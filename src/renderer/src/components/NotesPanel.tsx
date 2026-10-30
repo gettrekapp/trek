@@ -3,12 +3,16 @@ import { useAppStore } from '../store'
 
 interface Props {
   visible: boolean
+  repoId: string
   /** Branch the notes are associated with */
   noteKey: string
 }
 
-export function NotesPanel({ visible, noteKey }: Props): React.JSX.Element {
-  const note = useAppStore((s) => s.project?.branchNotes?.[noteKey]) ?? ''
+export function NotesPanel({ visible, repoId, noteKey }: Props): React.JSX.Element {
+  const note =
+    useAppStore(
+      (s) => s.project?.repositories.find((r) => r.id === repoId)?.branchNotes?.[noteKey]
+    ) ?? ''
   const setBranchNote = useAppStore((s) => s.setBranchNote)
 
   return (
@@ -26,7 +30,7 @@ export function NotesPanel({ visible, noteKey }: Props): React.JSX.Element {
         value={note}
         spellCheck={false}
         onChange={(e) => {
-          setBranchNote(noteKey, e.target.value)
+          setBranchNote(repoId, noteKey, e.target.value)
           scheduleAutoSave()
         }}
       />

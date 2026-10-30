@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useAppStore } from '../store'
 
 const MENU_WIDTH = 300
 
@@ -14,7 +13,7 @@ const COMPOSE_ACTIONS: { label: string; args: string[]; desc: string }[] = [
 ]
 
 /** The ▾ menu on the Docker tab: docker compose actions run in the main repo. */
-export function DockerMenu(): React.JSX.Element {
+export function DockerMenu({ repoPath }: { repoPath: string }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const [running, setRunning] = useState<string | null>(null)
@@ -53,8 +52,7 @@ export function DockerMenu(): React.JSX.Element {
 
   const run = async (action: (typeof COMPOSE_ACTIONS)[number]): Promise<void> => {
     setOpen(false)
-    const repoPath = useAppStore.getState().project?.repositoryPath
-    if (!repoPath || running) return
+    if (running) return
     setRunning(action.label)
     try {
       // Output streams into the Docker panel's log via docker:log events.

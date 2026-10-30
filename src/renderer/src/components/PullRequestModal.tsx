@@ -4,14 +4,17 @@ import { scheduleAutoSave } from '../persistence'
 import { useAppStore } from '../store'
 
 interface Props {
+  repoId: string
   /** Branch the pull request is associated with (survives promote/delete) */
   branch: string
   onClose: () => void
 }
 
 /** Links a branch to a GitHub pull request by URL. */
-export function PullRequestModal({ branch, onClose }: Props): React.JSX.Element {
-  const currentUrl = useAppStore((s) => s.project?.branchPullRequests?.[branch])
+export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.Element {
+  const currentUrl = useAppStore(
+    (s) => s.project?.repositories.find((r) => r.id === repoId)?.branchPullRequests?.[branch]
+  )
   const setBranchPullRequest = useAppStore((s) => s.setBranchPullRequest)
   const [input, setInput] = useState(currentUrl ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -22,13 +25,13 @@ export function PullRequestModal({ branch, onClose }: Props): React.JSX.Element 
       setError('Paste the pull request URL, e.g. https://github.com/org/repo/pull/123')
       return
     }
-    setBranchPullRequest(branch, url)
+    setBranchPullRequest(repoId, branch, url)
     scheduleAutoSave()
     onClose()
   }
 
   const unlink = (): void => {
-    setBranchPullRequest(branch, null)
+    setBranchPullRequest(repoId, branch, null)
     scheduleAutoSave()
     onClose()
   }

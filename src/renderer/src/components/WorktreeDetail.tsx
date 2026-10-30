@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  allWorktrees,
   baseName,
   branchCustomTags,
   branchTag,
   dormantSessions,
   environmentFor,
+  instanceForInfo,
   pullRequestLabel,
+  repoOfInfo,
   serverById,
   serverColorClass,
   tagStyle,
@@ -44,7 +45,6 @@ import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
 import { MoveWorktreeModal } from './MoveWorktreeModal'
-import { sameWorktree } from '../../../shared/types'
 import type { GitWorktreeInfo, StackStatus } from '../../../shared/types'
 
 interface Props {
@@ -149,12 +149,8 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
     return <main className="detail detail-empty muted">Reading worktrees…</main>
   }
 
-  // The local main checkout matches by isMain, not path: git reports the
-  // resolved path, which can differ from the project's stored repositoryPath.
-  const instance =
-    info.isMain && !info.serverId
-      ? allWorktrees(project)[0]
-      : allWorktrees(project).find((w) => sameWorktree(w, info))
+  const repo = repoOfInfo(project, info)
+  const instance = instanceForInfo(project, info)
   const isRemote = !!info.serverId
   const server = serverById(project, info.serverId)
   const hostDown = isRemote && serverStatus[info.serverId!] !== 'connected'
@@ -167,22 +163,22 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
   const { prefix, name } = splitBranch(branchLabel(info))
   const git = gitStatusLabel(info)
   const clean = !git && info.dirty === false
-  const tag = branchTag(project, info.branch)
+  const tag = branchTag(project, repo, info.branch)
   const customTags = project.customTags ?? []
-  const enabledCustomTags = branchCustomTags(project, info.branch)
+  const enabledCustomTags = branchCustomTags(project, repo, info.branch)
   // Ticket/PR links are keyed by branch, so they follow it through
   // promote/demote and worktree re-creation.
-  const ticket = info.branch ? project.branchTickets?.[info.branch] : undefined
-  const pullRequest = info.branch ? project.branchPullRequests?.[info.branch] : undefined
+  const ticket = info.branch ? repo.branchTickets?.[info.branch] : undefined
+  const pullRequest = info.branch ? repo.branchPullRequests?.[info.branch] : undefined
   const linearIssue = ticket ? linearIssues[ticket] : undefined
   const linkedTicketUrl = ticket ? ticketUrl(project, ticket, linearIssue) : null
 
   // Notes are keyed to the live branch, so they follow it through promote/demote.
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
 
-  const envEnabled = !!project.environments?.enabled
+  const envEnabled = !!repo.environments?.enabled
   const showEnv = envEnabled && !isRemote && !!info.branch
-  const env = showEnv ? environmentFor(environments, project.repositoryPath, info.branch) : undefined
+  const env = showEnv ? environmentFor(environments, repo.path, info.branch) : undefined
   const envOpBusy = env ? envBusy[env.profile] : undefined
   const envChipLabel = envOpBusy
     ? { start: 'Env starting…', stop: 'Env stopping…', destroy: 'Env resetting…' }[envOpBusy]
@@ -284,7 +280,7 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
                           key={t.id}
                           className={`tag-menu-item ${t.id === tag?.id ? 'active' : ''}`}
                           onClick={() => {
-                            setBranchTag(info.branch!, t.id)
+                            setBranchTag(repo.id, info.branch!, t.id)
                             scheduleAutoSave()
                             setTagMenuOpen(false)
                           }}
@@ -300,7 +296,7 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
                           <div
                             className="tag-menu-item clear"
                             onClick={() => {
-                              setBranchTag(info.branch!, null)
+                              setBranchTag(repo.id, info.branch!, null)
                               scheduleAutoSave()
                               setTagMenuOpen(false)
                             }}
@@ -348,7 +344,7 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
                             key={t.id}
                             className={`tag-menu-item ${on ? 'active' : ''}`}
                             onClick={() => {
-                              setBranchCustomTag(info.branch!, t.id, !on)
+                              setBranchCustomTag(repo.id, info.branch!, t.id, !on)
                               scheduleAutoSave()
                             }}
                           >
@@ -559,7 +555,7 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
             {isLocalMain ? (
               <div
                 className={`detail-menu-item ${busy ? 'disabled' : ''}`}
-                onClick={() => void runAction(() => promoteBranchToWorktree(info.branch))}
+                onClick={() => void runAction(() => promoteBranchToWorktree(repo.id, info.branch))}
               >
                 <div className="detail-menu-name">Promote branch to worktree…</div>
                 <div className="detail-menu-desc">
@@ -746,7 +742,7 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
             className={`panel-btn ${panel === 'docker' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
           >
-            Docker <DockerMenu />
+            Docker <DockerMenu repoPath={repo.path} />
           </button>
         )}
         {showEnv && (
@@ -836,7 +832,7 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
             )}
           </div>
         )}
-        <NotesPanel visible={panel === 'notes'} noteKey={noteKey} />
+        <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
         {isLocalMain && (
           <>
             <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />
@@ -856,10 +852,10 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
       </div>
 
       {showTicket && info.branch && (
-        <TicketModal branch={info.branch} onClose={() => setShowTicket(false)} />
+        <TicketModal repoId={repo.id} branch={info.branch} onClose={() => setShowTicket(false)} />
       )}
       {showPR && info.branch && (
-        <PullRequestModal branch={info.branch} onClose={() => setShowPR(false)} />
+        <PullRequestModal repoId={repo.id} branch={info.branch} onClose={() => setShowPR(false)} />
       )}
       {moveTarget && (
         <MoveWorktreeModal

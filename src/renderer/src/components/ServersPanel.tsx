@@ -13,12 +13,13 @@ interface FormState {
   id: string
   name: string
   url: string
-  repoPath: string
+  /** Repository id → that repository's clone on this server */
+  repoPaths: Record<string, string>
   /** empty = keep the stored token */
   token: string
 }
 
-const EMPTY_FORM: FormState = { id: '', name: '', url: 'wss://', repoPath: '', token: '' }
+const EMPTY_FORM: FormState = { id: '', name: '', url: 'wss://', repoPaths: {}, token: '' }
 
 const STATUS_LABELS: Record<HostStatus, string> = {
   connected: 'connected',
@@ -31,9 +32,11 @@ const STATUS_LABELS: Record<HostStatus, string> = {
 export function ServersPanel(): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const setServers = useAppStore((s) => s.setServers)
+  const setServerRepoPaths = useAppStore((s) => s.setServerRepoPaths)
   const serverStatus = useAppStore((s) => s.serverStatus)
 
   const servers = project.servers ?? []
+  const repositories = project.repositories
   const [form, setForm] = useState<FormState | null>(null)
   const [testResult, setTestResult] = useState<ServerTestResult | null>(null)
   const [testing, setTesting] = useState(false)
@@ -53,17 +56,25 @@ export function ServersPanel(): React.JSX.Element {
 
   const startAdd = (): void => setForm({ ...EMPTY_FORM, id: crypto.randomUUID() })
   const startEdit = (server: ServerConfig): void =>
-    setForm({ id: server.id, name: server.name, url: server.url, repoPath: server.repoPath, token: '' })
+    setForm({
+      id: server.id,
+      name: server.name,
+      url: server.url,
+      repoPaths: Object.fromEntries(
+        repositories.map((r) => [r.id, r.serverPaths?.[server.id] ?? ''])
+      ),
+      token: ''
+    })
 
-  const canSave = !!form && !!form.name.trim() && !!form.url.trim() && !!form.repoPath.trim()
+  const filledPaths = form ? Object.values(form.repoPaths).map((p) => p.trim()).filter(Boolean) : []
+  const canSave = !!form && !!form.name.trim() && !!form.url.trim() && filledPaths.length > 0
 
   const save = async (): Promise<void> => {
     if (!form || !canSave) return
     const config: ServerConfig = {
       id: form.id,
       name: form.name.trim(),
-      url: form.url.trim(),
-      repoPath: form.repoPath.trim()
+      url: form.url.trim()
     }
     if (form.token.trim()) {
       await window.api.setServerToken(config.id, form.token.trim())
@@ -71,6 +82,7 @@ export function ServersPanel(): React.JSX.Element {
     const next = editing
       ? servers.map((s) => (s.id === config.id ? config : s))
       : [...servers, config]
+    setServerRepoPaths(config.id, form.repoPaths)
     setServers(next)
     scheduleAutoSave()
     setForm(null)
@@ -78,7 +90,9 @@ export function ServersPanel(): React.JSX.Element {
   }
 
   const remove = async (server: ServerConfig): Promise<void> => {
-    const referencing = project.worktrees.filter((w) => w.serverId === server.id)
+    const referencing = repositories
+      .flatMap((r) => r.worktrees)
+      .filter((w) => w.serverId === server.id)
     const confirmed = await window.api.confirm({
       title: 'Remove Server',
       message: `Remove server “${server.name}”?`,
@@ -93,6 +107,7 @@ export function ServersPanel(): React.JSX.Element {
     })
     if (!confirmed) return
     await window.api.removeServer(server.id)
+    setServerRepoPaths(server.id, {})
     setServers(servers.filter((s) => s.id !== server.id))
     scheduleAutoSave()
   }
@@ -102,13 +117,18 @@ export function ServersPanel(): React.JSX.Element {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await window.api.testServer({
-        url: form.url.trim(),
-        token: form.token.trim() || undefined,
-        serverId: editing ? form.id : undefined,
-        repoPath: form.repoPath.trim()
-      })
-      setTestResult(result)
+      const results = await Promise.all(
+        filledPaths.map((repoPath) =>
+          window.api.testServer({
+            url: form.url.trim(),
+            token: form.token.trim() || undefined,
+            serverId: editing ? form.id : undefined,
+            repoPath
+          })
+        )
+      )
+      const failed = results.find((r) => !r.ok)
+      setTestResult(failed ?? { ...results[0], repoOk: results.every((r) => r.repoOk) })
     } catch (err) {
       setTestResult({ ok: false, error: String(err) })
     } finally {
@@ -142,7 +162,11 @@ export function ServersPanel(): React.JSX.Element {
               {server.name}
             </span>
             <span className="server-row-url">{server.url}</span>
-            <span className="server-row-path">{server.repoPath}</span>
+            <span className="server-row-path">
+              {repositories
+                .flatMap((r) => r.serverPaths?.[server.id] ?? [])
+                .join(', ')}
+            </span>
             {status === 'needs-auth' && <span className="server-row-warn">Token required</span>}
             <span className="server-row-actions">
               <button className="btn btn-ghost" onClick={() => startEdit(server)}>
@@ -190,15 +214,19 @@ export function ServersPanel(): React.JSX.Element {
               onChange={(e) => setForm({ ...form, token: e.target.value })}
             />
           </label>
-          <label className="server-form-row">
-            <span>Repo path on server</span>
-            <input
-              value={form.repoPath}
-              placeholder="/home/dev/repos/Trek"
-              spellCheck={false}
-              onChange={(e) => setForm({ ...form, repoPath: e.target.value })}
-            />
-          </label>
+          {repositories.map((repo) => (
+            <label className="server-form-row" key={repo.id}>
+              <span>{repo.name} path on server</span>
+              <input
+                value={form.repoPaths[repo.id] ?? ''}
+                placeholder="/home/dev/repos/Trek"
+                spellCheck={false}
+                onChange={(e) =>
+                  setForm({ ...form, repoPaths: { ...form.repoPaths, [repo.id]: e.target.value } })
+                }
+              />
+            </label>
+          ))}
           {testResult && (
             <div className={`server-test-result ${testResult.ok ? 'ok' : 'fail'}`}>
               {testResult.ok ? (
@@ -219,7 +247,7 @@ export function ServersPanel(): React.JSX.Element {
             </div>
           )}
           <div className="server-form-actions">
-            <button className="btn btn-ghost" disabled={testing} onClick={() => void test()}>
+            <button className="btn btn-ghost" disabled={testing || filledPaths.length === 0} onClick={() => void test()}>
               {testing ? 'Testing…' : 'Test connection'}
             </button>
             <span className="session-row-spacer" />

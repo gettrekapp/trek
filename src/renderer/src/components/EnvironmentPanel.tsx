@@ -3,7 +3,7 @@ import { ENV_DEFAULTS, deriveProfileName, parseEnvVars } from '../../../shared/e
 import type { EnvService, EnvUpStep, GitWorktreeInfo } from '../../../shared/types'
 import { refreshEnvironments } from '../environmentActions'
 import { scheduleAutoSave } from '../persistence'
-import { environmentFor, useAppStore } from '../store'
+import { environmentFor, repoOfInfo, useAppStore } from '../store'
 
 interface Props {
   visible: boolean
@@ -38,7 +38,8 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const setEnvBusy = useAppStore((s) => s.setEnvBusy)
   const setBranchEnvVars = useAppStore((s) => s.setBranchEnvVars)
 
-  const repoPath = project?.repositoryPath ?? ''
+  const repo = project ? repoOfInfo(project, info) : undefined
+  const repoPath = repo?.path ?? ''
   const profile = info.branch ? deriveProfileName(repoPath, info.branch) : null
   const env = environmentFor(environments, repoPath, info.branch)
   const busy = profile ? envBusy[profile] : undefined
@@ -54,7 +55,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const composeFile =
     composeChoice ??
     env?.composeFile ??
-    project?.environments?.composeFile ??
+    repo?.environments?.composeFile ??
     (ENV_DEFAULTS.composeFile as string)
   const [steps, setSteps] = useState<Partial<Record<EnvUpStep, StepStatus>> | null>(null)
   const [log, setLog] = useState('')
@@ -183,7 +184,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     )
   }
 
-  const varsText = project?.branchEnvVars?.[info.branch] ?? ''
+  const varsText = repo?.branchEnvVars?.[info.branch] ?? ''
   const varCount = Object.keys(parseEnvVars(varsText)).length
 
   const start = async (): Promise<void> => {
@@ -199,7 +200,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
         info.path,
         {
           enabled: true,
-          ...project?.environments,
+          ...repo?.environments,
           composeFile
         },
         Object.keys(envVars).length > 0 ? envVars : undefined
@@ -359,7 +360,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
                 spellCheck={false}
                 rows={6}
                 onChange={(e) => {
-                  setBranchEnvVars(info.branch!, e.target.value)
+                  setBranchEnvVars(repo!.id, info.branch!, e.target.value)
                   scheduleAutoSave()
                 }}
               />
@@ -431,7 +432,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
         {!running && !busy && !steps && (
           <p className="muted">
             Start gives this worktree its own Docker VM
-            {project?.environments?.networkAddress !== false ? ' with its own IP address' : ''} —
+            {repo?.environments?.networkAddress !== false ? ' with its own IP address' : ''} —
             ports never collide with other worktrees.
           </p>
         )}

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { scheduleAutoSave } from '../persistence'
-import { isLinearTicket, parseTicket, ticketLabel, useAppStore } from '../store'
+import { isLinearTicket, parseTicket, repoById, ticketLabel, useAppStore } from '../store'
 
 interface Props {
+  repoId: string
   /** Branch the ticket is associated with (survives promote/delete) */
   branch: string
   onClose: () => void
@@ -19,13 +20,13 @@ function ticketFromBranch(branch: string): string {
  * Links a branch to a Linear issue or an Azure DevOps work item, by
  * identifier or pasted URL.
  */
-export function TicketModal({ branch, onClose }: Props): React.JSX.Element {
+export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const setBranchTicket = useAppStore((s) => s.setBranchTicket)
   const setAzureDevOpsBaseUrl = useAppStore((s) => s.setAzureDevOpsBaseUrl)
   const setLinearWorkspace = useAppStore((s) => s.setLinearWorkspace)
 
-  const currentTicket = project.branchTickets?.[branch]
+  const currentTicket = repoById(project, repoId)?.branchTickets?.[branch]
   const [input, setInput] = useState(currentTicket ?? ticketFromBranch(branch))
   const [baseUrl, setBaseUrl] = useState(project.azureDevOpsBaseUrl ?? '')
   const [workspace, setWorkspace] = useState(project.linearWorkspace ?? '')
@@ -47,13 +48,13 @@ export function TicketModal({ branch, onClose }: Props): React.JSX.Element {
     const base = parsed.azureDevOpsBaseUrl ?? baseUrl.trim()
     if (ws && ws !== project.linearWorkspace) setLinearWorkspace(ws)
     if (base && base !== project.azureDevOpsBaseUrl) setAzureDevOpsBaseUrl(base)
-    setBranchTicket(branch, parsed.ticketId)
+    setBranchTicket(repoId, branch, parsed.ticketId)
     scheduleAutoSave()
     onClose()
   }
 
   const unlink = (): void => {
-    setBranchTicket(branch, null)
+    setBranchTicket(repoId, branch, null)
     scheduleAutoSave()
     onClose()
   }

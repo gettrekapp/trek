@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { scheduleAutoSave } from '../persistence'
 import { DEFAULT_PERMISSION_MODE } from '../terminals'
 import { useAppStore } from '../store'
@@ -7,7 +7,12 @@ import { ENV_DEFAULTS } from '../../../shared/environments'
 import { ServersPanel } from './ServersPanel'
 import { LinearSettings } from './LinearSettings'
 import { VoiceSettings } from './VoiceSettings'
-import type { ClaudeSessionType, TerminalQuickButton, WorktreeTag } from '../../../shared/types'
+import type {
+  ClaudeSessionType,
+  EnvironmentSettings,
+  TerminalQuickButton,
+  WorktreeTag
+} from '../../../shared/types'
 
 interface Props {
   visible: boolean
@@ -82,7 +87,32 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   )
   const setClaudePermissionMode = useAppStore((s) => s.setClaudePermissionMode)
   const claudeArgsOverride = useAppStore((s) => s.project?.claudeArgs?.trim())
-  const envSettings = useAppStore((s) => s.project?.environments)
+  const repositories = useAppStore((s) => s.project?.repositories) ?? []
+  // Which repository the per-repository settings below edit.
+  const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null)
+  const settingsRepo = repositories.find((r) => r.id === settingsRepoId) ?? repositories[0]
+  const envSettings = settingsRepo?.environments
+  const linkedDirs = settingsRepo?.linkedDirs ?? []
+  const repoSelector =
+    repositories.length > 1 ? (
+      <div className="settings-row">
+        <span className="settings-label">
+          <span className="settings-name">Repository</span>
+          <span className="settings-desc">These settings apply per repository.</span>
+        </span>
+        <select
+          className="settings-select"
+          value={settingsRepo?.id}
+          onChange={(e) => setSettingsRepoId(e.target.value)}
+        >
+          {repositories.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    ) : null
   const setEnvironmentSettings = useAppStore((s) => s.setEnvironmentSettings)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
@@ -100,17 +130,14 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const setSessionSystemPrompt = useAppStore((s) => s.setSessionSystemPrompt)
   const sessionTypes = useAppStore((s) => s.project?.sessionTypes) ?? []
   const setSessionTypes = useAppStore((s) => s.setSessionTypes)
-  const linkedDirs = useAppStore((s) => s.project?.linkedDirs) ?? []
   const setLinkedDirs = useAppStore((s) => s.setLinkedDirs)
   const worktreeTags = useAppStore((s) => s.project?.worktreeTags) ?? []
-  const branchTags = useAppStore((s) => s.project?.branchTags)
   const setWorktreeTags = useAppStore((s) => s.setWorktreeTags)
   const customTags = useAppStore((s) => s.project?.customTags) ?? []
-  const branchCustomTags = useAppStore((s) => s.project?.branchCustomTags)
   const setCustomTags = useAppStore((s) => s.setCustomTags)
 
-  const updateEnv = (patch: Parameters<typeof setEnvironmentSettings>[0]): void => {
-    setEnvironmentSettings(patch)
+  const updateEnv = (patch: Partial<EnvironmentSettings>): void => {
+    setEnvironmentSettings(settingsRepo.id, patch)
     scheduleAutoSave()
   }
 
@@ -202,6 +229,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             </span>
           </span>
         </label>
+        {repoSelector}
         <div className="settings-row">
           <span className="settings-label">
             <span className="settings-name">Linked directories</span>
@@ -214,6 +242,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           <input
             className="settings-select"
             type="text"
+            key={settingsRepo?.id}
             placeholder=".trek"
             defaultValue={linkedDirs.join(', ')}
             onBlur={(e) => {
@@ -221,7 +250,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                 .split(',')
                 .map((d) => d.trim())
                 .filter(Boolean)
-              setLinkedDirs(dirs)
+              setLinkedDirs(settingsRepo.id, dirs)
               scheduleAutoSave()
             }}
           />
@@ -233,7 +262,9 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           description="Workflow tags assignable to a worktree's branch, in menu order. New worktrees start with the first tag. Deleting a tag removes it from every branch using it."
           tags={worktreeTags}
           onChange={setWorktreeTags}
-          usesOf={(id) => Object.values(branchTags ?? {}).filter((t) => t === id).length}
+          usesOf={(id) =>
+            repositories.flatMap((r) => Object.values(r.branchTags ?? {})).filter((t) => t === id).length
+          }
         />
         <h3>Custom tags</h3>
         <WorktreeTagsEditor
@@ -241,7 +272,9 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           tags={customTags}
           onChange={setCustomTags}
           usesOf={(id) =>
-            Object.values(branchCustomTags ?? {}).filter((ids) => ids.includes(id)).length
+            repositories
+              .flatMap((r) => Object.values(r.branchCustomTags ?? {}))
+              .filter((ids) => ids.includes(id)).length
           }
         />
         <h3>Terminal quick buttons</h3>
@@ -362,6 +395,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           </button>
         </div>
         <h3>Environments</h3>
+        {repoSelector}
         <label className="settings-row">
           <input
             type="checkbox"

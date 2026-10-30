@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { hostRepoPath, useAppStore } from '../store'
+import { hostRepoPath, repoById, useAppStore } from '../store'
 import { createTerminal } from '../terminals'
 import {
   createBranchWorktree,
@@ -12,6 +12,7 @@ import { worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, WorktreeInstance } from '../../../shared/types'
 
 interface Props {
+  repoId: string
   onClose: () => void
 }
 
@@ -36,7 +37,7 @@ function parsePullRequestUrl(input: string): ParsedPullRequest | null {
   return { owner, repo, number: Number(num), url: `https://github.com/${owner}/${repo}/pull/${num}` }
 }
 
-export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
+export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const addWorktreeInstance = useAppStore((s) => s.addWorktreeInstance)
   const serverStatus = useAppStore((s) => s.serverStatus)
@@ -57,15 +58,12 @@ export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
   const pr = parsePullRequestUrl(prUrl)
 
   const servers = project.servers ?? []
-  const repoPath = hostRepoPath(project, serverId)
+  const repo = repoById(project, repoId)!
+  const repoPath = hostRepoPath(repo, serverId)
 
   const addedKeys = useMemo(
-    () =>
-      new Set([
-        worktreeKey({ path: project.repositoryPath }),
-        ...project.worktrees.map((w) => worktreeKey(w))
-      ]),
-    [project.repositoryPath, project.worktrees]
+    () => new Set([worktreeKey({ path: repo.path }), ...repo.worktrees.map((w) => worktreeKey(w))]),
+    [repo.path, repo.worktrees]
   )
 
   useEffect(() => {
@@ -105,7 +103,7 @@ export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
       serverId,
       branch: info.branch
     }
-    addWorktreeInstance(worktree)
+    addWorktreeInstance(repoId, worktree)
     await createTerminal(worktree.id, worktree.path)
     onClose()
   }
@@ -116,7 +114,7 @@ export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
     setCreating(true)
     setError(null)
     try {
-      const worktreePath = await createBranchWorktree(serverId, repoPath, branch, !baseExisting)
+      const worktreePath = await createBranchWorktree(repoId, serverId, repoPath, branch, !baseExisting)
       await addInstance({ path: worktreePath, branch })
     } catch (err) {
       setError(String(err))
@@ -132,7 +130,7 @@ export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
       const branch =
         (await window.api.githubPrHeadBranch(pr.owner, pr.repo, pr.number)) ?? `pr/${pr.number}`
       const linkPr = (): void => {
-        useAppStore.getState().setBranchPullRequest(branch, pr.url)
+        useAppStore.getState().setBranchPullRequest(repoId, branch, pr.url)
         scheduleAutoSave()
       }
       // The PR's branch may already be checked out — reuse that worktree.
@@ -153,8 +151,8 @@ export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
       }
       const worktreePath = worktreePathFor(repoPath, branch)
       await window.api.addWorktreeAt(serverId ?? null, repoPath, worktreePath, branch)
-      await linkProjectDirs(serverId ?? null, repoPath, worktreePath)
-      tagNewBranch(branch)
+      await linkProjectDirs(repoId, serverId ?? null, repoPath, worktreePath)
+      tagNewBranch(repoId, branch)
       linkPr()
       await addInstance({ path: worktreePath, branch })
     } catch (err) {
@@ -168,7 +166,7 @@ export function AddWorktreeModal({ onClose }: Props): React.JSX.Element {
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>Add Worktree</h2>
+        <h2>Add Worktree — {repo.name}</h2>
         {servers.length > 0 && (
           <div className="location-row">
             <span className="location-label">Location</span>
