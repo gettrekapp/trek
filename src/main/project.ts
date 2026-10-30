@@ -6,6 +6,7 @@ import { basename, join } from 'node:path'
 import { app } from 'electron'
 import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeStatus } from '../shared/types'
 import { getHost } from './hosts/registry'
+import type { RawProjectFile } from '../shared/migration'
 import { addRecent, getRecents } from './recents'
 
 const execFileAsync = promisify(execFile)
@@ -303,8 +304,8 @@ export function registerProjectHandlers(): void {
 
 async function openProjectFile(filePath: string): Promise<OpenedProject> {
   const raw = await readFile(filePath, 'utf8')
-  const project = JSON.parse(raw) as ProjectFile
+  const project = JSON.parse(raw) as RawProjectFile
   if (!project.name) project.name = basename(filePath).replace(/\.trekproj$/, '')
-  if (!Array.isArray(project.worktrees)) project.worktrees = []
+  if (!Array.isArray(project.worktrees) && !project.repositories) project.worktrees = []
   return { filePath, project }
 }

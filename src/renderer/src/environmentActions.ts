@@ -7,9 +7,11 @@ import { environmentFor, useAppStore } from './store'
  */
 export async function refreshEnvironments(): Promise<void> {
   const { project, envToolCheck, setEnvironments } = useAppStore.getState()
-  if (!project?.environments?.enabled || !envToolCheck?.ok) return
+  const repos = project?.repositories.filter((r) => r.environments?.enabled) ?? []
+  if (repos.length === 0 || !envToolCheck?.ok) return
   try {
-    setEnvironments(await window.api.envList(null, project.repositoryPath))
+    const lists = await Promise.all(repos.map((r) => window.api.envList(null, r.path)))
+    setEnvironments(lists.flat())
   } catch {
     // colima hiccup — keep the last known state; the next poll retries
   }

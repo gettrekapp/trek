@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { isLinearTicket, useAppStore } from './store'
+import { allBranchTickets, isLinearTicket, useAppStore } from './store'
 
 const REFRESH_MS = 5 * 60_000
 /** Window focus refreshes, but not more often than this. */
@@ -8,8 +8,8 @@ const FOCUS_THROTTLE_MS = 60_000
 let lastRefresh = 0
 
 function linkedLinearIds(): string[] {
-  const tickets = useAppStore.getState().project?.branchTickets ?? {}
-  return [...new Set(Object.values(tickets).filter(isLinearTicket))].sort()
+  const tickets = allBranchTickets(useAppStore.getState().project)
+  return [...new Set(tickets.filter(isLinearTicket))].sort()
 }
 
 export async function refreshLinearIssues(ids = linkedLinearIds()): Promise<void> {
@@ -28,7 +28,7 @@ export function useLinearSync(): void {
   const connected = useAppStore((s) => s.linearConnected)
   // Joined so the effect only re-runs when the set of linked ids changes.
   const idsKey = useAppStore((s) =>
-    [...new Set(Object.values(s.project?.branchTickets ?? {}).filter(isLinearTicket))]
+    [...new Set(allBranchTickets(s.project).filter(isLinearTicket))]
       .sort()
       .join(',')
   )

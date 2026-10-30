@@ -1,4 +1,4 @@
-import { PRIMARY_WORKTREE_ID, useAppStore } from './store'
+import { primaryWorktreeId, useAppStore } from './store'
 import type { PersistedTerminal, ProjectFile } from '../../shared/types'
 
 /**
@@ -33,12 +33,18 @@ export async function saveProject(): Promise<void> {
   // the instance, so they must be carried over rather than snapshotted away.
   const snapshot: ProjectFile = {
     ...state.project,
-    worktrees: state.project.worktrees.map((w) =>
-      state.loadedWorktrees[w.id] ? { ...w, terminals: sessionSnapshot(w.id, !!w.serverId) } : w
-    ),
-    primaryTerminals: state.loadedWorktrees[PRIMARY_WORKTREE_ID]
-      ? sessionSnapshot(PRIMARY_WORKTREE_ID, false)
-      : state.project.primaryTerminals
+    repositories: state.project.repositories.map((repo) => {
+      const primaryId = primaryWorktreeId(repo.id)
+      return {
+        ...repo,
+        worktrees: repo.worktrees.map((w) =>
+          state.loadedWorktrees[w.id] ? { ...w, terminals: sessionSnapshot(w.id, !!w.serverId) } : w
+        ),
+        primaryTerminals: state.loadedWorktrees[primaryId]
+          ? sessionSnapshot(primaryId, false)
+          : repo.primaryTerminals
+      }
+    })
   }
   const savedPath = await window.api.saveProject(state.filePath, snapshot)
   if (savedPath) state.markSaved(savedPath)

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { mergedWorktrees, useAppStore } from '../store'
+import { mergedWorktrees, repoHostKey, selectedWorktreeInfo, useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { Sidebar } from './Sidebar'
 import { WorktreeDetail } from './WorktreeDetail'
 import { AddWorktreeModal } from './AddWorktreeModal'
-import { hostKey, sameWorktree } from '../../../shared/types'
+import { hostKey } from '../../../shared/types'
 import type { GitWorktreeInfo } from '../../../shared/types'
 
 const POLL_MS = 5000
@@ -36,9 +36,11 @@ export function Workspace(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
   const selected = useAppStore((s) => s.selected)
   const hostWorktrees = useAppStore((s) => s.hostWorktrees)
-  const [showAdd, setShowAdd] = useState(false)
+  // Which repository the Add Worktree dialog is open for
+  const [addRepoId, setAddRepoId] = useState<string | null>(null)
 
-  const repoPath = project?.repositoryPath
+  // The poll restarts when a repository is added or removed.
+  const repoKey = project?.repositories.map((r) => r.path).join('\0')
   const servers = project?.servers
 
   // One connection per configured server; reruns when servers are added,
@@ -72,15 +74,15 @@ export function Workspace(): React.JSX.Element {
   )
 
   const refresh = useCallback(async (): Promise<void> => {
-    if (!repoPath) return
+    if (!repoKey) return
     const state = useAppStore.getState()
-    const targets = [
-      { serverId: undefined as string | undefined, repoPath },
-      ...(state.project?.servers ?? []).map((s) => ({
-        serverId: s.id as string | undefined,
-        repoPath: s.repoPath
-      }))
-    ]
+    const targets = (state.project?.repositories ?? []).flatMap((repo) => [
+      { repoId: repo.id, serverId: undefined as string | undefined, repoPath: repo.path },
+      ...(state.project?.servers ?? []).flatMap((s) => {
+        const repoPath = repo.serverPaths?.[s.id]
+        return repoPath ? [{ repoId: repo.id, serverId: s.id as string | undefined, repoPath }] : []
+      })
+    ])
     await Promise.allSettled(
       targets.map(async (target) => {
         // Skip hosts that aren't reachable — keep their cached rows (greyed
@@ -89,8 +91,8 @@ export function Workspace(): React.JSX.Element {
         try {
           const infos = (
             await window.api.listWorktrees(target.serverId ?? null, target.repoPath)
-          ).map((info) => ({ ...info, serverId: target.serverId }))
-          const key = hostKey(target.serverId)
+          ).map((info) => ({ ...info, serverId: target.serverId, repoId: target.repoId }))
+          const key = repoHostKey(target.repoId, target.serverId)
           const before = useAppStore.getState().hostWorktrees[key]
           useAppStore.getState().setHostWorktrees(key, infos)
           // First load, a new/removed worktree or a commit: the cached status
@@ -103,11 +105,11 @@ export function Workspace(): React.JSX.Element {
             )
           }
         } catch {
-          // host temporarily unreadable — keep the last known list
+          // repository or host temporarily unreadable — keep the last known list
         }
       })
     )
-  }, [repoPath, refreshStatuses])
+  }, [repoKey, refreshStatuses])
 
   /** The slow sweep: every known worktree on every reachable host. */
   const sweepStatuses = useCallback(async (): Promise<void> => {
@@ -120,7 +122,9 @@ export function Workspace(): React.JSX.Element {
     await Promise.allSettled(
       serverIds.map((serverId) => {
         if (serverId && state.serverStatus[serverId] !== 'connected') return Promise.resolve()
-        const known = state.hostWorktrees[hostKey(serverId)] ?? []
+        const known = mergedWorktrees(state.project!, state.hostWorktrees).filter(
+          (w) => w.serverId === serverId
+        )
         return refreshStatuses(
           serverId,
           known.map((w) => w.path)
@@ -176,7 +180,7 @@ export function Workspace(): React.JSX.Element {
 
   // Environment (Colima VM) status for badges. refreshEnvironments no-ops
   // until the feature is enabled and the toolchain check has passed.
-  const envEnabled = !!project?.environments?.enabled
+  const envEnabled = !!project?.repositories.some((r) => r.environments?.enabled)
   useEffect(() => {
     if (!envEnabled) return
     let cancelled = false
@@ -193,13 +197,11 @@ export function Workspace(): React.JSX.Element {
   }, [envEnabled])
 
   const worktrees = project ? mergedWorktrees(project, hostWorktrees) : []
-  const selectedInfo =
-    (selected ? worktrees.find((w) => sameWorktree(w, selected)) : undefined) ??
-    worktrees.find((w) => w.isMain && !w.serverId)
+  const selectedInfo = project ? selectedWorktreeInfo(project, worktrees, selected) : undefined
 
   return (
     <div className="workspace">
-      <Sidebar worktrees={worktrees} onAdd={() => setShowAdd(true)} />
+      <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
       <WorktreeDetail
         info={selectedInfo}
         worktrees={worktrees}
@@ -208,10 +210,11 @@ export function Workspace(): React.JSX.Element {
           void sweepStatuses() // a pull/push just moved ahead/behind
         }}
       />
-      {showAdd && (
+      {addRepoId && (
         <AddWorktreeModal
+          repoId={addRepoId}
           onClose={() => {
-            setShowAdd(false)
+            setAddRepoId(null)
             void refresh()
           }}
         />

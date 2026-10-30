@@ -1,3 +1,5 @@
+import type { RawProjectFile } from './migration'
+
 /** A workflow tag assignable to a branch's worktree, configured per project. */
 export interface WorktreeTag {
   id: string
@@ -217,7 +219,8 @@ export interface GlobalSession {
 
 export interface OpenedProject {
   filePath: string
-  project: ProjectFile
+  /** As read from disk: setProject migrates it, so it may still be an older version. */
+  project: RawProjectFile
 }
 
 export interface GitWorktreeInfo {

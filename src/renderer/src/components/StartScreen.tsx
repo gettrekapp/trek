@@ -27,10 +27,11 @@ export function StartScreen(): React.JSX.Element {
       // Validates that the directory is a git repository before committing.
       await window.api.listWorktrees(null, repoPath)
       const project: ProjectFile = {
-        version: 2,
+        version: 3,
         name: baseName(repoPath),
-        repositoryPath: repoPath,
-        worktrees: []
+        repositories: [
+          { id: crypto.randomUUID(), name: baseName(repoPath), path: repoPath, worktrees: [] }
+        ]
       }
       setProject(project, null)
     } catch (err) {
