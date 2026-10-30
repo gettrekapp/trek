@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { mergedWorktrees, repoHostKey, selectedWorktreeInfo, useAppStore } from '../store'
+import {
+  mergedWorktrees,
+  repoHostKey,
+  selectedRepository,
+  selectedWorktreeInfo,
+  useAppStore
+} from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { Sidebar } from './Sidebar'
 import { WorktreeDetail } from './WorktreeDetail'
@@ -35,7 +41,10 @@ function identityChanged(before: GitWorktreeInfo[] | undefined, after: GitWorktr
 export function Workspace(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
   const selected = useAppStore((s) => s.selected)
+  const activeWorktreeId = useAppStore((s) => s.activeWorktreeId)
   const hostWorktrees = useAppStore((s) => s.hostWorktrees)
+  // Repositories whose last local read failed, to tell that from one still loading.
+  const [readFailed, setReadFailed] = useState<Record<string, true>>({})
   // Which repository the Add Worktree dialog is open for
   const [addRepoId, setAddRepoId] = useState<string | null>(null)
 
@@ -95,6 +104,13 @@ export function Workspace(): React.JSX.Element {
           const key = repoHostKey(target.repoId, target.serverId)
           const before = useAppStore.getState().hostWorktrees[key]
           useAppStore.getState().setHostWorktrees(key, infos)
+          if (!target.serverId) {
+            setReadFailed((prev) => {
+              if (!prev[target.repoId]) return prev
+              const { [target.repoId]: _readable, ...rest } = prev
+              return rest
+            })
+          }
           // First load, a new/removed worktree or a commit: the cached status
           // is gone or wrong, so sweep now rather than waiting out the slow
           // interval. Edits alone don't land here — those wait for the sweep.
@@ -106,6 +122,9 @@ export function Workspace(): React.JSX.Element {
           }
         } catch {
           // repository or host temporarily unreadable — keep the last known list
+          if (!target.serverId) {
+            setReadFailed((prev) => (prev[target.repoId] ? prev : { ...prev, [target.repoId]: true }))
+          }
         }
       })
     )
@@ -197,13 +216,23 @@ export function Workspace(): React.JSX.Element {
   }, [envEnabled])
 
   const worktrees = project ? mergedWorktrees(project, hostWorktrees) : []
-  const selectedInfo = project ? selectedWorktreeInfo(project, worktrees, selected) : undefined
+  const selectedInfo = project
+    ? selectedWorktreeInfo(project, worktrees, selected, activeWorktreeId)
+    : undefined
+  const selectedRepo = project ? selectedRepository(project, selected, activeWorktreeId) : undefined
+  const unreadableRepo =
+    !selectedInfo &&
+    selectedRepo &&
+    (readFailed[selectedRepo.id] || repoHostKey(selectedRepo.id) in hostWorktrees)
+      ? selectedRepo
+      : undefined
 
   return (
     <div className="workspace">
       <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
       <WorktreeDetail
         info={selectedInfo}
+        unreadableRepo={unreadableRepo}
         worktrees={worktrees}
         onWorktreesChanged={() => {
           void refresh()

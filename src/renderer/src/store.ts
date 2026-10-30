@@ -194,6 +194,9 @@ export function ticketUrl(
   return `${project.azureDevOpsBaseUrl.replace(/\/+$/, '')}/_workitems/edit/${ticketId}`
 }
 
+/** repoId is stamped on selection, so a row that later vanishes still has a repository. */
+export type SelectedWorktree = WorktreeLocator & { repoId?: string }
+
 export interface TerminalMeta {
   id: string
   worktreeId: string
@@ -228,7 +231,7 @@ interface AppState {
    * across machines). Unlike activeWorktreeId this can point at a git
    * worktree that has no instance (no Claude session) yet.
    */
-  selected: WorktreeLocator | null
+  selected: SelectedWorktree | null
   terminals: Record<string, TerminalMeta>
   terminalOrder: Record<string, string[]>
   activeTerminal: Record<string, string>
@@ -418,6 +421,7 @@ export const useAppStore = create<AppState>((set) => ({
       const viewingRemoved = !!state.activeWorktreeId && removedIds.has(state.activeWorktreeId)
       const selectionRemoved =
         viewingRemoved ||
+        state.selected?.repoId === repoId ||
         Object.values(state.hostWorktrees)
           .flat()
           .some((w) => w.repoId === repoId && !!state.selected && sameWorktree(w, state.selected))
@@ -471,7 +475,12 @@ export const useAppStore = create<AppState>((set) => ({
             instanceId ? w.id === instanceId : sameWorktree(w, loc)
           )
         : undefined
-      return { selected: loc, activeWorktreeId: instance?.id ?? null }
+      const repo =
+        state.project &&
+        (instance
+          ? repoOfWorktreeId(state.project, instance.id)
+          : repoOfLocator(state.project, state.hostWorktrees, loc))
+      return { selected: { ...loc, repoId: repo?.id }, activeWorktreeId: instance?.id ?? null }
     }),
 
   addWorktreeInstance: (repoId, worktree) =>
@@ -1040,24 +1049,37 @@ export function mergedWorktrees(
   ])
 }
 
+/** The repository the selection belongs to, whether or not it has rows. */
+export function selectedRepository(
+  project: ProjectFile,
+  selected: SelectedWorktree | null,
+  activeWorktreeId: string | null
+): Repository | undefined {
+  const active = activeWorktreeId ? repoOfWorktreeId(project, activeWorktreeId) : undefined
+  if (active) return active
+  if (!selected) return project.repositories[0]
+  return (
+    repoById(project, selected.repoId) ??
+    project.repositories.find((r) => repoWorktrees(r).some((w) => sameWorktree(w, selected)))
+  )
+}
+
 /**
  * The row to show for the selection. A selected primary holds the stored path,
- * which can differ from git's resolved one, so it matches through its repository.
+ * which can differ from git's resolved one, so anything without a row of its own
+ * falls back to its repository's main row. Never to another repository's: a tag
+ * or note set there would land in the wrong place.
  */
 export function selectedWorktreeInfo(
   project: ProjectFile,
   worktrees: GitWorktreeInfo[],
-  selected: WorktreeLocator | null
+  selected: SelectedWorktree | null,
+  activeWorktreeId: string | null
 ): GitWorktreeInfo | undefined {
-  const isMainOf = (w: GitWorktreeInfo, path: string | undefined): boolean =>
-    w.isMain && !w.serverId && repoById(project, w.repoId)?.path === path
-  return (
-    (selected ? worktrees.find((w) => sameWorktree(w, selected)) : undefined) ??
-    (selected && !selected.serverId
-      ? worktrees.find((w) => isMainOf(w, selected.path))
-      : undefined) ??
-    worktrees.find((w) => w.isMain && !w.serverId)
-  )
+  const exact = selected ? worktrees.find((w) => sameWorktree(w, selected)) : undefined
+  if (exact) return exact
+  const repo = selectedRepository(project, selected, activeWorktreeId)
+  return repo && worktrees.find((w) => w.repoId === repo.id && w.isMain && !w.serverId)
 }
 
 export function serverById(

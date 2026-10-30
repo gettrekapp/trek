@@ -45,10 +45,12 @@ import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
 import { MoveWorktreeModal } from './MoveWorktreeModal'
-import type { GitWorktreeInfo, StackStatus } from '../../../shared/types'
+import type { GitWorktreeInfo, Repository, StackStatus } from '../../../shared/types'
 
 interface Props {
   info: GitWorktreeInfo | undefined
+  /** Set when there is no row to show because the selected repository can't be read. */
+  unreadableRepo?: Repository
   /** All live git worktrees, for the All Notes panel's "no worktree" markers */
   worktrees: GitWorktreeInfo[]
   /** Called after actions that change the set of worktrees (delete/promote). */
@@ -89,7 +91,12 @@ function useStackStatus(
   return [status, refresh]
 }
 
-export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): React.JSX.Element {
+export function WorktreeDetail({
+  info,
+  unreadableRepo,
+  worktrees,
+  onWorktreesChanged
+}: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const terminals = useAppStore((s) => s.terminals)
   const decisions = useAppStore((s) => s.decisions)
@@ -144,6 +151,14 @@ export function WorktreeDetail({ info, worktrees, onWorktreesChanged }: Props): 
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
+
+  if (!info && unreadableRepo) {
+    return (
+      <main className="detail detail-empty detail-unreadable muted">
+        Can’t read the repository {unreadableRepo.name} at {unreadableRepo.path}
+      </main>
+    )
+  }
 
   if (!info) {
     return <main className="detail detail-empty muted">Reading worktrees…</main>

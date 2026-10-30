@@ -151,6 +151,55 @@ try {
     1
   )
 
+  // A first repository that can't be read must not borrow the second's rows.
+  const missing = `${api}-missing`
+  await win.evaluate(
+    ({ missing, web }) => {
+      window.__store.getState().setProject(
+        {
+          version: 3,
+          name: 'unreadable',
+          repositories: [
+            { id: 'r-gone', name: 'gone', path: missing, worktrees: [] },
+            {
+              id: 'r-web',
+              name: 'web',
+              path: web,
+              worktrees: [{ id: 'w-web', name: 'feature-auth', path: `${web}-wt`, branch: 'feature-auth' }]
+            }
+          ]
+        },
+        '/tmp/multi-repo-smoke.trekproj'
+      )
+    },
+    { missing, web }
+  )
+  await win.waitForTimeout(1500)
+  check('unreadable: two sections', await win.locator('.repo-section').count(), 2)
+  check('unreadable: first section has no rows', await win.locator('.repo-section').nth(0).locator('.wt-row').count(), 0)
+  check('unreadable: second section has its rows', await win.locator('.repo-section').nth(1).locator('.wt-row').count(), 2)
+  check('unreadable: detail shows no row', await win.locator('.detail-header').count(), 0)
+  check(
+    'unreadable: detail names the path',
+    (await win.locator('.detail-unreadable').textContent())?.includes(missing) ?? false,
+    true
+  )
+  await win.locator('.repo-section').nth(1).locator('.wt-row', { hasText: 'feature-auth' }).click()
+  await win.waitForTimeout(300)
+  check('readable row still opens', await win.locator('.detail-header').count(), 1)
+
+  // A selected row that vanishes falls back within its own repository.
+  await win.evaluate(() => {
+    window.__store.setState({ selected: { path: '/gone', repoId: 'r-web' }, activeWorktreeId: null })
+  })
+  await win.waitForTimeout(200)
+  check('stale selection resolves in its repository', await win.locator('.detail-header').count(), 1)
+  await win.evaluate(() => {
+    window.__store.setState({ selected: { path: '/gone', repoId: 'r-gone' }, activeWorktreeId: null })
+  })
+  await win.waitForTimeout(200)
+  check('stale selection never crosses repositories', await win.locator('.detail-header').count(), 0)
+
   check('page errors', errors, [])
   await app.close()
   const pass = checks.every(Boolean)
