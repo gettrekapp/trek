@@ -70,10 +70,6 @@ export interface WorktreeInstance {
   /** Server this worktree lives on; undefined = the local machine */
   serverId?: string
   branch?: string
-  /** @deprecated migrated to ProjectFile.branchTickets on load */
-  ticketId?: string
-  /** @deprecated migrated to ProjectFile.branchPullRequests on load */
-  pullRequestUrl?: string
   /** Terminal sessions captured at save time, restored on open */
   terminals?: PersistedTerminal[]
 }
@@ -89,8 +85,6 @@ export interface ServerConfig {
   name: string
   /** wss://host[:port] — plain ws:// is only accepted for loopback */
   url: string
-  /** Absolute path of the pre-cloned repository on that server */
-  repoPath: string
 }
 
 export type HostStatus =
@@ -110,7 +104,7 @@ export interface ServerTestResult {
   ok: boolean
   error?: string
   daemonVersion?: string
-  /** Whether the configured repoPath is in the daemon's allowlist */
+  /** Whether the tested repository path is in the daemon's allowlist */
   repoOk?: boolean
   claudeAvailable?: boolean
   claudeVersion?: string
@@ -130,28 +124,18 @@ export const worktreeKey = (loc: WorktreeLocator): string =>
 export const sameWorktree = (a: WorktreeLocator, b: WorktreeLocator): boolean =>
   a.path === b.path && (a.serverId ?? undefined) === (b.serverId ?? undefined)
 
-export interface ProjectFile {
-  version: 1 | 2
+/** One git repository in a project, with the data that belongs to it. */
+export interface Repository {
+  id: string
+  /** Section title in the sidebar, defaults to the directory name */
   name: string
-  /** Absolute path to the primary repository */
-  repositoryPath: string
-  /** Command launched in each terminal (defaults to "claude") */
-  claudeCommand?: string
-  /** Extra flags for every claude launch — overrides claudePermissionMode when set */
-  claudeArgs?: string
-  /** --permission-mode for new Claude sessions (defaults to "auto") */
-  claudePermissionMode?: string
+  /** Absolute path to the main checkout on the local machine */
+  path: string
+  /** Server id → absolute path of this repository's clone on that server */
+  serverPaths?: Record<string, string>
   worktrees: WorktreeInstance[]
-  /** Remote servers running the companion daemon */
-  servers?: ServerConfig[]
   /** Terminal sessions of the primary (main repo) tab, captured at save time */
   primaryTerminals?: PersistedTerminal[]
-  /** Favorited docker containers, by container name */
-  dockerFavorites?: string[]
-  /** Azure DevOps org/project URL, e.g. https://dev.azure.com/org/Project */
-  azureDevOpsBaseUrl?: string
-  /** Linear workspace slug (linear.app/<slug>/...) — turns issue identifiers into links */
-  linearWorkspace?: string
   /** Free-form notes, keyed by branch name */
   branchNotes?: Record<string, string>
   /**
@@ -159,10 +143,6 @@ export interface ProjectFile {
    * being promoted to primary, deleted and re-created, etc.
    */
   branchTags?: Record<string, string>
-  /** Workflow tags offered for worktrees, in order (undefined = DEFAULT_WORKTREE_TAGS) */
-  worktreeTags?: WorktreeTag[]
-  /** Custom tags, any number of which can be toggled on per branch */
-  customTags?: WorktreeTag[]
   /** Enabled custom tag ids, keyed by branch name */
   branchCustomTags?: Record<string, string[]>
   /**
@@ -178,6 +158,39 @@ export interface ProjectFile {
    * injected into the docker compose process env for variable substitution.
    */
   branchEnvVars?: Record<string, string>
+  /**
+   * Repo-relative paths (e.g. ".trek") symlinked from the main repository
+   * into every newly created worktree — for local-only folders like database
+   * backups and secrets that aren't committed.
+   */
+  linkedDirs?: string[]
+  /** Per-worktree isolated Docker environments (Colima VMs) */
+  environments?: EnvironmentSettings
+}
+
+export interface ProjectFile {
+  version: 3
+  name: string
+  /** At least one entry. The first holds Global Claude's working directory. */
+  repositories: Repository[]
+  /** Command launched in each terminal (defaults to "claude") */
+  claudeCommand?: string
+  /** Extra flags for every claude launch — overrides claudePermissionMode when set */
+  claudeArgs?: string
+  /** --permission-mode for new Claude sessions (defaults to "auto") */
+  claudePermissionMode?: string
+  /** Remote servers running the companion daemon */
+  servers?: ServerConfig[]
+  /** Favorited docker containers, by container name */
+  dockerFavorites?: string[]
+  /** Azure DevOps org/project URL, e.g. https://dev.azure.com/org/Project */
+  azureDevOpsBaseUrl?: string
+  /** Linear workspace slug (linear.app/<slug>/...) — turns issue identifiers into links */
+  linearWorkspace?: string
+  /** Workflow tags offered for worktrees, in order (undefined = DEFAULT_WORKTREE_TAGS) */
+  worktreeTags?: WorktreeTag[]
+  /** Custom tags, any number of which can be toggled on per branch */
+  customTags?: WorktreeTag[]
   /** Play a sound when Claude becomes ready for input (default off) */
   audioAlerts?: boolean
   /** Quick buttons shown under every terminal — clicking pastes the text into the input */
@@ -190,20 +203,10 @@ export interface ProjectFile {
   sessionSystemPrompt?: string
   /** Session types offered by the new-session (+) menu */
   sessionTypes?: ClaudeSessionType[]
-  /** Per-worktree isolated Docker environments (Colima VMs) */
-  environments?: EnvironmentSettings
-  /**
-   * Repo-relative paths (e.g. ".trek") symlinked from the main repository
-   * into every newly created worktree — for local-only folders like database
-   * backups and secrets that aren't committed.
-   */
-  linkedDirs?: string[]
   /** Sidebar order, as worktreeKey()s — worktrees not listed sort after these */
   worktreeOrder?: string[]
   /** Tabs of the global (project-wide) Claude panel, in tab order */
   globalSessions?: GlobalSession[]
-  /** @deprecated single global session — migrated to globalSessions */
-  globalSessionId?: string
 }
 
 export interface GlobalSession {
@@ -221,6 +224,8 @@ export interface GitWorktreeInfo {
   path: string
   /** Stamped by the multi-host aggregation layer; undefined = local */
   serverId?: string
+  /** Stamped by the same layer as serverId: the repository this row belongs to */
+  repoId?: string
   branch?: string
   head?: string
   isMain: boolean
