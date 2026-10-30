@@ -61,6 +61,9 @@ try {
     { repoPath, worktreePath }
   )
   await win.waitForTimeout(1500)
+  const primaryId = await win.evaluate(
+    () => `__primary__:${window.__store.getState().project.repositories[0].id}`
+  )
 
   // Sidebar: both git worktrees listed, primary tagged and selected.
   const rows = await win.locator('.wt-row').count()
@@ -78,7 +81,7 @@ try {
     repoPath
   )
   const sweptDirty = await win.evaluate(() =>
-    (window.__store.getState().hostWorktrees.local ?? []).map((w) => w.dirty).join(',')
+    (Object.values(window.__store.getState().hostWorktrees).flat()).map((w) => w.dirty).join(',')
   )
   console.log(
     `list status fields: ${listStatusFields} (expect 0), swept dirty flags: "${sweptDirty}" (expect false,false)`
@@ -95,15 +98,15 @@ try {
   console.log(`no-session empty state: ${noSession} (expect 1)`)
 
   // Register a fake terminal on the primary worktree → session tab appears.
-  await win.evaluate(() => {
+  await win.evaluate((primaryId) => {
     window.__store.getState().registerTerminal({
       id: 't1',
-      worktreeId: '__primary__',
+      worktreeId: primaryId,
       title: 'Claude 1',
       sessionId: '00000000-0000-0000-0000-000000000000',
       status: 'working'
     })
-  })
+  }, primaryId)
   await win.waitForTimeout(400)
   const sessionTabs = await win.locator('.session-tab').count()
   const runningDots = await win.locator('.sidebar-list .wt-dot.running').count()
@@ -153,7 +156,7 @@ try {
   await win.locator('.notes-panel:visible textarea').fill('remember the thing')
   await win.waitForTimeout(200)
   const savedNote = await win.evaluate(
-    () => window.__store.getState().project.branchNotes?.['master']
+    () => window.__store.getState().project.repositories[0].branchNotes?.['master']
   )
   console.log(`notes panel: ${notesPanels} (expect 1), note saved: "${savedNote}"`)
 
@@ -172,7 +175,7 @@ try {
   await win.waitForTimeout(200)
   const noteCardsAfter = await win.locator('.note-card').count()
   const remainingNotes = await win.evaluate(() =>
-    Object.keys(window.__store.getState().project.branchNotes ?? {}).join(',')
+    Object.keys(window.__store.getState().project.repositories[0].branchNotes ?? {}).join(',')
   )
   console.log(
     `all notes: cards ${noteCards} (expect 2), gone tags ${goneTags} (expect 1), show buttons ${showButtons} (expect 1), confirm label "${confirmLabel}", after delete ${noteCardsAfter} (expect 1), remaining: ${remainingNotes} (expect master)`
@@ -230,7 +233,7 @@ try {
   await win.locator('.tag-menu .tag-menu-item', { hasText: 'Ready to Deploy' }).click()
   await win.waitForTimeout(200)
   const tagAfterPick = await win.evaluate(
-    () => window.__store.getState().project.branchTags['feature-x']
+    () => window.__store.getState().project.repositories[0].branchTags['feature-x']
   )
   console.log(
     `sidebar tag chips: ${sidebarTagChips} (expect 1), detail chip: "${tagChipText}", options: ${tagOptions} (expect 8, incl Remove: ${removeTagOptions}), after pick: ${tagAfterPick} (expect Ready to Deploy)`
@@ -244,6 +247,7 @@ try {
   await win.waitForTimeout(200)
   const filteredRows = await win.locator('.wt-row').count()
   const filterLabel = (await win.locator('.tag-filter-btn').innerText()).trim()
+  await win.locator('.sidebar-tag-filter .detail-menu-backdrop').click()
   await win.locator('.tag-filter-clear').click()
   await win.waitForTimeout(200)
   const unfilteredRows = await win.locator('.wt-row').count()
@@ -267,7 +271,7 @@ try {
   await win.waitForTimeout(400)
   const tabsAfterUnload = await win.locator('.session-tab').count()
   const savedAfterUnload = await win.evaluate(
-    () => window.__store.getState().project.primaryTerminals?.length ?? 0
+    () => window.__store.getState().project.repositories[0].primaryTerminals?.length ?? 0
   )
   const dormantDots = await win.locator('.sidebar-list .wt-dot.dormant').count()
   const loadButtons = await win.locator('.wt-row .wt-power.dormant').count()

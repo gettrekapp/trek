@@ -106,7 +106,10 @@ try {
   )
   check('server status', await win.evaluate(() => window.__store.getState().serverStatus['srv1']), 'connected')
   await win.waitForFunction(
-    () => Object.keys(window.__store.getState().hostWorktrees).includes('srv1'),
+    () => {
+      const { project, hostWorktrees } = window.__store.getState()
+      return `${project.repositories[0].id} srv1` in hostWorktrees
+    },
     undefined,
     { timeout: 15000 }
   )
@@ -126,7 +129,10 @@ try {
     { serverRepo }
   )
   await win.waitForFunction(
-    () => (window.__store.getState().hostWorktrees['srv1'] ?? []).length === 2,
+    () => {
+      const { project, hostWorktrees } = window.__store.getState()
+      return (hostWorktrees[`${project.repositories[0].id} srv1`] ?? []).length === 2
+    },
     undefined,
     { timeout: 15000 }
   )
@@ -166,7 +172,7 @@ try {
 
   // The instance record followed the move.
   const instance = await win.evaluate(() =>
-    window.__store.getState().project.worktrees.find((w) => w.branch === 'feature-move')
+    window.__store.getState().project.repositories[0].worktrees.find((w) => w.branch === 'feature-move')
   )
   check('instance serverId updated', instance?.serverId, 'srv1')
   check('instance path updated', instance?.path, movedPath)
