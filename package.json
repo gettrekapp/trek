@@ -10,6 +10,8 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "node --test scripts/*.test.mjs",
+    "smoke:multi": "npm run build && node scripts/multi-repo-smoke.mjs",
     "smoke": "npm run build && node scripts/smoke.mjs",
     "smoke:remote": "npm run build && node scripts/remote-smoke.mjs",
     "smoke:env": "npm run build && node scripts/env-smoke.mjs",
