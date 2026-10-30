@@ -7,16 +7,24 @@ git worktrees of a repository, side by side.
 
 ## Concepts
 
-- **Project file** (`.trekproj`, JSON): targets one repository and remembers which
-  worktrees have Claude sessions, tickets and PRs linked. `File → Save Project` (⌘S).
-- **Worktree sidebar**: lists *every* git worktree of the repository (polled live),
+- **Project file** (`.trekproj`, JSON): lists one or more repositories and remembers
+  which worktrees have Claude sessions, tickets and PRs linked. Tags, notes, tickets,
+  PR links and env vars are kept per repository, so a branch name shared by two
+  repositories has independent data. Older files upgrade when opened; once saved, they
+  can't be read by older Trek builds. `File → Save Project` (⌘S).
+- **Repositories**: each one is a collapsible sidebar section, and a collapsed section
+  still shows its session status. **Add repository…** in the sidebar footer adds one,
+  and the section's **⋯** menu removes it from the project without touching the disk.
+  A repository can't be removed while it has live sessions, and the first one can't be
+  removed while Global Claude has saved conversations.
+- **Worktree sidebar**: lists *every* git worktree of each repository (polled live),
   with the Claude session status dot, branch, workflow tag, ticket/PR chips and
   git ahead/behind/dirty state. The poll is two-tier: the worktree list is one
   git process per host and refreshes every 5s, while dirty/ahead/behind costs
   two git processes *per worktree* — across a repo with many worktrees that is
   seconds of CPU per sweep, so it refreshes every 30s, only while the window
   has focus, plus immediately when the list changes, the window regains focus,
-  the selection moves, or a pull/push finishes. The `+` button adds an existing worktree or creates a
+  the selection moves, or a pull/push finishes. The `+` on a repository's section adds an existing worktree or creates a
   new one (`git worktree add`) — new worktrees are created next to the repository
   as `<repo>-<branch>`. The main checkout is tagged **PRIMARY**.
 - **Workflow tags**: each branch can carry a tag (In Progress, In Review,
@@ -67,7 +75,8 @@ git worktrees of a repository, side by side.
   `.trekproj` file (and `claudeCommand` to replace the binary).
 - **Global Claude** (⌘J, or click the status bar at the bottom of the window):
   a project-wide Claude session in a collapsible panel, running in the
-  repository root. It starts the first time you open it, keeps running while
+  first repository's root, with the others available through `--add-dir`
+  (a repository added mid-session is available from that session's next launch). It starts the first time you open it, keeps running while
   collapsed, and resumes its conversation when the project is reopened
   (**New conversation** starts over). Its status bar shows the same
   working/attention/done badge as any session.
@@ -122,7 +131,9 @@ npm run build     # production build into out/
 npm run typecheck
 ```
 
-The project file format lives in `src/shared/types.ts` (`ProjectFile`). Terminal
+The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
+older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
+`npm run smoke:multi` runs the two-repository end-to-end test. Terminal
 PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
 the attention heuristics and worktree load/unload live in the renderer
 (`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only
