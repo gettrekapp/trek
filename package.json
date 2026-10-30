@@ -1,0 +1,68 @@
+{
+  "name": "trek-developer",
+  "productName": "Trek Dev",
+  "version": "0.1.0",
+  "description": "Multi-worktree Claude workspace manager",
+  "main": "out/main/index.js",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "smoke": "npm run build && node scripts/smoke.mjs",
+    "smoke:remote": "npm run build && node scripts/remote-smoke.mjs",
+    "smoke:env": "npm run build && node scripts/env-smoke.mjs",
+    "rebuild": "electron-rebuild -f -w node-pty",
+    "dist": "electron-vite build && electron-builder --mac --arm64"
+  },
+  "build": {
+    "appId": "com.trek.trekdev",
+    "productName": "Trek Dev",
+    "publish": null,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "resources/**"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-pty/**"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        }
+      ],
+      "icon": "resources/AppIcon.icns",
+      "category": "public.app-category.developer-tools",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Trek Dev switches to an already-open Chrome tab when opening a link."
+      }
+    }
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "playwright-core": "^1.61.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6",
+    "zustand": "^5.0.14"
+  }
+}
