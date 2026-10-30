@@ -5,8 +5,13 @@ import {
   dormantSessions,
   GLOBAL_WORKTREE_ID,
   hostRepoPath,
+  instanceForInfo,
   mergedWorktrees,
   parseTicket,
+  repoById,
+  repoHostKey,
+  repoOfInfo,
+  repoOfWorktreeId,
   serverById,
   ticketUrl,
   useAppStore
@@ -26,11 +31,13 @@ import { createBranchWorktree, promoteToPrimary } from './worktreeActions'
 import { scheduleAutoSave } from './persistence'
 import { stackState, stackUrls, stripAnsi } from './stacks'
 import { MAX_SUMMARY_CHARS, speakSummary, voiceReady } from './voice'
-import { hostKey, sameWorktree } from '../../shared/types'
+import { ambiguousAcrossRepos, findRepository } from '../../shared/repositories'
+import { sameWorktree } from '../../shared/types'
 import type {
   ClaudeSessionType,
   GitWorktreeInfo,
   McpCallRequest,
+  Repository,
   StackStatus,
   TerminalStatus,
   WorktreeInstance,
@@ -63,10 +70,7 @@ interface ResolvedWorktree {
 }
 
 function instanceFor(info: GitWorktreeInfo): WorktreeInstance | undefined {
-  const instances = allWorktrees(project())
-  // The local main checkout matches by isMain: git's resolved path can differ
-  // from the project's stored repositoryPath.
-  return info.isMain && !info.serverId ? instances[0] : instances.find((w) => sameWorktree(w, info))
+  return instanceForInfo(project(), info)
 }
 
 function resolveWorktree(ref: unknown): ResolvedWorktree {
@@ -78,10 +82,17 @@ function resolveWorktree(ref: unknown): ResolvedWorktree {
     const info = infos.find((i) => instanceFor(i)?.id === instance.id)
     return { loc: { serverId: instance.serverId, path: instance.path }, info, instance }
   }
+  const firstUnambiguous = (matches: GitWorktreeInfo[]): GitWorktreeInfo | undefined => {
+    if (ambiguousAcrossRepos(matches)) {
+      const listed = matches.map((i) => `${repoOfInfo(p, i).name}: ${i.path}`).join(', ')
+      throw new ToolError(`"${ref}" matches more than one repository (${listed}) — pass the path`)
+    }
+    return matches[0]
+  }
   const info =
     infos.find((i) => i.path === ref) ??
-    infos.find((i) => i.branch === ref) ??
-    infos.find((i) => instanceFor(i)?.name === ref)
+    firstUnambiguous(infos.filter((i) => i.branch === ref)) ??
+    firstUnambiguous(infos.filter((i) => instanceFor(i)?.name === ref))
   if (!info) throw new ToolError(`No worktree matches "${ref}" — call list_worktrees`)
   return { loc: { serverId: info.serverId, path: info.path }, info, instance: instanceFor(info) }
 }
@@ -126,24 +137,26 @@ function queueOf(id: string): string[] {
 function describeWorktree(info: GitWorktreeInfo): Record<string, unknown> {
   const p = project()
   const state = useAppStore.getState()
+  const repo = repoOfInfo(p, info)
   const instance = instanceFor(info)
   const branch = info.branch
-  const ticket = (branch && p.branchTickets?.[branch]) || null
+  const ticket = (branch && repo.branchTickets?.[branch]) || null
   const issue = ticket ? state.linearIssues[ticket] : undefined
   return {
     worktree: instance?.id ?? info.path,
+    repo: repo.name,
     path: info.path,
     server: info.serverId ? (serverById(p, info.serverId)?.name ?? info.serverId) : 'local',
     branch: branch ?? null,
     primary: info.isMain && !info.serverId,
     selected: isSelected(info),
-    tag: branchTag(p, branch)?.name ?? null,
-    customTags: branchCustomTags(p, branch).map((t) => t.name),
+    tag: branchTag(p, repo, branch)?.name ?? null,
+    customTags: branchCustomTags(p, repo, branch).map((t) => t.name),
     ticket,
     ticketTitle: issue?.title ?? null,
     ticketStatus: issue?.status ?? null,
-    pullRequest: (branch && p.branchPullRequests?.[branch]) || null,
-    note: (branch && p.branchNotes?.[branch]) || null,
+    pullRequest: (branch && repo.branchPullRequests?.[branch]) || null,
+    note: (branch && repo.branchNotes?.[branch]) || null,
     dirty: info.dirty ?? null,
     ahead: info.ahead ?? null,
     behind: info.behind ?? null,
@@ -189,17 +202,38 @@ async function promote(args: Record<string, unknown>): Promise<unknown> {
     throw new ToolError('Not promoted — the user cancelled, or git refused (the app showed why)')
   }
   // The main checkout's branch changed; re-read it rather than wait for the poll.
-  const p = project()
-  const fresh = await window.api.listWorktrees(null, p.repositoryPath)
-  useAppStore.getState().setHostWorktrees('local', fresh)
-  const primary = allInfos().find((i) => i.isMain && !i.serverId)
+  const repo = repoOfInfo(project(), info)
+  const fresh = (await window.api.listWorktrees(null, repo.path)).map((i) => ({
+    ...i,
+    repoId: repo.id
+  }))
+  useAppStore.getState().setHostWorktrees(repoHostKey(repo.id), fresh)
+  const primary = allInfos().find((i) => i.isMain && !i.serverId && i.repoId === repo.id)
   return primary ? describeWorktree(primary) : { promoted: true }
+}
+
+/** The repository a create_worktree call targets. Required once a project has several. */
+function targetRepository(ref: unknown): Repository {
+  const repositories = project().repositories
+  const name = typeof ref === 'string' ? ref.trim() : ''
+  const valid = repositories.map((r) => r.name).join(', ')
+  if (!name) {
+    if (repositories.length === 1) return repositories[0]
+    throw new ToolError(`repo is required in this project. Repositories: ${valid}`)
+  }
+  const found = findRepository(repositories, name)
+  if (found === 'ambiguous') {
+    throw new ToolError(`"${name}" matches more than one repository. Use its id.`)
+  }
+  if (!found) throw new ToolError(`Unknown repo "${name}". Repositories: ${valid}`)
+  return found
 }
 
 async function createWorktree(args: Record<string, unknown>): Promise<unknown> {
   const branch = typeof args.branch === 'string' ? args.branch.trim() : ''
   if (!branch) throw new ToolError('branch is required')
   const p = project()
+  const repo = targetRepository(args.repo)
   const state = useAppStore.getState()
   const serverRef = typeof args.server === 'string' ? args.server.trim() : ''
   let serverId: string | undefined
@@ -216,41 +250,50 @@ async function createWorktree(args: Record<string, unknown>): Promise<unknown> {
     }
     serverId = server.id
   }
-  const repoPath = hostRepoPath(p, serverId)
-  if (!repoPath) throw new ToolError('That server has no repository path configured')
-  const checkedOut = allInfos().find((i) => i.branch === branch && i.serverId === serverId)
+  const repoPath = hostRepoPath(repo, serverId)
+  if (!repoPath) throw new ToolError(`${repo.name} has no repository path on that server`)
+  const checkedOut = allInfos().find(
+    (i) => i.branch === branch && i.serverId === serverId && i.repoId === repo.id
+  )
   if (checkedOut) {
     throw new ToolError(`"${branch}" is already checked out at ${checkedOut.path}`)
   }
 
-  const path = await createBranchWorktree(serverId, repoPath, branch, args.existingBranch !== true)
+  const path = await createBranchWorktree(
+    repo.id,
+    serverId,
+    repoPath,
+    branch,
+    args.existingBranch !== true
+  )
   const instance: WorktreeInstance = { id: crypto.randomUUID(), name: branch, path, serverId, branch }
   // Adding an instance selects it; don't yank the user's view.
   const { selected, activeWorktreeId } = useAppStore.getState()
-  useAppStore.getState().addWorktreeInstance(instance)
+  useAppStore.getState().addWorktreeInstance(repo.id, instance)
   useAppStore.setState({ selected, activeWorktreeId })
   scheduleAutoSave()
 
   // Re-read the host's worktrees rather than wait for the poll.
   const fresh = (await window.api.listWorktrees(serverId ?? null, repoPath)).map((info) => ({
     ...info,
-    serverId
+    serverId,
+    repoId: repo.id
   }))
-  useAppStore.getState().setHostWorktrees(hostKey(serverId), fresh)
+  useAppStore.getState().setHostWorktrees(repoHostKey(repo.id, serverId), fresh)
   const info = allInfos().find((i) => instanceFor(i)?.id === instance.id)
   return info ? describeWorktree(info) : { worktree: instance.id, path, branch }
 }
 
 const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i
 
-function pullRequestUrl(input: string): string {
+function pullRequestUrl(input: string, repoId: string): string {
   const url = input.match(PR_URL)
   if (url) return `https://github.com/${url[1]}/${url[2]}/pull/${url[3]}`
   const num = input.match(/^#?(\d+)$/)
   if (!num) {
     throw new ToolError(`Unrecognised pull request "${input}". Use its GitHub URL or number.`)
   }
-  const known = Object.values(project().branchPullRequests ?? {})
+  const known = Object.values(repoById(project(), repoId)?.branchPullRequests ?? {})
     .map((u) => u.match(PR_URL))
     .find(Boolean)
   if (!known) {
@@ -402,11 +445,15 @@ async function waitForSessions(args: Record<string, unknown>): Promise<unknown> 
   }
 }
 
-function branchOf(args: Record<string, unknown>): string {
+function branchOf(args: Record<string, unknown>): { repoId: string; branch: string } {
   const { info, instance } = resolveWorktree(args.worktree)
   const branch = info?.branch ?? instance?.branch
   if (!branch) throw new ToolError('That worktree has no branch (detached HEAD)')
-  return branch
+  const repo = info
+    ? repoOfInfo(project(), info)
+    : instance && repoOfWorktreeId(project(), instance.id)
+  if (!repo) throw new ToolError('That worktree is no longer in the project')
+  return { repoId: repo.id, branch }
 }
 
 function describeStack(status: StackStatus): Record<string, unknown> {
@@ -569,7 +616,7 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
       return { removed: queue[index], queue: queueOf(id) }
     }
     case 'set_worktree_tag': {
-      const branch = branchOf(args)
+      const { repoId, branch } = branchOf(args)
       const name = typeof args.tag === 'string' ? args.tag.trim() : ''
       const tags = project().worktreeTags ?? []
       const tag = name ? tags.find((t) => t.name.toLowerCase() === name.toLowerCase()) : null
@@ -577,12 +624,12 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         const valid = tags.map((t) => t.name).join(', ') || 'none configured'
         throw new ToolError(`Unknown tag "${name}". Valid tags: ${valid}`)
       }
-      useAppStore.getState().setBranchTag(branch, tag?.id ?? null)
+      useAppStore.getState().setBranchTag(repoId, branch, tag?.id ?? null)
       scheduleAutoSave()
       return { branch, tag: tag?.name ?? null }
     }
     case 'set_worktree_custom_tag': {
-      const branch = branchOf(args)
+      const { repoId, branch } = branchOf(args)
       const name = typeof args.tag === 'string' ? args.tag.trim() : ''
       const tags = project().customTags ?? []
       const tag = tags.find((t) => t.name.toLowerCase() === name.toLowerCase())
@@ -590,22 +637,25 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
         const valid = tags.map((t) => t.name).join(', ') || 'none configured'
         throw new ToolError(`Unknown custom tag "${name}". Valid custom tags: ${valid}`)
       }
-      useAppStore.getState().setBranchCustomTag(branch, tag.id, args.enabled !== false)
+      useAppStore.getState().setBranchCustomTag(repoId, branch, tag.id, args.enabled !== false)
       scheduleAutoSave()
-      return { branch, customTags: branchCustomTags(project(), branch).map((t) => t.name) }
+      return {
+        branch,
+        customTags: branchCustomTags(project(), repoById(project(), repoId)!, branch).map((t) => t.name)
+      }
     }
     case 'set_worktree_note': {
-      const branch = branchOf(args)
-      useAppStore.getState().setBranchNote(branch, typeof args.note === 'string' ? args.note : '')
+      const { repoId, branch } = branchOf(args)
+      useAppStore.getState().setBranchNote(repoId, branch, typeof args.note === 'string' ? args.note : '')
       scheduleAutoSave()
       return { branch }
     }
     case 'set_worktree_ticket': {
-      const branch = branchOf(args)
+      const { repoId, branch } = branchOf(args)
       const store = useAppStore.getState()
       const input = typeof args.ticket === 'string' ? args.ticket.trim() : ''
       if (!input) {
-        store.setBranchTicket(branch, null)
+        store.setBranchTicket(repoId, branch, null)
         scheduleAutoSave()
         return { branch, ticket: null }
       }
@@ -617,16 +667,16 @@ async function runTool(name: string, args: Record<string, unknown>): Promise<unk
       }
       if (parsed.linearWorkspace) store.setLinearWorkspace(parsed.linearWorkspace)
       if (parsed.azureDevOpsBaseUrl) store.setAzureDevOpsBaseUrl(parsed.azureDevOpsBaseUrl)
-      store.setBranchTicket(branch, parsed.ticketId)
+      store.setBranchTicket(repoId, branch, parsed.ticketId)
       scheduleAutoSave()
       const project = useAppStore.getState().project!
       return { branch, ticket: parsed.ticketId, url: ticketUrl(project, parsed.ticketId) }
     }
     case 'set_worktree_pull_request': {
-      const branch = branchOf(args)
+      const { repoId, branch } = branchOf(args)
       const input = typeof args.pullRequest === 'string' ? args.pullRequest.trim() : ''
-      const url = input ? pullRequestUrl(input) : null
-      useAppStore.getState().setBranchPullRequest(branch, url)
+      const url = input ? pullRequestUrl(input, repoId) : null
+      useAppStore.getState().setBranchPullRequest(repoId, branch, url)
       scheduleAutoSave()
       return { branch, pullRequest: url }
     }

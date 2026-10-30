@@ -21,7 +21,8 @@ const CALL_TIMEOUT_MS = 11 * 60_000
 
 const WORKTREE_PARAM = {
   type: 'string',
-  description: 'Worktree id, path, branch or name, as returned by list_worktrees'
+  description:
+    'Worktree id, path, branch or name, as returned by list_worktrees. A branch or name in several repositories is an error: pass the path.'
 }
 const TERMINAL_PARAM = { type: 'string', description: 'Session terminalId from list_worktrees' }
 const SESSION_TYPE_PARAM = {
@@ -98,6 +99,11 @@ const TOOLS = [
         existingBranch: {
           type: 'boolean',
           description: 'Check out an existing branch instead of creating a new one (default false)'
+        },
+        repo: {
+          type: 'string',
+          description:
+            'Repository name or id (the repo field of list_worktrees). Required when the project has more than one repository.'
         },
         server: {
           type: 'string',
