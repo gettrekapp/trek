@@ -9,7 +9,7 @@ import { join } from 'node:path'
 // real Colima install. Read-only operations only — the userData registry is
 // never written (no Start/Reset is clicked).
 
-const projectDir = '/Users/garretthoofman/_repos/Trek.Developer'
+const projectDir = process.cwd()
 const errors = []
 
 // Mirrors deriveProfileName in src/shared/environments.ts.

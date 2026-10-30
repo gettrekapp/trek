@@ -4,7 +4,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const projectDir = '/Users/garretthoofman/_repos/Trek.Developer'
+const projectDir = process.cwd()
 const errors = []
 
 // A real throwaway git repo with one extra worktree, so the sidebar's
@@ -221,7 +221,7 @@ try {
   console.log(`ticket chips: sidebar ${sidebarTicketChips} / detail ${detailTicketChips} (expect 1/1), PR chips: sidebar ${sidebarPrChips} / detail ${detailPrChips} (expect 1/1)`)
 
   // Workflow tag: sidebar chip from branchTags, picker changes it per branch.
-  const sidebarTagChips = await win.locator('.wt-row .mini-chip.tag-in-review').count()
+  const sidebarTagChips = await win.locator('.wt-row .mini-chip', { hasText: 'In Review' }).count()
   const tagChipText = (await win.locator('.chip-tag').innerText()).trim()
   await win.locator('.chip-tag').click()
   await win.waitForTimeout(200)

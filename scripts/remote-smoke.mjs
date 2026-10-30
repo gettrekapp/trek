@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 
-const projectDir = '/Users/garretthoofman/_repos/Trek.Developer'
+const projectDir = process.cwd()
 const PORT = 17346
 const errors = []
 const failures = []
