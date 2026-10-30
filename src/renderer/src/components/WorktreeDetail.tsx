@@ -5,6 +5,7 @@ import {
   branchTag,
   dormantSessions,
   environmentFor,
+  hostRepoPath,
   instanceForInfo,
   pullRequestLabel,
   repoOfInfo,
@@ -594,12 +595,12 @@ export function WorktreeDetail({
                 {!info.isMain &&
                   info.branch &&
                   (() => {
-                    // Every other host is a move target: local (if this row is
-                    // remote) plus each configured server except its own.
+                    // Every other host with a clone is a move target: local (if this
+                    // row is remote) plus each server except its own.
                     const targets: { key: string; name: string; down: boolean }[] = [
                       ...(isRemote ? [{ key: 'local', name: 'this machine', down: false }] : []),
                       ...(project.servers ?? [])
-                        .filter((s) => s.id !== info.serverId)
+                        .filter((s) => s.id !== info.serverId && hostRepoPath(repo, s.id))
                         .map((s) => ({
                           key: s.id,
                           name: s.name,
@@ -757,7 +758,7 @@ export function WorktreeDetail({
             className={`panel-btn ${panel === 'docker' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
           >
-            Docker <DockerMenu repoPath={repo.path} />
+            Docker <DockerMenu key={repo.id} repoPath={repo.path} />
           </button>
         )}
         {showEnv && (
@@ -851,7 +852,7 @@ export function WorktreeDetail({
         {isLocalMain && (
           <>
             <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />
-            <DockerPanel visible={panel === 'docker'} />
+            <DockerPanel key={repo.id} visible={panel === 'docker'} />
           </>
         )}
         {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}

@@ -165,7 +165,9 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const keys = ordered.map(worktreeKey).filter((k) => k !== dragKey)
     const at = keys.indexOf(targetKey) + (after ? 1 : 0)
     keys.splice(at, 0, dragKey)
-    setWorktreeOrder(keys)
+    // Rows of an unreadable repository aren't live, but their order must survive.
+    const live = new Set(ordered.map(worktreeKey))
+    setWorktreeOrder([...keys, ...(project.worktreeOrder ?? []).filter((k) => !live.has(k))])
     endDrag()
   }
 
