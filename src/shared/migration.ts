@@ -31,7 +31,18 @@ function directoryName(path: string): string {
  *   into Repository.serverPaths.
  */
 export function migrateToV3(raw: RawProjectFile, newId: () => string): ProjectFile {
-  if (raw.repositories) return raw as ProjectFile
+  if (raw.repositories !== undefined || raw.version >= 3) {
+    if (!Array.isArray(raw.repositories)) {
+      throw new Error('This project file is invalid: "repositories" must be a list.')
+    }
+    if (raw.repositories.length === 0) {
+      throw new Error('This project file is invalid: it has no repositories.')
+    }
+    return {
+      ...raw,
+      repositories: raw.repositories.map((r) => ({ ...r, worktrees: r.worktrees ?? [] }))
+    } as ProjectFile
+  }
 
   const {
     repositoryPath = '',

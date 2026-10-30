@@ -94,3 +94,19 @@ test('v3 file passes through with ids intact', () => {
   }
   assert.deepEqual(migrateToV3(input, ids()), input)
 })
+
+test('repositories must be a non-empty array', () => {
+  const file = (repositories) => ({ version: 3, name: 'p', repositories })
+  assert.throws(() => migrateToV3(file([]), ids()), /no repositories/)
+  assert.throws(() => migrateToV3(file({ id: 'a' }), ids()), /must be a list/)
+  assert.throws(() => migrateToV3(file(null), ids()), /must be a list/)
+  assert.throws(() => migrateToV3({ version: 3, name: 'p' }, ids()), /must be a list/)
+})
+
+test('a repository without worktrees gets an empty list', () => {
+  const p = migrateToV3(
+    { version: 3, name: 'p', repositories: [{ id: 'a', name: 'a', path: '/a' }] },
+    ids()
+  )
+  assert.deepEqual(p.repositories[0].worktrees, [])
+})

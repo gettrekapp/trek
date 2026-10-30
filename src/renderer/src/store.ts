@@ -344,7 +344,7 @@ interface AppState {
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
 
 /** Older files upgrade on load; projects without configured workflow tags get the default set. */
-function migrateProject(raw: RawProjectFile): ProjectFile {
+export function migrateProject(raw: RawProjectFile): ProjectFile {
   const project = migrateToV3(raw, () => crypto.randomUUID())
   return { ...project, worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS }
 }

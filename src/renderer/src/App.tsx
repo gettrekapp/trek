@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { GLOBAL_WORKTREE_ID, useAppStore } from './store'
+import { GLOBAL_WORKTREE_ID, migrateProject, useAppStore } from './store'
 import { saveProject } from './persistence'
 import {
   closeGlobalTerminal,
@@ -27,12 +27,18 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const openProject = useCallback(async (): Promise<void> => {
-    const opened = await window.api.openProject()
-    if (!opened) return
-    disposeAllTerminals()
-    // Worktrees open unloaded — the sidebar loads each one's saved sessions on
-    // demand, so a project with dozens of them doesn't launch dozens of claudes.
-    useAppStore.getState().setProject(opened.project, opened.filePath)
+    try {
+      const opened = await window.api.openProject()
+      if (!opened) return
+      // Migrate first: an invalid file must not cost the open project its sessions.
+      const project = migrateProject(opened.project)
+      disposeAllTerminals()
+      // Worktrees open unloaded — the sidebar loads each one's saved sessions on
+      // demand, so a project with dozens of them doesn't launch dozens of claudes.
+      useAppStore.getState().setProject(project, opened.filePath)
+    } catch (err) {
+      await window.api.showError('Could not open project', String(err))
+    }
   }, [])
 
   const newProject = useCallback((): void => {
