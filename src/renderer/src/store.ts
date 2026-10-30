@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { DEFAULT_WORKTREE_TAGS, hostKey, sameWorktree } from '../../shared/types'
 import { deriveProfileName } from '../../shared/environments'
+import { migrateToV3, type RawProjectFile } from '../../shared/migration'
+import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   ClaudeSessionType,
   EnvCheckResult,
@@ -12,6 +14,7 @@ import type {
   LinearIssue,
   PersistedTerminal,
   ProjectFile,
+  Repository,
   ServerConfig,
   TerminalQuickButton,
   TerminalStatus,
@@ -22,12 +25,7 @@ import type {
   WorktreeTag
 } from '../../shared/types'
 
-/**
- * The primary tab targets the repository's main checkout. It is derived from
- * repositoryPath rather than stored in project.worktrees, so it always exists
- * and can never be closed.
- */
-export const PRIMARY_WORKTREE_ID = '__primary__'
+export { isPrimaryWorktreeId, primaryWorktreeId }
 
 /** Pseudo worktree id that owns the global (project-wide) Claude terminal. */
 export const GLOBAL_WORKTREE_ID = '__global__'
@@ -36,29 +34,108 @@ export function baseName(p: string): string {
   return p.replace(/\/+$/, '').split('/').pop() ?? p
 }
 
-export function primaryWorktree(project: ProjectFile): WorktreeInstance {
-  return {
-    id: PRIMARY_WORKTREE_ID,
-    name: baseName(project.repositoryPath),
-    path: project.repositoryPath
-  }
+export function primaryWorktree(repo: Repository): WorktreeInstance {
+  return { id: primaryWorktreeId(repo.id), name: baseName(repo.path), path: repo.path }
 }
 
 /** Primary tab first, then the added worktree instances. */
+export function repoWorktrees(repo: Repository): WorktreeInstance[] {
+  return [primaryWorktree(repo), ...repo.worktrees]
+}
+
+/** Every repository's worktrees, in section order. */
 export function allWorktrees(project: ProjectFile): WorktreeInstance[] {
-  return [primaryWorktree(project), ...project.worktrees]
+  return project.repositories.flatMap(repoWorktrees)
+}
+
+export function repoById(project: ProjectFile, repoId: string | undefined): Repository | undefined {
+  return project.repositories.find((r) => r.id === repoId)
+}
+
+/** The repository owning a worktree instance id (primary ids included). */
+export function repoOfWorktreeId(project: ProjectFile, worktreeId: string): Repository | undefined {
+  return project.repositories.find((r) => repoWorktrees(r).some((w) => w.id === worktreeId))
+}
+
+/**
+ * The repository of a live row. Rows are stamped on read and dropped in the
+ * same update that removes a repository, so a miss is a bug: throw rather than
+ * write one repository's branch data into another.
+ */
+export function repoOfInfo(project: ProjectFile, info: GitWorktreeInfo): Repository {
+  const repo = repoById(project, info.repoId)
+  if (!repo) throw new Error(`No repository for worktree ${info.path}`)
+  return repo
+}
+
+/** The repository of a worktree that may have no instance yet. */
+export function repoOfLocator(
+  project: ProjectFile,
+  hostWorktrees: Record<string, GitWorktreeInfo[]>,
+  loc: WorktreeLocator
+): Repository | undefined {
+  const instanceOwner = project.repositories.find((r) =>
+    repoWorktrees(r).some((w) => sameWorktree(w, loc))
+  )
+  if (instanceOwner) return instanceOwner
+  const info = Object.values(hostWorktrees)
+    .flat()
+    .find((w) => sameWorktree(w, loc))
+  return repoById(project, info?.repoId)
+}
+
+/** A live row's instance. The local main checkout matches by isMain, not path: git
+ * reports the resolved path, which can differ from the stored Repository.path. */
+export function instanceForInfo(
+  project: ProjectFile,
+  info: GitWorktreeInfo
+): WorktreeInstance | undefined {
+  const repo = repoById(project, info.repoId)
+  if (!repo) return undefined
+  return info.isMain && !info.serverId
+    ? primaryWorktree(repo)
+    : repo.worktrees.find((w) => sameWorktree(w, info))
+}
+
+/** Every repository's linked tickets, for fetching their live state. */
+export function allBranchTickets(project: ProjectFile | null): string[] {
+  return (project?.repositories ?? []).flatMap((r) => Object.values(r.branchTickets ?? {}))
 }
 
 /** The branch's workflow tag, if it has one that still exists. */
-export function branchTag(project: ProjectFile, branch: string | undefined): WorktreeTag | undefined {
-  const id = branch ? project.branchTags?.[branch] : undefined
+export function branchTag(
+  project: ProjectFile,
+  repo: Repository,
+  branch: string | undefined
+): WorktreeTag | undefined {
+  const id = branch ? repo.branchTags?.[branch] : undefined
   return id ? project.worktreeTags?.find((t) => t.id === id) : undefined
 }
 
 /** The branch's enabled custom tags that still exist, in configured order. */
-export function branchCustomTags(project: ProjectFile, branch: string | undefined): WorktreeTag[] {
-  const ids = branch ? project.branchCustomTags?.[branch] : undefined
+export function branchCustomTags(
+  project: ProjectFile,
+  repo: Repository,
+  branch: string | undefined
+): WorktreeTag[] {
+  const ids = branch ? repo.branchCustomTags?.[branch] : undefined
   return ids?.length ? (project.customTags ?? []).filter((t) => ids.includes(t.id)) : []
+}
+
+/** hostWorktrees cache key: rows of one repository on one host. */
+export const repoHostKey = (repoId: string, serverId?: string): string =>
+  `${repoId} ${hostKey(serverId)}`
+
+/** Apply a change to one repository. */
+function patchRepo(
+  project: ProjectFile,
+  repoId: string,
+  patch: (repo: Repository) => Partial<Repository>
+): ProjectFile {
+  return {
+    ...project,
+    repositories: project.repositories.map((r) => (r.id === repoId ? { ...r, ...patch(r) } : r))
+  }
 }
 
 /** Chip colors for a workflow tag: its color over a translucent tint of it. */
@@ -160,10 +237,10 @@ interface AppState {
    * a freshly opened project starts with everything unloaded so dozens of
    * worktrees don't all spawn claude at once. An unloaded worktree keeps its
    * sessions in the project file (WorktreeInstance.terminals /
-   * ProjectFile.primaryTerminals) and resumes them when loaded.
+   * Repository.primaryTerminals) and resumes them when loaded.
    */
   loadedWorktrees: Record<string, true>
-  /** Live git worktrees per host (keyed by hostKey), serverId pre-stamped. */
+  /** Live git worktrees per repository and host (keyed by repoHostKey), repoId and serverId stamped. */
   hostWorktrees: Record<string, GitWorktreeInfo[]>
   serverStatus: Record<string, HostStatus>
   /** Live Colima environments, keyed by profile name (not persisted). */
@@ -192,7 +269,10 @@ interface AppState {
   voicePlaying: SpokenSummary | null
   voiceQueued: number
 
-  setProject: (project: ProjectFile, filePath: string | null) => void
+  setProject: (project: RawProjectFile, filePath: string | null) => void
+  addRepository: (repo: Repository) => void
+  /** Drops the repository and its cached rows. Callers check repositoryRemovalBlock first. */
+  removeRepository: (repoId: string) => void
   closeProject: () => void
   markSaved: (filePath: string) => void
   setActiveWorktree: (id: string) => void
@@ -201,13 +281,14 @@ interface AppState {
    * whose stored path may differ from git's resolved worktree path).
    */
   selectWorktree: (loc: WorktreeLocator, instanceId?: string) => void
-  addWorktreeInstance: (worktree: WorktreeInstance) => void
+  addWorktreeInstance: (repoId: string, worktree: WorktreeInstance) => void
   removeWorktreeInstance: (id: string) => void
   updateWorktreeInstance: (id: string, patch: Partial<WorktreeInstance>) => void
   setServers: (servers: ServerConfig[]) => void
   setHostWorktrees: (key: string, infos: GitWorktreeInfo[]) => void
-  /** Merge a status sweep's dirty/ahead/behind into the cached worktree rows. */
-  setWorktreeStatuses: (key: string, statuses: WorktreeStatus[]) => void
+  /** Merge a status sweep's dirty/ahead/behind into the host's cached rows, in every repository. */
+  setWorktreeStatuses: (host: string, statuses: WorktreeStatus[]) => void
+  setServerRepoPaths: (serverId: string, pathsByRepo: Record<string, string>) => void
   clearHostWorktrees: (key: string) => void
   setServerStatus: (serverId: string, status: HostStatus) => void
   setWorktreeLoaded: (worktreeId: string, loaded: boolean) => void
@@ -224,15 +305,15 @@ interface AppState {
   toggleTerminalComplete: (id: string) => void
   toggleWorktreeComplete: (worktreeId: string) => void
   toggleDockerFavorite: (containerName: string) => void
-  setBranchTicket: (branch: string, ticketId: string | null) => void
-  setBranchPullRequest: (branch: string, url: string | null) => void
+  setBranchTicket: (repoId: string, branch: string, ticketId: string | null) => void
+  setBranchPullRequest: (repoId: string, branch: string, url: string | null) => void
   setAzureDevOpsBaseUrl: (url: string) => void
   setLinearWorkspace: (slug: string) => void
-  setBranchNote: (branch: string, text: string) => void
-  setBranchEnvVars: (branch: string, text: string) => void
-  setBranchTag: (branch: string, tagId: string | null) => void
+  setBranchNote: (repoId: string, branch: string, text: string) => void
+  setBranchEnvVars: (repoId: string, branch: string, text: string) => void
+  setBranchTag: (repoId: string, branch: string, tagId: string | null) => void
   setWorktreeTags: (tags: WorktreeTag[]) => void
-  setBranchCustomTag: (branch: string, tagId: string, enabled: boolean) => void
+  setBranchCustomTag: (repoId: string, branch: string, tagId: string, enabled: boolean) => void
   setCustomTags: (tags: WorktreeTag[]) => void
   setAudioAlerts: (enabled: boolean) => void
   setTerminalButtons: (buttons: TerminalQuickButton[]) => void
@@ -240,10 +321,10 @@ interface AppState {
   setGlobalSystemPrompt: (prompt: string) => void
   setSessionSystemPrompt: (prompt: string) => void
   setSessionTypes: (types: ClaudeSessionType[]) => void
-  setLinkedDirs: (dirs: string[]) => void
+  setLinkedDirs: (repoId: string, dirs: string[]) => void
   setWorktreeOrder: (keys: string[]) => void
   setClaudePermissionMode: (mode: string) => void
-  setEnvironmentSettings: (patch: Partial<EnvironmentSettings>) => void
+  setEnvironmentSettings: (repoId: string, patch: Partial<EnvironmentSettings>) => void
   setEnvironments: (infos: EnvironmentInfo[]) => void
   setEnvBusy: (profile: string, action: EnvBusyAction | null) => void
   setEnvToolCheck: (result: EnvCheckResult) => void
@@ -262,40 +343,10 @@ interface AppState {
 
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
 
-/**
- * Normalizes older project files on load:
- * - the main checkout used to be stored as a regular worktree; it is now the
- *   synthetic primary instance, so drop it from the list (local only — a
- *   remote worktree can legitimately share the local repo's path string).
- * - ticket/PR links used to live on the worktree instance; they are now keyed
- *   by branch so they survive promote/delete/re-create.
- * - v2 adds remote servers; older files just get the empty default.
- * - projects without configured workflow tags get the default set.
- */
-function migrateProject(project: ProjectFile): ProjectFile {
-  const branchTickets = { ...(project.branchTickets ?? {}) }
-  const branchPullRequests = { ...(project.branchPullRequests ?? {}) }
-  const worktrees = project.worktrees
-    .filter((w) => w.serverId || w.path !== project.repositoryPath)
-    .map((w) => {
-      const key = w.branch ?? w.name
-      if (w.ticketId && !branchTickets[key]) branchTickets[key] = w.ticketId
-      if (w.pullRequestUrl && !branchPullRequests[key]) branchPullRequests[key] = w.pullRequestUrl
-      const { ticketId: _t, pullRequestUrl: _p, ...rest } = w
-      return rest
-    })
-  const { globalSessionId, ...rest } = project
-  return {
-    ...rest,
-    globalSessions:
-      project.globalSessions ?? (globalSessionId ? [{ sessionId: globalSessionId, title: 'Claude' }] : []),
-    version: 2,
-    worktrees,
-    servers: project.servers ?? [],
-    worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS,
-    branchTickets,
-    branchPullRequests
-  }
+/** Older files upgrade on load; projects without configured workflow tags get the default set. */
+function migrateProject(raw: RawProjectFile): ProjectFile {
+  const project = migrateToV3(raw, () => crypto.randomUUID())
+  return { ...project, worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS }
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -324,13 +375,15 @@ export const useAppStore = create<AppState>((set) => ({
   voicePlaying: null,
   voiceQueued: 0,
 
-  setProject: (project, filePath) =>
+  setProject: (raw, filePath) => {
+    const project = migrateProject(raw)
+    const [first] = project.repositories
     set({
-      project: migrateProject(project),
+      project,
       filePath,
       dirty: filePath === null,
-      activeWorktreeId: PRIMARY_WORKTREE_ID,
-      selected: { path: project.repositoryPath },
+      activeWorktreeId: primaryWorktreeId(first.id),
+      selected: { path: first.path },
       terminals: {},
       terminalOrder: {},
       activeTerminal: {},
@@ -341,6 +394,43 @@ export const useAppStore = create<AppState>((set) => ({
       envBusy: {},
       terminalQueues: {},
       decisions: {}
+    })
+  },
+
+  addRepository: (repo) =>
+    set((state) => {
+      if (!state.project) return state
+      return {
+        project: { ...state.project, repositories: [...state.project.repositories, repo] },
+        dirty: true
+      }
+    }),
+
+  removeRepository: (repoId) =>
+    set((state) => {
+      if (!state.project) return state
+      const removed = repoById(state.project, repoId)
+      if (!removed) return state
+      const repositories = state.project.repositories.filter((r) => r.id !== repoId)
+      const hostWorktrees = Object.fromEntries(
+        Object.entries(state.hostWorktrees).filter(([key]) => !key.startsWith(`${repoId} `))
+      )
+      const removedIds = new Set(repoWorktrees(removed).map((w) => w.id))
+      const viewingRemoved = !!state.activeWorktreeId && removedIds.has(state.activeWorktreeId)
+      const selectionRemoved =
+        viewingRemoved ||
+        Object.values(state.hostWorktrees)
+          .flat()
+          .some((w) => w.repoId === repoId && !!state.selected && sameWorktree(w, state.selected))
+      return {
+        project: { ...state.project, repositories },
+        hostWorktrees,
+        activeWorktreeId: selectionRemoved
+          ? primaryWorktreeId(repositories[0].id)
+          : state.activeWorktreeId,
+        selected: selectionRemoved ? { path: repositories[0].path } : state.selected,
+        dirty: true
+      }
     }),
 
   closeProject: () =>
@@ -385,11 +475,13 @@ export const useAppStore = create<AppState>((set) => ({
       return { selected: loc, activeWorktreeId: instance?.id ?? null }
     }),
 
-  addWorktreeInstance: (worktree) =>
+  addWorktreeInstance: (repoId, worktree) =>
     set((state) => {
       if (!state.project) return state
       return {
-        project: { ...state.project, worktrees: [...state.project.worktrees, worktree] },
+        project: patchRepo(state.project, repoId, (r) => ({
+          worktrees: [...r.worktrees, worktree]
+        })),
         activeWorktreeId: worktree.id,
         selected: { serverId: worktree.serverId, path: worktree.path },
         dirty: true
@@ -398,8 +490,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   removeWorktreeInstance: (id) =>
     set((state) => {
-      if (!state.project || id === PRIMARY_WORKTREE_ID) return state
-      const worktrees = state.project.worktrees.filter((w) => w.id !== id)
+      if (!state.project || isPrimaryWorktreeId(id)) return state
+      const repo = repoOfWorktreeId(state.project, id)
+      if (!repo) return state
       const terminals = { ...state.terminals }
       const terminalQueues = { ...state.terminalQueues }
       for (const termId of state.terminalOrder[id] ?? []) {
@@ -413,18 +506,17 @@ export const useAppStore = create<AppState>((set) => ({
       const loadedWorktrees = { ...state.loadedWorktrees }
       delete loadedWorktrees[id]
       return {
-        project: { ...state.project, worktrees },
+        project: patchRepo(state.project, repo.id, (r) => ({
+          worktrees: r.worktrees.filter((w) => w.id !== id)
+        })),
         terminals,
         terminalOrder,
         activeTerminal,
         terminalQueues,
         loadedWorktrees,
         activeWorktreeId:
-          state.activeWorktreeId === id ? PRIMARY_WORKTREE_ID : state.activeWorktreeId,
-        selected:
-          state.activeWorktreeId === id
-            ? { path: state.project.repositoryPath }
-            : state.selected,
+          state.activeWorktreeId === id ? primaryWorktreeId(repo.id) : state.activeWorktreeId,
+        selected: state.activeWorktreeId === id ? { path: repo.path } : state.selected,
         dirty: true
       }
     }),
@@ -432,16 +524,30 @@ export const useAppStore = create<AppState>((set) => ({
   updateWorktreeInstance: (id, patch) =>
     set((state) => {
       if (!state.project) return state
-      const worktrees = state.project.worktrees.map((w) => (w.id === id ? { ...w, ...patch } : w))
+      const repo = repoOfWorktreeId(state.project, id)
+      if (!repo) return state
+      const worktrees = repo.worktrees.map((w) => (w.id === id ? { ...w, ...patch } : w))
       const updated = worktrees.find((w) => w.id === id)
       return {
-        project: { ...state.project, worktrees },
+        project: patchRepo(state.project, repo.id, () => ({ worktrees })),
         selected:
           state.activeWorktreeId === id && updated
             ? { serverId: updated.serverId, path: updated.path }
             : state.selected,
         dirty: true
       }
+    }),
+
+  setServerRepoPaths: (serverId, pathsByRepo) =>
+    set((state) => {
+      if (!state.project) return state
+      const repositories = state.project.repositories.map((r) => {
+        const { [serverId]: _old, ...serverPaths } = r.serverPaths ?? {}
+        const path = pathsByRepo[r.id]?.trim()
+        if (path) serverPaths[serverId] = path
+        return { ...r, serverPaths }
+      })
+      return { project: { ...state.project, repositories }, dirty: true }
     }),
 
   setServers: (servers) =>
@@ -466,18 +572,23 @@ export const useAppStore = create<AppState>((set) => ({
       return { hostWorktrees: { ...state.hostWorktrees, [key]: merged } }
     }),
 
-  setWorktreeStatuses: (key, statuses) =>
+  setWorktreeStatuses: (host, statuses) =>
     set((state) => {
-      const prev = state.hostWorktrees[key]
-      if (!prev) return state
       const byPath = new Map(statuses.map((s) => [s.path, s]))
-      const merged = prev.map((info) => {
-        const status = byPath.get(info.path)
-        if (!status) return info
-        return { ...info, dirty: status.dirty, ahead: status.ahead, behind: status.behind }
-      })
-      if (JSON.stringify(prev) === JSON.stringify(merged)) return state
-      return { hostWorktrees: { ...state.hostWorktrees, [key]: merged } }
+      let changed = false
+      const hostWorktrees = { ...state.hostWorktrees }
+      for (const [key, prev] of Object.entries(state.hostWorktrees)) {
+        if (!key.endsWith(` ${host}`)) continue
+        const merged = prev.map((info) => {
+          const status = byPath.get(info.path)
+          if (!status) return info
+          return { ...info, dirty: status.dirty, ahead: status.ahead, behind: status.behind }
+        })
+        if (JSON.stringify(prev) === JSON.stringify(merged)) continue
+        hostWorktrees[key] = merged
+        changed = true
+      }
+      return changed ? { hostWorktrees } : state
     }),
 
   clearHostWorktrees: (key) =>
@@ -506,13 +617,20 @@ export const useAppStore = create<AppState>((set) => ({
   setWorktreeSessions: (worktreeId, sessions) =>
     set((state) => {
       if (!state.project) return state
-      if (worktreeId === PRIMARY_WORKTREE_ID) {
-        return { project: { ...state.project, primaryTerminals: sessions }, dirty: true }
+      const repo = repoOfWorktreeId(state.project, worktreeId)
+      if (!repo) return state
+      return {
+        project: patchRepo(state.project, repo.id, (r) =>
+          isPrimaryWorktreeId(worktreeId)
+            ? { primaryTerminals: sessions }
+            : {
+                worktrees: r.worktrees.map((w) =>
+                  w.id === worktreeId ? { ...w, terminals: sessions } : w
+                )
+              }
+        ),
+        dirty: true
       }
-      const worktrees = state.project.worktrees.map((w) =>
-        w.id === worktreeId ? { ...w, terminals: sessions } : w
-      )
-      return { project: { ...state.project, worktrees }, dirty: true }
     }),
 
   registerTerminal: (meta) =>
@@ -621,24 +739,6 @@ export const useAppStore = create<AppState>((set) => ({
       }
     }),
 
-  setBranchTicket: (branch, ticketId) =>
-    set((state) => {
-      if (!state.project) return state
-      const branchTickets = { ...(state.project.branchTickets ?? {}) }
-      if (ticketId) branchTickets[branch] = ticketId
-      else delete branchTickets[branch]
-      return { project: { ...state.project, branchTickets }, dirty: true }
-    }),
-
-  setBranchPullRequest: (branch, url) =>
-    set((state) => {
-      if (!state.project) return state
-      const branchPullRequests = { ...(state.project.branchPullRequests ?? {}) }
-      if (url) branchPullRequests[branch] = url
-      else delete branchPullRequests[branch]
-      return { project: { ...state.project, branchPullRequests }, dirty: true }
-    }),
-
   setAzureDevOpsBaseUrl: (url) =>
     set((state) => {
       if (!state.project) return state
@@ -693,14 +793,6 @@ export const useAppStore = create<AppState>((set) => ({
       return { project: { ...state.project, sessionTypes }, dirty: true }
     }),
 
-  setLinkedDirs: (dirs) =>
-    set((state) => {
-      if (!state.project) return state
-      // An emptied list drops the key so it doesn't clutter the project file.
-      const linkedDirs = dirs.length > 0 ? dirs : undefined
-      return { project: { ...state.project, linkedDirs }, dirty: true }
-    }),
-
   setWorktreeOrder: (keys) =>
     set((state) =>
       state.project ? { project: { ...state.project, worktreeOrder: keys }, dirty: true } : state
@@ -710,13 +802,6 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => {
       if (!state.project) return state
       return { project: { ...state.project, claudePermissionMode: mode }, dirty: true }
-    }),
-
-  setEnvironmentSettings: (patch) =>
-    set((state) => {
-      if (!state.project) return state
-      const environments = { enabled: false, ...state.project.environments, ...patch }
-      return { project: { ...state.project, environments }, dirty: true }
     }),
 
   setEnvironments: (infos) =>
@@ -784,66 +869,139 @@ export const useAppStore = create<AppState>((set) => ({
       return { terminalQueues }
     }),
 
-  setBranchNote: (branch, text) =>
+  setBranchTicket: (repoId, branch, ticketId) =>
     set((state) => {
       if (!state.project) return state
-      const branchNotes = { ...(state.project.branchNotes ?? {}) }
-      if (text) branchNotes[branch] = text
-      else delete branchNotes[branch] // empty notes don't clutter the file
-      return { project: { ...state.project, branchNotes }, dirty: true }
+      return {
+        project: patchRepo(state.project, repoId, (r) => {
+          const branchTickets = { ...(r.branchTickets ?? {}) }
+          if (ticketId) branchTickets[branch] = ticketId
+          else delete branchTickets[branch]
+          return { branchTickets }
+        }),
+        dirty: true
+      }
     }),
 
-  setBranchEnvVars: (branch, text) =>
+  setBranchPullRequest: (repoId, branch, url) =>
     set((state) => {
       if (!state.project) return state
-      const branchEnvVars = { ...(state.project.branchEnvVars ?? {}) }
-      if (text.trim()) branchEnvVars[branch] = text
-      else delete branchEnvVars[branch] // empty editors don't clutter the file
-      return { project: { ...state.project, branchEnvVars }, dirty: true }
+      return {
+        project: patchRepo(state.project, repoId, (r) => {
+          const branchPullRequests = { ...(r.branchPullRequests ?? {}) }
+          if (url) branchPullRequests[branch] = url
+          else delete branchPullRequests[branch]
+          return { branchPullRequests }
+        }),
+        dirty: true
+      }
     }),
 
-  setBranchTag: (branch, tagId) =>
+  setLinkedDirs: (repoId, dirs) =>
     set((state) => {
       if (!state.project) return state
-      const branchTags = { ...(state.project.branchTags ?? {}) }
-      if (tagId) branchTags[branch] = tagId
-      else delete branchTags[branch] // untagged branches don't clutter the file
-      return { project: { ...state.project, branchTags }, dirty: true }
+      // An emptied list drops the key so it doesn't clutter the project file.
+      const linkedDirs = dirs.length > 0 ? dirs : undefined
+      return { project: patchRepo(state.project, repoId, () => ({ linkedDirs })), dirty: true }
+    }),
+
+  setEnvironmentSettings: (repoId, patch) =>
+    set((state) => {
+      if (!state.project) return state
+      return {
+        project: patchRepo(state.project, repoId, (r) => ({
+          environments: { enabled: false, ...r.environments, ...patch }
+        })),
+        dirty: true
+      }
+    }),
+
+  setBranchNote: (repoId, branch, text) =>
+    set((state) => {
+      if (!state.project) return state
+      return {
+        project: patchRepo(state.project, repoId, (r) => {
+          const branchNotes = { ...(r.branchNotes ?? {}) }
+          if (text) branchNotes[branch] = text
+          else delete branchNotes[branch] // empty notes don't clutter the file
+          return { branchNotes }
+        }),
+        dirty: true
+      }
+    }),
+
+  setBranchEnvVars: (repoId, branch, text) =>
+    set((state) => {
+      if (!state.project) return state
+      return {
+        project: patchRepo(state.project, repoId, (r) => {
+          const branchEnvVars = { ...(r.branchEnvVars ?? {}) }
+          if (text.trim()) branchEnvVars[branch] = text
+          else delete branchEnvVars[branch] // empty editors don't clutter the file
+          return { branchEnvVars }
+        }),
+        dirty: true
+      }
+    }),
+
+  setBranchTag: (repoId, branch, tagId) =>
+    set((state) => {
+      if (!state.project) return state
+      return {
+        project: patchRepo(state.project, repoId, (r) => {
+          const branchTags = { ...(r.branchTags ?? {}) }
+          if (tagId) branchTags[branch] = tagId
+          else delete branchTags[branch] // untagged branches don't clutter the file
+          return { branchTags }
+        }),
+        dirty: true
+      }
     }),
 
   setWorktreeTags: (tags) =>
     set((state) => {
       if (!state.project) return state
-      // Branches carrying a deleted tag become untagged.
+      // Branches carrying a deleted tag become untagged, in every repository.
       const ids = new Set(tags.map((t) => t.id))
-      const branchTags = Object.fromEntries(
-        Object.entries(state.project.branchTags ?? {}).filter(([, id]) => ids.has(id))
-      )
-      return { project: { ...state.project, worktreeTags: tags, branchTags }, dirty: true }
+      const repositories = state.project.repositories.map((r) => ({
+        ...r,
+        branchTags: Object.fromEntries(
+          Object.entries(r.branchTags ?? {}).filter(([, id]) => ids.has(id))
+        )
+      }))
+      return { project: { ...state.project, worktreeTags: tags, repositories }, dirty: true }
     }),
 
-  setBranchCustomTag: (branch, tagId, enabled) =>
+  setBranchCustomTag: (repoId, branch, tagId, enabled) =>
     set((state) => {
       if (!state.project) return state
-      const branchCustomTags = { ...(state.project.branchCustomTags ?? {}) }
-      const ids = (branchCustomTags[branch] ?? []).filter((id) => id !== tagId)
-      if (enabled) ids.push(tagId)
-      if (ids.length) branchCustomTags[branch] = ids
-      else delete branchCustomTags[branch]
-      return { project: { ...state.project, branchCustomTags }, dirty: true }
+      return {
+        project: patchRepo(state.project, repoId, (r) => {
+          const branchCustomTags = { ...(r.branchCustomTags ?? {}) }
+          const ids = (branchCustomTags[branch] ?? []).filter((id) => id !== tagId)
+          if (enabled) ids.push(tagId)
+          if (ids.length) branchCustomTags[branch] = ids
+          else delete branchCustomTags[branch]
+          return { branchCustomTags }
+        }),
+        dirty: true
+      }
     }),
 
   setCustomTags: (tags) =>
     set((state) => {
       if (!state.project) return state
-      // Deleted tags come off every branch carrying them.
+      // Deleted tags come off every branch carrying them, in every repository.
       const ids = new Set(tags.map((t) => t.id))
-      const branchCustomTags: Record<string, string[]> = {}
-      for (const [branch, tagIds] of Object.entries(state.project.branchCustomTags ?? {})) {
-        const kept = tagIds.filter((id) => ids.has(id))
-        if (kept.length) branchCustomTags[branch] = kept
-      }
-      return { project: { ...state.project, customTags: tags, branchCustomTags }, dirty: true }
+      const repositories = state.project.repositories.map((r) => {
+        const branchCustomTags: Record<string, string[]> = {}
+        for (const [branch, tagIds] of Object.entries(r.branchCustomTags ?? {})) {
+          const kept = tagIds.filter((id) => ids.has(id))
+          if (kept.length) branchCustomTags[branch] = kept
+        }
+        return { ...r, branchCustomTags }
+      })
+      return { project: { ...state.project, customTags: tags, repositories }, dirty: true }
     }),
 
   toggleWorktreeComplete: (worktreeId) =>
@@ -870,16 +1028,35 @@ export function environmentFor(
   return environments[deriveProfileName(repoPath, branch)]
 }
 
-/** Local worktrees first, then each server's in project.servers order. */
+/** Each repository in order: local rows first, then each server's in project.servers order. */
 export function mergedWorktrees(
   project: ProjectFile,
   hostWorktrees: Record<string, GitWorktreeInfo[]>
 ): GitWorktreeInfo[] {
-  const merged = [...(hostWorktrees[hostKey(undefined)] ?? [])]
-  for (const server of project.servers ?? []) {
-    merged.push(...(hostWorktrees[hostKey(server.id)] ?? []))
-  }
-  return merged
+  return project.repositories.flatMap((repo) => [
+    ...(hostWorktrees[repoHostKey(repo.id)] ?? []),
+    ...(project.servers ?? []).flatMap((s) => hostWorktrees[repoHostKey(repo.id, s.id)] ?? [])
+  ])
+}
+
+/**
+ * The row to show for the selection. A selected primary holds the stored path,
+ * which can differ from git's resolved one, so it matches through its repository.
+ */
+export function selectedWorktreeInfo(
+  project: ProjectFile,
+  worktrees: GitWorktreeInfo[],
+  selected: WorktreeLocator | null
+): GitWorktreeInfo | undefined {
+  const isMainOf = (w: GitWorktreeInfo, path: string | undefined): boolean =>
+    w.isMain && !w.serverId && repoById(project, w.repoId)?.path === path
+  return (
+    (selected ? worktrees.find((w) => sameWorktree(w, selected)) : undefined) ??
+    (selected && !selected.serverId
+      ? worktrees.find((w) => isMainOf(w, selected.path))
+      : undefined) ??
+    worktrees.find((w) => w.isMain && !w.serverId)
+  )
 }
 
 export function serverById(
@@ -891,9 +1068,9 @@ export function serverById(
 }
 
 /** Repo root on the worktree's host: the local repo or the server's clone. */
-export function hostRepoPath(project: ProjectFile, serverId: string | undefined): string | null {
-  if (!serverId) return project.repositoryPath
-  return serverById(project, serverId)?.repoPath ?? null
+export function hostRepoPath(repo: Repository, serverId: string | undefined): string | null {
+  if (!serverId) return repo.path
+  return repo.serverPaths?.[serverId] ?? null
 }
 
 const SERVER_COLOR_COUNT = 6
@@ -915,8 +1092,10 @@ export function dormantSessions(
   worktreeId: string
 ): PersistedTerminal[] {
   if (!state.project || state.loadedWorktrees[worktreeId]) return []
-  if (worktreeId === PRIMARY_WORKTREE_ID) return state.project.primaryTerminals ?? []
-  return state.project.worktrees.find((w) => w.id === worktreeId)?.terminals ?? []
+  const repo = repoOfWorktreeId(state.project, worktreeId)
+  if (!repo) return []
+  if (isPrimaryWorktreeId(worktreeId)) return repo.primaryTerminals ?? []
+  return repo.worktrees.find((w) => w.id === worktreeId)?.terminals ?? []
 }
 
 /** Highest-priority status across a worktree's terminals, for tab badges. */
