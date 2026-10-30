@@ -6,8 +6,8 @@ import {
   dormantSessions,
   GLOBAL_WORKTREE_ID,
   hostRepoPath,
-  PRIMARY_WORKTREE_ID,
   primaryWorktree,
+  repoOfLocator,
   useAppStore
 } from './store'
 import { playReadyAlert } from './audio'
@@ -220,12 +220,19 @@ const GLOBAL_SYSTEM_PROMPT =
 /** The global session also gets the app's MCP server and a role prompt. */
 async function globalClaudeCommand(sessionId: string, resume: boolean): Promise<string> {
   const mcpConfig = await window.api.getMcpConfigPath()
-  const custom = useAppStore.getState().project?.globalSystemPrompt?.trim()
+  const project = useAppStore.getState().project
+  const custom = project?.globalSystemPrompt?.trim()
   const systemPrompt = [GLOBAL_SYSTEM_PROMPT, voicePrompt(), custom].filter(Boolean).join('\n\n')
+  // Runs in the first repository: Claude stores sessions by working directory,
+  // so moving it would orphan conversations. The others are added for access.
+  const addDirs = (project?.repositories.slice(1) ?? []).map(
+    (r) => `--add-dir ${shellQuote(r.path)}`
+  )
   return claudeCommand(sessionId, resume, [
     `--mcp-config ${shellQuote(mcpConfig)}`,
     '--allowedTools mcp__trek-dev',
-    `--append-system-prompt ${shellQuote(systemPrompt)}`
+    `--append-system-prompt ${shellQuote(systemPrompt)}`,
+    ...addDirs
   ])
 }
 
@@ -297,8 +304,10 @@ export async function startClaudeSession(
   if (!project) return null
   let instance = allWorktrees(project).find((w) => sameWorktree(w, loc))
   if (!instance) {
+    const repo = repoOfLocator(project, useAppStore.getState().hostWorktrees, loc)
+    if (!repo) return null
     let branch: string | undefined
-    const repoPath = hostRepoPath(project, loc.serverId)
+    const repoPath = hostRepoPath(repo, loc.serverId)
     try {
       if (repoPath) {
         const infos = await window.api.listWorktrees(loc.serverId ?? null, repoPath)
@@ -314,7 +323,7 @@ export async function startClaudeSession(
       serverId: loc.serverId,
       branch
     }
-    useAppStore.getState().addWorktreeInstance(created)
+    useAppStore.getState().addWorktreeInstance(repo.id, created)
     instance = created
   }
   return createTerminal(instance.id, instance.path, undefined, sessionType)
@@ -470,7 +479,7 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
   try {
     await window.api.spawnPty({
       id,
-      cwd: project.repositoryPath,
+      cwd: project.repositories[0].path,
       command: await globalClaudeCommand(sessionId, !!saved),
       env: { TREK_TERMINAL_ID: id },
       cols: entry.term.cols,
@@ -574,7 +583,7 @@ export async function restartTerminal(id: string): Promise<void> {
   if (!entry || !meta || meta.status !== 'exited' || !state.project) return
   const isGlobal = meta.worktreeId === GLOBAL_WORKTREE_ID
   const worktree = isGlobal
-    ? primaryWorktree(state.project)
+    ? primaryWorktree(state.project.repositories[0])
     : allWorktrees(state.project).find((w) => w.id === meta.worktreeId)
   if (!worktree) return
 

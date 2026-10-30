@@ -3,7 +3,9 @@ import {
   dormantSessions,
   environmentFor,
   hostRepoPath,
-  PRIMARY_WORKTREE_ID,
+  primaryWorktreeId,
+  repoById,
+  repoOfInfo,
   useAppStore
 } from './store'
 import { destroyEnvironmentIfAny } from './environmentActions'
@@ -44,11 +46,13 @@ export interface MoveProgress {
  * Best-effort — a failure never blocks worktree creation.
  */
 export async function linkProjectDirs(
+  repoId: string,
   serverId: string | null,
   repoPath: string,
   worktreePath: string
 ): Promise<void> {
-  const dirs = useAppStore.getState().project?.linkedDirs ?? []
+  const project = useAppStore.getState().project
+  const dirs = (project && repoById(project, repoId)?.linkedDirs) ?? []
   if (dirs.length === 0) return
   try {
     await window.api.linkWorktreeDirs(serverId, repoPath, worktreePath, dirs)
@@ -69,6 +73,7 @@ export function worktreePathFor(repoPath: string, branch: string): string {
  * it. Returns the worktree's path.
  */
 export async function createBranchWorktree(
+  repoId: string,
   serverId: string | undefined,
   repoPath: string,
   branch: string,
@@ -76,18 +81,19 @@ export async function createBranchWorktree(
 ): Promise<string> {
   const worktreePath = worktreePathFor(repoPath, branch)
   await window.api.addWorktree(serverId ?? null, repoPath, worktreePath, branch, createBranch)
-  await linkProjectDirs(serverId ?? null, repoPath, worktreePath)
+  await linkProjectDirs(repoId, serverId ?? null, repoPath, worktreePath)
   // Fresh worktrees start with the first workflow tag — unless the branch
   // already carries a tag from an earlier worktree.
-  tagNewBranch(branch)
+  tagNewBranch(repoId, branch)
   return worktreePath
 }
 
 /** Give a fresh worktree's branch the first workflow tag, unless it already has one. */
-export function tagNewBranch(branch: string): void {
+export function tagNewBranch(repoId: string, branch: string): void {
   const state = useAppStore.getState()
   const first = state.project?.worktreeTags?.[0]
-  if (first && !state.project?.branchTags?.[branch]) state.setBranchTag(branch, first.id)
+  const repo = state.project && repoById(state.project, repoId)
+  if (first && repo && !repo.branchTags?.[branch]) state.setBranchTag(repoId, branch, first.id)
 }
 
 /**
@@ -112,8 +118,9 @@ export async function moveWorktree(opts: {
 
   const sourceServerId = info.serverId ?? null
   const targetHost = targetServerId ?? null
-  const sourceRepo = hostRepoPath(project, info.serverId)
-  const targetRepo = hostRepoPath(project, targetServerId)
+  const repo = repoOfInfo(project, info)
+  const sourceRepo = hostRepoPath(repo, info.serverId)
+  const targetRepo = hostRepoPath(repo, targetServerId)
   const branch = info.branch
   const sourcePath = info.path
 
@@ -218,7 +225,7 @@ export async function moveWorktree(opts: {
     await window.api.fetchBranch(targetHost, targetRepo, branch)
     await window.api.addWorktreeAt(targetHost, targetRepo, targetPath, branch)
     targetCreated = true
-    await linkProjectDirs(targetHost, targetRepo, targetPath)
+    await linkProjectDirs(repo.id, targetHost, targetRepo, targetPath)
     const targetHead = await window.api.revParseHead(targetHost, targetPath)
     if (targetHead !== headSha) {
       throw new Error(
@@ -292,7 +299,7 @@ export async function moveWorktree(opts: {
       serverId: targetServerId,
       branch
     }
-    useAppStore.getState().addWorktreeInstance(created)
+    useAppStore.getState().addWorktreeInstance(repo.id, created)
     movedInstanceId = created.id
   }
   await handOverSessions(movedInstanceId, targetPath, carried, wasLoaded)
@@ -302,10 +309,7 @@ export async function moveWorktree(opts: {
   // The source's environment VM must not survive pointing at a deleted path
   // (environments are local-only in v1, so only a local source can have one).
   if (sourceServerId === null && environmentOf(info)) {
-    const envWarning = await destroyEnvironmentIfAny(
-      useAppStore.getState().project?.repositoryPath ?? sourceRepo,
-      branch
-    )
+    const envWarning = await destroyEnvironmentIfAny(repo.path, branch)
     if (envWarning) warning = `${envWarning} It is listed under Orphaned environments in Settings.`
   }
   try {
@@ -334,14 +338,14 @@ export async function moveWorktree(opts: {
 function environmentOf(info: GitWorktreeInfo): { profile: string } | undefined {
   const state = useAppStore.getState()
   if (info.serverId || !state.project) return undefined
-  return environmentFor(state.environments, state.project.repositoryPath, info.branch)
+  return environmentFor(state.environments, repoOfInfo(state.project, info).path, info.branch)
 }
 
 /** Tear down the worktree's environment, surfacing failures without blocking the caller. */
 async function teardownEnvironment(info: GitWorktreeInfo): Promise<void> {
-  const repoPath = useAppStore.getState().project?.repositoryPath
-  if (!repoPath) return
-  const warning = await destroyEnvironmentIfAny(repoPath, info.branch)
+  const project = useAppStore.getState().project
+  if (!project) return
+  const warning = await destroyEnvironmentIfAny(repoOfInfo(project, info).path, info.branch)
   if (warning) {
     await window.api.showError(
       'Environment cleanup failed',
@@ -453,7 +457,8 @@ export async function deleteWorktree(
   const state = useAppStore.getState()
   const project = state.project
   if (!project) return
-  const repoPath = hostRepoPath(project, info.serverId)
+  const repo = repoOfInfo(project, info)
+  const repoPath = hostRepoPath(repo, info.serverId)
   if (!repoPath) return
   const env = environmentOf(info)
   const dirty = await worktreeIsDirty(info)
@@ -504,7 +509,7 @@ export async function deleteWorktree(
   if (instance) removeInstance(instance.id)
   const selected = useAppStore.getState().selected
   if (selected && sameWorktree(selected, info)) {
-    useAppStore.getState().selectWorktree({ path: project.repositoryPath })
+    useAppStore.getState().selectWorktree({ path: repo.path })
   }
 }
 
@@ -516,8 +521,11 @@ export async function promoteToPrimary(
   info: GitWorktreeInfo,
   instance: WorktreeInstance | undefined
 ): Promise<boolean> {
-  const repoPath = useAppStore.getState().project?.repositoryPath
-  if (!repoPath) return false
+  const project = useAppStore.getState().project
+  if (!project) return false
+  const repo = repoOfInfo(project, info)
+  const repoPath = repo.path
+  const primaryId = primaryWorktreeId(repo.id)
   const branch = info.branch
   if (!branch) {
     await window.api.showError(
@@ -588,8 +596,8 @@ export async function promoteToPrimary(
         console.error('session migration failed', err)
       }
     }
-    await handOverSessions(PRIMARY_WORKTREE_ID, repoPath, carried, wasLoaded)
-    useAppStore.getState().setActiveWorktree(PRIMARY_WORKTREE_ID)
+    await handOverSessions(primaryId, repoPath, carried, wasLoaded)
+    useAppStore.getState().setActiveWorktree(primaryId)
   }
   return checkedOut
 }
@@ -598,10 +606,15 @@ export async function promoteToPrimary(
  * Move the main checkout's current branch into its own worktree and switch
  * the main repository back to the default branch.
  */
-export async function promoteBranchToWorktree(branch: string | undefined): Promise<void> {
+export async function promoteBranchToWorktree(
+  repoId: string,
+  branch: string | undefined
+): Promise<void> {
   const project = useAppStore.getState().project
-  if (!project) return
-  const repoPath = project.repositoryPath
+  const repo = project && repoById(project, repoId)
+  if (!repo) return
+  const repoPath = repo.path
+  const primaryId = primaryWorktreeId(repoId)
 
   if (!branch) {
     await window.api.showError(
@@ -663,21 +676,21 @@ export async function promoteBranchToWorktree(branch: string | undefined): Promi
     await window.api.showError('Could not create worktree', String(err))
     return
   }
-  await linkProjectDirs(null, repoPath, worktreePath)
+  await linkProjectDirs(repoId, null, repoPath, worktreePath)
 
   // Fresh worktrees start with the first workflow tag — unless the branch
   // already carries a tag from an earlier worktree.
-  tagNewBranch(branch)
+  tagNewBranch(repoId, branch)
 
   // Carry the primary's Claude sessions into the new worktree.
-  const carried = carriedSessions(PRIMARY_WORKTREE_ID)
-  const primaryWasLoaded = isLoaded(PRIMARY_WORKTREE_ID)
+  const carried = carriedSessions(primaryId)
+  const primaryWasLoaded = isLoaded(primaryId)
   const state = useAppStore.getState()
-  for (const terminalId of [...(state.terminalOrder[PRIMARY_WORKTREE_ID] ?? [])]) {
+  for (const terminalId of [...(state.terminalOrder[primaryId] ?? [])]) {
     disposeTerminal(terminalId)
   }
   // The primary handed its sessions over — clear its saved list either way.
-  state.setWorktreeSessions(PRIMARY_WORKTREE_ID, [])
+  state.setWorktreeSessions(primaryId, [])
 
   const instance: WorktreeInstance = {
     id: crypto.randomUUID(),
@@ -685,7 +698,7 @@ export async function promoteBranchToWorktree(branch: string | undefined): Promi
     path: worktreePath,
     branch
   }
-  useAppStore.getState().addWorktreeInstance(instance)
+  useAppStore.getState().addWorktreeInstance(repoId, instance)
 
   for (const session of carried) {
     try {
