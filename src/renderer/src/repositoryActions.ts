@@ -12,8 +12,11 @@ function hasLiveSessions(repo: Repository): boolean {
 
 /** Why the repository can't be removed right now, or null if it can. */
 export function removalBlock(repo: Repository): string | null {
-  const project = useAppStore.getState().project
-  return project && repositoryRemovalBlock(project, repo, hasLiveSessions(repo))
+  const { project, environments } = useAppStore.getState()
+  return (
+    project &&
+    repositoryRemovalBlock(project, repo, hasLiveSessions(repo), Object.values(environments))
+  )
 }
 
 /** Ask for a directory and add it. Changes nothing unless it is a new git repository. */
@@ -62,11 +65,18 @@ export async function removeRepository(repo: Repository): Promise<void> {
     title: 'Remove Repository',
     message: `Remove “${repo.name}” from this project?`,
     detail:
-      'Its tags, notes, ticket links and pull request links are deleted from the project. ' +
+      'Its tags, notes, ticket links, pull request links and saved Claude session lists are ' +
+      'deleted from the project. ' +
       `Nothing is changed on disk at ${repo.path}.`,
     confirmLabel: 'Remove from Project'
   })
   if (!confirmed) return
+  // The dialog waits on the user, and sessions can start behind it.
+  const lateBlock = removalBlock(repo)
+  if (lateBlock) {
+    await window.api.showError(`Can't remove ${repo.name}`, lateBlock)
+    return
+  }
   useAppStore.getState().removeRepository(repo.id)
   scheduleAutoSave()
 }

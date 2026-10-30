@@ -1,6 +1,6 @@
 // src/shared/repositories.ts
 // Runtime imports stay out of this file so `node --test` can load it directly.
-import type { ProjectFile, Repository } from './types'
+import type { EnvironmentInfo, ProjectFile, Repository } from './types'
 
 const PRIMARY_PREFIX = '__primary__:'
 
@@ -17,10 +17,18 @@ export const isPrimaryWorktreeId = (id: string): boolean => id.startsWith(PRIMAR
 export function repositoryRemovalBlock(
   project: Pick<ProjectFile, 'repositories' | 'globalSessions'>,
   repo: Repository,
-  hasLiveSessions: boolean
+  hasLiveSessions: boolean,
+  environments: Pick<EnvironmentInfo, 'repoPath' | 'vmState'>[] = []
 ): string | null {
   if (project.repositories.length === 1) return 'It is the only repository in this project.'
   if (hasLiveSessions) return 'It has live Claude sessions. Unload them first.'
+  if (environments.some((e) => e.repoPath === repo.path && e.vmState === 'running')) {
+    return 'It has a running environment. Stop it in the Env tab first.'
+  }
+  const saved = [repo.primaryTerminals ?? [], ...repo.worktrees.map((w) => w.terminals ?? [])].flat()
+  if (saved.some((t) => t.ptyId)) {
+    return 'It has a remote session still running on a server. Load the worktree, then close that session.'
+  }
   if (project.repositories[0].id === repo.id && (project.globalSessions?.length ?? 0) > 0) {
     return 'Global Claude conversations are stored against the first repository.'
   }

@@ -36,6 +36,30 @@ test('the first repository cannot be removed while global sessions are saved', (
   assert.equal(repositoryRemovalBlock(project, project.repositories[1], false), null)
 })
 
+test('removal is blocked by a running environment of that repository only', () => {
+  const project = { repositories: [repo('a'), repo('b')], globalSessions: [] }
+  const [a, b] = project.repositories
+  const env = (repoPath, vmState) => [{ repoPath, vmState }]
+  assert.match(repositoryRemovalBlock(project, a, false, env('/r/a', 'running')), /Stop/)
+  assert.equal(repositoryRemovalBlock(project, a, false, env('/r/a', 'stopped')), null)
+  assert.equal(repositoryRemovalBlock(project, b, false, env('/r/a', 'running')), null)
+})
+
+test('removal is blocked by a saved remote session, on the primary or a worktree', () => {
+  const remote = { title: 'T', sessionId: 's', ptyId: 'p' }
+  const local = { title: 'T', sessionId: 's' }
+  const onPrimary = { ...repo('a'), primaryTerminals: [remote] }
+  const onWorktree = {
+    ...repo('b'),
+    worktrees: [{ id: 'w', name: 'x', path: '/w', terminals: [remote] }]
+  }
+  const saved = { ...repo('c'), primaryTerminals: [local] }
+  const project = { repositories: [repo('z'), onPrimary, onWorktree, saved], globalSessions: [] }
+  assert.match(repositoryRemovalBlock(project, onPrimary, false), /remote/)
+  assert.match(repositoryRemovalBlock(project, onWorktree, false), /remote/)
+  assert.equal(repositoryRemovalBlock(project, saved, false), null)
+})
+
 test('findRepository matches id, or a unique case-insensitive name', () => {
   const repos = [repo('a', 'API'), repo('b', 'web'), repo('c', 'web')]
   assert.equal(findRepository(repos, 'a').id, 'a')
