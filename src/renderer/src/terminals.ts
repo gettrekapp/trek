@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import {
   allWorktrees,
+  repoOfWorktreeId,
   baseName,
   dormantSessions,
   GLOBAL_WORKTREE_ID,
@@ -215,7 +216,7 @@ function voicePrompt(): string | undefined {
 }
 
 const GLOBAL_SYSTEM_PROMPT =
-  'You are the global Claude session of Trek Dev, an app that runs Claude Code sessions across the git worktrees of this repository. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their Claude sessions.'
+  'You are the global Claude session of Trek Dev, an app that runs Claude Code sessions across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their Claude sessions.'
 
 /** The global session also gets the app's MCP server and a role prompt. */
 async function globalClaudeCommand(sessionId: string, resume: boolean): Promise<string> {
@@ -513,7 +514,7 @@ export function closeGlobalTerminal(id: string): void {
   saveGlobalSessions()
 }
 
-/** "worktree · tab" label for a terminal, as shown in notifications. */
+/** "worktree · tab" label for a terminal, as shown in notifications; repo-prefixed with several. */
 export function terminalLabel(id: string): string {
   const state = useAppStore.getState()
   const meta = state.terminals[id]
@@ -522,7 +523,10 @@ export function terminalLabel(id: string): string {
   const worktree = state.project
     ? allWorktrees(state.project).find((w) => w.id === meta.worktreeId)
     : undefined
-  return worktree ? `${worktree.name} · ${meta.title}` : meta.title
+  if (!worktree) return meta.title
+  const repo = repoOfWorktreeId(state.project!, worktree.id)
+  const prefix = repo && state.project!.repositories.length > 1 ? `${repo.name} / ` : ''
+  return `${prefix}${worktree.name} · ${meta.title}`
 }
 
 /** Select a terminal's worktree (or open the global panel) and its tab. */

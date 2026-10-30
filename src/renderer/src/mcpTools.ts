@@ -82,17 +82,16 @@ function resolveWorktree(ref: unknown): ResolvedWorktree {
     const info = infos.find((i) => instanceFor(i)?.id === instance.id)
     return { loc: { serverId: instance.serverId, path: instance.path }, info, instance }
   }
-  const firstUnambiguous = (matches: GitWorktreeInfo[]): GitWorktreeInfo | undefined => {
-    if (ambiguousAcrossRepos(matches)) {
-      const listed = matches.map((i) => `${repoOfInfo(p, i).name}: ${i.path}`).join(', ')
-      throw new ToolError(`"${ref}" matches more than one repository (${listed}) — pass the path`)
-    }
-    return matches[0]
+  const pathMatch = infos.find((i) => i.path === ref)
+  const branchMatches = infos.filter((i) => i.branch === ref)
+  const nameMatches = infos.filter((i) => instanceFor(i)?.name === ref)
+  // A branch in one repository and a name in another is just as ambiguous.
+  const matches = [...new Set([...branchMatches, ...nameMatches])]
+  if (!pathMatch && ambiguousAcrossRepos(matches)) {
+    const listed = matches.map((i) => `${repoOfInfo(p, i).name}: ${i.path}`).join(', ')
+    throw new ToolError(`"${ref}" matches more than one repository (${listed}) — pass the path`)
   }
-  const info =
-    infos.find((i) => i.path === ref) ??
-    firstUnambiguous(infos.filter((i) => i.branch === ref)) ??
-    firstUnambiguous(infos.filter((i) => instanceFor(i)?.name === ref))
+  const info = pathMatch ?? branchMatches[0] ?? nameMatches[0]
   if (!info) throw new ToolError(`No worktree matches "${ref}" — call list_worktrees`)
   return { loc: { serverId: info.serverId, path: info.path }, info, instance: instanceFor(info) }
 }
@@ -281,7 +280,7 @@ async function createWorktree(args: Record<string, unknown>): Promise<unknown> {
   }))
   useAppStore.getState().setHostWorktrees(repoHostKey(repo.id, serverId), fresh)
   const info = allInfos().find((i) => instanceFor(i)?.id === instance.id)
-  return info ? describeWorktree(info) : { worktree: instance.id, path, branch }
+  return info ? describeWorktree(info) : { worktree: instance.id, repo: repo.name, path, branch }
 }
 
 const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i
