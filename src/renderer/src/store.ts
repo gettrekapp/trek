@@ -289,7 +289,6 @@ interface AppState {
   /** Merge a status sweep's dirty/ahead/behind into the host's cached rows, in every repository. */
   setWorktreeStatuses: (host: string, statuses: WorktreeStatus[]) => void
   setServerRepoPaths: (serverId: string, pathsByRepo: Record<string, string>) => void
-  clearHostWorktrees: (key: string) => void
   setServerStatus: (serverId: string, status: HostStatus) => void
   setWorktreeLoaded: (worktreeId: string, loaded: boolean) => void
   /** Store a worktree's dormant session list (primary included) in the project. */
@@ -541,13 +540,16 @@ export const useAppStore = create<AppState>((set) => ({
   setServerRepoPaths: (serverId, pathsByRepo) =>
     set((state) => {
       if (!state.project) return state
+      // A repository with no path on the server has no way to refresh its rows.
+      const hostWorktrees = { ...state.hostWorktrees }
       const repositories = state.project.repositories.map((r) => {
         const { [serverId]: _old, ...serverPaths } = r.serverPaths ?? {}
         const path = pathsByRepo[r.id]?.trim()
         if (path) serverPaths[serverId] = path
+        else delete hostWorktrees[repoHostKey(r.id, serverId)]
         return { ...r, serverPaths }
       })
-      return { project: { ...state.project, repositories }, dirty: true }
+      return { project: { ...state.project, repositories }, hostWorktrees, dirty: true }
     }),
 
   setServers: (servers) =>
@@ -558,6 +560,13 @@ export const useAppStore = create<AppState>((set) => ({
 
   setHostWorktrees: (key, infos) =>
     set((state) => {
+      // A poll can land after its repository or server path was removed.
+      const current = state.project?.repositories.some(
+        (r) =>
+          key === repoHostKey(r.id) ||
+          Object.keys(r.serverPaths ?? {}).some((s) => key === repoHostKey(r.id, s))
+      )
+      if (!current) return state
       const prev = state.hostWorktrees[key]
       // listWorktrees doesn't read git status, so carry the last sweep's
       // dirty/ahead/behind over instead of blanking the rows on every poll.
@@ -589,14 +598,6 @@ export const useAppStore = create<AppState>((set) => ({
         changed = true
       }
       return changed ? { hostWorktrees } : state
-    }),
-
-  clearHostWorktrees: (key) =>
-    set((state) => {
-      if (!(key in state.hostWorktrees)) return state
-      const hostWorktrees = { ...state.hostWorktrees }
-      delete hostWorktrees[key]
-      return { hostWorktrees }
     }),
 
   setServerStatus: (serverId, status) =>

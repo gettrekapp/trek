@@ -2,7 +2,7 @@
 import { repositoryRemovalBlock } from '../../shared/repositories'
 import type { Repository } from '../../shared/types'
 import { scheduleAutoSave } from './persistence'
-import { baseName, repoWorktrees, useAppStore } from './store'
+import { baseName, mergedWorktrees, repoWorktrees, useAppStore } from './store'
 
 /** Live sessions anywhere in the repository block its removal. */
 function hasLiveSessions(repo: Repository): boolean {
@@ -36,8 +36,7 @@ export async function addRepository(): Promise<void> {
   // Rows hold git's resolved paths, which a stored path may not match.
   const known = new Set([
     ...state.project.repositories.map((r) => r.path),
-    ...Object.values(state.hostWorktrees)
-      .flat()
+    ...mergedWorktrees(state.project, state.hostWorktrees)
       .filter((w) => w.isMain && !w.serverId)
       .map((w) => w.path)
   ])
