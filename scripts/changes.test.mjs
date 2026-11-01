@@ -1,7 +1,7 @@
 // scripts/changes.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { changesTabLabel, startsExpanded, initiallyExpanded, patchBody, lineClass } from '../src/shared/changes.ts'
+import { changesTabLabel, startsExpanded, initiallyExpanded, missingPatchNote, patchBody, lineClass } from '../src/shared/changes.ts'
 
 const file = (added, deleted, extra = {}) => ({
   path: 'f',
@@ -97,4 +97,13 @@ test('initiallyExpanded always expands note-only rows at no cost', () => {
     named('nope', 0, { unreadable: true })
   ]
   assert.deepEqual([...initiallyExpanded(files)], ['a', 'b', 'c', 'bin', 'large', 'nope'])
+})
+
+test('missingPatchNote explains a text row with no patch', () => {
+  const idle = { loading: false, diffError: false }
+  assert.equal(missingPatchNote(file(3, 1), { loading: true, diffError: false }), 'Loading…')
+  assert.equal(missingPatchNote(file(3, 1), { loading: false, diffError: true }), 'Diff not available')
+  assert.equal(missingPatchNote(file(3, 1), idle), 'Diff not shown: over the size limit')
+  assert.equal(missingPatchNote(file(0, 2), idle), 'Diff not shown: over the size limit')
+  assert.equal(missingPatchNote(file(0, 0), idle), 'No text changes')
 })

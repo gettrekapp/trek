@@ -326,7 +326,7 @@ export async function defaultBranch(repoPath: string): Promise<string | null> {
   return base ? base.replace(/^origin\//, '') : null
 }
 
-/** Untracked files above this are reported as binary rather than read on every poll. */
+/** Untracked files above this are reported as tooLarge rather than read on every poll. */
 const MAX_UNTRACKED_BYTES = 5 * 1024 * 1024
 /** Same window git uses to decide a file is binary. */
 const BINARY_SNIFF_BYTES = 8000
@@ -629,8 +629,35 @@ async function untrackedPatch(worktreePath: string, path: string): Promise<strin
 }
 
 /**
+ * Cap on the total patch text one worktreeDiff returns. A huge response over
+ * the WebSocket can drop the whole server connection, and because the open
+ * panel refetches on every poll it would then reconnect-loop.
+ */
+const MAX_DIFF_BYTES = 8 * 1024 * 1024
+
+/**
+ * Keeps patches, in sorted path order, while they fit in maxBytes. A patch that
+ * doesn't fit is omitted and later, smaller ones can still be included.
+ */
+export function limitPatches(
+  patches: Record<string, string>,
+  maxBytes: number
+): Record<string, string> {
+  const out: Record<string, string> = {}
+  let remaining = maxBytes
+  for (const key of Object.keys(patches).sort()) {
+    const size = Buffer.byteLength(patches[key])
+    if (size > remaining) continue
+    out[key] = patches[key]
+    remaining -= size
+  }
+  return out
+}
+
+/**
  * The patch text per changed file, keyed by path. Files with nothing to show
- * as text (binary, too large or unreadable untracked files) have no entry.
+ * as text (binary, too large or unreadable untracked files) have no entry, and
+ * neither do patches past the MAX_DIFF_BYTES total.
  */
 export async function worktreeDiff(path: string): Promise<Record<string, string>> {
   const { ref } = await changesBase(path)
@@ -654,5 +681,5 @@ export async function worktreeDiff(path: string): Promise<Record<string, string>
   for (const [p, patch] of patches) {
     if (patch) result[p] = (result[p] ?? '') + patch
   }
-  return result
+  return limitPatches(result, MAX_DIFF_BYTES)
 }

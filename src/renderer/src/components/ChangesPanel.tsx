@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { initiallyExpanded, lineClass, patchBody } from '../../../shared/changes'
+import { initiallyExpanded, lineClass, missingPatchNote, patchBody } from '../../../shared/changes'
 import type { ChangedFile, WorktreeChanges } from '../../../shared/types'
 
 const CHANGES_POLL_MS = 5000
@@ -133,8 +133,14 @@ export function useWorktreeChanges(
           } catch (err) {
             if (cancelled) return
             diffFailedFor = summary
+            // Patches from an older summary mustn't sit beside the new counts.
+            const stale = diffsFor !== summary
             diffsFor = diffsJson = null
-            update({ diffError: errorMessage(err), diffLoading: false })
+            update({
+              diffError: errorMessage(err),
+              diffLoading: false,
+              ...(stale ? { diffs: null } : {})
+            })
           }
         }
       } finally {
@@ -188,9 +194,10 @@ const FileDiff = memo(function FileDiff({ file, patch, loading, unavailable }: {
   if (file.tooLarge) return <div className="changes-note">File too large to show</div>
   if (file.unreadable) return <div className="changes-note">File can't be read</div>
   if (patch === undefined) {
-    if (loading) return <div className="changes-note">Loading…</div>
     return (
-      <div className="changes-note">{unavailable ? 'Diff not available' : 'No text changes'}</div>
+      <div className="changes-note">
+        {missingPatchNote(file, { loading, diffError: unavailable })}
+      </div>
     )
   }
   return (
@@ -234,7 +241,7 @@ export const ChangesPanel = memo(function ChangesPanel({
           <span className="muted">
             {changes.base
               ? `compared to ${changes.base}`
-              : 'no default branch found — comparing to HEAD'}
+              : 'comparing uncommitted changes only'}
           </span>
         )}
       </div>

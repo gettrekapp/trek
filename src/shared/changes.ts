@@ -81,3 +81,13 @@ export function patchBody(patch: string): string[] {
   }
   return out
 }
+
+/** What a text row says when it has no patch to render. */
+export function missingPatchNote(
+  file: ChangedFile,
+  { loading, diffError }: { loading: boolean; diffError: boolean }
+): string {
+  if (loading) return 'Loading…'
+  if (diffError) return 'Diff not available'
+  return file.added + file.deleted > 0 ? 'Diff not shown: over the size limit' : 'No text changes'
+}

@@ -10,8 +10,9 @@ the changes, and a panel listing each file with its diff.
 Everything this worktree would add to the default branch: commits since the
 merge-base with `defaultBaseBranch`, plus staged, unstaged and untracked files.
 
-- No default branch found: compare to `HEAD` (uncommitted changes only), and the
-  panel header says so.
+- No default branch found, or no usable merge-base (unrelated histories, a
+  repository with no commits): compare to `HEAD` (uncommitted changes only), and
+  the panel header says "comparing uncommitted changes only".
 - On the default branch itself: unpushed commits plus uncommitted work.
 
 ## Tab
@@ -32,7 +33,8 @@ Read-only: no staging or reverting.
   counts. Renames show the old path too.
 - Each row expands to a coloured unified diff. Files start expanded in order,
   except files with more than 1,500 changed lines, and once 5,000 changed lines
-  have been expanded in total the remaining files start collapsed. A user's own
+  have been expanded in total the remaining files start collapsed: auto-expansion
+  stops at the first file that would pass 5,000 lines. A user's own
   toggle always wins.
 - Binary, too-large and unreadable files show a note ("Binary file changed",
   "File too large to show", "File can't be read") instead of a diff. These rows
@@ -76,6 +78,12 @@ open.
 - A path that is both a tracked deletion and an untracked file gets both patches,
   concatenated.
 
+- The total patch text is capped at 8 MB, because a huge response can drop the
+  WebSocket connection and the open panel would refetch in a loop. Paths are
+  kept in sorted order while they fit; one that doesn't is omitted and smaller
+  later ones are still included. The panel says "Diff not shown: over the size
+  limit" for a text row with changed lines and no patch.
+
 Parsing is in pure, separately tested functions. Both functions are wired through
 `shared/protocol.ts`, `LocalHost`, `RemoteHost`, `main/project.ts` and preload.
 
@@ -93,7 +101,11 @@ Parsing is in pure, separately tested functions. Both functions are wired throug
 
 ## Errors
 
-- Git failure: the tab falls back to `Changes` and the panel shows the error.
+- Summary failure (`worktreeChanges`): the tab falls back to `Changes` and the
+  panel shows the error.
+- Diff failure (`worktreeDiff`): the counts and tab title are kept, and the panel
+  shows a banner "Couldn't load the diffs: …" above the list. Rows with no patch
+  say "Diff not available". Patches from an older summary are dropped.
 - A remote daemon without these calls is handled the same way.
 
 ## Testing

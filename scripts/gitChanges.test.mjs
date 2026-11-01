@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { splitPatch, worktreeChanges, worktreeDiff } from '../src/host/gitService.ts'
+import { limitPatches, splitPatch, worktreeChanges, worktreeDiff } from '../src/host/gitService.ts'
 
 function makeRepo(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
@@ -414,4 +414,37 @@ test('an untracked file marked binary by gitattributes has no entry', async (t) 
   writeFileSync(join(dir, 'x.dat'), 'plain text\n')
   const diffs = await worktreeDiff(dir)
   assert.equal(diffs['x.dat'], undefined)
+})
+
+test('limitPatches keeps patches that fit and omits ones that do not', () => {
+  const out = limitPatches({ a: 'x'.repeat(6), b: 'y'.repeat(6), c: 'z'.repeat(3) }, 10)
+  assert.deepEqual(Object.keys(out), ['a', 'c'])
+})
+
+test('limitPatches walks paths in sorted order', () => {
+  const out = limitPatches({ b: 'bbbbbb', a: 'aaaaaa' }, 8)
+  assert.deepEqual(Object.keys(out), ['a'])
+})
+
+test('limitPatches keeps a patch that exactly fills the budget', () => {
+  assert.deepEqual(limitPatches({ a: 'xxxx', b: 'yyyy' }, 8), { a: 'xxxx', b: 'yyyy' })
+  assert.deepEqual(limitPatches({ a: 'xxxx', b: 'yyyyy' }, 8), { a: 'xxxx' })
+})
+
+test('limitPatches counts bytes, not characters', () => {
+  assert.deepEqual(limitPatches({ a: 'é'.repeat(3) }, 5), {})
+  assert.deepEqual(limitPatches({ a: 'é'.repeat(3) }, 6), { a: 'ééé' })
+})
+
+test('worktreeDiff stays under the total size limit while worktreeChanges lists every file', async (t) => {
+  const { dir } = makeRepo(t)
+  const line = 'abcdefghij'.repeat(10) + '\n'
+  const body = line.repeat(Math.floor((3 * 1024 * 1024) / line.length))
+  for (let i = 0; i < 5; i++) writeFileSync(join(dir, `big${i}.txt`), body)
+  const patches = await worktreeDiff(dir)
+  const total = Object.values(patches).reduce((n, p) => n + Buffer.byteLength(p), 0)
+  assert.ok(total <= 8 * 1024 * 1024, `total ${total}`)
+  assert.ok(Object.keys(patches).length >= 1 && Object.keys(patches).length < 5)
+  const changes = await worktreeChanges(dir)
+  assert.equal(changes.files.filter((f) => f.path.startsWith('big')).length, 5)
 })
