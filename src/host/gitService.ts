@@ -335,6 +335,13 @@ const UNTRACKED_CONCURRENCY = 4
 
 /** The commit to diff against and the branch name to show for it. */
 async function changesBase(path: string): Promise<{ base: string | null; ref: string }> {
+  try {
+    await git(path, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+  } catch {
+    // no commits yet (fresh init or orphan branch) — everything is new against the empty tree
+    const emptyTree = (await git(path, ['hash-object', '-t', 'tree', '/dev/null'])).trim()
+    return { base: null, ref: emptyTree }
+  }
   const base = await defaultBaseBranch(path)
   if (base) {
     try {
@@ -354,47 +361,74 @@ function fileStatus(letter: string): ChangedFileStatus {
   return 'modified'
 }
 
-/** Parses `git diff --name-status -z -M` into status and old path, keyed by path. */
-function parseNameStatus(out: string): Map<string, { status: ChangedFileStatus; oldPath?: string }> {
+/**
+ * Parses `git diff -M -z --raw --numstat` into one file per path. Raw entries
+ * (`:modes shas STATUS\0path\0`, renames with `old\0new`) come first, then
+ * numstat entries (`added\tdeleted\tpath\0`, renames `added\tdeleted\t\0old\0new`).
+ */
+function parseDiffRawNumstat(out: string): ChangedFile[] {
   const parts = out.split('\0')
-  const result = new Map<string, { status: ChangedFileStatus; oldPath?: string }>()
+  const statuses = new Map<string, { status: ChangedFileStatus; oldPath?: string }>()
+  const counts: { path: string; added: number; deleted: number; binary: boolean }[] = []
   let i = 0
   while (i < parts.length && parts[i]) {
-    const letter = parts[i][0]
-    if (letter === 'R' || letter === 'C') {
-      result.set(parts[i + 2], { status: fileStatus(letter), oldPath: parts[i + 1] })
-      i += 3
+    const token = parts[i]
+    if (token.startsWith(':')) {
+      const letter = token.slice(token.lastIndexOf(' ') + 1)[0]
+      if (letter === 'R' || letter === 'C') {
+        statuses.set(parts[i + 2], { status: fileStatus(letter), oldPath: parts[i + 1] })
+        i += 3
+      } else {
+        statuses.set(parts[i + 1], { status: fileStatus(letter) })
+        i += 2
+      }
     } else {
-      result.set(parts[i + 1], { status: fileStatus(letter) })
-      i += 2
+      const first = token.indexOf('\t')
+      const second = token.indexOf('\t', first + 1)
+      const added = token.slice(0, first)
+      const deleted = token.slice(first + 1, second)
+      const inlinePath = token.slice(second + 1)
+      // Renames leave the path field empty and follow with old\0new.
+      const path = inlinePath || parts[i + 2]
+      i += inlinePath ? 1 : 3
+      const binary = added === '-'
+      counts.push({
+        path,
+        added: binary ? 0 : Number(added),
+        deleted: binary ? 0 : Number(deleted),
+        binary
+      })
     }
   }
-  return result
+  return counts.map((c) => {
+    const known = statuses.get(c.path)
+    const file: ChangedFile = { ...c, status: known?.status ?? 'modified' }
+    if (known?.oldPath) file.oldPath = known.oldPath
+    return file
+  })
 }
 
-/** Joins `git diff --numstat -z -M` with the parsed name-status output. */
-function parseNumstat(out: string, statuses: ReturnType<typeof parseNameStatus>): ChangedFile[] {
-  const parts = out.split('\0')
-  const files: ChangedFile[] = []
-  let i = 0
-  while (i < parts.length && parts[i]) {
-    const [added, deleted, inlinePath] = parts[i].split('\t')
-    // Renames leave the path field empty and follow with old\0new.
-    const path = inlinePath || parts[i + 2]
-    i += inlinePath ? 1 : 3
-    const binary = added === '-'
-    const known = statuses.get(path)
-    const file: ChangedFile = {
-      path,
-      status: known?.status ?? 'modified',
-      added: binary ? 0 : Number(added),
-      deleted: binary ? 0 : Number(deleted),
-      binary
+/** One row per path: a tracked deletion plus an untracked file is a modification. */
+function mergeChangedFiles(tracked: ChangedFile[], untracked: ChangedFile[]): ChangedFile[] {
+  const byPath = new Map<string, ChangedFile>()
+  for (const file of tracked) byPath.set(file.path, file)
+  for (const file of untracked) {
+    const existing = byPath.get(file.path)
+    if (!existing) {
+      byPath.set(file.path, file)
+      continue
     }
-    if (known?.oldPath) file.oldPath = known.oldPath
-    files.push(file)
+    const merged: ChangedFile = {
+      ...existing,
+      status: 'modified',
+      added: file.added,
+      deleted: existing.deleted,
+      binary: existing.binary || file.binary
+    }
+    if (existing.tooLarge || file.tooLarge) merged.tooLarge = true
+    byPath.set(file.path, merged)
   }
-  return files
+  return [...byPath.values()]
 }
 
 async function untrackedPaths(path: string): Promise<string[]> {
@@ -433,7 +467,11 @@ async function untrackedFile(worktreePath: string, path: string): Promise<Change
       file.added = 1 // git records a symlink as one line: its target
       return file
     }
-    if (stats.size > MAX_UNTRACKED_BYTES || (await isBinaryFile(fullPath))) {
+    if (stats.size > MAX_UNTRACKED_BYTES) {
+      file.tooLarge = true
+      return file
+    }
+    if (await isBinaryFile(fullPath)) {
       file.binary = true
       return file
     }
@@ -441,8 +479,10 @@ async function untrackedFile(worktreePath: string, path: string): Promise<Change
     if (text.length > 0) {
       file.added = text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
     }
-  } catch {
-    // deleted between the listing and this read — report it with no lines
+  } catch (error) {
+    // deleted between the listing and this read — report it with no lines;
+    // anything else (e.g. unreadable) is a real error and surfaces
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
   return file
 }
@@ -454,13 +494,13 @@ async function untrackedFile(worktreePath: string, path: string): Promise<Change
  */
 export async function worktreeChanges(path: string): Promise<WorktreeChanges> {
   const { base, ref } = await changesBase(path)
-  const diffArgs = ['--no-optional-locks', 'diff', '-M', '-z']
-  const statuses = parseNameStatus(await git(path, [...diffArgs, '--name-status', ref]))
-  const tracked = parseNumstat(await git(path, [...diffArgs, '--numstat', ref]), statuses)
+  const tracked = parseDiffRawNumstat(
+    await git(path, ['--no-optional-locks', 'diff', '-M', '-z', '--raw', '--numstat', ref, '--'])
+  )
   const untracked = await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) =>
     untrackedFile(path, p)
   )
-  const files = [...tracked, ...untracked].sort((a, b) =>
+  const files = mergeChangedFiles(tracked, untracked).sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0
   )
   return { base, files }

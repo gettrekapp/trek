@@ -42,21 +42,31 @@ Read-only: no staging or reverting.
 Returns `{ base, files: [{ path, oldPath?, status, added, deleted, binary }] }`.
 `base` is the default branch name, or `null` when comparing to `HEAD`.
 
-- Tracked changes: `git --no-optional-locks diff --numstat -z -M <merge-base>`
-  for counts, `--name-status -z -M` for status. This covers commits and tracked
-  working-tree edits in one diff.
+- Tracked changes: one `git --no-optional-locks diff -M -z --raw --numstat <ref> --`,
+  giving status and counts from a single snapshot and a single rename scan. This
+  covers commits and tracked working-tree edits in one diff.
 - Untracked files: `git ls-files --others --exclude-standard -z`, status `added`.
   Text line counts come from the file's line count. Files containing a NUL byte
   in their first 8 KB are binary.
+- Untracked files over 5 MB are not read on each poll. They are reported with
+  `tooLarge: true` and no line counts, and the panel says "File too large to show".
+- Nested repositories listed as untracked directories have no lines of their own
+  and are left out.
+- `path` is unique. A tracked deletion plus an untracked file at the same path (for
+  example after `git rm --cached`) is one `modified` row with both counts.
+- A repository with no commits, or an orphan branch, has no `HEAD`: `<ref>` is the
+  empty tree, and `base` is `null`.
 
 ### `worktreeDiff(path)`
 
 Returns the patch text per file, keyed by path. Fetched only while the panel is
 open.
 
-- Tracked: `git diff -M <merge-base>`, split by file.
+- Tracked: `git diff -M <ref> --`, split by file.
 - Untracked: `git diff --no-index -- /dev/null <file>`, which never touches the
   index. It exits 1 when files differ, so that exit code is treated as success.
+- A path that is both a tracked deletion and an untracked file gets both patches,
+  concatenated.
 
 Parsing is in pure, separately tested functions. Both functions are wired through
 `shared/protocol.ts`, `LocalHost`, `RemoteHost`, `main/project.ts` and preload.

@@ -36,3 +36,7 @@ test('files start expanded up to 1500 changed lines', () => {
 test('binary files never start expanded', () => {
   assert.equal(startsExpanded(file(0, 0, { binary: true })), false)
 })
+
+test('files too large to read never start expanded', () => {
+  assert.equal(startsExpanded(file(0, 0, { tooLarge: true })), false)
+})

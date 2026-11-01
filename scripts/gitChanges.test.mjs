@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { worktreeChanges } from '../src/host/gitService.ts'
@@ -133,4 +133,111 @@ test('on the default branch itself, uncommitted work still shows', async (t) => 
     changes.files.map((f) => f.path),
     ['keep.txt']
   )
+})
+
+test('a repository with no commits compares against the empty tree', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'main'])
+  writeFileSync(join(dir, 'staged.txt'), 'a\nb\n')
+  execFileSync('git', ['-C', dir, 'add', 'staged.txt'])
+  writeFileSync(join(dir, 'loose.txt'), 'c\n')
+
+  const changes = await worktreeChanges(dir)
+  assert.equal(changes.base, null)
+  assert.deepEqual(
+    changes.files.map((f) => [f.path, f.status, f.added]),
+    [
+      ['loose.txt', 'added', 1],
+      ['staged.txt', 'added', 2]
+    ]
+  )
+})
+
+test('an orphan branch has no HEAD and does not throw', async (t) => {
+  const { dir, run } = makeRepo(t)
+  run('checkout', '-q', '--orphan', 'orphan')
+  const changes = await worktreeChanges(dir)
+  assert.equal(changes.base, null)
+  assert.equal(byPath(changes, 'keep.txt').status, 'added')
+})
+
+test('a tab in a filename keeps the whole path', async (t) => {
+  const { dir, run } = makeRepo(t)
+  writeFileSync(join(dir, 'a\tb.txt'), 'x\n')
+  run('add', 'a\tb.txt')
+  const changes = await worktreeChanges(dir)
+  assert.equal(byPath(changes, 'a\tb.txt').status, 'added')
+  assert.equal(byPath(changes, 'a\tb.txt').added, 1)
+})
+
+test('a path that is a tracked deletion and untracked is one modified row', async (t) => {
+  const { dir, run } = makeRepo(t)
+  run('rm', '-q', '--cached', 'keep.txt')
+  const changes = await worktreeChanges(dir)
+  assert.equal(changes.files.filter((f) => f.path === 'keep.txt').length, 1)
+  const row = byPath(changes, 'keep.txt')
+  assert.equal(row.status, 'modified')
+  assert.equal(row.added, 2)
+  assert.equal(row.deleted, 2)
+})
+
+test('a file named HEAD does not make the comparison ambiguous', async (t) => {
+  const { dir, run } = makeRepo(t)
+  run('branch', '-qm', 'main', 'trunk')
+  writeFileSync(join(dir, 'HEAD'), 'one\n')
+  run('add', 'HEAD')
+  run('commit', '-qm', 'head file')
+  writeFileSync(join(dir, 'HEAD'), 'one\ntwo\n')
+  const changes = await worktreeChanges(dir)
+  assert.equal(changes.base, null)
+  assert.deepEqual(byPath(changes, 'HEAD'), {
+    path: 'HEAD',
+    status: 'modified',
+    added: 1,
+    deleted: 0,
+    binary: false
+  })
+})
+
+test('untracked files over 5 MB are flagged tooLarge, not binary', async (t) => {
+  const { dir } = makeRepo(t)
+  const big = join(dir, 'big.dat')
+  writeFileSync(big, '')
+  truncateSync(big, 5 * 1024 * 1024 + 1)
+  const changes = await worktreeChanges(dir)
+  assert.deepEqual(byPath(changes, 'big.dat'), {
+    path: 'big.dat',
+    status: 'added',
+    added: 0,
+    deleted: 0,
+    binary: false,
+    tooLarge: true
+  })
+})
+
+test('an unreadable untracked file is an error, not an empty file', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can read anything')
+  const { dir } = makeRepo(t)
+  const secret = join(dir, 'secret.txt')
+  writeFileSync(secret, 'x\n')
+  chmodSync(secret, 0)
+  t.after(() => {
+    try {
+      chmodSync(secret, 0o644)
+    } catch {
+      // the repo directory may already be removed
+    }
+  })
+  await assert.rejects(worktreeChanges(dir), { code: 'EACCES' })
+})
+
+test('nested repositories are left out', async (t) => {
+  const { dir } = makeRepo(t)
+  const nested = join(dir, 'nested')
+  mkdirSync(nested)
+  execFileSync('git', ['-C', nested, 'init', '-q'])
+  writeFileSync(join(nested, 'inner.txt'), 'x\n')
+  const changes = await worktreeChanges(dir)
+  assert.deepEqual(changes.files, [])
 })

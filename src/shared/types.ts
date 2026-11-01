@@ -279,6 +279,8 @@ export interface ChangedFile {
   added: number
   deleted: number
   binary: boolean
+  /** Untracked file too large to read on each poll; no line counts */
+  tooLarge?: boolean
 }
 
 /** What a worktree would add to the default branch, uncommitted work included. */
