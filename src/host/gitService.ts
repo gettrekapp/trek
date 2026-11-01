@@ -1,9 +1,15 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
-import { lstat, mkdir, symlink } from 'node:fs/promises'
-import { dirname, resolve, sep } from 'node:path'
+import { lstat, mkdir, open, readFile, symlink } from 'node:fs/promises'
+import { dirname, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
-import type { GitWorktreeInfo, WorktreeStatus } from '../shared/types'
+import type {
+  ChangedFile,
+  ChangedFileStatus,
+  GitWorktreeInfo,
+  WorktreeChanges,
+  WorktreeStatus
+} from '../shared/types'
 
 const execFileAsync = promisify(execFile)
 
@@ -318,4 +324,144 @@ export async function removeWorktreeForce(repoPath: string, worktreePath: string
 export async function defaultBranch(repoPath: string): Promise<string | null> {
   const base = await defaultBaseBranch(repoPath)
   return base ? base.replace(/^origin\//, '') : null
+}
+
+/** Untracked files above this are reported as binary rather than read on every poll. */
+const MAX_UNTRACKED_BYTES = 5 * 1024 * 1024
+/** Same window git uses to decide a file is binary. */
+const BINARY_SNIFF_BYTES = 8000
+/** Untracked files read at once. */
+const UNTRACKED_CONCURRENCY = 4
+
+/** The commit to diff against and the branch name to show for it. */
+async function changesBase(path: string): Promise<{ base: string | null; ref: string }> {
+  const base = await defaultBaseBranch(path)
+  if (base) {
+    try {
+      const ref = (await git(path, ['merge-base', base, 'HEAD'])).trim()
+      if (ref) return { base, ref }
+    } catch {
+      // unrelated histories — compare to HEAD instead
+    }
+  }
+  return { base: null, ref: 'HEAD' }
+}
+
+function fileStatus(letter: string): ChangedFileStatus {
+  if (letter === 'A') return 'added'
+  if (letter === 'D') return 'deleted'
+  if (letter === 'R') return 'renamed'
+  return 'modified'
+}
+
+/** Parses `git diff --name-status -z -M` into status and old path, keyed by path. */
+function parseNameStatus(out: string): Map<string, { status: ChangedFileStatus; oldPath?: string }> {
+  const parts = out.split('\0')
+  const result = new Map<string, { status: ChangedFileStatus; oldPath?: string }>()
+  let i = 0
+  while (i < parts.length && parts[i]) {
+    const letter = parts[i][0]
+    if (letter === 'R' || letter === 'C') {
+      result.set(parts[i + 2], { status: fileStatus(letter), oldPath: parts[i + 1] })
+      i += 3
+    } else {
+      result.set(parts[i + 1], { status: fileStatus(letter) })
+      i += 2
+    }
+  }
+  return result
+}
+
+/** Joins `git diff --numstat -z -M` with the parsed name-status output. */
+function parseNumstat(out: string, statuses: ReturnType<typeof parseNameStatus>): ChangedFile[] {
+  const parts = out.split('\0')
+  const files: ChangedFile[] = []
+  let i = 0
+  while (i < parts.length && parts[i]) {
+    const [added, deleted, inlinePath] = parts[i].split('\t')
+    // Renames leave the path field empty and follow with old\0new.
+    const path = inlinePath || parts[i + 2]
+    i += inlinePath ? 1 : 3
+    const binary = added === '-'
+    const known = statuses.get(path)
+    const file: ChangedFile = {
+      path,
+      status: known?.status ?? 'modified',
+      added: binary ? 0 : Number(added),
+      deleted: binary ? 0 : Number(deleted),
+      binary
+    }
+    if (known?.oldPath) file.oldPath = known.oldPath
+    files.push(file)
+  }
+  return files
+}
+
+async function untrackedPaths(path: string): Promise<string[]> {
+  const out = await git(path, [
+    '--no-optional-locks',
+    'ls-files',
+    '--others',
+    '--exclude-standard',
+    '-z'
+  ])
+  // A trailing slash is a nested repository, which has no lines of its own.
+  return out.split('\0').filter((p) => p && !p.endsWith('/'))
+}
+
+async function isBinaryFile(fullPath: string): Promise<boolean> {
+  const handle = await open(fullPath, 'r')
+  try {
+    const { buffer, bytesRead } = await handle.read(
+      Buffer.alloc(BINARY_SNIFF_BYTES),
+      0,
+      BINARY_SNIFF_BYTES,
+      0
+    )
+    return buffer.subarray(0, bytesRead).includes(0)
+  } finally {
+    await handle.close()
+  }
+}
+
+async function untrackedFile(worktreePath: string, path: string): Promise<ChangedFile> {
+  const file: ChangedFile = { path, status: 'added', added: 0, deleted: 0, binary: false }
+  const fullPath = join(worktreePath, path)
+  try {
+    const stats = await lstat(fullPath)
+    if (stats.isSymbolicLink()) {
+      file.added = 1 // git records a symlink as one line: its target
+      return file
+    }
+    if (stats.size > MAX_UNTRACKED_BYTES || (await isBinaryFile(fullPath))) {
+      file.binary = true
+      return file
+    }
+    const text = await readFile(fullPath, 'utf8')
+    if (text.length > 0) {
+      file.added = text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+    }
+  } catch {
+    // deleted between the listing and this read — report it with no lines
+  }
+  return file
+}
+
+/**
+ * Everything this worktree would add to the default branch: commits since the
+ * merge-base plus staged, unstaged and untracked files. Cheap enough to poll
+ * for the selected worktree; patches come from worktreeDiff.
+ */
+export async function worktreeChanges(path: string): Promise<WorktreeChanges> {
+  const { base, ref } = await changesBase(path)
+  const diffArgs = ['--no-optional-locks', 'diff', '-M', '-z']
+  const statuses = parseNameStatus(await git(path, [...diffArgs, '--name-status', ref]))
+  const tracked = parseNumstat(await git(path, [...diffArgs, '--numstat', ref]), statuses)
+  const untracked = await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) =>
+    untrackedFile(path, p)
+  )
+  const files = [...tracked, ...untracked].sort((a, b) =>
+    a.path < b.path ? -1 : a.path > b.path ? 1 : 0
+  )
+  return { base, files }
 }
