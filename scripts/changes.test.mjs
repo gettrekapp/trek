@@ -1,7 +1,7 @@
 // scripts/changes.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { changesTabLabel, startsExpanded, patchBody, lineClass } from '../src/shared/changes.ts'
+import { changesTabLabel, startsExpanded, initiallyExpanded, patchBody, lineClass } from '../src/shared/changes.ts'
 
 const file = (added, deleted, extra = {}) => ({
   path: 'f',
@@ -33,16 +33,16 @@ test('files start expanded up to 1500 changed lines', () => {
   assert.equal(startsExpanded(file(1000, 501)), false)
 })
 
-test('binary files never start expanded', () => {
-  assert.equal(startsExpanded(file(0, 0, { binary: true })), false)
+test('binary files start expanded so their note shows', () => {
+  assert.equal(startsExpanded(file(0, 0, { binary: true })), true)
 })
 
-test('files too large to read never start expanded', () => {
-  assert.equal(startsExpanded(file(0, 0, { tooLarge: true })), false)
+test('files too large to read start expanded so their note shows', () => {
+  assert.equal(startsExpanded(file(0, 0, { tooLarge: true })), true)
 })
 
-test('unreadable files never start expanded', () => {
-  assert.equal(startsExpanded(file(0, 0, { unreadable: true })), false)
+test('unreadable files start expanded so their note shows', () => {
+  assert.equal(startsExpanded(file(0, 0, { unreadable: true })), true)
 })
 
 const header = (name) =>
@@ -72,4 +72,29 @@ test('lineClass classifies by the first character', () => {
   assert.equal(lineClass('--- was a deleted -- line'), 'del')
   assert.equal(lineClass('+++ was an added ++ line'), 'add')
   assert.equal(lineClass(' context'), '')
+})
+
+const named = (path, added, extra = {}) => ({ ...file(added, 0, extra), path })
+
+test('initiallyExpanded expands files in order within the 5000 line budget', () => {
+  const files = [named('a', 1500), named('b', 1500), named('c', 1500), named('d', 600), named('e', 1)]
+  assert.deepEqual([...initiallyExpanded(files)], ['a', 'b', 'c'])
+})
+
+test('initiallyExpanded leaves over-limit files collapsed without spending budget', () => {
+  const files = [named('big', 2000), named('a', 10)]
+  assert.deepEqual([...initiallyExpanded(files)], ['a'])
+})
+
+test('initiallyExpanded always expands note-only rows at no cost', () => {
+  const files = [
+    named('a', 1500),
+    named('b', 1500),
+    named('c', 1500),
+    named('d', 600),
+    named('bin', 0, { binary: true }),
+    named('large', 0, { tooLarge: true }),
+    named('nope', 0, { unreadable: true })
+  ]
+  assert.deepEqual([...initiallyExpanded(files)], ['a', 'b', 'c', 'bin', 'large', 'nope'])
 })

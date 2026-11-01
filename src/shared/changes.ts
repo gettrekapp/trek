@@ -11,8 +11,39 @@ export function changesTabLabel(changes: WorktreeChanges | null): string {
   return `${count} ${count === 1 ? 'file' : 'files'} +${added} −${deleted}`
 }
 
+/** Total changed lines the panel expands on its own; later files start collapsed. */
+const EXPAND_BUDGET_LINES = 5000
+
+/** Rows that only show a note have nothing to render, so they start expanded. */
+const isNoteOnly = (file: ChangedFile): boolean => !!(file.binary || file.tooLarge || file.unreadable)
+
 export function startsExpanded(file: ChangedFile): boolean {
-  return !file.binary && !file.tooLarge && !file.unreadable && file.added + file.deleted <= MAX_EXPANDED_LINES
+  return isNoteOnly(file) || file.added + file.deleted <= MAX_EXPANDED_LINES
+}
+
+/**
+ * Paths that start expanded: files in order, each under the per-file limit,
+ * until the total budget would be exceeded. Note-only rows are free.
+ */
+export function initiallyExpanded(files: ChangedFile[]): Set<string> {
+  const out = new Set<string>()
+  let spent = 0
+  let exhausted = false
+  for (const file of files) {
+    if (isNoteOnly(file)) {
+      out.add(file.path)
+      continue
+    }
+    if (exhausted || !startsExpanded(file)) continue
+    const lines = file.added + file.deleted
+    if (spent + lines > EXPAND_BUDGET_LINES) {
+      exhausted = true
+      continue
+    }
+    spent += lines
+    out.add(file.path)
+  }
+  return out
 }
 
 /** CSS modifier for one line of a patch body (headers already removed). */

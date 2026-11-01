@@ -30,9 +30,14 @@ Read-only: no staging or reverting.
 - Header: the comparison base, e.g. `compared to origin/master`.
 - One row per file: path, status (added, modified, deleted, renamed) and `+/−`
   counts. Renames show the old path too.
-- Each row expands to a coloured unified diff. Rows start expanded, except files
-  with more than 1,500 changed lines, which start collapsed.
-- Binary files show "Binary file changed" instead of a diff.
+- Each row expands to a coloured unified diff. Files start expanded in order,
+  except files with more than 1,500 changed lines, and once 5,000 changed lines
+  have been expanded in total the remaining files start collapsed. A user's own
+  toggle always wins.
+- Binary, too-large and unreadable files show a note ("Binary file changed",
+  "File too large to show", "File can't be read") instead of a diff. These rows
+  start expanded so the note is visible, and cost nothing against the budget.
+- While the server is disconnected the panel says "Server disconnected".
 - Empty state: "No changes".
 
 ## Git layer (`src/host/gitService.ts`)
@@ -78,7 +83,11 @@ Parsing is in pure, separately tested functions. Both functions are wired throug
 
 - Only the selected worktree is polled, every 5 seconds, so large projects don't
   run a diff for every worktree.
-- The diff is re-fetched only when the summary changes while the panel is open.
+- While the panel is open the diff is re-fetched on every poll, not only when the
+  summary changes, because an edit can keep a file's counts and so leave the
+  summary identical. An identical result changes no state and re-renders nothing.
+  After a failed fetch it isn't retried until the summary changes or the panel is
+  reopened.
 - Polling pauses while the server is disconnected.
 - A response for a previously selected worktree is discarded.
 

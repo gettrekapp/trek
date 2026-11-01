@@ -867,7 +867,12 @@ export function WorktreeDetail({
             )}
           </div>
         )}
-        <ChangesPanel key={info.path} visible={panel === 'changes'} state={changesState} />
+        <ChangesPanel
+          key={info.path}
+          visible={panel === 'changes'}
+          paused={changesPaused}
+          state={changesState}
+        />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
         {isLocalMain && (
           <>

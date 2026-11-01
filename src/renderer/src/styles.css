@@ -1884,9 +1884,12 @@ button:disabled {
   line-height: 18px;
 }
 
-.changes-line {
+.changes-diff-inner {
   width: max-content;
   min-width: 100%;
+}
+
+.changes-line {
   padding: 0 10px;
   white-space: pre;
 }
