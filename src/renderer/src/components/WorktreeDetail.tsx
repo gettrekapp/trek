@@ -40,6 +40,8 @@ import { EnvironmentPanel } from './EnvironmentPanel'
 import { StackPanel } from './StackPanel'
 import { STACK_STATE_LABELS, stackState, stackUrls } from '../stacks'
 import { NotesPanel } from './NotesPanel'
+import { ChangesPanel, useWorktreeChanges } from './ChangesPanel'
+import { changesTabLabel } from '../../../shared/changes'
 import { AllNotesPanel } from './AllNotesPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { TerminalPane } from './TerminalPane'
@@ -58,7 +60,15 @@ interface Props {
   onWorktreesChanged: () => void
 }
 
-type Panel = 'sessions' | 'notes' | 'allNotes' | 'docker' | 'environment' | 'stack' | 'settings'
+type Panel =
+  | 'sessions'
+  | 'changes'
+  | 'notes'
+  | 'allNotes'
+  | 'docker'
+  | 'environment'
+  | 'stack'
+  | 'settings'
 
 const STACK_POLL_MS = 4000
 
@@ -129,6 +139,8 @@ export function WorktreeDetail({
 
   const path = info?.path
   const [stack, refreshStack] = useStackStatus(path, !!info?.serverId)
+  const changesPaused = !!info?.serverId && serverStatus[info.serverId] !== 'connected'
+  const changesState = useWorktreeChanges(path, info?.serverId, changesPaused, panel === 'changes')
   useEffect(() => {
     // Selection changed: back to the sessions view, drop transient UI state.
     setPanel('sessions')
@@ -738,6 +750,13 @@ export function WorktreeDetail({
           </button>
         )}
         <button
+          className={`panel-btn ${panel === 'changes' ? 'active' : ''}`}
+          title="Changes compared to the default branch, including uncommitted work"
+          onClick={() => setPanel(panel === 'changes' ? 'sessions' : 'changes')}
+        >
+          {changesTabLabel(changesState.changes)}
+        </button>
+        <button
           className={`panel-btn ${panel === 'notes' ? 'active' : ''}`}
           title={`Notes for ${noteKey}`}
           onClick={() => setPanel(panel === 'notes' ? 'sessions' : 'notes')}
@@ -848,6 +867,7 @@ export function WorktreeDetail({
             )}
           </div>
         )}
+        <ChangesPanel key={info.path} visible={panel === 'changes'} state={changesState} />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
         {isLocalMain && (
           <>
