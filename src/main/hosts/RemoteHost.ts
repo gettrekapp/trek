@@ -3,6 +3,7 @@ import type {
   HostStatus,
   PtySpawnOptions,
   ServerConfig,
+  WorktreeChanges,
   WorktreeStatus
 } from '../../shared/types'
 import {
@@ -296,6 +297,10 @@ export class RemoteHost implements HostService {
       this.request('git.listWorktrees', { repoPath }),
     worktreeStatuses: (worktreePaths: string[]): Promise<WorktreeStatus[]> =>
       this.request('git.worktreeStatuses', { worktreePaths }),
+    worktreeChanges: (worktreePath: string): Promise<WorktreeChanges> =>
+      this.request('git.worktreeChanges', { worktreePath }),
+    worktreeDiff: (worktreePath: string): Promise<Record<string, string>> =>
+      this.request('git.worktreeDiff', { worktreePath }),
     listBranches: (repoPath: string): Promise<string[]> =>
       this.request('git.listBranches', { repoPath }),
     addWorktree: async (

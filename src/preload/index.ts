@@ -32,6 +32,7 @@ import type {
   VoiceInfo,
   VoiceKeyResult,
   VoiceSettings,
+  WorktreeChanges,
   WorktreeStatus
 } from '../shared/types'
 
@@ -70,6 +71,10 @@ const api = {
   /** Dirty/ahead/behind for specific worktrees — polled apart from the list. */
   worktreeStatuses: (serverId: string | null, worktreePaths: string[]): Promise<WorktreeStatus[]> =>
     ipcRenderer.invoke('git:worktreeStatuses', serverId, worktreePaths),
+  worktreeChanges: (serverId: string | null, worktreePath: string): Promise<WorktreeChanges> =>
+    ipcRenderer.invoke('git:worktreeChanges', serverId, worktreePath),
+  worktreeDiff: (serverId: string | null, worktreePath: string): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('git:worktreeDiff', serverId, worktreePath),
   listBranches: (serverId: string | null, repoPath: string): Promise<string[]> =>
     ipcRenderer.invoke('git:listBranches', serverId, repoPath),
   addWorktree: (

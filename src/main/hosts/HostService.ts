@@ -1,4 +1,4 @@
-import type { GitWorktreeInfo, PtySpawnOptions, WorktreeStatus } from '../../shared/types'
+import type { GitWorktreeInfo, PtySpawnOptions, WorktreeChanges, WorktreeStatus } from '../../shared/types'
 
 /**
  * One machine that can hold worktrees and run Claude sessions. LocalHost runs
@@ -14,6 +14,10 @@ export interface HostService {
     listWorktrees(repoPath: string): Promise<GitWorktreeInfo[]>
     /** Dirty/ahead/behind per worktree — polled apart from the worktree list. */
     worktreeStatuses(worktreePaths: string[]): Promise<WorktreeStatus[]>
+    /** What the worktree would add to the default branch, for the Changes tab. */
+    worktreeChanges(worktreePath: string): Promise<WorktreeChanges>
+    /** Patch text per changed file. Fetched only while the Changes panel is open. */
+    worktreeDiff(worktreePath: string): Promise<Record<string, string>>
     listBranches(repoPath: string): Promise<string[]>
     addWorktree(
       repoPath: string,

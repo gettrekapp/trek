@@ -1,7 +1,7 @@
 // Wire protocol between clients (desktop app, future mobile app) and the
 // companion daemon. JSON text frames over WebSocket. See PROTOCOL.md for the
 // full contract; this file is the single source of truth for frame shapes.
-import type { GitWorktreeInfo, WorktreeStatus } from './types'
+import type { GitWorktreeInfo, WorktreeChanges, WorktreeStatus } from './types'
 
 export const PROTOCOL_VERSION = 1
 
@@ -83,6 +83,8 @@ export interface MethodParams {
   'git.listWorktrees': { repoPath: string }
   /** Dirty/ahead/behind per worktree — the expensive half of the sidebar poll. */
   'git.worktreeStatuses': { worktreePaths: string[] }
+  'git.worktreeChanges': { worktreePath: string }
+  'git.worktreeDiff': { worktreePath: string }
   'git.listBranches': { repoPath: string }
   'git.addWorktree': { repoPath: string; worktreePath: string; branch: string; createBranch: boolean }
   'git.removeWorktree': { repoPath: string; worktreePath: string }
@@ -137,6 +139,8 @@ export interface MethodResults {
   'repo.list': RemoteRepo[]
   'git.listWorktrees': GitWorktreeInfo[]
   'git.worktreeStatuses': WorktreeStatus[]
+  'git.worktreeChanges': WorktreeChanges
+  'git.worktreeDiff': Record<string, string>
   'git.listBranches': string[]
   'git.addWorktree': null
   'git.removeWorktree': null

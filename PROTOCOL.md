@@ -69,6 +69,8 @@ rejected with `PATH_DENIED`.
 | `repo.list` | – | `RemoteRepo[]` (same as `welcome.repos`) |
 | `git.listWorktrees` | `{repoPath}` | `GitWorktreeInfo[]` — one git process; carries no dirty/ahead/behind |
 | `git.worktreeStatuses` | `{worktreePaths}` | `WorktreeStatus[]` — dirty/ahead/behind, two git processes per worktree, so clients poll it on a slower cadence than the list |
+| `git.worktreeChanges` | `{worktreePath}` | `WorktreeChanges` — `{base, files}`: commits since the merge-base with the default branch, plus staged, unstaged and untracked files. Clients poll it for the selected worktree only |
+| `git.worktreeDiff` | `{worktreePath}` | `Record<string, string>` — patch text per changed file; binary files have no entry |
 | `git.listBranches` | `{repoPath}` | `string[]` |
 | `git.addWorktree` | `{repoPath, worktreePath, branch, createBranch}` | `null` |
 | `git.removeWorktree` | `{repoPath, worktreePath}` | `null` — refuses dirty worktrees |

@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { app } from 'electron'
-import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeStatus } from '../shared/types'
+import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeChanges, WorktreeStatus } from '../shared/types'
 import { getHost } from './hosts/registry'
 import type { RawProjectFile } from '../shared/migration'
 import { addRecent, getRecents } from './recents'
@@ -182,6 +182,24 @@ export function registerProjectHandlers(): void {
       worktreePaths: string[]
     ): Promise<WorktreeStatus[]> => {
       return getHost(serverId).git.worktreeStatuses(worktreePaths)
+    }
+  )
+
+  ipcMain.handle(
+    'git:worktreeChanges',
+    async (_event, serverId: string | null, worktreePath: string): Promise<WorktreeChanges> => {
+      return getHost(serverId).git.worktreeChanges(worktreePath)
+    }
+  )
+
+  ipcMain.handle(
+    'git:worktreeDiff',
+    async (
+      _event,
+      serverId: string | null,
+      worktreePath: string
+    ): Promise<Record<string, string>> => {
+      return getHost(serverId).git.worktreeDiff(worktreePath)
     }
   )
 

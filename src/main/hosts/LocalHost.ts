@@ -19,6 +19,8 @@ export class LocalHost implements HostService {
   git = {
     listWorktrees: gitService.listWorktrees,
     worktreeStatuses: gitService.worktreeStatuses,
+    worktreeChanges: gitService.worktreeChanges,
+    worktreeDiff: gitService.worktreeDiff,
     listBranches: gitService.listBranches,
     addWorktree: gitService.addWorktree,
     removeWorktree: gitService.removeWorktree,

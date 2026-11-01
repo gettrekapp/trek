@@ -26,6 +26,8 @@ const handlers: Record<string, Handler> = {
         ctx.guard.check(path)
       )
     ),
+  'git.worktreeChanges': (p, ctx) => gitService.worktreeChanges(ctx.guard.check(p.worktreePath)),
+  'git.worktreeDiff': (p, ctx) => gitService.worktreeDiff(ctx.guard.check(p.worktreePath)),
   'git.listBranches': (p, ctx) => gitService.listBranches(ctx.guard.check(p.repoPath)),
   'git.addWorktree': async (p, ctx) => {
     await gitService.addWorktree(
