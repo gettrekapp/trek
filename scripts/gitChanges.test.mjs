@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { splitPatch, worktreeChanges, worktreeDiff } from '../src/host/gitService.ts'
@@ -350,4 +350,68 @@ test('worktreeDiff concatenates tracked and untracked patches for one path', asy
   const diffs = await worktreeDiff(dir)
   assert.match(diffs['keep.txt'], /^-one$/m)
   assert.match(diffs['keep.txt'], /^\+one$/m)
+})
+
+test('a type change keeps both sections for the path', async (t) => {
+  const { dir } = makeRepo(t)
+  rmSync(join(dir, 'keep.txt'))
+  symlinkSync('target.txt', join(dir, 'keep.txt'))
+  const diffs = await worktreeDiff(dir)
+  assert.match(diffs['keep.txt'], /^-one$/m)
+  assert.match(diffs['keep.txt'], /^\+target\.txt$/m)
+})
+
+test('an untracked symlink to a directory has no entry and does not fail', async (t) => {
+  const { dir } = makeRepo(t)
+  mkdirSync(join(dir, 'real'))
+  symlinkSync('real', join(dir, 'link'))
+  writeFileSync(join(dir, 'keep.txt'), 'one\nchanged\n')
+  const diffs = await worktreeDiff(dir)
+  assert.deepEqual(Object.keys(diffs), ['keep.txt'])
+})
+
+test('an untracked file named - is read from disk, not stdin', async (t) => {
+  const { dir } = makeRepo(t)
+  writeFileSync(join(dir, '-'), 'dash\n')
+  const started = Date.now()
+  const diffs = await worktreeDiff(dir)
+  assert.ok(Date.now() - started < 10_000)
+  assert.match(diffs['-'], /^\+dash$/m)
+})
+
+test('file content cannot forge a section or a binary marker', async (t) => {
+  const { dir } = makeRepo(t)
+  writeFileSync(join(dir, 'keep.txt'), 'one\nold\rdiff --git a/phantom b/phantom\n')
+  writeFileSync(join(dir, 'fresh.txt'), 'old\rBinary files a differ\nx\u2028y\n')
+  const diffs = await worktreeDiff(dir)
+  assert.deepEqual(Object.keys(diffs).sort(), ['fresh.txt', 'keep.txt'])
+  assert.match(diffs['keep.txt'], /phantom/)
+  assert.match(diffs['fresh.txt'], /^\+x\u2028y$/m)
+})
+
+test('a broken textconv driver does not break the patches', async (t) => {
+  const { dir, run } = makeRepo(t)
+  writeFileSync(join(dir, '.gitattributes'), '*.tc diff=tc\n')
+  writeFileSync(join(dir, 'f.tc'), 'a\n')
+  run('add', '.')
+  run('commit', '-qm', 'tc')
+  run('config', 'diff.tc.textconv', '/nonexistent-textconv')
+  writeFileSync(join(dir, 'f.tc'), 'a\nb\n')
+  writeFileSync(join(dir, 'new.tc'), 'n\n')
+  const diffs = await worktreeDiff(dir)
+  assert.match(diffs['f.tc'], /^\+b$/m)
+  assert.match(diffs['new.tc'], /^\+n$/m)
+})
+
+test('splitPatch finds a quoted path in a mode-only section', () => {
+  const section = 'diff --git "a/q\\" m.sh" "b/q\\" m.sh"\nold mode 100644\nnew mode 100755\n'
+  assert.deepEqual(Object.keys(splitPatch(section)), ['q" m.sh'])
+})
+
+test('an untracked file marked binary by gitattributes has no entry', async (t) => {
+  const { dir } = makeRepo(t)
+  writeFileSync(join(dir, '.gitattributes'), '*.dat binary\n')
+  writeFileSync(join(dir, 'x.dat'), 'plain text\n')
+  const diffs = await worktreeDiff(dir)
+  assert.equal(diffs['x.dat'], undefined)
 })

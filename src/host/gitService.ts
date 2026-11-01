@@ -510,7 +510,14 @@ export async function worktreeChanges(path: string): Promise<WorktreeChanges> {
 }
 
 /** Flags that pin the patch format regardless of the user's git config. */
-const PATCH_FORMAT_ARGS = ['--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/']
+const PATCH_FORMAT_ARGS = [
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  '--submodule=short',
+  '--src-prefix=a/',
+  '--dst-prefix=b/'
+]
 
 /** Reverses git's C-style quoting of a path, e.g. "a/q\"t.txt". */
 function unquotePath(value: string): string {
@@ -557,7 +564,9 @@ function patchSectionPath(section: string): string {
   // same path twice: "a/<path> b/<path>".
   const header = lines[0].slice('diff --git '.length)
   if (header.startsWith('"')) {
-    const end = header.indexOf('" ') + 1
+    let end = 1
+    while (end < header.length && header[end] !== '"') end += header[end] === '\\' ? 2 : 1
+    end += 1
     return unquotePath(header.slice(0, end)).replace(/^a\//, '')
   }
   return header.slice('a/'.length, 'a/'.length + (header.length - ' b/'.length - 'a/'.length) / 2)
@@ -565,23 +574,50 @@ function patchSectionPath(section: string): string {
 
 /** Splits a multi-file patch into one patch per file, keyed by path. */
 export function splitPatch(patch: string): Record<string, string> {
-  const sections = patch.split(/^(?=diff --git )/m).filter((s) => s.startsWith('diff --git '))
-  return Object.fromEntries(sections.map((section) => [patchSectionPath(section), section]))
+  // Only a newline starts a section; a bare CR or U+2028 in file content must not.
+  const sections = patch.split(/(?<=\n)(?=diff --git )/).filter((s) => s.startsWith('diff --git '))
+  const result: Record<string, string> = {}
+  for (const section of sections) {
+    // A type change (file to symlink) emits two sections for one path.
+    const key = patchSectionPath(section)
+    result[key] = (result[key] ?? '') + section
+  }
+  return result
+}
+
+/** Binary sections say so in their header, before any hunk; content can't forge it. */
+function isBinarySection(section: string): boolean {
+  const hunk = section.indexOf('\n@@')
+  const header = hunk === -1 ? section : section.slice(0, hunk)
+  return /^Binary files .* differ$/m.test(header) || header.includes('\nGIT binary patch\n')
 }
 
 /** Patch for an untracked file. No index changes, so a read can't disturb the user's staging. */
 async function untrackedPatch(worktreePath: string, path: string): Promise<string> {
+  // A file named "-" would be read as stdin, so spell it as a path; the header is restored below.
+  const operand = path === '-' ? './-' : path
+  const restore = (patch: string): string =>
+    operand === path
+      ? patch
+      : patch
+          .replace(/^diff --git a\/\.\/- b\/\.\/-$/m, 'diff --git a/- b/-')
+          .replace(/^\+\+\+ b\/\.\/-$/m, '+++ b/-')
   try {
-    await execFileAsync(
+    const pending = execFileAsync(
       'git',
-      ['-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', path],
+      ['-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
       { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }
     )
+    // Never let git wait on stdin, whatever the file is called.
+    pending.child.stdin?.end()
+    await pending
     return ''
   } catch (err) {
     // --no-index exits 1 when the files differ, which is the expected outcome.
     const failure = err as { code?: number; stdout?: string }
-    if (failure.code === 1 && typeof failure.stdout === 'string') return failure.stdout
+    if (failure.code === 1 && typeof failure.stdout === 'string') {
+      return isBinarySection(failure.stdout) ? '' : restore(failure.stdout)
+    }
     // Deleted between the listing and this read: nothing to show.
     try {
       await lstat(join(worktreePath, path))
@@ -602,9 +638,7 @@ export async function worktreeDiff(path: string): Promise<Record<string, string>
     await git(path, ['--no-optional-locks', 'diff', '-M', ...PATCH_FORMAT_ARGS, ref, '--'])
   )
   for (const key of Object.keys(tracked)) {
-    if (/^Binary files .* differ$/m.test(tracked[key]) || tracked[key].includes('\nGIT binary patch\n')) {
-      delete tracked[key]
-    }
+    if (isBinarySection(tracked[key])) delete tracked[key]
   }
   const candidates = await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) =>
     untrackedFile(path, p)
