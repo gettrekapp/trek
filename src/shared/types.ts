@@ -269,6 +269,25 @@ export interface WorktreeStatus {
   behind?: number
 }
 
+export type ChangedFileStatus = 'added' | 'modified' | 'deleted' | 'renamed'
+
+export interface ChangedFile {
+  path: string
+  /** Previous path, for renames */
+  oldPath?: string
+  status: ChangedFileStatus
+  added: number
+  deleted: number
+  binary: boolean
+}
+
+/** What a worktree would add to the default branch, uncommitted work included. */
+export interface WorktreeChanges {
+  /** The default branch compared against; null when comparing to HEAD */
+  base: string | null
+  files: ChangedFile[]
+}
+
 export interface SkillInfo {
   /** Slash-command name, without the leading "/" */
   name: string
