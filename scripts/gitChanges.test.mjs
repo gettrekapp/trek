@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { worktreeChanges } from '../src/host/gitService.ts'
+import { splitPatch, worktreeChanges, worktreeDiff } from '../src/host/gitService.ts'
 
 function makeRepo(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
@@ -250,4 +250,104 @@ test('nested repositories are left out', async (t) => {
   writeFileSync(join(nested, 'inner.txt'), 'x\n')
   const changes = await worktreeChanges(dir)
   assert.deepEqual(changes.files, [])
+})
+
+test('splitPatch keys sections by path, including quoted and spaced names', () => {
+  const plain = 'diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-x\n+y\n'
+  const spaced =
+    'diff --git a/b c.txt b/b c.txt\n--- a/b c.txt\t\n+++ b/b c.txt\t\n@@ -1 +1 @@\n-x\n+y\n'
+  const removed = 'diff --git a/d.txt b/d.txt\n--- a/d.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n'
+  const moved =
+    'diff --git a/old.txt b/new.txt\nsimilarity index 100%\nrename from old.txt\nrename to new.txt\n'
+  const modeOnly = 'diff --git a/m n.sh b/m n.sh\nold mode 100644\nnew mode 100755\n'
+  const modeOnlyB = 'diff --git a/x b/y.sh b/x b/y.sh\nold mode 100644\nnew mode 100755\n'
+  const quoted =
+    'diff --git "a/q\\"t.txt" "b/q\\"t.txt"\n--- "a/q\\"t.txt"\n+++ "b/q\\"t.txt"\n@@ -1 +1 @@\n-x\n+y\n'
+  const utf8 =
+    'diff --git "a/caf\\303\\251.txt" "b/caf\\303\\251.txt"\n--- "a/caf\\303\\251.txt"\n+++ "b/caf\\303\\251.txt"\n@@ -1 +1 @@\n-x\n+y\n'
+
+  const result = splitPatch(plain + spaced + removed + moved + modeOnly + modeOnlyB + quoted + utf8)
+  assert.deepEqual(Object.keys(result).sort(), [
+    'a.txt',
+    'b c.txt',
+    'café.txt',
+    'd.txt',
+    'm n.sh',
+    'new.txt',
+    'q"t.txt',
+    'x b/y.sh'
+  ])
+  assert.equal(result['a.txt'], plain)
+})
+
+test('splitPatch handles an empty diff', () => {
+  assert.deepEqual(splitPatch(''), {})
+})
+
+test('worktreeDiff returns a patch for tracked and untracked files', async (t) => {
+  const { dir, run } = makeRepo(t)
+  writeFileSync(join(dir, 'keep.txt'), 'one\nchanged\n')
+  run('mv', 'moved.txt', 'new name.txt')
+  writeFileSync(join(dir, 'fresh file.txt'), 'hello\n')
+
+  const diffs = await worktreeDiff(dir)
+  assert.match(diffs['keep.txt'], /^\+changed$/m)
+  assert.match(diffs['new name.txt'], /^rename to new name\.txt$/m)
+  assert.match(diffs['fresh file.txt'], /^\+hello$/m)
+})
+
+test('worktreeDiff ignores user diff settings that change the output', async (t) => {
+  const { dir, run } = makeRepo(t)
+  run('config', 'diff.noprefix', 'true')
+  run('config', 'color.ui', 'always')
+  writeFileSync(join(dir, 'keep.txt'), 'one\nchanged\n')
+
+  const diffs = await worktreeDiff(dir)
+  assert.deepEqual(Object.keys(diffs), ['keep.txt'])
+  assert.match(diffs['keep.txt'], /^\+changed$/m)
+})
+
+test('worktreeDiff leaves the index untouched', async (t) => {
+  const { dir, run } = makeRepo(t)
+  writeFileSync(join(dir, 'fresh.txt'), 'hello\n')
+  const before = run('status', '--porcelain')
+  await worktreeDiff(dir)
+  assert.equal(run('status', '--porcelain'), before)
+})
+
+test('worktreeDiff has no entry for tracked or untracked binary files', async (t) => {
+  const { dir, run } = makeRepo(t)
+  writeFileSync(join(dir, 'tracked.bin'), Buffer.from([0, 1, 2, 0]))
+  run('add', 'tracked.bin')
+  writeFileSync(join(dir, 'blob.bin'), Buffer.from([0, 1, 2, 0]))
+  assert.deepEqual(await worktreeDiff(dir), {})
+})
+
+test('worktreeDiff has no entry for tooLarge or unreadable files and still resolves', async (t) => {
+  if (process.getuid?.() === 0) return t.skip('root can read anything')
+  const { dir } = makeRepo(t)
+  const big = join(dir, 'big.dat')
+  writeFileSync(big, '')
+  truncateSync(big, 5 * 1024 * 1024 + 1)
+  const secret = join(dir, 'secret.txt')
+  writeFileSync(secret, 'x\n')
+  chmodSync(secret, 0)
+  t.after(() => {
+    try {
+      chmodSync(secret, 0o644)
+    } catch {
+      // the repo directory may already be removed
+    }
+  })
+  writeFileSync(join(dir, 'keep.txt'), 'one\nchanged\n')
+  const diffs = await worktreeDiff(dir)
+  assert.deepEqual(Object.keys(diffs), ['keep.txt'])
+})
+
+test('worktreeDiff concatenates tracked and untracked patches for one path', async (t) => {
+  const { dir, run } = makeRepo(t)
+  run('rm', '-q', '--cached', 'keep.txt')
+  const diffs = await worktreeDiff(dir)
+  assert.match(diffs['keep.txt'], /^-one$/m)
+  assert.match(diffs['keep.txt'], /^\+one$/m)
 })
