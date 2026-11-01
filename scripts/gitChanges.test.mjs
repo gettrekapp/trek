@@ -216,9 +216,10 @@ test('untracked files over 5 MB are flagged tooLarge, not binary', async (t) => 
   })
 })
 
-test('an unreadable untracked file is an error, not an empty file', async (t) => {
+test('an unreadable untracked file is flagged and does not fail the summary', async (t) => {
   if (process.getuid?.() === 0) return t.skip('root can read anything')
   const { dir } = makeRepo(t)
+  writeFileSync(join(dir, 'keep.txt'), 'one\nchanged\n')
   const secret = join(dir, 'secret.txt')
   writeFileSync(secret, 'x\n')
   chmodSync(secret, 0)
@@ -229,7 +230,16 @@ test('an unreadable untracked file is an error, not an empty file', async (t) =>
       // the repo directory may already be removed
     }
   })
-  await assert.rejects(worktreeChanges(dir), { code: 'EACCES' })
+  const changes = await worktreeChanges(dir)
+  assert.deepEqual(byPath(changes, 'secret.txt'), {
+    path: 'secret.txt',
+    status: 'added',
+    added: 0,
+    deleted: 0,
+    binary: false,
+    unreadable: true
+  })
+  assert.equal(byPath(changes, 'keep.txt').status, 'modified')
 })
 
 test('nested repositories are left out', async (t) => {

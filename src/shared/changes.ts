@@ -12,5 +12,5 @@ export function changesTabLabel(changes: WorktreeChanges | null): string {
 }
 
 export function startsExpanded(file: ChangedFile): boolean {
-  return !file.binary && !file.tooLarge && file.added + file.deleted <= MAX_EXPANDED_LINES
+  return !file.binary && !file.tooLarge && !file.unreadable && file.added + file.deleted <= MAX_EXPANDED_LINES
 }

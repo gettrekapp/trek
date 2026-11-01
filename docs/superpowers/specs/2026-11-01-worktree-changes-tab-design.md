@@ -39,7 +39,7 @@ Read-only: no staging or reverting.
 
 ### `worktreeChanges(path)`
 
-Returns `{ base, files: [{ path, oldPath?, status, added, deleted, binary }] }`.
+Returns `{ base, files: [{ path, oldPath?, status, added, deleted, binary, tooLarge?, unreadable? }] }`.
 `base` is the default branch name, or `null` when comparing to `HEAD`.
 
 - Tracked changes: one `git --no-optional-locks diff -M -z --raw --numstat <ref> --`,
@@ -50,6 +50,9 @@ Returns `{ base, files: [{ path, oldPath?, status, added, deleted, binary }] }`.
   in their first 8 KB are binary.
 - Untracked files over 5 MB are not read on each poll. They are reported with
   `tooLarge: true` and no line counts, and the panel says "File too large to show".
+- Untracked files that cannot be read (for example mode 000) do not fail the
+  summary. They are reported with `unreadable: true` and no line counts, and the
+  panel says "File can't be read".
 - Nested repositories listed as untracked directories have no lines of their own
   and are left out.
 - `path` is unique. A tracked deletion plus an untracked file at the same path (for

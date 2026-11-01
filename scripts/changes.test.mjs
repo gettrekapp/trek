@@ -40,3 +40,7 @@ test('binary files never start expanded', () => {
 test('files too large to read never start expanded', () => {
   assert.equal(startsExpanded(file(0, 0, { tooLarge: true })), false)
 })
+
+test('unreadable files never start expanded', () => {
+  assert.equal(startsExpanded(file(0, 0, { unreadable: true })), false)
+})

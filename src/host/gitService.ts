@@ -426,6 +426,7 @@ function mergeChangedFiles(tracked: ChangedFile[], untracked: ChangedFile[]): Ch
       binary: existing.binary || file.binary
     }
     if (existing.tooLarge || file.tooLarge) merged.tooLarge = true
+    if (existing.unreadable || file.unreadable) merged.unreadable = true
     byPath.set(file.path, merged)
   }
   return [...byPath.values()]
@@ -480,9 +481,11 @@ async function untrackedFile(worktreePath: string, path: string): Promise<Change
       file.added = text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
     }
   } catch (error) {
-    // deleted between the listing and this read — report it with no lines;
-    // anything else (e.g. unreadable) is a real error and surfaces
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    // Gone, or replaced by a directory, between the listing and this read:
+    // report it with no lines. Anything else (e.g. permissions) is flagged
+    // rather than failing the whole summary.
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR' && code !== 'EISDIR') file.unreadable = true
   }
   return file
 }
