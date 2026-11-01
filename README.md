@@ -88,6 +88,13 @@ git worktrees of a repository, side by side.
   close a session, and set a branch's tag,
   note or linked ticket. Tool calls are executed by the renderer (`src/renderer/src/mcpTools.ts`),
   which owns the terminals and project state.
+- **Multiple windows**: each window holds one project, with its own sessions and
+  Global Claude. Opening a project uses a new window unless the current one is
+  empty, and focuses the project's window if it's already open. `File → New Window`
+  (⌘⇧N) opens an empty one. Closing a window saves its project and ends its local
+  sessions, which resume on reopen; remote sessions keep running. A never-saved
+  project asks first. On launch, the windows open at last quit come back with their
+  sessions unloaded (`open-windows.json` in the user-data directory).
 - **Recent projects**: the start screen lists the last 8 project files you opened
   or saved (stored in the app's user-data directory; missing files are dropped).
 

@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, ipcMain, type WebContents } from 'electron'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { writeFile } from 'node:fs/promises'
+import { readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { McpCallRequest, McpCallResponse } from '../shared/types'
@@ -10,7 +10,8 @@ import type { McpCallRequest, McpCallResponse } from '../shared/types'
  * MCP server (Streamable HTTP, JSON responses only) that lets the global
  * Claude session drive the app: list worktrees, start/load sessions, send
  * prompts, read terminal output. Bound to loopback with a per-launch bearer
- * token. Tool calls are forwarded to the renderer, which owns the terminals
+ * token per window: the token decides which window's project a call acts on.
+ * Tool calls are forwarded to that window's renderer, which owns the terminals
  * and project state.
  */
 
@@ -364,25 +365,40 @@ interface JsonRpcMessage {
 
 const pending = new Map<
   string,
-  { resolve: (r: McpCallResponse) => void; timer: ReturnType<typeof setTimeout> }
+  { resolve: (r: McpCallResponse) => void; timer: ReturnType<typeof setTimeout>; windowId: number }
 >()
 
-function callRenderer(name: string, args: Record<string, unknown>): Promise<McpCallResponse> {
-  const win = BrowserWindow.getAllWindows().find((w) => !w.webContents.isDestroyed())
-  if (!win) return Promise.resolve({ ok: false, error: 'The app window is not open' })
+interface McpClient {
+  windowId: number
+  contents: WebContents
+  token: string
+  configPath: string
+  written: Promise<void>
+}
+
+const clients = new Map<number, McpClient>()
+
+function callRenderer(
+  client: McpClient,
+  name: string,
+  args: Record<string, unknown>
+): Promise<McpCallResponse> {
+  if (client.contents.isDestroyed()) {
+    return Promise.resolve({ ok: false, error: 'The app window is not open' })
+  }
   const callId = randomUUID()
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(callId)
       resolve({ ok: false, error: 'Timed out waiting for the app' })
     }, CALL_TIMEOUT_MS)
-    pending.set(callId, { resolve, timer })
+    pending.set(callId, { resolve, timer, windowId: client.windowId })
     const request: McpCallRequest = { callId, name, args }
-    win.webContents.send('mcp:call', request)
+    client.contents.send('mcp:call', request)
   })
 }
 
-async function handleMessage(msg: JsonRpcMessage): Promise<object | null> {
+async function handleMessage(msg: JsonRpcMessage, client: McpClient): Promise<object | null> {
   const isRequest = msg.id !== undefined && msg.id !== null
   const reply = (result: object): object => ({ jsonrpc: '2.0', id: msg.id, result })
   const fail = (code: number, message: string): object => ({
@@ -416,7 +432,7 @@ async function handleMessage(msg: JsonRpcMessage): Promise<object | null> {
         return fail(-32602, `Unknown tool: ${String(name)}`)
       }
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
-      const response = await callRenderer(name, args)
+      const response = await callRenderer(client, name, args)
       const text = response.ok
         ? JSON.stringify(response.result ?? null, null, 2)
         : (response.error ?? 'Unknown error')
@@ -436,19 +452,21 @@ function readBody(req: IncomingMessage): Promise<string> {
   })
 }
 
-function authorized(req: IncomingMessage, token: string): boolean {
-  const header = req.headers.authorization ?? ''
-  const expected = Buffer.from(`Bearer ${token}`)
-  const actual = Buffer.from(header)
-  return actual.length === expected.length && timingSafeEqual(actual, expected)
+function clientFor(req: IncomingMessage): McpClient | undefined {
+  const actual = Buffer.from(req.headers.authorization ?? '')
+  return [...clients.values()].find((client) => {
+    const expected = Buffer.from(`Bearer ${client.token}`)
+    return actual.length === expected.length && timingSafeEqual(actual, expected)
+  })
 }
 
-async function handleRequest(req: IncomingMessage, res: ServerResponse, token: string): Promise<void> {
+async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.url?.split('?')[0] !== '/mcp') {
     res.writeHead(404).end()
     return
   }
-  if (!authorized(req, token)) {
+  const client = clientFor(req)
+  if (!client) {
     res.writeHead(401).end()
     return
   }
@@ -469,7 +487,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, token: s
 
   const batch = Array.isArray(body)
   const messages = (batch ? body : [body]) as JsonRpcMessage[]
-  const replies = (await Promise.all(messages.map(handleMessage))).filter(Boolean)
+  const replies = (await Promise.all(messages.map((m) => handleMessage(m, client)))).filter(Boolean)
   if (replies.length === 0) {
     res.writeHead(202).end()
     return
@@ -478,13 +496,22 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse, token: s
   res.end(JSON.stringify(batch ? replies : replies[0]))
 }
 
-let configPathPromise: Promise<string> | null = null
+let portPromise: Promise<number> | null = null
 
-/** Starts the server and writes a --mcp-config file pointing at it. */
-function startMcpServer(): Promise<string> {
-  const token = randomBytes(32).toString('hex')
+/** Per-window config files don't outlive a launch; a crash can leave them behind. */
+async function removeStaleConfigs(): Promise<void> {
+  const dir = app.getPath('userData')
+  const names = await readdir(dir)
+  await Promise.all(
+    names
+      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-\d+\.json$/.test(n))
+      .map((n) => rm(join(dir, n), { force: true }))
+  )
+}
+
+function startMcpServer(): Promise<number> {
   const server = createServer((req, res) => {
-    handleRequest(req, res, token).catch((err) => {
+    handleRequest(req, res).catch((err) => {
       if (!res.headersSent) res.writeHead(500)
       res.end(String(err))
     })
@@ -493,19 +520,8 @@ function startMcpServer(): Promise<string> {
     server.once('error', reject)
     server.listen(0, '127.0.0.1', async () => {
       try {
-        const { port } = server.address() as AddressInfo
-        const config = {
-          mcpServers: {
-            [MCP_SERVER_NAME]: {
-              type: 'http',
-              url: `http://127.0.0.1:${port}/mcp`,
-              headers: { Authorization: `Bearer ${token}` }
-            }
-          }
-        }
-        const path = join(app.getPath('userData'), 'global-claude-mcp.json')
-        await writeFile(path, JSON.stringify(config, null, 2), { mode: 0o600 })
-        resolve(path)
+        await removeStaleConfigs()
+        resolve((server.address() as AddressInfo).port)
       } catch (err) {
         reject(err)
       }
@@ -513,14 +529,56 @@ function startMcpServer(): Promise<string> {
   })
 }
 
-export function registerMcpHandlers(): void {
-  ipcMain.handle('mcp:configPath', () => {
-    configPathPromise ??= startMcpServer().catch((err) => {
-      configPathPromise = null
-      throw err
-    })
-    return configPathPromise
+/** Writes this window's --mcp-config file, with a token that identifies the window. */
+async function configPathFor(contents: WebContents): Promise<string> {
+  portPromise ??= startMcpServer().catch((err) => {
+    portPromise = null
+    throw err
   })
+  const port = await portPromise
+  const existing = clients.get(contents.id)
+  if (existing) {
+    await existing.written
+    return existing.configPath
+  }
+  const token = randomBytes(32).toString('hex')
+  const configPath = join(app.getPath('userData'), `mcp-${contents.id}.json`)
+  const config = {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        type: 'http',
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    }
+  }
+  const written = writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 })
+  clients.set(contents.id, { windowId: contents.id, contents, token, configPath, written })
+  try {
+    await written
+  } catch (err) {
+    clients.delete(contents.id)
+    throw err
+  }
+  return configPath
+}
+
+/** Revokes a closed window's token and fails the calls still waiting on it. */
+export function releaseMcpWindow(windowId: number): void {
+  for (const [callId, entry] of pending) {
+    if (entry.windowId !== windowId) continue
+    pending.delete(callId)
+    clearTimeout(entry.timer)
+    entry.resolve({ ok: false, error: 'The app window was closed' })
+  }
+  const client = clients.get(windowId)
+  if (!client) return
+  clients.delete(windowId)
+  void rm(client.configPath, { force: true }).catch((err) => console.error(err))
+}
+
+export function registerMcpHandlers(): void {
+  ipcMain.handle('mcp:configPath', (event) => configPathFor(event.sender))
 
   ipcMain.on('mcp:result', (_event, callId: string, response: McpCallResponse) => {
     const entry = pending.get(callId)

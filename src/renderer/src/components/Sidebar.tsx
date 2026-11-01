@@ -441,6 +441,11 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
 
   return (
     <aside className="sidebar">
+      {project.bannerImage && (
+        <div className="sidebar-banner">
+          <img src={project.bannerImage} alt="" />
+        </div>
+      )}
       <div className="sidebar-top">
         <input
           className="sidebar-filter"

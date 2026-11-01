@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { baseName, useAppStore } from '../store'
+import { syncWindowProject } from '../windowLifecycle'
 import type { OpenedProject, ProjectFile } from '../../../shared/types'
 
 export function StartScreen(): React.JSX.Element {
@@ -49,6 +50,7 @@ export function StartScreen(): React.JSX.Element {
       if (!opened) return
       loadOpened(opened)
     } catch (err) {
+      syncWindowProject() // main claimed the file for a project that didn't load
       setError(`Could not open project: ${String(err)}`)
     } finally {
       setBusy(false)
@@ -60,8 +62,9 @@ export function StartScreen(): React.JSX.Element {
     setError(null)
     try {
       const opened = await window.api.openProjectPath(filePath)
-      loadOpened(opened)
+      if (opened) loadOpened(opened)
     } catch (err) {
+      syncWindowProject() // main claimed the file for a project that didn't load
       setError(`Could not open project: ${String(err)}`)
       setRecents((r) => r.filter((p) => p !== filePath))
     } finally {

@@ -1,9 +1,4 @@
 import { app, BrowserWindow, Menu, nativeImage } from 'electron'
-import { join } from 'node:path'
-
-// icon.png is extracted from AppIcon.icns (the packaging icon) — nativeImage
-// needs a PNG for the runtime dock icon.
-const APP_ICON = join(app.getAppPath(), 'resources', 'icon.png')
 
 app.setName('Trek Dev')
 
@@ -13,7 +8,7 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon)
 }
 import { registerPtyHandlers, disposeAllPtys } from './pty'
-import { registerProjectHandlers } from './project'
+import { openProjectFile, registerProjectHandlers } from './project'
 import { registerGithubHandlers } from './github'
 import { registerLinearHandlers } from './linear'
 import { registerSkillHandlers } from './skills'
@@ -25,41 +20,30 @@ import { registerServerHandlers, disconnectAllServers } from './servers'
 import { registerMcpHandlers } from './mcp'
 import { registerVoiceHandlers } from './voice'
 import { fixPath } from './env'
-import { openUrl } from './openUrl'
-
-function createWindow(): BrowserWindow {
-  const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 900,
-    minHeight: 600,
-    title: 'Trek Dev',
-    icon: APP_ICON, // window icon on Windows/Linux; macOS uses the dock icon
-    backgroundColor: '#111113',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      contextIsolation: true,
-      sandbox: false
-    }
-  })
-
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void openUrl(url)
-    return { action: 'deny' }
-  })
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
-  }
-
-  return win
-}
+import {
+  APP_ICON,
+  closeAllForQuit,
+  createWindow,
+  isQuitting,
+  registerWindowHandlers,
+  restoreWindows,
+  windowHasProject
+} from './windows'
 
 function sendToFocused(channel: string): void {
   ;(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.webContents.send(channel)
+}
+
+function newProject(): void {
+  const focused = BrowserWindow.getFocusedWindow()
+  // An empty window is already at the start screen.
+  if (focused && !windowHasProject(focused.webContents)) focused.focus()
+  else createWindow()
+}
+
+function openProject(): void {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow({ menu: 'open-project' })
+  else sendToFocused('menu:open-project')
 }
 
 function buildMenu(): void {
@@ -70,14 +54,19 @@ function buildMenu(): void {
       label: 'File',
       submenu: [
         {
+          label: 'New Window',
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => createWindow()
+        },
+        {
           label: 'New Project…',
           accelerator: 'CmdOrCtrl+N',
-          click: () => sendToFocused('menu:new-project')
+          click: newProject
         },
         {
           label: 'Open Project…',
           accelerator: 'CmdOrCtrl+O',
-          click: () => sendToFocused('menu:open-project')
+          click: openProject
         },
         { type: 'separator' },
         {
@@ -123,6 +112,7 @@ app.whenReady().then(async () => {
   // Must complete before anything spawns child processes (docker, git, ptys).
   await fixPath()
   registerPtyHandlers()
+  registerWindowHandlers(openProjectFile)
   registerProjectHandlers()
   registerGithubHandlers()
   registerLinearHandlers()
@@ -136,20 +126,34 @@ app.whenReady().then(async () => {
   registerVoiceHandlers()
   buildMenu()
   setDockIcon()
-  createWindow()
+  await restoreWindows()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-app.on('window-all-closed', () => {
+function cleanUp(): void {
   disposeAllPtys()
   disconnectAllServers()
-  if (process.platform !== 'darwin') app.quit()
+}
+
+app.on('window-all-closed', () => {
+  cleanUp()
+  // A quit in progress finishes on its own once closeAllForQuit returns.
+  if (process.platform !== 'darwin' && !isQuitting()) app.quit()
 })
 
-app.on('before-quit', () => {
-  disposeAllPtys()
-  disconnectAllServers()
+let quitConfirmed = false
+
+app.on('before-quit', (event) => {
+  if (quitConfirmed) return
+  event.preventDefault()
+  if (isQuitting()) return
+  void closeAllForQuit().then((closed) => {
+    if (!closed) return
+    cleanUp()
+    quitConfirmed = true
+    app.quit()
+  })
 })

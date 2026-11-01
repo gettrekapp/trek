@@ -4,6 +4,7 @@ import * as gitService from '../../host/gitService'
 import * as claudeSessions from '../../host/claudeSessionService'
 import { PtyService } from '../../host/ptyService'
 import type { HostService } from './HostService'
+import { sendToPtyWindow } from './ptyWindows'
 
 export function broadcast(channel: string, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -38,8 +39,8 @@ export class LocalHost implements HostService {
   pty = {
     spawn: async (opts: PtySpawnOptions): Promise<void> => {
       this.ptys.spawn(opts, {
-        onData: (data) => broadcast('pty:data', { id: opts.id, data }),
-        onExit: (exitCode) => broadcast('pty:exit', { id: opts.id, exitCode })
+        onData: (data) => sendToPtyWindow('pty:data', { id: opts.id, data }),
+        onExit: (exitCode) => sendToPtyWindow('pty:exit', { id: opts.id, exitCode })
       })
     },
     write: (id: string, data: string): void => this.ptys.write(id, data),

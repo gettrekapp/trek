@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { GLOBAL_WORKTREE_ID, migrateProject, useAppStore } from './store'
 import { saveProject } from './persistence'
+import { handleWindowCloseRequest, syncWindowProject, watchWindowProject } from './windowLifecycle'
 import {
   closeGlobalTerminal,
   disposeAllTerminals,
@@ -15,6 +16,7 @@ import { handleMcpCall } from './mcpTools'
 import { useLinearSync } from './linear'
 import { loadVoiceSettings } from './voice'
 import { SummaryBubble } from './components/SummaryBubble'
+import { titleBarForeground } from '../../shared/appearance'
 
 export default function App(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
@@ -37,20 +39,15 @@ export default function App(): React.JSX.Element {
       // demand, so a project with dozens of them doesn't launch dozens of claudes.
       useAppStore.getState().setProject(project, opened.filePath)
     } catch (err) {
+      syncWindowProject() // main claimed the file for a project that didn't load
       await window.api.showError('Could not open project', String(err))
     }
-  }, [])
-
-  const newProject = useCallback((): void => {
-    disposeAllTerminals()
-    useAppStore.getState().closeProject()
   }, [])
 
   useEffect(() => {
     const unsubscribes = [
       window.api.onMenu('save-project', () => void saveProject()),
       window.api.onMenu('open-project', () => void openProject()),
-      window.api.onMenu('new-project', newProject),
       window.api.onMenu('new-terminal', () => {
         const state = useAppStore.getState()
         if (state.project && state.selected) void startClaudeSession(state.selected)
@@ -69,18 +66,40 @@ export default function App(): React.JSX.Element {
         const state = useAppStore.getState()
         if (state.project) state.setGlobalPanelOpen(!state.globalPanelOpen)
       }),
-      window.api.onMcpCall((request) => void handleMcpCall(request))
+      window.api.onMcpCall((request) => void handleMcpCall(request)),
+      window.api.onWindowCloseRequest(() => void handleWindowCloseRequest()),
+      watchWindowProject()
     ]
     return () => unsubscribes.forEach((u) => u())
-  }, [openProject, newProject])
+  }, [openProject])
+
+  // After the listeners above: this also tells main the window can answer a close request.
+  useEffect(() => {
+    window.api
+      .takeInitialWindowState()
+      .then(async ({ opened, menu }) => {
+        if (opened) useAppStore.getState().setProject(opened.project, opened.filePath)
+        if (menu === 'open-project') await openProject()
+      })
+      .catch(async (err) => {
+        syncWindowProject()
+        await window.api.showError('Could not open project', String(err))
+      })
+  }, [openProject])
+
+  const titleBarColor = project?.titleBarColor
 
   return (
     <div className="app">
-      <header className="title-bar">
+      <header
+        className={`title-bar ${titleBarColor ? `title-bar-${titleBarForeground(titleBarColor)}` : ''}`}
+        style={titleBarColor ? { background: titleBarColor } : undefined}
+      >
         <div className="title-side" />
         <span className="title-text">
           {project ? (
             <>
+              {project.logoImage && <img className="title-logo" src={project.logoImage} alt="" />}
               {project.name}
               {dirty && <span className="dirty-dot" title="Unsaved changes" />}
               <span className="title-path">

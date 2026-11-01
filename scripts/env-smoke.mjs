@@ -75,6 +75,7 @@ try {
     cwd: projectDir,
     env: {
       ...process.env,
+      TREK_NO_WINDOW_RESTORE: '1',
       PATH: `${stubDir}:${process.env.PATH}`,
       // A failing SHELL makes fixPath() keep process.env.PATH (with the stubs
       // first) instead of re-resolving PATH from a login shell.

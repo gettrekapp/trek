@@ -25,7 +25,8 @@ const cleanup = () => {
 try {
   const app = await electron.launch({
     args: ['out/main/index.js'],
-    cwd: projectDir
+    cwd: projectDir,
+    env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1' }
   })
 
   const win = await app.firstWindow()

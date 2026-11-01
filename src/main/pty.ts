@@ -1,15 +1,22 @@
 import { ipcMain } from 'electron'
 import type { PtySpawnOptions } from '../shared/types'
 import { deletePtyOwner, getHost, getPtyOwner, localHost, setPtyOwner } from './hosts/registry'
+import { deletePtyWindow, ptysOfWindow, setPtyWindow } from './hosts/ptyWindows'
+
+function forgetPty(id: string): void {
+  deletePtyOwner(id)
+  deletePtyWindow(id)
+}
 
 export function registerPtyHandlers(): void {
-  ipcMain.handle('pty:spawn', async (_event, opts: PtySpawnOptions) => {
+  ipcMain.handle('pty:spawn', async (event, opts: PtySpawnOptions) => {
     const host = getHost(opts.serverId)
     setPtyOwner(opts.id, host)
+    setPtyWindow(opts.id, event.sender)
     try {
       await host.pty.spawn(opts)
     } catch (err) {
-      deletePtyOwner(opts.id)
+      forgetPty(opts.id)
       throw err
     }
   })
@@ -24,13 +31,21 @@ export function registerPtyHandlers(): void {
 
   ipcMain.on('pty:dispose', (_event, id: string) => {
     getPtyOwner(id)?.pty.dispose(id)
-    deletePtyOwner(id)
+    forgetPty(id)
   })
 
   ipcMain.on('pty:detach', (_event, id: string) => {
     getPtyOwner(id)?.pty.detach(id)
-    deletePtyOwner(id)
+    forgetPty(id)
   })
+}
+
+/** A closed window's local shells die; its remote ptys keep running on their daemons. */
+export function releaseWindowPtys(windowId: number): void {
+  for (const id of ptysOfWindow(windowId)) {
+    getPtyOwner(id)?.pty.detach(id)
+    forgetPty(id)
+  }
 }
 
 export function disposeAllPtys(): void {

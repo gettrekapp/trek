@@ -88,7 +88,7 @@ button:disabled {
   font-size: 13px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;
   gap: 8px;
   white-space: nowrap;
   overflow: hidden;
@@ -99,6 +99,31 @@ button:disabled {
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.title-bar-light {
+  color: #ededf0;
+}
+
+.title-bar-light .title-path {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.title-bar-dark {
+  color: #161618;
+}
+
+.title-bar-dark .title-path {
+  color: rgba(0, 0, 0, 0.8);
+}
+
+/* Stops the browser's native image drag; the bar's app region handles window dragging */
+.title-logo {
+  flex: 0 0 auto;
+  height: 22px;
+  max-width: 120px;
+  object-fit: contain;
+  pointer-events: none;
 }
 
 .dirty-dot {
@@ -124,6 +149,17 @@ button:disabled {
   flex-direction: column;
   border-right: 1px solid var(--border);
   background: #141416;
+}
+
+.sidebar-banner {
+  flex: 0 0 auto;
+  padding: 12px 12px 0;
+}
+
+.sidebar-banner img {
+  display: block;
+  max-width: 100%;
+  max-height: 72px;
 }
 
 .sidebar-top {
@@ -1477,6 +1513,18 @@ button:disabled {
 .session-type-icon-btn img {
   max-width: 100%;
   max-height: 100%;
+}
+
+.image-picker-wide .session-type-icon-btn {
+  width: 112px;
+  height: 42px;
+}
+
+.appearance-color {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .session-type-icon-clear {

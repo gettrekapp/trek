@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { DEFAULT_WORKTREE_TAGS, hostKey, sameWorktree } from '../../shared/types'
 import { deriveProfileName } from '../../shared/environments'
 import { migrateToV3, type RawProjectFile } from '../../shared/migration'
+import { sanitizeAppearance } from '../../shared/appearance'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   ClaudeSessionType,
@@ -276,7 +277,6 @@ interface AppState {
   addRepository: (repo: Repository) => void
   /** Drops the repository and its cached rows. Callers check repositoryRemovalBlock first. */
   removeRepository: (repoId: string) => void
-  closeProject: () => void
   markSaved: (filePath: string) => void
   setActiveWorktree: (id: string) => void
   /**
@@ -318,6 +318,9 @@ interface AppState {
   setBranchCustomTag: (repoId: string, branch: string, tagId: string, enabled: boolean) => void
   setCustomTags: (tags: WorktreeTag[]) => void
   setAudioAlerts: (enabled: boolean) => void
+  setTitleBarColor: (color: string | undefined) => void
+  setLogoImage: (image: string | undefined) => void
+  setBannerImage: (image: string | undefined) => void
   setTerminalButtons: (buttons: TerminalQuickButton[]) => void
   setGlobalTerminalButtons: (buttons: TerminalQuickButton[]) => void
   setGlobalSystemPrompt: (prompt: string) => void
@@ -345,10 +348,13 @@ interface AppState {
 
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
 
-/** Older files upgrade on load; projects without configured workflow tags get the default set. */
+/** Older files upgrade on load; projects without configured workflow tags get the default set, and invalid appearance values are dropped. */
 export function migrateProject(raw: RawProjectFile): ProjectFile {
   const project = migrateToV3(raw, () => crypto.randomUUID())
-  return { ...project, worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS }
+  return sanitizeAppearance({
+    ...project,
+    worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS
+  })
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -434,25 +440,6 @@ export const useAppStore = create<AppState>((set) => ({
         selected: selectionRemoved ? { path: repositories[0].path } : state.selected,
         dirty: true
       }
-    }),
-
-  closeProject: () =>
-    set({
-      project: null,
-      filePath: null,
-      dirty: false,
-      activeWorktreeId: null,
-      selected: null,
-      terminals: {},
-      terminalOrder: {},
-      activeTerminal: {},
-      loadedWorktrees: {},
-      hostWorktrees: {},
-      serverStatus: {},
-      environments: {},
-      envBusy: {},
-      terminalQueues: {},
-      decisions: {}
     }),
 
   markSaved: (filePath) => set({ filePath, dirty: false }),
@@ -765,6 +752,24 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => {
       if (!state.project) return state
       return { project: { ...state.project, audioAlerts: enabled }, dirty: true }
+    }),
+
+  setTitleBarColor: (color) =>
+    set((state) => {
+      if (!state.project) return state
+      return { project: { ...state.project, titleBarColor: color }, dirty: true }
+    }),
+
+  setLogoImage: (image) =>
+    set((state) => {
+      if (!state.project) return state
+      return { project: { ...state.project, logoImage: image }, dirty: true }
+    }),
+
+  setBannerImage: (image) =>
+    set((state) => {
+      if (!state.project) return state
+      return { project: { ...state.project, bannerImage: image }, dirty: true }
     }),
 
   setTerminalButtons: (buttons) =>

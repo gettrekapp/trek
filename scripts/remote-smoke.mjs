@@ -72,7 +72,11 @@ const cleanup = () => {
 }
 
 try {
-  const app = await electron.launch({ args: ['out/main/index.js'], cwd: projectDir })
+  const app = await electron.launch({
+    args: ['out/main/index.js'],
+    cwd: projectDir,
+    env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1' }
+  })
   const win = await app.firstWindow()
   win.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()) })
   win.on('pageerror', (err) => errors.push(`PAGEERROR: ${err.message}`))

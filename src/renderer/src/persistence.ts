@@ -21,14 +21,19 @@ export function sessionSnapshot(worktreeId: string, remote: boolean): PersistedT
     }))
 }
 
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+
 /**
  * Saves the project, snapshotting live terminal sessions so reopening the
  * project resumes them. Prompts for a location when the project has never
- * been saved (manual ⌘S path).
+ * been saved (manual ⌘S path). False means nothing was written, because the
+ * user cancelled that prompt or the path was refused.
  */
-export async function saveProject(): Promise<void> {
+export async function saveProject(): Promise<boolean> {
   const state = useAppStore.getState()
-  if (!state.project) return
+  if (!state.project) return false
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = null
   // An unloaded worktree has no live terminals — its sessions already sit on
   // the instance, so they must be carried over rather than snapshotted away.
   const snapshot: ProjectFile = {
@@ -48,9 +53,8 @@ export async function saveProject(): Promise<void> {
   }
   const savedPath = await window.api.saveProject(state.filePath, snapshot)
   if (savedPath) state.markSaved(savedPath)
+  return savedPath !== null
 }
-
-let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Debounced background save after structural changes (new/closed tabs).

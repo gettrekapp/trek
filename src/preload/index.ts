@@ -14,6 +14,7 @@ import type {
   LinearKeyResult,
   McpCallRequest,
   McpCallResponse,
+  InitialWindowState,
   OpenedProject,
   ProjectFile,
   PtyDataEvent,
@@ -43,10 +44,21 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 const api = {
   // Project file
   openProject: (): Promise<OpenedProject | null> => ipcRenderer.invoke('project:open'),
-  openProjectPath: (filePath: string): Promise<OpenedProject> =>
+  openProjectPath: (filePath: string): Promise<OpenedProject | null> =>
     ipcRenderer.invoke('project:openPath', filePath),
   getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('recents:get'),
   focusWindow: (): Promise<void> => ipcRenderer.invoke('window:focus'),
+  takeInitialWindowState: (): Promise<InitialWindowState> => ipcRenderer.invoke('window:takeInitial'),
+  reportWindowProject: (hasProject: boolean, filePath: string | null, name: string | null): void =>
+    ipcRenderer.send('window:projectChanged', hasProject, filePath, name),
+  onWindowCloseRequest: (callback: () => void): (() => void) =>
+    subscribe('window:close-request', callback),
+  windowCloseReady: (): void => ipcRenderer.send('window:close-ready'),
+  windowCloseCancelled: (): void => ipcRenderer.send('window:close-cancelled'),
+  promptCloseUnsaved: (name: string): Promise<'save' | 'discard' | 'cancel'> =>
+    ipcRenderer.invoke('dialog:closeUnsaved', name),
+  promptCloseSaveFailed: (error: string): Promise<boolean> =>
+    ipcRenderer.invoke('dialog:closeSaveFailed', error),
   saveProject: (filePath: string | null, project: ProjectFile): Promise<string | null> =>
     ipcRenderer.invoke('project:save', filePath, project),
   selectDirectory: (title: string): Promise<string | null> =>
@@ -296,7 +308,6 @@ const api = {
   // Menu events
   onMenu: (
     channel:
-      | 'new-project'
       | 'open-project'
       | 'save-project'
       | 'new-terminal'

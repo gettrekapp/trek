@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -8,10 +8,39 @@ import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeStatus } from
 import { getHost } from './hosts/registry'
 import type { RawProjectFile } from '../shared/migration'
 import { addRecent, getRecents } from './recents'
+import { decideOpen } from './windowRules'
+import {
+  claimProject,
+  createWindow,
+  fileIsOpen,
+  fileOpenInOtherWindow,
+  focusWindowHoldingFile,
+  whileWindowPrompts,
+  windowHasProject
+} from './windows'
 
 const execFileAsync = promisify(execFile)
 
 const PROJECT_FILTERS = [{ name: 'Trek Developer Project', extensions: ['trekproj'] }]
+
+/** Null when the project ended up in another window: the sender has nothing to load. */
+async function openForSender(sender: WebContents, filePath: string): Promise<OpenedProject | null> {
+  // Read first, so a bad file errors in the window that asked for it.
+  const opened = await openProjectFile(filePath)
+  switch (decideOpen(windowHasProject(sender), fileIsOpen(filePath))) {
+    case 'focus-existing':
+      focusWindowHoldingFile(filePath)
+      return null
+    case 'new-window':
+      createWindow({ initialProject: filePath })
+      await addRecent(opened.filePath)
+      return null
+    case 'use-sender':
+      claimProject(sender, filePath)
+      await addRecent(opened.filePath)
+      return opened
+  }
+}
 
 export function registerProjectHandlers(): void {
   ipcMain.handle('dialog:selectDirectory', async (event, title: string) => {
@@ -31,16 +60,10 @@ export function registerProjectHandlers(): void {
       properties: ['openFile']
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    const opened = await openProjectFile(result.filePaths[0])
-    await addRecent(opened.filePath)
-    return opened
+    return openForSender(event.sender, result.filePaths[0])
   })
 
-  ipcMain.handle('project:openPath', async (_event, filePath: string) => {
-    const opened = await openProjectFile(filePath)
-    await addRecent(opened.filePath)
-    return opened
-  })
+  ipcMain.handle('project:openPath', (event, filePath: string) => openForSender(event.sender, filePath))
 
   ipcMain.handle('recents:get', async (): Promise<string[]> => {
     return getRecents()
@@ -61,15 +84,30 @@ export function registerProjectHandlers(): void {
       let target = filePath
       if (!target) {
         const win = BrowserWindow.fromWebContents(event.sender)!
-        const result = await dialog.showSaveDialog(win, {
-          title: 'Save Project',
-          defaultPath: `${project.name || 'project'}.trekproj`,
-          filters: PROJECT_FILTERS
-        })
+        const result = await whileWindowPrompts(event.sender, () =>
+          dialog.showSaveDialog(win, {
+            title: 'Save Project',
+            defaultPath: `${project.name || 'project'}.trekproj`,
+            filters: PROJECT_FILTERS
+          })
+        )
         if (result.canceled || !result.filePath) return null
         target = result.filePath
       }
+      // Two windows on one file would keep overwriting each other.
+      if (fileOpenInOtherWindow(event.sender, target)) {
+        const win = BrowserWindow.fromWebContents(event.sender)!
+        await whileWindowPrompts(event.sender, () =>
+          dialog.showMessageBox(win, {
+            type: 'error',
+            message: 'That project is open in another window',
+            detail: `Close it there before saving over ${target}.`
+          })
+        )
+        return null
+      }
       await writeFile(target, JSON.stringify(project, null, 2), 'utf8')
+      claimProject(event.sender, target)
       await addRecent(target)
       return target
     }
@@ -302,7 +340,7 @@ export function registerProjectHandlers(): void {
   })
 }
 
-async function openProjectFile(filePath: string): Promise<OpenedProject> {
+export async function openProjectFile(filePath: string): Promise<OpenedProject> {
   const raw = await readFile(filePath, 'utf8')
   const project = JSON.parse(raw) as RawProjectFile
   if (!project.name) project.name = basename(filePath).replace(/\.trekproj$/, '')

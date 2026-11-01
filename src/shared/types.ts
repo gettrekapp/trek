@@ -195,6 +195,12 @@ export interface ProjectFile {
   customTags?: WorktreeTag[]
   /** Play a sound when Claude becomes ready for input (default off) */
   audioAlerts?: boolean
+  /** Background of the window's top bar, #rrggbb (undefined = default) */
+  titleBarColor?: string
+  /** Shown beside the project name in the top bar, as a data:image/ URL */
+  logoImage?: string
+  /** Shown at the top of the sidebar, as a data:image/ URL */
+  bannerImage?: string
   /** Quick buttons shown under every terminal — clicking pastes the text into the input */
   terminalButtons?: TerminalQuickButton[]
   /** Quick buttons shown under the global Claude terminal instead of terminalButtons */
@@ -215,6 +221,12 @@ export interface GlobalSession {
   /** Claude session UUID */
   sessionId: string
   title: string
+}
+
+/** What a new window starts with. */
+export interface InitialWindowState {
+  opened: OpenedProject | null
+  menu: 'open-project' | null
 }
 
 export interface OpenedProject {

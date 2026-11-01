@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { scheduleAutoSave } from '../persistence'
 import { DEFAULT_PERMISSION_MODE } from '../terminals'
 import { useAppStore } from '../store'
@@ -7,6 +7,8 @@ import { ENV_DEFAULTS } from '../../../shared/environments'
 import { ServersPanel } from './ServersPanel'
 import { LinearSettings } from './LinearSettings'
 import { VoiceSettings } from './VoiceSettings'
+import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
+import { AppearanceSettings } from './AppearanceSettings'
 import type {
   ClaudeSessionType,
   EnvironmentSettings,
@@ -27,57 +29,6 @@ const PERMISSION_MODES: { value: string; label: string }[] = [
   { value: 'dontAsk', label: "Don't ask" },
   { value: 'bypassPermissions', label: 'Bypass permissions' }
 ]
-
-const ICON_SIZE = 64
-
-/** Reads a PNG and downscales it so the data URL stays small in the project file. */
-async function loadIcon(file: File): Promise<string> {
-  const bitmap = await createImageBitmap(file)
-  const scale = Math.min(1, ICON_SIZE / Math.max(bitmap.width, bitmap.height))
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale))
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale))
-  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-  bitmap.close()
-  return canvas.toDataURL('image/png')
-}
-
-function SessionTypeIconPicker({
-  icon,
-  onChange
-}: {
-  icon?: string
-  onChange: (icon: string | undefined) => void
-}): React.JSX.Element {
-  const inputRef = useRef<HTMLInputElement>(null)
-  return (
-    <div className="session-type-icon">
-      <button
-        className="session-type-icon-btn"
-        title={icon ? 'Change icon' : 'Choose a PNG icon'}
-        onClick={() => inputRef.current?.click()}
-      >
-        {icon ? <img src={icon} alt="" /> : '+'}
-      </button>
-      {icon && (
-        <button className="session-type-icon-clear" onClick={() => onChange(undefined)}>
-          Clear
-        </button>
-      )}
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/png"
-        hidden
-        onChange={async (e) => {
-          const file = e.target.files?.[0]
-          e.target.value = ''
-          if (file) onChange(await loadIcon(file))
-        }}
-      />
-    </div>
-  )
-}
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const audioAlerts = useAppStore((s) => s.project?.audioAlerts ?? false)
@@ -255,6 +206,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             }}
           />
         </div>
+        <AppearanceSettings />
         <LinearSettings />
         <VoiceSettings />
         <h3>Worktree tags</h3>
@@ -345,9 +297,11 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         </div>
         {sessionTypes.map((type) => (
           <div key={type.id} className="quick-btn-row">
-            <SessionTypeIconPicker
-              icon={type.icon}
+            <ImagePicker
+              image={type.icon}
               onChange={(icon) => patchSessionType(type.id, { icon })}
+              limits={SESSION_ICON_LIMITS}
+              title="Choose a PNG icon"
             />
             <input
               className="quick-btn-label-input"

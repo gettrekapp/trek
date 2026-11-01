@@ -18,7 +18,7 @@ import {
   type WireError
 } from '../../shared/protocol'
 import type { HostService } from './HostService'
-import { broadcast } from './LocalHost'
+import { sendToPtyWindow } from './ptyWindows'
 
 const RECONNECT_MIN_MS = 1000
 const RECONNECT_MAX_MS = 30_000
@@ -136,7 +136,7 @@ export class RemoteHost implements HostService {
       this.failAllPending(new Error('connection closed'))
       // The daemon keeps ptys alive — tell the renderer they're detached,
       // NOT exited, so terminal state survives until we reattach.
-      for (const ptyId of this.knownPtys.keys()) broadcast('pty:detached', { id: ptyId })
+      for (const ptyId of this.knownPtys.keys()) sendToPtyWindow('pty:detached', { id: ptyId })
       if (this.closed) return
       if (event.code === 4003) {
         this.setStatus('needs-auth', 'server rejected the access token')
@@ -173,7 +173,7 @@ export class RemoteHost implements HostService {
     if (frame.type === 'event') {
       if (frame.event === 'pty.data') {
         const payload = frame.payload as PtyDataEventWire
-        broadcast('pty:data', {
+        sendToPtyWindow('pty:data', {
           id: payload.ptyId,
           data: payload.data,
           ...(payload.replay ? { replay: true } : {})
@@ -181,7 +181,7 @@ export class RemoteHost implements HostService {
       } else if (frame.event === 'pty.exit') {
         const payload = frame.payload as PtyExitEventWire
         this.knownPtys.delete(payload.ptyId)
-        broadcast('pty:exit', { id: payload.ptyId, exitCode: payload.exitCode })
+        sendToPtyWindow('pty:exit', { id: payload.ptyId, exitCode: payload.exitCode })
       }
       // daemon.shutdown is followed by a close frame — handled there.
     }
@@ -239,19 +239,19 @@ export class RemoteHost implements HostService {
         // Daemon restarted — the process is gone. Surface a real exit so the
         // renderer offers Restart (which resumes via claude --resume).
         this.knownPtys.delete(ptyId)
-        broadcast('pty:exit', { id: ptyId, exitCode: -1 })
+        sendToPtyWindow('pty:exit', { id: ptyId, exitCode: -1 })
       }
     }
   }
 
   /** Reset the renderer terminal, attach (replay repaints), then repaint-wiggle. */
   private async attachPty(ptyId: string, meta: KnownPty): Promise<void> {
-    broadcast('pty:reset', { id: ptyId })
+    sendToPtyWindow('pty:reset', { id: ptyId })
     try {
       await this.request('pty.attach', { ptyId })
     } catch {
       this.knownPtys.delete(ptyId)
-      broadcast('pty:exit', { id: ptyId, exitCode: -1 })
+      sendToPtyWindow('pty:exit', { id: ptyId, exitCode: -1 })
       return
     }
     // Resize wiggle: force the TUI to fully repaint past any escape-sequence
