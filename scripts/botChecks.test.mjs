@@ -15,6 +15,45 @@ test('parses scheduled and plain duties', () => {
   ])
 })
 
+test('schedule tag is case-insensitive with many units', () => {
+  const ms = { m: 60_000, min: 60_000, mins: 60_000, minute: 60_000, minutes: 60_000, h: HOUR, hr: HOUR, hrs: HOUR, hour: HOUR, hours: HOUR, d: 24 * HOUR, day: 24 * HOUR, days: 24 * HOUR }
+  for (const [u, v] of Object.entries(ms)) {
+    assert.deepEqual(parseDuties(`- [every 2 ${u}] x`), [{ text: 'x', everyMs: 2 * v }], u)
+  }
+  assert.deepEqual(parseDuties('- [EVERY 2H] x'), [{ text: 'x', everyMs: 2 * HOUR }])
+})
+
+test('checkboxes: unticked kept, ticked disabled', () => {
+  assert.deepEqual(parseDuties('- [ ] [every 2h] x'), [{ text: 'x', everyMs: 2 * HOUR }])
+  assert.deepEqual(parseDuties('- [ ] plain'), [{ text: 'plain', everyMs: null }])
+  assert.deepEqual(parseDuties('- [x] [every 2h] x\n- [X] plain'), [])
+})
+
+test('zero interval is plain; empty text ignored', () => {
+  assert.deepEqual(parseDuties('- [every 0m] x'), [{ text: 'x', everyMs: null }])
+  assert.deepEqual(parseDuties('- [every 2h]\n- [every 2h]   \n- [ ]'), [])
+})
+
+test('fenced code and multi-line comments are ignored', () => {
+  const md = '- a\n```\n- b\n```\n- c\n<!--\n- d\n-->\n- e\n<!-- one line -->\n- f'
+  assert.deepEqual(parseDuties(md).map((d) => d.text), ['a', 'c', 'e', 'f'])
+})
+
+test('duplicates merge: shortest interval, schedule beats none', () => {
+  assert.deepEqual(parseDuties('- x\n- [every 4h] x\n- [every 2h] x'), [{ text: 'x', everyMs: 2 * HOUR }])
+  assert.deepEqual(parseDuties('- [every 2h] y\n- y'), [{ text: 'y', everyMs: 2 * HOUR }])
+})
+
+test('plus and numbered markers', () => {
+  assert.deepEqual(parseDuties('+ a\n1. b\n12. [every 1h] c'), [
+    { text: 'a', everyMs: null }, { text: 'b', everyMs: null }, { text: 'c', everyMs: HOUR }
+  ])
+})
+
+test('prototype-named duty is due when never run', () => {
+  assert.deepEqual(dueDuties(parseDuties('- [every 2h] constructor'), {}, HOUR), ['constructor'])
+})
+
 test('a scheduled duty is due when new or after its interval', () => {
   const duties = parseDuties('- [every 2h] A\n- [every 2h] B\n- Plain')
   const now = 10 * HOUR
@@ -39,10 +78,24 @@ test('identical snapshots have no changes', () => {
   assert.deepEqual(describeChanges(snap(), snap()), [])
 })
 
-test('flapping within busy or settled states is not a change', () => {
-  assert.deepEqual(describeChanges(withStatus('starting'), withStatus('working')), [])
-  assert.deepEqual(describeChanges(withStatus('idle'), withStatus('done')), [])
-  assert.deepEqual(describeChanges(withStatus('done'), withStatus('complete')), [])
+test('only moves into done, attention or exited are status changes', () => {
+  const quiet = [['idle', 'working'], ['working', 'idle'], ['attention', 'idle'], ['attention', 'working'],
+    ['starting', 'working'], ['done', 'idle'], ['done', 'complete'], ['done', 'done']]
+  for (const [a, b] of quiet) assert.deepEqual(describeChanges(withStatus(a), withStatus(b)), [], `${a}->${b}`)
+  const loud = [['working', 'done'], ['idle', 'done'], ['working', 'attention'], ['working', 'exited']]
+  for (const [a, b] of loud) assert.equal(describeChanges(withStatus(a), withStatus(b)).length, 1, `${a}->${b}`)
+})
+
+test('decision flag changes are reported both ways', () => {
+  assert.match(describeChanges(withStatus('idle'), withStatus('idle', true))[0], /is waiting on a user decision/)
+  assert.match(describeChanges(withStatus('idle', true), withStatus('idle'))[0], /decision was answered/)
+})
+
+test('a new session with a decision reports start and decision', () => {
+  const out = describeChanges(snap({ sessions: [] }), withStatus('idle', true))
+  assert.equal(out.length, 2)
+  assert.match(out[0], /started/)
+  assert.match(out[1], /waiting on a user decision/)
 })
 
 test('reports status, decision, HEAD, worktree and heartbeat changes', () => {

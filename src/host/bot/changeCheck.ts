@@ -1,11 +1,7 @@
 import type { BotSnapshot } from '../../shared/bot'
 
-/** Terminal status is a guess from output, so only meaningful moves count as changes. */
-function statusGroup(status: string): string {
-  if (status === 'starting' || status === 'working') return 'working'
-  if (status === 'idle' || status === 'done' || status === 'complete') return 'done'
-  return status
-}
+/** Terminal status is a guess from output, so only a move into one of these wakes the bot. */
+const WAKING_STATUSES = new Set(['done', 'attention', 'exited'])
 
 export function describeChanges(prev: BotSnapshot | null, next: BotSnapshot): string[] {
   if (!prev) return ['First look at this project: nothing has been recorded yet.']
@@ -30,13 +26,14 @@ export function describeChanges(prev: BotSnapshot | null, next: BotSnapshot): st
     const old = prevSessions.get(id)
     if (!old) {
       changes.push(`session "${session.title}" (${id}) started: ${session.status}`)
-      continue
-    }
-    if (statusGroup(old.status) !== statusGroup(session.status)) {
+    } else if (old.status !== session.status && WAKING_STATUSES.has(session.status)) {
       changes.push(`session "${session.title}" (${id}) went from ${old.status} to ${session.status}`)
     }
-    if (!old.decision && session.decision) {
+    const wasWaiting = old?.decision ?? false
+    if (!wasWaiting && session.decision) {
       changes.push(`session "${session.title}" (${id}) is waiting on a user decision`)
+    } else if (wasWaiting && !session.decision) {
+      changes.push(`session "${session.title}" (${id}) decision was answered`)
     }
   }
   for (const [id, session] of prevSessions) {
