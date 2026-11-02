@@ -21,7 +21,7 @@
 - Its `permissionDecision` of `allow` or `deny` is honoured, and the bot sees the deny reason.
 - A failing `curl … || exit 2` hook blocks the tool, so the hook fails closed.
 - `--resume` with an unknown ID exits 1 and prints `No conversation found` on stderr, with `is_error: true` in the result event.
-- Stream events include `system/init` (`session_id`), `assistant` (`message.content[]`), `rate_limit_event` (`rate_limit_info.status`) and `result` (`is_error`, `result`).
+- Stream events include `system/init` (`session_id`), `assistant` (`message.content[]`), `rate_limit_event` (`rate_limit_info.status`) and `result` (`is_error`, `result`, `errors`, `api_error_status`).
 
 ---
 
@@ -812,6 +812,8 @@ git commit -m "feat: parse project bot turn output"
 
 ---
 
+**Task 4 was revised after review:** `classifyFailure(text, apiStatus)` checks the API status first, then patterns anchored to the CLI's own messages, and `parseStreamLine` tolerates unexpected shapes. The code in the repository is authoritative over the Task 4 listing above.
+
 ### Task 5: Memory
 
 **Files:**
@@ -1455,7 +1457,7 @@ export function runTurn(
 
   let stdout = ''
   let stderr = ''
-  let result: { isError: boolean; text: string } | undefined
+  let result: { isError: boolean; text: string; apiStatus: number | null } | undefined
   let limited = false
   const handleLine = (line: string): void => {
     const parsed = parseStreamLine(line)
@@ -1494,7 +1496,9 @@ export function runTurn(
       if (stopReason) return settle({ kind: stopReason, text: `Turn ${stopReason === 'timeout' ? 'timed out' : 'stopped'}` })
       if (result && !result.isError) return settle({ kind: 'ok', text: result.text })
       const text = [result?.text, stderr.trim()].filter(Boolean).join('\n') || 'Claude exited without a result'
-      settle({ kind: limited ? 'limit' : classifyFailure(text), text })
+      // stderr can quote paths and stack traces, so it only decides when the result says nothing.
+      const failure = classifyFailure(result?.text || stderr, result?.apiStatus ?? null)
+      settle({ kind: failure === 'auth' || !limited ? failure : 'limit', text })
     })
   })
 
