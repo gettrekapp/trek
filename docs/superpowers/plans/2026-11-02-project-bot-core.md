@@ -12,6 +12,8 @@
 
 **Commit note:** this machine's `user.name` is empty. If `git commit` fails with "Author identity unknown", use `git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit …` and do not change git config. End every commit message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
+**Daemon:** `daemon/tsconfig.json` excludes `src/host/bot/` because the bot never runs on the daemon. Also run `npm --prefix daemon run typecheck` wherever a step runs `npm run typecheck`.
+
 **Type stripping rules for `src/host/bot/`:** tests load these files directly in Node, so use `.ts` in relative runtime imports, and don't use enums or constructor parameter properties.
 
 **Verified against CLI 2.1.316:**

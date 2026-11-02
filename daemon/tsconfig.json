@@ -12,5 +12,6 @@
     "allowImportingTsExtensions": false,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "../src/host/**/*.ts", "../src/shared/**/*.ts"]
+  "include": ["src/**/*.ts", "../src/host/**/*.ts", "../src/shared/**/*.ts"],
+  "exclude": ["../src/host/bot/**"]
 }
