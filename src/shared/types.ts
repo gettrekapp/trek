@@ -170,6 +170,12 @@ export interface Repository {
   environments?: EnvironmentSettings
 }
 
+export interface BotSettings {
+  enabled: boolean
+  /** Set when the user located the folder; otherwise it sits next to the project file. */
+  folder?: string
+}
+
 export interface ProjectFile {
   version: 3
   name: string
@@ -207,6 +213,8 @@ export interface ProjectFile {
   globalTerminalButtons?: TerminalQuickButton[]
   /** Appended to the global Claude session's built-in system prompt */
   globalSystemPrompt?: string
+  /** Project bot. Saved with the project; `saveProject` spreads the whole object. */
+  bot?: BotSettings
   /** Appended to every worktree Claude session's system prompt (not the global session) */
   sessionSystemPrompt?: string
   /** Session types offered by the new-session (+) menu */
