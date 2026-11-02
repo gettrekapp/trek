@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Stands in for the Claude CLI in tests. The wake text picks the behaviour, or the whole prompt if it has no wake tags.
 import { spawn } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const arg = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined)
@@ -47,6 +47,11 @@ if (wake.includes('HANG')) {
   if (process.env.FAKE_CLAUDE_PID_FILE) writeFileSync(process.env.FAKE_CLAUDE_PID_FILE, String(process.pid))
   say('hanging')
   setInterval(() => {}, 1000)
+} else if (wake.includes('GATED')) {
+  say('gated')
+  while (!existsSync(process.env.FAKE_CLAUDE_GATE)) await new Promise((done) => setTimeout(done, 50))
+  say('ungated')
+  finish()
 } else if (wake.includes('HOLD')) {
   say('holding')
   await new Promise((done) => setTimeout(done, 2500))
