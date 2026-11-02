@@ -151,7 +151,7 @@ fixed.
 |---|---|---|
 | Free | Allowed | Read files; write `HEARTBEAT.md`, `MEMORY.md`, `knowledge/`, `journal/`; start and prompt sessions; create worktrees; run stacks; set notes and tags |
 | Ask | Denied until approved | `git push`, opening or merging PRs, closing sessions, unloading or deleting worktrees, promoting to primary, changing session types |
-| Never | Always denied | Writing `BOT.md`, `POLICY.json`, `config.json` or `state/`; force-push; reading Trek's secret stores |
+| Never | Always denied | Writing `BOT.md`, `POLICY.json`, `config.json` or `state/`; destroying the bot folder or an ancestor of it; force-push; reading or overwriting Trek's secret stores |
 
 Trek tools match by exact name, so that enforcement is firm. Shell commands match
 by pattern, which is best-effort because a command can be disguised.

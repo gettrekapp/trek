@@ -484,6 +484,8 @@ git commit -m "feat: add project bot autonomy policy"
 
 ---
 
+**Task 2 was revised after review:** shell matching moved to `src/host/bot/shellCommand.ts`, a quote-aware tokeniser, and `PolicyContext` gained an optional `cwd`. The code in the repository is authoritative over the Task 2 listing above.
+
 ### Task 3: Duties and change check
 
 **Files:**
@@ -2024,8 +2026,9 @@ export class BotRunner {
     this.drain()
   }
 
-  checkTool(call: ToolCall): PolicyDecision {
-    const result = decide(call, this.policyContext())
+  /** `cwd` is the working directory the hook reports, which an earlier `cd` can change. */
+  checkTool(call: ToolCall, cwd?: string): PolicyDecision {
+    const result = decide(call, { ...this.policyContext(), cwd })
     if (result.approvalId) {
       this.state.approvals = this.state.approvals.filter((a) => a.id !== result.approvalId)
       this.commit()
@@ -2660,7 +2663,7 @@ export function registerBotHandlers(): void {
         ? bot.runner.checkTool({
             tool: String(hook.tool_name ?? ''),
             input: (hook.tool_input ?? {}) as Record<string, unknown>
-          })
+          }, typeof hook.cwd === 'string' ? hook.cwd : undefined)
         : { decision: 'deny', reason: 'The bot is not running' }
       return {
         hookSpecificOutput: {
