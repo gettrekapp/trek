@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { OFF_VIEW } from '../src/shared/bot.ts'
 import { BotRunner } from '../src/host/bot/runner.ts'
 import { createBotFolder, loadState, localDate, saveState } from '../src/host/bot/memory.ts'
 
@@ -1454,4 +1455,10 @@ test('a crash during a failed turn cannot run its chat twice', async () => {
   await t.finish({ kind: 'crash', text: 'boom' })
   assert.deepEqual(onDisk.queue.map((w) => w.text), ['a', 'b'])
   assert.equal(onDisk.activeTurn, null)
+})
+
+test('a runner view is bound, so the panel offers its controls; the off view is not', () => {
+  const t = setup()
+  assert.equal(t.runner.view().bound, true)
+  assert.equal(OFF_VIEW.bound, false)
 })

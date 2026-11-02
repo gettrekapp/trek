@@ -3516,7 +3516,7 @@ process.exit(failed ? 1 : 0)
 - [ ] **Step 3: Run the smoke test**
 
 Run: `npm run smoke:bot`
-Expected: ends with `All 16 checks passed`. The app also closes promptly while the `HANG` turn is running, which proves closing a window kills the turn.
+Expected: ends with `All 47 checks passed`. The script in the repository supersedes the listing above: it also covers closing mid-turn, restarts, a held folder, a missing folder and the policy route's refusals.
 
 - [ ] **Step 4: Run the full checks**
 

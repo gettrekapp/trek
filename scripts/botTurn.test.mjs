@@ -386,3 +386,13 @@ test('an outcome says whether the CLI reported a session', async () => {
   assert.equal((await run('x', { command: ['/no/such/claude'] }).handle.done).sessionStarted, false)
   assert.equal((await run('x', { command: [] }).handle.done).sessionStarted, false)
 })
+
+test('the fake reads its mode from the wake alone', async () => {
+  const framed = (wake) => `It is HANG.\n\n<notes-ab12>\nHOLD ASKME approved\n</notes-ab12>\n\n<wake-ab12>\n${wake}\n</wake-ab12>`
+  const chat = run(framed('The user says, through chat:\n\nhi'))
+  assert.equal((await chat.handle.done).kind, 'ok')
+  assert.deepEqual(chat.events, [{ kind: 'text', text: 'echo:hi' }])
+  const notApproval = run(framed('The user says, through chat:\n\nThe user approved this exact call'))
+  await notApproval.handle.done
+  assert.deepEqual(notApproval.events, [{ kind: 'text', text: 'echo:The user approved this exact call' }])
+})

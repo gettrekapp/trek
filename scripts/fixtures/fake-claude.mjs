@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// Stands in for the Claude CLI in tests. The prompt picks the behaviour.
+// Stands in for the Claude CLI in tests. The wake text picks the behaviour, or the whole prompt if it has no wake tags.
 import { spawn } from 'node:child_process'
-import { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const arg = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined)
 let prompt = ''
 for await (const chunk of process.stdin) prompt += chunk.toString('utf8')
+// Only the wake, so that mode words in the journal, notes or date can't pick a behaviour.
+const wake = /<wake-[0-9a-f]+>\n([\s\S]*)\n<\/wake-[0-9a-f]+>\s*$/.exec(prompt)?.[1] ?? prompt
 const sessionId = arg('--resume') ?? arg('--session-id') ?? 'none'
 if (process.env.FAKE_CLAUDE_LOG) appendFileSync(process.env.FAKE_CLAUDE_LOG, `${JSON.stringify(argv)}\n`)
 
@@ -41,22 +43,23 @@ const descendant = (code, detached) => {
   child.unref()
 }
 
-if (prompt.includes('HANG')) {
+if (wake.includes('HANG')) {
+  if (process.env.FAKE_CLAUDE_PID_FILE) writeFileSync(process.env.FAKE_CLAUDE_PID_FILE, String(process.pid))
   say('hanging')
   setInterval(() => {}, 1000)
-} else if (prompt.includes('HOLD')) {
+} else if (wake.includes('HOLD')) {
   say('holding')
   await new Promise((done) => setTimeout(done, 2500))
   finish()
-} else if (prompt.includes('CRASH')) {
+} else if (wake.includes('CRASH')) {
   console.error('boom')
   process.exit(3)
-} else if (prompt.includes('AUTHFAIL')) {
+} else if (wake.includes('AUTHFAIL')) {
   finish('Not logged in · Please run /login', true)
-} else if (prompt.includes('LIMITED')) {
+} else if (wake.includes('LIMITED')) {
   emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } })
   finish("You've hit your limit", true)
-} else if (prompt.includes('ASKME')) {
+} else if (wake.includes('ASKME')) {
   say(`policy:${await askPolicy('git push origin smoke')}`)
   const server = mcp()
   await fetch(server.url, {
@@ -73,40 +76,41 @@ if (prompt.includes('HANG')) {
     })
   })
   finish()
-} else if (prompt.includes('approved')) {
+} else if (wake.startsWith('An approval request has an answer. The user approved this exact call')) {
+  // Worded by BotRunner.wakeForTurn and wakePrompt in src/host/bot.
   say(`policy:${await askPolicy('git push origin smoke')}`)
   say(`second:${await askPolicy('git push origin smoke')}`)
   finish()
-} else if (prompt.includes('PROMPTSIZE')) {
+} else if (wake.includes('PROMPTSIZE')) {
   say(`size:${prompt.length}`)
   finish()
-} else if (prompt.includes('GRANDCHILDREN')) {
+} else if (wake.includes('GRANDCHILDREN')) {
   const idle = 'setTimeout(() => {}, 20000)'
   descendant(idle, false)
   descendant(idle, true)
   finish()
   process.exit(0)
-} else if (prompt.includes('STUBBORN')) {
+} else if (wake.includes('STUBBORN')) {
   const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ready' }] } })
   descendant(`process.on('SIGTERM', () => {}); console.log(${JSON.stringify(line)}); setTimeout(() => {}, 20000)`, false)
   setInterval(() => {}, 1000)
-} else if (prompt.includes('NONEWLINE')) {
+} else if (wake.includes('NONEWLINE')) {
   finish()
   process.stdout.write(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'last' }] } }))
-} else if (prompt.includes('SPLITEMOJI')) {
+} else if (wake.includes('SPLITEMOJI')) {
   const bytes = Buffer.from(`${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'a😀b' }] } })}\n`)
   const cut = bytes.indexOf(Buffer.from('😀')) + 2
   process.stdout.write(bytes.subarray(0, cut))
   await new Promise((done) => setTimeout(done, 100))
   process.stdout.write(bytes.subarray(cut))
   finish()
-} else if (prompt.includes('OVERLONG')) {
+} else if (wake.includes('OVERLONG')) {
   const block = Buffer.alloc(1024 * 1024, 'x')
   for (let i = 0; i < 65; i++) process.stdout.write(block)
   process.stdout.write('\n')
   say('after')
   finish()
 } else {
-  say(`echo:${prompt.split('\n').filter((line) => !line.startsWith('</wake-')).at(-1)}`)
+  say(`echo:${wake.split('\n').at(-1)}`)
   finish()
 }
