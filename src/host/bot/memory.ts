@@ -26,6 +26,8 @@ export interface BotState {
   turnsDate: string | null
   turnsToday: number
   failures: number
+  /** Failed turns in a row of the user wake at the head of the queue. */
+  wakeFailures: number
   blockedUntil: number
   limited: boolean
   activeTurn: Wake | null
@@ -45,6 +47,7 @@ export function emptyState(): BotState {
     turnsDate: null,
     turnsToday: 0,
     failures: 0,
+    wakeFailures: 0,
     blockedUntil: 0,
     limited: false,
     activeTurn: null,
@@ -280,6 +283,7 @@ export function loadState(folder: string): BotState {
     turnsDate: stringOr(parsed.turnsDate, fallback.turnsDate),
     turnsToday: numberOr(parsed.turnsToday, fallback.turnsToday),
     failures: numberOr(parsed.failures, fallback.failures),
+    wakeFailures: numberOr(parsed.wakeFailures, fallback.wakeFailures),
     blockedUntil: numberOr(parsed.blockedUntil, fallback.blockedUntil),
     limited: booleanOr(parsed.limited, fallback.limited),
     activeTurn: toWake(parsed.activeTurn),
