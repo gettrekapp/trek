@@ -25,6 +25,11 @@ export function sanitizeAppearance<T extends AppearanceFields>(project: T): T {
   return clean
 }
 
+/** The name a rename should leave: trimmed, or the current one if the input is blank. */
+export function resolveProjectName(input: string, current: string): string {
+  return input.trim() || current
+}
+
 function relativeLuminance(hex: string): number {
   const [r, g, b] = [1, 3, 5].map((start) => {
     const channel = parseInt(hex.slice(start, start + 2), 16) / 255

@@ -1,6 +1,6 @@
 import { scheduleAutoSave } from '../persistence'
 import { useAppStore } from '../store'
-import { DEFAULT_TITLE_BAR_COLOR } from '../../../shared/appearance'
+import { DEFAULT_TITLE_BAR_COLOR, resolveProjectName } from '../../../shared/appearance'
 import { ImagePicker, type ImageLimits } from './ImagePicker'
 
 const ACCEPTED_IMAGES = 'image/png,image/jpeg,image/webp'
@@ -20,8 +20,10 @@ const BANNER_LIMITS: ImageLimits = {
   accept: ACCEPTED_IMAGES
 }
 
-/** Per-project title bar color, logo and banner, stored in the project file. */
+/** Per-project name, title bar color, logo and banner, stored in the project file. */
 export function AppearanceSettings(): React.JSX.Element {
+  const projectName = useAppStore((s) => s.project?.name ?? '')
+  const setProjectName = useAppStore((s) => s.setProjectName)
   const titleBarColor = useAppStore((s) => s.project?.titleBarColor)
   const logoImage = useAppStore((s) => s.project?.logoImage)
   const bannerImage = useAppStore((s) => s.project?.bannerImage)
@@ -32,6 +34,36 @@ export function AppearanceSettings(): React.JSX.Element {
   return (
     <>
       <h3>Appearance</h3>
+      <div className="settings-row">
+        <span className="settings-label">
+          <span className="settings-name">Project name</span>
+          <span className="settings-desc">
+            Shown in the title bar. The project file keeps its own name.
+          </span>
+        </span>
+        <input
+          className="settings-select"
+          type="text"
+          key={projectName}
+          defaultValue={projectName}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.currentTarget.blur()
+            } else if (e.key === 'Escape') {
+              e.currentTarget.value = projectName
+              e.currentTarget.blur()
+            }
+          }}
+          onBlur={(e) => {
+            const name = resolveProjectName(e.target.value, projectName)
+            e.target.value = name
+            if (name !== projectName) {
+              setProjectName(name)
+              scheduleAutoSave()
+            }
+          }}
+        />
+      </div>
       <div className="settings-row">
         <span className="settings-label">
           <span className="settings-name">Title bar color</span>

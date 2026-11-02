@@ -326,6 +326,7 @@ interface AppState {
   setBranchCustomTag: (repoId: string, branch: string, tagId: string, enabled: boolean) => void
   setCustomTags: (tags: WorktreeTag[]) => void
   setAudioAlerts: (enabled: boolean) => void
+  setProjectName: (name: string) => void
   setTitleBarColor: (color: string | undefined) => void
   setLogoImage: (image: string | undefined) => void
   setBannerImage: (image: string | undefined) => void
@@ -769,6 +770,12 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => {
       if (!state.project) return state
       return { project: { ...state.project, audioAlerts: enabled }, dirty: true }
+    }),
+
+  setProjectName: (name) =>
+    set((state) => {
+      if (!state.project) return state
+      return { project: { ...state.project, name }, dirty: true }
     }),
 
   setTitleBarColor: (color) =>

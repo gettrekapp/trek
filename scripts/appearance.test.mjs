@@ -1,7 +1,7 @@
 // scripts/appearance.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { sanitizeAppearance, titleBarForeground } from '../src/shared/appearance.ts'
+import { resolveProjectName, sanitizeAppearance, titleBarForeground } from '../src/shared/appearance.ts'
 
 const PNG = 'data:image/png;base64,AAAA'
 
@@ -50,5 +50,15 @@ test('dark colors get light text', () => {
 test('light colors get dark text', () => {
   for (const color of ['#ffffff', '#ffeb3b', '#a7f3d0', '#e53935', '#767676']) {
     assert.equal(titleBarForeground(color), 'dark')
+  }
+})
+
+test('a project name is trimmed', () => {
+  assert.equal(resolveProjectName('  New name  ', 'old'), 'New name')
+})
+
+test('a blank project name keeps the current one', () => {
+  for (const input of ['', '   ', '\t\n']) {
+    assert.equal(resolveProjectName(input, 'old'), 'old')
   }
 })
