@@ -664,6 +664,8 @@ git commit -m "feat: add project bot duties and change check"
 
 ---
 
+**Task 3 was revised after review:** `describeChanges` wakes only on entry to `done`, `attention` or `exited`, and on any decision flag change. `parseDuties` accepts more schedule forms. The code in the repository is authoritative over the Task 3 listing above.
+
 ### Task 4: Stream parsing
 
 **Files:**
@@ -1823,6 +1825,44 @@ test('resume failure retries once with a new conversation and is not a failure',
   assert.equal(loadState(t.folder).failures, 0)
 })
 
+test('a change during a heartbeat turn wakes the next beat', async () => {
+  const t = setup()
+  t.runner.start()
+  void t.runner.beat()
+  await started(t, 1)
+  t.snapshot = { worktrees: [{ path: '/during', branch: 'b', head: 'h' }], sessions: [] }
+  await t.finish()
+  void t.runner.beat()
+  await started(t, 2)
+  assert.match(t.turns[1].request.wake.text, /\/during/)
+})
+
+test("the bot's own HEARTBEAT.md edit does not wake it", async () => {
+  const t = setup()
+  t.runner.start()
+  void t.runner.beat()
+  await started(t, 1)
+  writeFileSync(join(t.folder, 'HEARTBEAT.md'), '- edited by the bot\n')
+  await t.finish()
+  await t.runner.beat()
+  assert.equal(t.turns.length, 1)
+})
+
+test('a chat turn does not hide a change from the next beat', async () => {
+  const t = setup()
+  t.runner.start()
+  void t.runner.beat()
+  await started(t, 1)
+  await t.finish()
+  t.snapshot = { worktrees: [{ path: '/x', branch: 'b', head: 'h' }], sessions: [] }
+  t.runner.send('hi')
+  await started(t, 2)
+  await t.finish()
+  void t.runner.beat()
+  await started(t, 3)
+  assert.match(t.turns[2].request.wake.text, /\/x/)
+})
+
 test('a failed snapshot runs no turn', async () => {
   const t = setup()
   t.snapshotError = 'window busy'
@@ -1951,6 +1991,8 @@ export class BotRunner {
   private current: TurnHandle | null = null
   private running: Promise<void> | null = null
   private nextBeatAt: number | null = null
+  /** What the running heartbeat turn was told about, saved if the turn succeeds. */
+  private checkedTrek: TrekSnapshot | null = null
 
   constructor(deps: RunnerDeps) {
     this.deps = deps
@@ -2138,6 +2180,7 @@ export class BotRunner {
     const changes = describeChanges(this.state.snapshot, { ...trek, heartbeat })
     const dutyKeys = dueDuties(parseDuties(heartbeat), this.state.dutyRuns, now)
     if (changes.length === 0 && dutyKeys.length === 0) return null
+    this.checkedTrek = trek
     const lines = [...changes, ...dutyKeys.map((d) => `scheduled duty is due: ${d}`)]
     return { kind: 'heartbeat', text: lines.map((l) => `- ${l}`).join('\n'), dutyKeys }
   }
@@ -2178,7 +2221,7 @@ export class BotRunner {
     }
     this.current = null
     this.state.activeTurn = null
-    await this.afterTurn(wake, outcome)
+    this.afterTurn(wake, outcome)
     this.busy = false
     this.commit()
     this.drain()
@@ -2199,7 +2242,7 @@ export class BotRunner {
     return this.current.done
   }
 
-  private async afterTurn(wake: Wake, outcome: { kind: string; text: string }): Promise<void> {
+  private afterTurn(wake: Wake, outcome: { kind: string; text: string }): void {
     const now = this.deps.now()
     const summary = outcome.text.replace(/\s+/g, ' ').slice(0, 200)
     if (outcome.kind === 'ok') {
@@ -2211,7 +2254,11 @@ export class BotRunner {
         this.state.sessionId = null
       }
       appendJournal(this.deps.folder, now, `${wake.kind} turn: ${summary}`)
-      await this.recordSnapshot()
+      // Trek's state as checked before the turn, so anything that changes during it
+      // wakes the next beat. HEARTBEAT.md as of now, so the bot's own edits don't.
+      if (wake.kind === 'heartbeat' && this.checkedTrek) {
+        this.state.snapshot = { ...this.checkedTrek, heartbeat: readHeartbeat(this.deps.folder) }
+      }
       return
     }
 
@@ -2236,15 +2283,6 @@ export class BotRunner {
   private pauseWith(reason: string): void {
     this.state.paused = true
     this.state.pauseReason = reason
-  }
-
-  private async recordSnapshot(): Promise<void> {
-    try {
-      const trek = await this.deps.snapshot()
-      this.state.snapshot = { ...trek, heartbeat: readHeartbeat(this.deps.folder) }
-    } catch (err) {
-      this.event('error', `Could not record Trek's state: ${String(err)}`)
-    }
   }
 
   private resetDailyCount(now: number): void {

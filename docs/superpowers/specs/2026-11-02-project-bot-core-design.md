@@ -88,9 +88,10 @@ bot. A duty can carry a schedule:
 ```
 
 `ChangeCheck` makes no model calls and requests a turn if any of these differ from
-the snapshot saved after the last turn, or are due:
+the snapshot saved by the last successful heartbeat turn, or are due:
 
-- Session statuses and decision flags
+- A session entering `done`, `attention` or `exited`, or a session starting or ending
+- A session's decision flag changing in either direction
 - The worktree list and each worktree's `HEAD`
 - `HEARTBEAT.md` contents
 - A scheduled duty whose interval has elapsed
@@ -228,7 +229,12 @@ after a reload.
 - `state/` is one `state.json` plus `events.jsonl`.
 - A failed chat or approval wake returns to the front of the queue and retries after
   the backoff, or at the next heartbeat after a usage limit.
-- `ChangeCheck` treats starting and working as one status, and idle, done and complete
-  as another, because terminal status is guessed from output and would otherwise wake
-  the bot needlessly.
+- Terminal status is guessed from output, and repaints flip it between idle and working,
+  so `ChangeCheck` only reacts to entering `done`, `attention` or `exited`.
+- The snapshot holds Trek's state as checked before the heartbeat turn, so a change
+  during any turn wakes the next beat. Its `HEARTBEAT.md` copy is read after the turn,
+  so the bot's own edits don't wake it. Chat and reflection turns don't update it.
+- Schedules accept `- [every 2h] x`, `- [ ] [every 2h] x`, any case, and the units
+  m, min, minute, h, hr, hour, d and day. An interval of 0 is not a schedule. A ticked
+  duty (`- [x] ...`) is disabled.
 - Tools with no listed tier default to ask. Bot turns load only `trek-dev` MCP tools.
