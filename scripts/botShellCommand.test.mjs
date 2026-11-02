@@ -68,9 +68,9 @@ test('analysis reports force pushes per segment, ask keys and write targets', ()
   assert.deepEqual(analyzeShell('cd a && rm b -f > c', '/c').writes, ['/c/a/c', '/c/a/b'])
   assert.deepEqual(analyzeShell('cp a b', '/c').writes, ['/c/b', '/c/b/a'])
   assert.deepEqual(analyzeShell('git -C /r rm a', '/c').writes, ['/r/a'])
-  assert.deepEqual(analyzeShell('find a b -name c -delete', '/c').finds, [{ roots: ['/c/a', '/c/b'], names: ['c'] }])
-  assert.deepEqual(analyzeShell('find -name c -delete', '/c').finds, [{ roots: ['/c'], names: ['c'] }])
-  assert.deepEqual(analyzeShell('find . -name c', '/c').finds, [])
+  assert.deepEqual(analyzeShell('find a b -name c -delete', '/c').writes, ['/c/a', '/c/b'])
+  assert.deepEqual(analyzeShell('find -name c -delete', '/c').destroys, ['/c'])
+  assert.deepEqual(analyzeShell('find . -name c', '/c').destroys, [])
 })
 
 test('analysis reports what would be destroyed as a whole', () => {
@@ -81,7 +81,39 @@ test('analysis reports what would be destroyed as a whole', () => {
   assert.deepEqual(destroys('chmod -R 7 a'), ['/c/7', '/c/a'])
   assert.deepEqual(destroys('chmod 7 a'), [])
   assert.deepEqual(destroys('find a -delete'), ['/c/a'])
-  assert.deepEqual(destroys('find a -name b -delete'), [])
+  assert.deepEqual(destroys('find a -name b -delete'), ['/c/a'])
   assert.deepEqual(destroys('find a'), [])
   assert.deepEqual(destroys('mkdir a; touch b; cat c'), [])
+})
+
+test('substitutions queue their segments and keep the outer word', () => {
+  assert.deepEqual(words('echo "a$(b c)d" e'), [['b', 'c'], ['echo', 'a$()d', 'e']])
+  assert.deepEqual(words('echo a`b c`d e'), [['b', 'c'], ['echo', 'a$()d', 'e']])
+  assert.deepEqual(words(`x "$(cat <<'E'\nb " c\nE\n)" y`), [['cat'], ['x', '$()', 'y']])
+  assert.deepEqual(words('x $(a $(b) "$(c)")'), [['b'], ['c'], ['a', '$()', '$()'], ['x', '$()']])
+  assert.deepEqual(words('x $(a'), [['a'], ['x', '$()']])
+  assert.deepEqual(words('x $((1<<2)) y'), [['x', '$((1<<2))', 'y']])
+  assert.deepEqual(parseShell('x $(cd a; b); c', '/c').map((s) => s.cwd), ['/c', '/c/a', '/c', '/c'])
+})
+
+test('ANSI-C strings keep an escaped quote inside', () => {
+  assert.deepEqual(words(`echo $'it\\'s' b`), [['echo', `it's`, 'b']])
+})
+
+test('a run of wildcards collapses', () => {
+  const ref = analyzeShell(`cat /d/${'*'.repeat(500)}x`, '/c').paths.at(-1)
+  assert.equal(couldMatch(ref, '/d/aax'), true)
+  assert.equal(couldMatch(ref, '/d/aay'), false)
+})
+
+test('nesting is limited', () => {
+  assert.throws(() => parseShell(`${'eval '.repeat(20000)}ls`, '/c'), /nested/)
+  assert.throws(() => parseShell(`${'$('.repeat(20)}ls`, '/c'), /nested/)
+  assert.equal(parseShell(`${'eval '.repeat(5)}ls`, '/c').length, 6)
+})
+
+test('analysis rejects oversized commands', () => {
+  assert.throws(() => analyzeShell('a'.repeat(64 * 1024 + 1), '/c'), /too long/)
+  assert.throws(() => analyzeShell('a;'.repeat(2001), '/c'), /too many/)
+  assert.doesNotThrow(() => analyzeShell('a;'.repeat(2000), '/c'))
 })

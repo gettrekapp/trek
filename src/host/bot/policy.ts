@@ -63,7 +63,7 @@ const stable = (value: unknown): string =>
 /** Bash matches on the command and sandbox alone: the model rewrites `description` freely. */
 function callKey(tool: string, input: Record<string, unknown>): string {
   if (tool !== 'Bash') return `${tool}:${stable(input)}`
-  return `Bash:${stable({ command: input.command, dangerouslyDisableSandbox: input.dangerouslyDisableSandbox === true || undefined })}`
+  return `Bash:${stable({ command: input?.command, dangerouslyDisableSandbox: input?.dangerouslyDisableSandbox === true || undefined })}`
 }
 
 export function approvalMatches(approval: Approval, call: ToolCall): boolean {
@@ -124,11 +124,6 @@ function shellNever(command: string, ctx: PolicyContext, secrets: string[]): str
   const folderAndAncestors = ancestorsOf(folder)
   const destroysFolder = (ref: string): boolean => folderAndAncestors.some((dir) => couldMatch(ref, dir))
   if (shell.destroys.map(fold).some(destroysFolder)) return PROTECTED_REASON
-  const holdsFolder = (root: string): boolean => root === folder || within(root, folder) !== null
-  const findHits = shell.finds.some(({ roots, names }) =>
-    roots.map(fold).some(holdsFolder) && names.some((name) => PROTECTED.some((file) => couldMatch(fold(name), file)))
-  )
-  if (findHits) return PROTECTED_REASON
   const secretTargets = [...secrets, ...secrets.map((s) => dirname(s))]
   return shell.paths.some((ref) => secretTargets.some((target) => couldMatch(fold(ref), target))) ? SECRET_REASON : null
 }
