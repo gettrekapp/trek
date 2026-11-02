@@ -2329,6 +2329,8 @@ git commit -m "feat: add project bot runner and wake rules"
 
 ---
 
+**Tasks 5, 6 and 7 were revised after review:** `src/host/bot/memory.ts`, `turnProcess.ts`, `heartbeat.ts` and `runner.ts` in the repository are authoritative over the listings above. In particular, the prompt goes over stdin, `readPolicy` throws on a malformed file, `requestApproval` returns the message to show the bot, and `RunnerDeps` includes `onFolderMissing`.
+
 ### Task 8: MCP server additions
 
 **Files:**
