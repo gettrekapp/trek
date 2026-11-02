@@ -2344,7 +2344,7 @@ const BOT_TOOLS = [
   {
     name: 'request_approval',
     description:
-      'Ask the user to approve a tool call the policy denied with "Needs approval". Pass the exact tool name and input. End your turn afterwards; the answer arrives in a later turn. An approval allows one exact call.',
+      'Ask the user to approve a tool call the policy denied with "Needs approval". Pass the exact tool name and input. The result says what to do next: usually end your turn, and the answer arrives in a later turn, but if the call is already approved, run it now. An approval allows one exact call.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -2401,8 +2401,9 @@ In `handleMessage`, replace the `tools/list` and `tools/call` cases:
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
       if (client.bot && BOT_TOOLS.some((t) => t.name === name)) {
         try {
-          const id = botHandlers!.requestApproval(client.windowId, args)
-          return reply({ content: [{ type: 'text', text: `Requested approval ${id}. End your turn.` }], isError: false })
+          // The runner words this: end the turn, or run the call now if it is already approved.
+          const text = botHandlers!.requestApproval(client.windowId, args)
+          return reply({ content: [{ type: 'text', text }], isError: false })
         } catch (err) {
           return reply({ content: [{ type: 'text', text: String(err) }], isError: true })
         }

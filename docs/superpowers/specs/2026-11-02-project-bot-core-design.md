@@ -66,9 +66,10 @@ Wake sources are heartbeat, reflection, chat message and approval decision.
 3. **Reflection while busy:** stays due and runs at the next idle heartbeat.
 4. **Chat or approval decision while busy:** queued in order and persisted. These
    run ahead of any heartbeat or reflection, and being busy never drops them. One
-   that has failed three turns in a row is dropped when the bot is next resumed, with
-   an error naming it, so a poison message can't pause the bot forever. Dropping an
-   approval's message also removes that approval.
+   that has failed three turns in a row pauses the bot, and the error names it and
+   says resuming will retry it once more. If that attempt also fails, it is dropped
+   with an error naming it and the bot stays running, so a poison message can't pause
+   the bot forever. Dropping an approval's message also removes that approval.
 5. **Heartbeat while idle:** `ChangeCheck` runs first. If nothing changed, no model
    call is made.
 6. **Paused:** nothing starts a turn. Chat messages and approval decisions stay
