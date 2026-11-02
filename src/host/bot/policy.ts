@@ -1,14 +1,17 @@
-import { basename, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import type { Approval, ToolCall } from '../../shared/bot'
+import { analyzeShell, couldMatch, expandPath } from './shellCommand.ts'
 
 export interface PolicyOverrides {
-  /** Tool names without the MCP prefix, or `bash:<name>` from ASK_SHELL. */
+  /** Tool names without the MCP prefix, or `bash:<key>` with a key from shellCommand's analysis. */
   free?: string[]
   ask?: string[]
 }
 
 export interface PolicyContext {
   folder: string
+  /** The bot's working directory. Defaults to `folder`. */
+  cwd?: string
   secretPaths: string[]
   overrides: PolicyOverrides
   approvals: Approval[]
@@ -23,7 +26,7 @@ export interface PolicyDecision {
 const TREK_PREFIX = 'mcp__trek-dev__'
 
 const FREE_TOOLS = new Set([
-  'Read', 'Glob', 'Grep', 'LS', 'ToolSearch', 'TodoWrite',
+  'Read', 'Glob', 'Grep', 'LS', 'ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList',
   'list_worktrees', 'get_selected_worktree', 'list_session_types',
   'start_session', 'send_prompt', 'enqueue_prompt', 'remove_queued_prompt',
   'read_terminal', 'wait_for_sessions', 'create_worktree', 'load_worktree',
@@ -33,19 +36,22 @@ const FREE_TOOLS = new Set([
 ])
 
 const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'REPL'])
 
-const ASK_SHELL: Record<string, RegExp> = {
-  'git push': /\bgit\s+push\b/,
-  'git merge': /\bgit\s+merge\b/,
-  'git worktree remove': /\bgit\s+worktree\s+remove\b/,
-  'git branch -D': /\bgit\s+branch\s+-D\b/,
-  'gh pr create': /\bgh\s+pr\s+create\b/,
-  'gh pr merge': /\bgh\s+pr\s+merge\b/
-}
+const FORCE_PUSH_REASON = 'Force-pushing is never allowed.'
+const PROTECTED_REASON = 'Protected bot files cannot be changed.'
+const SECRET_REASON = "Trek's secret stores cannot be read."
 
-const FORCE_PUSH = /\bgit\s+push\b.*(\s--force\b|\s--force-with-lease\b|\s-f\b)/
-const SHELL_WRITE_TO_PROTECTED =
-  /(>|\btee\b|\bsed\s+-i\b|\bmv\b|\bcp\b|\brm\b|\btouch\b|\bchmod\b)[^|;&]*(BOT\.md|POLICY\.json|config\.json|state\/)/
+const FOLDS_CASE = process.platform === 'darwin' || process.platform === 'win32'
+const fold = (path: string): string => (FOLDS_CASE ? path.toLowerCase() : path)
+
+/** Expands `~`, resolves against cwd, and folds case where the filesystem does. */
+const normalizePath = (path: string, cwd: string): string => fold(expandPath(path, cwd))
+
+const PROTECTED = ['BOT.md', 'POLICY.json', 'config.json', 'state'].map(fold)
+const STATE_DIR = `${fold('state')}${sep}`
+const BOT_WRITABLE_FILES = ['HEARTBEAT.md', 'MEMORY.md'].map(fold)
+const BOT_WRITABLE_DIRS = ['knowledge', 'journal'].map((dir) => `${fold(dir)}${sep}`)
 
 const stable = (value: unknown): string =>
   JSON.stringify(value, (_key, v) =>
@@ -54,74 +60,98 @@ const stable = (value: unknown): string =>
       : v
   )
 
-/** Bash matches on the command alone: the model rewrites `description` freely. */
+/** Bash matches on the command and sandbox alone: the model rewrites `description` freely. */
 function callKey(tool: string, input: Record<string, unknown>): string {
-  return tool === 'Bash' ? `Bash:${String(input.command ?? '')}` : `${tool}:${stable(input)}`
+  if (tool !== 'Bash') return `${tool}:${stable(input)}`
+  return `Bash:${stable({ command: input.command, dangerouslyDisableSandbox: input.dangerouslyDisableSandbox === true || undefined })}`
 }
 
 export function approvalMatches(approval: Approval, call: ToolCall): boolean {
   return callKey(approval.tool, approval.input) === callKey(call.tool, call.input)
 }
 
-function inFolder(folder: string, path: string): string | null {
-  const rel = relative(folder, resolve(folder, path))
-  return rel === '' || rel.startsWith('..') ? null : rel
+const cwdOf = (ctx: PolicyContext): string => expandPath(ctx.cwd ?? ctx.folder, ctx.folder)
+const folderOf = (ctx: PolicyContext): string => normalizePath(ctx.folder, cwdOf(ctx))
+
+/** The path below `dir`, or null when it is `dir` itself or outside it. Both are normalised. */
+function within(dir: string, path: string): string | null {
+  const rel = relative(dir, path)
+  return rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : rel
 }
 
-function isProtected(rel: string): boolean {
-  return rel === 'BOT.md' || rel === 'POLICY.json' || rel === 'config.json' || rel === `state` || rel.startsWith(`state${sep}`)
+const isProtected = (rel: string): boolean => PROTECTED.includes(rel) || rel.startsWith(STATE_DIR)
+
+const isBotWritable = (rel: string): boolean =>
+  BOT_WRITABLE_FILES.includes(rel) || BOT_WRITABLE_DIRS.some((dir) => rel.startsWith(dir))
+
+/** The path a file tool acts on, chosen by tool so a decoy key can't stand in. */
+function filePath(call: ToolCall): string | null {
+  const path = call.tool === 'NotebookEdit' ? call.input.notebook_path : call.input.file_path
+  return typeof path === 'string' ? path : null
 }
 
-function isBotWritable(rel: string): boolean {
-  return (
-    rel === 'HEARTBEAT.md' ||
-    rel === 'MEMORY.md' ||
-    rel.startsWith(`knowledge${sep}`) ||
-    rel.startsWith(`journal${sep}`)
+function fileToolNever(call: ToolCall, ctx: PolicyContext, secrets: string[]): string | null {
+  const cwd = cwdOf(ctx)
+  if (call.tool === 'Grep') {
+    const target = normalizePath(typeof call.input.path === 'string' ? call.input.path : '.', cwd)
+    return secrets.some((s) => s === target || within(target, s) !== null) ? SECRET_REASON : null
+  }
+  const raw = filePath(call)
+  if (raw === null) return null
+  const path = normalizePath(raw, cwd)
+  const writes = FILE_WRITE_TOOLS.has(call.tool)
+  if ((writes || call.tool === 'Read') && secrets.includes(path)) return SECRET_REASON
+  const rel = within(folderOf(ctx), path)
+  return writes && rel !== null && isProtected(rel) ? PROTECTED_REASON : null
+}
+
+function shellNever(command: string, ctx: PolicyContext, secrets: string[]): string | null {
+  const shell = analyzeShell(command, cwdOf(ctx))
+  if (shell.forcePush) return FORCE_PUSH_REASON
+  const folder = folderOf(ctx)
+  const protectedFiles = PROTECTED.map((name) => join(folder, name))
+  const hitsProtected = (ref: string): boolean => {
+    const rel = within(folder, ref)
+    return (rel !== null && isProtected(rel)) || protectedFiles.some((file) => couldMatch(ref, file))
+  }
+  if (shell.writes.map(fold).some(hitsProtected)) return PROTECTED_REASON
+  const holdsFolder = (root: string): boolean => root === folder || within(root, folder) !== null
+  const findHits = shell.finds.some(({ roots, names }) =>
+    roots.map(fold).some(holdsFolder) && names.some((name) => PROTECTED.some((file) => couldMatch(fold(name), file)))
   )
+  if (findHits) return PROTECTED_REASON
+  const secretTargets = [...secrets, ...secrets.map((s) => dirname(s))]
+  return shell.paths.some((ref) => secretTargets.some((target) => couldMatch(fold(ref), target))) ? SECRET_REASON : null
 }
 
 function neverReason(call: ToolCall, ctx: PolicyContext): string | null {
-  const { tool, input } = call
-  if (tool === 'Bash') {
-    const command = String(input.command ?? '')
-    if (FORCE_PUSH.test(command)) return 'Force-pushing is never allowed.'
-    if (SHELL_WRITE_TO_PROTECTED.test(command)) return 'Protected bot files cannot be changed.'
-    if (ctx.secretPaths.some((p) => command.includes(p) || command.includes(basename(p)))) {
-      return "Trek's secret stores cannot be read."
-    }
-    return null
-  }
-  const path = input.file_path ?? input.notebook_path
-  if (typeof path !== 'string') return null
-  if (tool === 'Read' && ctx.secretPaths.includes(resolve(ctx.folder, path))) {
-    return "Trek's secret stores cannot be read."
-  }
-  if (FILE_WRITE_TOOLS.has(tool)) {
-    const rel = inFolder(ctx.folder, path)
-    if (rel !== null && isProtected(rel)) return 'Protected bot files cannot be changed.'
-  }
-  return null
+  const secrets = ctx.secretPaths.map((p) => normalizePath(p, cwdOf(ctx)))
+  if (!SHELL_TOOLS.has(call.tool)) return fileToolNever(call, ctx, secrets)
+  return typeof call.input.command === 'string' ? shellNever(call.input.command, ctx, secrets) : null
 }
 
 function askReason(call: ToolCall): string {
   return `Needs approval. Call ${TREK_PREFIX}request_approval with tool "${call.tool}", this exact input and a reason, then end your turn. The result arrives in a later turn.`
 }
 
+const stringsOf = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+
 function tierOf(call: ToolCall, ctx: PolicyContext): 'allow' | 'ask' {
   const name = call.tool.startsWith(TREK_PREFIX) ? call.tool.slice(TREK_PREFIX.length) : call.tool
-  const free = ctx.overrides.free ?? []
-  const ask = ctx.overrides.ask ?? []
+  const free = stringsOf(ctx.overrides?.free)
+  const ask = stringsOf(ctx.overrides?.ask)
   if (call.tool === 'Bash') {
-    const command = String(call.input.command ?? '')
-    const matched = Object.keys(ASK_SHELL).filter((key) => ASK_SHELL[key].test(command))
-    return matched.some((key) => !free.includes(`bash:${key}`)) ? 'ask' : 'allow'
+    const command = call.input.command
+    if (ask.includes('Bash') || typeof command !== 'string') return 'ask'
+    const keys = analyzeShell(command, cwdOf(ctx)).ask.map((key) => `bash:${key}`)
+    return keys.some((key) => !free.includes(key) || ask.includes(key)) ? 'ask' : 'allow'
   }
   if (ask.includes(name)) return 'ask'
   if (free.includes(name)) return 'allow'
   if (FILE_WRITE_TOOLS.has(call.tool)) {
-    const path = call.input.file_path ?? call.input.notebook_path
-    const rel = typeof path === 'string' ? inFolder(ctx.folder, path) : null
+    const path = filePath(call)
+    const rel = path === null ? null : within(folderOf(ctx), normalizePath(path, cwdOf(ctx)))
     return rel !== null && isBotWritable(rel) ? 'allow' : 'ask'
   }
   // Only trek-dev tools count: another server's tool of the same name is unknown.
