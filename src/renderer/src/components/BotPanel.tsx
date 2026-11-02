@@ -12,6 +12,7 @@ export function BotPanel({ visible }: { visible: boolean }): React.JSX.Element {
   const view = useAppStore((s) => s.botView)
   const events = useAppStore((s) => s.botEvents)
   const filePath = useAppStore((s) => s.filePath)
+  const claudeCommand = useAppStore((s) => s.project?.claudeCommand)
   const [draft, setDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const feedRef = useRef<HTMLDivElement>(null)
@@ -73,7 +74,8 @@ export function BotPanel({ visible }: { visible: boolean }): React.JSX.Element {
           <>
             <p>
               The project bot watches this project on a heartbeat, keeps its own memory, and asks before
-              outward-facing actions.
+              outward-facing actions. It runs unattended using{' '}
+              <code>{claudeCommand?.trim() || 'claude'}</code> and your Claude usage.
             </p>
             <button className="btn btn-ghost" onClick={() => guard(enableBot)}>
               Enable bot
