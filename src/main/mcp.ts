@@ -353,6 +353,35 @@ const TOOLS = [
   }
 ]
 
+/** Offered only to bot turns, through their own token. */
+const BOT_TOOLS = [
+  {
+    name: 'request_approval',
+    description:
+      'Ask the user to approve a tool call the policy denied with "Needs approval". Pass the exact tool name and input. The result says what to do next: usually end your turn, and the answer arrives in a later turn, but if the call is already approved, run it now. An approval allows one exact call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tool: { type: 'string', description: 'Tool name, e.g. Bash or mcp__trek-dev__close_session' },
+        input: { type: 'object', description: 'The exact tool input. For Bash, { "command": "..." } is enough.' },
+        reason: { type: 'string', description: 'One sentence on why this is needed, shown to the user' }
+      },
+      required: ['tool', 'input', 'reason']
+    }
+  }
+]
+
+export interface BotMcpHandlers {
+  policy: (windowId: number, hookInput: Record<string, unknown>) => object
+  requestApproval: (windowId: number, args: Record<string, unknown>) => string
+}
+
+let botHandlers: BotMcpHandlers | null = null
+
+export function setBotMcpHandlers(handlers: BotMcpHandlers): void {
+  botHandlers = handlers
+}
+
 const INSTRUCTIONS =
   'Controls the Trek Dev app. Each git worktree can run Claude sessions; use list_worktrees to see them (get_selected_worktree for the one the user has selected), start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), wait_for_sessions and read_terminal to follow progress, and get_stack/start_stack/stop_stack to run the dev stack of a local worktree. A worktree session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so the app flags it.'
 
@@ -374,9 +403,12 @@ interface McpClient {
   token: string
   configPath: string
   written: Promise<void>
+  bot: boolean
 }
 
 const clients = new Map<number, McpClient>()
+/** Bot turns get their own token, so bot-only routes and tools stay out of other sessions' reach. */
+const botClients = new Map<number, McpClient>()
 
 function callRenderer(
   client: McpClient,
@@ -425,13 +457,22 @@ async function handleMessage(msg: JsonRpcMessage, client: McpClient): Promise<ob
     case 'ping':
       return reply({})
     case 'tools/list':
-      return reply({ tools: TOOLS })
+      return reply({ tools: client.bot ? [...TOOLS, ...BOT_TOOLS] : TOOLS })
     case 'tools/call': {
       const name = msg.params?.name
+      const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
+      if (client.bot && BOT_TOOLS.some((t) => t.name === name)) {
+        try {
+          // The runner words this: end the turn, or run the call now if it is already approved.
+          const text = botHandlers!.requestApproval(client.windowId, args)
+          return reply({ content: [{ type: 'text', text }], isError: false })
+        } catch (err) {
+          return reply({ content: [{ type: 'text', text: String(err) }], isError: true })
+        }
+      }
       if (typeof name !== 'string' || !TOOLS.some((t) => t.name === name)) {
         return fail(-32602, `Unknown tool: ${String(name)}`)
       }
-      const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
       const response = await callRenderer(client, name, args)
       const text = response.ok
         ? JSON.stringify(response.result ?? null, null, 2)
@@ -454,20 +495,32 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 function clientFor(req: IncomingMessage): McpClient | undefined {
   const actual = Buffer.from(req.headers.authorization ?? '')
-  return [...clients.values()].find((client) => {
+  return [...clients.values(), ...botClients.values()].find((client) => {
     const expected = Buffer.from(`Bearer ${client.token}`)
     return actual.length === expected.length && timingSafeEqual(actual, expected)
   })
 }
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.url?.split('?')[0] !== '/mcp') {
+  const path = req.url?.split('?')[0]
+  if (path !== '/mcp' && path !== '/bot/policy') {
     res.writeHead(404).end()
     return
   }
   const client = clientFor(req)
   if (!client) {
     res.writeHead(401).end()
+    return
+  }
+  if (path === '/bot/policy') {
+    if (!client.bot || req.method !== 'POST') {
+      res.writeHead(403).end()
+      return
+    }
+    // A throw here becomes the 500 in startMcpServer: curl --fail then makes the hook exit 2, blocking the tool.
+    const decision = botHandlers!.policy(client.windowId, JSON.parse(await readBody(req)))
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(decision))
     return
   }
   // No server-initiated stream and no sessions to end.
@@ -504,7 +557,7 @@ async function removeStaleConfigs(): Promise<void> {
   const names = await readdir(dir)
   await Promise.all(
     names
-      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-\d+\.json$/.test(n))
+      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-(bot-)?\d+\.json$/.test(n))
       .map((n) => rm(join(dir, n), { force: true }))
   )
 }
@@ -553,7 +606,7 @@ async function configPathFor(contents: WebContents): Promise<string> {
     }
   }
   const written = writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 })
-  clients.set(contents.id, { windowId: contents.id, contents, token, configPath, written })
+  clients.set(contents.id, { windowId: contents.id, contents, token, configPath, written, bot: false })
   try {
     await written
   } catch (err) {
@@ -561,6 +614,58 @@ async function configPathFor(contents: WebContents): Promise<string> {
     throw err
   }
   return configPath
+}
+
+export interface BotMcpAccess {
+  configPath: string
+  token: string
+  port: number
+}
+
+/** Writes the bot's own --mcp-config for this window, once. */
+export async function botMcpAccess(contents: WebContents): Promise<BotMcpAccess> {
+  portPromise ??= startMcpServer().catch((err) => {
+    portPromise = null
+    throw err
+  })
+  const port = await portPromise
+  // A window closed by now has been released, and nothing would release a new token.
+  if (contents.isDestroyed()) throw new Error('The app window is not open')
+  const existing = botClients.get(contents.id)
+  if (existing) {
+    await existing.written
+    return { configPath: existing.configPath, token: existing.token, port }
+  }
+  const token = randomBytes(32).toString('hex')
+  const configPath = join(app.getPath('userData'), `mcp-bot-${contents.id}.json`)
+  const config = {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        type: 'http',
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: { Authorization: `Bearer ${token}` }
+      }
+    }
+  }
+  const written = writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 })
+  botClients.set(contents.id, { windowId: contents.id, contents, token, configPath, written, bot: true })
+  try {
+    await written
+  } catch (err) {
+    botClients.delete(contents.id)
+    throw err
+  }
+  return { configPath, token, port }
+}
+
+/** Reads the renderer's session state for the bot's change check. Not an MCP tool. */
+export async function readBotSnapshot(contents: WebContents): Promise<unknown> {
+  if (contents.isDestroyed()) throw new Error('The app window is not open')
+  const client = botClients.get(contents.id)
+  if (!client) throw new Error('The bot has no connection to this window')
+  const response = await callRenderer(client, 'bot_snapshot', {})
+  if (!response.ok) throw new Error(response.error ?? 'Unknown error')
+  return response.result
 }
 
 /** Revokes a closed window's token and fails the calls still waiting on it. */
@@ -571,10 +676,12 @@ export function releaseMcpWindow(windowId: number): void {
     clearTimeout(entry.timer)
     entry.resolve({ ok: false, error: 'The app window was closed' })
   }
-  const client = clients.get(windowId)
-  if (!client) return
-  clients.delete(windowId)
-  void rm(client.configPath, { force: true }).catch((err) => console.error(err))
+  for (const map of [clients, botClients]) {
+    const client = map.get(windowId)
+    if (!client) continue
+    map.delete(windowId)
+    void rm(client.configPath, { force: true }).catch((err) => console.error(err))
+  }
 }
 
 export function registerMcpHandlers(): void {
