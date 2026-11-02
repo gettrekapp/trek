@@ -50,6 +50,7 @@ export function GlobalClaude(): React.JSX.Element {
   const terminals = useAppStore((s) => s.terminals)
   const decisions = useAppStore((s) => s.decisions)
   const decisionCount = order.filter((id) => decisions[id]).length + (decisions[BOT_DECISION_ID] ? 1 : 0)
+  const botView = useAppStore((s) => s.botView)
   const [height, setHeight] = useState(storedHeight)
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -80,8 +81,9 @@ export function GlobalClaude(): React.JSX.Element {
   const toggle = (): void => useAppStore.getState().setGlobalPanelOpen(!open)
 
   const newTab = (): void => {
+    const viewChanged = view !== 'sessions'
     useAppStore.getState().setGlobalView('sessions')
-    if (!hasTabs) return // the effect above opens the first session on this change of view
+    if (!hasTabs && viewChanged) return // the effect above opens the first session on this change of view
     setError(null)
     startGlobalTerminal().catch((err) => setError(String(err)))
   }
@@ -222,7 +224,11 @@ export function GlobalClaude(): React.JSX.Element {
         <span className="global-hint">
           {hasTabs
             ? `project-wide ${order.length === 1 ? 'session' : `sessions (${order.length})`} · controls worktree sessions`
-            : 'click to start a project-wide session'}
+            : botView.needsConsent
+              ? 'bot: waiting for your OK'
+              : botView.phase !== 'off'
+                ? `bot: ${botView.phase}`
+                : 'click to start a project-wide session'}
         </span>
       </div>
     </div>

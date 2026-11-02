@@ -570,7 +570,7 @@ function isTerminalInView(id: string): boolean {
   const isVisible =
     state.activeTerminal[meta.worktreeId] === id &&
     (meta.worktreeId === GLOBAL_WORKTREE_ID
-      ? state.globalPanelOpen
+      ? state.globalPanelOpen && state.globalView === 'sessions'
       : state.activeWorktreeId === meta.worktreeId)
   return isVisible && document.hasFocus()
 }
