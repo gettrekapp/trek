@@ -1,0 +1,48 @@
+import type { BotSnapshot } from '../../shared/bot'
+
+/** Terminal status is a guess from output, so only meaningful moves count as changes. */
+function statusGroup(status: string): string {
+  if (status === 'starting' || status === 'working') return 'working'
+  if (status === 'idle' || status === 'done' || status === 'complete') return 'done'
+  return status
+}
+
+export function describeChanges(prev: BotSnapshot | null, next: BotSnapshot): string[] {
+  if (!prev) return ['First look at this project: nothing has been recorded yet.']
+  const changes: string[] = []
+
+  const prevTrees = new Map(prev.worktrees.map((w) => [w.path, w]))
+  const nextTrees = new Map(next.worktrees.map((w) => [w.path, w]))
+  for (const [path, tree] of nextTrees) {
+    const old = prevTrees.get(path)
+    if (!old) changes.push(`new worktree ${path} on ${tree.branch ?? 'no branch'}`)
+    else if (old.head !== tree.head || old.branch !== tree.branch) {
+      changes.push(`worktree ${path} moved to ${tree.branch ?? 'no branch'} at ${tree.head ?? 'unknown'}`)
+    }
+  }
+  for (const path of prevTrees.keys()) {
+    if (!nextTrees.has(path)) changes.push(`worktree removed: ${path}`)
+  }
+
+  const prevSessions = new Map(prev.sessions.map((s) => [s.id, s]))
+  const nextSessions = new Map(next.sessions.map((s) => [s.id, s]))
+  for (const [id, session] of nextSessions) {
+    const old = prevSessions.get(id)
+    if (!old) {
+      changes.push(`session "${session.title}" (${id}) started: ${session.status}`)
+      continue
+    }
+    if (statusGroup(old.status) !== statusGroup(session.status)) {
+      changes.push(`session "${session.title}" (${id}) went from ${old.status} to ${session.status}`)
+    }
+    if (!old.decision && session.decision) {
+      changes.push(`session "${session.title}" (${id}) is waiting on a user decision`)
+    }
+  }
+  for (const [id, session] of prevSessions) {
+    if (!nextSessions.has(id)) changes.push(`session "${session.title}" (${id}) ended`)
+  }
+
+  if (prev.heartbeat !== next.heartbeat) changes.push('HEARTBEAT.md changed')
+  return changes
+}
