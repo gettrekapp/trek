@@ -72,3 +72,16 @@ test('analysis reports force pushes per segment, ask keys and write targets', ()
   assert.deepEqual(analyzeShell('find -name c -delete', '/c').finds, [{ roots: ['/c'], names: ['c'] }])
   assert.deepEqual(analyzeShell('find . -name c', '/c').finds, [])
 })
+
+test('analysis reports what would be destroyed as a whole', () => {
+  const destroys = (c) => analyzeShell(c, '/c').destroys
+  assert.deepEqual(destroys('rm -rf a b'), ['/c/a', '/c/b'])
+  assert.deepEqual(destroys('mv a b c'), ['/c/a', '/c/b'])
+  assert.deepEqual(destroys('cd d && rmdir ..'), ['/c'])
+  assert.deepEqual(destroys('chmod -R 7 a'), ['/c/7', '/c/a'])
+  assert.deepEqual(destroys('chmod 7 a'), [])
+  assert.deepEqual(destroys('find a -delete'), ['/c/a'])
+  assert.deepEqual(destroys('find a -name b -delete'), [])
+  assert.deepEqual(destroys('find a'), [])
+  assert.deepEqual(destroys('mkdir a; touch b; cat c'), [])
+})

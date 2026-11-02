@@ -79,6 +79,12 @@ function within(dir: string, path: string): string | null {
   return rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) ? null : rel
 }
 
+/** The directory and each one above it, up to the root. */
+function ancestorsOf(dir: string): string[] {
+  const parent = dirname(dir)
+  return parent === dir ? [dir] : [dir, ...ancestorsOf(parent)]
+}
+
 const isProtected = (rel: string): boolean => PROTECTED.includes(rel) || rel.startsWith(STATE_DIR)
 
 const isBotWritable = (rel: string): boolean =>
@@ -115,6 +121,9 @@ function shellNever(command: string, ctx: PolicyContext, secrets: string[]): str
     return (rel !== null && isProtected(rel)) || protectedFiles.some((file) => couldMatch(ref, file))
   }
   if (shell.writes.map(fold).some(hitsProtected)) return PROTECTED_REASON
+  const folderAndAncestors = ancestorsOf(folder)
+  const destroysFolder = (ref: string): boolean => folderAndAncestors.some((dir) => couldMatch(ref, dir))
+  if (shell.destroys.map(fold).some(destroysFolder)) return PROTECTED_REASON
   const holdsFolder = (root: string): boolean => root === folder || within(root, folder) !== null
   const findHits = shell.finds.some(({ roots, names }) =>
     roots.map(fold).some(holdsFolder) && names.some((name) => PROTECTED.some((file) => couldMatch(fold(name), file)))

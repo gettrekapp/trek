@@ -394,3 +394,30 @@ test('PowerShell and REPL go through the never tier and otherwise ask', () => {
 test('the task tools are free', () => {
   for (const name of ['TaskCreate', 'TaskUpdate', 'TaskList']) assert.equal(tool(name, {}), 'allow', name)
 })
+
+test('destroying the bot folder or an ancestor is denied', () => {
+  expectAll('deny', [
+    'rm -rf .', 'rm -rf ..', 'rm -rf /p/My.trekbot', 'rm -rf /p/My.trekbot/', 'rm -rf /p', 'rm -rf /', 'rm .', 'rm -rf ../My.trekbot', 'rm -rf "/p/My.trekbot"',
+    'rmdir .', 'rmdir /p/My.trekbot', 'unlink .', 'mv . /tmp/x', 'mv /p/My.trekbot /tmp/x', 'mv .. /tmp/x', 'mv -f . /tmp/x',
+    'chmod -R 000 .', 'chmod -Rf 000 /p', 'chmod --recursive 000 .', 'chown -R me .', 'chown --recursive me /p/My.trekbot',
+    'find . -delete', 'find -delete', 'find . -type f -delete', 'find /p/My.trekbot -delete', 'find .. -delete', 'find . -exec rm {} ;',
+    'cd .. && rm -rf My.trekbot', 'cd /repo && rm -rf /p/My.trekbot', 'rm -rf ../*', 'rm -rf /p/My*', 'bash -c "rm -rf ."', 'sudo rm -rf .'
+  ])
+  expectAll('deny', ['rm -rf /p/My.trekbot', 'rm -rf /p', 'mv /p/My.trekbot /tmp/x', 'chmod -R 000 /p', 'find /p -delete', 'cd /p && rm -rf My.trekbot'], { cwd: REPO })
+  assert.equal(decide(bash('rm -rf .'), ctx({ overrides: { free: ['Bash', 'bash:git push'] }, approvals: [approval('Bash', { command: 'rm -rf .' })] })).decision, 'deny')
+})
+
+test('destroying the bot folder folds case only where the filesystem does', () => {
+  expectAll(FOLDS_CASE ? 'deny' : 'allow', ['rm -rf /P/MY.TREKBOT', 'mv /p/my.trekbot /tmp/x'])
+})
+
+test('writes near the bot folder that do not destroy it keep their behaviour', () => {
+  expectAll('allow', [
+    'mkdir .', 'mkdir -p /p/My.trekbot', 'mkdir -p /p', 'touch .', 'touch /p/My.trekbot', 'touch ..',
+    'chmod 755 .', 'chmod 755 /p/My.trekbot', 'chown me .', 'chmod -R 755 knowledge', 'mv /tmp/x .', 'mv /tmp/x /p/My.trekbot', 'mv /tmp/x /tmp/y',
+    'rm -rf /repo', 'rm -rf /p/other', 'rm -rf /p/My.trekbot-old', 'rm -rf knowledge', 'rm -rf /tmp', 'mv /repo /tmp/x', 'rm ""',
+    'find /repo -delete', 'find knowledge -delete', 'find . -name a.md -delete', 'find /p -name a.md -delete', 'find . -name a.md -exec rm {} ;',
+    'find .', 'find . -type f', 'find . -exec cat {} ;', 'ls .', 'cat ..', 'cp -r . /tmp/x', 'git -C /repo add .'
+  ])
+  expectAll('allow', ['rm -rf .', 'rm -rf ..', 'mv . /tmp/x', 'find . -delete', 'chmod -R 755 .'], { cwd: '/repo/sub' })
+})

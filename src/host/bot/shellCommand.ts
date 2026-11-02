@@ -32,6 +32,8 @@ export interface ShellAnalysis {
   ask: string[]
   /** Absolute paths really written. They can hold wildcards: compare with couldMatch. */
   writes: string[]
+  /** Absolute paths removed, moved away or recursively changed as a whole. */
+  destroys: string[]
   /** `find` deletions with name tests. */
   finds: Array<{ roots: string[]; names: string[] }>
   /** Every word as an absolute path, plus the value of `x=value` and `@value`. */
@@ -317,6 +319,14 @@ function writtenWords(name: string, args: Word[]): Word[] {
   return []
 }
 
+/** Arguments the command takes away or changes throughout. A move's destination survives. */
+function destroyedWords(name: string, args: Word[]): Word[] {
+  const paths = positional(args).filter((a) => a.text)
+  if (name === 'rm' || name === 'rmdir' || name === 'unlink') return paths
+  if (name === 'mv') return paths.slice(0, -1)
+  return (name === 'chmod' || name === 'chown') && hasFlag(args, '--recursive', 'R') ? paths : []
+}
+
 function isFindDelete(args: Word[]): boolean {
   return args.some((a, i) => a.text === '-delete' || (/^-(exec|execdir|ok|okdir)$/.test(a.text) && WRITE_VERBS.has(args[i + 1]?.text ?? '')))
 }
@@ -331,11 +341,12 @@ function findCall(args: Word[], cwd: string): ShellAnalysis['finds'][number] {
 }
 
 export function analyzeShell(command: string, cwd: string): ShellAnalysis {
-  const result: ShellAnalysis = { forcePush: false, ask: [], writes: [], finds: [], paths: [] }
+  const result: ShellAnalysis = { forcePush: false, ask: [], writes: [], destroys: [], finds: [], paths: [] }
   for (const seg of parseShell(command, cwd)) {
     const { name, args } = commandOf(seg.words)
     const refs = (words: Word[], from = seg.cwd): string[] => words.map((w) => refOf(w.glob, from))
     result.writes.push(...refs(seg.redirects), ...refs(writtenWords(name, args)))
+    result.destroys.push(...refs(destroyedWords(name, args)))
     for (const word of [...seg.words, ...seg.redirects]) {
       if (!word.text) continue
       result.paths.push(refOf(word.glob, seg.cwd))
@@ -353,6 +364,7 @@ export function analyzeShell(command: string, cwd: string): ShellAnalysis {
       const find = findCall(args, seg.cwd)
       result.writes.push(...find.roots)
       if (find.names.length) result.finds.push(find)
+      else result.destroys.push(...find.roots)
     }
   }
   result.ask = [...new Set(result.ask)]
