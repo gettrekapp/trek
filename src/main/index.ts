@@ -18,6 +18,7 @@ import { registerStackHandlers } from './stacks'
 import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
 import { registerMcpHandlers } from './mcp'
+import { registerBotHandlers } from './bot'
 import { registerVoiceHandlers } from './voice'
 import { fixPath } from './env'
 import {
@@ -123,6 +124,7 @@ app.whenReady().then(async () => {
   registerClaudeSessionHandlers()
   registerServerHandlers()
   registerMcpHandlers()
+  registerBotHandlers()
   registerVoiceHandlers()
   buildMenu()
   setDockIcon()

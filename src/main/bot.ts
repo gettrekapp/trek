@@ -1,0 +1,271 @@
+import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron'
+import { randomUUID } from 'node:crypto'
+import { existsSync, realpathSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { OFF_VIEW, type BotAttach, type BotEvent, type BotView, type TrekSnapshot } from '../shared/bot'
+import { startHeartbeat } from '../host/bot/heartbeat.ts'
+import { createBotFolder, defaultBotFolder, readConfig, readEvents } from '../host/bot/memory.ts'
+import { BotRunner } from '../host/bot/runner.ts'
+import { runTurn } from '../host/bot/turnProcess.ts'
+import { botMcpAccess, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
+
+interface BoundBot {
+  key: string
+  folder: string
+  /** `folder` with symlinks resolved, for telling whether two bots share one. */
+  folderId: string
+  runner: BotRunner
+  stopHeartbeat: () => void
+  attach: BotAttach
+}
+
+const EVENT_HISTORY = 500
+const bots = new Map<number, BoundBot>()
+/** Runners still finishing, by folderId. A new runner on that folder waits, or the two would overwrite its state. */
+const stopping = new Map<string, Promise<void>>()
+/** The last step queued for each window, so that starting and stopping its bot never overlap. */
+const windowQueues = new Map<number, Promise<void>>()
+
+const secretPaths = (): string[] =>
+  ['elevenlabs.json', 'linear.json', 'server-tokens.json'].map((n) => join(app.getPath('userData'), n))
+
+function sendView(contents: WebContents, view: BotView): void {
+  if (!contents.isDestroyed()) contents.send('bot:view', view)
+}
+
+function sendEvent(contents: WebContents, event: BotEvent): void {
+  if (!contents.isDestroyed()) contents.send('bot:event', event)
+}
+
+/** Blocks the tool if the app can't answer: curl --fail plus exit 2 fails closed. */
+function hookSettings(port: number): string {
+  const command = `curl -sS --fail --max-time 10 -X POST -H "Authorization: Bearer $TREK_BOT_TOKEN" --data-binary @- http://127.0.0.1:${port}/bot/policy || exit 2`
+  return JSON.stringify({
+    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }] }
+  })
+}
+
+function folderIdOf(folder: string): string {
+  try {
+    return realpathSync(folder)
+  } catch {
+    return resolve(folder)
+  }
+}
+
+/** Runs `step` after everything already queued for the window, whether that succeeded or not. */
+function inWindowOrder<T>(windowId: number, step: () => Promise<T>): Promise<T> {
+  const result = (windowQueues.get(windowId) ?? Promise.resolve()).then(step)
+  const tail = result.then(
+    () => {},
+    () => {}
+  )
+  windowQueues.set(windowId, tail)
+  void tail.then(() => {
+    if (windowQueues.get(windowId) === tail) windowQueues.delete(windowId)
+  })
+  return result
+}
+
+/** Only call from a step in the window's queue. */
+async function teardown(windowId: number): Promise<void> {
+  const bot = bots.get(windowId)
+  if (!bot) return
+  bots.delete(windowId)
+  bot.stopHeartbeat()
+  const stopped = bot.runner.stop()
+  stopping.set(bot.folderId, stopped)
+  try {
+    await stopped
+  } finally {
+    if (stopping.get(bot.folderId) === stopped) stopping.delete(bot.folderId)
+  }
+}
+
+/** Stops the bot when its window closes. Part of the window's cleanup. */
+export function releaseBotWindow(windowId: number): void {
+  void inWindowOrder(windowId, () => teardown(windowId))
+    .catch((err) => console.error(err))
+    // An attach that was under way when the window closed may have made a new bot token.
+    .finally(() => releaseMcpWindow(windowId))
+}
+
+function errorView(folder: string, reason: string): BotView {
+  return { ...OFF_VIEW, phase: 'error', folder, reason, decision: `Bot stopped: ${reason}` }
+}
+
+function missingView(folder: string): BotView {
+  return { ...errorView(folder, `The bot's folder is missing: ${folder}`), folderMissing: true }
+}
+
+function bind(
+  contents: WebContents,
+  windowId: number,
+  request: BotAttach,
+  place: { key: string; folder: string; folderId: string },
+  access: BotMcpAccess
+): void {
+  const { folder } = place
+  const bound: BoundBot = {
+    ...place,
+    attach: request,
+    stopHeartbeat: () => {},
+    runner: new BotRunner({
+      folder,
+      secretPaths: secretPaths(),
+      now: Date.now,
+      newSessionId: randomUUID,
+      snapshot: async () => (await readBotSnapshot(contents)) as TrekSnapshot,
+      runTurn: (turn, onEvent) =>
+        runTurn(
+          {
+            command: bound.attach.claudeCommand.trim().split(/\s+/),
+            cwd: folder,
+            prompt: turn.prompt,
+            systemPrompt: turn.systemPrompt,
+            sessionId: turn.sessionId,
+            resume: turn.resume,
+            mcpConfig: access.configPath,
+            settings: hookSettings(access.port),
+            addDirs: bound.attach.repoPaths.filter((p) => existsSync(p)),
+            env: { TREK_BOT_TOKEN: access.token },
+            timeoutMs: turn.timeoutMs
+          },
+          onEvent
+        ),
+      onView: (view) => sendView(contents, view),
+      onEvent: (event) => sendEvent(contents, event),
+      // Called from inside the runner, so stopping it has to wait until that call has returned.
+      onFolderMissing: () => {
+        setImmediate(() => {
+          void inWindowOrder(windowId, async () => {
+            if (bots.get(windowId) !== bound) return
+            await teardown(windowId)
+            sendView(contents, missingView(folder))
+          }).catch((err) => console.error(err))
+        })
+      }
+    })
+  }
+  bots.set(windowId, bound)
+  bound.runner.start()
+  bound.stopHeartbeat = startHeartbeat(
+    () => readConfig(folder).intervalMinutes, // falls back to the default if the file is gone
+    // A beat finds a removed or moved folder itself, and reports it through onFolderMissing.
+    () => void bound.runner.beat(),
+    (at) => {
+      if (bots.get(windowId) === bound) bound.runner.setNextBeat(at)
+    }
+  )
+}
+
+async function startBot(
+  contents: WebContents,
+  windowId: number,
+  request: BotAttach,
+  key: string,
+  folder: string
+): Promise<void> {
+  const access = await botMcpAccess(contents)
+  const folderId = folderIdOf(folder)
+  for (let done = stopping.get(folderId); done; done = stopping.get(folderId)) await done
+  // Nothing below awaits until the bot is in `bots`, so another window can't claim the folder meanwhile.
+  if (contents.isDestroyed()) return
+  if (!existsSync(folder)) {
+    sendView(contents, missingView(folder))
+    return
+  }
+  if ([...bots.values()].some((bot) => bot.folderId === folderId)) {
+    sendView(contents, errorView(folder, `Another window's bot is using this folder: ${folder}`))
+    return
+  }
+  bind(contents, windowId, request, { key, folder, folderId }, access)
+}
+
+async function attach(contents: WebContents, windowId: number, request: BotAttach | null): Promise<void> {
+  if (contents.isDestroyed()) return
+  if (!request?.enabled) {
+    await teardown(windowId)
+    sendView(contents, OFF_VIEW)
+    return
+  }
+  const folder = request.folder ?? defaultBotFolder(request.filePath)
+  const key = `${request.filePath}\n${folder}`
+  const existing = bots.get(windowId)
+  if (existing?.key === key) {
+    existing.attach = request
+    sendView(contents, existing.runner.view())
+    return
+  }
+  await teardown(windowId)
+  try {
+    await startBot(contents, windowId, request, key, folder)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    sendView(contents, errorView(folder, `The bot could not start: ${message}`))
+    throw err
+  }
+}
+
+export function registerBotHandlers(): void {
+  setBotMcpHandlers({
+    // A throw reaches the 500 in startMcpServer, which blocks the tool, as does anything but allow here.
+    policy: (windowId, hook) => {
+      const bot = bots.get(windowId)
+      const decision = bot
+        ? bot.runner.checkTool(
+            {
+              tool: String(hook.tool_name ?? ''),
+              input: (hook.tool_input ?? {}) as Record<string, unknown>
+            },
+            typeof hook.cwd === 'string' ? hook.cwd : undefined
+          )
+        : { decision: 'deny', reason: 'The bot is not running' }
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: decision.decision === 'allow' ? 'allow' : 'deny',
+          permissionDecisionReason: decision.reason
+        }
+      }
+    },
+    requestApproval: (windowId, args) => {
+      const bot = bots.get(windowId)
+      if (!bot) throw new Error('The bot is not running')
+      if (typeof args.tool !== 'string' || typeof args.reason !== 'string' || !args.input || typeof args.input !== 'object') {
+        throw new Error('tool, input and reason are required')
+      }
+      return bot.runner.requestApproval(args.tool, args.input as Record<string, unknown>, args.reason)
+    }
+  })
+
+  ipcMain.handle('bot:attach', (event, request: BotAttach | null) => {
+    const contents = event.sender
+    const windowId = contents.id
+    return inWindowOrder(windowId, () => attach(contents, windowId, request))
+  })
+  ipcMain.handle('bot:createFolder', (_event, filePath: string) => {
+    createBotFolder(defaultBotFolder(filePath))
+  })
+  ipcMain.handle('bot:locate', async (event): Promise<string | null> => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: "Locate the bot's folder",
+      properties: ['openDirectory']
+    })
+    return canceled ? null : filePaths[0]
+  })
+  ipcMain.handle('bot:events', (event): BotEvent[] => {
+    const bot = bots.get(event.sender.id)
+    return bot ? readEvents(bot.folder, EVENT_HISTORY) : []
+  })
+  ipcMain.handle('bot:setPaused', (event, paused: boolean) => bots.get(event.sender.id)?.runner.setPaused(paused))
+  ipcMain.handle('bot:send', (event, text: string) => bots.get(event.sender.id)?.runner.send(text))
+  ipcMain.handle('bot:decide', (event, id: string, approved: boolean) =>
+    bots.get(event.sender.id)?.runner.decideApproval(id, approved)
+  )
+  ipcMain.handle('bot:openFolder', async (event) => {
+    const bot = bots.get(event.sender.id)
+    if (bot) await shell.openPath(bot.folder)
+  })
+}

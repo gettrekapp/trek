@@ -35,6 +35,7 @@ import type {
   WorktreeChanges,
   WorktreeStatus
 } from '../shared/types'
+import type { BotAttach, BotEvent, BotView } from '../shared/bot'
 
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
   const listener = (_event: IpcRendererEvent, payload: T): void => callback(payload)
@@ -309,6 +310,18 @@ const api = {
     subscribe('mcp:call', callback),
   sendMcpResult: (callId: string, response: McpCallResponse): void =>
     ipcRenderer.send('mcp:result', callId, response),
+
+  // Project bot
+  botAttach: (request: BotAttach | null): Promise<void> => ipcRenderer.invoke('bot:attach', request),
+  botCreateFolder: (filePath: string): Promise<void> => ipcRenderer.invoke('bot:createFolder', filePath),
+  botLocate: (): Promise<string | null> => ipcRenderer.invoke('bot:locate'),
+  botEvents: (): Promise<BotEvent[]> => ipcRenderer.invoke('bot:events'),
+  botSetPaused: (paused: boolean): Promise<void> => ipcRenderer.invoke('bot:setPaused', paused),
+  botSend: (text: string): Promise<void> => ipcRenderer.invoke('bot:send', text),
+  botDecide: (id: string, approved: boolean): Promise<void> => ipcRenderer.invoke('bot:decide', id, approved),
+  botOpenFolder: (): Promise<void> => ipcRenderer.invoke('bot:openFolder'),
+  onBotView: (callback: (view: BotView) => void): (() => void) => subscribe('bot:view', callback),
+  onBotEvent: (callback: (event: BotEvent) => void): (() => void) => subscribe('bot:event', callback),
 
   // Menu events
   onMenu: (

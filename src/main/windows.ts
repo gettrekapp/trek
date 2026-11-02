@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { access, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { InitialWindowState, OpenedProject } from '../shared/types'
+import { releaseBotWindow } from './bot'
 import { releaseMcpWindow } from './mcp'
 import { openUrl } from './openUrl'
 import { releaseWindowPtys } from './pty'
@@ -132,6 +133,7 @@ export function createWindow(
   win.on('closed', () => {
     windows.delete(state.id)
     releaseWindowPtys(state.id)
+    releaseBotWindow(state.id)
     releaseMcpWindow(state.id)
     clearCloseTimer(state)
     state.closing?.settle(true)
