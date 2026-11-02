@@ -43,6 +43,12 @@ export interface BotView {
   bound: boolean
   /** The bot's folder is missing: offer Locate and Start new. */
   folderMissing: boolean
+  /** Another window or Trek holds the bot's folder: offer Retry. */
+  folderInUse: boolean
+  /** The project wants a bot that this machine hasn't agreed to. Nothing has started. */
+  needsConsent: boolean
+  /** The command to agree to, while `needsConsent`. */
+  command: string | null
   folder: string | null
   lastBeatAt: number | null
   nextBeatAt: number | null
@@ -88,6 +94,9 @@ export const OFF_VIEW: BotView = {
   reason: null,
   bound: false,
   folderMissing: false,
+  folderInUse: false,
+  needsConsent: false,
+  command: null,
   folder: null,
   lastBeatAt: null,
   nextBeatAt: null,

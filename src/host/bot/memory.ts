@@ -127,6 +127,24 @@ export function createBotFolder(folder: string): void {
   }
 }
 
+export function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/** Whether a folder the user picked is really a bot's. Starting there would fill it with starter files. */
+export function looksLikeBotFolder(folder: string): boolean {
+  if (isDirectory(join(folder, 'state'))) return true
+  try {
+    return statSync(join(folder, 'BOT.md')).isFile()
+  } catch {
+    return false
+  }
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 

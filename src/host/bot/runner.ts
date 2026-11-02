@@ -37,6 +37,10 @@ const MAX_FAILURES = 3
 const SUMMARY_CAP = 200
 const CHECK_TIMEOUT_MS = 15_000
 const FOLDER_MISSING_REASON = "The bot's folder is missing"
+/** Failures in a row of one kind of write before the bot pauses, so a brief hiccup is only logged. */
+const MAX_WRITE_FAILURES = 3
+
+type WriteKind = 'state' | 'event' | 'journal'
 
 const isUserWake = (wake: Wake): boolean => wake.kind === 'chat' || wake.kind === 'approval'
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -60,6 +64,7 @@ export class BotRunner {
   private abortCheck: (() => void) | null = null
   /** `stop` has finished: nothing writes or publishes any more. */
   private closed = false
+  private writeFailures: Record<WriteKind, number> = { state: 0, event: 0, journal: 0 }
 
   constructor(deps: RunnerDeps) {
     this.deps = deps
@@ -111,6 +116,9 @@ export class BotRunner {
       reason: pauseReason,
       bound: true,
       folderMissing: pauseReason === FOLDER_MISSING_REASON,
+      folderInUse: false,
+      needsConsent: false,
+      command: null,
       folder: this.deps.folder,
       lastBeatAt,
       nextBeatAt: this.nextBeatAt,
@@ -141,6 +149,7 @@ export class BotRunner {
       this.state.failures = 0
       this.state.blockedUntil = 0
       this.state.limited = false
+      this.writeFailures = { state: 0, event: 0, journal: 0 }
     }
     this.commit()
     this.drain()
@@ -529,26 +538,35 @@ export class BotRunner {
   }
 
   /** Runs a write to the bot's folder. Storage can vanish, and that must never stop the bot's callers. */
-  private store(write: () => void): void {
+  private store(kind: WriteKind, write: () => void): void {
     if (this.closed) return
     try {
       write()
+      this.writeFailures[kind] = 0
     } catch (err) {
-      // A long turn would otherwise log every event once the folder is gone.
-      if (!this.folderReported) console.error('Bot could not write to its folder', err)
+      // A long turn would otherwise log every event once the folder is gone, or once the bot has paused over it.
+      if (!this.folderReported && !this.state.pauseReason) console.error('Bot could not write to its folder', err)
       if (!existsSync(this.deps.folder)) this.folderLost()
+      else if (++this.writeFailures[kind] >= MAX_WRITE_FAILURES) this.writesFailing(err)
     }
   }
 
+  /** Carrying on would look fine until a restart lost everything. Resuming tries again. */
+  private writesFailing(err: unknown): void {
+    if (this.stopped || this.state.pauseReason) return
+    this.pauseWith(`The bot could not write to its folder: ${errorText(err)}`)
+    this.publishView()
+  }
+
   private journal(text: string): void {
-    this.store(() => appendJournal(this.deps.folder, this.deps.now(), text))
+    this.store('journal', () => appendJournal(this.deps.folder, this.deps.now(), text))
   }
 
   private event(kind: BotEventKind, text: string): void {
     if (this.closed) return
     try {
       const event = { at: this.deps.now(), kind, text }
-      this.store(() => appendEvent(this.deps.folder, event))
+      this.store('event', () => appendEvent(this.deps.folder, event))
       this.deps.onEvent(event)
     } catch (err) {
       console.error('Bot could not report an event', err)
@@ -556,7 +574,7 @@ export class BotRunner {
   }
 
   private commit(): void {
-    this.store(() => saveState(this.deps.folder, this.state))
+    this.store('state', () => saveState(this.deps.folder, this.state))
     this.publishView()
   }
 

@@ -1,7 +1,7 @@
 // scripts/botRunner.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { OFF_VIEW } from '../src/shared/bot.ts'
@@ -1461,4 +1461,57 @@ test('a runner view is bound, so the panel offers its controls; the off view is 
   const t = setup()
   assert.equal(t.runner.view().bound, true)
   assert.equal(OFF_VIEW.bound, false)
+})
+
+test('losing state/ from a running bot pauses it with a reason', async () => {
+  const t = setup()
+  t.runner.start()
+  rmSync(join(t.folder, 'state'), { recursive: true })
+  t.runner.setPaused(true)
+  t.runner.setPaused(true)
+  assert.equal(t.runner.view().reason, null, 'a brief failure is only logged')
+  t.runner.setPaused(true)
+  const view = t.runner.view()
+  assert.equal(view.phase, 'error')
+  assert.match(view.reason, /could not write to its folder/)
+  assert.equal(view.folderMissing, false)
+  assert.equal(t.folderMissing, 0)
+  assert.equal(t.views.at(-1).phase, 'error')
+  assert.equal(view.decision, `Bot stopped: ${view.reason}`)
+})
+
+test('a write that recovers does not count towards pausing', () => {
+  const t = setup()
+  t.runner.start()
+  const state = join(t.folder, 'state')
+  for (let round = 0; round < 3; round++) {
+    rmSync(state, { recursive: true })
+    t.runner.setPaused(true)
+    t.runner.setPaused(true)
+    mkdirSync(state)
+    t.runner.setPaused(true)
+  }
+  assert.equal(t.runner.view().reason, null)
+})
+
+test('state/ failing is not hidden by other writes still working', async () => {
+  const t = setup()
+  t.runner.start()
+  rmSync(join(t.folder, 'state'), { recursive: true })
+  t.runner.send('hello')
+  await new Promise(setImmediate)
+  await t.finish()
+  assert.match(t.runner.view().reason, /could not write to its folder/)
+  assert.equal(t.turns.length, 1)
+})
+
+test('resuming with state/ still gone pauses again rather than running unsaved', () => {
+  const t = setup()
+  t.runner.start()
+  rmSync(join(t.folder, 'state'), { recursive: true })
+  for (let i = 0; i < 3; i++) t.runner.setPaused(true)
+  t.runner.setPaused(false)
+  assert.equal(t.runner.view().reason, null)
+  for (let i = 0; i < 3; i++) t.runner.setPaused(true)
+  assert.match(t.runner.view().reason, /could not write to its folder/)
 })

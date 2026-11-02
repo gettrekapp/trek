@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   appendEvent, appendJournal, buildContext, createBotFolder, defaultBotFolder, emptyState,
-  loadState, localDate, readConfig, readEvents, readPolicy, saveState
+  loadState, localDate, looksLikeBotFolder, readConfig, readEvents, readPolicy, saveState
 } from '../src/host/bot/memory.ts'
 
 const folder = () => {
@@ -501,4 +501,31 @@ test('the starter rules cover notes, wake tags and duties', () => {
   assert.match(bot, /HEARTBEAT\.md duties are tasks/)
   assert.match(bot, /notes/)
   assert.match(bot, /wake/)
+})
+
+test('createBotFolder repairs what is missing and overwrites nothing', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'bot-repair-'))
+  writeFileSync(join(folder, 'MEMORY.md'), 'precious')
+  createBotFolder(folder)
+  assert.equal(readFileSync(join(folder, 'MEMORY.md'), 'utf8'), 'precious')
+  assert.equal(existsSync(join(folder, 'state')), true)
+  assert.equal(existsSync(join(folder, 'journal')), true)
+  assert.equal(existsSync(join(folder, 'BOT.md')), true)
+})
+
+test('only a folder with BOT.md or a state folder looks like a bot folder', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'bot-looks-'))
+  assert.equal(looksLikeBotFolder(folder), false)
+  writeFileSync(join(folder, 'state'), 'a file, not a folder')
+  mkdirSync(join(folder, 'BOT.md'))
+  assert.equal(looksLikeBotFolder(folder), false)
+  assert.equal(looksLikeBotFolder(join(folder, 'nowhere')), false)
+
+  const withBot = mkdtempSync(join(tmpdir(), 'bot-looks-'))
+  writeFileSync(join(withBot, 'BOT.md'), 'x')
+  assert.equal(looksLikeBotFolder(withBot), true)
+
+  const withState = mkdtempSync(join(tmpdir(), 'bot-looks-'))
+  mkdirSync(join(withState, 'state'))
+  assert.equal(looksLikeBotFolder(withState), true)
 })
