@@ -24,7 +24,11 @@ export type TurnOutcomeKind = 'ok' | 'crash' | 'timeout' | 'auth' | 'limit' | 'r
 export interface TurnOutcome {
   kind: TurnOutcomeKind
   text: string
+  /** The CLI reported a session, so a later turn can resume it. */
+  sessionStarted: boolean
 }
+
+type TurnEnding = Omit<TurnOutcome, 'sessionStarted'>
 
 export interface TurnHandle {
   done: Promise<TurnOutcome>
@@ -54,10 +58,13 @@ export function claudeArgs(options: TurnOptions): string[] {
   ]
 }
 
-const finished = (outcome: TurnOutcome): TurnHandle => ({ done: Promise.resolve(outcome), kill: () => {} })
+const finished = (ending: TurnEnding): TurnHandle => ({
+  done: Promise.resolve({ ...ending, sessionStarted: false }),
+  kill: () => {}
+})
 const ignore = (): void => {}
 
-function spawnFailure(err: NodeJS.ErrnoException, bin: string, cwd: string): TurnOutcome {
+function spawnFailure(err: NodeJS.ErrnoException, bin: string, cwd: string): TurnEnding {
   if (err.code !== 'ENOENT') return { kind: 'crash', text: err.message }
   return existsSync(cwd)
     ? { kind: 'missing', text: `Claude CLI not found: ${bin}` }
@@ -122,6 +129,7 @@ export function runTurn(
 
   let result: { isError: boolean; text: string; apiStatus: number | null } | undefined
   let limited = false
+  let sessionStarted = false
   const emit = (event: { kind: BotEventKind; text: string }): void => {
     try {
       onEvent(event)
@@ -132,6 +140,7 @@ export function runTurn(
   const handleLine = (line: string): void => {
     const parsed = parseStreamLine(line)
     parsed.events.forEach(emit)
+    if (parsed.sessionId) sessionStarted = true
     if (parsed.result) result = parsed.result
     if (parsed.limited) limited = true
   }
@@ -180,7 +189,7 @@ export function runTurn(
   const done = new Promise<TurnOutcome>((resolve) => {
     resolveDone = resolve
   })
-  const settle = (outcome: TurnOutcome): void => {
+  const settle = (ending: TurnEnding): void => {
     if (settled) return
     settled = true
     clearTimeout(timeout)
@@ -188,7 +197,7 @@ export function runTurn(
     stdin.destroy()
     stdout.destroy()
     stderr.destroy()
-    resolveDone(outcome)
+    resolveDone({ ...ending, sessionStarted })
   }
   function finish(): void {
     if (settled) return

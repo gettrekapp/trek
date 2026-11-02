@@ -9,6 +9,8 @@ export interface Wake {
   text: string
   /** Scheduled duties this wake covers, recorded as run once the turn succeeds. */
   dutyKeys?: string[]
+  /** The approved approval this wake reports. Its text is then just the call, worded at turn start. */
+  approvalId?: string
 }
 
 export interface ToolCall {

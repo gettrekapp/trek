@@ -205,6 +205,7 @@ function toWake(value: unknown): Wake | null {
   if (!isRecord(value) || !isString(value.kind) || !WAKE_KINDS.has(value.kind) || !isString(value.text)) return null
   const wake: Wake = { kind: value.kind as WakeKind, text: value.text }
   if (Array.isArray(value.dutyKeys)) wake.dutyKeys = value.dutyKeys.filter(isString)
+  if (isString(value.approvalId)) wake.approvalId = value.approvalId
   return wake
 }
 

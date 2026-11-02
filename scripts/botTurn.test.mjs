@@ -379,3 +379,10 @@ test('stopping during onBeat or onScheduled does not re-arm', (t) => {
   assert.equal(later, 1)
   assert.equal(calls, 2)
 })
+
+test('an outcome says whether the CLI reported a session', async () => {
+  assert.equal((await run('hello').handle.done).sessionStarted, true)
+  assert.equal((await run('x', { command: ['/usr/bin/true'] }).handle.done).sessionStarted, false)
+  assert.equal((await run('x', { command: ['/no/such/claude'] }).handle.done).sessionStarted, false)
+  assert.equal((await run('x', { command: [] }).handle.done).sessionStarted, false)
+})

@@ -35,10 +35,17 @@ export interface RunnerDeps {
 const BACKOFF_MS = [60_000, 5 * 60_000]
 const MAX_FAILURES = 3
 const SUMMARY_CAP = 200
+const CHECK_TIMEOUT_MS = 15_000
 const FOLDER_MISSING_REASON = "The bot's folder is missing"
 
 const isUserWake = (wake: Wake): boolean => wake.kind === 'chat' || wake.kind === 'approval'
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+const preview = (text: string): string => text.replace(/\s+/g, ' ').slice(0, SUMMARY_CAP)
+/** Turns that spent no real work, or that the bot had no part in ending, don't use up the daily cap. */
+const UNCOUNTED: ReadonlySet<TurnOutcome['kind']> = new Set<TurnOutcome['kind']>(['limit', 'killed', 'missing', 'auth'])
+
+const pendingText = (id: string): string =>
+  `Requested approval ${id}. End your turn; the answer arrives in a later turn.`
 
 export class BotRunner {
   private deps: RunnerDeps
@@ -48,9 +55,11 @@ export class BotRunner {
   private current: TurnHandle | null = null
   private running: Promise<void> | null = null
   private nextBeatAt: number | null = null
-  /** What the running heartbeat turn was told about, saved if the turn succeeds. */
-  private checkedTrek: TrekSnapshot | null = null
   private folderReported = false
+  /** Ends a running change check early, for `stop`. */
+  private abortCheck: (() => void) | null = null
+  /** `stop` has finished: nothing writes or publishes any more. */
+  private closed = false
 
   constructor(deps: RunnerDeps) {
     this.deps = deps
@@ -59,6 +68,7 @@ export class BotRunner {
 
   /** Recovers from an interrupted turn, then runs anything still queued. */
   start(): void {
+    if (this.stopped) return
     try {
       const interrupted = this.state.activeTurn
       if (interrupted) {
@@ -74,13 +84,16 @@ export class BotRunner {
     }
   }
 
+  /** Final. A turn in progress finishes writing; after this resolves nothing does. */
   async stop(): Promise<void> {
     this.stopped = true
     this.current?.kill()
+    this.abortCheck?.()
     await this.idle()
+    this.closed = true
   }
 
-  /** Resolves once no turn is running or waiting to start. */
+  /** Resolves once no change check or turn is running or waiting to start. */
   async idle(): Promise<void> {
     while (this.running) {
       const running = this.running
@@ -92,7 +105,7 @@ export class BotRunner {
   view(): BotView {
     const { paused, pauseReason, queue, approvals, lastBeatAt } = this.state
     const pending = approvals.filter((a) => a.status === 'pending')
-    const phase = pauseReason ? 'error' : paused ? 'paused' : this.current ? 'working' : 'idle'
+    const phase = pauseReason ? 'error' : this.state.activeTurn ? 'working' : paused ? 'paused' : 'idle'
     return {
       phase,
       reason: pauseReason,
@@ -112,6 +125,7 @@ export class BotRunner {
   }
 
   send(text: string): void {
+    if (this.stopped) return
     this.event('user', text)
     this.state.queue.push({ kind: 'chat', text })
     this.commit()
@@ -119,13 +133,13 @@ export class BotRunner {
   }
 
   setPaused(paused: boolean): void {
+    if (this.stopped) return
     this.state.paused = paused
     if (!paused) {
       this.state.pauseReason = null
       this.state.failures = 0
       this.state.blockedUntil = 0
       this.state.limited = false
-      this.dropPoisonWake()
     }
     this.commit()
     this.drain()
@@ -133,6 +147,11 @@ export class BotRunner {
 
   /** `cwd` is the working directory the hook reports, which an earlier `cd` can change. */
   checkTool(call: ToolCall, cwd?: string): PolicyDecision {
+    if (this.stopped || !this.state.activeTurn) return { decision: 'deny', reason: 'No bot turn is running.' }
+    if (!existsSync(this.deps.folder)) {
+      this.folderLost()
+      return { decision: 'deny', reason: `${FOLDER_MISSING_REASON}, so its policy can't be read.` }
+    }
     let result: PolicyDecision
     try {
       result = decide(call, { ...this.policyContext(), cwd })
@@ -143,18 +162,26 @@ export class BotRunner {
     }
     if (result.approvalId) {
       this.state.approvals = this.state.approvals.filter((a) => a.id !== result.approvalId)
+      const used = `Used approval for ${call.tool} ${JSON.stringify(call.input)}`
+      this.journal(used)
+      this.event('approval', used)
       this.commit()
     }
     return result
   }
 
+  /** Returns what to tell the bot. */
   requestApproval(tool: string, input: Record<string, unknown>, reason: string): string {
+    if (this.stopped) throw new Error('The bot has stopped.')
     const call = { tool, input }
     if (decide(call, { ...this.policyContext(), approvals: [] }).decision === 'deny') {
       throw new Error('This action is in the never tier and cannot be approved.')
     }
     const existing = this.state.approvals.find((a) => approvalMatches(a, call))
-    if (existing) return existing.id
+    if (existing?.status === 'approved') {
+      return `This exact call is already approved (${existing.id}). Run it now, in this turn.`
+    }
+    if (existing) return pendingText(existing.id)
     const approval: Approval = {
       id: randomUUID(),
       tool,
@@ -166,10 +193,11 @@ export class BotRunner {
     this.state.approvals.push(approval)
     this.event('approval', `Requested ${tool}: ${reason}`)
     this.commit()
-    return approval.id
+    return pendingText(approval.id)
   }
 
   decideApproval(id: string, approved: boolean): void {
+    if (this.stopped) return
     const approval = this.state.approvals.find((a) => a.id === id && a.status === 'pending')
     if (!approval) return
     const action = `${approval.tool} ${JSON.stringify(approval.input)}`
@@ -177,12 +205,11 @@ export class BotRunner {
     else this.state.approvals = this.state.approvals.filter((a) => a.id !== id)
     const answer = approved ? 'approved' : 'denied'
     this.event('approval', `User ${answer} ${action}`)
-    this.state.queue.push({
-      kind: 'approval',
-      text: approved
-        ? `The user approved this exact call, which may now run once: ${action}`
-        : `The user denied this call. Do not try it another way: ${action}`
-    })
+    this.state.queue.push(
+      approved
+        ? { kind: 'approval', text: action, approvalId: id }
+        : { kind: 'approval', text: `The user denied this call. Do not try it another way: ${action}` }
+    )
     this.commit()
     this.drain()
   }
@@ -193,7 +220,7 @@ export class BotRunner {
       await this.runBeat()
     } catch (err) {
       console.error('Bot heartbeat failed', err)
-      this.event('error', `Heartbeat failed: ${errorText(err)}`)
+      if (!this.stopped) this.event('error', `Heartbeat failed: ${errorText(err)}`)
     }
   }
 
@@ -202,6 +229,8 @@ export class BotRunner {
     const now = this.deps.now()
     if (!existsSync(this.deps.folder)) this.folderLost()
     this.state.lastBeatAt = now
+    // A new bot has nothing to reflect on yet.
+    this.state.lastReflectionDate ??= localDate(now)
     if (this.state.paused || this.state.pauseReason) {
       this.commit()
       return
@@ -212,7 +241,7 @@ export class BotRunner {
       return
     }
     this.state.limited = false
-    if (now < this.state.blockedUntil) {
+    if (this.backingOff(now)) {
       this.event('skip', 'Heartbeat skipped: backing off after a failure')
       this.commit()
       return
@@ -229,7 +258,7 @@ export class BotRunner {
       this.commit()
       return
     }
-    if (this.state.lastReflectionDate !== localDate(now)) {
+    if ((this.state.lastReflectionDate as string) < localDate(now)) {
       this.launch({ kind: 'reflection', text: '' })
       await this.idle()
       return
@@ -237,38 +266,56 @@ export class BotRunner {
 
     // The check is async, so it holds the lock: a chat arriving now queues.
     this.busy = true
-    let wake: Wake | null = null
-    try {
-      wake = await this.heartbeatWake(now)
-    } catch (err) {
-      this.event('error', `Could not read Trek's state: ${String(err)}`)
-    } finally {
-      this.busy = false
-    }
-    if (this.stopped) {
-      this.checkedTrek = null
-      return
-    }
-    // Anything that arrived during the check wins. An unsaved snapshot means the next beat sees the same changes.
-    if (wake && this.state.queue.length === 0 && !this.state.paused && !this.state.pauseReason) {
-      this.launch(wake)
-    } else {
-      this.checkedTrek = null
-      this.commit()
-      this.drain()
-    }
+    this.running = this.changeCheck(now)
     await this.idle()
   }
 
-  private async heartbeatWake(now: number): Promise<Wake | null> {
-    const trek = await this.deps.snapshot()
+  /** Never rejects, and always releases the lock. */
+  private async changeCheck(now: number): Promise<void> {
+    let found: { wake: Wake; trek: TrekSnapshot } | null = null
+    try {
+      found = await this.heartbeatWake(now)
+    } catch (err) {
+      if (!this.stopped) this.event('error', `Could not read Trek's state: ${String(err)}`)
+    } finally {
+      this.busy = false
+    }
+    if (this.stopped) return
+    try {
+      // Anything that arrived during the check wins. An unsaved snapshot means the next beat sees the same changes.
+      if (found && this.state.queue.length === 0 && !this.state.paused && !this.state.pauseReason) {
+        this.launch(found.wake, found.trek)
+      } else {
+        this.commit()
+        this.drain()
+      }
+    } catch (err) {
+      console.error('Bot could not finish a change check', err)
+    }
+  }
+
+  private async readSnapshot(): Promise<TrekSnapshot> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cutOff = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no answer after ${CHECK_TIMEOUT_MS / 1000} seconds`)), CHECK_TIMEOUT_MS)
+      this.abortCheck = () => reject(new Error('the bot stopped'))
+    })
+    try {
+      return await Promise.race([this.deps.snapshot(), cutOff])
+    } finally {
+      clearTimeout(timer)
+      this.abortCheck = null
+    }
+  }
+
+  private async heartbeatWake(now: number): Promise<{ wake: Wake; trek: TrekSnapshot } | null> {
+    const trek = await this.readSnapshot()
     const heartbeat = readHeartbeat(this.deps.folder)
     const changes = describeChanges(this.state.snapshot, { ...trek, heartbeat })
     const dutyKeys = dueDuties(parseDuties(heartbeat), this.state.dutyRuns, now)
     if (changes.length === 0 && dutyKeys.length === 0) return null
-    this.checkedTrek = trek
     const lines = [...changes, ...dutyKeys.map((d) => `scheduled duty is due: ${d}`)]
-    return { kind: 'heartbeat', text: lines.map((l) => `- ${l}`).join('\n'), dutyKeys }
+    return { wake: { kind: 'heartbeat', text: lines.map((l) => `- ${l}`).join('\n'), dutyKeys }, trek }
   }
 
   /** Throws if POLICY.json can't be used: a broken file must never read as no overrides. */
@@ -289,41 +336,45 @@ export class BotRunner {
 
   private drain(): void {
     if (this.busy || this.stopped || this.state.paused || this.state.pauseReason) return
-    if (this.state.limited || this.deps.now() < this.state.blockedUntil) return
+    if (this.state.limited || this.backingOff(this.deps.now())) return
     const next = this.state.queue.shift()
     if (next) this.launch(next)
   }
 
-  private launch(wake: Wake): void {
-    const run = this.runWake(wake)
-    this.running = run
+  /** `trek` is what a heartbeat wake was told about, saved if its turn succeeds. */
+  private launch(wake: Wake, trek: TrekSnapshot | null = null): void {
+    this.busy = true
+    this.state.activeTurn = wake
+    this.running = this.runWake(wake, trek)
   }
 
   /** Never rejects, and always releases the lock. */
-  private async runWake(wake: Wake): Promise<void> {
-    this.busy = true
-    this.state.activeTurn = wake
+  private async runWake(wake: Wake, trek: TrekSnapshot | null): Promise<void> {
+    // Yields first, so `running` is set before any listener can call `stop` or `idle`.
+    await null
     let outcome: TurnOutcome
+    let startedAt = 0
+    let resumed = false
     try {
-      this.resetDailyCount(this.deps.now())
-      this.state.turnsToday++
+      startedAt = this.deps.now()
       this.event('wake', wake.kind === 'chat' ? 'Reading your message' : `Woke for ${wake.kind}`)
+      resumed = this.state.sessionId !== null
       outcome = await this.attempt(wake, this.state.sessionId)
       if (outcome.kind === 'resume') {
         this.event('error', 'Could not resume the conversation; starting a new one from memory')
+        resumed = false
         outcome = await this.attempt(wake, null)
       }
     } catch (err) {
-      outcome = { kind: 'crash', text: errorText(err) }
+      outcome = { kind: 'crash', text: errorText(err), sessionStarted: false }
     }
     try {
-      this.afterTurn(wake, outcome)
+      this.afterTurn(wake, outcome, { startedAt, resumed, trek })
     } catch (err) {
       console.error('Bot could not finish a turn', err)
     } finally {
       this.current = null
       this.state.activeTurn = null
-      this.checkedTrek = null
       this.busy = false
     }
     try {
@@ -334,45 +385,72 @@ export class BotRunner {
     }
   }
 
-  private attempt(wake: Wake, existingSession: string | null): Promise<TurnOutcome> {
+  private async attempt(wake: Wake, existingSession: string | null): Promise<TurnOutcome> {
     const now = this.deps.now()
     const sessionId = existingSession ?? this.deps.newSessionId()
     this.state.sessionId = sessionId
     this.commit()
-    // The commit can report a missing folder, which may stop this runner.
-    if (this.stopped) return Promise.resolve({ kind: 'killed', text: 'Turn stopped' })
-    const { systemPrompt, prompt } = buildContext(this.deps.folder, wake, now)
+    // Anything above can reach a listener, which may pause or stop the bot.
+    if (this.stopped || this.state.paused) return { kind: 'killed', text: 'Turn stopped', sessionStarted: false }
+    const turnWake = this.wakeForTurn(wake)
+    const { systemPrompt, prompt } = buildContext(this.deps.folder, turnWake, now)
     const timeoutMs = readConfig(this.deps.folder).turnTimeoutMinutes * 60_000
     this.current = this.deps.runTurn(
-      { wake, prompt, systemPrompt, sessionId, resume: existingSession !== null, timeoutMs },
+      { wake: turnWake, prompt, systemPrompt, sessionId, resume: existingSession !== null, timeoutMs },
       (event) => this.event(event.kind, event.text)
     )
     this.commit()
     return this.current.done
   }
 
-  private afterTurn(wake: Wake, outcome: TurnOutcome): void {
-    // First, so nothing below can lose the user's message.
+  /** The approval may have been used since it was queued, by an earlier turn or a failed try of this one. */
+  private wakeForTurn(wake: Wake): Wake {
+    if (!wake.approvalId) return wake
+    const stillThere = this.state.approvals.some((a) => a.id === wake.approvalId)
+    return {
+      ...wake,
+      text: stillThere
+        ? `The user approved this exact call, which may now run once: ${wake.text}`
+        : `The approval for this call was already used: ${wake.text}. Check whether the action took effect before asking again.`
+    }
+  }
+
+  private afterTurn(
+    wake: Wake,
+    outcome: TurnOutcome,
+    run: { startedAt: number; resumed: boolean; trek: TrekSnapshot | null }
+  ): void {
+    // Together and first: nothing below can lose the user's message, and a listener's commit
+    // can't save it as both queued and active, which would run it twice after a crash.
     if (outcome.kind !== 'ok' && isUserWake(wake)) this.state.queue.unshift(wake)
+    this.state.activeTurn = null
     const now = this.deps.now()
-    const summary = outcome.text.replace(/\s+/g, ' ').slice(0, SUMMARY_CAP)
+    this.resetDailyCount(now)
+    if (!UNCOUNTED.has(outcome.kind)) this.state.turnsToday++
+    const summary = preview(outcome.text)
     if (outcome.kind === 'ok') {
       this.state.failures = 0
       this.state.wakeFailures = 0
       this.state.blockedUntil = 0
       for (const key of wake.dutyKeys ?? []) this.state.dutyRuns[key] = now
+      if (wake.approvalId) this.deleteApproval(wake.approvalId)
       if (wake.kind === 'reflection') {
-        this.state.lastReflectionDate = localDate(now)
+        this.state.lastReflectionDate = localDate(run.startedAt)
         this.state.sessionId = null
       }
       this.journal(`${wake.kind} turn: ${summary}`)
       // Trek's state as checked before the turn, so anything that changes during it
       // wakes the next beat. HEARTBEAT.md as of now, so the bot's own edits don't.
-      if (wake.kind === 'heartbeat' && this.checkedTrek) {
-        this.state.snapshot = { ...this.checkedTrek, heartbeat: readHeartbeat(this.deps.folder) }
+      if (wake.kind === 'heartbeat' && run.trek) {
+        this.state.snapshot = { ...run.trek, heartbeat: readHeartbeat(this.deps.folder) }
       }
       return
     }
+
+    // A resumed session that crashes may be what is broken, and a fresh one that never reported
+    // itself doesn't exist. Either way, the next attempt starts from memory.
+    const broken = outcome.kind === 'crash' || outcome.kind === 'timeout'
+    if (run.resumed ? broken : !outcome.sessionStarted) this.state.sessionId = null
 
     this.journal(`${wake.kind} turn ${outcome.kind}: ${summary}`)
     this.event('error', `Turn ${outcome.kind}: ${summary}`)
@@ -384,33 +462,54 @@ export class BotRunner {
     } else if (outcome.kind !== 'killed') {
       this.state.failures++
       if (isUserWake(wake)) this.state.wakeFailures++
-      if (this.state.failures >= MAX_FAILURES || this.state.wakeFailures >= MAX_FAILURES) {
-        this.pauseWith(`${MAX_FAILURES} turns failed in a row. Last: ${summary}`)
-      } else {
-        this.state.blockedUntil = now + BACKOFF_MS[this.state.failures - 1]
+      if (this.state.wakeFailures > MAX_FAILURES) {
+        this.dropPoisonWake()
+      } else if (this.state.failures >= MAX_FAILURES || this.state.wakeFailures >= MAX_FAILURES) {
+        this.pauseWith(this.failurePause(wake, summary))
+        return
       }
+      this.state.blockedUntil = now + BACKOFF_MS[Math.min(this.state.failures, BACKOFF_MS.length) - 1]
     }
+  }
+
+  private failurePause(wake: Wake, summary: string): string {
+    const failed = `${MAX_FAILURES} turns failed in a row.`
+    if (!isUserWake(wake)) return `${failed} Last: ${summary}`
+    const retry = this.state.wakeFailures >= MAX_FAILURES ? 'retry it once more' : 'retry it'
+    return `${failed} Resuming will ${retry}: ${wake.kind} "${preview(wake.text)}". Last: ${summary}`
   }
 
   /** A failed user wake goes back to the head of the queue, so `wakeFailures` always describes the head. */
   private dropPoisonWake(): void {
-    if (this.state.wakeFailures < MAX_FAILURES) return
     this.state.wakeFailures = 0
     const poison = this.state.queue.shift()
     if (!poison) return
-    const text = `Dropped ${poison.kind} wake after ${MAX_FAILURES} failed turns: ${poison.text.slice(0, SUMMARY_CAP)}`
+    if (poison.approvalId) this.deleteApproval(poison.approvalId)
+    const text = `Dropped ${poison.kind} wake after ${MAX_FAILURES + 1} failed turns: ${preview(poison.text)}`
     this.journal(text)
     this.event('error', text)
   }
 
+  private deleteApproval(id: string): void {
+    this.state.approvals = this.state.approvals.filter((a) => a.id !== id)
+  }
+
+  /** A block further off than the longest backoff can only come from a clock that has since moved back. */
+  private backingOff(now: number): boolean {
+    const left = this.state.blockedUntil - now
+    return left > 0 && left <= BACKOFF_MS[BACKOFF_MS.length - 1]
+  }
+
   private pauseWith(reason: string): void {
     this.state.paused = true
-    this.state.pauseReason = reason
+    // A missing folder explains everything else, so nothing replaces it.
+    if (this.state.pauseReason !== FOLDER_MISSING_REASON) this.state.pauseReason = reason
   }
 
   private resetDailyCount(now: number): void {
     const today = localDate(now)
-    if (this.state.turnsDate !== today) {
+    // `<`, so a clock moved backwards doesn't reset the count.
+    if (this.state.turnsDate === null || this.state.turnsDate < today) {
       this.state.turnsDate = today
       this.state.turnsToday = 0
     }
@@ -430,6 +529,7 @@ export class BotRunner {
 
   /** Runs a write to the bot's folder. Storage can vanish, and that must never stop the bot's callers. */
   private store(write: () => void): void {
+    if (this.closed) return
     try {
       write()
     } catch (err) {
@@ -444,6 +544,7 @@ export class BotRunner {
   }
 
   private event(kind: BotEventKind, text: string): void {
+    if (this.closed) return
     try {
       const event = { at: this.deps.now(), kind, text }
       this.store(() => appendEvent(this.deps.folder, event))
@@ -459,6 +560,7 @@ export class BotRunner {
   }
 
   private publishView(): void {
+    if (this.closed) return
     try {
       this.deps.onView(this.view())
     } catch (err) {
