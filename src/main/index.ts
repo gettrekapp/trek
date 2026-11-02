@@ -18,7 +18,7 @@ import { registerStackHandlers } from './stacks'
 import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
 import { registerMcpHandlers } from './mcp'
-import { registerBotHandlers } from './bot'
+import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
 import { fixPath } from './env'
 import {
@@ -152,8 +152,10 @@ app.on('before-quit', (event) => {
   if (quitConfirmed) return
   event.preventDefault()
   if (isQuitting()) return
-  void closeAllForQuit().then((closed) => {
+  void closeAllForQuit().then(async (closed) => {
     if (!closed) return
+    // After every window has agreed to close, so that a cancelled quit leaves the other bots running.
+    await stopAllBots().catch((err) => console.error(err))
     cleanUp()
     quitConfirmed = true
     app.quit()

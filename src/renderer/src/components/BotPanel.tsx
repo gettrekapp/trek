@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
-import { disableBot, enableBot, locateBotFolder } from '../bot'
+import { allowBot, disableBot, enableBot, locateBotFolder, retryBot, startNewBot } from '../bot'
 
 const clock = (at: number | null): string =>
   at ? new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'
@@ -26,7 +26,7 @@ export function BotPanel({ visible }: { visible: boolean }): React.JSX.Element {
     setError(null)
     Promise.resolve()
       .then(action)
-      .catch((err) => setError(String(err)))
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 
   /** The draft stays until main has the message, so a failed send loses nothing. */
@@ -45,6 +45,26 @@ export function BotPanel({ visible }: { visible: boolean }): React.JSX.Element {
   }
 
   const style = { display: visible ? 'flex' : 'none' }
+
+  if (view.needsConsent) {
+    return (
+      <div className="bot-panel bot-empty bot-consent" style={style}>
+        <p>This project wants to run a bot from this folder with this command:</p>
+        <code>{view.folder}</code>
+        <code>{view.command}</code>
+        <p>It runs unattended on a heartbeat and uses your Claude usage. Nothing runs unless you allow it.</p>
+        <span className="bot-actions">
+          <button className="btn btn-ghost" onClick={() => guard(allowBot)}>
+            Allow
+          </button>
+          <button className="btn btn-ghost" onClick={() => guard(disableBot)}>
+            Disable
+          </button>
+        </span>
+        {error && <div className="global-error bot-reason">{error}</div>}
+      </div>
+    )
+  }
 
   if (view.phase === 'off') {
     return (
@@ -103,8 +123,15 @@ export function BotPanel({ visible }: { visible: boolean }): React.JSX.Element {
           <button className="btn btn-ghost" onClick={() => guard(locateBotFolder)}>
             Locate folder…
           </button>
-          <button className="btn btn-ghost" onClick={() => guard(enableBot)}>
+          <button className="btn btn-ghost" onClick={() => guard(startNewBot)}>
             Start new
+          </button>
+        </div>
+      )}
+      {view.folderInUse && (
+        <div className="bot-approval">
+          <button className="btn btn-ghost" onClick={() => guard(retryBot)}>
+            Retry
           </button>
         </div>
       )}

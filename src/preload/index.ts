@@ -313,8 +313,10 @@ const api = {
 
   // Project bot
   botAttach: (request: BotAttach | null): Promise<void> => ipcRenderer.invoke('bot:attach', request),
-  botCreateFolder: (filePath: string): Promise<void> => ipcRenderer.invoke('bot:createFolder', filePath),
-  botLocate: (): Promise<string | null> => ipcRenderer.invoke('bot:locate'),
+  botAllow: (): Promise<void> => ipcRenderer.invoke('bot:allow'),
+  botEnable: (): Promise<void> => ipcRenderer.invoke('bot:enable'),
+  botStartNew: (): Promise<void> => ipcRenderer.invoke('bot:startNew'),
+  botLocate: (): Promise<{ folder: string | null; error?: string }> => ipcRenderer.invoke('bot:locate'),
   botEvents: (): Promise<BotEvent[]> => ipcRenderer.invoke('bot:events'),
   botSetPaused: (paused: boolean): Promise<void> => ipcRenderer.invoke('bot:setPaused', paused),
   botSend: (text: string): Promise<void> => ipcRenderer.invoke('bot:send', text),

@@ -3,10 +3,15 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { OFF_VIEW, type BotAttach, type BotEvent, type BotView, type TrekSnapshot } from '../shared/bot'
+import { commandProblem, consentEntry } from '../host/bot/consent.ts'
 import { startHeartbeat } from '../host/bot/heartbeat.ts'
-import { createBotFolder, defaultBotFolder, readConfig, readEvents } from '../host/bot/memory.ts'
+import { acquireBotLock } from '../host/bot/lock.ts'
+import {
+  createBotFolder, defaultBotFolder, isDirectory, looksLikeBotFolder, readConfig, readEvents
+} from '../host/bot/memory.ts'
 import { BotRunner } from '../host/bot/runner.ts'
-import { runTurn } from '../host/bot/turnProcess.ts'
+import { killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
+import { isConsented, recordConsent } from './botConsent'
 import { botMcpAccess, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
 
 interface BoundBot {
@@ -16,18 +21,24 @@ interface BoundBot {
   folderId: string
   runner: BotRunner
   stopHeartbeat: () => void
+  releaseLock: () => void
   attach: BotAttach
 }
 
 const EVENT_HISTORY = 500
+const QUIT_WAIT_MS = 2000
 const bots = new Map<number, BoundBot>()
 /** Runners still finishing, by folderId. A new runner on that folder waits, or the two would overwrite its state. */
 const stopping = new Map<string, Promise<void>>()
 /** The last step queued for each window, so that starting and stopping its bot never overlap. */
 const windowQueues = new Map<number, Promise<void>>()
+/** What each window last asked to attach. Consent is always given to this, never to values sent with the click. */
+const requested = new Map<number, BotAttach>()
+let quitting = false
 
+// The consent list is here because a bot that could write to it could approve other bots.
 const secretPaths = (): string[] =>
-  ['elevenlabs.json', 'linear.json', 'server-tokens.json'].map((n) => join(app.getPath('userData'), n))
+  ['elevenlabs.json', 'linear.json', 'server-tokens.json', 'bot-consent.json'].map((n) => join(app.getPath('userData'), n))
 
 function sendView(contents: WebContents, view: BotView): void {
   if (!contents.isDestroyed()) contents.send('bot:view', view)
@@ -78,12 +89,33 @@ async function teardown(windowId: number): Promise<void> {
   try {
     await stopped
   } finally {
+    bot.releaseLock()
     if (stopping.get(bot.folderId) === stopped) stopping.delete(bot.folderId)
   }
 }
 
+/**
+ * For quitting, once it can no longer be cancelled. Windows closing have started stopping their bots,
+ * but the SIGKILL that follows their SIGTERM wouldn't outlive the app, so it happens now instead.
+ */
+export async function stopAllBots(): Promise<void> {
+  quitting = true
+  for (const bot of bots.values()) void bot.runner.stop().catch((err) => console.error(err))
+  killAllTurnsNow()
+  for (const windowId of [...bots.keys()]) void inWindowOrder(windowId, () => teardown(windowId)).catch(() => {})
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    Promise.allSettled([...windowQueues.values()]),
+    new Promise((done) => {
+      timer = setTimeout(done, QUIT_WAIT_MS)
+    })
+  ])
+  clearTimeout(timer)
+}
+
 /** Stops the bot when its window closes. Part of the window's cleanup. */
 export function releaseBotWindow(windowId: number): void {
+  requested.delete(windowId)
   void inWindowOrder(windowId, () => teardown(windowId))
     .catch((err) => console.error(err))
     // An attach that was under way when the window closed may have made a new bot token.
@@ -98,17 +130,46 @@ function missingView(folder: string): BotView {
   return { ...errorView(folder, `The bot's folder is missing: ${folder}`), folderMissing: true }
 }
 
+function inUseView(folder: string, reason: string): BotView {
+  return { ...errorView(folder, reason), folderInUse: true }
+}
+
+/** No alert, like the consent view: this can be the first thing a shared project shows on opening. */
+function badCommandView(folder: string, reason: string): BotView {
+  return { ...OFF_VIEW, phase: 'error', folder, reason }
+}
+
+function consentView(folder: string, command: string): BotView {
+  return { ...OFF_VIEW, needsConsent: true, folder, command }
+}
+
+const folderFor = (request: BotAttach): string => request.folder ?? defaultBotFolder(request.filePath)
+
+/** A command that breaks the rule is never recorded: nothing could ever use the entry. */
+async function consentTo(request: BotAttach, folder: string): Promise<void> {
+  if (commandProblem(request.claudeCommand)) return
+  await recordConsent(consentEntry(request.filePath, folder, request.claudeCommand))
+}
+
+function requestOf(windowId: number): BotAttach {
+  const request = requested.get(windowId)
+  if (!request) throw new Error('This window has no saved project.')
+  return request
+}
+
 function bind(
   contents: WebContents,
   windowId: number,
   request: BotAttach,
   place: { key: string; folder: string; folderId: string },
-  access: BotMcpAccess
+  access: BotMcpAccess,
+  releaseLock: () => void
 ): void {
   const { folder } = place
   const bound: BoundBot = {
     ...place,
     attach: request,
+    releaseLock,
     stopHeartbeat: () => {},
     runner: new BotRunner({
       folder,
@@ -170,26 +231,53 @@ async function startBot(
   const folderId = folderIdOf(folder)
   for (let done = stopping.get(folderId); done; done = stopping.get(folderId)) await done
   // Nothing below awaits until the bot is in `bots`, so another window can't claim the folder meanwhile.
-  if (contents.isDestroyed()) return
-  if (!existsSync(folder)) {
+  if (contents.isDestroyed() || quitting) return
+  if (!isDirectory(folder)) {
     sendView(contents, missingView(folder))
     return
   }
   if ([...bots.values()].some((bot) => bot.folderId === folderId)) {
-    sendView(contents, errorView(folder, `Another window's bot is using this folder: ${folder}`))
+    sendView(contents, inUseView(folder, `Another window's bot is using this folder: ${folder}`))
     return
   }
-  bind(contents, windowId, request, { key, folder, folderId }, access)
+  createBotFolder(folder)
+  const lock = acquireBotLock(folder)
+  if (!lock.acquired) {
+    const holder = lock.pid ? ` (process ${lock.pid})` : ''
+    const reason = `Another copy of Trek${holder} is using this folder: ${folder}. If none is, delete state/lock in that folder.`
+    sendView(contents, inUseView(folder, reason))
+    return
+  }
+  try {
+    bind(contents, windowId, request, { key, folder, folderId }, access, lock.release)
+  } catch (err) {
+    lock.release()
+    throw err
+  }
 }
 
 async function attach(contents: WebContents, windowId: number, request: BotAttach | null): Promise<void> {
   if (contents.isDestroyed()) return
+  if (request) requested.set(windowId, request)
+  else requested.delete(windowId)
   if (!request?.enabled) {
     await teardown(windowId)
     sendView(contents, OFF_VIEW)
     return
   }
-  const folder = request.folder ?? defaultBotFolder(request.filePath)
+  const folder = folderFor(request)
+  // Both come before the running bot is reused, since its next turn would use the changed command.
+  const problem = commandProblem(request.claudeCommand)
+  if (problem) {
+    await teardown(windowId)
+    sendView(contents, badCommandView(folder, problem))
+    return
+  }
+  if (!(await isConsented(consentEntry(request.filePath, folder, request.claudeCommand)))) {
+    await teardown(windowId)
+    sendView(contents, consentView(folder, request.claudeCommand.trim()))
+    return
+  }
   const key = `${request.filePath}\n${folder}`
   const existing = bots.get(windowId)
   if (existing?.key === key) {
@@ -244,16 +332,48 @@ export function registerBotHandlers(): void {
     const windowId = contents.id
     return inWindowOrder(windowId, () => attach(contents, windowId, request))
   })
-  ipcMain.handle('bot:createFolder', (_event, filePath: string) => {
-    createBotFolder(defaultBotFolder(filePath))
+  ipcMain.handle('bot:allow', (event) => {
+    const contents = event.sender
+    const windowId = contents.id
+    return inWindowOrder(windowId, async () => {
+      const request = requested.get(windowId)
+      if (!request?.enabled) return
+      await consentTo(request, folderFor(request))
+      await attach(contents, windowId, request)
+    })
   })
-  ipcMain.handle('bot:locate', async (event): Promise<string | null> => {
+  // Enable, Start new and Locate are this machine's user asking for the bot, so they count as consent.
+  ipcMain.handle('bot:enable', (event) =>
+    inWindowOrder(event.sender.id, async () => {
+      const request = requestOf(event.sender.id)
+      const folder = folderFor(request)
+      if (!request.folder) createBotFolder(folder)
+      await consentTo(request, folder)
+    })
+  )
+  ipcMain.handle('bot:startNew', (event) =>
+    inWindowOrder(event.sender.id, async () => {
+      const request = requestOf(event.sender.id)
+      const folder = defaultBotFolder(request.filePath)
+      createBotFolder(folder)
+      await consentTo(request, folder)
+    })
+  )
+  ipcMain.handle('bot:locate', async (event): Promise<{ folder: string | null; error?: string }> => {
+    // As of the click: a command that changes during the dialog asks again.
+    const request = requestOf(event.sender.id)
     const win = BrowserWindow.fromWebContents(event.sender)!
     const { canceled, filePaths } = await dialog.showOpenDialog(win, {
       title: "Locate the bot's folder",
       properties: ['openDirectory']
     })
-    return canceled ? null : filePaths[0]
+    if (canceled) return { folder: null }
+    const folder = filePaths[0]
+    if (!looksLikeBotFolder(folder)) {
+      return { folder: null, error: `That isn't a bot folder: ${folder} has no BOT.md or state folder.` }
+    }
+    await inWindowOrder(event.sender.id, () => consentTo(request, folder))
+    return { folder }
   })
   ipcMain.handle('bot:events', (event): BotEvent[] => {
     const bot = bots.get(event.sender.id)
@@ -266,6 +386,6 @@ export function registerBotHandlers(): void {
   )
   ipcMain.handle('bot:openFolder', async (event) => {
     const bot = bots.get(event.sender.id)
-    if (bot) await shell.openPath(bot.folder)
+    if (bot && isDirectory(bot.folder)) await shell.openPath(bot.folder)
   })
 }
