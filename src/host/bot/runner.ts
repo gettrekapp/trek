@@ -109,6 +109,7 @@ export class BotRunner {
     return {
       phase,
       reason: pauseReason,
+      bound: true,
       folderMissing: pauseReason === FOLDER_MISSING_REASON,
       folder: this.deps.folder,
       lastBeatAt,

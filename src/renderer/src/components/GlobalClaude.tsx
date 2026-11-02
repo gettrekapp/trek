@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
+import { BOT_DECISION_ID, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import {
   closeGlobalTerminal,
   cycleTab,
@@ -10,6 +10,7 @@ import {
   startGlobalTerminal,
   tabCycleStep
 } from '../terminals'
+import { BotPanel } from './BotPanel'
 import { StatusBadge } from './StatusBadge'
 import { DecisionIcon } from './DecisionIcon'
 import { TerminalPane } from './TerminalPane'
@@ -43,11 +44,12 @@ const NO_TABS: string[] = []
  */
 export function GlobalClaude(): React.JSX.Element {
   const open = useAppStore((s) => s.globalPanelOpen)
+  const view = useAppStore((s) => s.globalView)
   const order = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID] ?? NO_TABS)
   const activeId = useAppStore((s) => s.activeTerminal[GLOBAL_WORKTREE_ID])
   const terminals = useAppStore((s) => s.terminals)
   const decisions = useAppStore((s) => s.decisions)
-  const decisionCount = order.filter((id) => decisions[id]).length
+  const decisionCount = order.filter((id) => decisions[id]).length + (decisions[BOT_DECISION_ID] ? 1 : 0)
   const [height, setHeight] = useState(storedHeight)
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -57,10 +59,10 @@ export function GlobalClaude(): React.JSX.Element {
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
 
   useEffect(() => {
-    if (!open || hasTabs) return
+    if (!open || hasTabs || view === 'bot') return
     setError(null)
     openGlobalTerminals().catch((err) => setError(String(err)))
-  }, [open, hasTabs])
+  }, [open, hasTabs, view])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -68,7 +70,7 @@ export function GlobalClaude(): React.JSX.Element {
       if (!step || !focusInGlobalPanel()) return
       e.preventDefault()
       e.stopPropagation()
-      cycleTab(GLOBAL_WORKTREE_ID, step)
+      if (useAppStore.getState().globalView === 'sessions') cycleTab(GLOBAL_WORKTREE_ID, step)
     }
     // Capture phase, so the focused xterm never sees the keystroke.
     window.addEventListener('keydown', onKeyDown, true)
@@ -78,11 +80,14 @@ export function GlobalClaude(): React.JSX.Element {
   const toggle = (): void => useAppStore.getState().setGlobalPanelOpen(!open)
 
   const newTab = (): void => {
+    useAppStore.getState().setGlobalView('sessions')
+    if (!hasTabs) return // the effect above opens the first session on this change of view
     setError(null)
     startGlobalTerminal().catch((err) => setError(String(err)))
   }
 
   const selectTab = (id: string): void => {
+    useAppStore.getState().setGlobalView('sessions')
     useAppStore.getState().setActiveTerminal(GLOBAL_WORKTREE_ID, id)
     focusTerminal(id)
   }
@@ -136,7 +141,7 @@ export function GlobalClaude(): React.JSX.Element {
             return (
               <div
                 key={id}
-                className={`global-tab ${isActive ? 'active' : ''} status-${meta.status} ${
+                className={`global-tab ${isActive && view === 'sessions' ? 'active' : ''} status-${meta.status} ${
                   decisions[id] ? 'has-decision' : ''
                 }`}
                 onClick={() => selectTab(id)}
@@ -180,16 +185,26 @@ export function GlobalClaude(): React.JSX.Element {
               </div>
             )
           })}
+          <div
+            className={`global-tab bot-tab ${view === 'bot' ? 'active' : ''} ${
+              decisions[BOT_DECISION_ID] ? 'has-decision' : ''
+            }`}
+            onClick={() => useAppStore.getState().setGlobalView('bot')}
+          >
+            <DecisionIcon terminalId={BOT_DECISION_ID} />
+            <span className="global-tab-title">Bot</span>
+          </div>
           <button className="global-tab-add" onClick={newTab} title="New global Claude tab">
             +
           </button>
         </div>
-        <div className="global-terminal">
+        <div className="global-terminal" style={{ display: view === 'sessions' ? undefined : 'none' }}>
           {order.map((id) => (
-            <TerminalPane key={id} terminalId={id} visible={open && id === activeId} global />
+            <TerminalPane key={id} terminalId={id} visible={open && view === 'sessions' && id === activeId} global />
           ))}
           {error && <div className="global-error">Couldn't start Claude: {error}</div>}
         </div>
+        <BotPanel visible={view === 'bot'} />
       </div>
       <div
         className={`global-bar ${open ? 'open' : ''} ${attention ? 'attention' : ''}`}
@@ -200,7 +215,7 @@ export function GlobalClaude(): React.JSX.Element {
         <span className="global-title">Claude</span>
         <StatusBadge status={status ?? null} />
         {decisionCount > 0 && (
-          <span className="decision-icon" title={`${decisionCount} global session(s) need a decision`}>
+          <span className="decision-icon" title={`${decisionCount} global session(s) or the project bot need a decision`}>
             ⚑
           </span>
         )}

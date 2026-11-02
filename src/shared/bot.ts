@@ -39,6 +39,8 @@ export interface BotView {
   phase: BotPhase
   /** Why the bot is paused or in error, for the panel. */
   reason: string | null
+  /** A runner is behind this view, so pausing, messages and approvals reach it. */
+  bound: boolean
   /** The bot's folder is missing: offer Locate and Start new. */
   folderMissing: boolean
   folder: string | null
@@ -84,6 +86,7 @@ export interface BotSnapshot extends TrekSnapshot {
 export const OFF_VIEW: BotView = {
   phase: 'off',
   reason: null,
+  bound: false,
   folderMissing: false,
   folder: null,
   lastBeatAt: null,
