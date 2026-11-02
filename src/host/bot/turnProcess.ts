@@ -58,16 +58,25 @@ export function claudeArgs(options: TurnOptions): string[] {
   ]
 }
 
+/** A way to kill each turn whose process group may be alive: running, or settled but still in its SIGTERM grace. */
+const liveGroups = new Set<() => void>()
+
+/** For quitting, which can't wait out the grace: the timers die with the app, and descendants would outlive it. */
+export function killAllTurnsNow(): void {
+  for (const kill of [...liveGroups]) kill()
+}
+
 const finished = (ending: TurnEnding): TurnHandle => ({
   done: Promise.resolve({ ...ending, sessionStarted: false }),
   kill: () => {}
 })
 const ignore = (): void => {}
+const NO_SHELL = 'The bot runs this command directly, without a shell, so shell aliases and env prefixes do not work.'
 
 function spawnFailure(err: NodeJS.ErrnoException, bin: string, cwd: string): TurnEnding {
   if (err.code !== 'ENOENT') return { kind: 'crash', text: err.message }
   return existsSync(cwd)
-    ? { kind: 'missing', text: `Claude CLI not found: ${bin}` }
+    ? { kind: 'missing', text: `Claude CLI not found: ${bin}. ${NO_SHELL}` }
     : { kind: 'crash', text: `Working directory not found: ${cwd}` }
 }
 
@@ -100,6 +109,7 @@ export function runTurn(
   let settled = false
   let stopReason: 'timeout' | 'killed' | null = null
   let drainTimer: ReturnType<typeof setTimeout> | null = null
+  let graceTimer: ReturnType<typeof setTimeout> | null = null
   const startDrain = (): void => {
     if (!settled && !drainTimer) drainTimer = setTimeout(finish, DRAIN_MS)
   }
@@ -116,11 +126,22 @@ export function runTurn(
     signalGroup('SIGTERM')
     // Outlives settling on purpose, so descendants that ignore SIGTERM still die. It also ends
     // the wait if the process can't be killed at all, so the turn can never stay open.
-    setTimeout(() => {
+    graceTimer = setTimeout(() => {
       signalGroup('SIGKILL')
+      liveGroups.delete(killNow)
       startDrain()
-    }, KILL_GRACE_MS).unref()
+    }, KILL_GRACE_MS)
+    graceTimer.unref()
   }
+  const killNow = (): void => {
+    stopReason ??= 'killed'
+    if (graceTimer) clearTimeout(graceTimer)
+    signalGroup('SIGTERM')
+    signalGroup('SIGKILL')
+    liveGroups.delete(killNow)
+    startDrain()
+  }
+  if (pid !== undefined) liveGroups.add(killNow)
   const requested = options.timeoutMs
   const timeout = setTimeout(
     () => stopGroup('timeout'),
@@ -192,6 +213,8 @@ export function runTurn(
   const settle = (ending: TurnEnding): void => {
     if (settled) return
     settled = true
+    // A stopped turn stays listed until its grace ends, for descendants that ignored SIGTERM.
+    if (!stopReason) liveGroups.delete(killNow)
     clearTimeout(timeout)
     if (drainTimer) clearTimeout(drainTimer)
     stdin.destroy()

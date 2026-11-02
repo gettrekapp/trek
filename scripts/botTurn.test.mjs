@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { runTurn } from '../src/host/bot/turnProcess.ts'
+import { killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
 import { startHeartbeat } from '../src/host/bot/heartbeat.ts'
 
 const FAKE = resolve('scripts/fixtures/fake-claude.mjs')
@@ -395,4 +395,56 @@ test('the fake reads its mode from the wake alone', async () => {
   const notApproval = run(framed('The user says, through chat:\n\nThe user approved this exact call'))
   await notApproval.handle.done
   assert.deepEqual(notApproval.events, [{ kind: 'text', text: 'echo:The user approved this exact call' }])
+})
+
+const stubbornTurn = (file, onReady) => {
+  const handle = runTurn({
+    command: [FAKE], cwd: dir, prompt: 'STUBBORN', systemPrompt: 'S', sessionId: 's1', resume: false, mcpConfig: 'm',
+    settings: '{}', addDirs: [], env: { FAKE_CLAUDE_PIDS: file }, timeoutMs: 20_000
+  }, (event) => {
+    if (event.text === 'ready') onReady(handle)
+  })
+  return handle
+}
+const goneWithin = async (pid, ms) => {
+  const deadline = Date.now() + ms
+  while (alive(pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25))
+  return !alive(pid)
+}
+
+test('killAllTurnsNow kills a running turn and its stubborn descendants at once', async (t) => {
+  const file = join(dir, 'now.pids')
+  writeFileSync(file, '')
+  t.after(() => killAll(readPids(file)))
+  const handle = stubbornTurn(file, () => killAllTurnsNow())
+  assert.equal((await handle.done).kind, 'killed')
+  assert.equal(await goneWithin(readPids(file)[0], 1000), true, 'well inside the 3 second grace')
+})
+
+test('killAllTurnsNow reaches descendants of a turn already stopped and settled', async (t) => {
+  const file = join(dir, 'grace.pids')
+  writeFileSync(file, '')
+  t.after(() => killAll(readPids(file)))
+  const handle = stubbornTurn(file, (h) => h.kill())
+  assert.equal((await handle.done).kind, 'killed')
+  const [pid] = readPids(file)
+  assert.ok(alive(pid), 'still in its grace period')
+  killAllTurnsNow()
+  assert.equal(await goneWithin(pid, 1000), true)
+})
+
+test('killAllTurnsNow leaves finished turns alone', async (t) => {
+  await run('hello').handle.done
+  const kill = t.mock.method(process, 'kill', () => true)
+  killAllTurnsNow()
+  assert.equal(kill.mock.callCount(), 0)
+})
+
+test('a missing CLI explains that there is no shell', async () => {
+  const { handle } = run('hello', { command: ['FOO=bar', 'claude'] })
+  const outcome = await handle.done
+  assert.equal(outcome.kind, 'missing')
+  assert.match(outcome.text, /Claude CLI not found: FOO=bar/)
+  assert.match(outcome.text, /without a shell/)
+  assert.match(outcome.text, /aliases/)
 })
