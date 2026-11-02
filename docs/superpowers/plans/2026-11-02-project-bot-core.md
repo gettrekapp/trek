@@ -3516,7 +3516,7 @@ process.exit(failed ? 1 : 0)
 - [ ] **Step 3: Run the smoke test**
 
 Run: `npm run smoke:bot`
-Expected: ends with `All 47 checks passed`. The script in the repository supersedes the listing above: it also covers closing mid-turn, restarts, a held folder, a missing folder and the policy route's refusals.
+Expected: ends with `All 111 checks passed`. The script in the repository supersedes the listing above: it also covers closing mid-turn, restarts, a held folder, a missing folder, the policy route's refusals, the real hook command, what each token can reach, consent, the command rule, two copies of Trek and quitting.
 
 - [ ] **Step 4: Run the full checks**
 

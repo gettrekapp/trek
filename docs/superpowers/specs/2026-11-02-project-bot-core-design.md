@@ -36,8 +36,41 @@ The bot is off by default and enabled per project. The project must be saved to
 disk. For `MyProject.trekproj`, the first enable creates `MyProject.trekbot/`
 with starter files.
 
-Each project window gets one `BotRunner`. Closing the window stops the runner and
+Enabling on this machine counts as consent; a project that arrives already enabled asks
+first (see Consent). Each project window gets one `BotRunner`. Closing the window stops the runner and
 kills any running turn.
+
+## Consent
+
+A project file can travel, and it names a command and a folder, so opening a project
+must never start a bot. Worktrees open unloaded, and opening stays just as inert.
+
+- **The list:** `bot-consent.json` in userData, so it is per machine and can't arrive in
+  a project file or bot folder. An entry is the realpath of the project file, the realpath
+  of the bot folder and the exact trimmed `claudeCommand`. Bots may not read or write it.
+- **Without a matching entry:** an enabled project starts nothing, creates nothing and
+  takes no lock or token. The view has `needsConsent`, and the panel shows the folder and
+  command and explains that the bot runs unattended and uses the user's Claude usage. It
+  raises no flag or alert, since merely opening a project shouldn't show its text that
+  way. A changed command or folder asks again, and stops a bot already running.
+- **Giving it:** Allow (`bot:allow`) records what main itself last recorded for that window's
+  attach, not anything sent with the click. Clicking Enable bot, Start new or Locate folder
+  counts as consent too, and these go through main so that it records it.
+
+**The command rule:** a turn's working directory is the bot's folder, so the command must be
+absolute or a bare name on PATH. A relative path with a slash gets an error view with the
+reason, with or without consent, and raises no alert. Turns run the command without a shell.
+
+**Locating a folder** requires `BOT.md` or a `state` directory in it, so that a repository
+root doesn't silently become a bot folder.
+
+## One bot per folder
+
+A window's bot takes `state/lock` before it starts, created exclusively and holding its pid,
+and releases it when it stops. This covers two copies of Trek, and sits alongside the check
+between windows of one copy. A lock whose process has gone is stale and is taken over. A held
+folder shows an error with Retry, since nothing tells the window when the folder comes free.
+`state/` is in the never tier, so the lock is protected from the bot like the rest of it.
 
 ## Units
 
@@ -140,8 +173,9 @@ The starter `BOT.md` tells the bot:
 
 - Runs locally with `.trekbot/` as the working directory and `--add-dir` for each
   local repository, the same pattern as Global Claude.
-- Uses the window's existing MCP config for `trek-dev` tools. Remote worktrees are
-  reached through those tools only.
+- Uses its own MCP token and config for `trek-dev` tools, separate from the window's
+  sessions, so that the policy route and `request_approval` are out of their reach.
+  Remote worktrees are reached through those tools only.
 - Default timeout is 15 minutes. On timeout, the process tree is killed.
 - Default cap is 100 turns per local day. Once reached, heartbeats and reflection
   stop until the next day, while chat and approval decisions still run.
@@ -206,6 +240,9 @@ after a reload.
 | 3 failures in a row | Pause and set the decision flag; a successful turn resets the count |
 | Usage limit reached | Keep the queue and retry at the next heartbeat; not counted as a failure |
 | Quit or crash mid-turn | Queue and approvals survive; the next launch notes the interrupted turn in the journal |
+| Quit | Once no window can cancel it, every turn's process group gets SIGTERM then SIGKILL straight away, including turns still in the grace after a stop; waits up to about 2 seconds for them to settle |
+| Bot folder exists but has lost parts | Start repairs missing subfolders and starter files, overwriting nothing |
+| Writes to the folder keep failing with it still there | After 3 failures in a row of one kind of write, pause with the reason; Resume tries again |
 | `--resume` fails | Start a new conversation from memory files; not counted as a failure |
 | `.trekbot/` missing or moved | Pause with an error; never recreate it silently |
 | Project file moved or renamed | Same as above, until the user points the bot at the folder |
@@ -230,7 +267,7 @@ after a reload.
 
 - The enabled flag and any located folder path are saved in the project file as
   `bot`, so a moved project can tell that its folder is missing.
-- `state/` is one `state.json` plus `events.jsonl`.
+- `state/` is one `state.json` plus `events.jsonl` and the `lock`.
 - A failed chat or approval wake returns to the front of the queue and retries after
   the backoff, or at the next heartbeat after a usage limit.
 - Terminal status is guessed from output, and repaints flip it between idle and working,
