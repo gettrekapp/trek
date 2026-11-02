@@ -1,4 +1,6 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { StringDecoder } from 'node:string_decoder'
 import type { BotEventKind } from '../../shared/bot'
 import { classifyFailure, parseStreamLine } from './events.ts'
 
@@ -30,11 +32,17 @@ export interface TurnHandle {
 }
 
 const KILL_GRACE_MS = 3000
+/** How long stdout may stay open after the CLI exits: a descendant can hold it forever. */
+const DRAIN_MS = 500
 const STDERR_KEEP = 2000
+const MAX_LINE = 64 * 1024 * 1024
+/** The longest delay a timer can hold; anything longer would fire straight away. */
+const MAX_TIMEOUT_MS = 2_147_483_647
+const DEFAULT_TIMEOUT_MS = 15 * 60_000
 
 export function claudeArgs(options: TurnOptions): string[] {
   return [
-    '-p', options.prompt,
+    '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--mcp-config', options.mcpConfig,
@@ -46,82 +54,167 @@ export function claudeArgs(options: TurnOptions): string[] {
   ]
 }
 
+const finished = (outcome: TurnOutcome): TurnHandle => ({ done: Promise.resolve(outcome), kill: () => {} })
+const ignore = (): void => {}
+
+function spawnFailure(err: NodeJS.ErrnoException, bin: string, cwd: string): TurnOutcome {
+  if (err.code !== 'ENOENT') return { kind: 'crash', text: err.message }
+  return existsSync(cwd)
+    ? { kind: 'missing', text: `Claude CLI not found: ${bin}` }
+    : { kind: 'crash', text: `Working directory not found: ${cwd}` }
+}
+
 export function runTurn(
   options: TurnOptions,
   onEvent: (event: { kind: BotEventKind; text: string }) => void
 ): TurnHandle {
   const [bin, ...prefix] = options.command
-  // detached gives the turn its own process group, so killing it reaches its children.
-  const child = spawn(bin, [...prefix, ...claudeArgs(options)], {
-    cwd: options.cwd,
-    env: { ...process.env, ...options.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true
-  })
-
-  let stopReason: 'timeout' | 'killed' | null = null
-  let graceTimer: ReturnType<typeof setTimeout> | null = null
-  const stopGroup = (reason: 'timeout' | 'killed'): void => {
-    if (stopReason || child.pid === undefined) return
-    stopReason = reason
-    const signal = (name: NodeJS.Signals): void => {
-      try {
-        process.kill(-child.pid!, name)
-      } catch {
-        // already gone
-      }
-    }
-    signal('SIGTERM')
-    graceTimer = setTimeout(() => signal('SIGKILL'), KILL_GRACE_MS)
+  if (!bin) return finished({ kind: 'missing', text: 'Claude CLI not found: the command is empty' })
+  let child: ChildProcess
+  try {
+    // detached gives the turn its own process group, so killing it reaches its children.
+    child = spawn(bin, [...prefix, ...claudeArgs(options)], {
+      cwd: options.cwd,
+      env: { ...process.env, ...options.env },
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true
+    })
+  } catch (err) {
+    return finished(spawnFailure(err as NodeJS.ErrnoException, bin, options.cwd))
   }
-  const timeout = setTimeout(() => stopGroup('timeout'), options.timeoutMs)
+  const { pid, stdin, stdout, stderr } = child
+  if (!stdin || !stdout || !stderr) {
+    // A failed spawn may still emit 'error', which would throw with no listener.
+    child.on('error', ignore)
+    if (pid !== undefined) child.kill('SIGKILL')
+    return finished({ kind: 'crash', text: 'Could not open pipes to the Claude CLI: too many open files' })
+  }
 
-  let stdout = ''
-  let stderr = ''
+  let settled = false
+  let stopReason: 'timeout' | 'killed' | null = null
+  let drainTimer: ReturnType<typeof setTimeout> | null = null
+  const startDrain = (): void => {
+    if (!settled && !drainTimer) drainTimer = setTimeout(finish, DRAIN_MS)
+  }
+  const signalGroup = (name: NodeJS.Signals): void => {
+    try {
+      process.kill(-pid!, name)
+    } catch {
+      // already gone
+    }
+  }
+  const stopGroup = (reason: 'timeout' | 'killed'): void => {
+    if (settled || stopReason || pid === undefined) return
+    stopReason = reason
+    signalGroup('SIGTERM')
+    // Outlives settling on purpose, so descendants that ignore SIGTERM still die. It also ends
+    // the wait if the process can't be killed at all, so the turn can never stay open.
+    setTimeout(() => {
+      signalGroup('SIGKILL')
+      startDrain()
+    }, KILL_GRACE_MS).unref()
+  }
+  const requested = options.timeoutMs
+  const timeout = setTimeout(
+    () => stopGroup('timeout'),
+    requested > 0 ? Math.min(requested, MAX_TIMEOUT_MS) : DEFAULT_TIMEOUT_MS
+  )
+
   let result: { isError: boolean; text: string; apiStatus: number | null } | undefined
   let limited = false
+  const emit = (event: { kind: BotEventKind; text: string }): void => {
+    try {
+      onEvent(event)
+    } catch (err) {
+      console.error('Bot turn event listener failed', err)
+    }
+  }
   const handleLine = (line: string): void => {
     const parsed = parseStreamLine(line)
-    parsed.events.forEach(onEvent)
+    parsed.events.forEach(emit)
     if (parsed.result) result = parsed.result
     if (parsed.limited) limited = true
   }
-  child.stdout.on('data', (chunk: Buffer) => {
-    stdout += chunk.toString('utf8')
-    const lines = stdout.split('\n')
-    stdout = lines.pop() ?? ''
-    lines.forEach(handleLine)
-  })
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderr = (stderr + chunk.toString('utf8')).slice(-STDERR_KEEP)
-  })
 
-  const done = new Promise<TurnOutcome>((resolve) => {
-    let settled = false
-    const settle = (outcome: TurnOutcome): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      if (graceTimer) clearTimeout(graceTimer)
-      resolve(outcome)
+  const stdoutDecoder = new StringDecoder('utf8')
+  const stderrDecoder = new StringDecoder('utf8')
+  let partial = ''
+  let discarding = false
+  const dropLongLine = (): void =>
+    emit({ kind: 'error', text: 'Dropped a line of Claude output over the 64 MB limit' })
+  const addOutput = (text: string): void => {
+    let from = 0
+    for (let end = text.indexOf('\n'); end !== -1; end = text.indexOf('\n', from)) {
+      const piece = text.slice(from, end)
+      from = end + 1
+      if (discarding) discarding = false
+      else if (partial.length + piece.length > MAX_LINE) dropLongLine()
+      else handleLine(partial + piece)
+      partial = ''
     }
-    child.on('error', (err: NodeJS.ErrnoException) => {
-      settle(
-        err.code === 'ENOENT'
-          ? { kind: 'missing', text: `Claude CLI not found: ${bin}` }
-          : { kind: 'crash', text: err.message }
-      )
-    })
-    child.on('close', () => {
-      if (stdout) handleLine(stdout)
-      if (stopReason) return settle({ kind: stopReason, text: `Turn ${stopReason === 'timeout' ? 'timed out' : 'stopped'}` })
-      if (result && !result.isError) return settle({ kind: 'ok', text: result.text })
-      const text = [result?.text, stderr.trim()].filter(Boolean).join('\n') || 'Claude exited without a result'
-      // stderr can quote paths and stack traces, so it only decides when the result says nothing.
-      const failure = classifyFailure(result?.text || stderr, result?.apiStatus ?? null)
-      settle({ kind: failure === 'auth' || !limited ? failure : 'limit', text })
-    })
+    if (discarding) return
+    const rest = text.slice(from)
+    if (partial.length + rest.length > MAX_LINE) {
+      partial = ''
+      discarding = true
+      dropLongLine()
+    } else {
+      partial += rest
+    }
+  }
+  let stderrText = ''
+  const addStderr = (text: string): void => {
+    stderrText = (stderrText + text).slice(-STDERR_KEEP)
+  }
+  stdout.on('data', (chunk: Buffer) => {
+    if (!settled) addOutput(stdoutDecoder.write(chunk))
   })
+  stderr.on('data', (chunk: Buffer) => {
+    if (!settled) addStderr(stderrDecoder.write(chunk))
+  })
+  stdin.on('error', ignore)
+  stdout.on('error', ignore)
+  stderr.on('error', ignore)
+
+  let resolveDone: (outcome: TurnOutcome) => void
+  const done = new Promise<TurnOutcome>((resolve) => {
+    resolveDone = resolve
+  })
+  const settle = (outcome: TurnOutcome): void => {
+    if (settled) return
+    settled = true
+    clearTimeout(timeout)
+    if (drainTimer) clearTimeout(drainTimer)
+    stdin.destroy()
+    stdout.destroy()
+    stderr.destroy()
+    resolveDone(outcome)
+  }
+  function finish(): void {
+    if (settled) return
+    addOutput(stdoutDecoder.end())
+    addStderr(stderrDecoder.end())
+    if (partial) {
+      const last = partial
+      partial = ''
+      handleLine(last)
+    }
+    if (result && !result.isError) return settle({ kind: 'ok', text: result.text })
+    if (stopReason) return settle({ kind: stopReason, text: `Turn ${stopReason === 'timeout' ? 'timed out' : 'stopped'}` })
+    const text = [result?.text, stderrText.trim()].filter(Boolean).join('\n') || 'Claude exited without a result'
+    // stderr can quote paths and stack traces, so it only decides when the result says nothing.
+    const failure = classifyFailure(result?.text || stderrText, result?.apiStatus ?? null)
+    settle({ kind: failure === 'auth' || !limited ? failure : 'limit', text })
+  }
+  child.on('error', (err: NodeJS.ErrnoException) => settle(spawnFailure(err, bin, options.cwd)))
+  child.on('exit', startDrain)
+  child.on('close', finish)
+
+  try {
+    stdin.end(options.prompt)
+  } catch (err) {
+    console.error('Bot turn could not write its prompt', err)
+  }
 
   return { done, kill: () => stopGroup('killed') }
 }
