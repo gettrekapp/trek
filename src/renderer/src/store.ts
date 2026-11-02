@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { OFF_VIEW, type BotEvent, type BotView } from '../../shared/bot'
+import type { BotSettings } from '../../shared/types'
 import { DEFAULT_WORKTREE_TAGS, hostKey, sameWorktree } from '../../shared/types'
 import { deriveProfileName } from '../../shared/environments'
 import { migrateToV3, type RawProjectFile } from '../../shared/migration'
@@ -29,6 +31,9 @@ import type {
 export { isPrimaryWorktreeId, primaryWorktreeId }
 
 /** Pseudo worktree id that owns the global (project-wide) Claude terminal. */
+/** Key of the bot's entry in `decisions`; it has no terminal of its own. */
+export const BOT_DECISION_ID = '__bot__'
+
 export const GLOBAL_WORKTREE_ID = '__global__'
 
 export function baseName(p: string): string {
@@ -261,6 +266,9 @@ interface AppState {
   globalQueuePanelOpen: boolean
   /** Whether the global Claude panel at the bottom of the window is expanded. */
   globalPanelOpen: boolean
+  globalView: 'sessions' | 'bot'
+  botView: BotView
+  botEvents: BotEvent[]
   /** Whether a Linear API key is stored (machine-wide, not per project). */
   linearConnected: boolean
   /** Live Linear issues by identifier, for ticket chips. Not persisted. */
@@ -336,6 +344,12 @@ interface AppState {
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
+  setGlobalView: (view: 'sessions' | 'bot') => void
+  setBotView: (view: BotView) => void
+  setBotEvents: (events: BotEvent[]) => void
+  addBotEvent: (event: BotEvent) => void
+  setBotDecision: (question: string | null) => void
+  setBotSettings: (settings: BotSettings) => void
   setLinearConnected: (connected: boolean) => void
   setVoice: (voice: VoiceSettings | null) => void
   setVoicePlayback: (playing: SpokenSummary | null, queued: number) => void
@@ -376,6 +390,9 @@ export const useAppStore = create<AppState>((set) => ({
   queuePanelOpen: false,
   globalQueuePanelOpen: false,
   globalPanelOpen: false,
+  globalView: 'sessions',
+  botView: OFF_VIEW,
+  botEvents: [],
   linearConnected: false,
   linearIssues: {},
   decisions: {},
@@ -842,6 +859,19 @@ export const useAppStore = create<AppState>((set) => ({
   setGlobalQueuePanelOpen: (open) => set({ globalQueuePanelOpen: open }),
 
   setGlobalPanelOpen: (open) => set({ globalPanelOpen: open }),
+  setGlobalView: (globalView) => set({ globalView }),
+  setBotView: (botView) => set({ botView }),
+  setBotEvents: (botEvents) => set({ botEvents }),
+  addBotEvent: (event) => set((state) => ({ botEvents: [...state.botEvents, event].slice(-500) })),
+  setBotDecision: (question) =>
+    set((state) => {
+      const decisions = { ...state.decisions }
+      if (question === null) delete decisions[BOT_DECISION_ID]
+      else decisions[BOT_DECISION_ID] = { terminalId: BOT_DECISION_ID, question, requestedAt: Date.now() }
+      return { decisions }
+    }),
+  setBotSettings: (bot) =>
+    set((state) => (state.project ? { project: { ...state.project, bot }, dirty: true } : state)),
 
   setLinearConnected: (connected) =>
     set(connected ? { linearConnected: true } : { linearConnected: false, linearIssues: {} }),

@@ -4,6 +4,7 @@ import {
   allWorktrees,
   repoOfWorktreeId,
   baseName,
+  BOT_DECISION_ID,
   dormantSessions,
   GLOBAL_WORKTREE_ID,
   hostRepoPath,
@@ -516,6 +517,7 @@ export function closeGlobalTerminal(id: string): void {
 
 /** "worktree · tab" label for a terminal, as shown in notifications; repo-prefixed with several. */
 export function terminalLabel(id: string): string {
+  if (id === BOT_DECISION_ID) return 'Project bot'
   const state = useAppStore.getState()
   const meta = state.terminals[id]
   if (!meta) return ''
@@ -532,9 +534,15 @@ export function terminalLabel(id: string): string {
 /** Select a terminal's worktree (or open the global panel) and its tab. */
 export function revealTerminal(id: string): void {
   const store = useAppStore.getState()
+  if (id === BOT_DECISION_ID) {
+    store.setGlobalView('bot')
+    store.setGlobalPanelOpen(true)
+    return
+  }
   const meta = store.terminals[id]
   if (!meta) return
   if (meta.worktreeId === GLOBAL_WORKTREE_ID) {
+    store.setGlobalView('sessions')
     store.setGlobalPanelOpen(true)
   } else {
     store.setActiveWorktree(meta.worktreeId)
@@ -578,6 +586,13 @@ export function requestTerminalDecision(id: string, question: string): void {
   useAppStore.getState().requestDecision(id, question)
   playReadyAlert()
   if (!isTerminalInView(id)) notify(id, 'Claude needs a decision', question)
+}
+
+/** The bot needs the user: same flag and alert as a session's decision. */
+export function requestBotDecision(question: string): void {
+  useAppStore.getState().setBotDecision(question)
+  playReadyAlert()
+  notify(BOT_DECISION_ID, 'The project bot needs a decision', question)
 }
 
 export async function restartTerminal(id: string): Promise<void> {

@@ -499,6 +499,25 @@ async function stackTool(name: string, args: Record<string, unknown>): Promise<u
 
 async function runTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
+    case 'bot_snapshot': {
+      const { terminals, decisions } = useAppStore.getState()
+      return {
+        worktrees: allInfos().map((info) => ({
+          path: info.path,
+          branch: info.branch ?? null,
+          head: info.head ?? null
+        })),
+        sessions: Object.entries(terminals)
+          .filter(([, meta]) => meta.worktreeId !== GLOBAL_WORKTREE_ID)
+          .map(([id, meta]) => ({
+            id,
+            worktreeId: meta.worktreeId,
+            title: meta.title,
+            status: meta.status,
+            decision: !!decisions[id]
+          }))
+      }
+    }
     case 'list_worktrees':
       return allInfos().map(describeWorktree)
     case 'get_selected_worktree': {

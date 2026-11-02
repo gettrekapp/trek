@@ -13,6 +13,7 @@ import { StartScreen } from './components/StartScreen'
 import { Workspace } from './components/Workspace'
 import { GlobalClaude } from './components/GlobalClaude'
 import { handleMcpCall } from './mcpTools'
+import { watchBot } from './bot'
 import { useLinearSync } from './linear'
 import { loadVoiceSettings } from './voice'
 import { SummaryBubble } from './components/SummaryBubble'
@@ -55,7 +56,8 @@ export default function App(): React.JSX.Element {
       window.api.onMenu('close-tab', () => {
         const state = useAppStore.getState()
         if (focusInGlobalPanel()) {
-          const id = state.activeTerminal[GLOBAL_WORKTREE_ID]
+          // On the Bot tab the active session is hidden, so there is no tab here to close.
+          const id = state.globalView === 'sessions' ? state.activeTerminal[GLOBAL_WORKTREE_ID] : undefined
           if (id) closeGlobalTerminal(id)
         } else if (state.activeWorktreeId) {
           const id = state.activeTerminal[state.activeWorktreeId]
@@ -68,7 +70,9 @@ export default function App(): React.JSX.Element {
       }),
       window.api.onMcpCall((request) => void handleMcpCall(request)),
       window.api.onWindowCloseRequest(() => void handleWindowCloseRequest()),
-      watchWindowProject()
+      watchWindowProject(),
+      // Attaches null while there is no project, so a reloaded renderer stops the bot it left behind.
+      watchBot()
     ]
     return () => unsubscribes.forEach((u) => u())
   }, [openProject])
