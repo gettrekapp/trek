@@ -215,10 +215,20 @@ after a reload.
 - **Manual check:** one real run in a throwaway project covering a heartbeat, a
   chat message and an approval.
 
-## To verify during planning
+## Verified during planning
 
-If either check fails, the design needs revisiting before implementation.
+- `windows.ts` limits each project file to one window, so one runner per project holds.
+- A `PreToolUse` hook passed with `--settings` runs in a headless `claude -p` turn on
+  CLI 2.1.316, can reach a local server, and blocks the tool if that server is down.
 
-- Each project has only one window at a time, which "one runner per project" needs.
-- A `PreToolUse` hook can be supplied to a headless `claude -p` turn per invocation
-  and can reach `Policy` in the running app.
+## Settled during planning
+
+- The enabled flag and any located folder path are saved in the project file as
+  `bot`, so a moved project can tell that its folder is missing.
+- `state/` is one `state.json` plus `events.jsonl`.
+- A failed chat or approval wake returns to the front of the queue and retries after
+  the backoff, or at the next heartbeat after a usage limit.
+- `ChangeCheck` treats starting and working as one status, and idle, done and complete
+  as another, because terminal status is guessed from output and would otherwise wake
+  the bot needlessly.
+- Tools with no listed tier default to ask. Bot turns load only `trek-dev` MCP tools.
