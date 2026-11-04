@@ -22,6 +22,8 @@ export type WireErrorCode =
   | 'PTY_NOT_FOUND'
   | 'INTERNAL'
   | 'UNSUPPORTED_VERSION'
+  /** v2: an `ifRev` guard failed because the project changed since that rev. */
+  | 'CONFLICT'
 
 export interface WireError {
   code: WireErrorCode
