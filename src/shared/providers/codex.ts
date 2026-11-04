@@ -54,7 +54,8 @@ export const codex: LlmProvider = {
     const parts = [o.command?.trim() || 'codex']
     if (o.resume) parts.push(`resume ${shellQuote(o.sessionId)}`)
     parts.push(approvalFlags(o.approvalMode?.trim()))
-    if (o.model) parts.push(`-m ${shellQuote(o.model)}`)
+    // Attached, so a value starting with a dash can never be read as a flag.
+    if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
     if (o.effort) parts.push(config('model_reasoning_effort', o.effort))
     if (o.mcp) {
       parts.push(

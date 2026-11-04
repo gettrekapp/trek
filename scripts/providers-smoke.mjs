@@ -65,7 +65,7 @@ try {
       llm: { provider: 'codex', model: 'gpt-5', effort: 'high' },
       // A first message that looks like a flag must come after `--`.
       type: { id: 't-codex', name: 'Probe', systemPrompt: '', initialMessage: '--evil-flag hello' },
-      args: ['--full-auto', '-m', 'gpt-5', 'model_reasoning_effort="high"', '--', '--evil-flag hello']
+      args: ['--full-auto', '--model=gpt-5', 'model_reasoning_effort="high"', '--', '--evil-flag hello']
     },
     {
       provider: 'gemini',

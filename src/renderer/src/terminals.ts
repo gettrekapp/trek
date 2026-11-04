@@ -16,7 +16,7 @@ import { playReadyAlert } from './audio'
 import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
 import { getProvider } from '../../shared/providers/registry'
-import { effectiveEffort, persistedLlm } from '../../shared/providers/selection'
+import { effectiveEffort, persistedLlm, sanitizeLlmSelection } from '../../shared/providers/selection'
 import { pickClaimant, pollDelay } from '../../shared/providers/discovery'
 import type { DiscoveryTab } from '../../shared/providers/discovery'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
@@ -208,17 +208,19 @@ interface LaunchRequest {
 
 /** The shell command (and pty env) that starts or resumes a session's agent. */
 async function launchSpec(req: LaunchRequest): Promise<LaunchSpec> {
+  // Whatever the selection's source, model and effort are cleaned the same way.
+  const llm = sanitizeLlmSelection(req.llm) ?? { provider: 'claude' }
   const project = useAppStore.getState().project
   const settings = llmSettings()
-  const provider = getProvider(req.llm.provider)
+  const provider = getProvider(llm.provider)
   const config = settings.providers[provider.id] ?? {}
   const isClaude = provider.id === 'claude'
   const localConfig = settings.providers.local
   return provider.buildLaunch({
     sessionId: req.sessionId,
     resume: req.resume,
-    model: req.llm.model,
-    effort: effectiveEffort(req.llm),
+    model: llm.model,
+    effort: effectiveEffort(llm),
     // The project's Claude mode beats the app-wide one, as before providers existed.
     approvalMode:
       (isClaude ? project?.claudePermissionMode?.trim() : undefined) ||

@@ -126,3 +126,12 @@ test('sessionsAfterMove keeps migratable sessions whole, minus their pty id', ()
   const local = { title: 'L', sessionId: 's3', llm: { provider: 'local', model: 'm' } }
   assert.deepEqual(sessionsAfterMove([local]), [local])
 })
+
+test('sanitizeLlmSelection drops a model or effort that starts with a dash', () => {
+  assert.deepEqual(sanitizeLlmSelection({ provider: 'claude', model: '--dangerously-skip-permissions' }), { provider: 'claude' })
+  assert.deepEqual(sanitizeLlmSelection({ provider: 'codex', model: 'gpt-5', effort: ' -high' }), {
+    provider: 'codex',
+    model: 'gpt-5'
+  })
+  assert.deepEqual(sanitizeLlmSelection({ provider: 'local', model: 'qwen-2' }), { provider: 'local', model: 'qwen-2' })
+})

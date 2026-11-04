@@ -140,7 +140,7 @@ test('codex: a new session with everything', () => {
   })
   assert.equal(
     spec.command,
-    `codex --full-auto -m 'gpt-5-codex' -c 'model_reasoning_effort="high"' ` +
+    `codex --full-auto --model='gpt-5-codex' -c 'model_reasoning_effort="high"' ` +
       `-c 'mcp_servers.trek-dev.url="http://127.0.0.1:5000/mcp"' ` +
       `-c 'mcp_servers.trek-dev.bearer_token_env_var="TREK_MCP_TOKEN"' ` +
       `-c 'developer_instructions="Be \\"brief\\""' --add-dir '/other' -- 'hi'`
@@ -192,7 +192,7 @@ test('gemini: new session with prompt, first message, MCP and dirs', () => {
   })
   assert.equal(
     spec.command,
-    `gemini --approval-mode yolo -m 'gemini-2.5-pro' --include-directories '/a' ` +
+    `gemini --approval-mode yolo --model='gemini-2.5-pro' --include-directories '/a' ` +
       `--include-directories '/b' --session-id ${ID} --prompt-interactive='You review code.\n\n/review'`
   )
   assert.deepEqual(spec.env, { GEMINI_CLI_SYSTEM_SETTINGS_PATH: '/u/mcp-gemini-1.json' })
@@ -215,7 +215,7 @@ import { getProvider, isProviderId, PROVIDER_LIST } from '../src/shared/provider
 test('grok: baseline launch, resume starts fresh', () => {
   assert.equal(
     grok.buildLaunch({ sessionId: ID, resume: false, model: 'grok-4', initialMessage: 'hi', systemPrompt: 'sp' }).command,
-    `grok -m 'grok-4' -- 'sp\n\nhi'`
+    `grok --model='grok-4' -- 'sp\n\nhi'`
   )
   assert.equal(grok.buildLaunch({ sessionId: ID, resume: true }).command, 'grok')
 })
@@ -262,4 +262,11 @@ test('hardening: local tolerates an unknown backend and ignores extraArgs', () =
 test('hardening: codex -c values are valid TOML strings', () => {
   const cmd = codex.buildLaunch({ sessionId: ID, resume: false, systemPrompt: 'a\x7fb\ud800c' }).command
   assert.ok(cmd.includes('developer_instructions="a\\u007fb\ufffdc"'), cmd)
+})
+
+test('hardening: a model starting with a dash is attached to its flag, never a flag itself', () => {
+  const model = '--yolo'
+  assert.match(codex.buildLaunch({ sessionId: ID, resume: false, model }).command, / --model='--yolo'/)
+  assert.match(gemini.buildLaunch({ sessionId: ID, resume: false, model }).command, / --model='--yolo'/)
+  assert.match(grok.buildLaunch({ sessionId: ID, resume: false, model }).command, / --model='--yolo'/)
 })

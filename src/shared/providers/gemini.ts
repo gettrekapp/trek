@@ -40,7 +40,8 @@ export const gemini: LlmProvider = {
       o.command?.trim() || 'gemini',
       `--approval-mode ${o.approvalMode?.trim() || 'auto_edit'}`
     ]
-    if (o.model) parts.push(`-m ${shellQuote(o.model)}`)
+    // Attached, so a value starting with a dash can never be read as a flag.
+    if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
     for (const dir of o.addDirs ?? []) parts.push(`--include-directories ${shellQuote(dir)}`)
     parts.push(o.resume ? `--resume ${o.sessionId}` : `--session-id ${o.sessionId}`)
     if (!o.resume) {

@@ -25,7 +25,8 @@ export const grok: LlmProvider = {
   statusMarkers: ['esc to interrupt', 'esc to cancel'],
   buildLaunch(o: LaunchOptions): LaunchSpec {
     const parts = [o.command?.trim() || 'grok']
-    if (o.model) parts.push(`-m ${shellQuote(o.model)}`)
+    // Attached, so a value starting with a dash can never be read as a flag.
+    if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
     if (!o.resume) {
       const first = [o.systemPrompt, o.initialMessage].filter(Boolean).join('\n\n')
       if (first) parts.push('--', shellQuote(first))

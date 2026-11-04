@@ -7,6 +7,11 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+function optionValue(value: unknown): string | undefined {
+  const clean = text(value)
+  return clean && !clean.startsWith('-') ? clean : undefined
+}
+
 /**
  * A saved selection, made safe: undefined when there is none, Claude when the provider
  * is unknown (hand-edited or from a newer Trek), and blank model/effort dropped.
@@ -15,8 +20,9 @@ export function sanitizeLlmSelection(value: unknown): LlmSelection | undefined {
   if (!value || typeof value !== 'object') return undefined
   const record = value as Record<string, unknown>
   if (!isProviderId(record.provider)) return { ...CLAUDE }
-  const model = text(record.model)
-  const effort = text(record.effort)
+  // No model or effort id starts with a dash; one that does could pass as a CLI flag.
+  const model = optionValue(record.model)
+  const effort = optionValue(record.effort)
   return {
     provider: record.provider,
     ...(model ? { model } : {}),
