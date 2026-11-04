@@ -16,7 +16,7 @@ import { handleMcpCall } from './mcpTools'
 import { watchBot } from './bot'
 import { useLinearSync } from './linear'
 import { loadVoiceSettings } from './voice'
-import { loadLlmSettings } from './llm'
+import { loadLlmSettings, watchLlmSettings } from './llm'
 import { SummaryBubble } from './components/SummaryBubble'
 import { titleBarForeground } from '../../shared/appearance'
 
@@ -29,6 +29,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     void loadVoiceSettings()
     void loadLlmSettings()
+    return watchLlmSettings()
   }, [])
 
   const openProject = useCallback(async (): Promise<void> => {

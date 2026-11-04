@@ -2222,7 +2222,7 @@ async function discoverSession(
       .filter((t) => t.llm?.provider === meta.llm?.provider && !t.sessionPending)
       .map((t) => t.sessionId)
     try {
-      const found = await window.api.discoverCodexSession(serverId, cwd, startedAt, claimed)
+      const found = await window.api.discoverCodexSession(serverId, cwd, Date.now() - startedAt, claimed)
       if (found && useAppStore.getState().terminals[id]?.sessionPending) {
         useAppStore.getState().setTerminalSession(id, found)
         scheduleAutoSave()
@@ -2647,14 +2647,14 @@ Create `src/renderer/src/components/LlmSettings.tsx`:
 import { useState } from 'react'
 import { useAppStore } from '../store'
 import { scheduleAutoSave } from '../persistence'
-import { defaultSessionLlm, saveLlmSettings } from '../llm'
+import { defaultSessionLlm, updateLlmSettings } from '../llm'
 import { LlmPicker } from './LlmPicker'
 import { PROVIDER_LIST } from '../../../shared/providers/registry'
 import { DEFAULT_LLM_SETTINGS, DEFAULT_LOCAL_URLS } from '../../../shared/providers/types'
 import type {
   LlmProviderId,
   LlmSelection,
-  LlmSettings as Settings,
+  LlmSettingsPatch,
   LocalBackend,
   LocalProviderConfig
 } from '../../../shared/providers/types'
@@ -2667,14 +2667,15 @@ export function LlmSettings(): React.JSX.Element {
   const setGlobalLlm = useAppStore((s) => s.setGlobalLlm)
   const [testResult, setTestResult] = useState<string | null>(null)
 
-  const save = (next: Settings): void => {
-    saveLlmSettings(next).catch((err) => void window.api.showError('Could not save LLM settings', String(err)))
+  // Patches, not whole objects: the main process merges them into the file, so two windows
+  // (or two quick edits) never overwrite each other. A field set to undefined is removed.
+  const save = (patch: LlmSettingsPatch): void => {
+    updateLlmSettings(patch).catch(
+      (err) => void window.api.showError('Could not save LLM settings', String(err))
+    )
   }
   const patchProvider = (id: LlmProviderId, patch: Partial<LocalProviderConfig>): void =>
-    save({
-      ...settings,
-      providers: { ...settings.providers, [id]: { ...settings.providers[id], ...patch } }
-    })
+    save({ providers: { [id]: patch } })
   const setProjectDefault = (llm: LlmSelection | undefined): void => {
     setProjectLlmDefault(llm)
     scheduleAutoSave()
@@ -2705,7 +2706,7 @@ export function LlmSettings(): React.JSX.Element {
             new sessions; existing ones keep their agent.
           </span>
         </span>
-        <LlmPicker value={settings.llmDefault} onChange={(llmDefault) => save({ ...settings, llmDefault })} />
+        <LlmPicker value={settings.llmDefault} onChange={(llmDefault) => save({ llmDefault })} />
       </div>
       {project && (
         <>

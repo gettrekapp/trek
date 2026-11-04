@@ -126,3 +126,9 @@ export const DEFAULT_LOCAL_URLS: Record<LocalBackend, string> = {
   ollama: 'http://localhost:11434',
   lmstudio: 'http://localhost:1234'
 }
+
+/** A partial update to LlmSettings: a field set to undefined is removed, a provider set to null is removed. */
+export interface LlmSettingsPatch {
+  llmDefault?: LlmSelection
+  providers?: Partial<Record<LlmProviderId, Partial<LocalProviderConfig> | null>>
+}

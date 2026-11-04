@@ -1,7 +1,8 @@
 import { useAppStore } from './store'
 import { resolveGlobalLlm, resolveNewSessionLlm } from '../../shared/providers/selection'
+import { mergeLlmSettings } from '../../shared/providers/settings'
 import { DEFAULT_LLM_SETTINGS } from '../../shared/providers/types'
-import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
+import type { LlmSelection, LlmSettings, LlmSettingsPatch } from '../../shared/providers/types'
 import type { SessionType } from '../../shared/types'
 
 export async function loadLlmSettings(): Promise<void> {
@@ -13,13 +14,35 @@ export async function loadLlmSettings(): Promise<void> {
   }
 }
 
+/** Number of updateLlmSettings calls still waiting for the main process. */
+let pendingUpdates = 0
+
+/**
+ * Mirrors settings changed from other windows. Broadcasts are ignored while our own
+ * updates are in flight: main serializes writes, so once our replies are in, the last
+ * broadcast is the truth.
+ */
+export function watchLlmSettings(): () => void {
+  return window.api.onLlmSettingsChanged((settings) => {
+    if (pendingUpdates === 0) useAppStore.getState().setLlmSettings(settings)
+  })
+}
+
 export function llmSettings(): LlmSettings {
   return useAppStore.getState().llmSettings ?? DEFAULT_LLM_SETTINGS
 }
 
-export async function saveLlmSettings(settings: LlmSettings): Promise<void> {
-  useAppStore.getState().setLlmSettings(settings)
-  useAppStore.getState().setLlmSettings(await window.api.llmSetSettings(settings))
+/** Applies a patch right away, then lets the main process confirm what was saved. */
+export async function updateLlmSettings(patch: LlmSettingsPatch): Promise<void> {
+  const store = useAppStore.getState()
+  store.setLlmSettings(mergeLlmSettings(llmSettings(), patch))
+  pendingUpdates++
+  try {
+    const saved = await window.api.llmUpdateSettings(patch)
+    if (pendingUpdates === 1) useAppStore.getState().setLlmSettings(saved)
+  } finally {
+    pendingUpdates--
+  }
 }
 
 /** What a new tab runs when nothing more specific is chosen. */
