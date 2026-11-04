@@ -295,7 +295,7 @@ try {
     noSession === 1 &&
     sessionTabs === 1 &&
     runningDots === 1 &&
-    footerText.includes('1 Claude session running') &&
+    footerText.includes('1 session running') &&
     attnBadges === 1 &&
     attnAfterClear === 0 &&
     triggers === 1 &&
@@ -340,7 +340,7 @@ try {
     savedAfterUnload === 1 &&
     dormantDots === 1 &&
     loadButtons === 1 &&
-    unloadedEmptyState.includes('1 saved Claude session') &&
+    unloadedEmptyState.includes('1 saved session') &&
     listStatusFields === 0 &&
     sweptDirty === 'false,false' &&
     errors.length === 0

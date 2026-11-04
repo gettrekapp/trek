@@ -75,7 +75,7 @@ export function StartScreen(): React.JSX.Element {
   return (
     <div className="start-screen">
       <h1>Trek Dev</h1>
-      <p className="muted">Run Claude across git worktrees, side by side.</p>
+      <p className="muted">Run coding agents across git worktrees, side by side.</p>
       {error && <div className="error">{error}</div>}
       <div className="start-actions">
         <button className="primary" disabled={busy} onClick={() => void newProject()}>
@@ -101,7 +101,7 @@ export function StartScreen(): React.JSX.Element {
         </div>
       )}
       <p className="muted hint">
-        A project targets one repository; each git worktree gets its own tab of Claude terminals.
+        A project targets one repository; each git worktree gets its own tab of agent terminals.
       </p>
     </div>
   )

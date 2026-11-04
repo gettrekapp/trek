@@ -635,7 +635,7 @@ export function WorktreeDetail({
                         <div className="detail-menu-desc">
                           {target.down
                             ? `${target.name} is disconnected`
-                            : `Recreate this worktree and its Claude sessions on ${target.name}`}
+                            : `Recreate this worktree and its sessions on ${target.name}`}
                         </div>
                       </div>
                     ))
@@ -750,7 +750,7 @@ export function WorktreeDetail({
         {instance && loaded && order.length > 0 && (
           <button
             className="panel-btn"
-            title="End this worktree's Claude sessions to free CPU — they stay saved and resume when you load it again"
+            title="End this worktree's sessions to free CPU — they stay saved and resume when you load it again"
             onClick={() => unloadWorktree(instance.id)}
           >
             ⏏ Unload
@@ -842,7 +842,7 @@ export function WorktreeDetail({
             {dormant.length > 0 && instance ? (
               <>
                 <span>
-                  Unloaded — {dormant.length} saved Claude session
+                  Unloaded — {dormant.length} saved session
                   {dormant.length === 1 ? '' : 's'}: {dormant.map((t) => t.title).join(', ')}
                 </span>
                 <button
@@ -858,7 +858,7 @@ export function WorktreeDetail({
               </>
             ) : (
               <>
-                <span>No Claude session in this worktree yet.</span>
+                <span>No session in this worktree yet.</span>
                 <button
                   className="btn btn-accent"
                   disabled={hostDown}

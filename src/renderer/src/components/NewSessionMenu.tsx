@@ -92,7 +92,9 @@ export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.E
         disabled={disabled}
         onClick={toggleMenu}
       >
-        ▾
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M1.5 3.5 5 7l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </button>
       {open &&
         createPortal(

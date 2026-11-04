@@ -142,7 +142,7 @@ export function ServersPanel(): React.JSX.Element {
         <span className="settings-label">
           <span className="settings-name">Remote servers</span>
           <span className="settings-desc">
-            Machines running the companion daemon. Worktrees and Claude sessions on them appear in
+            Machines running the companion daemon. Worktrees and sessions on them appear in
             the sidebar with a server chip; sessions keep running when this app disconnects.
           </span>
         </span>

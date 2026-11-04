@@ -210,7 +210,7 @@ export function GlobalClaude(): React.JSX.Element {
             <DecisionIcon terminalId={BOT_DECISION_ID} />
             <span className="global-tab-title">Bot</span>
           </div>
-          <button className="global-tab-add" onClick={newTab} title="New global Claude tab">
+          <button className="global-tab-add" onClick={newTab} title="New Global tab">
             +
           </button>
         </div>
@@ -218,7 +218,7 @@ export function GlobalClaude(): React.JSX.Element {
           {order.map((id) => (
             <TerminalPane key={id} terminalId={id} visible={open && view === 'sessions' && id === activeId} global />
           ))}
-          {error && <div className="global-error">Couldn't start Claude: {error}</div>}
+          {error && <div className="global-error">Couldn't start the session: {error}</div>}
         </div>
         <BotPanel visible={view === 'bot'} />
       </div>

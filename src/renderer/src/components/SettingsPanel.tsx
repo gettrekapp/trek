@@ -170,7 +170,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           <span className="settings-label">
             <span className="settings-name">Audio alerts</span>
             <span className="settings-desc">
-              Play a sound when a Claude terminal finishes working and is ready for input
+              Play a sound when an agent terminal finishes working and is ready for input
             </span>
           </span>
         </label>
@@ -226,16 +226,16 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         />
         <h3>Terminal quick buttons</h3>
         <QuickButtonsEditor
-          description="Buttons shown under every worktree Claude terminal. Clicking one fills the terminal's input with the text and submits it."
+          description="Buttons shown under every worktree agent terminal. Clicking one fills the terminal's input with the text and submits it."
           buttons={terminalButtons}
           onChange={updateButtons}
         />
-        <h3>Claude session system prompt</h3>
+        <h3>Session system prompt</h3>
         <div className="settings-row">
           <span className="settings-label">
             <span className="settings-desc">
-              Appended to the system prompt of every worktree Claude session, after its session
-              type&apos;s prompt (--append-system-prompt). Not used by the global Claude session.
+              Appended to the system prompt of every worktree session, after its session
+              type&apos;s prompt (--append-system-prompt). Not used by the global session.
               Takes effect the next time each session starts or resumes.
             </span>
           </span>
@@ -252,11 +252,11 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             }}
           />
         </div>
-        <h3>Global Claude system prompt</h3>
+        <h3>Global system prompt</h3>
         <div className="settings-row">
           <span className="settings-label">
             <span className="settings-desc">
-              Appended to the global Claude session&apos;s system prompt (--append-system-prompt).
+              Appended to the global session&apos;s system prompt (--append-system-prompt).
               Takes effect the next time the session starts, e.g. after restarting the app or
               starting a new conversation.
             </span>
@@ -274,9 +274,9 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             }}
           />
         </div>
-        <h3>Global Claude quick buttons</h3>
+        <h3>Global quick buttons</h3>
         <QuickButtonsEditor
-          description="Buttons shown under the global Claude terminal at the bottom of the window."
+          description="Buttons shown under the global terminal at the bottom of the window."
           buttons={globalTerminalButtons}
           onChange={updateGlobalButtons}
         />
@@ -284,7 +284,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         <div className="settings-row">
           <span className="settings-label">
             <span className="settings-desc">
-              Offered when clicking + to start a new Claude session. The session is named after
+              Offered when clicking + to start a new session. The session is named after
               the type and its system prompt is appended to the agent&apos;s system prompt.
               An optional first message is sent when the session starts.
             </span>
@@ -309,7 +309,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               <textarea
                 className="quick-btn-text-input"
                 rows={6}
-                placeholder="System prompt, e.g. how Claude should approach reviewing"
+                placeholder="System prompt, e.g. how the agent should approach reviewing"
                 value={type.systemPrompt}
                 onChange={(e) => patchSessionType(type.id, { systemPrompt: e.target.value })}
               />

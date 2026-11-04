@@ -52,13 +52,13 @@ export function gitStatusLabel(info: GitWorktreeInfo): string {
 type DotKind = 'none' | 'dormant' | 'idle' | 'running' | 'attention' | 'done' | 'exited'
 
 const DOT_TITLES: Record<DotKind, string> = {
-  none: 'No Claude session',
-  dormant: 'Saved Claude sessions — this worktree is unloaded',
-  idle: 'Claude session idle',
-  running: 'Claude is working',
-  attention: 'Claude needs your attention',
-  done: 'Claude finished',
-  exited: 'Claude session exited'
+  none: 'No session',
+  dormant: 'Saved sessions — this worktree is unloaded',
+  idle: 'Session idle',
+  running: 'Agent is working',
+  attention: 'Agent needs your attention',
+  done: 'Agent finished',
+  exited: 'Session exited'
 }
 
 function dotKind(
@@ -337,7 +337,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           {instance && loaded && (order?.length ?? 0) > 0 && (
             <button
               className="wt-power loaded"
-              title="Unload — end this worktree's Claude sessions (they stay saved)"
+              title="Unload — end this worktree's sessions (they stay saved)"
               onClick={(e) => {
                 e.stopPropagation()
                 unloadWorktree(instance.id)
@@ -349,7 +349,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           {instance && dormant.length > 0 && (
             <button
               className="wt-power dormant"
-              title={`Load ${dormant.length} saved Claude session${dormant.length === 1 ? '' : 's'}`}
+              title={`Load ${dormant.length} saved session${dormant.length === 1 ? '' : 's'}`}
               disabled={hostDown}
               onClick={(e) => {
                 e.stopPropagation()
@@ -541,7 +541,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         </div>
         <div className="sidebar-footer-row">
           <span className={`wt-dot ${runningSessions > 0 ? 'done' : 'idle'}`} />
-          {runningSessions} Claude session{runningSessions === 1 ? '' : 's'} running
+          {runningSessions} session{runningSessions === 1 ? '' : 's'} running
           {loadedCount > 0 && (
             <button
               className="footer-btn"

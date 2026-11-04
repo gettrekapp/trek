@@ -2,9 +2,9 @@ import type { TerminalStatus } from '../../../shared/types'
 
 const TITLES: Record<TerminalStatus, string> = {
   starting: 'Starting…',
-  working: 'Claude is working',
-  attention: 'Claude needs your attention',
-  done: 'Claude finished',
+  working: 'Agent is working',
+  attention: 'Agent needs your attention',
+  done: 'Agent finished',
   complete: 'Marked complete — status tracking paused',
   idle: '',
   exited: 'Process exited'

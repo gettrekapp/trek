@@ -83,7 +83,7 @@ export function MoveWorktreeModal({
         {phase === 'confirm' && (
           <p className="muted">
             The branch is pushed to origin from {sourceName}, checked out into a new worktree on{' '}
-            {targetName}, uncommitted changes travel as a patch, and its Claude sessions move with
+            {targetName}, uncommitted changes travel as a patch, and its sessions move with
             it and resume. The source worktree is only removed after everything is verified on the
             target.
           </p>
@@ -107,7 +107,7 @@ export function MoveWorktreeModal({
         )}
         {phase === 'failed' && (
           <div className="server-test-result fail">
-            The move failed and was rolled back — nothing changed on {sourceName}. Closed Claude
+            The move failed and was rolled back — nothing changed on {sourceName}. Closed
             sessions can be restarted from the worktree.
           </div>
         )}

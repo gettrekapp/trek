@@ -50,7 +50,7 @@ export function VoiceSettings(): React.JSX.Element {
   const test = async (): Promise<void> => {
     setError(null)
     try {
-      const result = await speakSummary('', 'This is how spoken summaries from your Claude sessions will sound.')
+      const result = await speakSummary('', 'This is how spoken summaries from your agent sessions will sound.')
       if (!result.played) setError(result.reason)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -64,7 +64,7 @@ export function VoiceSettings(): React.JSX.Element {
         <span className="settings-label">
           <span className="settings-name">ElevenLabs API key</span>
           <span className="settings-desc">
-            Lets Claude sessions read a short summary aloud (the speak_summary tool), while the
+            Lets agent sessions read a short summary aloud (the speak_summary tool), while the
             sidebar toggle is set to Active. Stored encrypted on this machine, not in the project
             file.
           </span>
@@ -127,7 +127,7 @@ export function VoiceSettings(): React.JSX.Element {
             <span className="settings-label">
               <span className="settings-name">Summarize automatically</span>
               <span className="settings-desc">
-                Tell every Claude session to speak a summary when it finishes a task or stops to
+                Tell every agent session to speak a summary when it finishes a task or stops to
                 wait on you. Off, sessions use the tool only when a prompt asks them to. Takes
                 effect the next time each session starts or resumes.
               </span>
