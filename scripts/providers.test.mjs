@@ -208,3 +208,30 @@ test('gemini: a system prompt alone still rides on -i; resume sends nothing', ()
     `gemini --approval-mode auto_edit --resume ${ID}`
   )
 })
+
+import { grok } from '../src/shared/providers/grok.ts'
+import { getProvider, isProviderId, PROVIDER_LIST } from '../src/shared/providers/registry.ts'
+
+test('grok: baseline launch, resume starts fresh', () => {
+  assert.equal(
+    grok.buildLaunch({ sessionId: ID, resume: false, model: 'grok-4', initialMessage: 'hi', systemPrompt: 'sp' }).command,
+    `grok -m 'grok-4' 'sp\n\nhi'`
+  )
+  assert.equal(grok.buildLaunch({ sessionId: ID, resume: true }).command, 'grok')
+})
+
+test('registry: every id resolves, unknown ids are rejected', () => {
+  assert.deepEqual(PROVIDER_LIST.map((p) => p.id), ['claude', 'codex', 'gemini', 'grok', 'local'])
+  for (const p of PROVIDER_LIST) assert.equal(getProvider(p.id), p)
+  assert.equal(isProviderId('codex'), true)
+  assert.equal(isProviderId('gpt'), false)
+  assert.equal(isProviderId(undefined), false)
+  assert.equal(getProvider('nope').id, 'claude')
+})
+
+test('every adapter returns a command starting with its command override', () => {
+  for (const p of PROVIDER_LIST) {
+    const { command } = p.buildLaunch({ sessionId: ID, resume: false, command: '/bin/fake' })
+    assert.match(command, /^\/bin\/fake( |$)/, p.id)
+  }
+})
