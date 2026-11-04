@@ -9,7 +9,7 @@ import { PROVIDER_IDS, type McpAccess } from '../shared/providers/types'
 
 /**
  * MCP server (Streamable HTTP, JSON responses only) that lets the global
- * Claude session drive the app: list worktrees, start/load sessions, send
+ * agent session drive the app: list worktrees, start/load sessions, send
  * prompts, read terminal output. Bound to loopback with a per-launch bearer
  * token per window: the token decides which window's project a call acts on.
  * Tool calls are forwarded to that window's renderer, which owns the terminals
@@ -49,7 +49,7 @@ const TOOLS = [
   {
     name: 'list_worktrees',
     description:
-      'List every git worktree of the project (local and remote) with branch, workflow tag, ticket (with its Linear title and status when known), PR, note, git status, whether it is the primary checkout or the one selected in the app, whether its sessions are loaded, and its live Claude sessions (terminalId, title, status, decision — the open request_decision question, if any — active — the tab shown in that worktree, so the active session of the selected worktree is the one the user has open — queue — the prompts queued in its Queue panel, oldest first). Status is one of starting, working, attention (waiting on input), done, complete, idle, exited.',
+      'List every git worktree of the project (local and remote) with branch, workflow tag, ticket (with its Linear title and status when known), PR, note, git status, whether it is the primary checkout or the one selected in the app, whether its sessions are loaded, and its live agent sessions (terminalId, title, status, llm — the provider/model/effort it runs — decision — the open request_decision question, if any — active — the tab shown in that worktree, so the active session of the selected worktree is the one the user has open — queue — the prompts queued in its Queue panel, oldest first). Status is one of starting, working, attention (waiting on input), done, complete, idle, exited.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -61,7 +61,7 @@ const TOOLS = [
   {
     name: 'get_current_session',
     description:
-      'The Claude session calling this tool and the worktree it runs in. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID). Returns terminalId, title, status, queue and the worktree, in the same shape as a list_worktrees entry.',
+      'The agent session calling this tool and the worktree it runs in. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID). Returns terminalId, title, status, llm, queue and the worktree, in the same shape as a list_worktrees entry.',
     inputSchema: {
       type: 'object',
       properties: { terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' } },
@@ -103,7 +103,7 @@ const TOOLS = [
   {
     name: 'create_worktree',
     description:
-      "Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the app, without changing the user's selection. By default cuts a new branch from the latest master/main (fetched from origin first); set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start Claude in it.",
+      "Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the app, without changing the user's selection. By default cuts a new branch from the latest master/main (fetched from origin first); set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -128,13 +128,13 @@ const TOOLS = [
   {
     name: 'promote_to_primary',
     description:
-      "Promote a local worktree to the primary checkout: deletes the worktree, checks its branch out in the main repository, and moves its Claude sessions there. The user must confirm in the app; uncommitted changes in either checkout block it. Returns the primary worktree afterwards.",
+      "Promote a local worktree to the primary checkout: deletes the worktree, checks its branch out in the main repository, and moves its sessions there (Codex, Gemini and Grok sessions can't move and are closed). The user must confirm in the app; uncommitted changes in either checkout block it. Returns the primary worktree afterwards.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
     name: 'start_session',
     description:
-      "Start a new agent session (Claude by default) in a worktree. Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once Claude is ready. Returns the new terminalId.",
+      "Start a new agent session in a worktree (the default agent unless provider is given). Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once the agent is ready. Returns the new terminalId.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -149,7 +149,7 @@ const TOOLS = [
   {
     name: 'list_session_types',
     description:
-      'List the configured Claude session types (id, name, systemPrompt, initialMessage, llm). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
+      'List the configured session types (id, name, systemPrompt, initialMessage, llm). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -161,7 +161,7 @@ const TOOLS = [
       properties: {
         id: { type: 'string', description: 'Id of the type to update' },
         name: { type: 'string', description: 'Name — the menu label and the tab title of its sessions' },
-        systemPrompt: { type: 'string', description: "Appended to Claude's system prompt" },
+        systemPrompt: { type: 'string', description: "Appended to the agent's system prompt (sent ahead of the first message for agents without one)" },
         initialMessage: {
           type: 'string',
           description: 'Sent as the first message when a session of this type starts; empty for none'
@@ -185,19 +185,19 @@ const TOOLS = [
   },
   {
     name: 'load_worktree',
-    description: "Resume a worktree's saved Claude sessions.",
+    description: "Resume a worktree's saved sessions.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
     name: 'unload_worktree',
     description:
-      "Unload a worktree's Claude sessions to free resources. They are saved and resume on the next load.",
+      "Unload a worktree's sessions to free resources. They are saved and resume on the next load.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
     name: 'send_prompt',
     description:
-      "Type a prompt into a session's Claude input and submit it. Slash commands and skills work too, e.g. \"/test-in-docker\".",
+      "Type a prompt into a session's agent input and submit it. Slash commands and skills work too, e.g. \"/test-in-docker\".",
     inputSchema: {
       type: 'object',
       properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
@@ -274,7 +274,7 @@ const TOOLS = [
   },
   {
     name: 'close_session',
-    description: 'Close a session for good, killing its Claude process.',
+    description: 'Close a session for good, killing its agent process.',
     inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
   },
   {
@@ -400,7 +400,7 @@ export function setBotMcpHandlers(handlers: BotMcpHandlers): void {
 }
 
 const INSTRUCTIONS =
-  'Controls the Trek Dev app. Each git worktree can run Claude sessions; use list_worktrees to see them (get_selected_worktree for the one the user has selected), start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), wait_for_sessions and read_terminal to follow progress, and get_stack/start_stack/stop_stack to run the dev stack of a local worktree. A worktree session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so the app flags it.'
+  'Controls the Trek Dev app. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them (get_selected_worktree for the one the user has selected), start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), wait_for_sessions and read_terminal to follow progress, and get_stack/start_stack/stop_stack to run the dev stack of a local worktree. A worktree session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so the app flags it.'
 
 interface JsonRpcMessage {
   jsonrpc: '2.0'

@@ -114,6 +114,7 @@ function sessionsOf(
   terminalId: string
   title: string
   status: TerminalStatus
+  llm: LlmSelection
   decision: string | null
   active: boolean
   queue: string[]
@@ -126,6 +127,8 @@ function sessionsOf(
       terminalId: t.id,
       title: t.title,
       status: t.status,
+      // Sessions from before providers existed are Claude.
+      llm: t.llm ?? { provider: 'claude' },
       decision: state.decisions[t.id]?.question ?? null,
       active: state.activeTerminal[worktreeId] === t.id,
       queue: state.terminalQueues[t.id] ?? []
@@ -189,6 +192,7 @@ function currentSession(args: Record<string, unknown>): unknown {
     terminalId: id,
     title: meta.title,
     status: meta.status,
+    llm: meta.llm ?? { provider: 'claude' },
     queue: queueOf(id),
     worktree: describeWorktree(info)
   }
@@ -366,8 +370,15 @@ function withoutIcon(type: SessionType): Omit<SessionType, 'icon'> {
   return rest
 }
 
-function llmArg(args: Record<string, unknown>): LlmSelection | undefined {
-  if (args.provider === undefined || args.provider === '') return undefined
+/** A { provider, model?, effort? } argument; `required` when the caller passed an llm object. */
+function llmArg(args: Record<string, unknown>, required = false): LlmSelection | undefined {
+  if (args.provider === undefined || args.provider === '') {
+    if (required) throw new ToolError('llm needs a provider')
+    if ((args.model !== undefined && args.model !== '') || (args.effort !== undefined && args.effort !== '')) {
+      throw new ToolError('model and effort need a provider')
+    }
+    return undefined
+  }
   if (!isProviderId(args.provider)) {
     throw new ToolError(
       `Unknown provider "${String(args.provider)}". Use one of: ${PROVIDER_LIST.map((p) => p.id).join(', ')}`
@@ -384,7 +395,7 @@ function saveSessionType(args: Record<string, unknown>): SessionType {
     throw new ToolError('llm must be an object { provider, model?, effort? } or null')
   }
   const llm =
-    args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>)
+    args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>, true)
   let existing: SessionType | undefined
   if (typeof args.id === 'string' && args.id) {
     existing = sessionTypes().find((t) => t.id === args.id)
