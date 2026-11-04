@@ -101,18 +101,22 @@ phase 4 removes the old desktop path.
 | Group | Methods |
 |---|---|
 | Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
-| Repositories | `repo.add`, `repo.remove`, `repo.listBranches` |
+| Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
-| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr` |
+| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (public, as in v1) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
-Edit-style methods (`branch.setNote`, `project.updateSettings`, `session.rename`) accept an
-optional `ifRev`. If the project's `rev` has moved past it, the request fails with
-`CONFLICT` and the client refreshes. Every other command is last-write-wins. New error
-code: `CONFLICT`.
+Edit-style methods (`project.rename`, `project.updateSettings`, `repo.update`,
+`branch.setNote`, `session.rename`) accept an optional `expected`: the value the client
+believes the edited field has now. If that field's current value differs, the request fails
+with `CONFLICT` and the client refreshes. The guard is per field, not per project rev,
+because the project's rev moves on every session status and git poll change, so a rev
+guard would almost always fail. Every other command is last-write-wins. New error code:
+`CONFLICT`. `worktree.remove` refuses a dirty worktree unless `force: true` is passed, so a
+client can confirm with the user and retry.
 
 **Subscriptions**
 
@@ -123,7 +127,7 @@ code: `CONFLICT`.
 - Topics:
   - `server`: project list (id, name), server name/version and `health` warnings.
   - `project:<id>`: the whole project tree, including session statuses and git state.
-  - `attention`: a flat list of `{projectId, sessionId, title, status, since}` for sessions
+  - `attention`: a flat list of `{projectId, worktreeId, sessionId, title, status, since}` for sessions
     in `attention` or `done`, across this server's projects.
 - If a client sees `rev` other than last + 1, or reconnects, it resubscribes and takes the new
   snapshot. There is no replay log.
@@ -239,7 +243,8 @@ Electron, on Linux, macOS and Windows.
 ### Several clients on one server
 
 - **State:** the server applies commands in arrival order and every subscriber gets the same
-  patches. `ifRev` guards the few edit-style commands; everything else is last-write-wins.
+  patches. Per-field `expected` guards cover the few edit-style commands; everything else is
+  last-write-wins.
 - **Terminal size:** each PTY has one size, set by the **most recently active** client (the
   last to write to or focus it). Other clients render at that size.
 - **Input:** any attached client can type; no locking.
@@ -264,7 +269,7 @@ Electron, on Linux, macOS and Windows.
 | Server restart | PTYs die; sessions come back as `exited` and resume with `--resume` when loaded |
 | Persistence failure | The mutation applies in memory; the server sets a `health` warning in the `server` topic and keeps retrying; clients show a banner |
 | Path outside the allowlist | `PATH_DENIED`, including repos named in `project.import` |
-| Stale `ifRev` | `CONFLICT`; the client refreshes and shows the newer value |
+| Stale `expected` guard | `CONFLICT`; the client refreshes and shows the newer value |
 
 ## 5. Testing
 
