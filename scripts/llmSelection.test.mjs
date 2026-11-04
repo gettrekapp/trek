@@ -10,6 +10,7 @@ import {
   resolveNewSessionLlm,
   sanitizeLlmSelection,
   sanitizeProjectLlm,
+  sessionsAfterMove,
   sessionMigrates
 } from '../src/shared/providers/selection.ts'
 
@@ -114,4 +115,14 @@ test('persistedLlm drops only plain Claude', () => {
   assert.deepEqual(persistedLlm({ provider: 'claude', effort: 'high' }), { provider: 'claude', effort: 'high' })
   assert.deepEqual(persistedLlm({ provider: 'codex' }), { provider: 'codex' })
   assert.deepEqual(persistedLlm({ provider: 'local', model: 'qwen' }), { provider: 'local', model: 'qwen' })
+})
+
+test('sessionsAfterMove keeps migratable sessions whole, minus their pty id', () => {
+  const claude = { title: 'A', sessionId: 's1', ptyId: 'p1', systemPrompt: 'SP', sessionTypeId: 't', queue: ['q1', 'q2'] }
+  const codex = { title: 'B', sessionId: 's2', llm: { provider: 'codex' }, systemPrompt: 'X' }
+  assert.deepEqual(sessionsAfterMove([claude, codex]), [
+    { title: 'A', sessionId: 's1', systemPrompt: 'SP', sessionTypeId: 't', queue: ['q1', 'q2'] }
+  ])
+  const local = { title: 'L', sessionId: 's3', llm: { provider: 'local', model: 'm' } }
+  assert.deepEqual(sessionsAfterMove([local]), [local])
 })

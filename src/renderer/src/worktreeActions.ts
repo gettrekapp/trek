@@ -12,7 +12,7 @@ import { destroyEnvironmentIfAny } from './environmentActions'
 import { createTerminal, disposeTerminal } from './terminals'
 import { sameWorktree } from '../../shared/types'
 import type { GitWorktreeInfo, PersistedTerminal, WorktreeInstance } from '../../shared/types'
-import { persistedLlm, sessionMigrates } from '../../shared/providers/selection'
+import { persistedLlm, sessionMigrates, sessionsAfterMove } from '../../shared/providers/selection'
 
 /**
  * Sessions whose agent can't follow a worktree to a new path (Codex, Gemini, Grok) are
@@ -445,9 +445,9 @@ function carriedSessions(instanceId: string | undefined): PersistedTerminal[] {
  * never starts claude processes the user had deliberately unloaded.
  *
  * `sourceId` is the instance the sessions came from. When it is the target (a move
- * keeps its instance), its saved list is the one `carried` was taken from, so it is
- * replaced rather than appended to — appending would duplicate the kept sessions and
- * bring back the dropped ones.
+ * keeps its instance) and nothing is spawned, its own saved list is kept minus the
+ * sessions that can't follow — not appended to, which would duplicate the kept ones and
+ * bring back the dropped ones — so their prompts, types and queues survive.
  */
 async function handOverSessions(
   targetId: string,
@@ -457,17 +457,17 @@ async function handOverSessions(
   sourceId?: string
 ): Promise<void> {
   const state = useAppStore.getState()
-  const sameInstance = targetId === sourceId
-  if (carried.length === 0) {
-    if (sameInstance && !sourceLoaded) state.setWorktreeSessions(targetId, [])
+  const spawn = sourceLoaded || !!state.loadedWorktrees[targetId]
+  if (targetId === sourceId && !spawn) {
+    state.setWorktreeSessions(targetId, sessionsAfterMove(dormantSessions(state, targetId)))
     return
   }
-  if (sourceLoaded || state.loadedWorktrees[targetId]) {
+  if (carried.length === 0) return
+  if (spawn) {
     for (const session of carried) await createTerminal(targetId, targetPath, session)
     return
   }
-  const existing = sameInstance ? [] : dormantSessions(state, targetId)
-  state.setWorktreeSessions(targetId, [...existing, ...carried])
+  state.setWorktreeSessions(targetId, [...dormantSessions(state, targetId), ...carried])
 }
 
 /** Whether a worktree's Claude sessions are currently live. */

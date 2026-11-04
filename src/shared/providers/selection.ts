@@ -85,6 +85,17 @@ export function sessionMigrates(session: { llm?: LlmSelection }): boolean {
   return getProvider(session.llm?.provider).capabilities.sessionMigration
 }
 
+/**
+ * A worktree's saved sessions as they stay with it when it moves to a new path: those
+ * whose history can follow, with everything else they carry (prompt, type, queue) kept,
+ * but no remote pty id, which belongs to the old host.
+ */
+export function sessionsAfterMove<T extends { llm?: LlmSelection; ptyId?: string }>(
+  sessions: T[]
+): Omit<T, 'ptyId'>[] {
+  return sessions.filter(sessionMigrates).map(({ ptyId: _ptyId, ...rest }) => rest)
+}
+
 type WithLlm = { llm?: unknown }
 
 function isObject(value: unknown): value is Record<string, unknown> {
