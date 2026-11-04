@@ -16,8 +16,8 @@ export interface Session {
   /** Server-assigned handle; clients address the session by this id. */
   id: string
   /**
-   * The agent CLI's own session id, used to resume. Equal to `id` for agents that
-   * take a preset id (Claude, Local); unset for Codex until it has been discovered.
+   * The agent CLI's own session id, used to resume. Equal to `id` when the agent
+   * accepts a preset id; otherwise unset until it has been discovered (Codex).
    */
   agentSessionId?: string
   title: string
@@ -128,7 +128,7 @@ export interface AttentionEntry {
   projectId: string
   sessionId: string
   title: string
-  status: 'attention' | 'done'
+  status: Extract<SessionStatus, 'attention' | 'done'>
   /** Epoch ms when the session entered this status */
   since: number
 }
