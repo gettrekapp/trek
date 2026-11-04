@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { scheduleAutoSave } from '../persistence'
 import { DEFAULT_PERMISSION_MODE } from '../terminals'
+import { CLAUDE_PERMISSION_MODES } from '../../../shared/providers/claude'
 import { useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { ENV_DEFAULTS } from '../../../shared/environments'
@@ -19,16 +20,6 @@ import type {
 interface Props {
   visible: boolean
 }
-
-/** --permission-mode values of the claude CLI, labeled like its UI. */
-const PERMISSION_MODES: { value: string; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'acceptEdits', label: 'Edit (accept edits)' },
-  { value: 'plan', label: 'Plan' },
-  { value: 'manual', label: 'Manual' },
-  { value: 'dontAsk', label: "Don't ask" },
-  { value: 'bypassPermissions', label: 'Bypass permissions' }
-]
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const audioAlerts = useAppStore((s) => s.project?.audioAlerts ?? false)
@@ -157,7 +148,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               scheduleAutoSave()
             }}
           >
-            {PERMISSION_MODES.map((m) => (
+            {CLAUDE_PERMISSION_MODES.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}
               </option>

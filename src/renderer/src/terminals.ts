@@ -15,10 +15,14 @@ import {
 import { playReadyAlert } from './audio'
 import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
+import { getProvider } from '../../shared/providers/registry'
+import { effectiveEffort } from '../../shared/providers/selection'
+import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
+import { globalSessionLlm, llmSettings, newSessionLlm } from './llm'
 import type {
-  ClaudeSessionType,
   GlobalSession,
   PersistedTerminal,
+  SessionType,
   WorktreeInstance,
   WorktreeLocator
 } from '../../shared/types'
@@ -32,23 +36,34 @@ interface Entry {
   term: Terminal
   fit: FitAddon
   idleTimer: ReturnType<typeof setTimeout> | null
-  /** Claude's processing marker was seen since the last settle — real work happened */
+  /** The agent's "working" marker was seen since the last settle — real work happened */
   processingSeen: boolean
   /** Tail of the previous chunk, so a marker split across chunks still matches */
   scanTail: string
+  /** Lower-case text this terminal's agent prints only while working */
+  markers: string[]
 }
 
 const entries = new Map<string, Entry>()
+
+/** The agent a terminal runs: its meta's selection, or Claude for older sessions. */
+function terminalLlm(id: string): LlmSelection {
+  return useAppStore.getState().terminals[id]?.llm ?? { provider: 'claude' }
+}
+
+/** "Claude", "Codex", … for notifications and buttons. */
+export function agentLabel(id: string): string {
+  return getProvider(terminalLlm(id).provider).label
+}
 
 /** Output must go quiet for this long before a working terminal counts as done. */
 const IDLE_MS = 2500
 
 /**
- * Claude Code renders this in its status line only while actually processing.
- * Idle-screen repaints and resize redraws never contain it, so it is the
+ * Each agent renders a marker (Claude: "esc to interrupt") in its status line only while
+ * actually processing. Idle repaints and resize redraws never contain it, so it is the
  * reliable "real work happened" signal that output-volume heuristics aren't.
  */
-const PROCESSING_MARKER = 'esc to interrupt'
 
 const THEME = {
   background: '#0d0d0f',
@@ -123,8 +138,10 @@ function markActivity(id: string, entry: Entry, data: string): void {
   // Scan with the previous chunk's tail so a marker split across two chunks
   // still matches.
   const window_ = entry.scanTail + data
-  if (window_.toLowerCase().includes(PROCESSING_MARKER)) entry.processingSeen = true
-  entry.scanTail = window_.slice(-PROCESSING_MARKER.length + 1)
+  const lower = window_.toLowerCase()
+  if (entry.markers.some((marker) => lower.includes(marker))) entry.processingSeen = true
+  const longest = Math.max(1, ...entry.markers.map((m) => m.length))
+  entry.scanTail = window_.slice(Math.max(0, window_.length - longest + 1))
   // A bell means claude is waiting on the user; subsequent screen redraws
   // must not clear that until the user actually responds.
   if (status !== 'attention' && status !== 'exited') {
@@ -141,62 +158,14 @@ function markActivity(id: string, entry: Entry, data: string): void {
     if (meaningful) {
       useAppStore.getState().setTerminalStatus(id, 'done')
       playReadyAlert()
-      if (!document.hasFocus()) notify(id, 'Claude finished')
+      if (!document.hasFocus()) notify(id, `${agentLabel(id)} finished`)
     } else {
       useAppStore.getState().setTerminalStatus(id, 'idle')
     }
   }, IDLE_MS)
 }
 
-// "auto" is what the Claude Code UI calls auto mode; the older "acceptEdits"
-// now shows up as edit mode instead.
-export const DEFAULT_PERMISSION_MODE = 'auto'
-
-/** claude invocation bound to a session: new sessions claim the UUID, restores resume it. */
-function claudeCommand(sessionId: string, resume: boolean, extraArgs: string[] = []): string {
-  const state = useAppStore.getState()
-  const base = state.project?.claudeCommand ?? 'claude'
-  // An explicit claudeArgs wins; otherwise the configurable permission mode
-  // from the Settings panel. Blank strings mean "not configured".
-  const args =
-    state.project?.claudeArgs?.trim() ||
-    `--permission-mode ${state.project?.claudePermissionMode?.trim() || DEFAULT_PERMISSION_MODE}`
-  const sessionFlag = resume ? `--resume ${sessionId}` : `--session-id ${sessionId}`
-  return [base, args, ...extraArgs, sessionFlag].map((part) => part.trim()).filter(Boolean).join(' ')
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-/**
- * A worktree session, with its session type's system prompt and first message
- * when it has them. Local sessions also get the app's MCP server; it listens
- * on localhost, so a remote session couldn't reach it.
- */
-async function sessionCommand(
-  sessionId: string,
-  resume: boolean,
-  local: boolean,
-  systemPrompt?: string,
-  initialMessage?: string
-): Promise<string> {
-  const extraArgs: string[] = []
-  if (local) {
-    extraArgs.push(
-      `--mcp-config ${shellQuote(await window.api.getMcpConfigPath())}`,
-      '--allowedTools mcp__trek-dev'
-    )
-  }
-  const shared = useAppStore.getState().project?.sessionSystemPrompt?.trim()
-  // The user's own session prompt goes last so it overrides the built-in voice guidance.
-  const prompt = [local ? voicePrompt() : undefined, systemPrompt, shared]
-    .filter(Boolean)
-    .join('\n\n')
-  if (prompt) extraArgs.push(`--append-system-prompt ${shellQuote(prompt)}`)
-  const command = claudeCommand(sessionId, resume, extraArgs)
-  return initialMessage ? `${command} ${shellQuote(initialMessage)}` : command
-}
+export { DEFAULT_PERMISSION_MODE } from '../../shared/providers/claude'
 
 /** Tells a worktree session's shell (and the claude inside it) where it is running. */
 function sessionEnv(terminalId: string, worktree: WorktreeInstance): Record<string, string> {
@@ -219,23 +188,86 @@ function voicePrompt(): string | undefined {
 const GLOBAL_SYSTEM_PROMPT =
   'You are the global Claude session of Trek Dev, an app that runs Claude Code sessions across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their Claude sessions.'
 
-/** The global session also gets the app's MCP server and a role prompt. */
-async function globalClaudeCommand(sessionId: string, resume: boolean): Promise<string> {
-  const mcpConfig = await window.api.getMcpConfigPath()
+interface LaunchRequest {
+  llm: LlmSelection
+  sessionId: string
+  resume: boolean
+  /** Give the agent Trek's MCP server (local sessions only — it listens on localhost) */
+  mcp: boolean
+  systemPrompt?: string
+  initialMessage?: string
+  addDirs?: string[]
+}
+
+/** The shell command (and pty env) that starts or resumes a session's agent. */
+async function launchSpec(req: LaunchRequest): Promise<LaunchSpec> {
+  const project = useAppStore.getState().project
+  const settings = llmSettings()
+  const provider = getProvider(req.llm.provider)
+  const config = settings.providers[provider.id] ?? {}
+  const isClaude = provider.id === 'claude'
+  const localConfig = settings.providers.local
+  return provider.buildLaunch({
+    sessionId: req.sessionId,
+    resume: req.resume,
+    model: req.llm.model,
+    effort: effectiveEffort(req.llm),
+    // The project's Claude mode beats the app-wide one, as before providers existed.
+    approvalMode:
+      (isClaude ? project?.claudePermissionMode?.trim() : undefined) ||
+      config.approvalMode?.trim() ||
+      provider.defaultApprovalMode,
+    command: (isClaude ? project?.claudeCommand : undefined) ?? (config.command?.trim() || undefined),
+    extraArgs: isClaude ? project?.claudeArgs?.trim() || undefined : undefined,
+    mcp: req.mcp && provider.capabilities.mcp ? await window.api.getMcpAccess() : undefined,
+    systemPrompt: req.systemPrompt,
+    initialMessage: req.initialMessage,
+    addDirs: provider.capabilities.addDirs ? req.addDirs : undefined,
+    localBackend: localConfig?.backend,
+    baseUrl: localConfig?.baseUrl
+  })
+}
+
+/**
+ * A worktree session: the voice prompt (local only), its session type's prompt and the
+ * project's shared session prompt, which goes last so it overrides the built-in guidance.
+ */
+function worktreeLaunch(
+  llm: LlmSelection,
+  sessionId: string,
+  resume: boolean,
+  local: boolean,
+  systemPrompt?: string,
+  initialMessage?: string
+): Promise<LaunchSpec> {
+  const shared = useAppStore.getState().project?.sessionSystemPrompt?.trim()
+  const prompt = [local ? voicePrompt() : undefined, systemPrompt, shared].filter(Boolean).join('\n\n')
+  return launchSpec({
+    llm,
+    sessionId,
+    resume,
+    mcp: local,
+    systemPrompt: prompt || undefined,
+    initialMessage
+  })
+}
+
+/** The global session: MCP, a role prompt, and the other repositories as extra dirs. */
+function globalLaunch(llm: LlmSelection, sessionId: string, resume: boolean): Promise<LaunchSpec> {
   const project = useAppStore.getState().project
   const custom = project?.globalSystemPrompt?.trim()
-  const systemPrompt = [GLOBAL_SYSTEM_PROMPT, voicePrompt(), custom].filter(Boolean).join('\n\n')
-  // Runs in the first repository: Claude stores sessions by working directory,
+  const label = getProvider(llm.provider).label
+  const role = GLOBAL_SYSTEM_PROMPT.replace('the global Claude session', `the global ${label} session`)
+  // Runs in the first repository: agents store sessions by working directory,
   // so moving it would orphan conversations. The others are added for access.
-  const addDirs = (project?.repositories.slice(1) ?? []).map(
-    (r) => `--add-dir ${shellQuote(r.path)}`
-  )
-  return claudeCommand(sessionId, resume, [
-    `--mcp-config ${shellQuote(mcpConfig)}`,
-    '--allowedTools mcp__trek-dev',
-    `--append-system-prompt ${shellQuote(systemPrompt)}`,
-    ...addDirs
-  ])
+  return launchSpec({
+    llm,
+    sessionId,
+    resume,
+    mcp: true,
+    systemPrompt: [role, voicePrompt(), custom].filter(Boolean).join('\n\n'),
+    addDirs: (project?.repositories.slice(1) ?? []).map((r) => r.path)
+  })
 }
 
 /**
@@ -280,6 +312,13 @@ export function unloadWorktree(worktreeId: string): void {
   const order = state.terminalOrder[worktreeId] ?? []
   const project = state.project
   const instance = project ? allWorktrees(project).find((w) => w.id === worktreeId) : undefined
+  const pending = order.filter((id) => state.terminals[id]?.sessionPending).length
+  if (pending > 0) {
+    void window.api.showError(
+      'Some sessions were not saved',
+      `${pending} session(s) closed before their agent reported a session id, so they can't be resumed.`
+    )
+  }
   // Snapshot first: tearing the terminals down drops their titles and queues.
   state.setWorktreeSessions(worktreeId, sessionSnapshot(worktreeId, !!instance?.serverId))
   for (const id of [...order]) unloadTerminal(id)
@@ -300,7 +339,8 @@ export function unloadAllWorktrees(): void {
  */
 export async function startClaudeSession(
   loc: WorktreeLocator,
-  sessionType?: ClaudeSessionType
+  sessionType?: SessionType,
+  llm?: LlmSelection
 ): Promise<string | null> {
   const project = useAppStore.getState().project
   if (!project) return null
@@ -328,11 +368,11 @@ export async function startClaudeSession(
     useAppStore.getState().addWorktreeInstance(repo.id, created)
     instance = created
   }
-  return createTerminal(instance.id, instance.path, undefined, sessionType)
+  return createTerminal(instance.id, instance.path, undefined, sessionType, llm)
 }
 
 /** The xterm instance and its input/status wiring, outside React. */
-function createEntry(id: string): Entry {
+function createEntry(id: string, markers: string[]): Entry {
   const term = new Terminal({
     fontFamily: 'Menlo, "SF Mono", Monaco, monospace',
     fontSize: 13,
@@ -350,7 +390,8 @@ function createEntry(id: string): Entry {
     fit,
     idleTimer: null,
     processingSeen: false,
-    scanTail: ''
+    scanTail: '',
+    markers
   }
   entries.set(id, entry)
 
@@ -389,7 +430,8 @@ export async function createTerminal(
   worktreeId: string,
   cwd: string,
   restore?: PersistedTerminal,
-  sessionType?: ClaudeSessionType
+  sessionType?: SessionType,
+  pick?: LlmSelection
 ): Promise<string> {
   ensureWired()
   // Adding a session to an unloaded worktree resumes its saved ones first —
@@ -404,41 +446,89 @@ export async function createTerminal(
   // running on the daemon, spawnPty reattaches to the live session instead
   // of starting a new claude.
   const id = (serverId && restore?.ptyId) || crypto.randomUUID()
+  // Resumes keep the agent they started with; older saved sessions are Claude.
+  const llm = restore ? (restore.llm ?? { provider: 'claude' }) : newSessionLlm(sessionType, pick)
+  const provider = getProvider(llm.provider)
+  // Agents that pick their own id (Codex) get a placeholder until it is discovered.
+  const sessionPending =
+    !restore && !provider.capabilities.presetSessionId && provider.capabilities.resume
   const sessionId = restore?.sessionId ?? crypto.randomUUID()
+  // Agents that can't resume (Grok) start fresh, still carrying their saved prompt.
+  const resume = !!restore && provider.capabilities.resume
   const systemPrompt = restore ? restore.systemPrompt : sessionType?.systemPrompt.trim() || undefined
   const initialMessage = restore ? undefined : sessionType?.initialMessage?.trim() || undefined
-  const command = await sessionCommand(sessionId, !!restore, !serverId, systemPrompt, initialMessage)
+  const launch = await worktreeLaunch(llm, sessionId, resume, !serverId, systemPrompt, initialMessage)
   const count = (state.terminalOrder[worktreeId]?.length ?? 0) + 1
-  createEntry(id)
+  createEntry(id, provider.statusMarkers)
 
   state.registerTerminal({
     id,
     worktreeId,
     // Typed sessions take their type's name; otherwise the first tab takes the
-    // worktree's name and later tabs fall back to Claude N.
+    // worktree's name and later tabs fall back to <Agent> N.
     title:
       restore?.title ??
       (sessionType?.name.trim() ||
-        (count === 1 && instance?.name ? instance.name : `Claude ${count}`)),
+        (count === 1 && instance?.name ? instance.name : `${provider.label} ${count}`)),
     sessionId,
     status: 'starting',
     systemPrompt,
-    sessionTypeId: restore ? restore.sessionTypeId : sessionType?.id
+    sessionTypeId: restore ? restore.sessionTypeId : sessionType?.id,
+    llm,
+    ...(sessionPending ? { sessionPending: true } : {})
   })
   if (restore?.queue?.length) state.setTerminalQueue(id, restore.queue)
 
+  const startedAt = Date.now()
   await window.api.spawnPty({
     id,
     cwd,
-    command,
-    env: instance ? sessionEnv(id, instance) : undefined,
+    command: launch.command,
+    env: { ...(instance ? sessionEnv(id, instance) : {}), ...launch.env },
     cols: 80,
     rows: 24,
     serverId: serverId ?? null,
     attachExisting: !!(serverId && restore?.ptyId)
   })
+  if (sessionPending) void discoverSession(id, serverId ?? null, cwd, startedAt)
   scheduleAutoSave()
   return id
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Codex chooses its own session id: watch its sessions folder for the rollout this tab
+ * created, then bind the tab to it so it can be resumed. Fast polling for a minute
+ * (the file appears on start or on the first prompt), then slowly until the tab closes.
+ */
+async function discoverSession(
+  id: string,
+  serverId: string | null,
+  cwd: string,
+  startedAt: number
+): Promise<void> {
+  for (;;) {
+    await delay(Date.now() - startedAt < 60_000 ? 2000 : 15_000)
+    const state = useAppStore.getState()
+    const meta = state.terminals[id]
+    if (!meta?.sessionPending) return
+    const claimed = Object.values(state.terminals)
+      .filter((t) => t.llm?.provider === meta.llm?.provider && !t.sessionPending)
+      .map((t) => t.sessionId)
+    try {
+      // The tab's age, not its start time: the host's own clock decides what is recent.
+      const found = await window.api.discoverCodexSession(serverId, cwd, Date.now() - startedAt, claimed)
+      if (found && useAppStore.getState().terminals[id]?.sessionPending) {
+        useAppStore.getState().setTerminalSession(id, found)
+        if (meta.worktreeId === GLOBAL_WORKTREE_ID) saveGlobalSessions()
+        else scheduleAutoSave()
+        return
+      }
+    } catch (err) {
+      console.error('session discovery failed', err)
+    }
+  }
 }
 
 export function globalTerminalIds(): string[] {
@@ -449,10 +539,13 @@ export function globalTerminalIds(): string[] {
 export function saveGlobalSessions(): void {
   const state = useAppStore.getState()
   state.setGlobalSessions(
-    globalTerminalIds().map((id) => ({
-      sessionId: state.terminals[id].sessionId,
-      title: state.terminals[id].title
-    }))
+    globalTerminalIds()
+      // A Codex tab whose session id isn't known yet has nothing to resume.
+      .filter((id) => !state.terminals[id].sessionPending)
+      .map((id) => {
+        const { sessionId, title, llm } = state.terminals[id]
+        return { sessionId, title, ...(llm && llm.provider !== 'claude' ? { llm } : {}) }
+      })
   )
   scheduleAutoSave()
 }
@@ -466,28 +559,39 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
   const state = useAppStore.getState()
   const project = state.project
   if (!project) return undefined
+  const llm = saved ? (saved.llm ?? { provider: 'claude' }) : globalSessionLlm()
+  const provider = getProvider(llm.provider)
+  // Agents that pick their own id (Codex) get a placeholder until it is discovered.
+  const sessionPending =
+    !saved && !provider.capabilities.presetSessionId && provider.capabilities.resume
   const sessionId = saved?.sessionId ?? crypto.randomUUID()
   const count = globalTerminalIds().length
   const id = crypto.randomUUID()
-  const entry = createEntry(id)
+  const entry = createEntry(id, provider.statusMarkers)
   state.registerTerminal({
     id,
     worktreeId: GLOBAL_WORKTREE_ID,
-    title: saved?.title ?? (count === 0 ? 'Claude' : `Claude ${count + 1}`),
+    title: saved?.title ?? (count === 0 ? provider.label : `${provider.label} ${count + 1}`),
     sessionId,
-    status: 'starting'
+    status: 'starting',
+    llm,
+    ...(sessionPending ? { sessionPending: true } : {})
   })
   if (!saved) saveGlobalSessions()
   try {
+    const cwd = project.repositories[0].path
+    const launch = await globalLaunch(llm, sessionId, !!saved && provider.capabilities.resume)
+    const startedAt = Date.now()
     await window.api.spawnPty({
       id,
-      cwd: project.repositories[0].path,
-      command: await globalClaudeCommand(sessionId, !!saved),
-      env: { TREK_TERMINAL_ID: id },
+      cwd,
+      command: launch.command,
+      env: { TREK_TERMINAL_ID: id, ...launch.env },
       cols: entry.term.cols,
       rows: entry.term.rows,
       serverId: null
     })
+    if (sessionPending) void discoverSession(id, null, cwd, startedAt)
   } catch (err) {
     closeGlobalTerminal(id)
     throw err
@@ -578,14 +682,14 @@ function isTerminalInView(id: string): boolean {
 /** Notify when a terminal needs the user and isn't currently in view. */
 function notifyAttention(id: string): void {
   if (!useAppStore.getState().terminals[id] || isTerminalInView(id)) return
-  notify(id, 'Claude needs your attention')
+  notify(id, `${agentLabel(id)} needs your attention`)
 }
 
 /** A session asked the user to decide something: flag its tab and worktree, and alert. */
 export function requestTerminalDecision(id: string, question: string): void {
   useAppStore.getState().requestDecision(id, question)
   playReadyAlert()
-  if (!isTerminalInView(id)) notify(id, 'Claude needs a decision', question)
+  if (!isTerminalInView(id)) notify(id, `${agentLabel(id)} needs a decision`, question)
 }
 
 /** The bot needs the user: same flag and alert as a session's decision. */
@@ -608,15 +712,18 @@ export async function restartTerminal(id: string): Promise<void> {
 
   entry.term.write('\r\n\x1b[90m[restarting]\x1b[0m\r\n')
   state.setTerminalStatus(id, 'starting')
-  // Resume the same Claude session the terminal was running before it exited.
-  const command = isGlobal
-    ? await globalClaudeCommand(meta.sessionId, true)
-    : await sessionCommand(meta.sessionId, true, !worktree.serverId, meta.systemPrompt)
+  const llm = meta.llm ?? { provider: 'claude' }
+  // A Codex tab whose id was never discovered, or an agent without resume, starts fresh.
+  const canResume = getProvider(llm.provider).capabilities.resume && !meta.sessionPending
+  // Resume the same session the terminal was running before it exited.
+  const launch = isGlobal
+    ? await globalLaunch(llm, meta.sessionId, canResume)
+    : await worktreeLaunch(llm, meta.sessionId, canResume, !worktree.serverId, meta.systemPrompt)
   await window.api.spawnPty({
     id,
     cwd: worktree.path,
-    command,
-    env: isGlobal ? { TREK_TERMINAL_ID: id } : sessionEnv(id, worktree),
+    command: launch.command,
+    env: { ...(isGlobal ? { TREK_TERMINAL_ID: id } : sessionEnv(id, worktree)), ...launch.env },
     cols: entry.term.cols,
     rows: entry.term.rows,
     serverId: worktree.serverId ?? null

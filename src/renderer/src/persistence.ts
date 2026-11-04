@@ -11,12 +11,16 @@ export function sessionSnapshot(worktreeId: string, remote: boolean): PersistedT
   return (state.terminalOrder[worktreeId] ?? [])
     .map((id) => state.terminals[id])
     .filter(Boolean)
+    // A Codex tab whose session id isn't known yet has nothing to resume.
+    .filter((meta) => !meta.sessionPending)
     .map((meta) => ({
       title: meta.title,
       sessionId: meta.sessionId,
       ...(remote ? { ptyId: meta.id } : {}),
       ...(meta.systemPrompt ? { systemPrompt: meta.systemPrompt } : {}),
       ...(meta.sessionTypeId ? { sessionTypeId: meta.sessionTypeId } : {}),
+      // Claude sessions omit it, so Claude-only project files stay as they were.
+      ...(meta.llm && meta.llm.provider !== 'claude' ? { llm: meta.llm } : {}),
       ...(state.terminalQueues[meta.id]?.length ? { queue: state.terminalQueues[meta.id] } : {})
     }))
 }
