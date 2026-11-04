@@ -186,7 +186,7 @@ comes from the `server` topic.
 | Topic | Snapshot |
 |---|---|
 | `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}]}` |
-| `attention` | `{entries: [{projectId, sessionId, title, status, since}]}`, sessions in `attention` or `done` |
+| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session), sessions in `attention` or `done` |
 | `project:<id>` | the whole `Project` tree |
 
 - `ops` are RFC 6902 JSON Patch, limited to `add`, `remove` and `replace`.
@@ -203,28 +203,41 @@ comes from the `server` topic.
 | Group | Methods |
 |---|---|
 | Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
-| Repositories | `repo.add`, `repo.remove`, `repo.listBranches` |
+| Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
-| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr` |
+| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
 Params and results are in `MethodParamsV2` / `MethodResultsV2`. Commands change
-state only through the server, so their effects arrive as patches. Results carry
-only new ids. `project.rename`, `project.updateSettings`, `branch.setNote` and
-`session.rename` take an optional `ifRev`; if the project's rev has moved past it,
-they fail with the new error code `CONFLICT`. Everything else is last-write-wins.
+state only through the server, so their effects arrive as patches. Command
+results carry only new ids; queries return their data.
 
-`project.import` takes one of the projects that `importProjectFile()`
-(`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
-The importer has already given its repositories, worktrees and sessions fresh
-ids. Each session keeps its old id as `agentSessionId`, so it resumes, and has no
-`ptyId`, since an imported session is never running. The server assigns the
-project's id and returns it.
+`project.rename`, `project.updateSettings`, `branch.setNote`, `session.rename`
+and `repo.update` take an optional `expected`: the value the client believes the
+field has now. The server fails with `CONFLICT` only if that field's current
+value differs (deep equality, null means absent). For `project.updateSettings`
+and `repo.update`, only the keys listed in `expected` are compared. A
+project-wide rev guard is not used because the rev moves on every status or git
+change, so it would almost always fail. Everything else is last-write-wins.
 
-The v1 `git.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
+`worktree.create` defaults `path` to `<repo>-<branch>` next to the repository,
+with each `/` in the branch replaced by `-`. `fromPr` checks out GitHub PR #n's
+head into the new branch (works for fork PRs). `worktree.remove` on a dirty
+worktree fails with `GIT_ERROR` unless `force: true`, so a client can confirm
+with the user and retry with `force: true`.
+
+`project.import` takes a project produced by the client-side importer from a v1
+project file. The server assigns the project's id; nested ids are kept. It
+rejects the import with `BAD_REQUEST` if any repository, worktree or session id
+is empty, contains a space, or already exists on that server, and with
+`PATH_DENIED` if any repository path is outside its allowlist. It resets runtime
+fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
+`dirty`, `ahead`, `behind` and `head`.
+
+The v1 `git.*`, `repo.list`, `agents.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
 internal to a v2 server.
 
 ## Events

@@ -126,6 +126,8 @@ export interface ProjectSummary {
 /** A session that needs the user, as listed by the `attention` topic. */
 export interface AttentionEntry {
   projectId: string
+  /** null = a Global panel session */
+  worktreeId: string | null
   sessionId: string
   title: string
   status: Extract<SessionStatus, 'attention' | 'done'>

@@ -2,12 +2,23 @@
 // and subscribe to topics (snapshot + JSON patches). Frames are the v1 frames
 // (hello/req/res/event) from protocol.ts; only welcome, the method catalog and
 // the events change. See PROTOCOL.md, "Protocol v2".
-import type { AttentionTopic, ProjectTopic, ServerTopic, Topic } from './model/topics.ts'
+import type {
+  AttentionTopic,
+  ProjectTopic,
+  ServerTopic,
+  Topic,
+  TopicSnapshot
+} from './model/topics.ts'
 import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
-import type { EventPayloads as EventPayloadsV1, PtyInfo } from './protocol.ts'
+import type {
+  EventFrame,
+  EventPayloads as EventPayloadsV1,
+  PtyInfo,
+  ResFrame
+} from './protocol.ts'
 import type { LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
-import type { WorktreeChanges } from './types.ts'
+import type { EnvironmentSettings, WorktreeChanges } from './types.ts'
 
 export const PROTOCOL_VERSION_V2 = 2
 
@@ -28,11 +39,6 @@ export interface WelcomeFrameV2 {
   capabilities: string[]
 }
 
-/** Guard for edit-style commands: fail with CONFLICT if the project moved past this rev. */
-interface IfRev {
-  ifRev?: number
-}
-
 interface ProjectRef {
   projectId: string
 }
@@ -49,25 +55,55 @@ interface BranchRef extends RepoRef {
   branch: string
 }
 
+/** A shallow settings patch: a key set to null is removed. */
+type SettingsPatch = { [K in keyof ProjectSettings]?: ProjectSettings[K] | null }
+
+/**
+ * Edit commands that take `expected` are compare-and-set: the server fails with
+ * CONFLICT only if the field's current value differs (deep equality, null = absent).
+ */
 export interface MethodParamsV2 {
   // Projects
   'project.list': Record<string, never>
   'project.create': { name: string; repositories: { path: string; name?: string }[] }
-  /** A project produced by importProjectFile(); the server assigns a fresh id */
+  /** A project from importProjectFile(). The server assigns the project's id; nested ids are kept. */
   'project.import': { project: Project }
-  'project.rename': ProjectRef & IfRev & { name: string }
+  'project.rename': ProjectRef & { name: string; expected?: string }
   'project.delete': ProjectRef
   /** Shallow merge into the project's settings; a key set to null is removed */
-  'project.updateSettings': ProjectRef &
-    IfRev & { settings: { [K in keyof ProjectSettings]?: ProjectSettings[K] | null } }
+  'project.updateSettings': ProjectRef & {
+    settings: SettingsPatch
+    /** Only the keys listed here are compared */
+    expected?: SettingsPatch
+  }
   // Repositories
   'repo.add': ProjectRef & { path: string; name?: string }
   'repo.remove': RepoRef
+  'repo.update': RepoRef & {
+    name?: string
+    linkedDirs?: string[] | null
+    environments?: EnvironmentSettings | null
+    expected?: {
+      name?: string
+      linkedDirs?: string[] | null
+      environments?: EnvironmentSettings | null
+    }
+  }
   'repo.listBranches': RepoRef
   // Worktrees
-  /** `path` defaults to `<repo>-<branch>` next to the repository */
-  'worktree.create': RepoRef & { branch: string; createBranch: boolean; path?: string }
-  'worktree.remove': WorktreeRef
+  /**
+   * `path` defaults to `<repo>-<branch>` next to the repository, each `/` in the
+   * branch replaced by `-`. `fromPr`: check out GitHub PR #n's head into the new
+   * branch (works for fork PRs).
+   */
+  'worktree.create': RepoRef & {
+    branch: string
+    createBranch: boolean
+    path?: string
+    fromPr?: number
+  }
+  /** Without `force`, a dirty worktree fails with GIT_ERROR */
+  'worktree.remove': WorktreeRef & { force?: boolean }
   'worktree.load': WorktreeRef
   'worktree.unload': WorktreeRef
   'worktree.pull': WorktreeRef
@@ -77,9 +113,10 @@ export interface MethodParamsV2 {
   // Branch data (null clears)
   'branch.setTag': BranchRef & { tag: string | null }
   'branch.setCustomTags': BranchRef & { customTags: string[] }
-  'branch.setNote': BranchRef & IfRev & { note: string | null }
+  'branch.setNote': BranchRef & { note: string | null; expected?: string | null }
   'branch.setTicket': BranchRef & { ticket: string | null }
   'branch.setPr': BranchRef & { pr: string | null }
+  'branch.setEnv': BranchRef & { env: string | null }
   // Sessions
   /** `worktreeId: null` starts a Global panel session */
   'session.start': ProjectRef & {
@@ -93,7 +130,7 @@ export interface MethodParamsV2 {
   }
   'session.restart': SessionRef & { cols: number; rows: number }
   'session.close': SessionRef
-  'session.rename': SessionRef & IfRev & { title: string }
+  'session.rename': SessionRef & { title: string; expected?: string }
   /** Types the text into the session now */
   'session.sendPrompt': SessionRef & { text: string }
   /** Appends to the session's queue; sent when the session is next ready */
@@ -129,6 +166,7 @@ export interface MethodResultsV2 {
   'project.updateSettings': null
   'repo.add': { repoId: string }
   'repo.remove': null
+  'repo.update': null
   'repo.listBranches': string[]
   'worktree.create': { worktreeId: string }
   'worktree.remove': null
@@ -144,6 +182,7 @@ export interface MethodResultsV2 {
   'branch.setNote': null
   'branch.setTicket': null
   'branch.setPr': null
+  'branch.setEnv': null
   'session.start': { sessionId: string; ptyId: string }
   'session.restart': { ptyId: string }
   'session.close': null
@@ -163,6 +202,16 @@ export interface MethodResultsV2 {
 }
 
 export type MethodNameV2 = keyof MethodParamsV2
+
+export type SubscribeResultFor<T extends Topic> = SubscribeResult<TopicSnapshot<T>>
+
+type SameKeys<A, B> = [Exclude<keyof A, keyof B>, Exclude<keyof B, keyof A>] extends [never, never]
+  ? true
+  : false
+/** Compile-time check: every method has both params and a result type. */
+export const _catalogComplete: SameKeys<MethodParamsV2, MethodResultsV2> = true
+
+export type ServerFrameV2 = WelcomeFrameV2 | ResFrame | EventFrame
 
 export interface StatePatchPayload extends StatePatch {
   topic: Topic
