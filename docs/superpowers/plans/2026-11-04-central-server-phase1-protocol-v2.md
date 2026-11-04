@@ -683,15 +683,15 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 Turns a v3 `ProjectFile` into one `Project` per machine it touched. Rules (from the spec's "Import splits by server" decision, refined for the file format):
 
 - **Targets:** `'local'` always, plus every server id found in any repository's `serverPaths` or any worktree's `serverId`.
-- **Repository on a target:** path is `repo.path` for local, `repo.serverPaths[target]` for a server. A repository with no path on a target is left out of that target's project; if it had worktrees there, a warning is recorded.
-- **Main worktree:** every included repository gets one worktree with `isMain: true` at the repository's path. Locally it carries `primaryTerminals`. On a server, a saved worktree whose path equals the server path becomes the main worktree (keeping its id, name and sessions); otherwise a fresh one with no sessions is created.
+- **Repository on a target:** path is `repo.path` for local, `repo.serverPaths[target]` for a server. A repository with no path on a target is left out of that target's project; if it had worktrees there, a warning is recorded. Paths are normalized before comparing (trailing and repeated slashes removed); symlinks are not resolved here, the server reconciles them against git on import.
+- **Main worktree:** every included repository gets one worktree with `isMain: true` at the repository's path. Locally it carries `primaryTerminals`. On a server, a saved worktree whose path equals the server path becomes the main worktree (keeping its id, name and sessions); otherwise a fresh one with no sessions is created. Other saved worktrees at the main path (normalized) are not dropped: their sessions are appended to the main worktree.
 - **Other worktrees:** saved worktrees whose `serverId` (missing = local) matches the target.
 - **Branch data** is copied whole into every copy of the repository.
-- **Sessions:** each `PersistedTerminal` becomes a `Session` with `id` and `agentSessionId` both set to its `sessionId`, status `idle`, empty queue when missing, and `llm` `{provider: 'claude'}` when missing. Every worktree starts with `loaded: false`.
+- **Sessions:** each `PersistedTerminal` becomes a `Session` with a fresh `id` from `newId` and `agentSessionId` set to its old `sessionId`, status `idle`, empty queue when missing, and `llm` `{provider: 'claude'}` when missing. `ptyId` is not copied (imported sessions are never running). Every worktree starts with `loaded: false`.
 - **Global sessions** go to the local project only (they ran on the machine that saved the file).
-- **Settings** are copied to every project; `worktreeOrder` keeps only that target's entries, re-keyed from `<hostKey> <path>` to `worktreeOrderKey(repoId, path)`, dropping entries for worktrees not in the project.
+- **Settings** are copied to every project; `worktreeOrder` keeps only that target's entries, re-keyed from `<hostKey> <path>` to `worktreeOrderKey(repoId, path)`, dropping entries for worktrees not in the project. Legacy root keys a v3 file may still carry (`repositoryPath`, `worktrees`, branch maps, etc.) are stripped.
 - **Projects with no repositories are dropped.** Every project keeps the file's name, since they live on different servers.
-- **Repository ids are kept** (ids only need to be unique within a server); project ids and new main-worktree ids come from `newId`.
+- **Ids are all fresh:** project, repository, worktree and session ids come from `newId`, so repeated imports never collide. `worktreeOrder` is re-keyed with the new repository ids. Each returned project is a `structuredClone`, sharing no references with its siblings. The no-clone-path warning also counts the dropped sessions.
 
 **Files:**
 - Create: `src/shared/model/importProject.ts`

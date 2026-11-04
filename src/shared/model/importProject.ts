@@ -11,7 +11,14 @@ import type {
   WorktreeInstance
 } from '../types.ts'
 import { worktreeOrderKey } from './keys.ts'
-import type { BranchData, Project, ProjectSettings, Repository, Session, Worktree } from './types.ts'
+import type {
+  BranchData,
+  Project,
+  ProjectSettings,
+  Repository,
+  Session,
+  Worktree
+} from './types.ts'
 
 /** Target for everything that lived on the machine that saved the file. */
 export const LOCAL_TARGET = 'local'
@@ -30,9 +37,21 @@ export interface ImportResult {
   warnings: string[]
 }
 
-function toSession(t: PersistedTerminal | GlobalSession): Session {
+/**
+ * Strips trailing slashes (except on a bare "/") and collapses repeated ones.
+ * Symlinked paths are not resolved here; the server reconciles them against
+ * git on import.
+ */
+function normalizePath(p: string): string {
+  const collapsed = p.replace(/\/{2,}/g, '/')
+  return collapsed.length > 1 ? collapsed.replace(/\/+$/, '') : collapsed
+}
+
+// Session ids are fresh; the old id is kept as the agent session id. ptyId is
+// not copied: an imported session is never running.
+function toSession(t: PersistedTerminal | GlobalSession, newId: () => string): Session {
   const session: Session = {
-    id: t.sessionId,
+    id: newId(),
     agentSessionId: t.sessionId,
     title: t.title,
     llm: t.llm ?? { provider: 'claude' },
@@ -41,18 +60,17 @@ function toSession(t: PersistedTerminal | GlobalSession): Session {
   }
   if ('sessionTypeId' in t && t.sessionTypeId) session.sessionTypeId = t.sessionTypeId
   if ('systemPrompt' in t && t.systemPrompt) session.systemPrompt = t.systemPrompt
-  if ('ptyId' in t && t.ptyId) session.ptyId = t.ptyId
   return session
 }
 
-function toWorktree(w: WorktreeInstance, isMain: boolean): Worktree {
+function toWorktree(w: WorktreeInstance, isMain: boolean, newId: () => string): Worktree {
   const worktree: Worktree = {
-    id: w.id,
+    id: newId(),
     name: w.name,
     path: w.path,
     isMain,
     loaded: false,
-    sessions: (w.terminals ?? []).map(toSession)
+    sessions: (w.terminals ?? []).map((t) => toSession(t, newId))
   }
   if (w.branch) worktree.branch = w.branch
   return worktree
@@ -85,32 +103,42 @@ function repositoryFor(
   warnings: string[]
 ): Repository | null {
   const isLocal = target === LOCAL_TARGET
-  const path = isLocal ? r.path : r.serverPaths?.[target]
+  const rawPath = isLocal ? r.path : r.serverPaths?.[target]
   const own = r.worktrees.filter((w) => (w.serverId ?? LOCAL_TARGET) === target)
-  if (!path) {
+  if (!rawPath) {
     if (own.length > 0) {
+      const sessions = own.reduce((n, w) => n + (w.terminals?.length ?? 0), 0)
       warnings.push(
-        `Repository "${r.name}" has ${own.length} worktree(s) on ${label} but no clone path there; they were not imported.`
+        `Repository "${r.name}" has ${own.length} worktree(s) (${sessions} session(s)) on ${label} but no clone path there; they were not imported.`
       )
     }
     return null
   }
 
-  const savedMain = isLocal ? undefined : own.find((w) => w.path === path)
+  const path = normalizePath(rawPath)
+  const atMain = own.filter((w) => normalizePath(w.path) === path)
+  const savedMain = isLocal ? undefined : atMain[0]
+  // Other saved worktrees at the main path fold their sessions into the main one.
+  const extraSessions = atMain
+    .filter((w) => w !== savedMain)
+    .flatMap((w) => (w.terminals ?? []).map((t) => toSession(t, newId)))
   const main: Worktree = savedMain
-    ? toWorktree(savedMain, true)
+    ? toWorktree(savedMain, true, newId)
     : {
         id: newId(),
         name: r.name,
         path,
         isMain: true,
         loaded: false,
-        sessions: isLocal ? (r.primaryTerminals ?? []).map(toSession) : []
+        sessions: isLocal ? (r.primaryTerminals ?? []).map((t) => toSession(t, newId)) : []
       }
-  const others = own.filter((w) => w !== savedMain && w.path !== path).map((w) => toWorktree(w, false))
+  main.sessions.push(...extraSessions)
+  const others = own
+    .filter((w) => normalizePath(w.path) !== path)
+    .map((w) => toWorktree(w, false, newId))
 
   const repo: Repository = {
-    id: r.id,
+    id: newId(),
     name: r.name,
     path,
     branchData: branchDataOf(r),
@@ -122,8 +150,29 @@ function repositoryFor(
 }
 
 function settingsOf(file: ProjectFile): ProjectSettings {
-  const { version: _v, name: _n, repositories: _r, servers: _s, globalSessions: _g, ...settings } = file
-  return settings
+  const {
+    version: _v,
+    name: _n,
+    repositories: _r,
+    servers: _s,
+    globalSessions: _g,
+    // Legacy root keys a v3 file may still carry
+    repositoryPath: _rp,
+    worktrees: _w,
+    globalSessionId: _gid,
+    primaryTerminals: _pt,
+    serverPaths: _sp,
+    branchNotes: _bn,
+    branchTags: _bt,
+    branchCustomTags: _bc,
+    branchTickets: _bk,
+    branchPullRequests: _bp,
+    branchEnvVars: _be,
+    linkedDirs: _ld,
+    environments: _env,
+    ...settings
+  } = file as unknown as Record<string, unknown>
+  return settings as ProjectSettings
 }
 
 /** Keeps the target's `<hostKey> <path>` entries, as `<repoId> <path>`. */
@@ -134,13 +183,14 @@ function rekeyOrder(
 ): string[] | undefined {
   if (!order) return undefined
   const repoByPath = new Map<string, string>()
-  for (const repo of repositories) for (const w of repo.worktrees) repoByPath.set(w.path, repo.id)
+  for (const repo of repositories)
+    for (const w of repo.worktrees) repoByPath.set(normalizePath(w.path), repo.id)
   const prefix = `${target} `
   const out: string[] = []
   for (const key of order) {
     if (!key.startsWith(prefix)) continue
     const path = key.slice(prefix.length)
-    const repoId = repoByPath.get(path)
+    const repoId = repoByPath.get(normalizePath(path))
     if (repoId) out.push(worktreeOrderKey(repoId, path))
   }
   return out
@@ -179,11 +229,11 @@ export function splitProjectByServer(file: ProjectFile, newId: () => string): Im
         name: file.name,
         settings: projectSettings,
         repositories,
-        globalSessions: isLocal ? (file.globalSessions ?? []).map(toSession) : []
+        globalSessions: isLocal ? (file.globalSessions ?? []).map((t) => toSession(t, newId)) : []
       }
     }
     if (serverName !== undefined) imported.serverName = serverName
-    projects.push(imported)
+    projects.push(structuredClone(imported))
   }
   return { projects, warnings }
 }

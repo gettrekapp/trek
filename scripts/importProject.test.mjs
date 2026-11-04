@@ -8,7 +8,11 @@ const ids = () => {
   return () => `new${++n}`
 }
 
-const term = (sessionId, extra = {}) => ({ title: `T ${sessionId}`, sessionId, ...extra })
+const term = (sessionId, extra = {}) => ({
+  title: `T ${sessionId}`,
+  sessionId,
+  ...extra
+})
 
 function mixedFile() {
   return {
@@ -33,16 +37,35 @@ function mixedFile() {
         branchEnvVars: { x: 'A=1' },
         linkedDirs: ['.trek'],
         worktrees: [
-          { id: 'wx', name: 'x', path: '/r/api-x', branch: 'x', terminals: [term('s1', { queue: ['hi'] })] },
+          {
+            id: 'wx',
+            name: 'x',
+            path: '/r/api-x',
+            branch: 'x',
+            terminals: [term('s1', { queue: ['hi'] })]
+          },
           {
             id: 'wy',
             name: 'y',
             path: '/home/api-y',
             serverId: 'srv',
             branch: 'y',
-            terminals: [term('s2', { llm: { provider: 'codex' }, ptyId: 'pty2', sessionTypeId: 'rev' })]
+            terminals: [
+              term('s2', {
+                llm: { provider: 'codex' },
+                ptyId: 'pty2',
+                sessionTypeId: 'rev'
+              })
+            ]
           },
-          { id: 'wm', name: 'main', path: '/home/api', serverId: 'srv', branch: 'main', terminals: [term('s3')] }
+          {
+            id: 'wm',
+            name: 'main',
+            path: '/home/api',
+            serverId: 'srv',
+            branch: 'main',
+            terminals: [term('s3')]
+          }
         ]
       },
       { id: 'web', name: 'web', path: '/r/web', worktrees: [] }
@@ -53,10 +76,13 @@ function mixedFile() {
 test('a mixed file splits into a local and a server project', () => {
   const { projects, warnings } = splitProjectByServer(mixedFile(), ids())
   assert.deepEqual(warnings, [])
-  assert.deepEqual(projects.map((p) => [p.target, p.serverName]), [
-    ['local', undefined],
-    ['srv', 'build-box']
-  ])
+  assert.deepEqual(
+    projects.map((p) => [p.target, p.serverName]),
+    [
+      ['local', undefined],
+      ['srv', 'build-box']
+    ]
+  )
   for (const { project } of projects) {
     assert.equal(project.name, 'Proj')
     assert.equal(project.settings.audioAlerts, true)
@@ -67,43 +93,71 @@ test('a mixed file splits into a local and a server project', () => {
 
 test('the local project holds local worktrees, primary sessions and global sessions', () => {
   const [{ project }] = splitProjectByServer(mixedFile(), ids()).projects
-  assert.deepEqual(project.repositories.map((r) => [r.id, r.path]), [
-    ['api', '/r/api'],
-    ['web', '/r/web']
-  ])
+  assert.deepEqual(
+    project.repositories.map((r) => [r.name, r.path]),
+    [
+      ['api', '/r/api'],
+      ['web', '/r/web']
+    ]
+  )
   const api = project.repositories[0]
-  assert.deepEqual(api.worktrees.map((w) => [w.path, w.isMain, w.loaded]), [
-    ['/r/api', true, false],
-    ['/r/api-x', false, false]
-  ])
-  assert.deepEqual(api.worktrees[0].sessions.map((s) => s.id), ['p1'])
-  assert.deepEqual(api.worktrees[1].sessions[0], {
-    id: 's1',
+  assert.deepEqual(
+    api.worktrees.map((w) => [w.path, w.isMain, w.loaded]),
+    [
+      ['/r/api', true, false],
+      ['/r/api-x', false, false]
+    ]
+  )
+  assert.deepEqual(
+    api.worktrees[0].sessions.map((s) => s.agentSessionId),
+    ['p1']
+  )
+  const { id: s1Id, ...s1 } = api.worktrees[1].sessions[0]
+  assert.match(s1Id, /^new\d+$/)
+  assert.deepEqual(s1, {
     agentSessionId: 's1',
     title: 'T s1',
     llm: { provider: 'claude' },
     queue: ['hi'],
     status: 'idle'
   })
-  assert.deepEqual(project.globalSessions, [
-    { id: 'g1', agentSessionId: 'g1', title: 'Global', llm: { provider: 'claude' }, queue: [], status: 'idle' }
-  ])
+  assert.deepEqual(
+    project.globalSessions.map(({ id: _id, ...g }) => g),
+    [
+      {
+        agentSessionId: 'g1',
+        title: 'Global',
+        llm: { provider: 'claude' },
+        queue: [],
+        status: 'idle'
+      }
+    ]
+  )
   assert.deepEqual(api.linkedDirs, ['.trek'])
 })
 
 test('the server project uses server paths and keeps the saved main worktree', () => {
   const [, { project }] = splitProjectByServer(mixedFile(), ids()).projects
-  assert.deepEqual(project.repositories.map((r) => r.id), ['api'])
+  assert.deepEqual(
+    project.repositories.map((r) => r.name),
+    ['api']
+  )
   const api = project.repositories[0]
   assert.equal(api.path, '/home/api')
-  assert.deepEqual(api.worktrees.map((w) => [w.id, w.path, w.isMain]), [
-    ['wm', '/home/api', true],
-    ['wy', '/home/api-y', false]
-  ])
-  assert.deepEqual(api.worktrees[0].sessions.map((s) => s.id), ['s3'])
+  assert.deepEqual(
+    api.worktrees.map((w) => [w.name, w.path, w.isMain]),
+    [
+      ['main', '/home/api', true],
+      ['y', '/home/api-y', false]
+    ]
+  )
+  assert.deepEqual(
+    api.worktrees[0].sessions.map((s) => s.agentSessionId),
+    ['s3']
+  )
   const s2 = api.worktrees[1].sessions[0]
   assert.deepEqual(s2.llm, { provider: 'codex' })
-  assert.equal(s2.ptyId, 'pty2')
+  assert.equal(s2.ptyId, undefined)
   assert.equal(s2.sessionTypeId, 'rev')
   assert.deepEqual(project.globalSessions, [])
 })
@@ -118,10 +172,15 @@ test('branch data is folded per branch and copied to every copy of the repositor
   }
 })
 
-test('worktree order keeps each target\'s entries, re-keyed by repository', () => {
+test("worktree order keeps each target's entries, re-keyed by repository", () => {
   const [local, remote] = splitProjectByServer(mixedFile(), ids()).projects
-  assert.deepEqual(local.project.settings.worktreeOrder, ['api /r/api-x'])
-  assert.deepEqual(remote.project.settings.worktreeOrder, ['api /home/api-y', 'api /home/api'])
+  const localId = local.project.repositories[0].id
+  const remoteId = remote.project.repositories[0].id
+  assert.deepEqual(local.project.settings.worktreeOrder, [`${localId} /r/api-x`])
+  assert.deepEqual(remote.project.settings.worktreeOrder, [
+    `${remoteId} /home/api-y`,
+    `${remoteId} /home/api`
+  ])
 })
 
 test('a server main checkout with no saved worktree gets a fresh one', () => {
@@ -137,15 +196,31 @@ test('a server main checkout with no saved worktree gets a fresh one', () => {
 
 test('worktrees on a server without a clone path are dropped with a warning', () => {
   const file = mixedFile()
-  file.repositories[1].worktrees = [{ id: 'wz', name: 'z', path: '/elsewhere/web-z', serverId: 'srv' }]
+  file.repositories[1].worktrees = [
+    {
+      id: 'wz',
+      name: 'z',
+      path: '/elsewhere/web-z',
+      serverId: 'srv',
+      terminals: [term('z1'), term('z2')]
+    }
+  ]
   const { projects, warnings } = splitProjectByServer(file, ids())
-  assert.deepEqual(projects[1].project.repositories.map((r) => r.id), ['api'])
+  assert.deepEqual(
+    projects[1].project.repositories.map((r) => r.name),
+    ['api']
+  )
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /"web".*1 worktree.*build-box/)
+  assert.match(warnings[0], /2 session\(s\)/)
 })
 
 test('a local-only file gives one project', () => {
-  const file = { version: 3, name: 'Solo', repositories: [{ id: 'r', name: 'r', path: '/r', worktrees: [] }] }
+  const file = {
+    version: 3,
+    name: 'Solo',
+    repositories: [{ id: 'r', name: 'r', path: '/r', worktrees: [] }]
+  }
   const { projects } = splitProjectByServer(file, ids())
   assert.equal(projects.length, 1)
   assert.equal(projects[0].target, 'local')
@@ -167,18 +242,153 @@ test('a worktree on a server missing from servers[] still imports, without a nam
     ]
   }
   const { projects } = splitProjectByServer(file, ids())
-  assert.deepEqual(projects.map((p) => [p.target, p.serverName]), [
-    ['local', undefined],
-    ['ghost', undefined]
-  ])
+  assert.deepEqual(
+    projects.map((p) => [p.target, p.serverName]),
+    [
+      ['local', undefined],
+      ['ghost', undefined]
+    ]
+  )
 })
 
 test('importProjectFile migrates an older file first', () => {
   const { projects } = importProjectFile(
-    { version: 1, name: 'Old', repositoryPath: '/r/old', worktrees: [], globalSessionId: 'g' },
+    {
+      version: 1,
+      name: 'Old',
+      repositoryPath: '/r/old',
+      worktrees: [],
+      globalSessionId: 'g'
+    },
     ids()
   )
   assert.equal(projects.length, 1)
   assert.equal(projects[0].project.repositories[0].path, '/r/old')
-  assert.deepEqual(projects[0].project.globalSessions.map((s) => s.id), ['g'])
+  assert.deepEqual(
+    projects[0].project.globalSessions.map((s) => s.agentSessionId),
+    ['g']
+  )
+})
+
+test('a trailing slash on a server path still matches the saved main worktree', () => {
+  const file = mixedFile()
+  file.repositories[0].serverPaths.srv = '/home/api/'
+  const [, { project }] = splitProjectByServer(file, ids()).projects
+  const api = project.repositories[0]
+  assert.equal(api.path, '/home/api')
+  assert.deepEqual(
+    api.worktrees.map((w) => [w.path, w.isMain]),
+    [
+      ['/home/api', true],
+      ['/home/api-y', false]
+    ]
+  )
+  assert.deepEqual(
+    api.worktrees[0].sessions.map((s) => s.agentSessionId),
+    ['s3']
+  )
+})
+
+test('a second saved worktree at the main path adds its sessions to the main one on a server', () => {
+  const file = mixedFile()
+  file.repositories[0].worktrees.push({
+    id: 'wm2',
+    name: 'dup',
+    path: '/home//api/',
+    serverId: 'srv',
+    terminals: [term('s4')]
+  })
+  const [, { project }] = splitProjectByServer(file, ids()).projects
+  const api = project.repositories[0]
+  assert.equal(api.worktrees.filter((w) => w.isMain).length, 1)
+  assert.equal(api.worktrees.length, 2)
+  assert.deepEqual(
+    api.worktrees[0].sessions.map((s) => s.agentSessionId),
+    ['s3', 's4']
+  )
+})
+
+test('a saved local worktree at the main path adds its sessions after the primary terminals', () => {
+  const file = mixedFile()
+  file.repositories[0].worktrees.push({
+    id: 'wl',
+    name: 'dup',
+    path: '/r/api/',
+    terminals: [term('s5')]
+  })
+  const [{ project }] = splitProjectByServer(file, ids()).projects
+  const api = project.repositories[0]
+  assert.deepEqual(
+    api.worktrees.map((w) => w.path),
+    ['/r/api', '/r/api-x']
+  )
+  assert.deepEqual(
+    api.worktrees[0].sessions.map((s) => s.agentSessionId),
+    ['p1', 's5']
+  )
+})
+
+test('ids are fresh across imports sharing one id source', () => {
+  const newId = ids()
+  const all = []
+  for (let i = 0; i < 2; i++) {
+    for (const { project } of splitProjectByServer(mixedFile(), newId).projects) {
+      all.push(project.id)
+      for (const g of project.globalSessions) all.push(g.id)
+      for (const r of project.repositories) {
+        all.push(r.id)
+        for (const w of r.worktrees) {
+          all.push(w.id)
+          for (const s of w.sessions) all.push(s.id)
+        }
+      }
+    }
+  }
+  assert.equal(new Set(all).size, all.length)
+})
+
+test('legacy root keys do not leak into settings', () => {
+  const file = mixedFile()
+  file.repositoryPath = '/old'
+  file.branchTags = { x: 'Old' }
+  for (const { project } of splitProjectByServer(file, ids()).projects) {
+    assert.equal('repositoryPath' in project.settings, false)
+    assert.equal('branchTags' in project.settings, false)
+  }
+})
+
+test('split projects share no references', () => {
+  const [a, b] = splitProjectByServer(mixedFile(), ids()).projects
+  assert.notEqual(a.project.repositories[0].branchData, b.project.repositories[0].branchData)
+  assert.notEqual(a.project.settings, b.project.settings)
+})
+
+test('a server with no clone path anywhere gives only the local project and a warning', () => {
+  const file = {
+    version: 3,
+    name: 'P',
+    repositories: [
+      {
+        id: 'r',
+        name: 'r',
+        path: '/r',
+        worktrees: [
+          {
+            id: 'w',
+            name: 'w',
+            path: '/x/r-w',
+            serverId: 'srv',
+            terminals: [term('t')]
+          }
+        ]
+      }
+    ]
+  }
+  const { projects, warnings } = splitProjectByServer(file, ids())
+  assert.deepEqual(
+    projects.map((p) => p.target),
+    ['local']
+  )
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /1 session\(s\)/)
 })
