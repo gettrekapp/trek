@@ -149,7 +149,7 @@ function markActivity(id: string, entry: Entry, data: string): void {
   if (entry.markers.some((marker) => lower.includes(marker))) entry.processingSeen = true
   const longest = Math.max(1, ...entry.markers.map((m) => m.length))
   entry.scanTail = window_.slice(Math.max(0, window_.length - longest + 1))
-  // A bell means claude is waiting on the user; subsequent screen redraws
+  // A bell means the agent is waiting on the user; subsequent screen redraws
   // must not clear that until the user actually responds.
   if (status !== 'attention' && status !== 'exited') {
     store.setTerminalStatus(id, 'working')
@@ -158,7 +158,7 @@ function markActivity(id: string, entry: Entry, data: string): void {
   entry.idleTimer = setTimeout(() => {
     const current = useAppStore.getState().terminals[id]?.status
     if (current !== 'working') return
-    // Only output that included claude's processing marker counts as real
+    // Only output that included the agent's processing marker counts as real
     // work; idle repaints and resize redraws settle back silently.
     const meaningful = entry.processingSeen
     entry.processingSeen = false
@@ -174,7 +174,7 @@ function markActivity(id: string, entry: Entry, data: string): void {
 
 export { DEFAULT_PERMISSION_MODE } from '../../shared/providers/claude'
 
-/** Tells a worktree session's shell (and the claude inside it) where it is running. */
+/** Tells a worktree session's shell (and the agent inside it) where it is running. */
 function sessionEnv(terminalId: string, worktree: WorktreeInstance): Record<string, string> {
   return {
     TREK_TERMINAL_ID: terminalId,
@@ -287,11 +287,11 @@ function globalLaunch(llm: LlmSelection, sessionId: string, resume: boolean): Pr
 /**
  * Loading and unloading worktrees
  *
- * Every Claude session costs a pty, a claude process and an xterm instance,
+ * Every session costs a pty, an agent process and an xterm instance,
  * so a project with dozens of worktrees is unloaded on open and each worktree
  * is loaded on demand. Unloading snapshots the worktree's sessions into the
  * project file and tears the live ones down; loading resumes them
- * (claude --resume, or a reattach for a remote session still running on its
+ * (the agent's resume, or a reattach for a remote session still running on its
  * daemon). Sessions are resumed one at a time so a load never stampedes.
  */
 
@@ -308,7 +308,7 @@ async function restoreDormantSessions(worktreeId: string, cwd: string): Promise<
   }
 }
 
-/** Bring a worktree's saved Claude sessions back to life. */
+/** Bring a worktree's saved sessions back to life. */
 export async function loadWorktree(worktreeId: string): Promise<void> {
   const project = useAppStore.getState().project
   const instance = project ? allWorktrees(project).find((w) => w.id === worktreeId) : undefined
@@ -317,8 +317,8 @@ export async function loadWorktree(worktreeId: string): Promise<void> {
 }
 
 /**
- * Free a worktree's Claude sessions, keeping them in the project file so
- * loading resumes them. Local claude processes are killed; remote ones keep
+ * Free a worktree's sessions, keeping them in the project file so
+ * loading resumes them. Local agent processes are killed; remote ones keep
  * running on their server and are reattached on the next load.
  */
 export function unloadWorktree(worktreeId: string): void {
@@ -352,8 +352,9 @@ export function unloadAllWorktrees(): void {
 }
 
 /**
- * Start a Claude session in the worktree at `loc`, creating its project
+ * Start a session in the worktree at `loc`, creating its project
  * instance first when the worktree has never been opened in this project.
+ * (Named from when every session was Claude; it starts whichever agent is chosen.)
  */
 export async function startClaudeSession(
   loc: WorktreeLocator,
@@ -414,7 +415,7 @@ function createEntry(id: string, markers: string[]): Entry {
   entries.set(id, entry)
 
   // onData is NOT only keystrokes — xterm also emits automatic replies
-  // (focus reports, cursor/device query responses) that claude's TUI
+  // (focus reports, cursor/device query responses) that the agent's TUI
   // triggers, so it must not count as user activity.
   term.onData((data) => {
     window.api.writePty(id, data)
@@ -462,7 +463,7 @@ export async function createTerminal(
   const serverId = instance?.serverId
   // Remote restores keep their persisted pty id — if that pty is still
   // running on the daemon, spawnPty reattaches to the live session instead
-  // of starting a new claude.
+  // of starting a new agent.
   const id = (serverId && restore?.ptyId) || crypto.randomUUID()
   // Resumes keep the agent they started with; older saved sessions are Claude.
   const llm = restore ? (restore.llm ?? { provider: 'claude' }) : newSessionLlm(sessionType, pick)
@@ -678,7 +679,7 @@ export function saveGlobalSessions(): void {
 }
 
 /**
- * Start a global Claude tab in the repository root, with the app's MCP
+ * Start a global tab in the repository root, with the app's MCP
  * server. `saved` resumes that conversation; otherwise a new one starts.
  */
 export async function startGlobalTerminal(saved?: GlobalSession): Promise<string | undefined> {
@@ -964,7 +965,7 @@ export function focusTerminal(id: string): void {
   useAppStore.getState().clearTerminalAttention(id)
 }
 
-/** Whether tab shortcuts should act on the global Claude panel rather than the worktree. */
+/** Whether tab shortcuts should act on the global panel rather than the worktree. */
 export function focusInGlobalPanel(): boolean {
   return (
     useAppStore.getState().globalPanelOpen &&
@@ -1004,7 +1005,7 @@ function disposeEntry(id: string): void {
   entries.delete(id)
 }
 
-/** Close a session for good — the claude process is killed wherever it runs. */
+/** Close a session for good — the agent process is killed wherever it runs. */
 export function disposeTerminal(id: string): void {
   disposeEntry(id)
   window.api.disposePty(id)
@@ -1015,7 +1016,7 @@ export function disposeTerminal(id: string): void {
 /**
  * Drop a session's local resources on unload. A remote session survives on
  * its daemon; a local one has nowhere to live, so it ends here and resumes
- * from its Claude session file on the next load.
+ * from the agent's own session history on the next load.
  */
 function unloadTerminal(id: string): void {
   disposeEntry(id)

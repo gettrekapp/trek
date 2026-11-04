@@ -9,7 +9,6 @@ import { sanitizeProjectLlm } from '../../shared/providers/selection'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
-  ClaudeSessionType,
   EnvCheckResult,
   EnvironmentInfo,
   EnvironmentSettings,
@@ -21,6 +20,7 @@ import type {
   ProjectFile,
   Repository,
   ServerConfig,
+  SessionType,
   TerminalQuickButton,
   TerminalStatus,
   VoiceSettings,
@@ -346,7 +346,7 @@ interface AppState {
   setGlobalTerminalButtons: (buttons: TerminalQuickButton[]) => void
   setGlobalSystemPrompt: (prompt: string) => void
   setSessionSystemPrompt: (prompt: string) => void
-  setSessionTypes: (types: ClaudeSessionType[]) => void
+  setSessionTypes: (types: SessionType[]) => void
   setLinkedDirs: (repoId: string, dirs: string[]) => void
   setWorktreeOrder: (keys: string[]) => void
   /** undefined clears the project's mode, so the app-wide Claude mode applies */

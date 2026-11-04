@@ -37,10 +37,10 @@ import { MAX_SUMMARY_CHARS, speakSummary, voiceReady } from './voice'
 import { ambiguousAcrossRepos, findRepository } from '../../shared/repositories'
 import { sameWorktree } from '../../shared/types'
 import type {
-  ClaudeSessionType,
   GitWorktreeInfo,
   McpCallRequest,
   Repository,
+  SessionType,
   StackStatus,
   TerminalStatus,
   WorktreeInstance,
@@ -336,16 +336,16 @@ async function waitUntilReady(id: string): Promise<void> {
   await waitFor([id], (ids) => settled(ids[0]), 30_000)
 }
 
-function sessionTypes(): ClaudeSessionType[] {
+function sessionTypes(): SessionType[] {
   return project().sessionTypes ?? []
 }
 
-function findSessionType(ref: string): ClaudeSessionType | undefined {
+function findSessionType(ref: string): SessionType | undefined {
   const name = ref.trim().toLowerCase()
   return sessionTypes().find((t) => t.id === ref || t.name.trim().toLowerCase() === name)
 }
 
-function requireSessionType(ref: unknown): ClaudeSessionType {
+function requireSessionType(ref: unknown): SessionType {
   if (typeof ref !== 'string' || !ref.trim()) throw new ToolError('sessionType is required')
   const type = findSessionType(ref)
   if (!type) {
@@ -355,13 +355,13 @@ function requireSessionType(ref: unknown): ClaudeSessionType {
   return type
 }
 
-function setSessionTypes(types: ClaudeSessionType[]): void {
+function setSessionTypes(types: SessionType[]): void {
   useAppStore.getState().setSessionTypes(types)
   scheduleAutoSave()
 }
 
 /** Session types as tools return them — the icon data URL is just noise to Claude. */
-function withoutIcon(type: ClaudeSessionType): Omit<ClaudeSessionType, 'icon'> {
+function withoutIcon(type: SessionType): Omit<SessionType, 'icon'> {
   const { icon: _icon, ...rest } = type
   return rest
 }
@@ -376,7 +376,7 @@ function llmArg(args: Record<string, unknown>): LlmSelection | undefined {
   return sanitizeLlmSelection({ provider: args.provider, model: args.model, effort: args.effort })
 }
 
-function saveSessionType(args: Record<string, unknown>): ClaudeSessionType {
+function saveSessionType(args: Record<string, unknown>): SessionType {
   const name = typeof args.name === 'string' ? args.name.trim() : undefined
   const systemPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
   const initialMessage = typeof args.initialMessage === 'string' ? args.initialMessage : undefined
@@ -385,7 +385,7 @@ function saveSessionType(args: Record<string, unknown>): ClaudeSessionType {
   }
   const llm =
     args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>)
-  let existing: ClaudeSessionType | undefined
+  let existing: SessionType | undefined
   if (typeof args.id === 'string' && args.id) {
     existing = sessionTypes().find((t) => t.id === args.id)
     if (!existing) throw new ToolError(`No session type with id "${args.id}"`)

@@ -40,10 +40,10 @@ function storedHeight(): number {
 const NO_TABS: string[] = []
 
 /**
- * Project-wide Claude sessions, as tabs in a collapsible panel docked to the
+ * Project-wide agent sessions, as tabs in a collapsible panel docked to the
  * bottom of the window. They run in the repository root with the app's MCP
  * server, so they can drive the worktree sessions. Started on first open,
- * then kept alive while collapsed.
+ * then kept alive while collapsed. (Named from when every session was Claude.)
  */
 export function GlobalClaude(): React.JSX.Element {
   const open = useAppStore((s) => s.globalPanelOpen)
