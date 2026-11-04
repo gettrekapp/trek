@@ -1,6 +1,6 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
-import { open, readdir } from 'node:fs/promises'
+import { open, readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseCodexSessionMeta } from '../shared/providers/codex.ts'
@@ -35,6 +35,21 @@ function dayDirs(root: string, since: number, now: number): string[] {
   return [...dirs]
 }
 
+/** Where Codex files its sessions: $CODEX_HOME/sessions, or ~/.codex/sessions. */
+export function codexSessionsRoot(): string {
+  const home = process.env.CODEX_HOME?.trim()
+  return home ? join(home, 'sessions') : join(homedir(), '.codex', 'sessions')
+}
+
+/** The canonical path, so a symlinked folder matches; the path as given if it can't be resolved. */
+async function canonical(path: string): Promise<string> {
+  try {
+    return await realpath(path)
+  } catch {
+    return path
+  }
+}
+
 /**
  * The id of the Codex session a tab launched `ageMs` ago in `cwd` created: the earliest
  * rollout in that cwd that started after the launch and isn't claimed by another tab.
@@ -45,10 +60,18 @@ export async function discoverCodexSession(
   cwd: string,
   ageMs: number,
   exclude: string[],
-  root = join(homedir(), '.codex', 'sessions'),
+  root = codexSessionsRoot(),
   now = Date.now()
 ): Promise<string | undefined> {
   const since = now - ageMs
+  const target = await canonical(cwd)
+  const resolved = new Map<string, Promise<string>>()
+  const sameFolder = async (other: string): Promise<boolean> => {
+    if (other === cwd) return true
+    let path = resolved.get(other)
+    if (!path) resolved.set(other, (path = canonical(other)))
+    return (await path) === target
+  }
   const candidates: { id: string; startedAt: number }[] = []
   for (const dir of dayDirs(root, since, now)) {
     let names: string[]
@@ -61,7 +84,12 @@ export async function discoverCodexSession(
       if (!name.startsWith('rollout-') || !name.endsWith('.jsonl')) continue
       try {
         const meta = parseCodexSessionMeta(await firstLine(join(dir, name)))
-        if (meta && meta.cwd === cwd && meta.startedAt >= since - SKEW_MS && !exclude.includes(meta.id)) {
+        if (
+          meta &&
+          meta.startedAt >= since - SKEW_MS &&
+          !exclude.includes(meta.id) &&
+          (await sameFolder(meta.cwd))
+        ) {
           candidates.push(meta)
         }
       } catch {

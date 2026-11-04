@@ -5,7 +5,7 @@ process.env.TZ = 'Pacific/Kiritimati'
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandExists, discoverCodexSession } from '../src/host/agentService.ts'
@@ -76,6 +76,40 @@ test(
     assert.equal(await discoverCodexSession('/w', AGE, [], root, NOW), 'local-only')
   })
 )
+
+test('a symlinked cwd matches the rollout recorded under its real path, and back', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'codex-cwd-'))
+  const root = join(base, 'sessions')
+  try {
+    const real = join(base, 'real')
+    mkdirSync(real)
+    const link = join(base, 'link')
+    symlinkSync(real, link)
+    rollout(root, '2026-11-04T12:00:05.000Z', 'via-real', real)
+    assert.equal(await discoverCodexSession(link, AGE, [], root, NOW), 'via-real')
+    rollout(root, '2026-11-04T12:00:06.000Z', 'via-link', link)
+    assert.equal(await discoverCodexSession(real, AGE, ['via-real'], root, NOW), 'via-link')
+    // A path that doesn't exist still matches by its exact string.
+    rollout(root, '2026-11-04T12:00:07.000Z', 'gone', '/no/such/dir')
+    assert.equal(await discoverCodexSession('/no/such/dir', AGE, [], root, NOW), 'gone')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('CODEX_HOME moves the sessions folder', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'codex-home-'))
+  const saved = process.env.CODEX_HOME
+  try {
+    rollout(join(home, 'sessions'), '2026-11-04T12:00:05.000Z', 'in-home', '/w')
+    process.env.CODEX_HOME = home
+    assert.equal(await discoverCodexSession('/w', AGE, [], undefined, NOW), 'in-home')
+  } finally {
+    if (saved === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = saved
+    rmSync(home, { recursive: true, force: true })
+  }
+})
 
 test('a missing sessions dir finds nothing', async () => {
   assert.equal(await discoverCodexSession('/w', 1000, [], '/nonexistent/codex'), undefined)
