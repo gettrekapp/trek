@@ -16,18 +16,20 @@ import { persistedLlm, sessionMigrates } from '../../shared/providers/selection'
 
 /**
  * Sessions whose agent can't follow a worktree to a new path (Codex, Gemini, Grok) are
- * dropped rather than resumed somewhere their history isn't, with a notice.
+ * dropped rather than resumed somewhere their history isn't.
  */
-function keepMigratable(carried: PersistedTerminal[]): PersistedTerminal[] {
+function splitMigratable(carried: PersistedTerminal[]): { kept: PersistedTerminal[]; dropped: number } {
   const kept = carried.filter(sessionMigrates)
-  const dropped = carried.length - kept.length
-  if (dropped > 0) {
-    void window.api.showError(
-      'Some sessions could not move',
-      `${dropped} session(s) run an agent that keeps its history per folder, so they were closed. Start new ones in the new location.`
-    )
-  }
-  return kept
+  return { kept, dropped: carried.length - kept.length }
+}
+
+/** Tells the user how many sessions splitMigratable dropped, once they really are gone. */
+function notifyDropped(dropped: number): void {
+  if (dropped === 0) return
+  void window.api.showError(
+    'Some sessions could not move',
+    `${dropped} session(s) run an agent that keeps its history per folder, so they were closed. Start new ones in the new location.`
+  )
 }
 
 export type MoveStepKey =
@@ -179,7 +181,8 @@ export async function moveWorktree(opts: {
   // ---- 2. Capture + close sessions (source stays intact on failure —
   //         sessions resume from their still-present .jsonl files) ----
   progress('sessions', 'active')
-  const carried = keepMigratable(carriedSessions(instance?.id))
+  // The notice waits for the finalize step: a failed or cancelled move says nothing.
+  const { kept: carried, dropped } = splitMigratable(carriedSessions(instance?.id))
   const wasLoaded = isLoaded(instance?.id)
   if (instance) {
     const state = useAppStore.getState()
@@ -319,7 +322,8 @@ export async function moveWorktree(opts: {
     useAppStore.getState().addWorktreeInstance(repo.id, created)
     movedInstanceId = created.id
   }
-  await handOverSessions(movedInstanceId, targetPath, carried, wasLoaded)
+  await handOverSessions(movedInstanceId, targetPath, carried, wasLoaded, instance?.id)
+  notifyDropped(dropped)
   useAppStore.getState().setActiveWorktree(movedInstanceId)
 
   let warning: string | undefined
@@ -439,20 +443,31 @@ function carriedSessions(instanceId: string | undefined): PersistedTerminal[] {
  * each session) when either side is loaded; when an unloaded worktree hands
  * over to an unloaded target they are only recorded, so promoting or moving
  * never starts claude processes the user had deliberately unloaded.
+ *
+ * `sourceId` is the instance the sessions came from. When it is the target (a move
+ * keeps its instance), its saved list is the one `carried` was taken from, so it is
+ * replaced rather than appended to — appending would duplicate the kept sessions and
+ * bring back the dropped ones.
  */
 async function handOverSessions(
   targetId: string,
   targetPath: string,
   carried: PersistedTerminal[],
-  sourceLoaded: boolean
+  sourceLoaded: boolean,
+  sourceId?: string
 ): Promise<void> {
-  if (carried.length === 0) return
   const state = useAppStore.getState()
+  const sameInstance = targetId === sourceId
+  if (carried.length === 0) {
+    if (sameInstance && !sourceLoaded) state.setWorktreeSessions(targetId, [])
+    return
+  }
   if (sourceLoaded || state.loadedWorktrees[targetId]) {
     for (const session of carried) await createTerminal(targetId, targetPath, session)
     return
   }
-  state.setWorktreeSessions(targetId, [...dormantSessions(state, targetId), ...carried])
+  const existing = sameInstance ? [] : dormantSessions(state, targetId)
+  state.setWorktreeSessions(targetId, [...existing, ...carried])
 }
 
 /** Whether a worktree's Claude sessions are currently live. */
@@ -609,7 +624,8 @@ export async function promoteToPrimary(
     // primary — two claude processes must not share one session.
     if (instance) removeInstance(instance.id)
     // Dropped only now: until the worktree was removed, its sessions were still live.
-    const carried = keepMigratable(captured)
+    const { kept: carried, dropped } = splitMigratable(captured)
+    notifyDropped(dropped)
     for (const session of carried) {
       // Claude stores sessions per cwd; move each session file into the main
       // repo's project dir or --resume won't find it there.
@@ -706,7 +722,8 @@ export async function promoteBranchToWorktree(
   tagNewBranch(repoId, branch)
 
   // Carry the primary's Claude sessions into the new worktree.
-  const carried = keepMigratable(carriedSessions(primaryId))
+  const { kept: carried, dropped } = splitMigratable(carriedSessions(primaryId))
+  notifyDropped(dropped)
   const primaryWasLoaded = isLoaded(primaryId)
   const state = useAppStore.getState()
   for (const terminalId of [...(state.terminalOrder[primaryId] ?? [])]) {
