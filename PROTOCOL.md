@@ -217,10 +217,12 @@ only new ids. `project.rename`, `project.updateSettings`, `branch.setNote` and
 `session.rename` take an optional `ifRev`; if the project's rev has moved past it,
 they fail with the new error code `CONFLICT`. Everything else is last-write-wins.
 
-`project.import` takes a project produced by the client-side importer from a v1
-project file. The server assigns fresh ids to the project, its repositories,
-worktrees and sessions; sessions keep their old id as the agent session id, and
-no `ptyId` is carried over, so imported sessions start without a running pty.
+`project.import` takes one of the projects that `importProjectFile()`
+(`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
+The importer has already given its repositories, worktrees and sessions fresh
+ids. Each session keeps its old id as `agentSessionId`, so it resumes, and has no
+`ptyId`, since an imported session is never running. The server assigns the
+project's id and returns it.
 
 The v1 `git.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
 internal to a v2 server.
