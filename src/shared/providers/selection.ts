@@ -1,5 +1,5 @@
 import { getProvider, isProviderId } from './registry.ts'
-import type { LlmSelection } from './types'
+import type { LlmSelection, ProviderCapabilities } from './types'
 
 const CLAUDE: LlmSelection = { provider: 'claude' }
 
@@ -84,6 +84,25 @@ export function describeLlm(selection: LlmSelection): string {
 export function persistedLlm(llm: LlmSelection | undefined): LlmSelection | undefined {
   if (!llm) return undefined
   return llm.provider === 'claude' && !llm.model && !llm.effort ? undefined : llm
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * The session id a launch uses and whether it resumes. An agent whose id Trek presets
+ * (Claude, Local, Gemini) gets it on the command line unquoted, so a saved id that isn't
+ * a UUID is never used: that session starts over with a fresh id. Codex's own ids are
+ * quoted; an agent without resume always starts fresh.
+ */
+export function sessionLaunch(
+  capabilities: Pick<ProviderCapabilities, 'presetSessionId' | 'resume'>,
+  saved: string | undefined,
+  freshId: () => string
+): { sessionId: string; resume: boolean } {
+  if (!saved || (capabilities.presetSessionId && !UUID.test(saved))) {
+    return { sessionId: freshId(), resume: false }
+  }
+  return { sessionId: saved, resume: capabilities.resume }
 }
 
 /** Whether a saved session's history can follow its worktree to a new path. */

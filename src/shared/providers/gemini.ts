@@ -1,5 +1,12 @@
 import { joinCommand, shellQuote } from './shell.ts'
-import type { LaunchOptions, LaunchSpec, LlmProvider } from './types'
+import type { ApprovalModeOption, LaunchOptions, LaunchSpec, LlmProvider } from './types'
+
+const GEMINI_APPROVAL_MODES: ApprovalModeOption[] = [
+  { value: 'auto_edit', label: 'Auto-approve edits' },
+  { value: 'default', label: 'Ask for approval' },
+  { value: 'yolo', label: 'YOLO (approve everything)' },
+  { value: 'plan', label: 'Plan (read-only)' }
+]
 
 /**
  * Gemini CLI. Verified against 0.46.0: --session-id/--resume take a UUID, MCP servers
@@ -27,19 +34,14 @@ export const gemini: LlmProvider = {
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' }
   ],
   efforts: [],
-  approvalModes: [
-    { value: 'auto_edit', label: 'Auto-approve edits' },
-    { value: 'default', label: 'Ask for approval' },
-    { value: 'yolo', label: 'YOLO (approve everything)' },
-    { value: 'plan', label: 'Plan (read-only)' }
-  ],
+  approvalModes: GEMINI_APPROVAL_MODES,
   defaultApprovalMode: 'auto_edit',
   statusMarkers: ['esc to cancel'],
   buildLaunch(o: LaunchOptions): LaunchSpec {
-    const parts = [
-      o.command?.trim() || 'gemini',
-      `--approval-mode ${o.approvalMode?.trim() || 'auto_edit'}`
-    ]
+    // The mode goes on the line unquoted, so only a known one does.
+    const mode = o.approvalMode?.trim()
+    const known = GEMINI_APPROVAL_MODES.some((m) => m.value === mode) ? mode : undefined
+    const parts = [o.command?.trim() || 'gemini', `--approval-mode ${known || 'auto_edit'}`]
     // Attached, so a value starting with a dash can never be read as a flag.
     if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
     for (const dir of o.addDirs ?? []) parts.push(`--include-directories ${shellQuote(dir)}`)

@@ -18,9 +18,12 @@ const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 /** The claude command line; shared with the Local provider. */
 export function buildClaudeCommand(o: LaunchOptions, effort: string | undefined): string {
+  // The mode goes on the line unquoted, so only a known one does.
+  const mode = o.approvalMode?.trim()
+  const known = CLAUDE_PERMISSION_MODES.some((m) => m.value === mode) ? mode : undefined
   const parts = [
     o.command?.trim() || 'claude',
-    o.extraArgs?.trim() || `--permission-mode ${o.approvalMode?.trim() || DEFAULT_PERMISSION_MODE}`
+    o.extraArgs?.trim() || `--permission-mode ${known || DEFAULT_PERMISSION_MODE}`
   ]
   if (o.model) parts.push(`--model ${shellQuote(o.model)}`)
   if (effort && CLAUDE_EFFORTS.includes(effort)) parts.push(`--effort ${effort}`)

@@ -270,3 +270,25 @@ test('hardening: a model starting with a dash is attached to its flag, never a f
   assert.match(gemini.buildLaunch({ sessionId: ID, resume: false, model }).command, / --model='--yolo'/)
   assert.match(grok.buildLaunch({ sessionId: ID, resume: false, model }).command, / --model='--yolo'/)
 })
+
+test('hardening: an unknown approval mode falls back to the provider default', () => {
+  const evil = 'auto; touch /tmp/p'
+  assert.equal(
+    claude.buildLaunch({ sessionId: ID, resume: false, approvalMode: evil }).command,
+    `claude --permission-mode auto --session-id ${ID}`
+  )
+  assert.equal(
+    claude.buildLaunch({ sessionId: ID, resume: false, approvalMode: ' plan ' }).command,
+    `claude --permission-mode plan --session-id ${ID}`
+  )
+  assert.match(local.buildLaunch({ sessionId: ID, resume: false, approvalMode: evil }).command, /^claude --permission-mode auto /)
+  assert.equal(
+    gemini.buildLaunch({ sessionId: ID, resume: true, approvalMode: evil }).command,
+    `gemini --approval-mode auto_edit --resume ${ID}`
+  )
+  assert.equal(
+    gemini.buildLaunch({ sessionId: ID, resume: true, approvalMode: 'yolo' }).command,
+    `gemini --approval-mode yolo --resume ${ID}`
+  )
+  assert.equal(codex.buildLaunch({ sessionId: ID, resume: false, approvalMode: evil }).command, 'codex --full-auto')
+})

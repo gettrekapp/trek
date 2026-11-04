@@ -16,7 +16,12 @@ import { playReadyAlert } from './audio'
 import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
 import { getProvider } from '../../shared/providers/registry'
-import { effectiveEffort, persistedLlm, sanitizeLlmSelection } from '../../shared/providers/selection'
+import {
+  effectiveEffort,
+  persistedLlm,
+  sanitizeLlmSelection,
+  sessionLaunch
+} from '../../shared/providers/selection'
 import { pickClaimant, pollDelay } from '../../shared/providers/discovery'
 import type { DiscoveryTab } from '../../shared/providers/discovery'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
@@ -465,9 +470,11 @@ export async function createTerminal(
   // Agents that pick their own id (Codex) get a placeholder until it is discovered.
   const sessionPending =
     !restore && !provider.capabilities.presetSessionId && provider.capabilities.resume
-  const sessionId = restore?.sessionId ?? crypto.randomUUID()
-  // Agents that can't resume (Grok) start fresh, still carrying their saved prompt.
-  const resume = !!restore && provider.capabilities.resume
+  // Agents that can't resume (Grok) start fresh, still carrying their saved prompt, and
+  // so does a saved session whose id can't safely go on the command line.
+  const { sessionId, resume } = sessionLaunch(provider.capabilities, restore?.sessionId, () =>
+    crypto.randomUUID()
+  )
   const systemPrompt = restore ? restore.systemPrompt : sessionType?.systemPrompt.trim() || undefined
   const initialMessage = restore ? undefined : sessionType?.initialMessage?.trim() || undefined
   const launch = await worktreeLaunch(llm, sessionId, resume, !serverId, systemPrompt, initialMessage)
@@ -666,7 +673,9 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
   // Agents that pick their own id (Codex) get a placeholder until it is discovered.
   const sessionPending =
     !saved && !provider.capabilities.presetSessionId && provider.capabilities.resume
-  const sessionId = saved?.sessionId ?? crypto.randomUUID()
+  const { sessionId, resume } = sessionLaunch(provider.capabilities, saved?.sessionId, () =>
+    crypto.randomUUID()
+  )
   const count = globalTerminalIds().length
   const id = crypto.randomUUID()
   const entry = createEntry(id, provider.statusMarkers)
@@ -679,10 +688,11 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
     llm,
     ...(sessionPending ? { sessionPending: true } : {})
   })
-  if (!saved) saveGlobalSessions()
+  // New tabs, and saved ones that had to start over, are written with their id.
+  if (!saved || saved.sessionId !== sessionId) saveGlobalSessions()
   try {
     const cwd = project.repositories[0].path
-    const launch = await globalLaunch(llm, sessionId, !!saved && provider.capabilities.resume)
+    const launch = await globalLaunch(llm, sessionId, resume)
     const startedAt = Date.now()
     if (sessionPending) startDiscovery(id, null, cwd, startedAt)
     await window.api.spawnPty({
@@ -815,12 +825,17 @@ export async function restartTerminal(id: string): Promise<void> {
   entry.term.write('\r\n\x1b[90m[restarting]\x1b[0m\r\n')
   state.setTerminalStatus(id, 'starting')
   const llm = meta.llm ?? { provider: 'claude' }
-  // A Codex tab whose id was never discovered, or an agent without resume, starts fresh.
-  const canResume = getProvider(llm.provider).capabilities.resume && !meta.sessionPending
-  // Resume the same session the terminal was running before it exited.
+  // Resume the same session the terminal was running before it exited. A Codex tab whose
+  // id was never discovered, an agent without resume, or an id that isn't safe to put on
+  // the command line starts fresh instead.
+  const session = sessionLaunch(getProvider(llm.provider).capabilities, meta.sessionId, () =>
+    crypto.randomUUID()
+  )
+  if (session.sessionId !== meta.sessionId) state.setTerminalSession(id, session.sessionId)
+  const canResume = session.resume && !meta.sessionPending
   const launch = isGlobal
-    ? await globalLaunch(llm, meta.sessionId, canResume)
-    : await worktreeLaunch(llm, meta.sessionId, canResume, !worktree.serverId, meta.systemPrompt)
+    ? await globalLaunch(llm, session.sessionId, canResume)
+    : await worktreeLaunch(llm, session.sessionId, canResume, !worktree.serverId, meta.systemPrompt)
   const startedAt = Date.now()
   // A fresh launch of a pending tab writes a new rollout: look for that one instead.
   if (meta.sessionPending) startDiscovery(id, worktree.serverId ?? null, worktree.path, startedAt)

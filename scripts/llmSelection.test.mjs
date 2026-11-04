@@ -10,6 +10,7 @@ import {
   resolveNewSessionLlm,
   sanitizeLlmSelection,
   sanitizeProjectLlm,
+  sessionLaunch,
   sessionsAfterMove,
   sessionMigrates
 } from '../src/shared/providers/selection.ts'
@@ -134,4 +135,22 @@ test('sanitizeLlmSelection drops a model or effort that starts with a dash', () 
     model: 'gpt-5'
   })
   assert.deepEqual(sanitizeLlmSelection({ provider: 'local', model: 'qwen-2' }), { provider: 'local', model: 'qwen-2' })
+})
+
+import { getProvider } from '../src/shared/providers/registry.ts'
+
+test('sessionLaunch: new sessions get a fresh id; saved ones resume when they can', () => {
+  const UUID = '0b7f6b2e-1111-4222-8333-444455556666'
+  const fresh = () => 'fresh-uuid'
+  const caps = (id) => getProvider(id).capabilities
+  assert.deepEqual(sessionLaunch(caps('claude'), undefined, fresh), { sessionId: 'fresh-uuid', resume: false })
+  assert.deepEqual(sessionLaunch(caps('claude'), UUID, fresh), { sessionId: UUID, resume: true })
+  assert.deepEqual(sessionLaunch(caps('gemini'), UUID.toUpperCase(), fresh), { sessionId: UUID.toUpperCase(), resume: true })
+  // A preset-id agent never gets a saved id that isn't a UUID: it starts over instead.
+  assert.deepEqual(sessionLaunch(caps('claude'), '$(touch /tmp/x)', fresh), { sessionId: 'fresh-uuid', resume: false })
+  assert.deepEqual(sessionLaunch(caps('gemini'), 'abc', fresh), { sessionId: 'fresh-uuid', resume: false })
+  assert.deepEqual(sessionLaunch(caps('local'), '', fresh), { sessionId: 'fresh-uuid', resume: false })
+  // Codex ids are its own (quoted on the command line); Grok can't resume at all.
+  assert.deepEqual(sessionLaunch(caps('codex'), 'codex-id', fresh), { sessionId: 'codex-id', resume: true })
+  assert.deepEqual(sessionLaunch(caps('grok'), 'g', fresh), { sessionId: 'g', resume: false })
 })
