@@ -22,7 +22,7 @@ import {
   sanitizeLlmSelection,
   sessionLaunch
 } from '../../shared/providers/selection'
-import { pickClaimant, pollDelay } from '../../shared/providers/discovery'
+import { isUnknownMethodError, pickClaimant, pollDelay } from '../../shared/providers/discovery'
 import type { DiscoveryTab } from '../../shared/providers/discovery'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
 import { globalSessionLlm, llmSettings, newSessionLlm } from './llm'
@@ -551,8 +551,13 @@ function startDiscovery(id: string, serverId: string | null, cwd: string, starte
   ensurePoller(folderKey({ serverId, cwd }))
 }
 
+/** Servers whose daemon predates Codex discovery: never polled again, told once. */
+const outdatedServers = new Set<string>()
+
 function ensurePoller(key: string): void {
   if (pollers.has(key)) return
+  const serverId = key.slice(0, key.indexOf('\0'))
+  if (serverId && outdatedServers.has(serverId)) return
   pollers.add(key)
   void pollFolder(key)
 }
@@ -598,7 +603,7 @@ async function pollFolder(key: string): Promise<void> {
       await delay(pollDelay(Date.now() - first.startedAt))
       const claimant = pickClaimant(folderTabs(key))
       if (!claimant) return
-      await scanFor(claimant)
+      if ((await scanFor(claimant)) === 'outdated') return
     }
   } catch (err) {
     console.error('session discovery stopped', err)
@@ -621,7 +626,8 @@ function scanSince(tab: DiscoveryTab & { discovery: Discovery }): Promise<string
   )
 }
 
-async function scanFor(tab: DiscoveryTab & { discovery: Discovery }): Promise<void> {
+/** One scan for a tab; 'outdated' when its host can't scan at all (an old daemon). */
+async function scanFor(tab: DiscoveryTab & { discovery: Discovery }): Promise<'outdated' | void> {
   try {
     const found = await scanSince(tab)
     if (!found) return
@@ -635,6 +641,18 @@ async function scanFor(tab: DiscoveryTab & { discovery: Discovery }): Promise<vo
     if (meta.worktreeId === GLOBAL_WORKTREE_ID) saveGlobalSessions()
     else scheduleAutoSave()
   } catch (err) {
+    const serverId = tab.discovery.serverId
+    if (serverId && isUnknownMethodError(err)) {
+      if (!outdatedServers.has(serverId)) {
+        outdatedServers.add(serverId)
+        const server = useAppStore.getState().project?.servers?.find((s) => s.id === serverId)
+        void window.api.showError(
+          server ? `Codex sessions on ${server.name}` : 'Codex sessions',
+          "This server's Trek daemon is too old to resume Codex sessions — update it."
+        )
+      }
+      return 'outdated'
+    }
     console.error('session discovery failed', err)
   }
 }

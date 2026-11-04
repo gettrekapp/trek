@@ -151,3 +151,17 @@ test('pollDelay: fast for the first minute, then slow', () => {
   assert.equal(pollDelay(59_999), 2000)
   assert.equal(pollDelay(60_000), 15_000)
 })
+
+import { isUnknownMethodError } from '../src/shared/providers/discovery.ts'
+
+test('isUnknownMethodError spots an old daemon through IPC', () => {
+  const ipc = new Error(
+    "Error invoking remote method 'agents:discoverCodexSession': Error: Unknown method: agents.discoverCodexSession"
+  )
+  assert.equal(isUnknownMethodError(ipc), true)
+  const coded = Object.assign(new Error('nope'), { code: 'NOT_FOUND' })
+  assert.equal(isUnknownMethodError(coded), true)
+  assert.equal(isUnknownMethodError(new Error('Server "x" is not connected')), false)
+  assert.equal(isUnknownMethodError('Unknown method: x'), true)
+  assert.equal(isUnknownMethodError(undefined), false)
+})

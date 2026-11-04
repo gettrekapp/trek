@@ -31,3 +31,14 @@ export function pickClaimant<T extends DiscoveryTab>(tabs: T[]): T | undefined {
   }
   return best
 }
+
+/**
+ * Whether a host call failed because the host doesn't know the method: a remote daemon
+ * older than this app. The daemon answers NOT_FOUND "Unknown method: …"; across IPC only
+ * the message survives.
+ */
+export function isUnknownMethodError(err: unknown): boolean {
+  if ((err as { code?: unknown } | null)?.code === 'NOT_FOUND') return true
+  const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  return message.includes('Unknown method:')
+}
