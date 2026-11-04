@@ -5,6 +5,7 @@ import { readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { McpCallRequest, McpCallResponse } from '../shared/types'
+import type { McpAccess } from '../shared/providers/types'
 
 /**
  * MCP server (Streamable HTTP, JSON responses only) that lets the global
@@ -557,7 +558,7 @@ async function removeStaleConfigs(): Promise<void> {
   const names = await readdir(dir)
   await Promise.all(
     names
-      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-(bot-)?\d+\.json$/.test(n))
+      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-(bot-|gemini-)?\d+\.json$/.test(n))
       .map((n) => rm(join(dir, n), { force: true }))
   )
 }
@@ -614,6 +615,29 @@ async function configPathFor(contents: WebContents): Promise<string> {
     throw err
   }
   return configPath
+}
+
+/** Everything a non-Claude CLI needs to reach this window's MCP server. */
+async function accessFor(contents: WebContents): Promise<McpAccess> {
+  const configPath = await configPathFor(contents)
+  const client = clients.get(contents.id)
+  if (!client) throw new Error('The app window is not open')
+  const port = await portPromise!
+  const url = `http://127.0.0.1:${port}/mcp`
+  // Gemini reads MCP servers from a settings file; it trusts this one's tools,
+  // the equivalent of claude's --allowedTools mcp__trek-dev.
+  const geminiSettingsPath = join(app.getPath('userData'), `mcp-gemini-${contents.id}.json`)
+  const settings = {
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        httpUrl: url,
+        headers: { Authorization: `Bearer ${client.token}` },
+        trust: true
+      }
+    }
+  }
+  await writeFile(geminiSettingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 })
+  return { configPath, url, token: client.token, geminiSettingsPath }
 }
 
 export interface BotMcpAccess {
@@ -682,10 +706,14 @@ export function releaseMcpWindow(windowId: number): void {
     map.delete(windowId)
     void rm(client.configPath, { force: true }).catch((err) => console.error(err))
   }
+  void rm(join(app.getPath('userData'), `mcp-gemini-${windowId}.json`), { force: true }).catch(
+    (err) => console.error(err)
+  )
 }
 
 export function registerMcpHandlers(): void {
   ipcMain.handle('mcp:configPath', (event) => configPathFor(event.sender))
+  ipcMain.handle('mcp:access', (event) => accessFor(event.sender))
 
   ipcMain.on('mcp:result', (_event, callId: string, response: McpCallResponse) => {
     const entry = pending.get(callId)

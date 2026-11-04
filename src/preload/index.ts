@@ -36,7 +36,7 @@ import type {
   WorktreeStatus
 } from '../shared/types'
 import type { BotAttach, BotEvent, BotView } from '../shared/bot'
-import type { LlmSettings, LocalBackend, ModelInfo } from '../shared/providers/types'
+import type { LlmSettings, LocalBackend, McpAccess, ModelInfo } from '../shared/providers/types'
 
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
   const listener = (_event: IpcRendererEvent, payload: T): void => callback(payload)
@@ -322,6 +322,8 @@ const api = {
   // MCP server for the global Claude session
   /** Starts the server on first call; resolves to the --mcp-config file path. */
   getMcpConfigPath: (): Promise<string> => ipcRenderer.invoke('mcp:configPath'),
+  /** Starts the server on first call; url, token and config files for any agent CLI. */
+  getMcpAccess: (): Promise<McpAccess> => ipcRenderer.invoke('mcp:access'),
   onMcpCall: (callback: (request: McpCallRequest) => void): (() => void) =>
     subscribe('mcp:call', callback),
   sendMcpResult: (callId: string, response: McpCallResponse): void =>
