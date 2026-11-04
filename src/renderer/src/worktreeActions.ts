@@ -12,6 +12,23 @@ import { destroyEnvironmentIfAny } from './environmentActions'
 import { createTerminal, disposeTerminal } from './terminals'
 import { sameWorktree } from '../../shared/types'
 import type { GitWorktreeInfo, PersistedTerminal, WorktreeInstance } from '../../shared/types'
+import { sessionMigrates } from '../../shared/providers/selection'
+
+/**
+ * Sessions whose agent can't follow a worktree to a new path (Codex, Gemini, Grok) are
+ * dropped rather than resumed somewhere their history isn't, with a notice.
+ */
+function keepMigratable(carried: PersistedTerminal[]): PersistedTerminal[] {
+  const kept = carried.filter(sessionMigrates)
+  const dropped = carried.length - kept.length
+  if (dropped > 0) {
+    void window.api.showError(
+      'Some sessions could not move',
+      `${dropped} session(s) run an agent that keeps its history per folder, so they were closed. Start new ones in the new location.`
+    )
+  }
+  return kept
+}
 
 export type MoveStepKey =
   | 'preflight'
@@ -162,7 +179,7 @@ export async function moveWorktree(opts: {
   // ---- 2. Capture + close sessions (source stays intact on failure —
   //         sessions resume from their still-present .jsonl files) ----
   progress('sessions', 'active')
-  const carried = carriedSessions(instance?.id)
+  const carried = keepMigratable(carriedSessions(instance?.id))
   const wasLoaded = isLoaded(instance?.id)
   if (instance) {
     const state = useAppStore.getState()
@@ -401,8 +418,8 @@ function removeInstance(instanceId: string): void {
 
 /**
  * The sessions a worktree hands over when it is promoted or moved: its live
- * terminals when loaded, else the ones saved in the project file. Only title
- * and session id travel — a remote pty id belongs to the source host.
+ * terminals when loaded, else the ones saved in the project file. Only title,
+ * session id and agent travel — a remote pty id belongs to the source host.
  */
 function carriedSessions(instanceId: string | undefined): PersistedTerminal[] {
   if (!instanceId) return []
@@ -410,7 +427,12 @@ function carriedSessions(instanceId: string | undefined): PersistedTerminal[] {
   const source = state.loadedWorktrees[instanceId]
     ? (state.terminalOrder[instanceId] ?? []).map((id) => state.terminals[id]).filter(Boolean)
     : dormantSessions(state, instanceId)
-  return source.map(({ title, sessionId }) => ({ title, sessionId }))
+  // Claude sessions leave `llm` out, as project files always have.
+  return source.map(({ title, sessionId, llm }) => ({
+    title,
+    sessionId,
+    ...(llm && llm.provider !== 'claude' ? { llm } : {})
+  }))
 }
 
 /**
@@ -560,7 +582,7 @@ export async function promoteToPrimary(
   }
   // Capture the Claude sessions now — they move to the primary worktree
   // after this one is gone.
-  const carried = carriedSessions(instance?.id)
+  const captured = carriedSessions(instance?.id)
   const wasLoaded = isLoaded(instance?.id)
   // Stack and environment first: they need the worktree's files, and their
   // containers hold bind-mount handles into it.
@@ -587,6 +609,8 @@ export async function promoteToPrimary(
     // Kill the worktree terminals before resuming their sessions in the
     // primary — two claude processes must not share one session.
     if (instance) removeInstance(instance.id)
+    // Dropped only now: until the worktree was removed, its sessions were still live.
+    const carried = keepMigratable(captured)
     for (const session of carried) {
       // Claude stores sessions per cwd; move each session file into the main
       // repo's project dir or --resume won't find it there.
@@ -683,7 +707,7 @@ export async function promoteBranchToWorktree(
   tagNewBranch(repoId, branch)
 
   // Carry the primary's Claude sessions into the new worktree.
-  const carried = carriedSessions(primaryId)
+  const carried = keepMigratable(carriedSessions(primaryId))
   const primaryWasLoaded = isLoaded(primaryId)
   const state = useAppStore.getState()
   for (const terminalId of [...(state.terminalOrder[primaryId] ?? [])]) {
