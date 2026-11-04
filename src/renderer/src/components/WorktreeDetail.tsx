@@ -734,9 +734,9 @@ export function WorktreeDetail({
         <NewSessionMenu
           title={hostDown ? 'Server disconnected' : 'New Claude session (⌘T)'}
           disabled={hostDown}
-          onStart={(sessionType) => {
+          onStart={(sessionType, llm) => {
             setPanel('sessions')
-            void startClaudeSession({ serverId: info.serverId, path: info.path }, sessionType)
+            void startClaudeSession({ serverId: info.serverId, path: info.path }, sessionType, llm)
           }}
         />
         <div className="session-row-spacer" />
