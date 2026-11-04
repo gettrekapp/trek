@@ -27,9 +27,13 @@ interface Props {
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const audioAlerts = useAppStore((s) => s.project?.audioAlerts ?? false)
   const setAudioAlerts = useAppStore((s) => s.setAudioAlerts)
-  const permissionMode = useAppStore(
-    (s) => s.project?.claudePermissionMode ?? DEFAULT_PERMISSION_MODE
+  // '' is "App default": the project leaves the mode to the app-wide Claude setting.
+  const permissionMode = useAppStore((s) => s.project?.claudePermissionMode ?? '')
+  const appPermissionMode = useAppStore(
+    (s) => s.llmSettings?.providers.claude?.approvalMode?.trim() || DEFAULT_PERMISSION_MODE
   )
+  const appPermissionLabel =
+    CLAUDE_PERMISSION_MODES.find((m) => m.value === appPermissionMode)?.label ?? appPermissionMode
   const setClaudePermissionMode = useAppStore((s) => s.setClaudePermissionMode)
   const claudeArgsOverride = useAppStore((s) => s.project?.claudeArgs?.trim())
   const repositories = useAppStore((s) => s.project?.repositories) ?? []
@@ -147,10 +151,11 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             className="settings-select"
             value={permissionMode}
             onChange={(e) => {
-              setClaudePermissionMode(e.target.value)
+              setClaudePermissionMode(e.target.value || undefined)
               scheduleAutoSave()
             }}
           >
+            <option value="">App default ({appPermissionLabel})</option>
             {CLAUDE_PERMISSION_MODES.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}

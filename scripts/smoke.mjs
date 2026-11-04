@@ -190,7 +190,7 @@ try {
   await win.locator('.settings-panel:visible input[type="checkbox"]').first().click()
   await win.waitForTimeout(200)
   const audioAfterToggle = await win.evaluate(() => window.__store.getState().project.audioAlerts)
-  // Default Claude session mode dropdown: defaults to auto, persists changes.
+  // Claude session mode dropdown: defaults to the app-wide mode (""), persists changes.
   const modeDefault = await win.locator('select.settings-select').first().inputValue()
   await win.locator('select.settings-select').first().selectOption('acceptEdits')
   await win.waitForTimeout(200)
@@ -198,7 +198,7 @@ try {
     () => window.__store.getState().project.claudePermissionMode
   )
   console.log(
-    `settings panel: ${settingsPanels} (expect 1), audio default: ${audioDefault} (expect false), after toggle: ${audioAfterToggle} (expect true), mode default: ${modeDefault} (expect auto), after pick: ${modeAfterPick} (expect acceptEdits)`
+    `settings panel: ${settingsPanels} (expect 1), audio default: ${audioDefault} (expect false), after toggle: ${audioAfterToggle} (expect true), mode default: "${modeDefault}" (expect "", the app default), after pick: ${modeAfterPick} (expect acceptEdits)`
   )
 
   // Overflow menu on the primary: VS Code, Reveal, Ticket, PR, promote-branch.
@@ -315,7 +315,7 @@ try {
     settingsPanels === 1 &&
     audioDefault === false &&
     audioAfterToggle === true &&
-    modeDefault === 'auto' &&
+    modeDefault === '' &&
     modeAfterPick === 'acceptEdits' &&
     primaryMenuItems === 5 &&
     sidebarTicketChips === 1 &&

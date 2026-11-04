@@ -349,7 +349,8 @@ interface AppState {
   setSessionTypes: (types: ClaudeSessionType[]) => void
   setLinkedDirs: (repoId: string, dirs: string[]) => void
   setWorktreeOrder: (keys: string[]) => void
-  setClaudePermissionMode: (mode: string) => void
+  /** undefined clears the project's mode, so the app-wide Claude mode applies */
+  setClaudePermissionMode: (mode: string | undefined) => void
   setEnvironmentSettings: (repoId: string, patch: Partial<EnvironmentSettings>) => void
   setEnvironments: (infos: EnvironmentInfo[]) => void
   setEnvBusy: (profile: string, action: EnvBusyAction | null) => void
@@ -855,7 +856,8 @@ export const useAppStore = create<AppState>((set) => ({
   setClaudePermissionMode: (mode) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, claudePermissionMode: mode }, dirty: true }
+      const { claudePermissionMode: _previous, ...rest } = state.project
+      return { project: mode ? { ...rest, claudePermissionMode: mode } : rest, dirty: true }
     }),
 
   setEnvironments: (infos) =>
