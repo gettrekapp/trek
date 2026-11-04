@@ -18,6 +18,7 @@ export class PatchError extends Error {
 export function parsePointer(path: string): string[] {
   if (path === '') return []
   if (!path.startsWith('/')) throw new PatchError(`Bad JSON pointer: ${path}`)
+  if (/~(?![01])/.test(path)) throw new PatchError(`Bad escape in JSON pointer: ${path}`)
   return path
     .slice(1)
     .split('/')
@@ -52,7 +53,7 @@ function applyAt(node: unknown, tokens: readonly string[], op: PatchOp): unknown
   }
   if (!isContainer(node)) throw new PatchError(`Path not found: ${op.path}`)
   const [head, ...rest] = tokens
-  if (head === '__proto__' || head === 'constructor' || head === 'prototype') {
+  if (head === '__proto__') {
     throw new PatchError(`Forbidden key in ${op.path}`)
   }
 
@@ -86,12 +87,19 @@ function applyAt(node: unknown, tokens: readonly string[], op: PatchOp): unknown
  * caller's document is untouched (nothing is mutated).
  */
 export function applyPatch<T>(doc: T, ops: readonly PatchOp[]): T {
-  let out: unknown = doc
-  for (const op of ops) {
-    if (op.op !== 'add' && op.op !== 'remove' && op.op !== 'replace') {
-      throw new PatchError(`Unsupported op: ${(op as { op: unknown }).op}`)
+  if (!Array.isArray(ops)) throw new PatchError('Patch must be an array of ops')
+  for (const op of ops as unknown[]) {
+    if (typeof op !== 'object' || op === null) throw new PatchError('Patch op must be an object')
+    const o = op as Record<string, unknown>
+    if (typeof o.path !== 'string') throw new PatchError('Patch op path must be a string')
+    if (o.op !== 'add' && o.op !== 'remove' && o.op !== 'replace') {
+      throw new PatchError(`Unsupported op: ${String(o.op)}`)
     }
-    out = applyAt(out, parsePointer(op.path), op)
+    if (o.op !== 'remove' && !Object.prototype.hasOwnProperty.call(o, 'value')) {
+      throw new PatchError(`Patch op ${o.op} needs a value`)
+    }
   }
+  let out: unknown = doc
+  for (const op of ops) out = applyAt(out, parsePointer(op.path), op)
   return out as T
 }

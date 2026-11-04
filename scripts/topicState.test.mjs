@@ -36,3 +36,10 @@ test('applies a run of patches in order', () => {
   }
   assert.deepEqual(state, { snapshot: { n: 8 }, rev: 8 })
 })
+
+test('malformed ops ask for a resync', () => {
+  assert.deepEqual(applyStatePatch(start, { topic: 'server', rev: 6, ops: [null] }), {
+    kind: 'resync',
+    reason: 'invalid'
+  })
+})

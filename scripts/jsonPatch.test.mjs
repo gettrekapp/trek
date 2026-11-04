@@ -65,3 +65,24 @@ test('bad paths throw PatchError and leave the input alone', () => {
   assert.deepEqual(doc, { a: [1], b: {} })
   assert.equal({}.polluted, undefined)
 })
+
+test('malformed ops throw PatchError, never a raw TypeError', () => {
+  const bad = [null, [null], [{ op: 'add' }], [{ op: 'add', path: '/a' }], [{ op: 'replace', path: 7, value: 1 }]]
+  for (const ops of bad) {
+    assert.throws(() => applyPatch({ a: 1 }, ops), PatchError, JSON.stringify(ops))
+  }
+})
+
+test('constructor and prototype are ordinary keys; only __proto__ is refused', () => {
+  const added = applyPatch({}, [{ op: 'add', path: '/constructor', value: 1 }])
+  assert.equal(Object.prototype.hasOwnProperty.call(added, 'constructor'), true)
+  assert.equal(added.constructor, 1)
+  const replaced = applyPatch(added, [{ op: 'replace', path: '/constructor', value: 2 }])
+  assert.equal(replaced.constructor, 2)
+  assert.equal(applyPatch({}, [{ op: 'add', path: '/prototype', value: 3 }]).prototype, 3)
+})
+
+test('parsePointer rejects invalid escapes', () => {
+  assert.throws(() => parsePointer('/a~2'), PatchError)
+  assert.throws(() => parsePointer('/a~'), PatchError)
+})
