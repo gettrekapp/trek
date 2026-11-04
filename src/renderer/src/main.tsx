@@ -3,11 +3,13 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { useAppStore } from './store'
+import { readTerminal, startClaudeSession } from './terminals'
 import '@xterm/xterm/css/xterm.css'
 import './styles.css'
 
 // Exposed for debugging and smoke tests (local trusted app).
 ;(window as unknown as Record<string, unknown>).__store = useAppStore
+;(window as unknown as Record<string, unknown>).__terminals = { readTerminal, startClaudeSession }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

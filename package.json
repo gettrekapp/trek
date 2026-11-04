@@ -18,6 +18,7 @@
     "smoke:changes": "npm run build && node scripts/changes-smoke.mjs",
     "smoke:bot": "npm run build && node scripts/bot-smoke.mjs",
     "smoke:env": "npm run build && node scripts/env-smoke.mjs",
+    "smoke:providers": "npm run build && node scripts/providers-smoke.mjs",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "electron-vite build && electron-builder --mac --arm64"
   },
