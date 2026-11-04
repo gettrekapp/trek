@@ -12,7 +12,7 @@ import { destroyEnvironmentIfAny } from './environmentActions'
 import { createTerminal, disposeTerminal } from './terminals'
 import { sameWorktree } from '../../shared/types'
 import type { GitWorktreeInfo, PersistedTerminal, WorktreeInstance } from '../../shared/types'
-import { sessionMigrates } from '../../shared/providers/selection'
+import { persistedLlm, sessionMigrates } from '../../shared/providers/selection'
 
 /**
  * Sessions whose agent can't follow a worktree to a new path (Codex, Gemini, Grok) are
@@ -427,12 +427,11 @@ function carriedSessions(instanceId: string | undefined): PersistedTerminal[] {
   const source = state.loadedWorktrees[instanceId]
     ? (state.terminalOrder[instanceId] ?? []).map((id) => state.terminals[id]).filter(Boolean)
     : dormantSessions(state, instanceId)
-  // Claude sessions leave `llm` out, as project files always have.
-  return source.map(({ title, sessionId, llm }) => ({
-    title,
-    sessionId,
-    ...(llm && llm.provider !== 'claude' ? { llm } : {})
-  }))
+  // Plain Claude sessions leave `llm` out, as project files always have.
+  return source.map(({ title, sessionId, llm }) => {
+    const saved = persistedLlm(llm)
+    return { title, sessionId, ...(saved ? { llm: saved } : {}) }
+  })
 }
 
 /**

@@ -16,7 +16,7 @@ import { playReadyAlert } from './audio'
 import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
 import { getProvider } from '../../shared/providers/registry'
-import { effectiveEffort } from '../../shared/providers/selection'
+import { effectiveEffort, persistedLlm } from '../../shared/providers/selection'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
 import { globalSessionLlm, llmSettings, newSessionLlm } from './llm'
 import type {
@@ -544,7 +544,8 @@ export function saveGlobalSessions(): void {
       .filter((id) => !state.terminals[id].sessionPending)
       .map((id) => {
         const { sessionId, title, llm } = state.terminals[id]
-        return { sessionId, title, ...(llm && llm.provider !== 'claude' ? { llm } : {}) }
+        const saved = persistedLlm(llm)
+        return { sessionId, title, ...(saved ? { llm: saved } : {}) }
       })
   )
   scheduleAutoSave()

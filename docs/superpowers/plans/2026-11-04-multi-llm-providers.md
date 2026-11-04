@@ -2309,13 +2309,13 @@ export function sessionSnapshot(worktreeId: string, remote: boolean): PersistedT
       ...(remote ? { ptyId: meta.id } : {}),
       ...(meta.systemPrompt ? { systemPrompt: meta.systemPrompt } : {}),
       ...(meta.sessionTypeId ? { sessionTypeId: meta.sessionTypeId } : {}),
-      ...(meta.llm && meta.llm.provider !== 'claude' ? { llm: meta.llm } : {}),
+      ...(persistedLlm(meta.llm) ? { llm: persistedLlm(meta.llm) } : {}),
       ...(state.terminalQueues[meta.id]?.length ? { queue: state.terminalQueues[meta.id] } : {})
     }))
 }
 ```
 
-(Claude sessions omit `llm` so files saved by this build stay identical to today's for Claude-only projects.)
+(`persistedLlm` from `src/shared/providers/selection.ts` returns undefined only for plain Claude — `{ provider: 'claude' }` with no model or effort — so files saved by this build stay identical to today's for Claude-only projects, while a Claude session with a chosen model or effort keeps it across reloads. `carriedSessions` in `worktreeActions.ts` uses the same rule. Unit-tested in `scripts/llmSelection.test.mjs`.)
 
 In `saveGlobalSessions` (terminals.ts) apply the same rule: skip `sessionPending` terminals and write `llm` only when it isn't Claude:
 
@@ -2324,7 +2324,8 @@ In `saveGlobalSessions` (terminals.ts) apply the same rule: skip `sessionPending
       .filter((id) => !state.terminals[id].sessionPending)
       .map((id) => {
         const { sessionId, title, llm } = state.terminals[id]
-        return { sessionId, title, ...(llm && llm.provider !== 'claude' ? { llm } : {}) }
+        const saved = persistedLlm(llm)
+        return { sessionId, title, ...(saved ? { llm: saved } : {}) }
       })
 ```
 

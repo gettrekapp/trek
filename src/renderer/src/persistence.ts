@@ -1,4 +1,5 @@
 import { primaryWorktreeId, useAppStore } from './store'
+import { persistedLlm } from '../../shared/providers/selection'
 import type { PersistedTerminal, ProjectFile } from '../../shared/types'
 
 /**
@@ -19,8 +20,8 @@ export function sessionSnapshot(worktreeId: string, remote: boolean): PersistedT
       ...(remote ? { ptyId: meta.id } : {}),
       ...(meta.systemPrompt ? { systemPrompt: meta.systemPrompt } : {}),
       ...(meta.sessionTypeId ? { sessionTypeId: meta.sessionTypeId } : {}),
-      // Claude sessions omit it, so Claude-only project files stay as they were.
-      ...(meta.llm && meta.llm.provider !== 'claude' ? { llm: meta.llm } : {}),
+      // Plain Claude sessions omit it, so Claude-only project files stay as they were.
+      ...(persistedLlm(meta.llm) ? { llm: persistedLlm(meta.llm) } : {}),
       ...(state.terminalQueues[meta.id]?.length ? { queue: state.terminalQueues[meta.id] } : {})
     }))
 }

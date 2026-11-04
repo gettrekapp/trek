@@ -5,6 +5,7 @@ import {
   describeLlm,
   effectiveEffort,
   effortsFor,
+  persistedLlm,
   resolveGlobalLlm,
   resolveNewSessionLlm,
   sanitizeLlmSelection,
@@ -103,4 +104,14 @@ test('sanitizeProjectLlm does not throw on malformed input', () => {
   assert.deepEqual(sanitizeProjectLlm({ sessionTypes: {} }), { sessionTypes: {} })
   const p = { repositories: [{ worktrees: [null] }] }
   assert.deepEqual(sanitizeProjectLlm(p), p)
+})
+
+test('persistedLlm drops only plain Claude', () => {
+  assert.equal(persistedLlm(undefined), undefined)
+  assert.equal(persistedLlm({ provider: 'claude' }), undefined)
+  assert.equal(persistedLlm({ provider: 'claude', model: undefined, effort: undefined }), undefined)
+  assert.deepEqual(persistedLlm({ provider: 'claude', model: 'opus' }), { provider: 'claude', model: 'opus' })
+  assert.deepEqual(persistedLlm({ provider: 'claude', effort: 'high' }), { provider: 'claude', effort: 'high' })
+  assert.deepEqual(persistedLlm({ provider: 'codex' }), { provider: 'codex' })
+  assert.deepEqual(persistedLlm({ provider: 'local', model: 'qwen' }), { provider: 'local', model: 'qwen' })
 })

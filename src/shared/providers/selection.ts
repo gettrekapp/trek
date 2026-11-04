@@ -71,6 +71,15 @@ export function describeLlm(selection: LlmSelection): string {
   return [getProvider(selection.provider).label, selection.model, effort].filter(Boolean).join(' · ')
 }
 
+/**
+ * The selection to write into a project file: none for plain Claude (no model or effort),
+ * so files from Claude-only projects stay as they were before providers existed.
+ */
+export function persistedLlm(llm: LlmSelection | undefined): LlmSelection | undefined {
+  if (!llm) return undefined
+  return llm.provider === 'claude' && !llm.model && !llm.effort ? undefined : llm
+}
+
 /** Whether a saved session's history can follow its worktree to a new path. */
 export function sessionMigrates(session: { llm?: LlmSelection }): boolean {
   return getProvider(session.llm?.provider).capabilities.sessionMigration
