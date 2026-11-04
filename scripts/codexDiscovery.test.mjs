@@ -85,3 +85,37 @@ test('commandExists', async () => {
   assert.equal(await commandExists('sh'), true)
   assert.equal(await commandExists('definitely-not-a-command-xyz'), false)
 })
+
+import { nextClaimantAfter, pickClaimant, pollDelay } from '../src/shared/providers/discovery.ts'
+
+const tab = (id, startedAt, status = 'working', sessionPending = true) => ({ id, status, sessionPending, startedAt })
+
+test('pickClaimant: the oldest eligible tab wins', () => {
+  assert.equal(pickClaimant([tab('b', 200), tab('a', 100), tab('c', 300)])?.id, 'a')
+})
+
+test('pickClaimant: an exited tab is skipped', () => {
+  assert.equal(pickClaimant([tab('a', 100, 'exited'), tab('b', 200)])?.id, 'b')
+})
+
+test('pickClaimant: bound tabs are skipped', () => {
+  assert.equal(pickClaimant([tab('a', 100, 'working', false), tab('b', 200, 'starting')])?.id, 'b')
+})
+
+test('pickClaimant: none eligible gives undefined', () => {
+  assert.equal(pickClaimant([]), undefined)
+  assert.equal(pickClaimant([tab('a', 100, 'exited'), tab('b', 200, 'idle', false)]), undefined)
+})
+
+test('nextClaimantAfter: the oldest live tab launched after the exited one', () => {
+  const exited = tab('a', 200, 'exited')
+  const tabs = [tab('old', 100), exited, tab('c', 400), tab('b', 300), tab('d', 350, 'exited')]
+  assert.equal(nextClaimantAfter(tabs, exited)?.id, 'b')
+  assert.equal(nextClaimantAfter([exited, tab('old', 100)], exited), undefined)
+})
+
+test('pollDelay: fast for the first minute, then slow', () => {
+  assert.equal(pollDelay(0), 2000)
+  assert.equal(pollDelay(59_999), 2000)
+  assert.equal(pollDelay(60_000), 15_000)
+})

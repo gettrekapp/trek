@@ -17,6 +17,8 @@ import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
 import { getProvider } from '../../shared/providers/registry'
 import { effectiveEffort, persistedLlm } from '../../shared/providers/selection'
+import { nextClaimantAfter, pickClaimant, pollDelay } from '../../shared/providers/discovery'
+import type { DiscoveryTab } from '../../shared/providers/discovery'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
 import { globalSessionLlm, llmSettings, newSessionLlm } from './llm'
 import type {
@@ -110,6 +112,7 @@ function ensureWired(): void {
       entry.term.write(`\r\n\x1b[90m[process exited with code ${exitCode}]\x1b[0m\r\n`)
     }
     useAppStore.getState().setTerminalStatus(id, 'exited')
+    finishDiscovery(id)
   })
 
   // Remote host lost its connection — the session is still running on the
@@ -489,6 +492,8 @@ export async function createTerminal(
   if (restore?.queue?.length) state.setTerminalQueue(id, restore.queue)
 
   const startedAt = Date.now()
+  // Tracked before the spawn, so an agent that exits at once still gets its final scan.
+  if (sessionPending) startDiscovery(id, serverId ?? null, cwd, startedAt)
   await window.api.spawnPty({
     id,
     cwd,
@@ -499,101 +504,137 @@ export async function createTerminal(
     serverId: serverId ?? null,
     attachExisting: !!(serverId && restore?.ptyId)
   })
-  if (sessionPending) startDiscovery(id, serverId ?? null, cwd, startedAt)
   scheduleAutoSave()
   return id
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** One launch of a pending tab's agent, waiting for its session id. */
+/** A pending tab's (Codex) current launch, waiting for its session id. */
 interface Discovery {
-  /** Bumped on every launch (a restart starts over); older loops see it and stop */
-  generation: number
   serverId: string | null
   cwd: string
   startedAt: number
+  /** Its agent exited while pending: one last scan claims a rollout written just before */
+  finalScan?: boolean
 }
 
-/** Pending tabs (Codex) by terminal id, with their current launch. */
+/** Pending tabs by terminal id. */
 const discoveries = new Map<string, Discovery>()
-let discoveryGeneration = 0
-/** Per-folder chains, so discovery for one folder never runs two scans at once. */
-const discoveryChains = new Map<string, Promise<void>>()
+/** Folders whose poller is running. */
+const pollers = new Set<string>()
 
-const discoveryKey = (d: Pick<Discovery, 'serverId' | 'cwd'>): string => `${d.serverId ?? ''}\0${d.cwd}`
+const folderKey = (d: Pick<Discovery, 'serverId' | 'cwd'>): string => `${d.serverId ?? ''}\0${d.cwd}`
 
-function serialized(key: string, task: () => Promise<void>): Promise<void> {
-  const next = (discoveryChains.get(key) ?? Promise.resolve()).then(task)
-  discoveryChains.set(key, next)
-  void next.finally(() => {
-    if (discoveryChains.get(key) === next) discoveryChains.delete(key)
-  })
-  return next
+/** A pending tab's agent was (re)launched: track this launch and make sure its folder is polled. */
+function startDiscovery(id: string, serverId: string | null, cwd: string, startedAt: number): void {
+  discoveries.set(id, { serverId, cwd, startedAt })
+  ensurePoller(folderKey({ serverId, cwd }))
+}
+
+/** A pending tab's agent exited: scan once more for it, then leave it out until a restart. */
+function finishDiscovery(id: string): void {
+  const discovery = discoveries.get(id)
+  if (!discovery || !useAppStore.getState().terminals[id]?.sessionPending) return
+  discovery.finalScan = true
+  ensurePoller(folderKey(discovery))
+}
+
+function ensurePoller(key: string): void {
+  if (pollers.has(key)) return
+  pollers.add(key)
+  void pollFolder(key)
+}
+
+/** The folder's pending tabs, shaped for the pure rules in shared/providers/discovery. */
+function folderTabs(key: string): (DiscoveryTab & { discovery: Discovery })[] {
+  const terminals = useAppStore.getState().terminals
+  const tabs: (DiscoveryTab & { discovery: Discovery })[] = []
+  for (const [id, discovery] of discoveries) {
+    const meta = terminals[id]
+    if (!meta || folderKey(discovery) !== key) continue
+    tabs.push({
+      id,
+      status: meta.status,
+      sessionPending: !!meta.sessionPending,
+      startedAt: discovery.startedAt,
+      discovery
+    })
+  }
+  return tabs
 }
 
 /**
- * Codex chooses its own session id: watch its sessions folder for the rollout this tab
- * created, then bind the tab to it so it can be resumed. Fast polling for a minute
- * (the file appears on start or on the first prompt), then slowly until the tab closes.
- * Called again by a restart, which supersedes the earlier launch's loop.
+ * Codex chooses its own session id, so a folder with pending tabs is polled for the
+ * rollouts they create — one poller per folder, so its scans never overlap. Each scan is
+ * for the oldest-launched tab still pending and running: the host returns the earliest
+ * unclaimed rollout started after that launch, so tabs pair with rollouts in launch
+ * order. Fast polling while that tab is under a minute old (the file appears on start or
+ * on the first prompt), then slowly, until no tab in the folder is waiting.
+ *
+ * Still ambiguous: if Codex only writes its rollout on the first prompt, an older tab
+ * left idle and unprompted takes the rollout of a younger tab prompted first. The plan's
+ * Task 3 Step 6 (checking against the real CLI) should confirm when Codex creates it.
  */
-function startDiscovery(id: string, serverId: string | null, cwd: string, startedAt: number): void {
-  const generation = ++discoveryGeneration
-  discoveries.set(id, { generation, serverId, cwd, startedAt })
-  void discoverSession(id, generation)
-}
-
-async function discoverSession(id: string, generation: number): Promise<void> {
-  for (;;) {
-    const mine = discoveries.get(id)
-    if (mine?.generation !== generation) return
-    await delay(Date.now() - mine.startedAt < 60_000 ? 2000 : 15_000)
-    if (discoveries.get(id)?.generation !== generation) return
-    if (!useAppStore.getState().terminals[id]?.sessionPending) {
-      discoveries.delete(id)
-      return
+async function pollFolder(key: string): Promise<void> {
+  try {
+    for (;;) {
+      const final = folderTabs(key).find((t) => t.discovery.finalScan && t.sessionPending)
+      if (final) {
+        final.discovery.finalScan = false
+        await scanFor(key, final, true)
+        continue
+      }
+      const first = pickClaimant(folderTabs(key))
+      if (!first) return
+      await delay(pollDelay(Date.now() - first.startedAt))
+      if (folderTabs(key).some((t) => t.discovery.finalScan && t.sessionPending)) continue
+      const claimant = pickClaimant(folderTabs(key))
+      if (!claimant) return
+      await scanFor(key, claimant, false)
     }
-    await serialized(discoveryKey(mine), () => claimForOldest(mine))
+  } catch (err) {
+    console.error('session discovery stopped', err)
+  } finally {
+    pollers.delete(key)
   }
 }
 
-/**
- * One scan of a folder, on behalf of its oldest-launched pending tab. The host returns
- * the earliest unclaimed rollout started after that launch, so tabs pair with rollouts
- * in launch order.
- *
- * Still ambiguous: if Codex only writes its rollout on the first prompt and the user
- * prompts the tabs out of launch order, two tabs in one folder can swap ids. The plan's
- * Task 3 Step 6 (checking against the real CLI) should confirm when Codex creates it.
- */
-async function claimForOldest(folder: Pick<Discovery, 'serverId' | 'cwd'>): Promise<void> {
-  const key = discoveryKey(folder)
-  const state = useAppStore.getState()
-  const waiting = [...discoveries.entries()]
-    .filter(([tid, d]) => discoveryKey(d) === key && state.terminals[tid]?.sessionPending)
-    .sort(([, a], [, b]) => a.startedAt - b.startedAt)
-  if (waiting.length === 0) return
-  const [claimant, launch] = waiting[0]
-  const claimed = Object.values(state.terminals)
+/** The earliest unclaimed rollout in the tab's folder since its launch, from the host. */
+function scanSince(tab: DiscoveryTab & { discovery: Discovery }): Promise<string | null> {
+  const claimed = Object.values(useAppStore.getState().terminals)
     .filter((t) => !t.sessionPending)
     .map((t) => t.sessionId)
+  // The tab's age, not its start time: the host's own clock decides what is recent.
+  return window.api.discoverCodexSession(
+    tab.discovery.serverId,
+    tab.discovery.cwd,
+    Date.now() - tab.startedAt,
+    claimed
+  )
+}
+
+async function scanFor(
+  key: string,
+  tab: DiscoveryTab & { discovery: Discovery },
+  exited: boolean
+): Promise<void> {
   try {
-    // The tab's age, not its start time: the host's own clock decides what is recent.
-    const found = await window.api.discoverCodexSession(
-      launch.serverId,
-      launch.cwd,
-      Date.now() - launch.startedAt,
-      claimed
-    )
+    const found = await scanSince(tab)
     if (!found) return
-    const now = useAppStore.getState()
-    const meta = now.terminals[claimant]
-    if (!meta?.sessionPending || discoveries.get(claimant)?.generation !== launch.generation) return
-    // Bound to another tab while the scan ran — keep polling.
-    if (Object.values(now.terminals).some((t) => t.id !== claimant && t.sessionId === found)) return
-    now.setTerminalSession(claimant, found)
-    discoveries.delete(claimant)
+    if (exited) {
+      // An exited tab may never have written one: if the live tab launched after it would
+      // get this same rollout, it started after that launch too — leave it to the live tab.
+      const next = nextClaimantAfter(folderTabs(key), tab)
+      if (next && (await scanSince(next)) === found) return
+    }
+    const state = useAppStore.getState()
+    const meta = state.terminals[tab.id]
+    // Still pending, on the launch the scan was for, and nobody else holds the id.
+    if (!meta?.sessionPending || discoveries.get(tab.id)?.startedAt !== tab.startedAt) return
+    if (Object.values(state.terminals).some((t) => t.id !== tab.id && t.sessionId === found)) return
+    state.setTerminalSession(tab.id, found)
+    discoveries.delete(tab.id)
     if (meta.worktreeId === GLOBAL_WORKTREE_ID) saveGlobalSessions()
     else scheduleAutoSave()
   } catch (err) {
@@ -653,6 +694,7 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
     const cwd = project.repositories[0].path
     const launch = await globalLaunch(llm, sessionId, !!saved && provider.capabilities.resume)
     const startedAt = Date.now()
+    if (sessionPending) startDiscovery(id, null, cwd, startedAt)
     await window.api.spawnPty({
       id,
       cwd,
@@ -662,7 +704,6 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
       rows: entry.term.rows,
       serverId: null
     })
-    if (sessionPending) startDiscovery(id, null, cwd, startedAt)
   } catch (err) {
     closeGlobalTerminal(id)
     throw err
@@ -791,6 +832,8 @@ export async function restartTerminal(id: string): Promise<void> {
     ? await globalLaunch(llm, meta.sessionId, canResume)
     : await worktreeLaunch(llm, meta.sessionId, canResume, !worktree.serverId, meta.systemPrompt)
   const startedAt = Date.now()
+  // A fresh launch of a pending tab writes a new rollout: look for that one instead.
+  if (meta.sessionPending) startDiscovery(id, worktree.serverId ?? null, worktree.path, startedAt)
   await window.api.spawnPty({
     id,
     cwd: worktree.path,
@@ -800,8 +843,6 @@ export async function restartTerminal(id: string): Promise<void> {
     rows: entry.term.rows,
     serverId: worktree.serverId ?? null
   })
-  // A fresh launch of a pending tab writes a new rollout: look for that one instead.
-  if (meta.sessionPending) startDiscovery(id, worktree.serverId ?? null, worktree.path, startedAt)
   entry.term.focus()
 }
 
@@ -927,6 +968,7 @@ export function cycleTab(worktreeId: string, step: -1 | 1): void {
 
 /** Tear down the xterm instance; the pty is ended by the caller's api call. */
 function disposeEntry(id: string): void {
+  discoveries.delete(id)
   const entry = entries.get(id)
   if (!entry) return
   if (entry.idleTimer) clearTimeout(entry.idleTimer)
