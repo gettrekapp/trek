@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import type { WebSocket } from 'ws'
 import * as gitService from '../../src/host/gitService'
 import * as claudeSessions from '../../src/host/claudeSessionService'
+import * as agentService from '../../src/host/agentService'
 import type { WireError, WireErrorCode } from '../../src/shared/protocol'
 import type { DaemonConfig } from './config'
 import { PathGuard } from './paths'
@@ -129,6 +130,10 @@ const handlers: Record<string, Handler> = {
     await claudeSessions.deleteSession(p.cwd, p.sessionId)
     return null
   },
+  'agents.discoverCodexSession': async (p) => ({
+    sessionId: (await agentService.discoverCodexSession(p.cwd, p.since, p.exclude)) ?? null
+  }),
+  'agents.commandExists': async (p) => ({ exists: await agentService.commandExists(p.command) }),
   'claude.check': () =>
     new Promise((resolve) => {
       // Login shell so version-manager shims and ~/.local/bin are on PATH.

@@ -285,6 +285,15 @@ const api = {
     toCwd: string
   ): Promise<boolean> =>
     ipcRenderer.invoke('claude:migrateSession', serverId, sessionId, fromCwd, toCwd),
+  discoverCodexSession: (
+    serverId: string | null,
+    cwd: string,
+    since: number,
+    exclude: string[]
+  ): Promise<string | null> =>
+    ipcRenderer.invoke('agents:discoverCodexSession', serverId, cwd, since, exclude),
+  agentCommandExists: (serverId: string | null, command: string): Promise<boolean> =>
+    ipcRenderer.invoke('agents:commandExists', serverId, command),
 
   // Terminals
   spawnPty: (opts: PtySpawnOptions): Promise<void> => ipcRenderer.invoke('pty:spawn', opts),

@@ -9,7 +9,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "allowImportingTsExtensions": false,
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
   "include": ["src/**/*.ts", "../src/host/**/*.ts", "../src/shared/**/*.ts"],

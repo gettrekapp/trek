@@ -420,6 +420,13 @@ export class RemoteHost implements HostService {
     }
   }
 
+  agents = {
+    discoverCodexSession: async (cwd: string, since: number, exclude: string[]) =>
+      (await this.request('agents.discoverCodexSession', { cwd, since, exclude })).sessionId,
+    commandExists: async (command: string) =>
+      (await this.request('agents.commandExists', { command })).exists
+  }
+
   checkClaude(): Promise<{ available: boolean; version?: string }> {
     return this.request('claude.check', {})
   }

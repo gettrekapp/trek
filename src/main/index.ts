@@ -20,6 +20,7 @@ import { registerServerHandlers, disconnectAllServers } from './servers'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
+import { registerAgentHandlers } from './agents'
 import { fixPath } from './env'
 import {
   APP_ICON,
@@ -126,6 +127,7 @@ app.whenReady().then(async () => {
   registerMcpHandlers()
   registerBotHandlers()
   registerVoiceHandlers()
+  registerAgentHandlers()
   buildMenu()
   setDockIcon()
   await restoreWindows()

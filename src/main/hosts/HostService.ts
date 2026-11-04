@@ -62,4 +62,11 @@ export interface HostService {
     importSession(cwd: string, sessionId: string, content: string): Promise<void>
     deleteSession(cwd: string, sessionId: string): Promise<void>
   }
+
+  agents: {
+    /** Id of the Codex session started in `cwd` after `since` (ms), skipping `exclude`. */
+    discoverCodexSession(cwd: string, since: number, exclude: string[]): Promise<string | null>
+    /** Whether the command resolves in the host user's login shell. */
+    commandExists(command: string): Promise<boolean>
+  }
 }

@@ -2,6 +2,7 @@ import { BrowserWindow } from 'electron'
 import type { PtySpawnOptions } from '../../shared/types'
 import * as gitService from '../../host/gitService'
 import * as claudeSessions from '../../host/claudeSessionService'
+import * as agentService from '../../host/agentService'
 import { PtyService } from '../../host/ptyService'
 import type { HostService } from './HostService'
 import { sendToPtyWindow } from './ptyWindows'
@@ -57,6 +58,12 @@ export class LocalHost implements HostService {
     exportSession: claudeSessions.exportSession,
     importSession: claudeSessions.importSession,
     deleteSession: claudeSessions.deleteSession
+  }
+
+  agents = {
+    discoverCodexSession: async (cwd: string, since: number, exclude: string[]) =>
+      (await agentService.discoverCodexSession(cwd, since, exclude)) ?? null,
+    commandExists: agentService.commandExists
   }
 
   disposeAllPtys(): void {
