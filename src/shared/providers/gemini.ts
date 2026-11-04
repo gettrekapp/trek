@@ -45,7 +45,7 @@ export const gemini: LlmProvider = {
     parts.push(o.resume ? `--resume ${o.sessionId}` : `--session-id ${o.sessionId}`)
     if (!o.resume) {
       const first = [o.systemPrompt, o.initialMessage].filter(Boolean).join('\n\n')
-      if (first) parts.push(`-i ${shellQuote(first)}`)
+      if (first) parts.push(`--prompt-interactive=${shellQuote(first)}`)
     }
     return {
       command: joinCommand(parts),

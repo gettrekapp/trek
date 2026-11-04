@@ -26,7 +26,7 @@ export const local: LlmProvider = {
   defaultApprovalMode: DEFAULT_PERMISSION_MODE,
   statusMarkers: ['esc to interrupt'],
   buildLaunch(o: LaunchOptions): LaunchSpec {
-    const backend: LocalBackend = o.localBackend ?? 'ollama'
+    const backend: LocalBackend = o.localBackend === 'lmstudio' ? 'lmstudio' : 'ollama'
     const baseUrl = (o.baseUrl?.trim() || DEFAULT_LOCAL_URLS[backend]).replace(/\/+$/, '')
     return {
       command: buildClaudeCommand({ ...o, extraArgs: undefined }, undefined),

@@ -5,7 +5,9 @@ const CODEX_EFFORTS = ['minimal', 'low', 'medium', 'high']
 
 /** `-c key=value` override; the value is TOML, and a JSON string is a valid TOML basic string. */
 function config(key: string, value: string): string {
-  return `-c ${shellQuote(`${key}=${JSON.stringify(value)}`)}`
+  const safe = value.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd')
+  const toml = JSON.stringify(safe).replace(/\x7f/g, '\\u007f')
+  return `-c ${shellQuote(`${key}=${toml}`)}`
 }
 
 function approvalFlags(mode: string | undefined): string {
@@ -62,7 +64,7 @@ export const codex: LlmProvider = {
     }
     if (o.systemPrompt) parts.push(config('developer_instructions', o.systemPrompt))
     for (const dir of o.addDirs ?? []) parts.push(`--add-dir ${shellQuote(dir)}`)
-    if (!o.resume && o.initialMessage) parts.push(shellQuote(o.initialMessage))
+    if (!o.resume && o.initialMessage) parts.push('--', shellQuote(o.initialMessage))
     return {
       command: joinCommand(parts),
       ...(o.mcp ? { env: { TREK_MCP_TOKEN: o.mcp.token } } : {})

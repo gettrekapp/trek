@@ -143,7 +143,7 @@ test('codex: a new session with everything', () => {
     `codex --full-auto -m 'gpt-5-codex' -c 'model_reasoning_effort="high"' ` +
       `-c 'mcp_servers.trek-dev.url="http://127.0.0.1:5000/mcp"' ` +
       `-c 'mcp_servers.trek-dev.bearer_token_env_var="TREK_MCP_TOKEN"' ` +
-      `-c 'developer_instructions="Be \\"brief\\""' --add-dir '/other' 'hi'`
+      `-c 'developer_instructions="Be \\"brief\\""' --add-dir '/other' -- 'hi'`
   )
   assert.deepEqual(spec.env, { TREK_MCP_TOKEN: 'tok' })
 })
@@ -193,7 +193,7 @@ test('gemini: new session with prompt, first message, MCP and dirs', () => {
   assert.equal(
     spec.command,
     `gemini --approval-mode yolo -m 'gemini-2.5-pro' --include-directories '/a' ` +
-      `--include-directories '/b' --session-id ${ID} -i 'You review code.\n\n/review'`
+      `--include-directories '/b' --session-id ${ID} --prompt-interactive='You review code.\n\n/review'`
   )
   assert.deepEqual(spec.env, { GEMINI_CLI_SYSTEM_SETTINGS_PATH: '/u/mcp-gemini-1.json' })
 })
@@ -201,7 +201,7 @@ test('gemini: new session with prompt, first message, MCP and dirs', () => {
 test('gemini: a system prompt alone still rides on -i; resume sends nothing', () => {
   assert.equal(
     gemini.buildLaunch({ sessionId: ID, resume: false, systemPrompt: 'p' }).command,
-    `gemini --approval-mode auto_edit --session-id ${ID} -i 'p'`
+    `gemini --approval-mode auto_edit --session-id ${ID} --prompt-interactive='p'`
   )
   assert.equal(
     gemini.buildLaunch({ sessionId: ID, resume: true, systemPrompt: 'p' }).command,
@@ -215,7 +215,7 @@ import { getProvider, isProviderId, PROVIDER_LIST } from '../src/shared/provider
 test('grok: baseline launch, resume starts fresh', () => {
   assert.equal(
     grok.buildLaunch({ sessionId: ID, resume: false, model: 'grok-4', initialMessage: 'hi', systemPrompt: 'sp' }).command,
-    `grok -m 'grok-4' 'sp\n\nhi'`
+    `grok -m 'grok-4' -- 'sp\n\nhi'`
   )
   assert.equal(grok.buildLaunch({ sessionId: ID, resume: true }).command, 'grok')
 })
@@ -234,4 +234,32 @@ test('every adapter returns a command starting with its command override', () =>
     const { command } = p.buildLaunch({ sessionId: ID, resume: false, command: '/bin/fake' })
     assert.match(command, /^\/bin\/fake( |$)/, p.id)
   }
+})
+
+test('hardening: first messages starting with a dash are not flags', () => {
+  const msg = '--dangerously-bypass-approvals-and-sandbox'
+  assert.match(codex.buildLaunch({ sessionId: ID, resume: false, initialMessage: msg }).command, / -- '--dangerously[^']*'$/)
+  assert.match(grok.buildLaunch({ sessionId: ID, resume: false, initialMessage: msg }).command, / -- '--dangerously[^']*'$/)
+  assert.equal(grok.buildLaunch({ sessionId: ID, resume: false }).command, 'grok')
+  assert.equal(codex.buildLaunch({ sessionId: ID, resume: false }).command, 'codex --full-auto')
+  assert.match(gemini.buildLaunch({ sessionId: ID, resume: false, initialMessage: '-x' }).command, / --prompt-interactive='-x'$/)
+})
+
+test('hardening: claude only emits a known effort', () => {
+  const { command } = claude.buildLaunch({ sessionId: ID, resume: false, effort: 'high;touch /tmp/p' })
+  assert.equal(command.includes('--effort'), false)
+  assert.equal(command.includes('touch'), false)
+})
+
+test('hardening: local tolerates an unknown backend and ignores extraArgs', () => {
+  const spec = local.buildLaunch({ sessionId: ID, resume: false, model: 'm', localBackend: 'bogus', extraArgs: '--x' })
+  assert.equal(spec.env.ANTHROPIC_BASE_URL, 'http://localhost:11434')
+  assert.equal(spec.env.ANTHROPIC_AUTH_TOKEN, 'ollama')
+  assert.match(spec.command, /--permission-mode auto/)
+  assert.equal(spec.command.includes('--x'), false)
+})
+
+test('hardening: codex -c values are valid TOML strings', () => {
+  const cmd = codex.buildLaunch({ sessionId: ID, resume: false, systemPrompt: 'a\x7fb\ud800c' }).command
+  assert.ok(cmd.includes('developer_instructions="a\\u007fb\ufffdc"'), cmd)
 })

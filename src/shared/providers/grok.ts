@@ -28,7 +28,7 @@ export const grok: LlmProvider = {
     if (o.model) parts.push(`-m ${shellQuote(o.model)}`)
     if (!o.resume) {
       const first = [o.systemPrompt, o.initialMessage].filter(Boolean).join('\n\n')
-      if (first) parts.push(shellQuote(first))
+      if (first) parts.push('--', shellQuote(first))
     }
     return { command: joinCommand(parts) }
   }

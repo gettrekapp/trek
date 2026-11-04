@@ -23,7 +23,7 @@ export function buildClaudeCommand(o: LaunchOptions, effort: string | undefined)
     o.extraArgs?.trim() || `--permission-mode ${o.approvalMode?.trim() || DEFAULT_PERMISSION_MODE}`
   ]
   if (o.model) parts.push(`--model ${shellQuote(o.model)}`)
-  if (effort) parts.push(`--effort ${effort}`)
+  if (effort && CLAUDE_EFFORTS.includes(effort)) parts.push(`--effort ${effort}`)
   if (o.mcp) {
     parts.push(`--mcp-config ${shellQuote(o.mcp.configPath)}`, '--allowedTools mcp__trek-dev')
   }
