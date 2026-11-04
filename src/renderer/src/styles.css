@@ -3673,3 +3673,26 @@ body.resizing-row {
 .bot-input:disabled {
   opacity: 0.5;
 }
+
+/* Provider → Model → Effort picker */
+.llm-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.llm-picker .settings-select {
+  min-width: 0;
+  max-width: 100%;
+}
+.llm-custom-model {
+  width: 180px;
+}
+.llm-picker .settings-desc {
+  flex-basis: 100%;
+}
+.llm-small-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
