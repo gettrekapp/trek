@@ -404,6 +404,8 @@ interface McpClient {
   token: string
   configPath: string
   written: Promise<void>
+  /** The Gemini settings file, written on first non-Claude access */
+  geminiWritten?: Promise<string>
   bot: boolean
 }
 
@@ -621,22 +623,37 @@ async function configPathFor(contents: WebContents): Promise<string> {
 async function accessFor(contents: WebContents): Promise<McpAccess> {
   const configPath = await configPathFor(contents)
   const client = clients.get(contents.id)
-  if (!client) throw new Error('The app window is not open')
+  if (!client || contents.isDestroyed()) throw new Error('The app window is not open')
   const port = await portPromise!
   const url = `http://127.0.0.1:${port}/mcp`
-  // Gemini reads MCP servers from a settings file; it trusts this one's tools,
-  // the equivalent of claude's --allowedTools mcp__trek-dev.
-  const geminiSettingsPath = join(app.getPath('userData'), `mcp-gemini-${contents.id}.json`)
-  const settings = {
-    mcpServers: {
-      [MCP_SERVER_NAME]: {
-        httpUrl: url,
-        headers: { Authorization: `Bearer ${client.token}` },
-        trust: true
+  // Written once per window, like the Claude config. Gemini reads MCP servers from a
+  // settings file and trusts this one's tools, the equivalent of --allowedTools mcp__trek-dev.
+  client.geminiWritten ??= (async () => {
+    const path = join(app.getPath('userData'), `mcp-gemini-${contents.id}.json`)
+    const settings = {
+      mcpServers: {
+        [MCP_SERVER_NAME]: {
+          httpUrl: url,
+          headers: { Authorization: `Bearer ${client.token}` },
+          trust: true
+        }
       }
     }
+    await writeFile(path, JSON.stringify(settings, null, 2), { mode: 0o600 })
+    return path
+  })()
+  let geminiSettingsPath: string
+  try {
+    geminiSettingsPath = await client.geminiWritten
+  } catch (err) {
+    client.geminiWritten = undefined
+    throw err
   }
-  await writeFile(geminiSettingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 })
+  // The window may have closed (and had its files removed) while we were writing.
+  if (contents.isDestroyed()) {
+    void rm(geminiSettingsPath, { force: true }).catch((err) => console.error(err))
+    throw new Error('The app window is not open')
+  }
   return { configPath, url, token: client.token, geminiSettingsPath }
 }
 
