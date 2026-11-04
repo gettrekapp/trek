@@ -188,6 +188,11 @@ function voicePrompt(): string | undefined {
 const GLOBAL_SYSTEM_PROMPT =
   'You are the global Claude session of Trek Dev, an app that runs Claude Code sessions across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their Claude sessions.'
 
+/** The global session's role for agents other than Claude, whose prompt stays as it was. */
+function globalAgentPrompt(label: string): string {
+  return `You are the global ${label} session of Trek Dev, an app that runs coding-agent sessions (Claude Code, Codex, Gemini and others) across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their sessions.`
+}
+
 interface LaunchRequest {
   llm: LlmSelection
   sessionId: string
@@ -257,7 +262,7 @@ function globalLaunch(llm: LlmSelection, sessionId: string, resume: boolean): Pr
   const project = useAppStore.getState().project
   const custom = project?.globalSystemPrompt?.trim()
   const label = getProvider(llm.provider).label
-  const role = GLOBAL_SYSTEM_PROMPT.replace('the global Claude session', `the global ${label} session`)
+  const role = llm.provider === 'claude' ? GLOBAL_SYSTEM_PROMPT : globalAgentPrompt(label)
   // Runs in the first repository: agents store sessions by working directory,
   // so moving it would orphan conversations. The others are added for access.
   return launchSpec({
