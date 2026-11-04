@@ -1,7 +1,7 @@
 # Trek Dev
 
-An Electron + React + TypeScript app for running Claude Code across multiple
-git worktrees of a repository, side by side.
+An Electron + React + TypeScript app for running Claude Code, or Codex, Gemini, Grok and
+local models, across multiple git worktrees of a repository, side by side.
 
 <img width="1206" height="765" alt="Screenshot 2026-07-22 at 2 48 07 PM" src="https://github.com/user-attachments/assets/16ea55ed-6a88-4f7d-bc72-9ee9fa21fce9" />
 
@@ -73,6 +73,23 @@ git worktrees of a repository, side by side.
   auto mode by default — change the default session mode in the ⚙ Settings
   panel, or override the flags entirely with a `claudeArgs` field in the
   `.trekproj` file (and `claudeCommand` to replace the binary).
+- **Agents**: each session runs one agent CLI: **Claude** (`claude`), **Codex**
+  (`codex`), **Gemini** (`gemini`), **Grok** (`grok`) or **Local** (Claude Code pointed
+  at Ollama or LM Studio through `ANTHROPIC_BASE_URL`; it needs a model, since Claude's
+  default alias means nothing to Ollama). ⚙ Settings → Agents sets the app-wide default
+  agent, model and effort for ⌘T and `+`, each agent's command and approval mode, and the
+  Local endpoint. A project can override the default (`llmDefault` in the `.trekproj`)
+  and pick the Global panel's agent (`globalLlm`, MCP-capable agents only). Session types
+  can name their own agent, and `▾ → Choose…` next to `+` picks one for a single session.
+  The `start_session` and `save_session_type` MCP tools take a `provider` too.
+  A session always resumes with the agent it started with. Codex picks its own session
+  ids, so Trek finds each one in `~/.codex/sessions` after launch; a Codex tab that exits
+  before its id is found can't be resumed. Gemini gets the trek-dev MCP server through
+  `GEMINI_CLI_SYSTEM_SETTINGS_PATH` and has no system-prompt flag, so a session type's
+  prompt is sent ahead of its first message. Grok starts a fresh conversation on every
+  load. Only Claude and Local sessions follow a worktree when it is promoted, demoted or
+  moved; the others are closed with a notice. A first message is passed so that it can't
+  be read as a flag, and an effort is only passed if it is one the model accepts.
 - **Global Claude** (⌘J, or click the status bar at the bottom of the window):
   a project-wide Claude session in a collapsible panel, running in the
   first repository's root, with the others available through `--add-dir`
@@ -140,7 +157,8 @@ npm run typecheck
 
 The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
 older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
-`npm run smoke:multi` runs the two-repository end-to-end test. Terminal
+`npm run smoke:multi` runs the two-repository end-to-end test, and
+`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs. Terminal
 PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
 the attention heuristics and worktree load/unload live in the renderer
 (`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only
