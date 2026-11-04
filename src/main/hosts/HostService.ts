@@ -64,8 +64,8 @@ export interface HostService {
   }
 
   agents: {
-    /** Id of the Codex session started in `cwd` after `since` (ms), skipping `exclude`. */
-    discoverCodexSession(cwd: string, since: number, exclude: string[]): Promise<string | null>
+    /** Id of the Codex session started in `cwd` within the last `ageMs` (host clock), skipping `exclude`. */
+    discoverCodexSession(cwd: string, ageMs: number, exclude: string[]): Promise<string | null>
     /** Whether the command resolves in the host user's login shell. */
     commandExists(command: string): Promise<boolean>
   }

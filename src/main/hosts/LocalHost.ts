@@ -61,8 +61,8 @@ export class LocalHost implements HostService {
   }
 
   agents = {
-    discoverCodexSession: async (cwd: string, since: number, exclude: string[]) =>
-      (await agentService.discoverCodexSession(cwd, since, exclude)) ?? null,
+    discoverCodexSession: async (cwd: string, ageMs: number, exclude: string[]) =>
+      (await agentService.discoverCodexSession(cwd, ageMs, exclude)) ?? null,
     commandExists: agentService.commandExists
   }
 

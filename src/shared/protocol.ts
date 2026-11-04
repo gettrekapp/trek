@@ -123,7 +123,7 @@ export interface MethodParams {
   'claude.importSession': { cwd: string; sessionId: string; content: string }
   'claude.deleteSession': { cwd: string; sessionId: string }
   'claude.check': Record<string, never>
-  'agents.discoverCodexSession': { cwd: string; since: number; exclude: string[] }
+  'agents.discoverCodexSession': { cwd: string; ageMs: number; exclude: string[] }
   'agents.commandExists': { command: string }
   'sys.ping': { t: number }
 }

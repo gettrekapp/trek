@@ -298,10 +298,10 @@ const api = {
   discoverCodexSession: (
     serverId: string | null,
     cwd: string,
-    since: number,
+    ageMs: number,
     exclude: string[]
   ): Promise<string | null> =>
-    ipcRenderer.invoke('agents:discoverCodexSession', serverId, cwd, since, exclude),
+    ipcRenderer.invoke('agents:discoverCodexSession', serverId, cwd, ageMs, exclude),
   agentCommandExists: (serverId: string | null, command: string): Promise<boolean> =>
     ipcRenderer.invoke('agents:commandExists', serverId, command),
 

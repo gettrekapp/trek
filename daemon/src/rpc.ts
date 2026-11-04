@@ -131,7 +131,7 @@ const handlers: Record<string, Handler> = {
     return null
   },
   'agents.discoverCodexSession': async (p) => ({
-    sessionId: (await agentService.discoverCodexSession(p.cwd, p.since, p.exclude)) ?? null
+    sessionId: (await agentService.discoverCodexSession(p.cwd, p.ageMs, p.exclude)) ?? null
   }),
   'agents.commandExists': async (p) => ({ exists: await agentService.commandExists(p.command) }),
   'claude.check': () =>

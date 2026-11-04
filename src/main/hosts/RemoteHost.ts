@@ -421,8 +421,8 @@ export class RemoteHost implements HostService {
   }
 
   agents = {
-    discoverCodexSession: async (cwd: string, since: number, exclude: string[]) =>
-      (await this.request('agents.discoverCodexSession', { cwd, since, exclude })).sessionId,
+    discoverCodexSession: async (cwd: string, ageMs: number, exclude: string[]) =>
+      (await this.request('agents.discoverCodexSession', { cwd, ageMs, exclude })).sessionId,
     commandExists: async (command: string) =>
       (await this.request('agents.commandExists', { command })).exists
   }

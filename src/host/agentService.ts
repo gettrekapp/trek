@@ -21,9 +21,9 @@ async function firstLine(path: string): Promise<string> {
 }
 
 /** Codex files sessions under <root>/YYYY/MM/DD/; scan the days around the launch. */
-function dayDirs(root: string, since: number): string[] {
+function dayDirs(root: string, since: number, now: number): string[] {
   const dirs = new Set<string>()
-  for (let t = since - DAY_MS; t <= Date.now() + DAY_MS; t += DAY_MS) {
+  for (let t = since - DAY_MS; t <= now + DAY_MS; t += DAY_MS) {
     const d = new Date(t)
     for (const [y, m, day] of [
       [d.getFullYear(), d.getMonth() + 1, d.getDate()],
@@ -36,17 +36,21 @@ function dayDirs(root: string, since: number): string[] {
 }
 
 /**
- * The id of the Codex session a tab launched at `since` in `cwd` created: the earliest
+ * The id of the Codex session a tab launched `ageMs` ago in `cwd` created: the earliest
  * rollout in that cwd that started after the launch and isn't claimed by another tab.
+ * Taking an age rather than a timestamp keeps the comparison on this host's clock, which
+ * may differ from the caller's (remote servers).
  */
 export async function discoverCodexSession(
   cwd: string,
-  since: number,
+  ageMs: number,
   exclude: string[],
-  root = join(homedir(), '.codex', 'sessions')
+  root = join(homedir(), '.codex', 'sessions'),
+  now = Date.now()
 ): Promise<string | undefined> {
+  const since = now - ageMs
   const candidates: { id: string; startedAt: number }[] = []
-  for (const dir of dayDirs(root, since)) {
+  for (const dir of dayDirs(root, since, now)) {
     let names: string[]
     try {
       names = await readdir(dir)
