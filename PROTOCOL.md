@@ -1,4 +1,7 @@
-# Trek Daemon Wire Protocol (v1)
+# Trek Daemon Wire Protocol
+
+Version 1 is described first; [Protocol v2](#protocol-v2) follows it. v2 is
+defined but not yet served by the daemon.
 
 The companion daemon exposes the operations a client needs to manage git
 worktrees and Claude Code terminal sessions on a remote machine. Any client
@@ -144,3 +147,95 @@ optional fields) do not bump it — clients must ignore unknown fields and
 daemons reply `NOT_FOUND` for unknown methods. Breaking changes bump the
 version, and the daemon rejects clients with a version it does not support
 (close `4002`).
+
+---
+
+# Protocol v2
+
+In v2 the server owns all project state: projects, worktrees, sessions, their
+statuses and prompt queues. Clients send domain commands and keep a mirror of the
+topics they subscribe to. Frame shapes: `src/shared/protocolV2.ts`; model:
+`src/shared/model/`.
+
+The transport, `hello`, `req`/`res`/`event` frames, auth and close codes are the
+same as v1. A client selects v2 with `"protocolVersion": 2` in `hello`. A v2
+server keeps accepting v1 clients; a client the server can no longer serve is
+closed with `4002` and the reason `UPGRADE_CLIENT`.
+
+## Welcome
+
+```json
+{ "type": "welcome", "protocolVersion": 2, "daemonVersion": "0.2.0",
+  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"] }
+```
+
+`serverId` is a UUID generated on the server's first start and never changes.
+Clients key everything they cache by it. `repos` is gone; the project list
+comes from the `server` topic.
+
+## Subscriptions
+
+```json
+{ "type": "req", "id": 7, "method": "sub.subscribe", "params": { "topic": "project:p1" } }
+{ "type": "res", "id": 7, "ok": true, "result": { "snapshot": { … }, "rev": 41 } }
+{ "type": "event", "event": "state.patch",
+  "payload": { "topic": "project:p1", "rev": 42,
+               "ops": [{ "op": "replace", "path": "/repositories/0/worktrees/2/sessions/0/status", "value": "attention" }] } }
+```
+
+| Topic | Snapshot |
+|---|---|
+| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}]}` |
+| `attention` | `{entries: [{projectId, sessionId, title, status, since}]}`, sessions in `attention` or `done` |
+| `project:<id>` | the whole `Project` tree |
+
+- `ops` are RFC 6902 JSON Patch, limited to `add`, `remove` and `replace`.
+- `rev` goes up by exactly 1 per patch, per topic. The server sends the
+  `sub.subscribe` response before any patch past its `rev`.
+- A client ignores patches with `rev` at or below its own. On any other `rev`
+  than its own + 1, or a patch that does not apply, it subscribes again and
+  replaces its mirror with the new snapshot. There is no replay log.
+- Subscriptions end with `sub.unsubscribe` or when the socket closes.
+- Unknown topics fail with `BAD_REQUEST`; unknown project ids with `NOT_FOUND`.
+
+## Commands
+
+| Group | Methods |
+|---|---|
+| Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
+| Repositories | `repo.add`, `repo.remove`, `repo.listBranches` |
+| Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
+| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr` |
+| Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
+| Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 |
+| Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
+| Misc | `sys.ping` |
+
+Params and results are in `MethodParamsV2` / `MethodResultsV2`. Commands change
+state only through the server, so their effects arrive as patches. Results carry
+only new ids. `project.rename`, `project.updateSettings`, `branch.setNote` and
+`session.rename` take an optional `ifRev`; if the project's rev has moved past it,
+they fail with the new error code `CONFLICT`. Everything else is last-write-wins.
+
+`project.import` takes a project produced by the client-side importer from a v1
+project file. The server assigns fresh ids to the project, its repositories,
+worktrees and sessions; sessions keep their old id as the agent session id, and
+no `ptyId` is carried over, so imported sessions start without a running pty.
+
+The v1 `git.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
+internal to a v2 server.
+
+## Events
+
+| Event | Payload |
+|---|---|
+| `state.patch` | `{topic, rev, ops}` |
+| `pty.data` | as v1. Session status is computed on the server from live bytes, never from replay |
+| `pty.exit` | as v1 |
+| `daemon.shutdown` | as v1 |
+
+## Several clients
+
+All clients see the same state and the same patches. A pty's size is set by the
+client that most recently wrote to or focused it. `session.seen` from any client
+clears that session's `attention`/`done` status for all of them.
