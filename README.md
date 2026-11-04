@@ -81,25 +81,31 @@ local models, across multiple git worktrees of a repository, side by side.
   Local endpoint. A project can override the default (`llmDefault` in the `.trekproj`)
   and pick the Global panel's agent (`globalLlm`, MCP-capable agents only). Session types
   can name their own agent, and `▾ → Choose…` next to `+` picks one for a single session.
-  The `start_session` and `save_session_type` MCP tools take a `provider` too.
+  The `start_session` MCP tool takes `provider`, `model` and `effort`, and
+  `save_session_type` takes an `llm` object (`{ provider, model?, effort? }`).
   A session always resumes with the agent it started with. Codex picks its own session
-  ids, so Trek finds each one in `~/.codex/sessions` after launch; a Codex tab that exits
-  before its id is found can't be resumed. Gemini gets the trek-dev MCP server through
+  ids, so Trek finds each one in `~/.codex/sessions` (or `$CODEX_HOME/sessions`) after
+  launch; a Codex tab that exits before its id is found can't be resumed. Gemini gets the trek-dev MCP server through
   `GEMINI_CLI_SYSTEM_SETTINGS_PATH` and has no system-prompt flag, so a session type's
-  prompt is sent ahead of its first message. Grok starts a fresh conversation on every
-  load. Only Claude and Local sessions follow a worktree when it is promoted, demoted or
+  prompt is sent ahead of its first message. Grok does the same, and since it can't
+  resume, it starts a fresh conversation (carrying that prompt again) on every load.
+  A Local session on a remote worktree talks to the server's own localhost, while the
+  picker's model list comes from this machine's endpoint. Only Claude and Local sessions follow a worktree when it is promoted, demoted or
   moved; the others are closed with a notice. A first message is passed so that it can't
   be read as a flag, and an effort is only passed if it is one the model accepts.
-- **Global Claude** (⌘J, or click the status bar at the bottom of the window):
-  a project-wide Claude session in a collapsible panel, running in the
-  first repository's root, with the others available through `--add-dir`
+  Older Trek builds open Codex and Gemini sessions as Claude ones, so don't go back to
+  one with such sessions saved.
+- **Global panel** (⌘J, or click the status bar at the bottom of the window):
+  a project-wide agent session (Claude unless the project picks another) in a
+  collapsible panel, running in the
+  first repository's root, with the others available as extra directories
   (a repository added mid-session is available from that session's next launch). It starts the first time you open it, keeps running while
   collapsed, and resumes its conversation when the project is reopened
   (**New conversation** starts over). Its status bar shows the same
   working/attention/done badge as any session.
 - **MCP server**: the app serves an MCP server (`trek-dev`, Streamable HTTP on
   `127.0.0.1` with a per-launch bearer token, `src/main/mcp.ts`) that the
-  global Claude is launched with. Its tools let it list worktrees, start, load
+  global session is launched with. Its tools let it list worktrees, start, load
   and unload sessions, send prompts and keystrokes, read terminal output, wait
   for sessions to finish, see and edit a session's prompt queue, focus or
   close a session, and set a branch's tag,
@@ -109,7 +115,9 @@ local models, across multiple git worktrees of a repository, side by side.
   Global Claude. Opening a project uses a new window unless the current one is
   empty, and focuses the project's window if it's already open. `File → New Window`
   (⌘⇧N) opens an empty one. Closing a window saves its project and ends its local
-  sessions, which resume on reopen; remote sessions keep running. A never-saved
+  sessions, which resume on reopen; remote sessions keep running. Codex tabs still
+  waiting for their session id are ended, local or remote, since nothing could
+  resume them. A never-saved
   project asks first. On launch, the windows open at last quit come back with their
   sessions unloaded (`open-windows.json` in the user-data directory).
 - **Recent projects**: the start screen lists the last 8 project files you opened
