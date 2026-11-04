@@ -123,3 +123,55 @@ test('parseLocalModels reads Ollama tags and LM Studio models', () => {
   ])
   assert.deepEqual(parseLocalModels('ollama', { nope: true }), [])
 })
+
+import { codex, parseCodexSessionMeta } from '../src/shared/providers/codex.ts'
+
+test('codex: a new session with everything', () => {
+  const spec = codex.buildLaunch({
+    sessionId: ID,
+    resume: false,
+    model: 'gpt-5-codex',
+    effort: 'high',
+    approvalMode: 'full-auto',
+    mcp: MCP,
+    systemPrompt: 'Be "brief"',
+    addDirs: ['/other'],
+    initialMessage: 'hi'
+  })
+  assert.equal(
+    spec.command,
+    `codex --full-auto -m 'gpt-5-codex' -c 'model_reasoning_effort="high"' ` +
+      `-c 'mcp_servers.trek-dev.url="http://127.0.0.1:5000/mcp"' ` +
+      `-c 'mcp_servers.trek-dev.bearer_token_env_var="TREK_MCP_TOKEN"' ` +
+      `-c 'developer_instructions="Be \\"brief\\""' --add-dir '/other' 'hi'`
+  )
+  assert.deepEqual(spec.env, { TREK_MCP_TOKEN: 'tok' })
+})
+
+test('codex: resume puts the subcommand and id first; no first message', () => {
+  const spec = codex.buildLaunch({ sessionId: 'abc-123', resume: true, approvalMode: 'yolo' })
+  assert.equal(spec.command, `codex resume 'abc-123' --dangerously-bypass-approvals-and-sandbox`)
+  assert.equal(spec.env, undefined)
+})
+
+test('codex: approval modes map to flags', () => {
+  const cmd = (approvalMode) => codex.buildLaunch({ sessionId: ID, resume: false, approvalMode }).command
+  assert.equal(cmd('on-request'), 'codex -a on-request')
+  assert.equal(cmd('untrusted'), 'codex -a untrusted')
+  assert.equal(cmd(undefined), 'codex --full-auto')
+})
+
+test('parseCodexSessionMeta reads the first rollout line', () => {
+  const line = JSON.stringify({
+    timestamp: '2026-11-04T10:00:00.000Z',
+    type: 'session_meta',
+    payload: { id: 'abc', timestamp: '2026-11-04T10:00:00.000Z', cwd: '/w' }
+  })
+  assert.deepEqual(parseCodexSessionMeta(line), {
+    id: 'abc',
+    cwd: '/w',
+    startedAt: Date.parse('2026-11-04T10:00:00.000Z')
+  })
+  assert.equal(parseCodexSessionMeta('not json'), undefined)
+  assert.equal(parseCodexSessionMeta(JSON.stringify({ type: 'other' })), undefined)
+})
