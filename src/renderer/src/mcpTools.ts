@@ -27,6 +27,9 @@ import {
   startClaudeSession,
   unloadWorktree
 } from './terminals'
+import { isProviderId, PROVIDER_LIST } from '../../shared/providers/registry'
+import { sanitizeLlmSelection } from '../../shared/providers/selection'
+import type { LlmSelection } from '../../shared/providers/types'
 import { createBranchWorktree, promoteToPrimary } from './worktreeActions'
 import { scheduleAutoSave } from './persistence'
 import { stackState, stackUrls, stripAnsi } from './stacks'
@@ -363,10 +366,25 @@ function withoutIcon(type: ClaudeSessionType): Omit<ClaudeSessionType, 'icon'> {
   return rest
 }
 
+function llmArg(args: Record<string, unknown>): LlmSelection | undefined {
+  if (args.provider === undefined || args.provider === '') return undefined
+  if (!isProviderId(args.provider)) {
+    throw new ToolError(
+      `Unknown provider "${String(args.provider)}". Use one of: ${PROVIDER_LIST.map((p) => p.id).join(', ')}`
+    )
+  }
+  return sanitizeLlmSelection({ provider: args.provider, model: args.model, effort: args.effort })
+}
+
 function saveSessionType(args: Record<string, unknown>): ClaudeSessionType {
   const name = typeof args.name === 'string' ? args.name.trim() : undefined
   const systemPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
   const initialMessage = typeof args.initialMessage === 'string' ? args.initialMessage : undefined
+  if (args.llm !== undefined && args.llm !== null && (typeof args.llm !== 'object' || Array.isArray(args.llm))) {
+    throw new ToolError('llm must be an object { provider, model?, effort? } or null')
+  }
+  const llm =
+    args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>)
   let existing: ClaudeSessionType | undefined
   if (typeof args.id === 'string' && args.id) {
     existing = sessionTypes().find((t) => t.id === args.id)
@@ -379,7 +397,8 @@ function saveSessionType(args: Record<string, unknown>): ClaudeSessionType {
       ...existing,
       ...(name ? { name } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-      ...(initialMessage !== undefined ? { initialMessage } : {})
+      ...(initialMessage !== undefined ? { initialMessage } : {}),
+      ...(llm === null ? { llm: undefined } : llm ? { llm } : {})
     }
     setSessionTypes(sessionTypes().map((t) => (t.id === existing.id ? updated : t)))
     return withoutIcon(updated)
@@ -389,7 +408,8 @@ function saveSessionType(args: Record<string, unknown>): ClaudeSessionType {
     id: crypto.randomUUID(),
     name,
     systemPrompt: systemPrompt ?? '',
-    ...(initialMessage !== undefined ? { initialMessage } : {})
+    ...(initialMessage !== undefined ? { initialMessage } : {}),
+    ...(llm ? { llm } : {})
   }
   setSessionTypes([...sessionTypes(), created])
   return created
@@ -401,10 +421,11 @@ async function startSession(args: Record<string, unknown>): Promise<unknown> {
     args.sessionType === undefined || args.sessionType === ''
       ? undefined
       : requireSessionType(args.sessionType)
+  const llm = llmArg(args)
   const before = useAppStore.getState()
   const id = instance
-    ? await createTerminal(instance.id, instance.path, undefined, sessionType)
-    : await startClaudeSession(loc, sessionType)
+    ? await createTerminal(instance.id, instance.path, undefined, sessionType, llm)
+    : await startClaudeSession(loc, sessionType, llm)
   if (!id) throw new ToolError('Could not start a session')
   // Creating a worktree instance selects it; don't yank the user's view.
   const after = useAppStore.getState()

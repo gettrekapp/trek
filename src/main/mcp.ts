@@ -5,7 +5,7 @@ import { readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { McpCallRequest, McpCallResponse } from '../shared/types'
-import type { McpAccess } from '../shared/providers/types'
+import { PROVIDER_IDS, type McpAccess } from '../shared/providers/types'
 
 /**
  * MCP server (Streamable HTTP, JSON responses only) that lets the global
@@ -30,6 +30,16 @@ const TERMINAL_PARAM = { type: 'string', description: 'Session terminalId from l
 const SESSION_TYPE_PARAM = {
   type: 'string',
   description: 'Session type id or name (case-insensitive), as returned by list_session_types'
+}
+
+const LLM_PARAMS = {
+  provider: {
+    type: 'string',
+    enum: [...PROVIDER_IDS],
+    description: "Optional agent CLI to run. Defaults to the session type's agent, then the project/app default."
+  },
+  model: { type: 'string', description: "Optional model id (with provider). Omit for the agent's default." },
+  effort: { type: 'string', description: 'Optional effort level (with provider), e.g. high.' }
 }
 
 const STACK_DESCRIPTION =
@@ -124,13 +134,14 @@ const TOOLS = [
   {
     name: 'start_session',
     description:
-      "Start a new Claude session in a worktree. Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once Claude is ready. Returns the new terminalId.",
+      "Start a new agent session (Claude by default) in a worktree. Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once Claude is ready. Returns the new terminalId.",
     inputSchema: {
       type: 'object',
       properties: {
         worktree: WORKTREE_PARAM,
         sessionType: { ...SESSION_TYPE_PARAM, description: `Optional. ${SESSION_TYPE_PARAM.description}` },
-        prompt: { type: 'string', description: 'Optional first prompt to send' }
+        prompt: { type: 'string', description: 'Optional first prompt to send' },
+        ...LLM_PARAMS
       },
       required: ['worktree']
     }
@@ -138,7 +149,7 @@ const TOOLS = [
   {
     name: 'list_session_types',
     description:
-      'List the configured Claude session types (id, name, systemPrompt, initialMessage). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
+      'List the configured Claude session types (id, name, systemPrompt, initialMessage, llm). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -154,6 +165,11 @@ const TOOLS = [
         initialMessage: {
           type: 'string',
           description: 'Sent as the first message when a session of this type starts; empty for none'
+        },
+        llm: {
+          type: ['object', 'null'],
+          description: 'Agent for sessions of this type: { provider, model?, effort? }. null = use the default.',
+          properties: LLM_PARAMS
         }
       }
     }
