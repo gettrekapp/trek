@@ -229,8 +229,11 @@ head into the new branch (works for fork PRs). `worktree.remove` on a dirty
 worktree fails with `GIT_ERROR` unless `force: true`, so a client can confirm
 with the user and retry with `force: true`.
 
-`project.import` takes a project produced by the client-side importer from a v1
-project file. The server assigns the project's id; nested ids are kept. It
+`project.import` takes one of the projects that `importProjectFile()`
+(`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
+The importer has already given its repositories, worktrees and sessions fresh
+ids, and each session keeps its old id as `agentSessionId` so it resumes. The
+server assigns the project's id; nested ids are kept. It
 rejects the import with `BAD_REQUEST` if any repository, worktree or session id
 is empty, contains a space, or already exists on that server, and with
 `PATH_DENIED` if any repository path is outside its allowlist. It resets runtime
