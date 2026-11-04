@@ -17,7 +17,7 @@ import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
 import { getProvider } from '../../shared/providers/registry'
 import { effectiveEffort, persistedLlm } from '../../shared/providers/selection'
-import { nextClaimantAfter, pickClaimant, pollDelay } from '../../shared/providers/discovery'
+import { pickClaimant, pollDelay } from '../../shared/providers/discovery'
 import type { DiscoveryTab } from '../../shared/providers/discovery'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
 import { globalSessionLlm, llmSettings, newSessionLlm } from './llm'
@@ -112,7 +112,6 @@ function ensureWired(): void {
       entry.term.write(`\r\n\x1b[90m[process exited with code ${exitCode}]\x1b[0m\r\n`)
     }
     useAppStore.getState().setTerminalStatus(id, 'exited')
-    finishDiscovery(id)
   })
 
   // Remote host lost its connection — the session is still running on the
@@ -492,20 +491,33 @@ export async function createTerminal(
   if (restore?.queue?.length) state.setTerminalQueue(id, restore.queue)
 
   const startedAt = Date.now()
-  // Tracked before the spawn, so an agent that exits at once still gets its final scan.
   if (sessionPending) startDiscovery(id, serverId ?? null, cwd, startedAt)
-  await window.api.spawnPty({
-    id,
-    cwd,
-    command: launch.command,
-    env: { ...(instance ? sessionEnv(id, instance) : {}), ...launch.env },
-    cols: 80,
-    rows: 24,
-    serverId: serverId ?? null,
-    attachExisting: !!(serverId && restore?.ptyId)
-  })
+  try {
+    await window.api.spawnPty({
+      id,
+      cwd,
+      command: launch.command,
+      env: { ...(instance ? sessionEnv(id, instance) : {}), ...launch.env },
+      cols: 80,
+      rows: 24,
+      serverId: serverId ?? null,
+      attachExisting: !!(serverId && restore?.ptyId)
+    })
+  } catch (err) {
+    launchFailed(id)
+    throw err
+  }
   scheduleAutoSave()
   return id
+}
+
+/**
+ * A spawn was refused: the tab stays, marked exited so the user sees it and can Restart,
+ * and drops out of discovery so its folder isn't polled for it forever.
+ */
+function launchFailed(id: string): void {
+  discoveries.delete(id)
+  useAppStore.getState().setTerminalStatus(id, 'exited')
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -515,8 +527,6 @@ interface Discovery {
   serverId: string | null
   cwd: string
   startedAt: number
-  /** Its agent exited while pending: one last scan claims a rollout written just before */
-  finalScan?: boolean
 }
 
 /** Pending tabs by terminal id. */
@@ -530,14 +540,6 @@ const folderKey = (d: Pick<Discovery, 'serverId' | 'cwd'>): string => `${d.serve
 function startDiscovery(id: string, serverId: string | null, cwd: string, startedAt: number): void {
   discoveries.set(id, { serverId, cwd, startedAt })
   ensurePoller(folderKey({ serverId, cwd }))
-}
-
-/** A pending tab's agent exited: scan once more for it, then leave it out until a restart. */
-function finishDiscovery(id: string): void {
-  const discovery = discoveries.get(id)
-  if (!discovery || !useAppStore.getState().terminals[id]?.sessionPending) return
-  discovery.finalScan = true
-  ensurePoller(folderKey(discovery))
 }
 
 function ensurePoller(key: string): void {
@@ -572,6 +574,9 @@ function folderTabs(key: string): (DiscoveryTab & { discovery: Discovery })[] {
  * order. Fast polling while that tab is under a minute old (the file appears on start or
  * on the first prompt), then slowly, until no tab in the folder is waiting.
  *
+ * A tab whose agent exits (or whose launch fails) before it is bound drops out and is
+ * never bound: it simply isn't resumable, and a restart starts a fresh discovery.
+ *
  * Still ambiguous: if Codex only writes its rollout on the first prompt, an older tab
  * left idle and unprompted takes the rollout of a younger tab prompted first. The plan's
  * Task 3 Step 6 (checking against the real CLI) should confirm when Codex creates it.
@@ -579,19 +584,12 @@ function folderTabs(key: string): (DiscoveryTab & { discovery: Discovery })[] {
 async function pollFolder(key: string): Promise<void> {
   try {
     for (;;) {
-      const final = folderTabs(key).find((t) => t.discovery.finalScan && t.sessionPending)
-      if (final) {
-        final.discovery.finalScan = false
-        await scanFor(key, final, true)
-        continue
-      }
       const first = pickClaimant(folderTabs(key))
       if (!first) return
       await delay(pollDelay(Date.now() - first.startedAt))
-      if (folderTabs(key).some((t) => t.discovery.finalScan && t.sessionPending)) continue
       const claimant = pickClaimant(folderTabs(key))
       if (!claimant) return
-      await scanFor(key, claimant, false)
+      await scanFor(claimant)
     }
   } catch (err) {
     console.error('session discovery stopped', err)
@@ -614,20 +612,10 @@ function scanSince(tab: DiscoveryTab & { discovery: Discovery }): Promise<string
   )
 }
 
-async function scanFor(
-  key: string,
-  tab: DiscoveryTab & { discovery: Discovery },
-  exited: boolean
-): Promise<void> {
+async function scanFor(tab: DiscoveryTab & { discovery: Discovery }): Promise<void> {
   try {
     const found = await scanSince(tab)
     if (!found) return
-    if (exited) {
-      // An exited tab may never have written one: if the live tab launched after it would
-      // get this same rollout, it started after that launch too — leave it to the live tab.
-      const next = nextClaimantAfter(folderTabs(key), tab)
-      if (next && (await scanSince(next)) === found) return
-    }
     const state = useAppStore.getState()
     const meta = state.terminals[tab.id]
     // Still pending, on the launch the scan was for, and nobody else holds the id.
@@ -834,15 +822,20 @@ export async function restartTerminal(id: string): Promise<void> {
   const startedAt = Date.now()
   // A fresh launch of a pending tab writes a new rollout: look for that one instead.
   if (meta.sessionPending) startDiscovery(id, worktree.serverId ?? null, worktree.path, startedAt)
-  await window.api.spawnPty({
-    id,
-    cwd: worktree.path,
-    command: launch.command,
-    env: { ...(isGlobal ? { TREK_TERMINAL_ID: id } : sessionEnv(id, worktree)), ...launch.env },
-    cols: entry.term.cols,
-    rows: entry.term.rows,
-    serverId: worktree.serverId ?? null
-  })
+  try {
+    await window.api.spawnPty({
+      id,
+      cwd: worktree.path,
+      command: launch.command,
+      env: { ...(isGlobal ? { TREK_TERMINAL_ID: id } : sessionEnv(id, worktree)), ...launch.env },
+      cols: entry.term.cols,
+      rows: entry.term.rows,
+      serverId: worktree.serverId ?? null
+    })
+  } catch (err) {
+    launchFailed(id)
+    throw err
+  }
   entry.term.focus()
 }
 

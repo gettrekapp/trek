@@ -86,7 +86,7 @@ test('commandExists', async () => {
   assert.equal(await commandExists('definitely-not-a-command-xyz'), false)
 })
 
-import { nextClaimantAfter, pickClaimant, pollDelay } from '../src/shared/providers/discovery.ts'
+import { pickClaimant, pollDelay } from '../src/shared/providers/discovery.ts'
 
 const tab = (id, startedAt, status = 'working', sessionPending = true) => ({ id, status, sessionPending, startedAt })
 
@@ -107,11 +107,9 @@ test('pickClaimant: none eligible gives undefined', () => {
   assert.equal(pickClaimant([tab('a', 100, 'exited'), tab('b', 200, 'idle', false)]), undefined)
 })
 
-test('nextClaimantAfter: the oldest live tab launched after the exited one', () => {
-  const exited = tab('a', 200, 'exited')
-  const tabs = [tab('old', 100), exited, tab('c', 400), tab('b', 300), tab('d', 350, 'exited')]
-  assert.equal(nextClaimantAfter(tabs, exited)?.id, 'b')
-  assert.equal(nextClaimantAfter([exited, tab('old', 100)], exited), undefined)
+test('pickClaimant: a tab whose launch failed (marked exited) is skipped', () => {
+  assert.equal(pickClaimant([tab('a', 100, 'exited')]), undefined)
+  assert.equal(pickClaimant([tab('a', 100, 'exited'), tab('b', 200, 'starting')])?.id, 'b')
 })
 
 test('pollDelay: fast for the first minute, then slow', () => {

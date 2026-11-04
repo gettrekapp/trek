@@ -20,7 +20,8 @@ export function pollDelay(ageMs: number): number {
 
 /**
  * The tab a folder's next scan is for: the oldest-launched one still pending and still
- * running. An exited tab never writes a rollout, so it must not take the next tab's.
+ * running. A tab that exited (or failed to launch) before being bound is never bound, so
+ * it can't take the next tab's rollout.
  */
 export function pickClaimant<T extends DiscoveryTab>(tabs: T[]): T | undefined {
   let best: T | undefined
@@ -29,9 +30,4 @@ export function pickClaimant<T extends DiscoveryTab>(tabs: T[]): T | undefined {
     if (!best || tab.startedAt < best.startedAt) best = tab
   }
   return best
-}
-
-/** The live tab that would claim next if `exited` were out of the way: launched after it. */
-export function nextClaimantAfter<T extends DiscoveryTab>(tabs: T[], exited: DiscoveryTab): T | undefined {
-  return pickClaimant(tabs.filter((tab) => tab.id !== exited.id && tab.startedAt > exited.startedAt))
 }
