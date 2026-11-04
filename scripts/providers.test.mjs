@@ -175,3 +175,36 @@ test('parseCodexSessionMeta reads the first rollout line', () => {
   assert.equal(parseCodexSessionMeta('not json'), undefined)
   assert.equal(parseCodexSessionMeta(JSON.stringify({ type: 'other' })), undefined)
 })
+
+import { gemini } from '../src/shared/providers/gemini.ts'
+
+test('gemini: new session with prompt, first message, MCP and dirs', () => {
+  const spec = gemini.buildLaunch({
+    sessionId: ID,
+    resume: false,
+    model: 'gemini-2.5-pro',
+    effort: 'high',
+    approvalMode: 'yolo',
+    mcp: MCP,
+    systemPrompt: 'You review code.',
+    addDirs: ['/a', '/b'],
+    initialMessage: '/review'
+  })
+  assert.equal(
+    spec.command,
+    `gemini --approval-mode yolo -m 'gemini-2.5-pro' --include-directories '/a' ` +
+      `--include-directories '/b' --session-id ${ID} -i 'You review code.\n\n/review'`
+  )
+  assert.deepEqual(spec.env, { GEMINI_CLI_SYSTEM_SETTINGS_PATH: '/u/mcp-gemini-1.json' })
+})
+
+test('gemini: a system prompt alone still rides on -i; resume sends nothing', () => {
+  assert.equal(
+    gemini.buildLaunch({ sessionId: ID, resume: false, systemPrompt: 'p' }).command,
+    `gemini --approval-mode auto_edit --session-id ${ID} -i 'p'`
+  )
+  assert.equal(
+    gemini.buildLaunch({ sessionId: ID, resume: true, systemPrompt: 'p' }).command,
+    `gemini --approval-mode auto_edit --resume ${ID}`
+  )
+})
