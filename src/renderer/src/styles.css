@@ -3696,3 +3696,21 @@ body.resizing-row {
   padding: 0 8px;
   font-size: 12px;
 }
+
+/* Agent settings */
+.llm-inline-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.llm-provider-card {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.quick-btn-label-input.llm-command-input {
+  flex: 0 1 220px;
+  min-width: 0;
+}

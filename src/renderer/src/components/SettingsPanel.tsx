@@ -10,8 +10,11 @@ import { LinearSettings } from './LinearSettings'
 import { VoiceSettings } from './VoiceSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
 import { AppearanceSettings } from './AppearanceSettings'
+import { LlmSettings } from './LlmSettings'
+import { LlmPicker } from './LlmPicker'
+import { defaultSessionLlm } from '../llm'
 import type {
-  ClaudeSessionType,
+  SessionType,
   EnvironmentSettings,
   TerminalQuickButton,
   WorktreeTag
@@ -93,12 +96,12 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
     scheduleAutoSave()
   }
 
-  const updateSessionTypes = (types: ClaudeSessionType[]): void => {
+  const updateSessionTypes = (types: SessionType[]): void => {
     setSessionTypes(types)
     scheduleAutoSave()
   }
 
-  const patchSessionType = (id: string, patch: Partial<ClaudeSessionType>): void => {
+  const patchSessionType = (id: string, patch: Partial<SessionType>): void => {
     updateSessionTypes(sessionTypes.map((t) => (t.id === id ? { ...t, ...patch } : t)))
   }
 
@@ -129,7 +132,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         <h3>Settings</h3>
         <div className="settings-row">
           <span className="settings-label">
-            <span className="settings-name">Default Claude session mode</span>
+            <span className="settings-name">Claude session mode for this project</span>
             <span className="settings-desc">
               Permission mode passed to new Claude sessions (--permission-mode). Existing
               sessions keep the mode they were started with.
@@ -200,6 +203,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         <AppearanceSettings />
         <LinearSettings />
         <VoiceSettings />
+        <LlmSettings />
         <h3>Worktree tags</h3>
         <WorktreeTagsEditor
           description="Workflow tags assignable to a worktree's branch, in menu order. New worktrees start with the first tag. Deleting a tag removes it from every branch using it."
@@ -276,12 +280,12 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           buttons={globalTerminalButtons}
           onChange={updateGlobalButtons}
         />
-        <h3>Claude session types</h3>
+        <h3>Session types</h3>
         <div className="settings-row">
           <span className="settings-label">
             <span className="settings-desc">
               Offered when clicking + to start a new Claude session. The session is named after
-              the type and its system prompt is appended to Claude&apos;s (--append-system-prompt).
+              the type and its system prompt is appended to the agent&apos;s system prompt.
               An optional first message is sent when the session starts.
             </span>
           </span>
@@ -316,6 +320,19 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                 value={type.initialMessage ?? ''}
                 onChange={(e) => patchSessionType(type.id, { initialMessage: e.target.value })}
               />
+              <label className="llm-inline-check">
+                <input
+                  type="checkbox"
+                  checked={!type.llm}
+                  onChange={(e) =>
+                    patchSessionType(type.id, { llm: e.target.checked ? undefined : defaultSessionLlm() })
+                  }
+                />
+                Use the default agent
+              </label>
+              {type.llm && (
+                <LlmPicker value={type.llm} onChange={(llm) => patchSessionType(type.id, { llm })} />
+              )}
             </div>
             <button
               className="quick-btn-remove"
