@@ -48,6 +48,8 @@ import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
 import { MoveWorktreeModal } from './MoveWorktreeModal'
+import { getProvider } from '../../../shared/providers/registry'
+import { describeLlm } from '../../../shared/providers/selection'
 import type { GitWorktreeInfo, Repository, StackStatus } from '../../../shared/types'
 
 interface Props {
@@ -684,6 +686,11 @@ export function WorktreeDetail({
                 />
                 <DecisionIcon terminalId={id} />
                 {icon && <img className="session-tab-icon" src={icon} alt="" />}
+                {meta.llm && meta.llm.provider !== 'claude' && (
+                  <span className="session-llm-glyph" title={describeLlm(meta.llm)}>
+                    {getProvider(meta.llm.provider).glyph}
+                  </span>
+                )}
                 {editingId === id ? (
                   <input
                     className="tab-title-input"
@@ -732,7 +739,7 @@ export function WorktreeDetail({
             )
           })}
         <NewSessionMenu
-          title={hostDown ? 'Server disconnected' : 'New Claude session (⌘T)'}
+          title={hostDown ? 'Server disconnected' : 'New session (⌘T)'}
           disabled={hostDown}
           onStart={(sessionType, llm) => {
             setPanel('sessions')
@@ -861,7 +868,7 @@ export function WorktreeDetail({
                       : void startClaudeSession({ serverId: info.serverId, path: info.path })
                   }
                 >
-                  Start Claude session
+                  Start session
                 </button>
               </>
             )}

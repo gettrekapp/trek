@@ -10,6 +10,9 @@ import {
   startGlobalTerminal,
   tabCycleStep
 } from '../terminals'
+import { globalSessionLlm } from '../llm'
+import { getProvider } from '../../../shared/providers/registry'
+import { describeLlm } from '../../../shared/providers/selection'
 import { BotPanel } from './BotPanel'
 import { StatusBadge } from './StatusBadge'
 import { DecisionIcon } from './DecisionIcon'
@@ -51,6 +54,10 @@ export function GlobalClaude(): React.JSX.Element {
   const decisions = useAppStore((s) => s.decisions)
   const decisionCount = order.filter((id) => decisions[id]).length + (decisions[BOT_DECISION_ID] ? 1 : 0)
   const botView = useAppStore((s) => s.botView)
+  // Subscribed so the bar label follows the configured Global agent.
+  useAppStore((s) => s.project?.globalLlm)
+  useAppStore((s) => s.project?.llmDefault)
+  useAppStore((s) => s.llmSettings)
   const [height, setHeight] = useState(storedHeight)
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -172,7 +179,14 @@ export function GlobalClaude(): React.JSX.Element {
                     onMouseDown={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  <span className="global-tab-title">{meta.title}</span>
+                  <>
+                    {meta.llm && meta.llm.provider !== 'claude' && (
+                      <span className="session-llm-glyph" title={describeLlm(meta.llm)}>
+                        {getProvider(meta.llm.provider).glyph}
+                      </span>
+                    )}
+                    <span className="global-tab-title">{meta.title}</span>
+                  </>
                 )}
                 <span
                   className="session-tab-close"
@@ -211,10 +225,10 @@ export function GlobalClaude(): React.JSX.Element {
       <div
         className={`global-bar ${open ? 'open' : ''} ${attention ? 'attention' : ''}`}
         onClick={toggle}
-        title={open ? 'Hide global Claude (⌘J)' : 'Show global Claude (⌘J)'}
+        title={open ? 'Hide the Global panel (⌘J)' : 'Show the Global panel (⌘J)'}
       >
         <span className="global-chevron">{open ? '▾' : '▴'}</span>
-        <span className="global-title">Claude</span>
+        <span className="global-title">Global · {getProvider(globalSessionLlm().provider).label}</span>
         <StatusBadge status={status ?? null} />
         {decisionCount > 0 && (
           <span className="decision-icon" title={`${decisionCount} global session(s) or the project bot need a decision`}>

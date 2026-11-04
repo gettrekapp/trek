@@ -3737,3 +3737,14 @@ body.resizing-row {
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-muted);
 }
+
+/* Agent glyph on non-Claude session tabs */
+.session-llm-glyph {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}

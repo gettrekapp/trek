@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store'
 import {
+  agentLabel,
   attachTerminal,
   fitTerminal,
   focusTerminal,
@@ -19,6 +20,8 @@ interface Props {
 export function TerminalPane({ terminalId, visible, global = false }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const status = useAppStore((s) => s.terminals[terminalId]?.status)
+  // Subscribed so the restart label follows the session's agent.
+  useAppStore((s) => s.terminals[terminalId]?.llm)
   const quickButtons = useAppStore((s) =>
     global ? s.project?.globalTerminalButtons : s.project?.terminalButtons
   )
@@ -67,7 +70,7 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
       {status === 'exited' && (
         <div className="exited-overlay">
           <span>Process exited</span>
-          <button onClick={() => void restartTerminal(terminalId)}>Restart Claude</button>
+          <button onClick={() => void restartTerminal(terminalId)}>Restart {agentLabel(terminalId)}</button>
         </div>
       )}
     </div>
