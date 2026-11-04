@@ -15,6 +15,8 @@ let lastPick: LlmSelection | undefined
 interface Props {
   disabled: boolean
   title: string
+  /** Host the session will run on, so the picker checks the right machine for the agent */
+  serverId?: string | null
   /** Start a session — of a type and/or with a one-off agent pick; neither = the default */
   onStart: (sessionType?: SessionType, llm?: LlmSelection) => void
 }
@@ -23,7 +25,7 @@ interface Props {
  * The + button on the session row starts a default session straight away; the ▾ beside it
  * opens a menu with the default, a one-off "Choose…" picker and the session types.
  */
-export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.Element {
+export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Props): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [choosing, setChoosing] = useState(false)
   const [pick, setPick] = useState<LlmSelection>(lastPick ?? defaultSessionLlm())
@@ -109,9 +111,10 @@ export function NewSessionMenu({ disabled, title, onStart }: Props): React.JSX.E
             </button>
             {choosing ? (
               <div className="new-session-choose">
-                <LlmPicker value={pick} onChange={setPick} />
+                <LlmPicker value={pick} onChange={setPick} serverId={serverId} />
                 <button
                   className="btn btn-accent"
+                  disabled={pick.provider === 'local' && !pick.model}
                   onClick={() => {
                     lastPick = pick
                     start(undefined, pick)

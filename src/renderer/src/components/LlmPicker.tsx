@@ -12,10 +12,12 @@ interface Props {
   onChange: (value: LlmSelection) => void
   /** Restrict the providers offered (e.g. MCP-capable for the Global panel) */
   filter?: (provider: LlmProvider) => boolean
+  /** Host the agent will run on, for the "not installed" check; null = this machine */
+  serverId?: string | null
 }
 
 /** Provider → Model → Effort. Changing provider resets model and effort. */
-export function LlmPicker({ value, onChange, filter }: Props): React.JSX.Element {
+export function LlmPicker({ value, onChange, filter, serverId = null }: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
   const project = useAppStore((s) => s.project)
   const providers = PROVIDER_LIST.filter((p) => !filter || filter(p))
@@ -74,17 +76,20 @@ export function LlmPicker({ value, onChange, filter }: Props): React.JSX.Element
     // Only the binary name is checked; a command with arguments is assumed present.
     const binary = command.split(/\s+/)[0]
     window.api
-      .agentCommandExists(null, binary)
+      .agentCommandExists(serverId, binary)
       .then((exists) => !cancelled && setInstalled(exists))
       .catch(() => !cancelled && setInstalled(null))
     return () => {
       cancelled = true
     }
-  }, [command])
+  }, [command, serverId])
 
   const models = isLocal ? (localModels ?? []) : provider.models
   const known = models.some((m) => m.id === value.model)
-  const showCustom = customOpen || (!!value.model && !known && !(isLocal && loading))
+  const showCustom =
+    customOpen ||
+    (!!value.model && !known && !(isLocal && loading)) ||
+    (isLocal && !loading && !value.model && models.length === 0)
   const efforts = effortsFor(value)
 
   const setModel = (model: string | undefined): void =>
@@ -119,7 +124,12 @@ export function LlmPicker({ value, onChange, filter }: Props): React.JSX.Element
         }}
       >
         {!isLocal && <option value="">Default model</option>}
-        {isLocal && loading && <option value={value.model ?? ''}>Loading models…</option>}
+        {isLocal && !value.model && (
+          <option value="" disabled>
+            {loading ? 'Loading models…' : models.length === 0 ? 'No models found' : 'Choose a model'}
+          </option>
+        )}
+        {isLocal && loading && value.model && <option value={value.model}>Loading models…</option>}
         {models.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label}

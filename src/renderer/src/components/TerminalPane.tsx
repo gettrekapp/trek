@@ -21,7 +21,7 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
   const ref = useRef<HTMLDivElement>(null)
   const status = useAppStore((s) => s.terminals[terminalId]?.status)
   // Subscribed so the restart label follows the session's agent.
-  useAppStore((s) => s.terminals[terminalId]?.llm)
+  const llm = useAppStore((s) => s.terminals[terminalId]?.llm)
   const quickButtons = useAppStore((s) =>
     global ? s.project?.globalTerminalButtons : s.project?.terminalButtons
   )
@@ -71,6 +71,11 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
         <div className="exited-overlay">
           <span>Process exited</span>
           <button onClick={() => void restartTerminal(terminalId)}>Restart {agentLabel(terminalId)}</button>
+          {llm && llm.provider !== 'claude' && (
+            <span className="exited-hint">
+              If {agentLabel(terminalId)} isn&apos;t installed, set its command in ⚙ Settings → Agents.
+            </span>
+          )}
         </div>
       )}
     </div>

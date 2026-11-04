@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { scheduleAutoSave } from '../persistence'
 import { defaultSessionLlm, updateLlmSettings } from '../llm'
@@ -27,11 +27,17 @@ function DraftInput({
 } & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'>): React.JSX.Element {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
+  const cancelled = useRef(false)
   useEffect(() => {
     if (!editing) setDraft(value)
   }, [value, editing])
   const commit = (): void => {
     setEditing(false)
+    if (cancelled.current) {
+      cancelled.current = false
+      setDraft(value)
+      return
+    }
     if (draft.trim() !== value) onCommit(draft.trim())
   }
   return (
@@ -39,14 +45,16 @@ function DraftInput({
       {...rest}
       type="text"
       value={draft}
-      onFocus={() => setEditing(true)}
+      onFocus={() => {
+        cancelled.current = false
+        setEditing(true)
+      }}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur()
         else if (e.key === 'Escape') {
-          setDraft(value)
-          setEditing(false)
+          cancelled.current = true
           e.currentTarget.blur()
         }
       }}
