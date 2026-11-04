@@ -5,6 +5,7 @@ import { DEFAULT_WORKTREE_TAGS, hostKey, sameWorktree } from '../../shared/types
 import { deriveProfileName } from '../../shared/environments'
 import { migrateToV3, type RawProjectFile } from '../../shared/migration'
 import { sanitizeAppearance } from '../../shared/appearance'
+import { sanitizeProjectLlm } from '../../shared/providers/selection'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   ClaudeSessionType,
@@ -363,13 +364,15 @@ interface AppState {
 
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
 
-/** Older files upgrade on load; projects without configured workflow tags get the default set, and invalid appearance values are dropped. */
+/** Older files upgrade on load; projects without configured workflow tags get the default set, and invalid appearance values and LLM selections are dropped. */
 export function migrateProject(raw: RawProjectFile): ProjectFile {
   const project = migrateToV3(raw, () => crypto.randomUUID())
-  return sanitizeAppearance({
-    ...project,
-    worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS
-  })
+  return sanitizeProjectLlm(
+    sanitizeAppearance({
+      ...project,
+      worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS
+    })
+  )
 }
 
 export const useAppStore = create<AppState>((set) => ({

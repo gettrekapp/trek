@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { migrateToV3 } from '../src/shared/migration.ts'
+import { sanitizeProjectLlm } from '../src/shared/providers/selection.ts'
 
 const ids = () => {
   let n = 0
@@ -109,4 +110,18 @@ test('a repository without worktrees gets an empty list', () => {
     ids()
   )
   assert.deepEqual(p.repositories[0].worktrees, [])
+})
+
+test('a legacy project with no llm fields loads unchanged by LLM sanitizing', () => {
+  const project = migrateToV3(
+    {
+      version: 3,
+      name: 'p',
+      repositories: [
+        { id: 'r', name: 'r', path: '/r', worktrees: [{ id: 'w', name: 'w', path: '/w', terminals: [{ title: 'a', sessionId: 's' }] }] }
+      ]
+    },
+    () => 'id'
+  )
+  assert.deepEqual(sanitizeProjectLlm(project), project)
 })

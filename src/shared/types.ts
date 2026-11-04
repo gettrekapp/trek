@@ -1,4 +1,5 @@
 import type { RawProjectFile } from './migration'
+import type { LlmSelection } from './providers/types'
 
 /** A workflow tag assignable to a branch's worktree, configured per project. */
 export interface WorktreeTag {
@@ -32,18 +33,23 @@ export interface TerminalQuickButton {
   text: string
 }
 
-/** User-configured kind of Claude session, offered by the new-session (+) menu. */
-export interface ClaudeSessionType {
+/** User-configured kind of session, offered by the new-session (+) menu. */
+export interface SessionType {
   id: string
   /** Menu label, and the new session's tab title */
   name: string
-  /** Passed to claude via --append-system-prompt */
+  /** Appended to the agent's system prompt (Claude: --append-system-prompt) */
   systemPrompt: string
   /** Sent as the first message when a session of this type starts */
   initialMessage?: string
   /** PNG data URL shown on the tabs of sessions of this type */
   icon?: string
+  /** Provider/model/effort for sessions of this type; unset = the default */
+  llm?: LlmSelection
 }
+
+/** @deprecated Use SessionType. */
+export type ClaudeSessionType = SessionType
 
 export interface PersistedTerminal {
   title: string
@@ -61,6 +67,8 @@ export interface PersistedTerminal {
   systemPrompt?: string
   /** Session type the session was started from — its icon shows on the tab */
   sessionTypeId?: string
+  /** Agent the session runs; resumes always use it. Missing = Claude (older files). */
+  llm?: LlmSelection
 }
 
 export interface WorktreeInstance {
@@ -218,7 +226,11 @@ export interface ProjectFile {
   /** Appended to every worktree Claude session's system prompt (not the global session) */
   sessionSystemPrompt?: string
   /** Session types offered by the new-session (+) menu */
-  sessionTypes?: ClaudeSessionType[]
+  sessionTypes?: SessionType[]
+  /** Default provider/model/effort for new sessions — overrides the app-wide default */
+  llmDefault?: LlmSelection
+  /** Provider for new Global panel tabs (must support MCP); falls back to the session default */
+  globalLlm?: LlmSelection
   /** Sidebar order, as worktreeKey()s — worktrees not listed sort after these */
   worktreeOrder?: string[]
   /** Tabs of the global (project-wide) Claude panel, in tab order */
@@ -229,6 +241,8 @@ export interface GlobalSession {
   /** Claude session UUID */
   sessionId: string
   title: string
+  /** Agent the tab runs. Missing = Claude. */
+  llm?: LlmSelection
 }
 
 /** What a new window starts with. */
