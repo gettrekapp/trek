@@ -96,3 +96,11 @@ test('sanitizeProjectLlm cleans every place a selection lives', () => {
   assert.deepEqual(clean.repositories[0].worktrees[0].terminals[0].llm, { provider: 'gemini' })
   assert.equal('llm' in clean.repositories[0].primaryTerminals[0], false)
 })
+
+test('sanitizeProjectLlm does not throw on malformed input', () => {
+  assert.doesNotThrow(() => sanitizeProjectLlm({ sessionTypes: [null] }))
+  assert.deepEqual(sanitizeProjectLlm({ sessionTypes: [null] }), { sessionTypes: [null] })
+  assert.deepEqual(sanitizeProjectLlm({ sessionTypes: {} }), { sessionTypes: {} })
+  const p = { repositories: [{ worktrees: [null] }] }
+  assert.deepEqual(sanitizeProjectLlm(p), p)
+})

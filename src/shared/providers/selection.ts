@@ -78,21 +78,47 @@ export function sessionMigrates(session: { llm?: LlmSelection }): boolean {
 
 type WithLlm = { llm?: unknown }
 
-function cleanLlm<T extends WithLlm>(item: T): T {
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function cleanLlm<T>(item: T): T {
+  if (!isObject(item)) return item
   const { llm, ...rest } = item
   const clean = sanitizeLlmSelection(llm)
   return (clean ? { ...rest, llm: clean } : rest) as T
 }
 
+/** Maps an array's entries; anything that isn't an array is left as is. */
+function mapEach<T>(value: T, fn: (item: unknown) => unknown): T {
+  return (Array.isArray(value) ? value.map(fn) : value) as T
+}
+
 interface ProjectLlmShape {
   llmDefault?: unknown
   globalLlm?: unknown
-  sessionTypes?: WithLlm[]
-  globalSessions?: WithLlm[]
-  repositories?: { worktrees?: { terminals?: WithLlm[] }[]; primaryTerminals?: WithLlm[] }[]
+  sessionTypes?: unknown
+  globalSessions?: unknown
+  repositories?: unknown
 }
 
-/** Sanitizes every LLM selection a loaded project file can hold. */
+function cleanWorktree(w: unknown): unknown {
+  if (!isObject(w) || !('terminals' in w)) return w
+  return { ...w, terminals: mapEach(w.terminals, cleanLlm) }
+}
+
+function cleanRepository(repo: unknown): unknown {
+  if (!isObject(repo)) return repo
+  return {
+    ...repo,
+    ...('worktrees' in repo ? { worktrees: mapEach(repo.worktrees, cleanWorktree) } : {}),
+    ...('primaryTerminals' in repo
+      ? { primaryTerminals: mapEach(repo.primaryTerminals, cleanLlm) }
+      : {})
+  }
+}
+
+/** Sanitizes every LLM selection a loaded project file can hold; malformed shapes pass through. */
 export function sanitizeProjectLlm<T extends ProjectLlmShape>(project: T): T {
   const { llmDefault, globalLlm, ...rest } = project
   const cleanDefault = sanitizeLlmSelection(llmDefault)
@@ -101,22 +127,12 @@ export function sanitizeProjectLlm<T extends ProjectLlmShape>(project: T): T {
     ...rest,
     ...(cleanDefault ? { llmDefault: cleanDefault } : {}),
     ...(cleanGlobal ? { globalLlm: cleanGlobal } : {}),
-    ...(project.sessionTypes ? { sessionTypes: project.sessionTypes.map(cleanLlm) } : {}),
-    ...(project.globalSessions ? { globalSessions: project.globalSessions.map(cleanLlm) } : {}),
-    ...(project.repositories
-      ? {
-          repositories: project.repositories.map((repo) => ({
-            ...repo,
-            ...(repo.worktrees
-              ? {
-                  worktrees: repo.worktrees.map((w) =>
-                    w.terminals ? { ...w, terminals: w.terminals.map(cleanLlm) } : w
-                  )
-                }
-              : {}),
-            ...(repo.primaryTerminals ? { primaryTerminals: repo.primaryTerminals.map(cleanLlm) } : {})
-          }))
-        }
+    ...('sessionTypes' in project ? { sessionTypes: mapEach(project.sessionTypes, cleanLlm) } : {}),
+    ...('globalSessions' in project
+      ? { globalSessions: mapEach(project.globalSessions, cleanLlm) }
+      : {}),
+    ...('repositories' in project
+      ? { repositories: mapEach(project.repositories, cleanRepository) }
       : {})
   } as T
 }
