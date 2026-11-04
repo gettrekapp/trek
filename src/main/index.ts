@@ -21,6 +21,7 @@ import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
 import { registerAgentHandlers } from './agents'
+import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
 import {
   APP_ICON,
@@ -128,6 +129,7 @@ app.whenReady().then(async () => {
   registerBotHandlers()
   registerVoiceHandlers()
   registerAgentHandlers()
+  registerLlmHandlers()
   buildMenu()
   setDockIcon()
   await restoreWindows()

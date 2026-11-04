@@ -6,6 +6,7 @@ import { deriveProfileName } from '../../shared/environments'
 import { migrateToV3, type RawProjectFile } from '../../shared/migration'
 import { sanitizeAppearance } from '../../shared/appearance'
 import { sanitizeProjectLlm } from '../../shared/providers/selection'
+import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   ClaudeSessionType,
@@ -214,6 +215,10 @@ export interface TerminalMeta {
   /** Session type's system prompt, if the session was started from one */
   systemPrompt?: string
   sessionTypeId?: string
+  /** Agent this terminal runs; undefined = Claude */
+  llm?: LlmSelection
+  /** Codex: the real session id hasn't been discovered yet, so sessionId is a placeholder */
+  sessionPending?: boolean
 }
 
 /** A session asked the user to make a call (request_decision MCP tool). */
@@ -278,6 +283,12 @@ interface AppState {
   decisions: Record<string, PendingDecision>
   /** Machine-wide ElevenLabs settings, null until loaded. */
   voice: VoiceSettings | null
+  llmSettings: LlmSettings | null
+  setLlmSettings: (settings: LlmSettings | null) => void
+  setProjectLlmDefault: (llm: LlmSelection | undefined) => void
+  setGlobalLlm: (llm: LlmSelection | undefined) => void
+  /** Codex: swap a terminal's placeholder session id for the discovered one */
+  setTerminalSession: (id: string, sessionId: string) => void
   /** The spoken summary playing now, and how many wait behind it. Not persisted. */
   voicePlaying: SpokenSummary | null
   voiceQueued: number
@@ -401,6 +412,7 @@ export const useAppStore = create<AppState>((set) => ({
   linearIssues: {},
   decisions: {},
   voice: null,
+  llmSettings: null,
   voicePlaying: null,
   voiceQueued: 0,
 
@@ -886,6 +898,27 @@ export const useAppStore = create<AppState>((set) => ({
   setLinearConnected: (connected) =>
     set(connected ? { linearConnected: true } : { linearConnected: false, linearIssues: {} }),
   setVoice: (voice) => set({ voice }),
+
+  setLlmSettings: (llmSettings) => set({ llmSettings }),
+
+  setProjectLlmDefault: (llmDefault) =>
+    set((state) =>
+      state.project ? { project: { ...state.project, llmDefault }, dirty: true } : state
+    ),
+
+  setGlobalLlm: (globalLlm) =>
+    set((state) =>
+      state.project ? { project: { ...state.project, globalLlm }, dirty: true } : state
+    ),
+
+  setTerminalSession: (id, sessionId) =>
+    set((state) => {
+      const meta = state.terminals[id]
+      if (!meta) return state
+      return {
+        terminals: { ...state.terminals, [id]: { ...meta, sessionId, sessionPending: false } }
+      }
+    }),
 
   setVoicePlayback: (playing, queued) => set({ voicePlaying: playing, voiceQueued: queued }),
 

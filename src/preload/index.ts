@@ -36,6 +36,7 @@ import type {
   WorktreeStatus
 } from '../shared/types'
 import type { BotAttach, BotEvent, BotView } from '../shared/bot'
+import type { LlmSettings, LocalBackend, ModelInfo } from '../shared/providers/types'
 
 function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
   const listener = (_event: IpcRendererEvent, payload: T): void => callback(payload)
@@ -167,6 +168,12 @@ const api = {
     ipcRenderer.invoke('linear:fetchIssues', ids),
 
   // ElevenLabs voice summaries — the API key stays in the main process
+  // Agent CLIs — app-wide defaults and local model lists
+  llmGetSettings: (): Promise<LlmSettings> => ipcRenderer.invoke('llm:getSettings'),
+  llmSetSettings: (settings: LlmSettings): Promise<LlmSettings> =>
+    ipcRenderer.invoke('llm:setSettings', settings),
+  llmFetchModels: (backend: LocalBackend, baseUrl: string): Promise<ModelInfo[]> =>
+    ipcRenderer.invoke('llm:fetchModels', backend, baseUrl),
   voiceGetSettings: (): Promise<VoiceSettings> => ipcRenderer.invoke('voice:getSettings'),
   voiceSetApiKey: (apiKey: string): Promise<VoiceKeyResult> =>
     ipcRenderer.invoke('voice:setApiKey', apiKey),
