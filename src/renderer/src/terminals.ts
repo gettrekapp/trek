@@ -321,7 +321,11 @@ export function unloadWorktree(worktreeId: string): void {
   }
   // Snapshot first: tearing the terminals down drops their titles and queues.
   state.setWorktreeSessions(worktreeId, sessionSnapshot(worktreeId, !!instance?.serverId))
-  for (const id of [...order]) unloadTerminal(id)
+  // A pending tab has nothing to resume, so its agent ends here, remote ones too.
+  for (const id of [...order]) {
+    if (state.terminals[id]?.sessionPending) disposeTerminal(id)
+    else unloadTerminal(id)
+  }
   state.setWorktreeLoaded(worktreeId, false)
   scheduleAutoSave()
 }
@@ -490,44 +494,105 @@ export async function createTerminal(
     serverId: serverId ?? null,
     attachExisting: !!(serverId && restore?.ptyId)
   })
-  if (sessionPending) void discoverSession(id, serverId ?? null, cwd, startedAt)
+  if (sessionPending) startDiscovery(id, serverId ?? null, cwd, startedAt)
   scheduleAutoSave()
   return id
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+/** One launch of a pending tab's agent, waiting for its session id. */
+interface Discovery {
+  /** Bumped on every launch (a restart starts over); older loops see it and stop */
+  generation: number
+  serverId: string | null
+  cwd: string
+  startedAt: number
+}
+
+/** Pending tabs (Codex) by terminal id, with their current launch. */
+const discoveries = new Map<string, Discovery>()
+let discoveryGeneration = 0
+/** Per-folder chains, so discovery for one folder never runs two scans at once. */
+const discoveryChains = new Map<string, Promise<void>>()
+
+const discoveryKey = (d: Pick<Discovery, 'serverId' | 'cwd'>): string => `${d.serverId ?? ''}\0${d.cwd}`
+
+function serialized(key: string, task: () => Promise<void>): Promise<void> {
+  const next = (discoveryChains.get(key) ?? Promise.resolve()).then(task)
+  discoveryChains.set(key, next)
+  void next.finally(() => {
+    if (discoveryChains.get(key) === next) discoveryChains.delete(key)
+  })
+  return next
+}
+
 /**
  * Codex chooses its own session id: watch its sessions folder for the rollout this tab
  * created, then bind the tab to it so it can be resumed. Fast polling for a minute
  * (the file appears on start or on the first prompt), then slowly until the tab closes.
+ * Called again by a restart, which supersedes the earlier launch's loop.
  */
-async function discoverSession(
-  id: string,
-  serverId: string | null,
-  cwd: string,
-  startedAt: number
-): Promise<void> {
+function startDiscovery(id: string, serverId: string | null, cwd: string, startedAt: number): void {
+  const generation = ++discoveryGeneration
+  discoveries.set(id, { generation, serverId, cwd, startedAt })
+  void discoverSession(id, generation)
+}
+
+async function discoverSession(id: string, generation: number): Promise<void> {
   for (;;) {
-    await delay(Date.now() - startedAt < 60_000 ? 2000 : 15_000)
-    const state = useAppStore.getState()
-    const meta = state.terminals[id]
-    if (!meta?.sessionPending) return
-    const claimed = Object.values(state.terminals)
-      .filter((t) => t.llm?.provider === meta.llm?.provider && !t.sessionPending)
-      .map((t) => t.sessionId)
-    try {
-      // The tab's age, not its start time: the host's own clock decides what is recent.
-      const found = await window.api.discoverCodexSession(serverId, cwd, Date.now() - startedAt, claimed)
-      if (found && useAppStore.getState().terminals[id]?.sessionPending) {
-        useAppStore.getState().setTerminalSession(id, found)
-        if (meta.worktreeId === GLOBAL_WORKTREE_ID) saveGlobalSessions()
-        else scheduleAutoSave()
-        return
-      }
-    } catch (err) {
-      console.error('session discovery failed', err)
+    const mine = discoveries.get(id)
+    if (mine?.generation !== generation) return
+    await delay(Date.now() - mine.startedAt < 60_000 ? 2000 : 15_000)
+    if (discoveries.get(id)?.generation !== generation) return
+    if (!useAppStore.getState().terminals[id]?.sessionPending) {
+      discoveries.delete(id)
+      return
     }
+    await serialized(discoveryKey(mine), () => claimForOldest(mine))
+  }
+}
+
+/**
+ * One scan of a folder, on behalf of its oldest-launched pending tab. The host returns
+ * the earliest unclaimed rollout started after that launch, so tabs pair with rollouts
+ * in launch order.
+ *
+ * Still ambiguous: if Codex only writes its rollout on the first prompt and the user
+ * prompts the tabs out of launch order, two tabs in one folder can swap ids. The plan's
+ * Task 3 Step 6 (checking against the real CLI) should confirm when Codex creates it.
+ */
+async function claimForOldest(folder: Pick<Discovery, 'serverId' | 'cwd'>): Promise<void> {
+  const key = discoveryKey(folder)
+  const state = useAppStore.getState()
+  const waiting = [...discoveries.entries()]
+    .filter(([tid, d]) => discoveryKey(d) === key && state.terminals[tid]?.sessionPending)
+    .sort(([, a], [, b]) => a.startedAt - b.startedAt)
+  if (waiting.length === 0) return
+  const [claimant, launch] = waiting[0]
+  const claimed = Object.values(state.terminals)
+    .filter((t) => !t.sessionPending)
+    .map((t) => t.sessionId)
+  try {
+    // The tab's age, not its start time: the host's own clock decides what is recent.
+    const found = await window.api.discoverCodexSession(
+      launch.serverId,
+      launch.cwd,
+      Date.now() - launch.startedAt,
+      claimed
+    )
+    if (!found) return
+    const now = useAppStore.getState()
+    const meta = now.terminals[claimant]
+    if (!meta?.sessionPending || discoveries.get(claimant)?.generation !== launch.generation) return
+    // Bound to another tab while the scan ran — keep polling.
+    if (Object.values(now.terminals).some((t) => t.id !== claimant && t.sessionId === found)) return
+    now.setTerminalSession(claimant, found)
+    discoveries.delete(claimant)
+    if (meta.worktreeId === GLOBAL_WORKTREE_ID) saveGlobalSessions()
+    else scheduleAutoSave()
+  } catch (err) {
+    console.error('session discovery failed', err)
   }
 }
 
@@ -592,7 +657,7 @@ export async function startGlobalTerminal(saved?: GlobalSession): Promise<string
       rows: entry.term.rows,
       serverId: null
     })
-    if (sessionPending) void discoverSession(id, null, cwd, startedAt)
+    if (sessionPending) startDiscovery(id, null, cwd, startedAt)
   } catch (err) {
     closeGlobalTerminal(id)
     throw err
@@ -720,6 +785,7 @@ export async function restartTerminal(id: string): Promise<void> {
   const launch = isGlobal
     ? await globalLaunch(llm, meta.sessionId, canResume)
     : await worktreeLaunch(llm, meta.sessionId, canResume, !worktree.serverId, meta.systemPrompt)
+  const startedAt = Date.now()
   await window.api.spawnPty({
     id,
     cwd: worktree.path,
@@ -729,6 +795,8 @@ export async function restartTerminal(id: string): Promise<void> {
     rows: entry.term.rows,
     serverId: worktree.serverId ?? null
   })
+  // A fresh launch of a pending tab writes a new rollout: look for that one instead.
+  if (meta.sessionPending) startDiscovery(id, worktree.serverId ?? null, worktree.path, startedAt)
   entry.term.focus()
 }
 
@@ -878,6 +946,21 @@ function unloadTerminal(id: string): void {
   disposeEntry(id)
   window.api.detachPty(id)
   useAppStore.getState().removeTerminal(id)
+}
+
+/**
+ * End the agents of tabs that never reported a session id. Called before the window
+ * closes: main detaches the rest, and a remote one would otherwise keep running on its
+ * daemon with nothing left that could reattach to it.
+ */
+export function disposePendingTerminals(): void {
+  const state = useAppStore.getState()
+  for (const id of Object.keys(state.terminals)) {
+    if (!state.terminals[id].sessionPending) continue
+    disposeEntry(id)
+    window.api.disposePty(id)
+    state.removeTerminal(id)
+  }
 }
 
 export function disposeAllTerminals(): void {
