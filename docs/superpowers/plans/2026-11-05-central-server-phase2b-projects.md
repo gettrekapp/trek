@@ -27,7 +27,7 @@ These either fill gaps in the spec or change it slightly. Task 13 records them i
 5. **The schema starts at 1.** Each stored file is `{"schema": 1, "project": {…}}`. A file with a higher schema, or one that fails to load, is skipped and reported as a `LOAD_FAILED` health warning. The file itself is left alone.
 6. **Deleting a project drops its topic.** Subscribers learn about the deletion from the `server` topic's `projects` list. The `project:<id>` topic then answers `NOT_FOUND`.
 7. **Branch names and data keys may not be `__proto__`.** `branch.*` and `project.import` reject a branch named `__proto__` with `BAD_REQUEST`, because clients cannot apply a patch at that key. Names like `constructor` work (the diff checks own keys).
-8. **Runtime fields reset on load and import.** `status` becomes `idle` and `loaded` becomes `false`. `ptyId`, `exitCode`, `dirty`, `ahead`, `behind` and `head` are dropped.
+8. **Runtime fields reset on load and import.** `status` becomes `idle`, except `complete`, which is kept because the user chose it. `loaded` becomes `false`. `ptyId`, `exitCode`, `dirty`, `ahead`, `behind` and `head` are dropped.
 
 ## Conventions
 
@@ -769,7 +769,7 @@ git commit -m "feat: project settings validation for trek-server"
 
 ### Task 6: Project model helpers
 
-**Files:** `server/src/projects/model.ts` (create), `scripts/serverProjectModel.test.mjs` (create)
+**Files:** `server/src/projects/model.ts` (create), `server/src/repos.ts` (export `realOrResolved`), `scripts/serverProjectModel.test.mjs` (create)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -856,6 +856,41 @@ test('projectsUsingRepo and collectIds', () => {
   assert.deepEqual(projectsUsingRepo(projects, '/c'), [])
   assert.deepEqual([...collectIds(projects[1])].sort(), ['p2', 'p2-g', 'p2-r0', 'p2-s0', 'p2-w0'])
 })
+
+test('findRegistered matches when the registry entry itself is the symlink', (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-model-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'a'))
+  symlinkSync(join(dir, 'a'), join(dir, 'link'))
+  const registry = [{ id: 'a', name: 'A', path: join(dir, 'link') }]
+  assert.equal(findRegistered(registry, join(dir, 'a')).id, 'a')
+  assert.equal(findRegistered(registry, join(dir, 'link')).path, join(dir, 'link'))
+})
+
+test('newProject gives every repository and worktree a distinct id', () => {
+  n = 0
+  const p = newProject('P', [
+    { registered: { id: 'a', name: 'A', path: '/r/a' }, name: undefined },
+    { registered: { id: 'b', name: 'B', path: '/r/b' }, name: 'Bee' }
+  ], newId)
+  const ids = [p.id, ...p.repositories.flatMap((r) => [r.id, ...r.worktrees.map((w) => w.id)])]
+  assert.equal(ids.length, 5)
+  assert.equal(new Set(ids).size, 5)
+  assert.ok(ids.every((id) => id !== ''))
+})
+
+test('resetRuntime keeps a complete status; every other status becomes idle', () => {
+  const s = (id, status) => ({ id, title: 't', llm: { provider: 'claude' }, queue: [], status })
+  const p = {
+    id: 'p', name: 'P', settings: {}, globalSessions: [s('g1', 'complete'), s('g2', 'attention')],
+    repositories: [{ id: 'r', name: 'R', path: '/r', branchData: {}, worktrees: [
+      { id: 'w', name: 'W', path: '/r', isMain: true, loaded: true, sessions: [s('s1', 'complete'), s('s2', 'working'), s('s3', 'idle')] }
+    ] }]
+  }
+  const out = resetRuntime(p)
+  assert.deepEqual(out.globalSessions.map((x) => x.status), ['complete', 'idle'])
+  assert.deepEqual(out.repositories[0].worktrees[0].sessions.map((x) => x.status), ['complete', 'idle', 'idle'])
+})
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -868,19 +903,10 @@ Create `server/src/projects/model.ts`:
 
 ```ts
 // Pure helpers for building and inspecting v2 projects on the server.
-import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
-
-function real(path: string): string {
-  try {
-    return realpathSync(resolve(path))
-  } catch {
-    return resolve(path)
-  }
-}
+import { realOrResolved as real } from '../repos.ts'
 
 /** The registered repo at `path` (compared by realpath), or PATH_DENIED. */
 export function findRegistered(registry: readonly RemoteRepo[], path: string): RemoteRepo {
@@ -917,7 +943,8 @@ export function newProject(
 
 function resetSession(s: Session): Session {
   const { ptyId: _p, exitCode: _e, ...rest } = s
-  return { ...rest, status: 'idle' }
+  // `complete` is the user marking a session finished, not something that was running.
+  return { ...rest, status: s.status === 'complete' ? 'complete' : 'idle' }
 }
 
 function resetWorktree(w: Worktree): Worktree {
@@ -925,7 +952,7 @@ function resetWorktree(w: Worktree): Worktree {
   return { ...rest, loaded: false, sessions: w.sessions.map(resetSession) }
 }
 
-/** Nothing runs after a load or an import: statuses idle, worktrees unloaded, git state unknown. */
+/** Nothing runs after a load or an import: statuses idle (except `complete`), worktrees unloaded, git state unknown. */
 export function resetRuntime(project: Project): Project {
   return {
     ...project,
@@ -999,6 +1026,19 @@ function tempDir(t) {
   return dir
 }
 
+/** `<tmp>/projects` with lock() (read-only) and unlock(); cleanup unlocks first. */
+function lockableDir(t) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-projects-')))
+  const projects = join(dir, 'projects')
+  mkdirSync(projects)
+  const unlock = () => chmodSync(projects, 0o700)
+  t.after(() => {
+    unlock()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  return { projects, lock: () => chmodSync(projects, 0o500), unlock }
+}
+
 const project = (id, name = 'P') => ({
   id, name, settings: {}, globalSessions: [],
   repositories: [{ id: `${id}-r`, name: 'r', path: '/r', branchData: {}, worktrees: [
@@ -1007,16 +1047,28 @@ const project = (id, name = 'P') => ({
     ] }
   ] }]
 })
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-test('save is debounced and writes {schema, project} at 0600', async (t) => {
+const readName = (dir, id) => JSON.parse(readFileSync(join(dir, `${id}.json`), 'utf8')).project.name
+
+/** A non-empty directory where `<id>.json` should be, so renaming onto it fails. */
+function blockFile(dir, id) {
+  mkdirSync(join(dir, `${id}.json`, 'x'), { recursive: true })
+  return () => rmSync(join(dir, `${id}.json`), { recursive: true, force: true })
+}
+
+const noChmod = process.platform === 'win32' || process.getuid?.() === 0
+
+test('save is debounced and writes {schema, project} at 0600', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const dir = tempDir(t)
   const store = new ProjectStore(dir, { debounceMs: 20 })
   t.after(() => store.close())
   store.save(project('p1', 'one'))
+  t.mock.timers.tick(10)
   store.save(project('p1', 'two'))
+  t.mock.timers.tick(10)
   assert.equal(existsSync(join(dir, 'p1.json')), false)
-  await sleep(60)
+  t.mock.timers.tick(10)
   const file = JSON.parse(readFileSync(join(dir, 'p1.json'), 'utf8'))
   assert.equal(file.schema, STORE_SCHEMA)
   assert.equal(file.project.name, 'two')
@@ -1039,21 +1091,40 @@ test('loadAll returns stored projects with runtime state reset', (t) => {
 
 test('loadAll skips bad files and reports LOAD_FAILED; the files are kept', (t) => {
   const dir = tempDir(t)
-  writeFileSync(join(dir, 'bad.json'), '{ nope')
-  writeFileSync(join(dir, 'future.json'), JSON.stringify({ schema: STORE_SCHEMA + 1, project: project('future') }))
-  writeFileSync(join(dir, 'shape.json'), JSON.stringify({ schema: STORE_SCHEMA, project: { id: 'x' } }))
-  writeFileSync(join(dir, 'other.txt'), 'ignored')
-  writeFileSync(join(dir, 'p1.json'), JSON.stringify({ schema: STORE_SCHEMA, project: project('p1') }))
+  const write = (file, value) => writeFileSync(join(dir, file), typeof value === 'string' ? value : JSON.stringify(value))
+  write('bad.json', '{ nope')
+  write('future.json', { schema: STORE_SCHEMA + 1, project: project('future') })
+  write('shape.json', { schema: STORE_SCHEMA, project: { id: 'x' } })
+  write('zero.json', { schema: 0, project: project('zero') })
+  write('frac.json', { schema: 1.5, project: project('frac') })
+  write('.json', { schema: STORE_SCHEMA, project: project('') })
+  write('deep.json', { schema: STORE_SCHEMA, project: { ...project('deep'), repositories: [{ id: 'r', worktrees: 'no' }] } })
+  write('other.txt', 'ignored')
+  write('p1.json', { schema: STORE_SCHEMA, project: project('p1') })
   const store = new ProjectStore(dir)
   t.mock.method(console, 'warn', () => {})
   const loaded = store.loadAll()
   assert.deepEqual(loaded.map((p) => p.id), ['p1'])
   const [warning] = store.health()
   assert.equal(warning.code, 'LOAD_FAILED')
-  assert.match(warning.message, /bad\.json/)
-  assert.match(warning.message, /future\.json/)
-  assert.match(warning.message, /shape\.json/)
+  for (const file of ['bad', 'future', 'shape', 'zero', 'frac', 'deep']) assert.match(warning.message, new RegExp(`${file}\\.json`))
+  assert.match(warning.message, /deep\.json: project has the wrong shape: /)
+  assert.match(warning.message, /(^|; |: )\.json: /)
   assert.ok(existsSync(join(dir, 'bad.json')))
+})
+
+test('a project whose nested ids collide with one already loaded is skipped', (t) => {
+  const dir = tempDir(t)
+  writeFileSync(join(dir, 'a.json'), JSON.stringify({ schema: STORE_SCHEMA, project: project('a') }))
+  const clash = project('b')
+  clash.repositories[0].worktrees[0].id = 'a-w'
+  writeFileSync(join(dir, 'b.json'), JSON.stringify({ schema: STORE_SCHEMA, project: clash }))
+  t.mock.method(console, 'warn', () => {})
+  const store = new ProjectStore(dir)
+  assert.deepEqual(store.loadAll().map((p) => p.id), ['a'])
+  const [warning] = store.health()
+  assert.equal(warning.code, 'LOAD_FAILED')
+  assert.match(warning.message, /b\.json: .*a-w/)
 })
 
 test('a file whose name does not match its project id is skipped', (t) => {
@@ -1069,7 +1140,8 @@ test('a missing directory loads as empty', (t) => {
   assert.deepEqual(new ProjectStore(join(tempDir(t), 'missing')).loadAll(), [])
 })
 
-test('remove cancels a pending save and deletes the file', async (t) => {
+test('remove cancels a pending save and deletes the file', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const dir = tempDir(t)
   const store = new ProjectStore(dir, { debounceMs: 0 })
   t.after(() => store.close())
@@ -1077,29 +1149,133 @@ test('remove cancels a pending save and deletes the file', async (t) => {
   store.flush()
   store.save(project('p1', 'later'))
   store.remove('p1')
-  await sleep(30)
+  t.mock.timers.tick(30)
   assert.deepEqual(readdirSync(dir), [])
 })
 
-test('a failing save sets PERSIST_FAILED, retries, and clears it once it works', async (t) => {
-  if (process.platform === 'win32') return
-  const dir = tempDir(t)
-  const projects = join(dir, 'projects')
-  mkdirSync(projects)
-  chmodSync(projects, 0o500)
+test('remove rethrows a failed unlink and keeps the pending save', { skip: noChmod }, (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { projects, lock, unlock } = lockableDir(t)
+  const store = new ProjectStore(projects, { debounceMs: 10 })
+  t.after(() => store.close())
+  store.save(project('p1', 'one'))
+  store.flush()
+  store.save(project('p1', 'two'))
+  lock()
+  assert.throws(() => store.remove('p1'), (err) => err.code === 'EACCES' || err.code === 'EPERM')
+  unlock()
+  t.mock.timers.tick(10)
+  assert.equal(readName(projects, 'p1'), 'two')
+})
+
+test('a failing save sets PERSIST_FAILED, retries, and clears it once it works', { skip: noChmod }, (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { projects, lock, unlock } = lockableDir(t)
+  lock()
   t.mock.method(console, 'warn', () => {})
   const store = new ProjectStore(projects, { debounceMs: 0, retryMs: 30 })
   t.after(() => store.close())
   let changes = 0
   store.on('health', () => changes++)
   store.save(project('p1'))
-  await sleep(20)
+  t.mock.timers.tick(0)
   assert.equal(store.health()[0]?.code, 'PERSIST_FAILED')
-  chmodSync(projects, 0o700)
-  await sleep(80)
+  unlock()
+  t.mock.timers.tick(30)
   assert.deepEqual(store.health(), [])
   assert.ok(existsSync(join(projects, 'p1.json')))
-  assert.ok(changes >= 2)
+  assert.equal(changes, 2)
+})
+
+test('removing the only failing project clears PERSIST_FAILED', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const dir = tempDir(t)
+  blockFile(dir, 'p1')
+  t.mock.method(console, 'warn', () => {})
+  const store = new ProjectStore(dir, { debounceMs: 0, retryMs: 30 })
+  t.after(() => store.close())
+  store.save(project('p1'))
+  t.mock.timers.tick(0)
+  assert.equal(store.health()[0]?.code, 'PERSIST_FAILED')
+  // unlinking a directory fails, so let the remove find nothing there
+  rmSync(join(dir, 'p1.json'), { recursive: true })
+  store.remove('p1')
+  assert.deepEqual(store.health(), [])
+  t.mock.timers.tick(30)
+  assert.deepEqual(readdirSync(dir), [])
+})
+
+test('a successful save of another project does not clear PERSIST_FAILED', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 })
+  const dir = tempDir(t)
+  const unblock = blockFile(dir, 'p1')
+  const warn = t.mock.method(console, 'warn', () => {})
+  const store = new ProjectStore(dir, { debounceMs: 0, retryMs: 30 })
+  t.after(() => store.close())
+  store.save(project('p1'))
+  t.mock.timers.tick(0)
+  const [first] = store.health()
+  assert.equal(first.code, 'PERSIST_FAILED')
+  store.save(project('p1', 'again'))
+  store.save(project('p2'))
+  t.mock.timers.tick(0)
+  assert.equal(readName(dir, 'p2'), 'P')
+  const [still] = store.health()
+  assert.equal(still?.code, 'PERSIST_FAILED')
+  assert.equal(still.since, first.since)
+  t.mock.timers.tick(30)
+  assert.equal(store.health()[0]?.since, first.since)
+  assert.ok(warn.mock.callCount() >= 3)
+  unblock()
+  t.mock.timers.tick(30)
+  assert.deepEqual(store.health(), [])
+  assert.equal(readName(dir, 'p1'), 'again')
+})
+
+test('flush returns the ids that failed to save', (t) => {
+  const dir = tempDir(t)
+  blockFile(dir, 'p1')
+  t.mock.method(console, 'warn', () => {})
+  const store = new ProjectStore(dir, { debounceMs: 1000, retryMs: 1000 })
+  t.after(() => store.close())
+  store.save(project('p1'))
+  store.save(project('p2'))
+  assert.deepEqual(store.flush(), ['p1'])
+  assert.equal(readName(dir, 'p2'), 'P')
+})
+
+test('close writes pending saves and returns the failures; later saves are ignored', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const dir = tempDir(t)
+  const store = new ProjectStore(dir, { debounceMs: 1000 })
+  store.save(project('p1'))
+  assert.deepEqual(store.close(), [])
+  assert.equal(readName(dir, 'p1'), 'P')
+  store.save(project('p2'))
+  t.mock.timers.tick(5000)
+  assert.deepEqual(store.flush(), [])
+  assert.deepEqual(readdirSync(dir), ['p1.json'])
+})
+
+test('a throwing health listener cannot fail a save or escape a timer', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const dir = tempDir(t)
+  const unblock = blockFile(dir, 'p1')
+  const warn = t.mock.method(console, 'warn', () => {})
+  const store = new ProjectStore(dir, { debounceMs: 0, retryMs: 30 })
+  t.after(() => store.close())
+  store.on('health', () => {
+    throw new Error('listener broke')
+  })
+  store.save(project('p1'))
+  t.mock.timers.tick(0)
+  assert.equal(store.health()[0]?.code, 'PERSIST_FAILED')
+  unblock()
+  t.mock.timers.tick(30)
+  assert.deepEqual(store.health(), [])
+  assert.equal(readName(dir, 'p1'), 'P')
+  assert.deepEqual(store.flush(), [])
+  assert.ok(warn.mock.calls.some((c) => String(c.arguments.join(' ')).includes('listener broke')))
 })
 ```
 
@@ -1121,7 +1297,7 @@ import { join } from 'node:path'
 import type { HealthWarning, Project } from '../../../src/shared/model/types'
 import { writeFileAtomic } from '../atomicWrite.ts'
 import { isRecord } from '../validate.ts'
-import { resetRuntime } from './model.ts'
+import { collectIds, resetRuntime } from './model.ts'
 
 export const STORE_SCHEMA = 1
 
@@ -1132,21 +1308,25 @@ export interface ProjectStoreOptions {
   retryMs?: number
 }
 
-/** Minimal shape check; anything deeper is the server's own data. */
+/** Shape check of the stored wrapper and the project's top level; resets runtime state. */
 function decode(raw: unknown, file: string): Project {
   if (!isRecord(raw)) throw new Error('not a JSON object')
-  if (typeof raw.schema !== 'number') throw new Error('missing schema')
-  if (raw.schema > STORE_SCHEMA) throw new Error(`schema ${raw.schema} is newer than this server (${STORE_SCHEMA})`)
+  if (!Number.isInteger(raw.schema) || (raw.schema as number) < 1) throw new Error('schema must be an integer of at least 1')
+  if ((raw.schema as number) > STORE_SCHEMA) throw new Error(`schema ${raw.schema} is newer than this server (${STORE_SCHEMA})`)
   const p = raw.project
   if (
-    !isRecord(p) || typeof p.id !== 'string' || typeof p.name !== 'string' ||
+    !isRecord(p) || typeof p.id !== 'string' || p.id === '' || typeof p.name !== 'string' ||
     !isRecord(p.settings) || !Array.isArray(p.repositories) || p.repositories.length === 0 ||
     !Array.isArray(p.globalSessions)
   ) {
     throw new Error('project has the wrong shape')
   }
   if (`${p.id}.json` !== file) throw new Error(`holds project ${p.id}`)
-  return p as unknown as Project
+  try {
+    return resetRuntime(p as unknown as Project)
+  } catch (err) {
+    throw new Error(`project has the wrong shape: ${(err as Error).message}`)
+  }
 }
 
 export class ProjectStore extends EventEmitter<{ health: [] }> {
@@ -1155,9 +1335,12 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
   private readonly retryMs: number
   private pending = new Map<string, Project>()
   private timers = new Map<string, NodeJS.Timeout>()
+  /** Ids whose last write failed; PERSIST_FAILED is set while this is non-empty. */
+  private failed = new Set<string>()
   private retryTimer?: NodeJS.Timeout
   private loadFailed?: HealthWarning
   private persistFailed?: HealthWarning
+  private closed = false
 
   constructor(dir: string, options: ProjectStoreOptions = {}) {
     super()
@@ -1166,15 +1349,24 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
     this.retryMs = options.retryMs ?? 5000
   }
 
-  /** Reads every `<id>.json`; bad files are skipped and reported as LOAD_FAILED. */
+  /**
+   * Reads every `<id>.json`; bad files, and projects whose ids collide with
+   * one already loaded, are skipped and reported as LOAD_FAILED.
+   */
   loadAll(): Project[] {
     if (!existsSync(this.dir)) return []
     const projects: Project[] = []
     const failures: string[] = []
+    const ids = new Set<string>()
     for (const file of readdirSync(this.dir).sort()) {
       if (!file.endsWith('.json')) continue
       try {
-        projects.push(resetRuntime(decode(JSON.parse(readFileSync(join(this.dir, file), 'utf8')), file)))
+        const project = decode(JSON.parse(readFileSync(join(this.dir, file), 'utf8')), file)
+        const own = collectIds(project)
+        const clash = [...own].filter((id) => ids.has(id))
+        if (clash.length > 0) throw new Error(`ids already used by another project: ${clash.join(', ')}`)
+        for (const id of own) ids.add(id)
+        projects.push(project)
       } catch (err) {
         failures.push(`${file}: ${(err as Error).message}`)
       }
@@ -1187,35 +1379,46 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
     return projects
   }
 
-  /** Queues `project` to be written; later calls for the same id replace it. */
+  /** Queues `project` to be written; later calls for the same id replace it. A no-op after close(). */
   save(project: Project): void {
+    if (this.closed) return
     this.pending.set(project.id, project)
     clearTimeout(this.timers.get(project.id))
-    this.timers.set(project.id, setTimeout(() => this.write(project.id), this.debounceMs))
+    this.timers.set(project.id, setTimeout(() => this.guarded(() => this.write(project.id)), this.debounceMs))
   }
 
-  /** Cancels any pending write and deletes the file. */
+  /**
+   * Deletes the file, then drops any pending write. If the delete fails (other
+   * than the file being absent) it throws and the pending write is kept.
+   */
   remove(projectId: string): void {
-    this.pending.delete(projectId)
-    clearTimeout(this.timers.get(projectId))
-    this.timers.delete(projectId)
     try {
       unlinkSync(this.file(projectId))
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
+    this.pending.delete(projectId)
+    clearTimeout(this.timers.get(projectId))
+    this.timers.delete(projectId)
+    this.failed.delete(projectId)
+    this.updatePersistHealth()
   }
 
-  /** Writes everything pending now (shutdown). */
-  flush(): void {
+  /** Writes everything pending now; returns the ids that could not be saved. */
+  flush(): string[] {
     for (const id of [...this.pending.keys()]) this.write(id)
+    return [...this.failed]
   }
 
-  close(): void {
+  /** Flushes (returning the ids that failed), stops all timers and ignores later saves. */
+  close(): string[] {
+    const failed = this.flush()
+    this.closed = true
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
     clearTimeout(this.retryTimer)
     this.retryTimer = undefined
+    return failed
   }
 
   health(): HealthWarning[] {
@@ -1226,36 +1429,57 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
     return join(this.dir, `${projectId}.json`)
   }
 
+  /** Timer callbacks: a throwing 'health' listener must not crash the process. */
+  private guarded(fn: () => void): void {
+    try {
+      fn()
+    } catch (err) {
+      console.warn(`[projects] ${(err as Error).message}`)
+    }
+  }
+
   private write(projectId: string): void {
     clearTimeout(this.timers.get(projectId))
     this.timers.delete(projectId)
     const project = this.pending.get(projectId)
     if (!project) return
+    let error: Error | undefined
     try {
       writeFileAtomic(this.file(projectId), JSON.stringify({ schema: STORE_SCHEMA, project }, null, 2) + '\n', 0o600)
-      this.pending.delete(projectId)
-      this.updatePersistHealth()
     } catch (err) {
-      console.warn(`[projects] could not save ${projectId}: ${(err as Error).message}`)
-      if (!this.persistFailed) {
-        this.persistFailed = { code: 'PERSIST_FAILED', message: `Could not save projects: ${(err as Error).message}`, since: Date.now() }
-        this.emit('health')
-      }
-      this.scheduleRetry()
+      error = err as Error
+    }
+    if (!error) {
+      this.pending.delete(projectId)
+      this.failed.delete(projectId)
+      this.updatePersistHealth()
+      return
+    }
+    console.warn(`[projects] could not save ${projectId}: ${error.message}`)
+    this.failed.add(projectId)
+    this.scheduleRetry()
+    const message = `Could not save projects: ${error.message}`
+    if (!this.persistFailed) {
+      this.persistFailed = { code: 'PERSIST_FAILED', message, since: Date.now() }
+      this.emit('health')
+    } else if (this.persistFailed.message !== message) {
+      this.persistFailed = { ...this.persistFailed, message }
+      this.emit('health')
     }
   }
 
   private scheduleRetry(): void {
-    if (this.retryTimer) return
-    this.retryTimer = setTimeout(() => {
+    if (this.retryTimer || this.closed) return
+    this.retryTimer = setTimeout(() => this.guarded(() => {
       this.retryTimer = undefined
-      for (const id of [...this.pending.keys()]) if (!this.timers.has(id)) this.write(id)
-    }, this.retryMs)
+      for (const id of [...this.failed]) if (!this.timers.has(id)) this.guarded(() => this.write(id))
+      this.updatePersistHealth()
+    }), this.retryMs)
   }
 
+  /** Clears PERSIST_FAILED once no project is failing. */
   private updatePersistHealth(): void {
-    const failing = [...this.pending.keys()].some((id) => !this.timers.has(id))
-    if (!failing && this.persistFailed) {
+    if (this.failed.size === 0 && this.persistFailed) {
       this.persistFailed = undefined
       this.emit('health')
     }
@@ -1288,7 +1512,7 @@ Create `scripts/serverImportCheck.test.mjs`:
 // scripts/serverImportCheck.test.mjs — what project.import accepts.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkImport } from '../server/src/projects/importCheck.ts'
@@ -1387,6 +1611,78 @@ test('shape, settings and branch keys are checked', (t) => {
   q.repositories[0].worktrees[1].sessions[0].queue = [1]
   assert.equal(code(() => checkImport(q, ctx)), 'BAD_REQUEST')
 })
+
+test('a nested __proto__ key anywhere in the payload is BAD_REQUEST', (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const p = project()
+  p.repositories[0].environments = JSON.parse('{"dev":{"vars":{"__proto__":{"x":1}}}}')
+  assert.throws(() => checkImport(p, ctx), (err) => {
+    assert.equal(err.code, 'BAD_REQUEST')
+    assert.match(err.message, /environments/)
+    return true
+  })
+})
+
+test('two repositories that resolve to the same registered repo are BAD_REQUEST', (t) => {
+  const { dir, registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  symlinkSync(join(dir, 'repo'), join(dir, 'repo-link'))
+  const a = project()
+  const b = project()
+  b.repositories[0].path = join(dir, 'repo-link')
+  b.repositories[0].worktrees[1].path = join(dir, 'repo-feature2')
+  mkdirSync(join(dir, 'repo-feature2'))
+  a.repositories.push(b.repositories[0])
+  assert.equal(code(() => checkImport(a, ctx)), 'BAD_REQUEST')
+})
+
+test('the main worktree takes the registry path', (t) => {
+  const { dir, repo, registry, guard, project } = setup(t)
+  symlinkSync(repo, join(dir, 'main-link'))
+  const p = project()
+  p.repositories[0].worktrees[0].path = join(dir, 'main-link')
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'pid' })
+  assert.equal(out.repositories[0].worktrees[0].path, registry[0].path)
+})
+
+test('a non-main worktree path is stored as its realpath', (t) => {
+  const { dir, registry, guard, project } = setup(t)
+  symlinkSync(join(dir, 'repo-feature'), join(dir, 'feature-link'))
+  const p = project()
+  p.repositories[0].worktrees[1].path = join(dir, 'feature-link')
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'pid' })
+  assert.equal(out.repositories[0].worktrees[1].path, join(dir, 'repo-feature'))
+})
+
+test('each repository needs exactly one main worktree', (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const none = project()
+  none.repositories[0].worktrees[0].isMain = false
+  assert.equal(code(() => checkImport(none, ctx)), 'BAD_REQUEST')
+  const two = project()
+  two.repositories[0].worktrees[1].isMain = true
+  assert.equal(code(() => checkImport(two, ctx)), 'BAD_REQUEST')
+})
+
+test('a non-main worktree may not be another repository or contain one', (t) => {
+  const { dir, registry, guard, project } = setup(t)
+  const other = join(dir, 'other')
+  mkdirSync(other)
+  const twoRepos = [...registry, { id: 'other', name: 'other', path: other }]
+  const ctx = { registry: twoRepos, guard: new PathGuard({ repos: twoRepos }), existingIds: new Set(), projectId: 'pid' }
+  const a = project()
+  a.repositories[0].worktrees[1].path = other
+  assert.throws(() => checkImport(a, ctx), (err) => {
+    assert.equal(err.code, 'BAD_REQUEST')
+    assert.match(err.message, /is another repository/)
+    return true
+  })
+  const b = project()
+  b.repositories[0].worktrees[1].path = dir
+  assert.equal(code(() => checkImport(b, ctx)), 'BAD_REQUEST')
+})
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1400,12 +1696,15 @@ Create `server/src/projects/importCheck.ts`:
 ```ts
 // Validates a `project.import` payload (one project from importProjectFile())
 // and returns it ready to store: the server's project id, nested ids kept,
-// repository paths taken from the registry, runtime state reset.
+// repository and main worktree paths taken from the registry, other worktree
+// paths realpath'd, runtime state reset.
+import { sep } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
 import type { PathGuard } from '../paths.ts'
-import { isRecord, requireName } from '../validate.ts'
+import { realOrResolved } from '../repos.ts'
+import { assertNoProtoKeys, isRecord, requireName } from '../validate.ts'
 import { findRegistered, resetRuntime } from './model.ts'
 import { validateSettings } from './settings.ts'
 
@@ -1440,28 +1739,38 @@ function checkSession(raw: unknown, where: string, seen: Set<string>, existing: 
   return raw as unknown as Session
 }
 
-function checkWorktree(raw: unknown, where: string, ctx: ImportContext, seen: Set<string>): Worktree {
+function checkWorktree(raw: unknown, where: string, ctx: ImportContext, seen: Set<string>, registered: RemoteRepo): Worktree {
   if (!isRecord(raw)) throw bad(`${where} must be an object`)
   checkId(raw.id, where, seen, ctx.existingIds)
   if (typeof raw.name !== 'string') throw bad(`${where}.name must be a string`)
   if (typeof raw.path !== 'string') throw bad(`${where}.path must be a string`)
-  ctx.guard.check(raw.path)
   if (typeof raw.isMain !== 'boolean') throw bad(`${where}.isMain must be a boolean`)
+  let path = registered.path
+  if (!raw.isMain) {
+    path = ctx.guard.check(raw.path)
+    // A worktree at (or above) a registered repo would let the project act on that repo.
+    const clash = ctx.registry.find((r) => {
+      const repo = realOrResolved(r.path)
+      return repo === path || repo.startsWith(path.endsWith(sep) ? path : path + sep)
+    })
+    if (clash) throw bad(`${where}: worktree path ${raw.path} is another repository (${clash.path}) or contains one`)
+  }
   if (raw.branch !== undefined && typeof raw.branch !== 'string') throw bad(`${where}.branch must be a string`)
   if (!Array.isArray(raw.sessions)) throw bad(`${where}.sessions must be an array`)
   raw.sessions.forEach((s, i) => checkSession(s, `${where}.sessions[${i}]`, seen, ctx.existingIds))
-  return raw as unknown as Worktree
+  return { ...(raw as unknown as Worktree), path }
 }
 
-function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: Set<string>): Repository {
+function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: Set<string>, used: Set<string>): Repository {
   if (!isRecord(raw)) throw bad(`${where} must be an object`)
   checkId(raw.id, where, seen, ctx.existingIds)
   if (typeof raw.name !== 'string') throw bad(`${where}.name must be a string`)
   if (typeof raw.path !== 'string') throw bad(`${where}.path must be a string`)
   const registered = findRegistered(ctx.registry, raw.path)
+  if (used.has(registered.id)) throw bad(`${where}: repository ${registered.path} is in this project twice`)
+  used.add(registered.id)
   if (!isRecord(raw.branchData)) throw bad(`${where}.branchData must be an object`)
   for (const [branch, data] of Object.entries(raw.branchData)) {
-    if (branch === '__proto__') throw bad(`${where}.branchData must not have a "__proto__" branch`)
     if (!isRecord(data)) throw bad(`${where}.branchData["${branch}"] must be an object`)
   }
   if (raw.linkedDirs !== undefined && (!Array.isArray(raw.linkedDirs) || raw.linkedDirs.some((d) => typeof d !== 'string'))) {
@@ -1469,18 +1778,22 @@ function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: 
   }
   if (raw.environments !== undefined && !isRecord(raw.environments)) throw bad(`${where}.environments must be an object`)
   if (!Array.isArray(raw.worktrees)) throw bad(`${where}.worktrees must be an array`)
-  const worktrees = raw.worktrees.map((w, i) => checkWorktree(w, `${where}.worktrees[${i}]`, ctx, seen))
+  const worktrees = raw.worktrees.map((w, i) => checkWorktree(w, `${where}.worktrees[${i}]`, ctx, seen, registered))
+  const mains = worktrees.filter((w) => w.isMain).length
+  if (mains !== 1) throw bad(`${where}.worktrees must have exactly one isMain worktree (found ${mains})`)
   return { ...(raw as unknown as Repository), path: registered.path, worktrees }
 }
 
 export function checkImport(raw: unknown, ctx: ImportContext): Project {
   if (!isRecord(raw)) throw bad('project must be an object')
+  assertNoProtoKeys(raw, 'project')
   const name = requireName(raw.name, 'project.name')
   const settings = validateSettings(raw.settings ?? {}, 'project.settings')
   if (!Array.isArray(raw.repositories) || raw.repositories.length === 0) throw bad('project.repositories must be a non-empty array')
   if (!Array.isArray(raw.globalSessions)) throw bad('project.globalSessions must be an array')
   const seen = new Set<string>([ctx.projectId])
-  const repositories = raw.repositories.map((r, i) => checkRepository(r, `project.repositories[${i}]`, ctx, seen))
+  const used = new Set<string>()
+  const repositories = raw.repositories.map((r, i) => checkRepository(r, `project.repositories[${i}]`, ctx, seen, used))
   const globalSessions = raw.globalSessions.map((s, i) => checkSession(s, `project.globalSessions[${i}]`, seen, ctx.existingIds))
   return resetRuntime(structuredClone({ id: ctx.projectId, name, settings, repositories, globalSessions }))
 }
