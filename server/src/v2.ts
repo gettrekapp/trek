@@ -4,13 +4,26 @@ import { parseTopic } from '../../src/shared/model/topics.ts'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
-import { optionalName, requireAbsolutePath, requireString } from './validate.ts'
+import { checkImport } from './projects/importCheck.ts'
+import { findRegistered } from './projects/model.ts'
+import type { ProjectState } from './projects/state.ts'
+import { applySettingsPatch } from './projects/settings.ts'
+import {
+  checkExpected,
+  isRecord,
+  optionalName,
+  requireAbsolutePath,
+  requireName,
+  requireRecord,
+  requireString
+} from './validate.ts'
 
 export interface V2Context {
   store: ConfigStore
   hub: TopicHub
   /** This connection, as a topic subscriber */
   subscriber: Subscriber
+  projects: ProjectState
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -18,7 +31,58 @@ type Handler = (params: any, ctx: V2Context) => unknown
 const handlers: Record<string, Handler> = {
   'sys.ping': (p) => ({ t: p.t }),
 
-  'project.list': () => [],
+  'project.list': (_p, ctx) => ctx.projects.list(),
+
+  'project.create': (p, ctx) => {
+    const name = requireName(p.name, 'name')
+    if (!Array.isArray(p.repositories) || p.repositories.length === 0) {
+      throw codedError('BAD_REQUEST', 'repositories must be a non-empty array')
+    }
+    const repositories = p.repositories.map((r: unknown, i: number) => {
+      if (!isRecord(r)) throw codedError('BAD_REQUEST', `repositories[${i}] must be an object`)
+      return {
+        registered: findRegistered(ctx.store.config.repos, requireString(r.path, `repositories[${i}].path`)),
+        name: optionalName(r.name, `repositories[${i}].name`)
+      }
+    })
+    if (new Set(repositories.map((r: { registered: { id: string } }) => r.registered.id)).size !== repositories.length) {
+      throw codedError('BAD_REQUEST', 'a repository is listed twice')
+    }
+    return { projectId: ctx.projects.create(name, repositories) }
+  },
+
+  'project.import': (p, ctx) => {
+    const existingIds = ctx.projects.allIds()
+    const projectId = ctx.projects.importProject((id) =>
+      checkImport(p.project, { registry: ctx.store.config.repos, guard: ctx.store.guard, existingIds, projectId: id })
+    )
+    return { projectId }
+  },
+
+  'project.rename': (p, ctx) => {
+    const name = requireName(p.name, 'name')
+    ctx.projects.apply(p.projectId, (d) => {
+      checkExpected('name', d.name, p.expected)
+      d.name = name
+    })
+    return null
+  },
+
+  'project.delete': (p, ctx) => {
+    ctx.projects.delete(p.projectId)
+    return null
+  },
+
+  'project.updateSettings': (p, ctx) => {
+    const patch = requireRecord(p.settings, 'settings')
+    const expected = p.expected === undefined ? undefined : requireRecord(p.expected, 'expected')
+    ctx.projects.apply(p.projectId, (d) => {
+      const current = d.settings as Record<string, unknown>
+      for (const [key, value] of Object.entries(expected ?? {})) checkExpected(`settings.${key}`, current[key], value)
+      d.settings = applySettingsPatch(d.settings, patch)
+    })
+    return null
+  },
 
   'sub.subscribe': (p, ctx) => {
     if (!parseTopic(p.topic)) throw codedError('BAD_REQUEST', `Unknown topic: ${String(p.topic)}`)

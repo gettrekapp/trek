@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
+import { ProjectState } from '../server/src/projects/state.ts'
 import { publishServerState } from '../server/src/serverState.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
@@ -21,14 +22,24 @@ function setup(t) {
   saveConfig(configPath, { serverId: 'sid-1', name: 'box', repos: [{ id: 'a', name: 'a', path: a }] })
   const store = new ConfigStore(configPath)
   const hub = new TopicHub()
-  const stop = publishServerState(store, hub, '0.2.0')
+  const holder = {}
+  const server = publishServerState(store, hub, '0.2.0', {
+    projects: () => holder.projects?.list() ?? [],
+    health: () => []
+  })
+  holder.projects = new ProjectState({
+    hub,
+    store: { save: () => {}, remove: () => {} },
+    onSummariesChange: () => server.refresh()
+  })
+  store.setUsage((repo) => holder.projects.usage(repo.path))
   t.after(() => {
-    stop()
+    server.stop()
     store.close()
   })
   const sent = []
   const subscriber = { send: (topic, rev, ops) => sent.push({ topic, rev, ops }) }
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber })
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects })
   return { dir, a, store, sent, call }
 }
 
@@ -138,4 +149,67 @@ test('project.list is empty, ping echoes, unknown methods are NOT_FOUND', async 
 test('server.addRepo needs an absolute path', async (t) => {
   const { call } = setup(t)
   assert.equal((await call('server.addRepo', { path: 'repos/a' })).error.code, 'BAD_REQUEST')
+})
+
+test('project.create from registered repos; listed, subscribable and in the server topic', async (t) => {
+  const { a, call } = setup(t)
+  const server = await call('sub.subscribe', { topic: 'server' })
+  const created = await call('project.create', { name: 'Proj', repositories: [{ path: a }] })
+  assert.equal(created.ok, true)
+  const { projectId } = created.result
+  assert.deepEqual((await call('project.list', {})).result, [{ id: projectId, name: 'Proj' }])
+  const topic = await call('sub.subscribe', { topic: `project:${projectId}` })
+  assert.equal(topic.result.snapshot.repositories[0].path, a)
+  assert.equal(topic.result.snapshot.repositories[0].worktrees[0].isMain, true)
+  assert.ok(server.result.rev >= 0)
+})
+
+test('project.create errors', async (t) => {
+  const { dir, a, call } = setup(t)
+  assert.equal((await call('project.create', { name: ' ', repositories: [{ path: a }] })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('project.create', { name: 'P', repositories: [] })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('project.create', { name: 'P', repositories: [{ path: a }, { path: a }] })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('project.create', { name: 'P', repositories: [{ path: join(dir, 'nope') }] })).error.code, 'PATH_DENIED')
+})
+
+test('project.rename with expected; CONFLICT on a stale guard', async (t) => {
+  const { a, call } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  assert.equal((await call('project.rename', { projectId, name: 'Q', expected: 'P' })).ok, true)
+  assert.equal((await call('project.rename', { projectId, name: 'R', expected: 'P' })).error.code, 'CONFLICT')
+  assert.deepEqual((await call('project.list', {})).result.map((p) => p.name), ['Q'])
+})
+
+test('project.updateSettings merges, null removes, expected is per key', async (t) => {
+  const { a, call } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  await call('project.updateSettings', { projectId, settings: { claudeCommand: 'c', audioAlerts: true } })
+  await call('project.updateSettings', { projectId, settings: { audioAlerts: null }, expected: { claudeCommand: 'c' } })
+  const conflict = await call('project.updateSettings', { projectId, settings: { claudeCommand: 'x' }, expected: { claudeCommand: 'old' } })
+  assert.equal(conflict.error.code, 'CONFLICT')
+  const snap = (await call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
+  assert.deepEqual(snap.settings, { claudeCommand: 'c' })
+  assert.equal((await call('project.updateSettings', { projectId, settings: { nope: 1 } })).error.code, 'BAD_REQUEST')
+})
+
+test('project.delete removes it everywhere; removeRepo is IN_USE until then', async (t) => {
+  const { a, call } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  assert.equal((await call('server.removeRepo', { repoId: 'a' })).error.code, 'IN_USE')
+  assert.equal((await call('project.delete', { projectId })).ok, true)
+  assert.equal((await call('sub.subscribe', { topic: `project:${projectId}` })).error.code, 'NOT_FOUND')
+  assert.equal((await call('project.delete', { projectId })).error.code, 'NOT_FOUND')
+  assert.equal((await call('server.removeRepo', { repoId: 'a' })).ok, true)
+})
+
+test('project.import accepts a project from importProjectFile', async (t) => {
+  const { a, call } = setup(t)
+  const { importProjectFile } = await import('../src/shared/model/importProject.ts')
+  let n = 0
+  const { projects } = importProjectFile({ version: 3, name: 'File', repositories: [{ id: 'x', name: 'a', path: a, worktrees: [{ name: 'main', path: a }] }] }, () => `imp-${++n}`)
+  const res = await call('project.import', { project: projects[0].project })
+  assert.equal(res.ok, true)
+  assert.deepEqual((await call('project.list', {})).result.map((p) => p.name), ['File'])
+  const again = await call('project.import', { project: projects[0].project })
+  assert.equal(again.error.code, 'BAD_REQUEST')
 })
