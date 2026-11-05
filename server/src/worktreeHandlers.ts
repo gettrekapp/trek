@@ -165,9 +165,15 @@ export const worktreeHandlers: Record<string, Handler> = {
       assertNotRepository(ctx.store.config.repos, real(worktree.path), 'worktree')
       // A directory that is already gone is removed from git's list too, and
       // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
-      await viaGit(() => force
-        ? gitService.removeWorktreeForce(repo.path, worktree.path)
-        : gitService.removeWorktree(repo.path, worktree.path))
+      // While git removes the directory, no session or load may start in it.
+      const unblock = ctx.sessions.blockPath(worktree.path)
+      try {
+        await viaGit(() => force
+          ? gitService.removeWorktreeForce(repo.path, worktree.path)
+          : gitService.removeWorktree(repo.path, worktree.path))
+      } finally {
+        unblock()
+      }
       // Git has removed it. Even if the re-read fails, the row goes below.
       await ctx.poller.refresh(repo.path)
     }

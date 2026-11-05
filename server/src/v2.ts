@@ -1,6 +1,6 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
-// projects, repositories and branch data, and worktree.create. worktree.load/unload,
-// session.* and v2 pty.* come in 2d.
+// projects, repositories and branch data, worktree commands, session.*, worktree.load/unload
+// and the v2 pty.* stream. Attention (working/done) arrives in 2d-2.
 import { parseTopic } from '../../src/shared/model/topics.ts'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
@@ -9,6 +9,8 @@ import { listBranches } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
+import { sessionHandlers } from './sessionHandlers.ts'
+import type { TerminalSink } from './sessions/terminalHost.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
@@ -38,6 +40,8 @@ export interface V2Context {
   poller: GitPoller
   /** Agent sessions and their ptys */
   sessions: SessionManager
+  /** This connection, as a receiver of pty events */
+  terminal: TerminalSink
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -240,7 +244,8 @@ const handlers: Record<string, Handler> = {
     return null
   },
 
-  ...worktreeHandlers
+  ...worktreeHandlers,
+  ...sessionHandlers
 }
 
 /**

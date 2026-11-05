@@ -36,14 +36,16 @@ async function setup(t) {
   const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {} })
   t.after(() => { poller.stop(); store.close() })
   const subscriber = { send: () => {} }
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller })
+  const blocked = []
+  const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } } }
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions })
   const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
   const projectId = created.result.projectId
   await poller.refresh(a)
   const project = () => projects.require(projectId)
   const repoId = project().repositories[0].id
   const worktree = (id) => project().repositories[0].worktrees.find((w) => w.id === id)
-  return { dir, a, store, projects, poller, call, projectId, repoId, project, worktree }
+  return { dir, a, store, projects, poller, call, blocked, projectId, repoId, project, worktree }
 }
 
 test('worktree.create cuts a new branch at <repo>-<branch> and lists it', async (t) => {
@@ -172,6 +174,14 @@ async function withWorktree(s, branch) {
   assert.equal(res.ok, true, JSON.stringify(res))
   return s.worktree(res.result.worktreeId)
 }
+
+test('worktree.remove blocks the worktree path while git removes it, then unblocks', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'blk')
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(s.blocked, [wt.row.path, `unblock ${wt.row.path}`])
+})
 
 test('worktree.remove deletes a clean worktree and its worktreeOrder entry', async (t) => {
   const s = await setup(t)
@@ -344,7 +354,7 @@ test('worktree.pull, push and diff refuse a missing worktree', async (t) => {
 
 /** dispatchV2 with a poller whose refresh changes nothing, so a row keeps what was written into it. */
 const callWithInertPoller = (s, method, params) => dispatchV2(method, params,
-  { store: s.store, hub: new TopicHub(), subscriber: { send: () => {} }, projects: s.projects, poller: { refresh: async () => true, warning: () => undefined } })
+  { store: s.store, hub: new TopicHub(), subscriber: { send: () => {} }, projects: s.projects, poller: { refresh: async () => true, warning: () => undefined }, sessions: { blockPath: () => () => {} } })
 
 test('worktree.pull and push refuse a branch name that git would read as an option', async (t) => {
   const s = await setup(t)

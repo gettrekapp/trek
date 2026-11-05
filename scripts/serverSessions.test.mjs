@@ -10,6 +10,7 @@ import { ConfigStore } from '../server/src/configStore.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
+import { dispatchV2 } from '../server/src/v2.ts'
 
 const s = (id) => ({ id, title: id, llm: { provider: 'claude' }, queue: [], status: 'idle' })
 const project = {
@@ -524,4 +525,54 @@ test('seen clears attention and done; markComplete false resumes tracking', (t) 
   s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: false })
   assert.equal(s.wx().sessions[0].status, 'idle')
   assert.throws(() => s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: 'yes' }), (e) => e.code === 'BAD_REQUEST')
+})
+
+function v2(s) {
+  const events = []
+  const terminal = { send: (event, payload) => events.push({ event, ...payload }), bufferedAmount: () => 0 }
+  const call = (method, params) =>
+    dispatchV2(method, params, { store: s.store, hub: undefined, subscriber: undefined, projects: s.projects, poller: undefined, sessions: s.sessions, terminal })
+  return { events, terminal, call }
+}
+
+test('v2: session.start, pty.attach/write/resize/detach, session.close', async (t) => {
+  const s = setup(t)
+  const { call, events } = v2(s)
+  const started = await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.equal(started.ok, true, JSON.stringify(started))
+  const { sessionId, ptyId } = started.result
+  s.spawned[0].emit('hello')
+  const attached = await call('pty.attach', { ptyId })
+  assert.equal(attached.result.seq, 5)
+  assert.deepEqual(events[0], { event: 'pty.data', ptyId, seq: 0, data: 'hello', replay: true })
+  assert.deepEqual(await call('pty.write', { ptyId, data: 'x' }), { ok: true, result: null })
+  assert.deepEqual(s.spawned[0].written, ['x'])
+  assert.equal((await call('pty.resize', { ptyId, cols: 0, rows: 1 })).error.code, 'BAD_REQUEST')
+  assert.deepEqual(await call('pty.detach', { ptyId }), { ok: true, result: null })
+  assert.equal((await call('pty.attach', { ptyId: 'nope' })).error.code, 'PTY_NOT_FOUND')
+  assert.equal((await call('pty.write', { ptyId, data: 3 })).error.code, 'BAD_REQUEST')
+  assert.deepEqual(await call('session.close', { projectId: s.projectId, sessionId }), { ok: true, result: null })
+})
+
+test('v2: worktree.load / unload, and the other session methods are wired', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const { sessionId } = (await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })).result
+  for (const [method, params] of [
+    ['worktree.unload', { worktreeId: 'wx' }],
+    ['worktree.load', { worktreeId: 'wx' }],
+    ['session.rename', { sessionId, title: 'R' }],
+    ['session.enqueue', { sessionId, text: 'q' }],
+    ['session.setQueue', { sessionId, queue: [] }],
+    ['session.markComplete', { sessionId, complete: true }],
+    ['session.seen', { sessionId }],
+    ['session.sendPrompt', { sessionId, text: 'hi' }]
+  ]) {
+    const res = await call(method, { projectId: s.projectId, ...params })
+    assert.equal(res.ok, true, `${method}: ${JSON.stringify(res)}`)
+  }
+  s.spawned.at(-1).exit(1)
+  const restarted = await call('session.restart', { projectId: s.projectId, sessionId, ...size })
+  assert.equal(restarted.ok, true, JSON.stringify(restarted))
+  assert.ok(restarted.result.ptyId)
 })

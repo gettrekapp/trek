@@ -25,6 +25,7 @@ import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2 } from './v2'
 import { GitPoller } from './git/poller'
 import { SessionManager } from './sessions/manager'
+import type { TerminalSink } from './sessions/terminalHost'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -109,6 +110,11 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     /** Set when hello is rejected: every later frame is ignored until the delayed close. */
     let rejected = false
     let rejectTimer: NodeJS.Timeout | undefined
+    /** This connection as a receiver of v2 pty events */
+    const terminal: TerminalSink = {
+      send: (event, payload) => sendFrame(ws, { type: 'event', event, payload } as ServerFrameV2),
+      bufferedAmount: () => ws.bufferedAmount
+    }
     const subscriber: Subscriber = {
       send(topic, rev, ops) {
         sendFrame(ws, { type: 'event', event: 'state.patch', payload: { topic, rev, ops } })
@@ -223,7 +229,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
       }
       const id = frame.id
       if (protocolVersion === PROTOCOL_VERSION_V2) {
-        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects, poller, sessions })
+        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects, poller, sessions, terminal })
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
         if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
@@ -253,6 +259,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
       hub.unsubscribeAll(subscriber)
       // PTYs keep running — the client reattaches on its next connection.
       ptys.detachAll(ws)
+      sessions.terminals.detachAll(terminal)
     })
   })
 
