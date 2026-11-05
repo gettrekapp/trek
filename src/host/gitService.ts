@@ -53,12 +53,15 @@ export function parseWorktreeList(porcelain: string): GitWorktreeInfo[] {
       current.head = line.slice('HEAD '.length)
     } else if (line.startsWith('branch ')) {
       current.branch = line.slice('branch '.length).replace('refs/heads/', '')
+    } else if (line === 'prunable' || line.startsWith('prunable ')) {
+      current.prunable = true
     } else if (line === '' && current.path) {
       entries.push({
         path: current.path,
         branch: current.branch,
         head: current.head,
-        isMain: entries.length === 0
+        isMain: entries.length === 0,
+        ...(current.prunable ? { prunable: true } : {})
       })
       current = {}
     }

@@ -50,9 +50,20 @@ export function reconcileWorktrees(repo: Repository, listed: readonly GitWorktre
     membershipChanged = true
   }
 
+  // Git flags its first entry as main, but a repository registered at a linked
+  // worktree has its own checkout elsewhere in the list: prefer the entry at the
+  // main row's path, else git's main. Other entries at that path are not rows.
+  const mainReal = real(repo.worktrees.find((w) => w.isMain)?.path ?? repo.path)
+  const mainInfo = listed.find((i) => real(i.path) === mainReal) ?? listed.find((i) => i.isMain)
+  const entries: GitWorktreeInfo[] = []
+  for (const i of listed) {
+    if (i === mainInfo) entries.push({ ...i, isMain: true })
+    else if (!i.isMain && !i.prunable && real(i.path) !== mainReal) entries.push(i)
+  }
+
   const listedKeys = new Set<string>()
   const added: Worktree[] = []
-  for (const info of listed) {
+  for (const info of entries) {
     const key = keyOf(info)
     if (listedKeys.has(key)) continue
     listedKeys.add(key)
@@ -63,7 +74,7 @@ export function reconcileWorktrees(repo: Repository, listed: readonly GitWorktre
       byKey.set(key, row)
       membershipChanged = true
       headsChanged = true
-    } else if (row.head !== info.head || row.missing) {
+    } else if (row.head !== info.head || row.branch !== info.branch || row.missing) {
       const index = rows.indexOf(row)
       row = withoutStatus(row)
       delete row.missing

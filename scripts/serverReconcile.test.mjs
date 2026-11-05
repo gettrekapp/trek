@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { applyStatuses, reconcileWorktrees } from '../server/src/git/reconcile.ts'
+import { parseWorktreeList } from '../src/host/gitService.ts'
 
 const ids = () => { let n = 0; return () => `new${++n}` }
 const session = (id) => ({ id, title: id, llm: { provider: 'claude' }, queue: [], status: 'idle' })
@@ -82,13 +83,6 @@ test('duplicate rows for one path merge into the first, which keeps every sessio
   assert.equal(out.membershipChanged, true)
 })
 
-test('the input repository is not mutated', () => {
-  const r = repo([main()])
-  const before = structuredClone(r)
-  reconcileWorktrees(r, [listMain(), { path: '/r/a-x', branch: 'x', head: 'h', isMain: false }], ids())
-  assert.deepEqual(r, before)
-})
-
 test('applyStatuses sets and clears fields, matches by realpath and skips missing rows', () => {
   const worktrees = [
     main({ dirty: true, ahead: 3 }),
@@ -103,4 +97,84 @@ test('applyStatuses sets and clears fields, matches by realpath and skips missin
   assert.deepEqual(out[0], main({ dirty: false }))
   assert.deepEqual(out[1], { id: 'w', name: 'f', path: '/r/a-f', isMain: false, loaded: false, sessions: [], dirty: true, ahead: 1, behind: 0 })
   assert.deepEqual(out[2], worktrees[2])
+})
+
+test('a branch switch at the same head drops status and flags heads changed', () => {
+  const known = { id: 'w', name: 'feat', path: '/r/a-feat', branch: 'feat', head: 'h2', isMain: false, loaded: false, dirty: true, ahead: 1, behind: 2, sessions: [] }
+  const out = reconcileWorktrees(repo([main({ branch: 'main', head: 'h1' }), known]), [listMain(), { path: '/r/a-feat', branch: 'other', head: 'h2', isMain: false }], ids())
+  assert.deepEqual(out.worktrees[1], { id: 'w', name: 'other', path: '/r/a-feat', branch: 'other', head: 'h2', isMain: false, loaded: false, sessions: [] })
+  assert.equal(out.headsChanged, true)
+})
+
+test('a repository registered at a linked worktree keeps one row at its path, with that checkout\'s branch and head', () => {
+  const stored = { id: 'm', name: 'Repo', path: '/r/a-feat', isMain: true, loaded: false, sessions: [] }
+  const r = { id: 'r', name: 'Repo', path: '/r/a-feat', branchData: {}, worktrees: [stored] }
+  const out = reconcileWorktrees(r, [
+    { path: '/r/a', branch: 'main', head: 'h1', isMain: true },
+    { path: '/r/a-feat', branch: 'feat', head: 'h2', isMain: false }
+  ], ids())
+  assert.equal(out.worktrees.filter((w) => w.path === '/r/a-feat').length, 1)
+  assert.equal(out.worktrees.some((w) => w.path === '/r/a'), false)
+  assert.equal(out.worktrees.length, 1)
+  assert.deepEqual(out.worktrees[0], { ...stored, branch: 'feat', head: 'h2' })
+})
+
+test('parseWorktreeList marks prunable entries, with or without a reason', () => {
+  const text = [
+    'worktree /r/a', 'HEAD h1', 'branch refs/heads/main', '',
+    'worktree /r/a-gone', 'HEAD h2', 'branch refs/heads/gone', 'prunable gitdir file points to non-existent location', '',
+    'worktree /r/a-bare', 'HEAD h3', 'detached', 'prunable', '',
+    'worktree /r/a-ok', 'HEAD h4', 'branch refs/heads/ok', '', ''
+  ].join('\n')
+  const out = parseWorktreeList(text)
+  assert.deepEqual(out.map((w) => w.prunable === true), [false, true, true, false])
+  assert.equal('prunable' in out[0], false)
+  assert.equal(out[1].branch, 'gone')
+})
+
+test('a prunable entry counts as not listed: dropped, or missing when it has sessions', () => {
+  const empty = { id: 'e', name: 'e', path: '/r/a-e', branch: 'e', head: 'h', isMain: false, loaded: false, sessions: [] }
+  const busy = { id: 'b', name: 'b', path: '/r/a-b', branch: 'b', head: 'h', isMain: false, loaded: false, sessions: [session('s1')] }
+  const out = reconcileWorktrees(repo([main({ branch: 'main', head: 'h1' }), empty, busy]), [
+    listMain(),
+    { path: '/r/a-e', branch: 'e', head: 'h', isMain: false, prunable: true },
+    { path: '/r/a-b', branch: 'b', head: 'h', isMain: false, prunable: true },
+    { path: '/r/a-new', branch: 'n', head: 'h', isMain: false, prunable: true }
+  ], ids())
+  assert.deepEqual(out.worktrees.map((w) => w.id), ['m', 'b'])
+  assert.equal(out.worktrees[1].missing, true)
+  assert.equal(out.membershipChanged, true)
+})
+
+test('reconciling its own output with the same listing is a no-op', () => {
+  const known = { id: 'k', name: 'k', path: '/r/a-k', branch: 'k', head: 'hk', isMain: false, loaded: true, dirty: true, sessions: [session('s0')] }
+  const gone = { id: 'g', name: 'g', path: '/r/a-g', branch: 'g', head: 'hg', isMain: false, loaded: false, sessions: [session('s1')] }
+  const det = { id: 'd', name: 'd', path: '/r/a-d', branch: 'd', head: 'hd', isMain: false, loaded: false, sessions: [] }
+  const listing = [
+    listMain(),
+    { path: '/r/a-k', branch: 'k', head: 'hk', isMain: false },
+    { path: '/r/a-n', branch: 'n', head: 'hn', isMain: false },
+    { path: '/r/a-d', head: 'hd2', isMain: false }
+  ]
+  const first = reconcileWorktrees(repo([main(), known, gone, det]), listing, ids())
+  assert.equal(first.worktrees.some((w) => w.missing), true)
+  const second = reconcileWorktrees(repo(first.worktrees), listing, ids())
+  assert.deepEqual(second.worktrees, first.worktrees)
+  assert.equal(second.membershipChanged, false)
+  assert.equal(second.headsChanged, false)
+})
+
+test('the input is not mutated by head moves, duplicate merges or vanished rows', () => {
+  const moved = { id: 'w', name: 'f', path: '/r/a-f', branch: 'f', head: 'h', isMain: false, loaded: false, dirty: true, sessions: [session('s1')] }
+  const dupA = { id: 'd1', name: 'd', path: '/r/a-d', branch: 'd', head: 'h', isMain: false, loaded: false, sessions: [session('s1')] }
+  const dupB = { id: 'd2', name: 'd', path: '/r/a-d/', branch: 'd', head: 'h', isMain: false, loaded: true, sessions: [session('s2')] }
+  const busy = { id: 'b', name: 'b', path: '/r/a-b', branch: 'b', head: 'h', isMain: false, loaded: false, dirty: true, sessions: [session('s3')] }
+  const empty = { id: 'e', name: 'e', path: '/r/a-e', branch: 'e', head: 'h', isMain: false, loaded: false, sessions: [] }
+  const r = repo([main({ branch: 'main', head: 'h1' }), moved, dupA, dupB, busy, empty])
+  const before = structuredClone(r)
+  const listing = [listMain('h9'), { path: '/r/a-f', branch: 'f', head: 'h8', isMain: false }, { path: '/r/a-d', branch: 'd', head: 'h', isMain: false }, { path: '/r/a-x', branch: 'x', head: 'h', isMain: false }]
+  const frozen = structuredClone(listing)
+  reconcileWorktrees(r, listing, ids())
+  assert.deepEqual(r, before)
+  assert.deepEqual(listing, frozen)
 })

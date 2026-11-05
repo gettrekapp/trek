@@ -267,6 +267,11 @@ export interface GitWorktreeInfo {
   head?: string
   isMain: boolean
   /**
+   * git reports the worktree's directory as gone (`prunable` in the porcelain
+   * listing): it is registered but cannot be used until pruned.
+   */
+  prunable?: boolean
+  /**
    * Dirty/ahead/behind are NOT filled in by listWorktrees — that would cost
    * two git processes per worktree on every poll. They are merged in from the
    * slower worktreeStatuses sweep, and stay undefined until it has run.
