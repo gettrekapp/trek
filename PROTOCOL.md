@@ -57,7 +57,8 @@ Responses correlate by `id`:
 ```
 
 Error codes: `UNAUTHORIZED`, `BAD_REQUEST`, `NOT_FOUND`, `PATH_DENIED`,
-`GIT_ERROR`, `PTY_NOT_FOUND`, `INTERNAL`, `UNSUPPORTED_VERSION`.
+`GIT_ERROR`, `PTY_NOT_FOUND`, `INTERNAL`, `UNSUPPORTED_VERSION`, and (v2)
+`CONFLICT`, `NOT_A_REPO`, `IN_USE`.
 
 Every path param (`repoPath`, `worktreePath`, `cwd`) is realpath-resolved and
 must fall under a configured repo root or worktree root; anything else is
@@ -185,7 +186,7 @@ comes from the `server` topic.
 
 | Topic | Snapshot |
 |---|---|
-| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}]}` |
+| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}` |
 | `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session), sessions in `attention` or `done` |
 | `project:<id>` | the whole `Project` tree |
 
@@ -208,6 +209,7 @@ comes from the `server` topic.
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 |
+| Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -239,6 +241,20 @@ is empty, contains a space, or already exists on that server, and with
 `PATH_DENIED` if any repository path is outside its allowlist. It resets runtime
 fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
 `dirty`, `ahead`, `behind` and `head`.
+
+`server.addRepo {path, name?}` registers the git repository containing `path`
+and returns `{repoId}`. Both `path` and the repository's top level must be under
+an allowed root (a registered repo's parent directory or a `worktreeRoots`
+entry); otherwise it fails with `PATH_DENIED`. A path that is not in a git
+repository fails with `NOT_A_REPO`. A path that is already registered returns
+the existing id. `server.removeRepo {repoId}` fails with `NOT_FOUND` for an
+unknown id and with `IN_USE` while a project uses the repo. Both change the
+server's config file and patch the `server` topic. Edits made with the
+`trek-server` CLI on the server reach subscribers the same way, without a
+restart.
+
+Tokens are named, one per device (`trek-server token add <name>`). Revoking a
+token closes its open connections with `4003`.
 
 The v1 `git.*`, `repo.list`, `agents.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
 internal to a v2 server.
