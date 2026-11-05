@@ -65,6 +65,10 @@ export interface TerminalHostDeps {
   onExit: (ptyId: string, exitCode: number) => void
   /** How long after kill() a process that is still running gets SIGKILL (default 3000) */
   killTimeoutMs?: number
+  /** Live output (never replay), after the chunk is buffered and before clients get it */
+  onOutput?: (ptyId: string, data: string) => void
+  /** The program rang the terminal bell (from the headless screen) */
+  onBell?: (ptyId: string) => void
 }
 
 interface PtyRecord {
@@ -123,11 +127,15 @@ export class TerminalHost {
   private readonly spawner: PtySpawner
   private readonly onExit: TerminalHostDeps['onExit']
   private readonly killTimeoutMs: number
+  private readonly onOutputHook?: TerminalHostDeps['onOutput']
+  private readonly onBellHook?: TerminalHostDeps['onBell']
 
   constructor(deps: TerminalHostDeps) {
     this.spawner = deps.spawner ?? nodePtySpawner
     this.onExit = deps.onExit
     this.killTimeoutMs = deps.killTimeoutMs ?? KILL_TIMEOUT_MS
+    this.onOutputHook = deps.onOutput
+    this.onBellHook = deps.onBell
   }
 
   spawn(ptyId: string, opts: SpawnOptions): void {
@@ -161,6 +169,7 @@ export class TerminalHost {
       killed: false
     }
     this.records.set(ptyId, record)
+    screen.onBell(() => this.safely(() => this.onBellHook?.(ptyId)))
     proc.onData((data) => this.onData(record, data))
     proc.onExit((exitCode) => this.onProcessExit(record, exitCode))
   }
@@ -169,6 +178,22 @@ export class TerminalHost {
   has(ptyId: string): boolean {
     const record = this.records.get(ptyId)
     return record !== undefined && !record.killed
+  }
+
+  /** Whether `sink` is attached to the pty. */
+  isAttached(ptyId: string, sink: TerminalSink): boolean {
+    return this.records.get(ptyId)?.sinks.has(sink) ?? false
+  }
+
+  /** Last resort at process exit: SIGKILL every pty that is still alive. */
+  forceKillAll(): void {
+    for (const record of this.records.values()) {
+      try {
+        record.proc.kill('SIGKILL')
+      } catch {
+        // already gone
+      }
+    }
   }
 
   info(ptyId: string): PtyInfo {
@@ -274,6 +299,15 @@ export class TerminalHost {
     return this.require(ptyId).parsed
   }
 
+  /** Runs an owner hook; a throwing owner must never break streaming. */
+  private safely(fn: () => void): void {
+    try {
+      fn()
+    } catch (err) {
+      console.error('terminal host hook failed', err)
+    }
+  }
+
   private onData(record: PtyRecord, data: string): void {
     // node-pty can deliver data after the exit event.
     if (this.records.get(record.ptyId) !== record) return
@@ -287,6 +321,7 @@ export class TerminalHost {
       record.bufferStartSeq += dropped.length
     }
     this.writeScreen(record, data)
+    this.safely(() => this.onOutputHook?.(record.ptyId, data))
     for (const sink of [...record.sinks]) {
       try {
         sink.send('pty.data', { ptyId: record.ptyId, seq, data })

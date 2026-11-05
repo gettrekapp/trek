@@ -365,3 +365,52 @@ test('attach refuses a congested connection without replaying or attaching', (t)
   assert.deepEqual(busy.events, [], 'not attached')
   assert.equal(spawned[0].paused, false)
 })
+
+test('onOutput sees live output, never replay; onBell fires for a real bell only', async (t) => {
+  const outputs = []
+  const bells = []
+  const { host, spawned } = setup(t, { onOutput: (id, d) => outputs.push([id, d]), onBell: (id) => bells.push(id) })
+  host.spawn('p1', opts)
+  spawned[0].emit('hi')
+  host.attach('p1', sink())
+  assert.deepEqual(outputs, [['p1', 'hi']], 'attach replays without calling onOutput')
+  spawned[0].emit('\x1b]0;title\x07')
+  spawned[0].emit('ding\x07')
+  await host.settled('p1')
+  assert.deepEqual(bells, ['p1'])
+})
+
+test('a throwing onOutput or onBell never breaks streaming', async (t) => {
+  const { host, spawned } = setup(t, { onOutput: () => { throw new Error('boom') }, onBell: () => { throw new Error('boom') } })
+  const orig = console.error
+  console.error = () => {}
+  t.after(() => { console.error = orig })
+  host.spawn('p1', opts)
+  const a = sink()
+  host.attach('p1', a)
+  spawned[0].emit('x\x07')
+  await host.settled('p1')
+  assert.equal(a.events.at(-1).data, 'x\x07')
+})
+
+test('isAttached', (t) => {
+  const { host } = setup(t)
+  host.spawn('p1', opts)
+  const a = sink()
+  assert.equal(host.isAttached('p1', a), false)
+  host.attach('p1', a)
+  assert.equal(host.isAttached('p1', a), true)
+  host.detach('p1', a)
+  assert.equal(host.isAttached('p1', a), false)
+  assert.equal(host.isAttached('nope', a), false)
+})
+
+test('forceKillAll sends SIGKILL to every pty still alive', (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  host.spawn('p2', opts)
+  const signals = []
+  for (const p of spawned) p.kill = (signal) => signals.push(signal ?? 'SIGHUP')
+  host.forceKillAll()
+  assert.deepEqual(signals, ['SIGKILL', 'SIGKILL'])
+})
