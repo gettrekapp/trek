@@ -3,7 +3,8 @@
 // line is built here, never by a client.
 import { randomUUID } from 'node:crypto'
 import { discoverCodexSession } from '../../../src/host/agentService.ts'
-import type { Project, Session, Worktree } from '../../../src/shared/model/types'
+import type { AttentionTopic } from '../../../src/shared/model/topics'
+import type { Project, Session, SessionStatus, Worktree } from '../../../src/shared/model/types'
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
 import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import {
@@ -18,9 +19,21 @@ import { codedError } from '../errors.ts'
 import { assertNotRepository, findRegistered } from '../projects/model.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
+import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
+import {
+  IDLE_MS,
+  attentionEntries,
+  isTerminalReply,
+  newActivity,
+  onBell,
+  onInput,
+  onOutput,
+  onQuiet,
+  type Activity
+} from './status.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
 
 export const LOAD_COLS = 120
@@ -44,6 +57,8 @@ export interface ScheduledJob {
 export interface SessionManagerDeps {
   projects: ProjectState
   store: ConfigStore
+  /** Where the `attention` topic is published; without it the topic is not published */
+  hub?: TopicHub
   spawner?: PtySpawner
   discover?: (cwd: string, ageMs: number, exclude: string[]) => Promise<string | undefined>
   schedule?: (fn: () => void | Promise<void>, ms: number) => ScheduledJob
@@ -96,6 +111,10 @@ export class SessionManager {
   private readonly loops = new Map<string, FolderLoop>()
   /** realpath → how many worktree.remove calls are working on it */
   private readonly blocked = new Map<string, number>()
+  /** sessionId → live activity (marker scan) and its quiet timer */
+  private readonly activity = new Map<string, { activity: Activity; quiet?: ScheduledJob }>()
+  /** sessionId → when it entered attention or done */
+  private readonly since = new Map<string, number>()
   private stopped = false
 
   constructor(deps: SessionManagerDeps) {
@@ -110,7 +129,13 @@ export class SessionManager {
         timer.unref()
         return { cancel: () => clearTimeout(timer) }
       })
-    this.terminals = new TerminalHost({ spawner: deps.spawner, onExit: (ptyId, code) => this.onExit(ptyId, code) })
+    this.terminals = new TerminalHost({
+      spawner: deps.spawner,
+      onExit: (ptyId, code) => this.onExit(ptyId, code),
+      onOutput: (ptyId, data) => this.onPtyOutput(ptyId, data),
+      onBell: (ptyId) => this.onPtyBell(ptyId)
+    })
+    this.publishAttention()
   }
 
   /**
@@ -218,6 +243,8 @@ export class SessionManager {
     this.stopDiscovery(found.session.id)
     this.killSession(found.session)
     this.removeSession(project.id, found.session.id)
+    this.since.delete(found.session.id)
+    this.publishAttention()
     return null
   }
 
@@ -227,6 +254,8 @@ export class SessionManager {
       if (complete) s.status = 'complete'
       else if (s.status === 'complete') s.status = 'idle'
     })
+    this.syncSince(p.projectId, p.sessionId)
+    this.publishAttention()
     return null
   }
 
@@ -236,6 +265,7 @@ export class SessionManager {
       checkExpected('title', s.title, p.expected)
       s.title = title
     })
+    this.publishAttention()
     return null
   }
 
@@ -265,6 +295,7 @@ export class SessionManager {
     if (!this.terminals.has(ptyId)) throw bad('the session is not running')
     const normalized = text.replace(/\r?\n/g, '\r')
     this.terminals.write(ptyId, this.terminals.bracketedPaste(ptyId) ? `\x1b[200~${normalized}\x1b[201~` : normalized)
+    this.noteInput(ptyId, text)
     setTimeout(() => {
       if (this.terminals.has(ptyId)) this.terminals.write(ptyId, '\r')
     }, 150).unref()
@@ -281,7 +312,15 @@ export class SessionManager {
       },
       false
     )
+    this.syncSince(p.projectId, p.sessionId)
+    this.publishAttention()
     return null
+  }
+
+  /** A client typed into the pty (pty.write, session.sendPrompt). Terminal auto-replies are not input. */
+  noteInput(ptyId: string, data: string): void {
+    if (isTerminalReply(data)) return
+    this.updateStatus(ptyId, (status) => onInput(status))
   }
 
   loadWorktree(p: any): null {
@@ -332,6 +371,7 @@ export class SessionManager {
       },
       { persist: false }
     )
+    this.publishAttention()
     return null
   }
 
@@ -341,11 +381,13 @@ export class SessionManager {
    */
   forgetProject(projectId: string): void {
     this.forget((o) => o.projectId === projectId)
+    this.publishAttention()
   }
 
   /** A repository is leaving the project: as forgetProject, for that repository's sessions only. */
   forgetRepo(projectId: string, repoId: string): void {
     this.forget((o) => o.projectId === projectId && o.repoId === repoId)
+    this.publishAttention()
   }
 
   /**
@@ -370,6 +412,7 @@ export class SessionManager {
     } catch {
       // the project is gone
     }
+    this.publishAttention()
   }
 
   /** Server shutdown: kill every pty; their exits are ignored. */
@@ -378,6 +421,9 @@ export class SessionManager {
     for (const loop of this.loops.values()) loop.job.cancel()
     this.loops.clear()
     this.pending.clear()
+    for (const entry of this.activity.values()) entry.quiet?.cancel()
+    this.activity.clear()
+    this.since.clear()
     this.terminals.disposeAll()
   }
 
@@ -395,6 +441,7 @@ export class SessionManager {
     for (const [ptyId, owner] of [...this.owners]) {
       if (!match(owner)) continue
       this.owners.delete(ptyId)
+      this.dropActivity(owner.sessionId)
       if (this.terminals.has(ptyId)) this.terminals.kill(ptyId)
     }
   }
@@ -494,6 +541,7 @@ export class SessionManager {
     } catch (err) {
       // No record points at the new pty: nothing could ever reach or kill it.
       this.owners.delete(ptyId)
+      this.dropActivity(sessionId)
       this.terminals.kill(ptyId)
       throw err
     }
@@ -506,6 +554,7 @@ export class SessionManager {
   private killSession(session: Session): void {
     if (!session.ptyId) return
     this.owners.delete(session.ptyId)
+    this.dropActivity(session.id)
     if (this.terminals.has(session.ptyId)) this.terminals.kill(session.ptyId)
   }
 
@@ -513,6 +562,7 @@ export class SessionManager {
     const owner = this.owners.get(ptyId)
     this.owners.delete(ptyId)
     if (!owner || this.stopped) return
+    this.dropActivity(owner.sessionId)
     // A Codex session that exited before its id was found is never bound (pickClaimant's rule).
     this.stopDiscovery(owner.sessionId)
     try {
@@ -530,6 +580,94 @@ export class SessionManager {
     } catch {
       // the project or session is gone
     }
+    this.publishAttention()
+  }
+
+  // ---- live status ----
+
+  private onPtyOutput(ptyId: string, data: string): void {
+    const owner = this.owners.get(ptyId)
+    const session = owner && this.sessionOf(owner)
+    if (!owner || !session) return
+    const markers = getProvider(session.llm.provider).statusMarkers
+    const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
+    const r = onOutput(session.status, entry.activity, data, markers)
+    entry.activity = r.activity
+    this.activity.set(owner.sessionId, entry)
+    if (r.restartTimer) {
+      entry.quiet?.cancel()
+      entry.quiet = this.schedule(() => this.onQuietTimer(ptyId, entry), IDLE_MS)
+    }
+    if (r.status !== session.status) this.setStatus(owner, r.status)
+  }
+
+  private onQuietTimer(ptyId: string, entry: { activity: Activity; quiet?: ScheduledJob }): void {
+    const owner = this.owners.get(ptyId)
+    // A timer whose session was dropped (and maybe tracked again since) does nothing.
+    if (!owner || this.activity.get(owner.sessionId) !== entry) return
+    entry.quiet = undefined
+    const session = this.sessionOf(owner)
+    if (!session) return
+    const r = onQuiet(session.status, entry.activity)
+    entry.activity = r.activity
+    if (r.status !== session.status) this.setStatus(owner, r.status)
+  }
+
+  private onPtyBell(ptyId: string): void {
+    this.updateStatus(ptyId, (status) => onBell(status))
+  }
+
+  private updateStatus(ptyId: string, next: (status: SessionStatus) => SessionStatus): void {
+    const owner = this.owners.get(ptyId)
+    const session = owner && this.sessionOf(owner)
+    if (!owner || !session) return
+    const status = next(session.status)
+    if (status !== session.status) this.setStatus(owner, status)
+  }
+
+  /** The session's current record, or undefined if it (or its project) is gone. */
+  private sessionOf(owner: Owner): Session | undefined {
+    try {
+      return findSession(this.deps.projects.require(owner.projectId), owner.sessionId).session
+    } catch {
+      return undefined
+    }
+  }
+
+  /** A runtime-only status change (never saved), then the attention topic. */
+  private setStatus(owner: Owner, status: SessionStatus): void {
+    try {
+      this.deps.projects.apply(owner.projectId, (d) => { findSession(d, owner.sessionId).session.status = status }, { persist: false })
+    } catch {
+      return
+    }
+    if (status === 'attention' || status === 'done') this.since.set(owner.sessionId, this.now())
+    else this.since.delete(owner.sessionId)
+    this.publishAttention()
+  }
+
+  /** After a client changed a session's status: a session no longer in attention or done has no `since`. */
+  private syncSince(projectId: unknown, sessionId: unknown): void {
+    try {
+      const { session } = findSession(this.deps.projects.require(projectId), sessionId)
+      if (session.status !== 'attention' && session.status !== 'done') this.since.delete(session.id)
+    } catch {
+      // the session is gone
+    }
+  }
+
+  /** The session's pty ended or was dropped: forget its activity, quiet timer and `since`. */
+  private dropActivity(sessionId: string): void {
+    this.activity.get(sessionId)?.quiet?.cancel()
+    this.activity.delete(sessionId)
+    this.since.delete(sessionId)
+  }
+
+  /** Republishes the `attention` topic (a no-op when nothing changed). */
+  private publishAttention(): void {
+    if (!this.deps.hub) return
+    const topic: AttentionTopic = { entries: attentionEntries(this.deps.projects.all(), this.since, this.now) }
+    this.deps.hub.publish('attention', topic)
   }
 
   private mutate(projectId: unknown, sessionId: unknown, fn: (s: Session) => void, persist = true): void {

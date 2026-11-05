@@ -38,6 +38,7 @@ export const sessionHandlers: Record<string, Handler> = {
     const ptyId = ptyOf(ctx, p)
     const data = requireString(p.data, 'data')
     if (data.length > MAX_PTY_WRITE) throw codedError('BAD_REQUEST', `data must be at most ${MAX_PTY_WRITE} characters`)
+    ctx.sessions.noteInput(ptyId, data)
     ctx.sessions.terminals.write(ptyId, data)
     return null
   },

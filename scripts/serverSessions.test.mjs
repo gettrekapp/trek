@@ -87,7 +87,7 @@ function setup(t, { llm } = {}) {
   const scheduled = []
   const clock = { t: 1_000_000 }
   const sessions = new SessionManager({
-    projects, store, spawner: fake.spawner, now: () => clock.t,
+    projects, store, hub, spawner: fake.spawner, now: () => clock.t,
     discover: async (cwd, ageMs, exclude) => {
       discoveries.push({ cwd, ageMs, exclude })
       const next = sessions.__nextDiscovery
@@ -104,7 +104,7 @@ function setup(t, { llm } = {}) {
   const project = () => projects.require(projectId)
   const main = () => project().repositories[0].worktrees[0]
   const wx = () => project().repositories[0].worktrees[1]
-  return { dir, a, b, store, projects, sessions, saves, projectId, project, main, wx, ...fake, discoveries, scheduled, clock }
+  return { dir, a, b, store, hub, projects, sessions, saves, projectId, project, main, wx, ...fake, discoveries, scheduled, clock }
 }
 
 const size = { cols: 100, rows: 30 }
@@ -531,7 +531,7 @@ function v2(s) {
   const events = []
   const terminal = { send: (event, payload) => events.push({ event, ...payload }), bufferedAmount: () => 0 }
   const call = (method, params) =>
-    dispatchV2(method, params, { store: s.store, hub: undefined, subscriber: undefined, projects: s.projects, poller: undefined, sessions: s.sessions, terminal })
+    dispatchV2(method, params, { store: s.store, hub: s.hub, subscriber: undefined, projects: s.projects, poller: undefined, sessions: s.sessions, terminal })
   return { events, terminal, call }
 }
 
@@ -677,4 +677,131 @@ test('v2: pty.write refuses data over 1 MiB', async (t) => {
   assert.equal((await call('pty.write', { ptyId, data: 'x'.repeat(1024 * 1024 + 1) })).error.code, 'BAD_REQUEST')
   assert.equal(s.spawned[0].written.length, 0)
   assert.equal((await call('pty.write', { ptyId, data: 'x'.repeat(1024 * 1024) })).ok, true)
+})
+
+// ---- live status and the attention topic ----
+
+/** The quiet-timer jobs (2500 ms) still pending (neither cancelled nor fired), newest last. */
+const quietJobs = (s) => s.scheduled.filter((j) => j.ms === 2500 && !j.cancelled && !j.fired)
+/** Fires the one pending quiet timer, as its setTimeout would. */
+const fireQuiet = (s) => {
+  const jobs = quietJobs(s)
+  assert.equal(jobs.length, 1, 'one quiet timer is pending')
+  jobs[0].fired = true
+  jobs[0].fn()
+}
+const statusOf = (s) => s.wx().sessions[0].status
+const attention = (s) => s.hub.subscribe('attention', { send() {} }).snapshot.entries
+
+test('output → working; quiet → done after a marker, idle after a repaint', (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const proc = s.spawned[0]
+  proc.emit('Thinking… (esc to interrupt)')
+  assert.equal(statusOf(s), 'working')
+  proc.emit('more')
+  assert.equal(quietJobs(s).length, 1, 'each chunk restarts the one quiet timer')
+  fireQuiet(s)
+  assert.equal(statusOf(s), 'done')
+  assert.equal(attention(s)[0].status, 'done')
+  proc.emit('repaint')
+  assert.equal(statusOf(s), 'working')
+  assert.deepEqual(attention(s), [])
+  fireQuiet(s)
+  assert.equal(statusOf(s), 'idle')
+})
+
+test('a bell sets attention and lists it; real input clears it, a terminal reply does not', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  assert.equal(statusOf(s), 'attention')
+  assert.deepEqual(attention(s).map((e) => [e.sessionId, e.worktreeId, e.status]), [[sessionId, 'wx', 'attention']])
+  s.sessions.noteInput(ptyId, '\x1b[12;1R')
+  assert.equal(statusOf(s), 'attention')
+  s.sessions.noteInput(ptyId, 'y')
+  assert.equal(statusOf(s), 'working')
+  assert.deepEqual(attention(s), [])
+})
+
+test('complete ignores output and bells; typing re-engages tracking', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: true })
+  s.spawned[0].emit('esc to interrupt\x07')
+  await s.sessions.terminals.settled(ptyId)
+  assert.equal(statusOf(s), 'complete')
+  s.sessions.noteInput(ptyId, 'x')
+  assert.equal(statusOf(s), 'working')
+})
+
+test('status changes are not saved; seen and rename update the attention topic', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const saves = s.saves.length
+  s.spawned[0].emit('esc to interrupt')
+  fireQuiet(s)
+  assert.equal(s.saves.length, saves, 'working/done are runtime-only')
+  s.sessions.rename({ projectId: s.projectId, sessionId, title: 'Renamed' })
+  assert.equal(attention(s)[0].title, 'Renamed')
+  s.sessions.seen({ projectId: s.projectId, sessionId })
+  assert.deepEqual(attention(s), [])
+})
+
+test('exit, close and unload cancel the quiet timer and drop attention entries', async (t) => {
+  const s = setup(t)
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('esc to interrupt')
+  fireQuiet(s)
+  assert.equal(attention(s).length, 1)
+  s.spawned[0].emit('x')
+  s.spawned[0].exit(0)
+  assert.equal(quietJobs(s).length, 0)
+  assert.equal(statusOf(s), 'exited')
+  assert.deepEqual(attention(s), [])
+  s.sessions.restart({ projectId: s.projectId, sessionId: one.sessionId, ...size })
+  s.spawned[1].emit('esc to interrupt')
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  assert.equal(quietJobs(s).length, 0)
+})
+
+test('sendPrompt counts as input', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'go' })
+  assert.equal(statusOf(s), 'working')
+})
+
+test('pty.write notes input through the v2 handler', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const { ptyId } = (await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })).result
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  await call('pty.attach', { ptyId })
+  await call('pty.write', { ptyId, data: 'n' })
+  assert.equal(statusOf(s), 'working')
+})
+
+test('close and project.delete drop attention entries and cancel the quiet timer', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('esc to interrupt')
+  fireQuiet(s)
+  assert.equal(attention(s).length, 1)
+  s.spawned[0].emit('x')
+  s.sessions.close({ projectId: s.projectId, sessionId: one.sessionId })
+  assert.equal(quietJobs(s).length, 0)
+  assert.deepEqual(attention(s), [])
+  const two = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[1].emit('\x07')
+  await s.sessions.terminals.settled(two.ptyId)
+  assert.equal(attention(s).length, 1)
+  assert.equal((await call('project.delete', { projectId: s.projectId })).ok, true)
+  assert.equal(quietJobs(s).length, 0)
+  assert.deepEqual(attention(s), [])
 })
