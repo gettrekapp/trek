@@ -1,0 +1,73 @@
+// scripts/serverStatus.test.mjs — the desktop's status rules, ported; input filter; attention entries.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { attentionEntries, isTerminalReply, newActivity, onBell, onInput, onOutput, onQuiet } from '../server/src/sessions/status.ts'
+
+const markers = ['esc to interrupt']
+
+test('output makes a session working and asks for the quiet timer', () => {
+  for (const status of ['idle', 'done', 'working']) {
+    const r = onOutput(status, newActivity(), 'hello', markers)
+    assert.equal(r.status, 'working', status)
+    assert.equal(r.restartTimer, true)
+  }
+})
+
+test('output leaves attention and exited alone, and is ignored while complete', () => {
+  assert.equal(onOutput('attention', newActivity(), 'x', markers).status, 'attention')
+  assert.equal(onOutput('exited', newActivity(), 'x', markers).status, 'exited')
+  const complete = onOutput('complete', newActivity(), 'esc to interrupt', markers)
+  assert.equal(complete.status, 'complete')
+  assert.equal(complete.restartTimer, false)
+  assert.equal(complete.activity.processingSeen, false)
+})
+
+test('markers are found case-insensitively, even split across chunks', () => {
+  let a = onOutput('idle', newActivity(), '… Esc to inte', markers).activity
+  assert.equal(a.processingSeen, false)
+  a = onOutput('working', a, 'rrupt)', markers).activity
+  assert.equal(a.processingSeen, true)
+})
+
+test('quiet: done after real work, idle after a repaint; only while working', () => {
+  assert.deepEqual(onQuiet('working', { processingSeen: true, scanTail: 'x' }), { status: 'done', activity: { processingSeen: false, scanTail: 'x' } })
+  assert.equal(onQuiet('working', { processingSeen: false, scanTail: '' }).status, 'idle')
+  assert.equal(onQuiet('attention', { processingSeen: true, scanTail: '' }).status, 'attention')
+  assert.equal(onQuiet('attention', { processingSeen: true, scanTail: '' }).activity.processingSeen, true)
+})
+
+test('bell means attention unless complete; input clears attention and complete', () => {
+  for (const s of ['idle', 'working', 'done', 'attention']) assert.equal(onBell(s), 'attention')
+  assert.equal(onBell('complete'), 'complete')
+  assert.equal(onBell('exited'), 'exited')
+  assert.equal(onInput('attention'), 'working')
+  assert.equal(onInput('complete'), 'working')
+  for (const s of ['idle', 'working', 'done', 'exited']) assert.equal(onInput(s), s)
+})
+
+test('terminal replies are not user input', () => {
+  for (const reply of ['\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[0n', '\x1b[I', '\x1b[O',
+    '\x1b]11;rgb:0d0d/0d0d/0f0f\x07', '\x1b]10;rgb:c9c9/c9c9/cfcf\x1b\\', '\x1b[I\x1b[12;1R']) {
+    assert.equal(isTerminalReply(reply), true, JSON.stringify(reply))
+  }
+  for (const input of ['a', '\r', '\x1b[A', '\x03', 'hello\r', '\x1b[200~paste\x1b[201~', '', '\x1b[I a']) {
+    assert.equal(isTerminalReply(input), input === '' ? true : false, JSON.stringify(input))
+  }
+})
+
+test('attentionEntries lists attention and done sessions, oldest first, with Global as null', () => {
+  const s = (id, status, title = id) => ({ id, title, llm: { provider: 'claude' }, queue: [], status })
+  const projects = [{
+    id: 'p', name: 'P', settings: {},
+    globalSessions: [s('g', 'done')],
+    repositories: [{ id: 'r', name: 'R', path: '/r', branchData: {}, worktrees: [
+      { id: 'w', name: 'w', path: '/r', isMain: true, loaded: true, sessions: [s('a', 'attention', 'Fix'), s('b', 'working'), s('c', 'idle')] }
+    ] }]
+  }]
+  const since = new Map([['a', 200], ['g', 100]])
+  assert.deepEqual(attentionEntries(projects, since, () => 999), [
+    { projectId: 'p', worktreeId: null, sessionId: 'g', title: 'g', status: 'done', since: 100 },
+    { projectId: 'p', worktreeId: 'w', sessionId: 'a', title: 'Fix', status: 'attention', since: 200 }
+  ])
+  assert.equal(attentionEntries(projects, new Map(), () => 999)[0].since, 999)
+})
