@@ -112,7 +112,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     let rejectTimer: NodeJS.Timeout | undefined
     /** This connection as a receiver of v2 pty events */
     const terminal: TerminalSink = {
-      send: (event, payload) => sendFrame(ws, { type: 'event', event, payload } as ServerFrameV2),
+      send: (event, payload) => sendFrame(ws, { type: 'event', event, payload }),
       bufferedAmount: () => ws.bufferedAmount
     }
     const subscriber: Subscriber = {

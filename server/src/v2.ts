@@ -169,6 +169,9 @@ const handlers: Record<string, Handler> = {
     })
     // Only once the repository is removed: a refused remove ends none of its sessions.
     ctx.sessions.forgetRepo(projectId, repoId)
+    // Global sessions run in the first repository with the others as additional
+    // directories, so every removal leaves the running ones with a stale set.
+    ctx.sessions.forgetGlobal(projectId)
     return null
   },
 

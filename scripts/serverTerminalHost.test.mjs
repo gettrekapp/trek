@@ -120,9 +120,10 @@ test('the ring buffer keeps the newest output', (t) => {
 test('a congested sink pauses the pty until every sink drains', async (t) => {
   const { host, spawned } = setup(t)
   host.spawn('p1', opts)
-  let buffered = 5 * MiB
+  let buffered = 0
   host.attach('p1', sink(() => buffered))
   host.attach('p1', sink())
+  buffered = 5 * MiB
   spawned[0].emit('a')
   assert.equal(spawned[0].paused, true)
   buffered = 0
@@ -182,13 +183,6 @@ test('a sink between the water marks stays paused until it drops below low water
   assert.equal(spawned[0].paused, false)
 })
 
-test('attaching a sink that is already above high water pauses the pty', (t) => {
-  const { host, spawned } = setup(t)
-  host.spawn('p1', opts)
-  host.attach('p1', sink(() => 5 * MiB))
-  assert.equal(spawned[0].paused, true)
-})
-
 test('an attach whose replay throws leaves the sink unattached', (t) => {
   const { host, spawned } = setup(t)
   host.spawn('p1', opts)
@@ -206,8 +200,10 @@ test('an attach whose replay throws leaves the sink unattached', (t) => {
 test('detaching the only congested sink while paused resumes the pty', (t) => {
   const { host, spawned } = setup(t)
   host.spawn('p1', opts)
-  const busy = sink(() => 5 * MiB)
+  let buffered = 0
+  const busy = sink(() => buffered)
   host.attach('p1', busy)
+  buffered = 5 * MiB
   spawned[0].emit('a')
   assert.equal(spawned[0].paused, true)
   host.detach('p1', busy)
@@ -231,9 +227,10 @@ test('a sink whose send throws is dropped; the others still get the data', (t) =
 test('a sink whose bufferedAmount throws during a drain poll is dropped', async (t) => {
   const { host, spawned } = setup(t)
   host.spawn('p1', opts)
-  let mode = 'busy'
-  const bad = { send() {}, bufferedAmount() { if (mode === 'throw') throw new Error('gone'); return 5 * MiB } }
+  let mode = 'idle'
+  const bad = { send() {}, bufferedAmount() { if (mode === 'throw') throw new Error('gone'); return mode === 'busy' ? 5 * MiB : 0 } }
   host.attach('p1', bad)
+  mode = 'busy'
   spawned[0].emit('a')
   assert.equal(spawned[0].paused, true)
   mode = 'throw'
@@ -355,4 +352,16 @@ test('screen() validates lines and joins a wrapped line without losing the space
   for (const bad of [0, -1, 1.5, 10_001, NaN]) {
     assert.throws(() => host.screen('p1', bad), (e) => e.code === 'BAD_REQUEST')
   }
+})
+
+test('attach refuses a congested connection without replaying or attaching', (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  spawned[0].emit('hello')
+  const busy = sink(() => 5 * MiB)
+  assert.throws(() => host.attach('p1', busy), (e) => e.code === 'BAD_REQUEST' && /congested/.test(e.message))
+  assert.deepEqual(busy.events, [])
+  spawned[0].emit('more')
+  assert.deepEqual(busy.events, [], 'not attached')
+  assert.equal(spawned[0].paused, false)
 })

@@ -178,8 +178,19 @@ async function withWorktree(s, branch) {
 test('worktree.remove blocks the worktree path while git removes it, then unblocks', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'blk')
+  const refresh = s.poller.refresh.bind(s.poller)
+  s.poller.refresh = (...args) => { s.blocked.push('refresh'); return refresh(...args) }
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(s.blocked, [wt.path, 'refresh', `unblock ${wt.path}`], 'still blocked while the repo is re-read')
+})
+
+test('worktree.remove unblocks when git refuses the removal', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'blkdirty')
+  writeFileSync(join(wt.path, 'scratch.txt'), 'x')
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.error.code, 'GIT_ERROR')
   assert.deepEqual(s.blocked, [wt.path, `unblock ${wt.path}`])
 })
 

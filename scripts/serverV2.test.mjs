@@ -43,7 +43,8 @@ function setup(t) {
   const forgotten = []
   const sessions = {
     forgetProject: (projectId) => forgotten.push(['project', projectId, holder.projects.list().some((x) => x.id === projectId)]),
-    forgetRepo: (projectId, repoId) => forgotten.push(['repo', projectId, repoId])
+    forgetRepo: (projectId, repoId) => forgotten.push(['repo', projectId, repoId]),
+    forgetGlobal: (projectId) => forgotten.push(['global', projectId])
   }
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects, sessions })
   return { dir, a, store, sent, call, forgotten, projects: holder.projects }
@@ -374,12 +375,12 @@ test('project.delete and repo.remove end their sessions, and only once the remov
   await call('repo.remove', { projectId, repoId: 'nope' })
   assert.deepEqual(forgotten, [], 'a refused remove ends nothing')
   await call('repo.remove', { projectId, repoId })
-  assert.deepEqual(forgotten, [['repo', projectId, repoId]])
+  assert.deepEqual(forgotten, [['repo', projectId, repoId], ['global', projectId]])
   assert.equal((await call('repo.remove', { projectId, repoId: first })).error.code, 'BAD_REQUEST')
-  assert.equal(forgotten.length, 1, 'the last repository is not removed, so its sessions keep running')
+  assert.equal(forgotten.length, 2, 'the last repository is not removed, so its sessions keep running')
   assert.equal((await call('project.delete', { projectId })).ok, true)
-  assert.deepEqual(forgotten[1], ['project', projectId, false])
+  assert.deepEqual(forgotten[2], ['project', projectId, false])
   assert.throws(() => projects.require(projectId))
   await call('project.delete', { projectId })
-  assert.equal(forgotten.length, 2, 'an unknown project ends nothing')
+  assert.equal(forgotten.length, 3, 'an unknown project ends nothing')
 })

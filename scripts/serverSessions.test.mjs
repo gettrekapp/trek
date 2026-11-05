@@ -576,3 +576,105 @@ test('v2: worktree.load / unload, and the other session methods are wired', asyn
   assert.equal(restarted.ok, true, JSON.stringify(restarted))
   assert.ok(restarted.result.ptyId)
 })
+
+test('Codex discovery: a poll whose result handling throws still schedules the next poll', async (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  const all = s.projects.all.bind(s.projects)
+  let throwNext = false
+  t.mock.method(s.projects, 'all', () => {
+    if (throwNext) { throwNext = false; throw new Error('boom') }
+    return all()
+  })
+  const warnings = []
+  t.mock.method(console, 'warn', (...args) => warnings.push(args))
+  s.sessions.__nextDiscovery = () => { throwNext = true; return 'cdx-x' }
+  await s.scheduled[0].fn()
+  assert.equal(s.scheduled.length, 2, 'the next poll is scheduled')
+  assert.ok(warnings.length >= 1, 'the failure is logged')
+  s.sessions.__nextDiscovery = 'cdx-y'
+  await s.scheduled[1].fn()
+  assert.equal(s.wx().sessions[0].agentSessionId, 'cdx-y')
+})
+
+test('blockPath is ref-counted, and each unblock works once', (t) => {
+  const s = setup(t)
+  const start = () => codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }))
+  const one = s.sessions.blockPath(s.wx().path)
+  const two = s.sessions.blockPath(s.wx().path)
+  one()
+  one()
+  assert.equal(start(), 'IN_USE', 'still blocked by the second')
+  two()
+  assert.equal(start(), 'ok')
+  two()
+  const three = s.sessions.blockPath(s.wx().path)
+  assert.equal(start(), 'IN_USE', 'an extra unblock does not cancel a later block')
+  three()
+})
+
+test('main-worktree sessions need the repo registered', (t) => {
+  const s = setup(t)
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].path = d.repositories[0].worktrees[0].path = join(s.dir, 'repos', 'a-x') })
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: s.main().id, ...size })), 'PATH_DENIED')
+  assert.equal(s.spawned.length, 0)
+})
+
+/** A project with repositories a (first, with worktree wx) and b. */
+function twoRepos(t) {
+  const s = setup(t)
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories.push({ id: 'rb', name: 'b', path: s.b, branchData: {}, worktrees: [{ id: 'mb', name: 'b', path: s.b, isMain: true, loaded: false, sessions: [] }] })
+  })
+  return s
+}
+
+test('repo.remove of the first repository ends the Global sessions; they restart in the new first one', async (t) => {
+  const s = twoRepos(t)
+  const { call } = v2(s)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const g = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...codex, ...size })
+  assert.match(cmd(s.spawned[1]), /--add-dir/)
+  const res = await call('repo.remove', { projectId: s.projectId, repoId: s.project().repositories[0].id })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(s.spawned.map((p) => p.killed), [true, true, true])
+  assert.equal(live(s).length, 0, 'Global discovery stopped')
+  await tick()
+  const [kept] = s.project().globalSessions
+  assert.equal(kept.id, g.sessionId, 'the record is kept')
+  assert.equal(kept.ptyId, undefined)
+  assert.equal(kept.status, 'idle')
+  assert.equal(s.project().globalSessions.length, 2)
+  s.sessions.restart({ projectId: s.projectId, sessionId: g.sessionId, ...size })
+  assert.equal(s.spawned[3].opts.cwd, s.b)
+  assert.doesNotMatch(cmd(s.spawned[3]), /--add-dir/)
+})
+
+test('repo.remove of an additional directory ends the Global sessions too, and only them', async (t) => {
+  const s = twoRepos(t)
+  const { call } = v2(s)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const g = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  const other = s.projects.create('Q', [{ registered: { id: 'a', name: 'a', path: s.a }, name: undefined }])
+  s.sessions.start({ projectId: other, worktreeId: null, ...size })
+  const res = await call('repo.remove', { projectId: s.projectId, repoId: 'rb' })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(s.spawned.map((p) => p.killed), [false, true, false])
+  await tick()
+  assert.equal(s.project().globalSessions[0].status, 'idle')
+  s.sessions.restart({ projectId: s.projectId, sessionId: g.sessionId, ...size })
+  assert.equal(s.spawned[3].opts.cwd, s.a)
+  assert.doesNotMatch(cmd(s.spawned[3]), /--add-dir/)
+  assert.equal((await call('repo.remove', { projectId: s.projectId, repoId: s.project().repositories[0].id })).error.code, 'BAD_REQUEST')
+  assert.equal(s.spawned[3].killed, false, 'a refused remove ends nothing')
+})
+
+test('v2: pty.write refuses data over 1 MiB', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const { ptyId } = (await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })).result
+  assert.equal((await call('pty.write', { ptyId, data: 'x'.repeat(1024 * 1024 + 1) })).error.code, 'BAD_REQUEST')
+  assert.equal(s.spawned[0].written.length, 0)
+  assert.equal((await call('pty.write', { ptyId, data: 'x'.repeat(1024 * 1024) })).ok, true)
+})

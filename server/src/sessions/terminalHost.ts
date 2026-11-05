@@ -9,6 +9,7 @@ import * as nodePty from 'node-pty'
 import * as xtermNamespace from '@xterm/headless'
 import type { Terminal as HeadlessTerminal } from '@xterm/headless'
 import type { PtyInfo } from '../../../src/shared/protocol'
+import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 
 const { Terminal } = (xtermNamespace as { default?: typeof xtermNamespace }).default ?? xtermNamespace
@@ -53,7 +54,7 @@ export type PtySpawner = (opts: SpawnOptions) => PtyProcess
 
 /** One client connection, as a receiver of pty events. */
 export interface TerminalSink {
-  send(event: 'pty.data' | 'pty.exit', payload: unknown): void
+  send<E extends 'pty.data' | 'pty.exit'>(event: E, payload: EventPayloadsV2[E]): void
   /** Bytes queued on the connection but not yet sent (a WebSocket's bufferedAmount) */
   bufferedAmount(): number
 }
@@ -175,9 +176,13 @@ export class TerminalHost {
     return { ptyId: r.ptyId, cwd: r.cwd, cols: r.cols, rows: r.rows, seq: r.seq }
   }
 
-  /** Replays the scrollback to `sink`, then streams live output to it. A throw leaves it unattached. */
+  /**
+   * Replays the scrollback to `sink`, then streams live output to it. A throw leaves it
+   * unattached. A connection already above high water gets no replay: it is refused.
+   */
   attach(ptyId: string, sink: TerminalSink): PtyInfo {
     const record = this.require(ptyId)
+    if (sink.bufferedAmount() > SINK_HIGH_WATER) throw codedError('BAD_REQUEST', 'the connection is congested; try again')
     let seq = record.bufferStartSeq
     for (const data of record.buffer) {
       sink.send('pty.data', { ptyId, seq, data, replay: true })

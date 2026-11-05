@@ -341,8 +341,10 @@ Deleting a project removes it from the `server` topic's `projects`; its
 `project:<id>` topic stops, and subscribing to it fails with `NOT_FOUND`. Once
 `project.delete` succeeds, the server kills the ptys of the project's sessions
 (Global ones included) and stops their Codex id discovery. Once `repo.remove`
-succeeds, it does the same for that repository's sessions. A refused or failed
-removal ends nothing.
+succeeds, it does the same for that repository's sessions and for the project's
+Global sessions, whose working directory or additional directories it changed.
+The Global session records stay, as `idle`, and `session.restart` runs them with
+the remaining repositories. A refused or failed removal ends nothing.
 
 `server.addRepo {path, name?}` registers the git repository containing `path`
 and returns `{repoId}`. Both `path` and the repository's top level must be under
@@ -402,14 +404,20 @@ repositories as additional directories, and get the project's `globalSystemPromp
 The built-in Global role prompt is added only for sessions with MCP access, which
 arrives in phase 2e. They have no load state. The path checks of a worktree
 session apply: the main worktree must not be `missing`, and its path and the
-additional directories must be under the allowlist (`PATH_DENIED`).
+additional directories must be under the allowlist (`PATH_DENIED`). Removing any
+repository from the project ends the running Global sessions (see `repo.remove`).
+
+**Path checks.** A worktree session's worktree must be under the allowlist
+(`PATH_DENIED`). A main worktree must be a registered repository and a linked
+worktree must not be one (both `PATH_DENIED`).
 
 **Ids.** `Session.id` is the server's handle. For agents that accept a preset id
 (Claude, local, Gemini), `agentSessionId` equals `id`. Codex picks its own id, so
 the server finds it in Codex's session files: it polls every 2 s for the first
 minute, then every 15 s. There is one poll loop per folder; when several Codex
 sessions start in one folder, the oldest claims first, and ids that another
-session on the server already holds are skipped. Until the id is found,
+session on the server already holds are skipped. A poll that fails is logged and
+the loop carries on. Until the id is found,
 `agentSessionId` is unset and a restart starts a fresh conversation. Each run gets
 a new `ptyId`.
 
@@ -431,9 +439,10 @@ that cannot be spawned does not stop the others: it becomes `exited` with
 `exitCode` -1 and can be restarted, and the worktree stays loaded. `worktree.unload`
 kills the worktree's ptys and marks it unloaded. Its sessions stay and become
 `idle` (a `complete` session stays `complete`). `worktree.remove` on a loaded
-worktree is `IN_USE`. While `worktree.remove` runs git on a path, `session.start`,
-`session.restart` and `worktree.load` on that path (or on a Global session whose
-main worktree it is) are `IN_USE`.
+worktree is `IN_USE`. While `worktree.remove` runs git on a path and then re-reads
+the repository, `session.start`, `session.restart` and `worktree.load` on that path
+(or on a Global session whose main worktree it is) are `IN_USE`. The path is
+released when the call ends, also when git refuses the removal.
 
 **Closing.** `session.close` kills the session's pty, stops its id discovery and
 removes the record.
@@ -453,8 +462,9 @@ would start a pty (`session.start`, `session.restart`, `worktree.load`) fail wit
 
 **Errors.** `NOT_FOUND` for an unknown project, worktree or session id.
 `PTY_NOT_FOUND` for an unknown pty, or one that is being killed. `BAD_REQUEST` for
-bad sizes, titles or types, restarting a running session and `sendPrompt` to a
-stopped one. `IN_USE` as above.
+bad sizes, titles or types, restarting a running session, `sendPrompt` to a
+stopped one, a `pty.write` whose `data` is longer than 1 MiB (1,048,576 UTF-16
+code units) and a `pty.attach` refused as congested (below). `IN_USE` as above.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
 buffer of up to 2 MiB) as `pty.data` events with `replay: true`, then streams live
@@ -464,6 +474,9 @@ of connections can attach to one pty, and any of them may `pty.write`. `pty.resi
 from any attached connection sets the size; the most recent call wins. The pty
 pauses while any attached connection has more than 4 MiB unsent, or the server's
 screen parser falls far behind, and resumes once every connection is under 2 MiB.
+A connection that already has more than 4 MiB unsent when it calls `pty.attach`
+gets no replay and is not attached: the call answers `BAD_REQUEST` ("the
+connection is congested; try again").
 `pty.exit` goes to every attached connection, also when the server killed the pty.
 A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
 meanwhile the pty counts as gone. Only session ptys are reachable through v2;

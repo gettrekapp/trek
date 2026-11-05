@@ -6,6 +6,9 @@ import type { V2Context } from './v2.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
+/** The most a single pty.write may carry, in UTF-16 code units. */
+export const MAX_PTY_WRITE = 1024 * 1024
+
 function ptyOf(ctx: V2Context, p: any): string {
   const ptyId = requireString(p.ptyId, 'ptyId')
   if (!ctx.sessions.terminals.has(ptyId)) throw codedError('PTY_NOT_FOUND', `No such pty: ${ptyId}`)
@@ -33,7 +36,9 @@ export const sessionHandlers: Record<string, Handler> = {
   },
   'pty.write': (p, ctx) => {
     const ptyId = ptyOf(ctx, p)
-    ctx.sessions.terminals.write(ptyId, requireString(p.data, 'data'))
+    const data = requireString(p.data, 'data')
+    if (data.length > MAX_PTY_WRITE) throw codedError('BAD_REQUEST', `data must be at most ${MAX_PTY_WRITE} characters`)
+    ctx.sessions.terminals.write(ptyId, data)
     return null
   },
   'pty.resize': (p, ctx) => {

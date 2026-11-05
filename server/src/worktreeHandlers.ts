@@ -166,16 +166,17 @@ export const worktreeHandlers: Record<string, Handler> = {
       // A directory that is already gone is removed from git's list too, and
       // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
       // While git removes the directory, no session or load may start in it.
+      // The block lasts until the re-read has marked the row missing.
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
         await viaGit(() => force
           ? gitService.removeWorktreeForce(repo.path, worktree.path)
           : gitService.removeWorktree(repo.path, worktree.path))
+        // Git has removed it. Even if the re-read fails, the row goes below.
+        await ctx.poller.refresh(repo.path)
       } finally {
         unblock()
       }
-      // Git has removed it. Even if the re-read fails, the row goes below.
-      await ctx.poller.refresh(repo.path)
     }
 
     // The poller keeps a vanished row that has sessions (as missing); an explicit remove drops it.

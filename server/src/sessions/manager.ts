@@ -94,8 +94,8 @@ export class SessionManager {
   private readonly pending = new Map<string, PendingDiscovery>()
   /** folder → its poll loop, while it has pending sessions */
   private readonly loops = new Map<string, FolderLoop>()
-  /** realpaths a worktree.remove is working on */
-  private readonly blocked = new Set<string>()
+  /** realpath → how many worktree.remove calls are working on it */
+  private readonly blocked = new Map<string, number>()
   private stopped = false
 
   constructor(deps: SessionManagerDeps) {
@@ -113,11 +113,21 @@ export class SessionManager {
     this.terminals = new TerminalHost({ spawner: deps.spawner, onExit: (ptyId, code) => this.onExit(ptyId, code) })
   }
 
-  /** While the returned function is not called, start/load on `path` are IN_USE. */
+  /**
+   * While the returned function is not called, start/load on `path` are IN_USE.
+   * Blocks on one path nest; each returned function releases its own block once.
+   */
   blockPath(path: string): () => void {
     const key = real(path)
-    this.blocked.add(key)
-    return () => this.blocked.delete(key)
+    this.blocked.set(key, (this.blocked.get(key) ?? 0) + 1)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const count = (this.blocked.get(key) ?? 1) - 1
+      if (count > 0) this.blocked.set(key, count)
+      else this.blocked.delete(key)
+    }
   }
 
   start(p: any): { sessionId: string; ptyId: string } {
@@ -338,6 +348,30 @@ export class SessionManager {
     this.forget((o) => o.projectId === projectId && o.repoId === repoId)
   }
 
+  /**
+   * The project's repositories changed so that its Global sessions run with a stale
+   * working directory or additional directories: kill their ptys and stop their
+   * discovery. The records stay, `idle`, and restart with the current repositories.
+   */
+  forgetGlobal(projectId: string): void {
+    this.forget((o) => o.projectId === projectId && o.repoId === undefined)
+    try {
+      this.deps.projects.apply(
+        projectId,
+        (d) => {
+          for (const s of d.globalSessions) {
+            delete s.ptyId
+            delete s.exitCode
+            if (s.status !== 'complete') s.status = 'idle'
+          }
+        },
+        { persist: false }
+      )
+    } catch {
+      // the project is gone
+    }
+  }
+
   /** Server shutdown: kill every pty; their exits are ignored. */
   stopAll(): void {
     this.stopped = true
@@ -365,12 +399,16 @@ export class SessionManager {
     }
   }
 
-  /** A worktree a session may run in: present, inside the allowlist, not a registered repo of its own, not being removed. */
+  /**
+   * A worktree a session may run in: present, inside the allowlist, a registered repo
+   * if it is a main worktree and not one if it is linked, not being removed.
+   */
   private usableWorktree(project: Project, worktreeId: unknown): Worktree {
     const { worktree } = findWorktree(project, worktreeId)
     if (worktree.missing) throw bad(`${worktree.path} no longer exists`)
     this.deps.store.guard.check(worktree.path)
-    if (!worktree.isMain) assertNotRepository(this.deps.store.config.repos, real(worktree.path), 'worktree')
+    if (worktree.isMain) findRegistered(this.deps.store.config.repos, worktree.path)
+    else assertNotRepository(this.deps.store.config.repos, real(worktree.path), 'worktree')
     if (this.blocked.has(real(worktree.path))) throw codedError('IN_USE', `${worktree.path} is being removed`)
     return worktree
   }
@@ -587,17 +625,23 @@ export class SessionManager {
       console.warn(`codex session discovery in ${claimant.cwd} failed`, err)
     }
     if (!current()) return
-    // Re-check after the await: the claimant may have been closed or restarted, and another
-    // session may have taken the id meanwhile.
-    if (found && this.pending.get(claimant.sessionId) === claimant && !this.claimedIds().has(found)) {
-      this.pending.delete(claimant.sessionId)
-      const id = found
-      try {
-        this.mutate(claimant.projectId, claimant.sessionId, (s) => { s.agentSessionId = id })
-      } catch {
-        // the session is gone
+    // A throw below must not end the loop: the folder's other sessions still wait for ids.
+    try {
+      // Re-check after the await: the claimant may have been closed or restarted, and another
+      // session may have taken the id meanwhile.
+      if (found && this.pending.get(claimant.sessionId) === claimant && !this.claimedIds().has(found)) {
+        this.pending.delete(claimant.sessionId)
+        const id = found
+        try {
+          this.mutate(claimant.projectId, claimant.sessionId, (s) => { s.agentSessionId = id })
+        } catch {
+          // the session is gone
+        }
       }
+    } catch (err) {
+      console.warn(`codex session discovery in ${claimant.cwd}: applying the result failed`, err)
+    } finally {
+      if (current()) this.scheduleLoop(folder)
     }
-    this.scheduleLoop(folder)
   }
 }
