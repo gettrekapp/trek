@@ -1,7 +1,7 @@
 // Named access tokens, one per device. Only sha256 hashes are stored; the
 // plaintext is shown once when created.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import type { DaemonConfig } from './config'
+import type { TrekServerConfig } from './config'
 
 export interface TokenEntry {
   name: string
@@ -20,7 +20,7 @@ export function hashToken(token: string): string {
 }
 
 /** Every token the config accepts, counting an unmigrated v1 tokenHash as "default". */
-export function listTokens(config: DaemonConfig): TokenEntry[] {
+export function listTokens(config: TrekServerConfig): TokenEntry[] {
   // Hand-edited entries that are malformed are dropped (fail closed).
   const tokens = (config.tokens ?? []).filter(
     (t) => t && typeof t.name === 'string' && t.name !== '' && typeof t.hash === 'string' && t.hash !== ''
@@ -31,12 +31,12 @@ export function listTokens(config: DaemonConfig): TokenEntry[] {
   return tokens
 }
 
-export function activeTokenHashes(config: DaemonConfig): Set<string> {
+export function activeTokenHashes(config: TrekServerConfig): Set<string> {
   return new Set(listTokens(config).map((t) => t.hash))
 }
 
 /** Moves v1's `tokenHash` into `tokens` as "default". Returns true if it changed the config. */
-export function migrateLegacyToken(config: DaemonConfig): boolean {
+export function migrateLegacyToken(config: TrekServerConfig): boolean {
   if (!config.tokenHash) return false
   config.tokens = listTokens(config)
   delete config.tokenHash
@@ -44,7 +44,7 @@ export function migrateLegacyToken(config: DaemonConfig): boolean {
 }
 
 /** Creates the token `name`, replacing any token of that name. Returns the plaintext, shown once. */
-export function addToken(config: DaemonConfig, name: string, now: Date = new Date()): string {
+export function addToken(config: TrekServerConfig, name: string, now: Date = new Date()): string {
   if (!NAME_RE.test(name)) {
     throw new Error(`Invalid token name "${name}" (letters, digits, ".", "_", "-"; up to 64)`)
   }
@@ -57,7 +57,7 @@ export function addToken(config: DaemonConfig, name: string, now: Date = new Dat
 }
 
 /** Returns true if a token of that name existed. Also migrates a v1 tokenHash into `tokens`. */
-export function revokeToken(config: DaemonConfig, name: string): boolean {
+export function revokeToken(config: TrekServerConfig, name: string): boolean {
   migrateLegacyToken(config)
   const tokens = config.tokens ?? []
   const kept = tokens.filter((t) => t.name !== name)
@@ -66,7 +66,7 @@ export function revokeToken(config: DaemonConfig, name: string): boolean {
 }
 
 /** The entry `token` matches, or undefined. Compares every entry in constant time. */
-export function matchToken(config: DaemonConfig, token: string): TokenEntry | undefined {
+export function matchToken(config: TrekServerConfig, token: string): TokenEntry | undefined {
   const digest = Buffer.from(hashToken(token), 'hex')
   let match: TokenEntry | undefined
   for (const entry of listTokens(config)) {

@@ -4,18 +4,15 @@ import {
   constants,
   copyFileSync,
   existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync
+  mkdirSync
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
+import { writeFileAtomic } from './atomicWrite.ts'
 import type { TokenEntry } from './tokens'
 
-export interface DaemonConfig {
+export interface TrekServerConfig {
   /** Stable UUID of this server, generated on first start. */
   serverId?: string
   /** Display name shown in clients; defaults to the hostname. */
@@ -34,6 +31,8 @@ export interface DaemonConfig {
   worktreeRoots?: string[]
   port?: number
   host?: string
+  /** Where projects are stored (default: the platform data dir, see dataDir.ts). */
+  dataDir?: string
 }
 
 export function defaultConfigPath(): string {
@@ -64,46 +63,16 @@ export function migrateLegacyConfig(target: string, legacy: string): boolean {
   return true
 }
 
-export function loadConfig(path: string): DaemonConfig {
-  let raw: string
-  try {
-    raw = readFileSync(path, 'utf8')
-  } catch {
-    return { repos: [] }
-  }
-  const config = JSON.parse(raw) as DaemonConfig
-  if (!Array.isArray(config.repos)) config.repos = []
-  return config
-}
-
 /**
  * Write-then-rename, so a running server watching the file never reads a
  * half-written config. The file is 0600: it holds token hashes.
  */
-export function saveConfig(path: string, config: DaemonConfig): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.${process.pid}.tmp`
-  // A stale temp file would keep its own (possibly looser) mode, so start fresh.
-  try {
-    unlinkSync(tmp)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-  }
-  try {
-    writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-    renameSync(tmp, path)
-  } catch (err) {
-    try {
-      unlinkSync(tmp)
-    } catch {
-      // best effort
-    }
-    throw err
-  }
+export function saveConfig(path: string, config: TrekServerConfig): void {
+  writeFileAtomic(path, JSON.stringify(config, null, 2) + '\n', 0o600)
 }
 
 /** Fills in `serverId` and `name` if missing. Returns true if it changed the config. */
-export function ensureIdentity(config: DaemonConfig, hostname: string): boolean {
+export function ensureIdentity(config: TrekServerConfig, hostname: string): boolean {
   let changed = false
   if (!config.serverId) {
     config.serverId = randomUUID()

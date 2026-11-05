@@ -1,9 +1,8 @@
 // Protocol v2 request dispatch. Phase 2a serves the handshake topics and the
 // repo registry; later sub-plans add the rest of MethodParamsV2.
 import { parseTopic } from '../../src/shared/model/topics.ts'
-import type { WireError } from '../../src/shared/protocol'
 import type { ConfigStore } from './configStore'
-import { codedError, toWireError } from './errors.ts'
+import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 
 export interface V2Context {
@@ -65,13 +64,11 @@ const handlers: Record<string, Handler> = {
   }
 }
 
-export type OutcomeV2 = { ok: true; result: unknown } | { ok: false; error: WireError }
-
 /**
  * Synchronous when the handler is: the caller can then answer in the same tick,
  * so a `sub.subscribe` response always precedes the patches it registered for.
  */
-export function dispatchV2(method: string, params: unknown, ctx: V2Context): OutcomeV2 | Promise<OutcomeV2> {
+export function dispatchV2(method: string, params: unknown, ctx: V2Context): Outcome | Promise<Outcome> {
   const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
   if (!handler) {
     return { ok: false, error: { code: 'NOT_FOUND', message: `Unknown method: ${method}` } }
@@ -84,8 +81,8 @@ export function dispatchV2(method: string, params: unknown, ctx: V2Context): Out
   }
   if (result instanceof Promise) {
     return result.then(
-      (value): OutcomeV2 => ({ ok: true, result: value }),
-      (err): OutcomeV2 => ({ ok: false, error: toWireError(method, err) })
+      (value): Outcome => ({ ok: true, result: value }),
+      (err): Outcome => ({ ok: false, error: toWireError(method, err) })
     )
   }
   return { ok: true, result }

@@ -8,10 +8,11 @@ import {
   defaultConfigPath,
   ensureIdentity,
   legacyConfigPath,
-  loadConfig,
   migrateLegacyConfig,
   saveConfig
 } from '../server/src/config.ts'
+
+const loadConfig = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-config-')))

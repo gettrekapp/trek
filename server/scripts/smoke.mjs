@@ -398,5 +398,5 @@ else ok('bad token rejected with 4003')
   }
 }
 
-console.log(failed ? 'DAEMON SMOKE FAIL' : 'DAEMON SMOKE PASS')
+console.log(failed ? 'SERVER SMOKE FAIL' : 'SERVER SMOKE PASS')
 process.exit(failed ? 1 : 0)

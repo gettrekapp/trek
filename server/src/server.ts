@@ -5,14 +5,15 @@ import {
   CLOSE_UNAUTHORIZED,
   CLOSE_UNSUPPORTED_VERSION,
   PROTOCOL_VERSION,
-  type ServerFrame,
-  type WireError
+  type ServerFrame
 } from '../../src/shared/protocol'
 import {
   PROTOCOL_VERSION_V2,
   SUPPORTED_PROTOCOL_VERSIONS,
   type ServerFrameV2
 } from '../../src/shared/protocolV2'
+import type { Outcome } from './errors'
+import { isRecord } from './validate'
 import type { ConfigStore } from './configStore'
 import { PtyRegistry } from './ptyRegistry'
 import { dispatch } from './rpc'
@@ -26,14 +27,14 @@ const BAD_TOKEN_CLOSE_DELAY_MS = 500
 const HEARTBEAT_INTERVAL_MS = 15_000
 const REVOKE_TERMINATE_MS = 1000
 
-export interface DaemonServer {
+export interface TrekServer {
   httpServer: Server
   ptys: PtyRegistry
   hub: TopicHub
   shutdown(reason: string): void
 }
 
-export function startServer(store: ConfigStore, daemonVersion: string): DaemonServer {
+export function startServer(store: ConfigStore, daemonVersion: string): TrekServer {
   const ptys = new PtyRegistry({
     send(ws, event, payload) {
       sendFrame(ws, { type: 'event', event, payload })
@@ -238,12 +239,6 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
   }
 
   return { httpServer, ptys, hub, shutdown }
-}
-
-type Outcome = { ok: true; result: unknown } | { ok: false; error: WireError }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {

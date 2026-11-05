@@ -1,10 +1,13 @@
 import type { WireError, WireErrorCode } from '../../src/shared/protocol'
 
 /** Errors carrying one of these codes reach the client as-is. */
+export type Outcome = { ok: true; result: unknown } | { ok: false; error: WireError }
+
 const PASSTHROUGH: ReadonlySet<string> = new Set<WireErrorCode>([
   'BAD_REQUEST',
   'NOT_FOUND',
   'PATH_DENIED',
+  'GIT_ERROR',
   'PTY_NOT_FOUND',
   'NOT_A_REPO',
   'IN_USE',

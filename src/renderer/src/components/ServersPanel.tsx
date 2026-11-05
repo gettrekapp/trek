@@ -5,7 +5,7 @@ import type { HostStatus, ServerConfig, ServerTestResult } from '../../../shared
 
 /**
  * Remote server management: each entry is a machine running the companion
- * daemon (see server/README.md). The access token is stored encrypted on this
+ * trek-server (see server/README.md). The access token is stored encrypted on this
  * machine only — never in the project file.
  */
 
@@ -142,7 +142,7 @@ export function ServersPanel(): React.JSX.Element {
         <span className="settings-label">
           <span className="settings-name">Remote servers</span>
           <span className="settings-desc">
-            Machines running the companion daemon. Worktrees and sessions on them appear in
+            Machines running trek-server. Worktrees and sessions on them appear in
             the sidebar with a server chip; sessions keep running when this app disconnects.
           </span>
         </span>
@@ -181,7 +181,7 @@ export function ServersPanel(): React.JSX.Element {
       })}
       {servers.length === 0 && !form && (
         <p className="muted servers-empty">
-          No servers yet. Run the daemon on a machine (see server/README.md), then add it here.
+          No servers yet. Run trek-server on a machine (see server/README.md), then add it here.
         </p>
       )}
 
@@ -231,9 +231,9 @@ export function ServersPanel(): React.JSX.Element {
             <div className={`server-test-result ${testResult.ok ? 'ok' : 'fail'}`}>
               {testResult.ok ? (
                 <>
-                  Connected — daemon {testResult.daemonVersion}
+                  Connected — trek-server {testResult.daemonVersion}
                   {' · '}
-                  {testResult.repoOk ? 'repo OK' : '⚠ repo path not in the daemon config'}
+                  {testResult.repoOk ? 'repo OK' : '⚠ repo path not in the server config'}
                   {testResult.claudeAvailable !== undefined &&
                     ` · ${
                       testResult.claudeAvailable

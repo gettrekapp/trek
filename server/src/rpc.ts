@@ -3,14 +3,13 @@ import type { WebSocket } from 'ws'
 import * as gitService from '../../src/host/gitService'
 import * as claudeSessions from '../../src/host/claudeSessionService'
 import * as agentService from '../../src/host/agentService'
-import type { WireError } from '../../src/shared/protocol'
-import { toWireError } from './errors'
-import type { DaemonConfig } from './config'
+import { toWireError, type Outcome } from './errors'
+import type { TrekServerConfig } from './config'
 import { PathGuard } from './paths'
 import { PtyRegistry } from './ptyRegistry'
 
 export interface RpcContext {
-  config: DaemonConfig
+  config: TrekServerConfig
   guard: PathGuard
   ptys: PtyRegistry
   ws: WebSocket
@@ -151,7 +150,7 @@ export async function dispatch(
   method: string,
   params: unknown,
   ctx: RpcContext
-): Promise<{ ok: true; result: unknown } | { ok: false; error: WireError }> {
+): Promise<Outcome> {
   const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
   if (!handler) {
     return { ok: false, error: { code: 'NOT_FOUND', message: `Unknown method: ${method}` } }

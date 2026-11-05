@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs'
 import { dirname, resolve, sep } from 'node:path'
-import type { DaemonConfig } from './config'
+import type { TrekServerConfig } from './config'
 
 /**
  * Every client-supplied filesystem path must resolve under one of the
@@ -12,7 +12,7 @@ import type { DaemonConfig } from './config'
 export class PathGuard {
   private roots: string[]
 
-  constructor(config: DaemonConfig) {
+  constructor(config: TrekServerConfig) {
     const roots = new Set<string>()
     const addRoot = (path: string): void => {
       // realpath so symlinked configs (e.g. /var → /private/var) match the

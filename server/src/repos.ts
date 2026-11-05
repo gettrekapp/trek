@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
-import type { DaemonConfig } from './config'
+import type { TrekServerConfig } from './config'
 
 /**
  * Resolves `path` to the top level of the git checkout containing it, so
@@ -16,7 +16,8 @@ export function resolveRepoRoot(path: string): string {
   try {
     top = execFileSync('git', ['-C', abs, 'rev-parse', '--show-toplevel'], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000
     }).trim()
   } catch {
     throw new Error(`${abs} is not inside a git repository`)
@@ -53,7 +54,7 @@ export interface AddRepoOptions {
  * explicit one that clashes is an error.
  */
 export function addRepo(
-  config: DaemonConfig,
+  config: TrekServerConfig,
   path: string,
   options: AddRepoOptions = {}
 ): { repo: RemoteRepo; added: boolean } {
@@ -81,7 +82,7 @@ export function addRepo(
  * `target` (or the git checkout containing it). Returns the removed repo, or
  * undefined when nothing matched.
  */
-export function removeRepo(config: DaemonConfig, target: string): RemoteRepo | undefined {
+export function removeRepo(config: TrekServerConfig, target: string): RemoteRepo | undefined {
   let index = config.repos.findIndex((r) => r.id === target)
   if (index === -1) {
     const candidates = new Set([realOrResolved(target)])

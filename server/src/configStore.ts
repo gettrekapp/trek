@@ -5,7 +5,8 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
 import { basename, dirname } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
-import { saveConfig, type DaemonConfig } from './config.ts'
+import { isRecord } from './validate.ts'
+import { saveConfig, type TrekServerConfig } from './config.ts'
 import { codedError } from './errors.ts'
 import { PathGuard } from './paths.ts'
 import { addRepo, removeRepo, resolveRepoRoot, type AddRepoOptions } from './repos.ts'
@@ -23,14 +24,13 @@ export type RepoUsage = (repo: RemoteRepo) => string[]
 
 const RELOAD_DEBOUNCE_MS = 100
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** Checks the shape of a parsed config file. Token entries are filtered later by tokens.ts. */
-export function validateConfig(raw: unknown): DaemonConfig {
-  if (!isObject(raw)) throw new Error('config must be a JSON object')
+export function validateConfig(raw: unknown): TrekServerConfig {
+  if (!isRecord(raw)) throw new Error('config must be a JSON object')
   if (!Array.isArray(raw.repos)) throw new Error('config.repos must be an array')
   raw.repos.forEach((repo, i) => {
-    if (!isObject(repo)) throw new Error(`config.repos[${i}] must be an object`)
+    if (!isRecord(repo)) throw new Error(`config.repos[${i}] must be an object`)
     for (const key of ['id', 'name', 'path']) {
       if (typeof repo[key] !== 'string') throw new Error(`config.repos[${i}].${key} must be a string`)
     }
@@ -40,16 +40,16 @@ export function validateConfig(raw: unknown): DaemonConfig {
     throw new Error('config.worktreeRoots must be an array of strings')
   }
   if (raw.port !== undefined && typeof raw.port !== 'number') throw new Error('config.port must be a number')
-  for (const key of ['host', 'serverId', 'name', 'tokenHash']) {
+  for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
   }
-  return raw as unknown as DaemonConfig
+  return raw as unknown as TrekServerConfig
 }
 
 export class ConfigStore extends EventEmitter<{ change: [] }> {
   readonly path: string
   usage: RepoUsage = () => []
-  private current: DaemonConfig
+  private current: TrekServerConfig
   private currentGuard: PathGuard
   private watcher?: FSWatcher
   private reloadTimer?: NodeJS.Timeout
@@ -66,7 +66,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   }
 
   /** Treat as read-only; change it through update(). */
-  get config(): DaemonConfig {
+  get config(): TrekServerConfig {
     return this.current
   }
 
@@ -75,7 +75,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   }
 
   /** Applies `mutate` to a copy, saves it and swaps it in. If `mutate` throws, nothing changes. */
-  update(mutate: (config: DaemonConfig) => void): void {
+  update(mutate: (config: TrekServerConfig) => void): void {
     this.syncFromDisk()
     const next = structuredClone(this.current)
     mutate(next)
@@ -124,7 +124,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
 
   /** Re-reads the file. Returns true (and emits change) if it differs from what is loaded. */
   reload(): boolean {
-    let next: DaemonConfig
+    let next: TrekServerConfig
     if (!existsSync(this.path)) {
       if (!this.warnedMissing) console.warn(`[config] ${this.path} does not exist; keeping the current config`)
       this.warnedMissing = true
@@ -144,7 +144,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   }
 
   /** A reloaded file must not change the running server's identity. */
-  private keepIdentity(next: DaemonConfig): void {
+  private keepIdentity(next: TrekServerConfig): void {
     const { serverId, name } = this.current
     if (serverId && next.serverId !== serverId) {
       if (!this.warnedServerId) console.warn('[config] serverId changes are ignored until restart')
@@ -189,7 +189,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     this.reload()
   }
 
-  private commit(next: DaemonConfig): void {
+  private commit(next: TrekServerConfig): void {
     // Build the guard first: if it throws, neither disk nor memory has changed.
     const guard = new PathGuard(next)
     saveConfig(this.path, next)
@@ -198,7 +198,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     this.emit('change')
   }
 
-  private swap(next: DaemonConfig): void {
+  private swap(next: TrekServerConfig): void {
     const guard = new PathGuard(next)
     this.current = next
     this.currentGuard = guard
