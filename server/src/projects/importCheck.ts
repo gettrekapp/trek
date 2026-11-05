@@ -78,14 +78,14 @@ function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: 
   if (raw.environments !== undefined && !isRecord(raw.environments)) throw bad(`${where}.environments must be an object`)
   if (!Array.isArray(raw.worktrees)) throw bad(`${where}.worktrees must be an array`)
   const worktrees = raw.worktrees.map((w, i) => checkWorktree(w, `${where}.worktrees[${i}]`, ctx, seen, registered))
+  const mains = worktrees.filter((w) => w.isMain).length
+  if (mains !== 1) throw bad(`${where}.worktrees must have exactly one isMain worktree (found ${mains})`)
   const paths = new Set<string>()
   worktrees.forEach((w, i) => {
     const key = realOrResolved(w.path)
     if (paths.has(key)) throw bad(`${where}.worktrees[${i}]: path ${w.path} is listed twice`)
     paths.add(key)
   })
-  const mains = worktrees.filter((w) => w.isMain).length
-  if (mains !== 1) throw bad(`${where}.worktrees must have exactly one isMain worktree (found ${mains})`)
   return { ...(raw as unknown as Repository), path: registered.path, worktrees }
 }
 
