@@ -4,16 +4,20 @@ import { parseTopic } from '../../src/shared/model/topics.ts'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
+import { listBranches } from '../../src/host/gitService.ts'
+import type { BranchData, Project, Repository } from '../../src/shared/model/types'
 import { checkImport } from './projects/importCheck.ts'
-import { findRegistered } from './projects/model.ts'
+import { findRegistered, newRepository } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
 import { applySettingsPatch } from './projects/settings.ts'
 import {
   checkExpected,
   isRecord,
   optionalName,
+  optionalStringArray,
   requireAbsolutePath,
   requireName,
+  requireBranch,
   requireRecord,
   requireString
 } from './validate.ts'
@@ -27,6 +31,41 @@ export interface V2Context {
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
+
+function repoIn(project: Project, repoId: unknown): Repository {
+  const repo = project.repositories.find((r) => r.id === repoId)
+  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${String(repoId)}" in this project`)
+  return repo
+}
+
+/** A nullable string field: null clears it; anything else must be a string. */
+function nullableString(value: unknown, field: string): string | null {
+  if (value === null) return null
+  if (typeof value !== 'string') throw codedError('BAD_REQUEST', `${field} must be a string or null`)
+  return value
+}
+
+/** Sets or clears one branch-data field; an entry left empty is removed. */
+function setBranchField<K extends keyof BranchData>(
+  ctx: V2Context,
+  p: any,
+  field: K,
+  value: BranchData[K] | null,
+  expected?: unknown
+): null {
+  const branch = requireBranch(p.branch)
+  ctx.projects.apply(p.projectId, (d) => {
+    const repo = repoIn(d, p.repoId)
+    const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+    checkExpected(`branchData.${field}`, data[field], expected)
+    const empty = value === null || (Array.isArray(value) && value.length === 0)
+    if (empty) delete data[field]
+    else data[field] = value as BranchData[K]
+    if (Object.keys(data).length === 0) delete repo.branchData[branch]
+    else repo.branchData[branch] = data
+  })
+  return null
+}
 
 const handlers: Record<string, Handler> = {
   'sys.ping': (p) => ({ t: p.t }),
@@ -83,6 +122,73 @@ const handlers: Record<string, Handler> = {
     })
     return null
   },
+
+  'repo.add': (p, ctx) => {
+    const registered = findRegistered(ctx.store.config.repos, requireString(p.path, 'path'))
+    const name = optionalName(p.name, 'name')
+    const repoId = ctx.projects.apply(p.projectId, (d) => {
+      if (d.repositories.some((r) => r.path === registered.path)) {
+        throw codedError('BAD_REQUEST', `${registered.path} is already in this project`)
+      }
+      const repo = newRepository(registered, name, ctx.projects.newId)
+      d.repositories.push(repo)
+      return repo.id
+    })
+    return { repoId }
+  },
+
+  'repo.remove': (p, ctx) => {
+    ctx.projects.apply(p.projectId, (d) => {
+      const repo = repoIn(d, p.repoId)
+      if (d.repositories.length === 1) throw codedError('BAD_REQUEST', 'a project needs at least one repository')
+      d.repositories = d.repositories.filter((r) => r !== repo)
+      if (d.settings.worktreeOrder) {
+        const order = d.settings.worktreeOrder.filter((key) => !key.startsWith(`${repo.id} `))
+        if (order.length > 0) d.settings.worktreeOrder = order
+        else delete d.settings.worktreeOrder
+      }
+    })
+    return null
+  },
+
+  'repo.update': (p, ctx) => {
+    const name = optionalName(p.name, 'name')
+    const linkedDirs = p.linkedDirs === null ? null : optionalStringArray(p.linkedDirs, 'linkedDirs')
+    const environments = p.environments === null || p.environments === undefined ? p.environments : requireRecord(p.environments, 'environments')
+    const expected = p.expected === undefined ? {} : requireRecord(p.expected, 'expected')
+    ctx.projects.apply(p.projectId, (d) => {
+      const repo = repoIn(d, p.repoId)
+      for (const key of ['name', 'linkedDirs', 'environments'] as const) {
+        if (Object.hasOwn(expected, key)) checkExpected(key, repo[key], expected[key])
+      }
+      if (name !== undefined) repo.name = name
+      if (linkedDirs === null) delete repo.linkedDirs
+      else if (linkedDirs !== undefined) repo.linkedDirs = linkedDirs
+      if (environments === null) delete repo.environments
+      else if (environments !== undefined) repo.environments = environments as Repository['environments']
+    })
+    return null
+  },
+
+  'repo.listBranches': async (p, ctx) => {
+    const repo = repoIn(ctx.projects.require(p.projectId), p.repoId)
+    try {
+      return await listBranches(repo.path)
+    } catch (err) {
+      throw codedError('GIT_ERROR', (err as Error).message)
+    }
+  },
+
+  'branch.setTag': (p, ctx) => setBranchField(ctx, p, 'tag', nullableString(p.tag, 'tag')),
+  'branch.setCustomTags': (p, ctx) => {
+    const tags = optionalStringArray(p.customTags, 'customTags')
+    if (tags === undefined) throw codedError('BAD_REQUEST', 'customTags is required')
+    return setBranchField(ctx, p, 'customTags', tags)
+  },
+  'branch.setNote': (p, ctx) => setBranchField(ctx, p, 'note', nullableString(p.note, 'note'), p.expected),
+  'branch.setTicket': (p, ctx) => setBranchField(ctx, p, 'ticket', nullableString(p.ticket, 'ticket')),
+  'branch.setPr': (p, ctx) => setBranchField(ctx, p, 'pr', nullableString(p.pr, 'pr')),
+  'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', nullableString(p.env, 'env')),
 
   'sub.subscribe': (p, ctx) => {
     if (!parseTopic(p.topic)) throw codedError('BAD_REQUEST', `Unknown topic: ${String(p.topic)}`)

@@ -213,3 +213,92 @@ test('project.import accepts a project from importProjectFile', async (t) => {
   const again = await call('project.import', { project: projects[0].project })
   assert.equal(again.error.code, 'BAD_REQUEST')
 })
+
+async function withProject(t) {
+  const env = setup(t)
+  const { projectId } = (await env.call('project.create', { name: 'P', repositories: [{ path: env.a }] })).result
+  const snap = async () => (await env.call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
+  return { ...env, projectId, snap }
+}
+
+test('repo.add adds a registered repo once; repo.remove refuses the last one', async (t) => {
+  const { dir, call, projectId, snap } = await withProject(t)
+  const b = join(dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', b])
+  await call('server.addRepo', { path: b })
+  const added = await call('repo.add', { projectId, path: b, name: 'Bee' })
+  assert.equal(added.ok, true)
+  assert.equal((await call('repo.add', { projectId, path: b })).error.code, 'BAD_REQUEST')
+  const s = await snap()
+  assert.deepEqual(s.repositories.map((r) => r.name), ['a', 'Bee'])
+  assert.equal((await call('repo.remove', { projectId, repoId: added.result.repoId })).ok, true)
+  assert.equal((await call('repo.remove', { projectId, repoId: s.repositories[0].id })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.remove', { projectId, repoId: 'nope' })).error.code, 'NOT_FOUND')
+})
+
+test('repo.remove prunes worktreeOrder entries for that repo', async (t) => {
+  const { dir, call, projectId, snap } = await withProject(t)
+  const b = join(dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', b])
+  await call('server.addRepo', { path: b })
+  const { repoId } = (await call('repo.add', { projectId, path: b })).result
+  const keep = `${(await snap()).repositories[0].id} /x`
+  await call('project.updateSettings', { projectId, settings: { worktreeOrder: [keep, `${repoId} /y`] } })
+  await call('repo.remove', { projectId, repoId })
+  assert.deepEqual((await snap()).settings.worktreeOrder, [keep])
+})
+
+test('repo.update: name, linkedDirs, environments, null removes, expected guards', async (t) => {
+  const { call, projectId, snap } = await withProject(t)
+  const repoId = (await snap()).repositories[0].id
+  assert.equal((await call('repo.update', { projectId, repoId, name: 'Main', linkedDirs: ['node_modules'] })).ok, true)
+  let r = (await snap()).repositories[0]
+  assert.equal(r.name, 'Main')
+  assert.deepEqual(r.linkedDirs, ['node_modules'])
+  assert.equal((await call('repo.update', { projectId, repoId, linkedDirs: null, expected: { linkedDirs: ['node_modules'] } })).ok, true)
+  r = (await snap()).repositories[0]
+  assert.equal(r.linkedDirs, undefined)
+  assert.equal((await call('repo.update', { projectId, repoId, name: 'X', expected: { name: 'old' } })).error.code, 'CONFLICT')
+  assert.equal((await call('repo.update', { projectId, repoId, name: ' ' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.update', { projectId, repoId, environments: [] })).error.code, 'BAD_REQUEST')
+})
+
+test('repo.listBranches lists git branches', async (t) => {
+  const { a, call, projectId, snap } = await withProject(t)
+  execFileSync('git', ['-C', a, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', 'init'])
+  execFileSync('git', ['-C', a, 'branch', 'feature'])
+  const repoId = (await snap()).repositories[0].id
+  const res = await call('repo.listBranches', { projectId, repoId })
+  assert.equal(res.ok, true)
+  assert.ok(res.result.includes('feature'))
+})
+
+test('branch.* set and clear branch data; an empty entry disappears', async (t) => {
+  const { call, projectId, snap } = await withProject(t)
+  const repoId = (await snap()).repositories[0].id
+  const ref = { projectId, repoId, branch: 'feature/x' }
+  await call('branch.setTag', { ...ref, tag: 'review' })
+  await call('branch.setCustomTags', { ...ref, customTags: ['ui'] })
+  await call('branch.setNote', { ...ref, note: 'hello' })
+  await call('branch.setTicket', { ...ref, ticket: 'TOW-1' })
+  await call('branch.setPr', { ...ref, pr: 'https://github.com/o/r/pull/1' })
+  await call('branch.setEnv', { ...ref, env: 'A=1' })
+  assert.deepEqual((await snap()).repositories[0].branchData['feature/x'], {
+    tag: 'review', customTags: ['ui'], note: 'hello', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/1', env: 'A=1'
+  })
+  assert.equal((await call('branch.setNote', { ...ref, note: 'x', expected: 'stale' })).error.code, 'CONFLICT')
+  for (const [method, field] of [['branch.setTag', 'tag'], ['branch.setNote', 'note'], ['branch.setTicket', 'ticket'], ['branch.setPr', 'pr'], ['branch.setEnv', 'env']]) {
+    await call(method, { ...ref, [field]: null })
+  }
+  await call('branch.setCustomTags', { ...ref, customTags: [] })
+  assert.equal((await snap()).repositories[0].branchData['feature/x'], undefined)
+})
+
+test('branch names: constructor works, __proto__ is refused', async (t) => {
+  const { call, projectId, snap } = await withProject(t)
+  const repoId = (await snap()).repositories[0].id
+  assert.equal((await call('branch.setNote', { projectId, repoId, branch: 'constructor', note: 'n' })).ok, true)
+  assert.equal((await snap()).repositories[0].branchData.constructor.note, 'n')
+  assert.equal((await call('branch.setNote', { projectId, repoId, branch: '__proto__', note: 'n' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('branch.setTag', { projectId, repoId, branch: 'b', tag: 5 })).error.code, 'BAD_REQUEST')
+})
