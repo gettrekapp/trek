@@ -78,3 +78,21 @@ test('subscribing twice delivers once', () => {
   hub.publish('server', { n: 1 })
   assert.equal(sub.sent.length, 1)
 })
+
+test('a throwing subscriber is dropped without affecting the others', (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const hub = new TopicHub()
+  hub.publish('server', { n: 0 })
+  hub.publish('attention', { entries: [] })
+  let calls = 0
+  const a = { send: () => { calls++; throw new Error('socket closed') } }
+  const b = recorder()
+  hub.subscribe('server', a)
+  hub.subscribe('attention', a)
+  hub.subscribe('server', b)
+  hub.publish('server', { n: 1 })
+  hub.publish('server', { n: 2 })
+  hub.publish('attention', { entries: [1] })
+  assert.deepEqual(b.sent.map((s) => s.rev), [1, 2])
+  assert.equal(calls, 1)
+})

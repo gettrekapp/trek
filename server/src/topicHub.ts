@@ -30,10 +30,22 @@ export class TopicHub {
     if (ops.length === 0) return
     entry.snapshot = snapshot
     entry.rev += 1
-    for (const subscriber of entry.subscribers) subscriber.send(topic, entry.rev, ops)
+    for (const subscriber of [...entry.subscribers]) {
+      try {
+        subscriber.send(topic, entry.rev, ops)
+      } catch (err) {
+        console.warn(`topic ${topic}: dropping subscriber after send failed`, err)
+        this.unsubscribeAll(subscriber)
+      }
+    }
   }
 
-  /** Adds the subscriber and returns the state it starts from; undefined if the topic was never published. */
+  /**
+   * Adds the subscriber and returns the state it starts from; undefined if the topic was never published.
+   * The caller must write the subscribe response before yielding to the event loop and must send
+   * patches through the same socket, so the response always precedes any patch past its rev
+   * (PROTOCOL.md "Subscriptions").
+   */
   subscribe(topic: Topic, subscriber: Subscriber): { snapshot: unknown; rev: number } | undefined {
     const entry = this.topics.get(topic)
     if (!entry) return undefined
