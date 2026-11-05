@@ -1,21 +1,22 @@
 # Central server — design
 
-**Date:** 2026-11-04
+**Date:** 2026-11-04 (revised 2026-11-05: per-project windows, remote projects first)
 **Status:** Approved for planning
 
 ## Goal
 
 Move every piece of Trek's state and logic into a server process, `trek-server`, so that
 one client can connect to many servers at once and act as a thin view onto them. The
-desktop app becomes a terminal-and-UI client that also starts its own local server. This
-makes a React Native phone client possible later (out of scope here) using the same
-protocol and client SDK.
+desktop app becomes a terminal-and-UI client that also starts its own local server. Opening
+a new Trek window offers to connect to a server, local or remote, and open one of its
+projects. This makes a React Native phone client possible later (out of scope here) using
+the same protocol and client SDK.
 
 ## Scope
 
 - In: the overall architecture, protocol v2, the server-side domain model, the server's
-  components, the client SDK, the local server supervisor, the all-servers UI, multi-client
-  behaviour, auth, and a phase plan. Phase 1 (protocol v2 + domain model) is specified in
+  components, the client SDK, the local server supervisor, the start screen and per-project
+  windows, multi-client behaviour, auth, and a phase plan. Phase 1 (protocol v2 + domain model) is specified in
   enough detail to plan. Later phases get their own spec → plan → implementation.
 - Out: the React Native app, phone push (APNs/FCM), server-to-server federation,
   cross-server MCP, user accounts and roles, offline edits.
@@ -25,7 +26,11 @@ protocol and client SDK.
 | Question | Decision |
 |---|---|
 | Who owns a project | Exactly one server. Its file, sessions, MCP, bot and attention state all live there |
-| Multi-server UI | One window for all servers: Server → Project → Repository → Worktree, plus a cross-server Attention list |
+| Multi-server UI | One window per project, bound to `(serverId, projectId)`. Opening an already-open project focuses its window |
+| Cross-server attention | A notifications menu in every window merges every connected server's `attention` topic; clicking an entry focuses or opens that project's window |
+| Local projects | Every project lives on a server, the local server included. `.trekproj` is import-only from phase 4 |
+| New project on a server | Pick from the server's registered repos, or add a repo by path (must be under an allowed root) |
+| Phase order | Remote projects first: a new v2 window kind ships before the local server; legacy file windows run alongside it, never mixed in one renderer, until phase 4 deletes them |
 | Local server | Always started (or reused) by the desktop app as a peer server; survives app quit |
 | Migrating `.trekproj` | "Import" splits a mixed project by server, one project per server; the old file is not touched |
 | Architecture | Grow `daemon/` into `trek-server`, which holds the state; the app becomes a thin client (approach A) |
@@ -33,7 +38,7 @@ protocol and client SDK.
 | Terminal bytes | Stay on their own stream (`pty.attach` / `pty.data`), not mixed into state patches |
 | Offline | No offline edits. An unreachable server's tree is read-only |
 | Git polling | On the server, refcounted by subscribers |
-| Windows | Per-project windows are retired; one main window |
+| Windows | Per-project windows are kept. The registry key becomes `(serverId, projectId)`; `open-windows.json` and recents store that pair |
 | Client transport (desktop) | Renderer connects to servers directly; Electron main no longer relays git/pty |
 
 ## Background: today
@@ -107,6 +112,7 @@ phase 4 removes the old desktop path.
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (public, as in v1) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
+| Server registry (phase 2) | `server.addRepo`, `server.removeRepo` |
 | Misc | `sys.ping` |
 
 Edit-style methods (`project.rename`, `project.updateSettings`, `repo.update`,
@@ -125,7 +131,8 @@ client can confirm with the user and retry.
   `{ "type": "event", "event": "state.patch", "payload": { "topic", "rev", "ops" } }`, where
   `ops` is RFC 6902 JSON Patch against the snapshot and `rev` goes up by exactly 1 per patch.
 - Topics:
-  - `server`: project list (id, name), server name/version and `health` warnings.
+  - `server`: project list (id, name), server name/version, `health` warnings and (from
+    phase 2) `repos: { id, name, path }[]`, the server's repo registry.
   - `project:<id>`: the whole project tree, including session statuses and git state.
   - `attention`: a flat list of `{projectId, worktreeId, sessionId, title, status, since}` for sessions
     in `attention` or `done`, across this server's projects.
@@ -167,10 +174,27 @@ Electron, on Linux, macOS and Windows.
 | `pty/` | Spawn, ring buffer, attach; a headless xterm (`@xterm/headless`) per PTY for screen reads | `daemon/src/ptyRegistry.ts`, `src/host/ptyService.ts`, `src/main/hosts/ptyWindows.ts` |
 | `sessions/` | Start, resume, load, unload; agent command lines; Codex id discovery; attention heuristics; prompt queue | logic from `src/renderer/src/terminals.ts`, `src/shared/providers/*`, `src/host/agentService.ts`, `src/host/claudeSessionService.ts` |
 | `mcp/` | The `trek-dev` MCP server, one per server; tools run directly against `state/` and `sessions/` | `src/main/mcp.ts` + `src/renderer/src/mcpTools.ts` |
-| `integrations/` (phase 6) | Bot, Linear, Docker/Colima/env/stacks, voice synthesis (audio returned to the client), skills | `src/host/bot/*`, `src/main/{linear,docker,environments,stacks,voice,skills}.ts` |
-| `secrets/` (phase 6) | Linear and voice keys in a 0600 file in the server's config dir | replaces `src/main/secrets.ts` for these |
+| `integrations/` (phase 5) | Bot, Linear, Docker/Colima/env/stacks, voice synthesis (audio returned to the client), skills | `src/host/bot/*`, `src/main/{linear,docker,environments,stacks,voice,skills}.ts` |
+| `secrets/` (phase 5) | Linear and voice keys in a 0600 file in the server's config dir | replaces `src/main/secrets.ts` for these |
 | `access/` | Path allowlist (repo roots + parents + `worktreeRoots`), also applied to `project.import` and `repo.add` | `daemon/src/paths.ts`, `config.ts` |
 
+- **Rename:** the binary becomes `trek-server`; `trek-daemon` stays as an alias bin for one
+  release. On first start, if `~/.config/trek-daemon/config.json` exists and
+  `~/.config/trek-server/` does not, the config (token hash, repos) is copied across.
+- **Repo registry:** `access/` owns the registered repos (what `add` / `list` / `remove`
+  manage) and the allowlist derived from them. The CLI commands and the RPCs call the same
+  module, so validation is identical. A running server watches the config file and reloads
+  it, so `add` no longer needs a restart; changes patch the `server` topic.
+  - `server.addRepo { path, name? } → { repoId }`: the path must be a git repo under an
+    allowed root (a registered repo's parent or a `worktreeRoots` entry). It is appended to
+    the config. Errors: `PATH_DENIED`, `NOT_A_REPO`.
+  - `server.removeRepo { repoId }`: refused with `IN_USE` (listing the projects) while any
+    project references the repo.
+  - `project.create` and `repo.add` accept only registered paths (`PATH_DENIED`
+    otherwise); the client calls `server.addRepo` first.
+  - v1's `welcome.repos` is read from the same registry.
+- **Store:** a project references repos by registry id plus path.
+- **Named tokens** land in this phase, since remote windows need one token per device.
 - **Code sharing:** `src/host/` and `src/shared/` move into a workspace package
   (`packages/core`) imported by both `server/` and the app. Nothing is duplicated.
 - **Session start** is a server command. The server builds the command line, spawns the PTY
@@ -180,11 +204,11 @@ Electron, on Linux, macOS and Windows.
   keep running" is no longer needed for unload.)
 - **MCP** is per server. Global sessions launch with that server's MCP URL and token, so a
   project's Global agent sees only its own server's projects.
-- **Docker / env / stacks** (phase 6) act on the server's machine.
+- **Docker / env / stacks** (phase 5) act on the server's machine.
 - **Notifications:** the server publishes the `attention` topic; each client decides
   whether to raise an OS notification.
 
-## 3. Client and local server (phases 3–5)
+## 3. Client, project windows and local server (phases 3–4)
 
 ### Client SDK (`packages/client`, plain TS)
 
@@ -194,35 +218,66 @@ Electron, on Linux, macOS and Windows.
   (`connected | connecting | needs-auth | error | incompatible`).
 - `mirror`: per `(serverId, topic)` it keeps `snapshot + rev`, applies patches and
   resubscribes on a gap. No domain logic.
-- On desktop the SDK runs in the **renderer**, which connects to servers directly.
+- On desktop a project window's **renderer** connects directly to its project's server.
+  Main also uses the SDK, for the attention aggregator only.
 
 ### Desktop app
 
 - **Main process keeps:** windows, menus, dialogs, notifications, open-URL, open-in-VS-Code
-  and Reveal in Finder (only for worktrees on the local server), token storage in
-  safeStorage, and the local server supervisor.
+  and Reveal in Finder (only for worktrees on the local server), the app-wide server list
+  with tokens in safeStorage, the attention aggregator, and the local server supervisor.
 - **Main process loses:** in phase 4, `pty.ts`, `project.ts`, `mcp.ts`, `hosts/` and the
-  session/git `ipcMain` handlers; in phase 6, `bot.ts`, `docker.ts`, `environments.ts`,
+  session/git `ipcMain` handlers; in phase 5, `bot.ts`, `docker.ts`, `environments.ts`,
   `stacks.ts`, `linear.ts`, `voice.ts` and `skills.ts`, once each has a server replacement.
-  Until then those keep running in main against the local machine.
-- **Renderer:** Zustand holds UI state only and reads domain state from the mirror.
-  `terminals.ts` shrinks to xterm rendering and input: attach, write, resize, and the
-  reset-before / repaint-after on replay.
-- **Windows:** one main window showing every server. Per-project windows, `windows.ts` and
-  `open-windows.json` are retired.
+  Until then those keep running in main against the local machine, for legacy windows.
+- **Windows:** one window per project. The registry entry is
+  `{kind: 'file', path}` (legacy, until phase 4) or `{kind: 'server', serverId, projectId}`.
+  Opening an already-open entry focuses its window. `open-windows.json` and recents store
+  the same entries; restored server windows reconnect, read-only if unreachable.
 
-### All-servers UI
+### Start screen (phase 3)
 
-- Sidebar: **Server → Project → Repository → Worktree**. Each server header has a connection
-  dot. A disconnected server stays listed, greyed out, read-only, showing its last-known tree
-  and "last seen …".
-- A cross-server **Attention** list at the top of the sidebar, merged from every server's
-  `attention` topic; clicking an entry jumps to the session.
-- Settings → Servers (today's `ServersPanel`, now app-wide): add, remove, set token, test.
-- File menu: **New Project on <server>…** and **Import .trekproj…**. Import splits the file
-  by server and sends each piece to its server with `project.import`.
+- A third action, **Connect to server…**, beside the legacy New Project / Open Project.
+- It shows the app-wide server list (Settings → Servers, today's `ServersPanel`, moved out
+  of `.trekproj` into app settings) with a connection dot each, and inline add / set token /
+  test.
+- Picking a server lists its projects from the `server` topic, with **Open** and
+  **New Project…**.
+- **New Project** dialog: a name, checkboxes for the server's registered repos, and
+  **Add repo by path…**, which calls `server.addRepo`, ticks the new repo, and shows
+  `PATH_DENIED` / `NOT_A_REPO` inline (with a hint to run `trek-server add <path>` on the
+  server).
+- Recents mix both kinds; server entries show as `project — server`.
 
-### Local server supervisor
+### v2 project window (phase 3)
+
+- A window opened with a server entry boots in **v2 mode**: main hands it the server URL
+  and token over IPC, and it subscribes to `project:<id>` through `packages/client`.
+- A **v2 store adapter** maps the mirror onto the view shapes `Sidebar`, `TerminalPane`,
+  `ChangesPanel`, `QueuePanel` and `NotesPanel` already take, and routes actions to v2
+  commands instead of IPC. Components are shared; the store and actions are not. A window is
+  either legacy or v2, never both.
+- `terminals.ts` gains a v2 path that only does attach, write, resize, and the
+  reset-before / repaint-after on replay. Status comes from the server.
+- **In phase 3:** worktree create / remove / load / unload / pull / push, sessions (start,
+  resume, queue, prompt, seen), branch data, changes and diff, and the Global session via
+  the server's MCP.
+- **Hidden until phase 5:** Docker / env / stacks, the bot, Linear, voice, skills, moving
+  worktrees; open-in-VS-Code and Reveal in Finder return for local-server worktrees in
+  phase 4.
+- **Disconnected:** last-known tree read-only, a banner with "last seen …", commands
+  disabled, terminals show the reconnecting overlay.
+
+### Attention and notifications (phase 3)
+
+- Main runs one **attention aggregator**: a `packages/client` connection per configured
+  server, subscribed to `attention` only.
+- It raises each OS notification once and pushes the merged list to every window's
+  **notifications menu**, legacy windows included.
+- Clicking an entry asks main to focus or open that `(serverId, projectId)` window and
+  select the session.
+
+### Local server supervisor (phase 4)
 
 - On launch, main reads `local.json` in the trek-server config dir (port, token, pid). If a
   server answers there, the app reuses it; otherwise it spawns `trek-server --local`
@@ -237,6 +292,20 @@ Electron, on Linux, macOS and Windows.
 - **Version skew:** if the running local server is older than the bundled one, the app
   offers to restart it. A restart kills local PTYs; sessions resume with `--resume`.
 - The app menu has **Stop local server**.
+- **Local** is listed first among servers and cannot be removed. New Project on Local opens
+  the native folder picker; the local server registers the picked path itself, since the
+  user is choosing on their own disk.
+
+### Import and retiring legacy windows (phase 4)
+
+- File → **Import .trekproj…**, plus a one-time prompt on first launch covering recents and
+  restored windows. Each file is split by server and each piece is sent to its server with
+  `project.import`. Recents and `open-windows.json` entries are rewritten to
+  `(serverId, projectId)`. The original files are not touched.
+- Then the `file` window kind, the legacy store and actions, main's `pty.ts`, `project.ts`,
+  `mcp.ts`, `hosts/`, the session/git IPC and server-side v1 are deleted.
+- The start screen becomes **Open on server…** (Local first), **New Project…** (with a
+  server picker) and **Import .trekproj…**.
 
 ## 4. Multi-client behaviour, auth, errors
 
@@ -270,6 +339,11 @@ Electron, on Linux, macOS and Windows.
 | Persistence failure | The mutation applies in memory; the server sets a `health` warning in the `server` topic and keeps retrying; clients show a banner |
 | Path outside the allowlist | `PATH_DENIED`, including repos named in `project.import` |
 | Stale `expected` guard | `CONFLICT`; the client refreshes and shows the newer value |
+| Opening a project that was deleted or is unknown | The window shows "Project not found on <server>" with Close / Pick another project |
+| `server.addRepo` path outside the allowed roots | `PATH_DENIED`, shown inline with a hint to run `trek-server add <path>` on the server |
+| `server.addRepo` path is not a git repo | `NOT_A_REPO` |
+| `server.removeRepo` while projects use the repo | `IN_USE`, listing those projects |
+| Restored window on a server no longer configured | Read-only with "Server removed" and an offer to re-add it |
 
 ## 5. Testing
 
@@ -281,27 +355,36 @@ Electron, on Linux, macOS and Windows.
   with the fake agent CLIs from `smoke:providers`, attention transitions.
 - **Two-client test:** two connections to one server see identical state; the most-recently-
   active client sets the PTY size.
+- **Registry tests:** `server.addRepo` / `server.removeRepo` contract tests, config
+  reload on file change, and CLI-vs-RPC parity (same inputs, same validation results).
+- **v2 window smoke (phase 3):** a temp server; open it from the start screen, create a
+  project from a registered repo, start a session with the fake agent, and see its attention
+  reach a second window's notifications menu. Opening the same `(serverId, projectId)`
+  twice focuses the existing window.
 - **Desktop smoke:** existing `scripts/*smoke*.mjs` run through the local server; a new
-  `smoke:local-server` covers spawn, reuse, survival across quit and restart on version skew.
+  `smoke:local-server` (phase 4) covers spawn, reuse, survival across quit and restart on
+  version skew, plus a `.trekproj` import round trip.
 
 ## 6. Phases
 
 Each phase gets its own spec (or a section here, for phase 1), plan and implementation.
 
 1. **Protocol v2 + domain model:** types, reducer, gap detection, import splitter,
-   `PROTOCOL.md`. No behaviour change.
-2. **`trek-server` holds the state:** `packages/core`, server store/state/sessions/attention/
-   MCP, the v2 command catalog and topics, named tokens. Keeps serving v1.
-3. **Local server:** the supervisor in Electron main, `--local` mode, `local.json`, version
-   skew handling.
-4. **Thin client:** `packages/client`, renderer moved onto the mirror, Electron main's
-   session/git/project logic and v1 removed (peripheral features stay in main until phase 6).
-5. **All-servers UI:** grouped sidebar, cross-server Attention, app-wide Servers settings,
-   New Project / Import.
-6. **Peripheral features on the server:** bot, Docker/env/stacks, Linear, voice, skills, and
+   `PROTOCOL.md`. No behaviour change. (Done.)
+2. **`trek-server` holds the state:** the rename, `packages/core`, server store/state/
+   sessions/attention/MCP, the v2 command catalog and topics, the repo registry RPCs and
+   config reload, named tokens. Keeps serving v1.
+3. **v2 project windows (remote projects):** `packages/client`, the server-entry window
+   kind, the start screen's Connect to server… flow and New Project dialog, app-wide
+   Servers settings, the attention aggregator and notifications menu. Legacy file windows
+   keep working unchanged.
+4. **Local server and retiring legacy:** the supervisor, `--local` mode, `local.json`,
+   version skew, `.trekproj` import, then deletion of file windows, Electron main's
+   session/git/project logic and v1.
+5. **Peripheral features on the server:** bot, Docker/env/stacks, Linear, voice, skills, and
    moving worktrees between servers (client-relayed through `exportDirtyPatch` /
-   `applyPatch` and session export/import).
-7. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
+   `applyPatch` and session export/import). Each returns to v2 windows as it lands.
+6. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
 
-The app is usable after phase 4 against the local server alone. Phases 5 and 6 bring back
-multi-server and the remaining features.
+Remote projects can be opened after phase 3. After phase 4 every project is on a server and
+the legacy path is gone; phase 5 brings back the remaining features.
