@@ -281,12 +281,24 @@ worktree stays on disk.
 and drops the row. A dirty worktree fails with `GIT_ERROR` unless
 `force: true`, so a client can confirm with the user and retry. The main
 worktree is `BAD_REQUEST`; a worktree that any project has loaded is `IN_USE`.
-For a worktree whose directory was deleted but which git still lists, it runs
-`git worktree prune` instead. A `missing` worktree's row is just dropped.
-`worktree.pull` (fast-forward only) and `worktree.push {setUpstream}` need a
-checked-out branch (`BAD_REQUEST` when detached) and refresh the worktree's
-status before answering. `worktree.changes` and `worktree.diff` return what v1's
-`git.worktreeChanges` and `git.worktreeDiff` do.
+For a worktree whose directory was deleted but which git still lists, `git
+worktree remove` clears just that worktree from git's list; the server never
+runs a repository-wide `git worktree prune`, which would also drop worktrees on
+an unmounted volume. A `missing` worktree's row is just dropped, without running
+git, so a directory that still exists on disk at that path is left untouched.
+Other projects' rows for the same path are left to the poller, which drops them
+or, if they hold sessions, keeps them as `missing`.
+`worktree.pull` (fast-forward only) and `worktree.push {setUpstream}` first
+re-read the repository's worktrees, then act on the branch git has checked out
+in the worktree now, which may differ from the branch the row last showed.
+They need a checked-out branch that is a valid branch name (`BAD_REQUEST` when
+detached, when the worktree is now `missing`, or for a name like `--mirror`;
+`NOT_FOUND` when the row is gone), pass it to git as `refs/heads/<branch>`, and
+refresh the worktree's status before answering. `worktree.changes` and
+`worktree.diff` return what v1's `git.worktreeChanges` and `git.worktreeDiff`
+do. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
+a worktree whose path is outside the allowlist (a row from a hand-edited
+project file, say) fail with `PATH_DENIED` before running git.
 
 `project.import` takes one of the projects that `importProjectFile()`
 (`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
@@ -295,7 +307,7 @@ ids, and each session keeps its old id as `agentSessionId` so it resumes. The
 server assigns the project's id; nested ids are kept. It
 rejects the import with `BAD_REQUEST` if any repository, worktree or session id
 is empty, contains a space, or already exists on that server, and with
-`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no worktree path listed twice in one repository, no non-main worktree path that is another registered repository or contains one, and no own `__proto__` key anywhere in the payload (settings values included); otherwise `BAD_REQUEST`. It resets runtime
+`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no worktree path listed twice in one repository, no non-main worktree path that is another registered repository or contains one, no worktree `branch` that starts with `-` or contains whitespace or control characters, and no own `__proto__` key anywhere in the payload (settings values included); otherwise `BAD_REQUEST`. It resets runtime
 fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
 `dirty`, `ahead`, `behind`, `head` and `missing`.
 
