@@ -165,5 +165,32 @@ export const worktreeHandlers: Record<string, Handler> = {
       }
     })
     return null
+  },
+
+  'worktree.pull': async (p, ctx) => {
+    const { repo, worktree } = present(ctx, p)
+    const branch = checkedOutBranch(worktree)
+    await viaGit(() => gitService.pull(worktree.path, branch))
+    await ctx.poller.refresh(repo.path, { status: true })
+    return null
+  },
+
+  'worktree.push': async (p, ctx) => {
+    const setUpstream = requireBoolean(p.setUpstream, 'setUpstream')
+    const { repo, worktree } = present(ctx, p)
+    const branch = checkedOutBranch(worktree)
+    await viaGit(() => gitService.push(worktree.path, branch, setUpstream))
+    await ctx.poller.refresh(repo.path, { status: true })
+    return null
+  },
+
+  'worktree.changes': async (p, ctx) => {
+    const { worktree } = present(ctx, p)
+    return viaGit(() => gitService.worktreeChanges(worktree.path))
+  },
+
+  'worktree.diff': async (p, ctx) => {
+    const { worktree } = present(ctx, p)
+    return viaGit(() => gitService.worktreeDiff(worktree.path))
   }
 }
