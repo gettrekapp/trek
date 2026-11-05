@@ -4,6 +4,7 @@ import { parseTopic } from '../../src/shared/model/topics.ts'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
+import { optionalName, requireAbsolutePath, requireString } from './validate.ts'
 
 export interface V2Context {
   store: ConfigStore
@@ -13,24 +14,6 @@ export interface V2Context {
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
-
-function requireString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value === '') throw codedError('BAD_REQUEST', `${field} is required`)
-  return value
-}
-
-function optionalString(value: unknown, field: string): string | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'string') throw codedError('BAD_REQUEST', `${field} must be a string`)
-  return value
-}
-
-/** Absent, or a string with something other than whitespace in it. */
-function optionalName(value: unknown, field: string): string | undefined {
-  const name = optionalString(value, field)
-  if (name !== undefined && name.trim() === '') throw codedError('BAD_REQUEST', `${field} must not be empty`)
-  return name
-}
 
 const handlers: Record<string, Handler> = {
   'sys.ping': (p) => ({ t: p.t }),
@@ -50,7 +33,7 @@ const handlers: Record<string, Handler> = {
   },
 
   'server.addRepo': (p, ctx) => {
-    const path = requireString(p.path, 'path')
+    const path = requireAbsolutePath(p.path, 'path')
     const name = optionalName(p.name, 'name')
     const { repo } = ctx.store.addRepo(path, { name, requireAllowedRoot: true })
     return { repoId: repo.id }

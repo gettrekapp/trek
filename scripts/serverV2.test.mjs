@@ -134,3 +134,8 @@ test('project.list is empty, ping echoes, unknown methods are NOT_FOUND', async 
   assert.deepEqual(await call('sys.ping', { t: 5 }), { ok: true, result: { t: 5 } })
   assert.equal((await call('git.listWorktrees', {})).error.code, 'NOT_FOUND')
 })
+
+test('server.addRepo needs an absolute path', async (t) => {
+  const { call } = setup(t)
+  assert.equal((await call('server.addRepo', { path: 'repos/a' })).error.code, 'BAD_REQUEST')
+})
