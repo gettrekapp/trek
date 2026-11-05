@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { hostname } from 'node:os'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
@@ -61,6 +61,7 @@ Options:
   -v, --version    Print the server version
 
 A running server picks up repo and token changes without a restart.
+To add a directory named like a command, use ./<dir>.
 `
 
 function usageError(message: string): never {
@@ -81,6 +82,9 @@ function parseArgs(argv: string[]): CliArgs {
     return next
   }
   let sawCommand = false
+  // -h / -v win wherever they appear, so `trek-server -h add` only prints help.
+  let wantHelp = false
+  let wantVersion = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     const positional = !arg.startsWith('-')
@@ -110,8 +114,8 @@ function parseArgs(argv: string[]): CliArgs {
       sawCommand = true
     } else if (arg === '--id') args.repoId = value(++i, arg)
     else if (arg === '--name') args.repoName = value(++i, arg)
-    else if (arg === '-h' || arg === '--help') args.command = 'help'
-    else if (arg === '-v' || arg === '--version') args.command = 'version'
+    else if (arg === '-h' || arg === '--help') wantHelp = true
+    else if (arg === '-v' || arg === '--version') wantVersion = true
     else if (arg === '--config') {
       args.configPath = value(++i, arg)
       args.configExplicit = true
@@ -123,6 +127,13 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--insecure') args.insecure = true
     else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
     else usageError(`Unknown argument: ${arg}`)
+  }
+  if (wantHelp || wantVersion) {
+    args.command = wantHelp ? 'help' : 'version'
+    return args
+  }
+  if ((args.port !== undefined || args.host !== undefined || args.insecure) && args.command !== 'start') {
+    usageError('--port, --host and --insecure only apply to `start`')
   }
   if ((args.repoId !== undefined || args.repoName !== undefined) && args.command !== 'add') {
     usageError('--id and --name only apply to `add`')
@@ -170,16 +181,28 @@ if (args.command === 'version') {
   process.exit(0)
 }
 
-if (!args.configExplicit && migrateLegacyConfig(args.configPath, legacyConfigPath())) {
-  console.error(`Copied ${legacyConfigPath()} to ${args.configPath}.`)
+function openStore(path: string): ConfigStore {
+  try {
+    return new ConfigStore(path)
+  } catch (err) {
+    fail(`Cannot read ${path}: ${(err as Error).message}`)
+  }
 }
 
-let store: ConfigStore
-try {
-  store = new ConfigStore(args.configPath)
-} catch (err) {
-  fail(`Cannot read ${args.configPath}: ${(err as Error).message}`)
+/** Copies the trek-daemon config into place if there is no trek-server config yet. */
+function migrateConfig(): void {
+  if (!args.configExplicit && migrateLegacyConfig(args.configPath, legacyConfigPath())) {
+    console.error(`Copied ${legacyConfigPath()} to ${args.configPath}.`)
+  }
 }
+
+// Read-only commands (and `start`, until its checks pass) read a legacy
+// trek-daemon config in place rather than copying it.
+const readLegacyInPlace =
+  !args.configExplicit && !existsSync(args.configPath) && existsSync(legacyConfigPath())
+const readOnly = args.command === 'list' || (args.command === 'token' && args.tokenAction === 'list')
+if (!readOnly && args.command !== 'start') migrateConfig()
+let store = openStore(readLegacyInPlace && (readOnly || args.command === 'start') ? legacyConfigPath() : args.configPath)
 
 if (args.command === 'add') {
   try {
@@ -230,9 +253,13 @@ if (args.command === 'token') {
     if (!listTokens(store.config).some((t) => t.name === name)) {
       fail(`No token named "${name}". Run \`trek-server token list\` to see them.`)
     }
-    store.update((c) => {
-      revokeToken(c, name)
-    })
+    try {
+      store.update((c) => {
+        revokeToken(c, name)
+      })
+    } catch (err) {
+      fail((err as Error).message)
+    }
     console.log(`Revoked "${name}". A running server closes its connections.`)
     process.exit(0)
   }
@@ -251,14 +278,7 @@ if (args.command === 'token') {
   process.exit(0)
 }
 
-// start
-const config = store.config
-if (!config.serverId || !config.name || config.tokenHash) {
-  store.update((c) => {
-    ensureIdentity(c, hostname())
-    migrateLegacyToken(c)
-  })
-}
+// start: every check runs before anything is written.
 if (listTokens(store.config).length === 0) {
   fail(`No token configured. Run \`trek-server token\` first (config: ${args.configPath}).`)
 }
@@ -273,6 +293,21 @@ if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && !args.inse
       'of the loopback listener, or pass --insecure if you really know what you are doing.'
   )
 }
+if (readLegacyInPlace) {
+  migrateConfig()
+  store = openStore(args.configPath)
+}
+const config = store.config
+if (!config.serverId || !config.name || config.tokenHash) {
+  try {
+    store.update((c) => {
+      ensureIdentity(c, hostname())
+      migrateLegacyToken(c)
+    })
+  } catch (err) {
+    fail(`Cannot update ${args.configPath}: ${(err as Error).message}`)
+  }
+}
 
 const server = startServer(store, serverVersion())
 store.watch()
@@ -283,11 +318,16 @@ server.httpServer.listen(port, host, () => {
   console.log(`repos: ${store.config.repos.map((r) => `${r.name} (${r.path})`).join(', ')}`)
 })
 
+const SHUTDOWN_FLUSH_MS = 200
+let shuttingDown = false
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
+    if (shuttingDown) return
+    shuttingDown = true
     console.log(`\n${signal} — shutting down (all agent sessions will end)`)
     store.close()
     server.shutdown(signal)
-    process.exit(0)
+    // Give the daemon.shutdown frames and close handshakes a moment to flush.
+    setTimeout(() => process.exit(0), SHUTDOWN_FLUSH_MS)
   })
 }

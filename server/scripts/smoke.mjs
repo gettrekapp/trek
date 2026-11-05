@@ -1,7 +1,7 @@
 // Daemon smoke test: throwaway config + temp git repo, then handshake,
 // git.listWorktrees, pty spawn/echo/kill, and an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
@@ -37,7 +37,13 @@ const cli = (...args) =>
   execFileSync(cmd, [...cmdPrefix, ...args, '--config', configPath], { cwd: serverDir, encoding: 'utf8' })
 const daemon = spawn(cmd, [...cmdPrefix, 'start', '--config', configPath, '--port', String(PORT)], {
   cwd: serverDir,
-  stdio: ['ignore', 'pipe', 'inherit']
+  stdio: ['ignore', 'pipe', 'pipe']
+})
+// Forwarded, and kept so checks can wait for a server-side log line.
+let daemonStderr = ''
+daemon.stderr.on('data', (d) => {
+  process.stderr.write(d)
+  daemonStderr += d.toString()
 })
 
 let failed = false
@@ -248,6 +254,117 @@ const revokedCode = await Promise.race([phone.closed, new Promise((r) => setTime
 if (revokedCode !== 4003) fail(`revoked token connection: ${revokedCode}`)
 else ok('token revoke closes its live connection with 4003')
 
+// --- v2 transport edge cases ---
+/** A raw socket that records frames and its close code; sends nothing by itself. */
+async function rawSocket() {
+  const sock = new WebSocket(`ws://127.0.0.1:${PORT}`)
+  const frames = []
+  sock.on('message', (raw) => frames.push(JSON.parse(raw.toString())))
+  const closed = new Promise((r) => sock.on('close', (code) => r(code)))
+  await new Promise((r) => sock.on('open', r))
+  return { sock, frames, closed }
+}
+const hello2 = (tok) => JSON.stringify({ type: 'hello', protocolVersion: 2, token: tok, client: 'smoke-v2', clientVersion: '0' })
+const raceTimeout = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r('timeout'), ms))])
+const waitFor = async (pred, ms = 4000) => {
+  const deadline = Date.now() + ms
+  while (!pred() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25))
+  return pred()
+}
+
+// The sub.subscribe response must precede the patches it registered for, even
+// when a mutation is pipelined right behind it.
+for (const [label, corked] of [['back-to-back sends', false], ['one TCP write', true]]) {
+  const conn = await connect(2, token)
+  const fresh = mkRepo(join(work, `order-${corked ? 'corked' : 'plain'}`))
+  const subFrame = JSON.stringify({ type: 'req', id: 1, method: 'sub.subscribe', params: { topic: 'server' } })
+  const addFrame = JSON.stringify({ type: 'req', id: 2, method: 'server.addRepo', params: { path: fresh } })
+  if (corked) conn.sock._socket.cork()
+  conn.sock.send(subFrame)
+  conn.sock.send(addFrame)
+  if (corked) process.nextTick(() => conn.sock._socket.uncork())
+  const isPatch = (f) => f.type === 'event' && f.event === 'state.patch' && f.payload.topic === 'server'
+  await waitFor(() => conn.frames.some((f) => f.type === 'res' && f.id === 2) && conn.frames.some(isPatch))
+  const resIndex = conn.frames.findIndex((f) => f.type === 'res' && f.id === 1)
+  const patchIndex = conn.frames.findIndex(isPatch)
+  const order = conn.frames.map((f) => (f.type === 'res' ? `res${f.id}` : f.event ?? f.type)).join(', ')
+  if (resIndex === -1 || patchIndex === -1 || resIndex > patchIndex) fail(`subscribe ordering (${label}): ${order}`)
+  else ok(`sub.subscribe res precedes the pipelined patch (${label})`)
+  conn.sock.close()
+}
+
+// Frames a revoked socket sends after the server closed it are ignored.
+const phone2Token = /^ {2}(\S+)$/m.exec(cli('token', 'add', 'phone2'))?.[1]
+let phone2 = await connect(2, phone2Token)
+for (let attempt = 0; attempt < 10 && phone2.welcome?.protocolVersion !== 2; attempt++) {
+  await new Promise((r) => setTimeout(r, 300))
+  phone2 = await connect(2, phone2Token)
+}
+if (phone2.welcome?.protocolVersion !== 2) fail(`phone2 login: ${JSON.stringify(phone2.frames)}`)
+// Stop reading, so the client does not see the server's close and keeps sending.
+phone2.sock._socket.pause()
+const revokedBefore = daemonStderr.split('token revoked').length
+cli('token', 'revoke', 'phone2')
+if (!(await waitFor(() => daemonStderr.split('token revoked').length > revokedBefore))) {
+  fail('server did not log the phone2 revocation')
+}
+phone2.sock.send(JSON.stringify({ type: 'req', id: 99, method: 'server.removeRepo', params: { repoId: 'repo3' } }))
+await new Promise((r) => setTimeout(r, 300))
+phone2.sock._socket.resume()
+await raceTimeout(phone2.closed, 4000)
+const checker = await connect(2, token)
+const snap = await checker.req('sub.subscribe', { topic: 'server' })
+if (!snap.ok || !snap.result.snapshot.repos.some((r) => r.id === 'repo3')) {
+  fail(`revoked socket removed a repo: ${JSON.stringify(snap)}`)
+} else ok('frames from a revoked socket are ignored (repo3 still registered)')
+if (phone2.frames.some((f) => f.type === 'res' && f.id === 99)) fail('revoked socket got a response')
+checker.sock.close()
+
+// Malformed frames close the socket with 1002 and do not crash the server.
+for (const bad of ['null', '"x"', '[]', JSON.stringify({ type: 'hello', protocolVersion: 2, token: 5 }),
+  JSON.stringify({ type: 'hello', protocolVersion: '2', token: 'TOKEN' })]) {
+  const conn = await rawSocket()
+  conn.sock.send(bad)
+  const code = await raceTimeout(conn.closed, 4000)
+  if (code !== 1002) fail(`malformed frame ${bad}: close ${code}`)
+  else ok(`malformed frame ${bad} closes with 1002`)
+}
+{
+  const conn = await connect(2, token)
+  conn.sock.send(JSON.stringify({ type: 'req', id: 'one', method: 'sys.ping', params: {} }))
+  const code = await raceTimeout(conn.closed, 4000)
+  if (code !== 1002) fail(`req with a non-numeric id: close ${code}`)
+  else ok('req with a non-numeric id closes with 1002')
+}
+const alive = await connect(2, token)
+if (alive.welcome?.protocolVersion !== 2) fail(`server after malformed frames: ${JSON.stringify(alive.frames)}`)
+else ok('server still answers a v2 hello after malformed frames')
+alive.sock.close()
+
+// After a rejected hello, a pipelined good hello is ignored.
+{
+  const conn = await rawSocket()
+  conn.sock.send(hello2('wrong'))
+  conn.sock.send(hello2(token))
+  const code = await raceTimeout(conn.closed, 4000)
+  if (code !== 4003 || conn.frames.some((f) => f.type === 'welcome')) {
+    fail(`hello after a bad token: close ${code}, frames ${JSON.stringify(conn.frames)}`)
+  } else ok('a good hello pipelined after a bad one is ignored; closed with 4003')
+}
+
+// An empty token in hello falls back to the Authorization header.
+{
+  const sock = new WebSocket(`ws://127.0.0.1:${PORT}`, { headers: { authorization: `Bearer ${token}` } })
+  const frames = []
+  sock.on('message', (raw) => frames.push(JSON.parse(raw.toString())))
+  await new Promise((r) => sock.on('open', r))
+  sock.send(hello2(''))
+  await waitFor(() => frames.length > 0, 2000)
+  if (frames[0]?.type !== 'welcome') fail(`empty frame token with a header token: ${JSON.stringify(frames)}`)
+  else ok('an empty hello token falls back to the Authorization header')
+  sock.close()
+}
+
 v2.sock.close()
 
 // --- bad token rejected ---
@@ -257,6 +374,25 @@ badWs.send(JSON.stringify({ type: 'hello', protocolVersion: 1, token: 'wrong', c
 const closeCode = await new Promise((r) => badWs.on('close', (code) => r(code)))
 if (closeCode !== 4003) fail(`bad token close code: ${closeCode}`)
 else ok('bad token rejected with 4003')
+
+// --- CLI edge cases ---
+{
+  const before = readFileSync(configPath, 'utf8')
+  const help = cli('-h', 'add', repo)
+  if (!help.startsWith('Usage: trek-server') || readFileSync(configPath, 'utf8') !== before) {
+    fail('`-h add` did not just print help')
+  } else ok('`-h` wins over a later command and writes nothing')
+  const version = cli('add', '-v')
+  if (!/^\d+\.\d+\.\d+/.test(version)) fail(`\`add -v\`: ${version}`)
+  else ok('`-v` wins over an earlier command')
+  try {
+    execFileSync(cmd, [...cmdPrefix, 'list', '--port', '1234', '--config', configPath], { cwd: serverDir, stdio: 'pipe' })
+    fail('`list --port` was accepted')
+  } catch (err) {
+    if (err.status !== 2) fail(`\`list --port\` exit ${err.status}`)
+    else ok('`--port` outside `start` is a usage error (exit 2)')
+  }
+}
 
 console.log(failed ? 'DAEMON SMOKE FAIL' : 'DAEMON SMOKE PASS')
 process.exit(failed ? 1 : 0)

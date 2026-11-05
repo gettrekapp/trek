@@ -100,6 +100,16 @@ test('removeRepo by id or path; unknown is NOT_FOUND', (t) => {
   assert.equal(changes(), 3)
 })
 
+test('removeRepo idOnly matches ids only, never paths', (t) => {
+  const { a, store, changes } = setup(t)
+  assert.equal(codeOf(() => store.removeRepo(a, { idOnly: true })), 'NOT_FOUND')
+  assert.equal(codeOf(() => store.removeRepo(join(a, 'sub'), { idOnly: true })), 'NOT_FOUND')
+  assert.equal(store.config.repos.length, 1)
+  assert.equal(store.removeRepo('a', { idOnly: true }).id, 'a')
+  assert.equal(store.config.repos.length, 0)
+  assert.equal(changes(), 1)
+})
+
 test('removeRepo is IN_USE while projects use the repo', (t) => {
   const { store } = setup(t)
   store.usage = (repo) => (repo.id === 'a' ? ['Project One', 'Project Two'] : [])

@@ -101,11 +101,17 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     return result
   }
 
-  /** By id, or by path (or a path inside the checkout). */
-  removeRepo(target: string): RemoteRepo {
+  /** By id, or by path (or a path inside the checkout). `idOnly` skips the path fallback. */
+  removeRepo(target: string, options: { idOnly?: boolean } = {}): RemoteRepo {
     this.syncFromDisk()
     const next = structuredClone(this.current)
-    const removed = removeRepo(next, target)
+    let removed: RemoteRepo | undefined
+    if (options.idOnly) {
+      const index = next.repos.findIndex((r) => r.id === target)
+      if (index !== -1) [removed] = next.repos.splice(index, 1)
+    } else {
+      removed = removeRepo(next, target)
+    }
     if (!removed) throw codedError('NOT_FOUND', `No configured repo matches "${target}"`)
     const users = this.usage(removed)
     if (users.length > 0) {

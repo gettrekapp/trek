@@ -26,6 +26,13 @@ function optionalString(value: unknown, field: string): string | undefined {
   return value
 }
 
+/** Absent, or a string with something other than whitespace in it. */
+function optionalName(value: unknown, field: string): string | undefined {
+  const name = optionalString(value, field)
+  if (name !== undefined && name.trim() === '') throw codedError('BAD_REQUEST', `${field} must not be empty`)
+  return name
+}
+
 const handlers: Record<string, Handler> = {
   'sys.ping': (p) => ({ t: p.t }),
 
@@ -45,7 +52,7 @@ const handlers: Record<string, Handler> = {
 
   'server.addRepo': (p, ctx) => {
     const path = requireString(p.path, 'path')
-    const name = optionalString(p.name, 'name')
+    const name = optionalName(p.name, 'name')
     const { repo } = ctx.store.addRepo(path, { name, requireAllowedRoot: true })
     return { repoId: repo.id }
   },
@@ -53,26 +60,33 @@ const handlers: Record<string, Handler> = {
   'server.removeRepo': (p, ctx) => {
     const repoId = requireString(p.repoId, 'repoId')
     // By id only: the CLI's path fallback is not offered over the wire.
-    if (!ctx.store.config.repos.some((r) => r.id === repoId)) {
-      throw codedError('NOT_FOUND', `No repo with id "${repoId}"`)
-    }
-    ctx.store.removeRepo(repoId)
+    ctx.store.removeRepo(repoId, { idOnly: true })
     return null
   }
 }
 
-export async function dispatchV2(
-  method: string,
-  params: unknown,
-  ctx: V2Context
-): Promise<{ ok: true; result: unknown } | { ok: false; error: WireError }> {
+export type OutcomeV2 = { ok: true; result: unknown } | { ok: false; error: WireError }
+
+/**
+ * Synchronous when the handler is: the caller can then answer in the same tick,
+ * so a `sub.subscribe` response always precedes the patches it registered for.
+ */
+export function dispatchV2(method: string, params: unknown, ctx: V2Context): OutcomeV2 | Promise<OutcomeV2> {
   const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
   if (!handler) {
     return { ok: false, error: { code: 'NOT_FOUND', message: `Unknown method: ${method}` } }
   }
+  let result: unknown
   try {
-    return { ok: true, result: await handler(params ?? {}, ctx) }
+    result = handler(params ?? {}, ctx)
   } catch (err) {
     return { ok: false, error: toWireError(method, err) }
   }
+  if (result instanceof Promise) {
+    return result.then(
+      (value): OutcomeV2 => ({ ok: true, result: value }),
+      (err): OutcomeV2 => ({ ok: false, error: toWireError(method, err) })
+    )
+  }
+  return { ok: true, result }
 }

@@ -83,6 +83,29 @@ test('server.addRepo errors: missing path, outside roots, not a repo', async (t)
   assert.equal(store.config.repos.length, 1)
 })
 
+test('server.addRepo rejects an empty or whitespace-only name', async (t) => {
+  const { dir, call, store } = setup(t)
+  const b = join(dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', b])
+  assert.equal((await call('server.addRepo', { path: b, name: '' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('server.addRepo', { path: b, name: '   ' })).error.code, 'BAD_REQUEST')
+  assert.equal(store.config.repos.length, 1)
+})
+
+test('server.removeRepo does not fall back to paths', async (t) => {
+  const { a, call, store } = setup(t)
+  assert.equal((await call('server.removeRepo', { repoId: a })).error.code, 'NOT_FOUND')
+  assert.equal(store.config.repos.length, 1)
+})
+
+test('synchronous handlers return a plain outcome, not a promise', (t) => {
+  const { call } = setup(t)
+  const res = call('sub.subscribe', { topic: 'server' })
+  assert.ok(!(res instanceof Promise))
+  assert.equal(res.ok, true)
+  assert.ok(!(call('nope.nope', {}) instanceof Promise))
+})
+
 test('server.removeRepo: unknown id, in use, then removed', async (t) => {
   const { call, store, sent } = setup(t)
   await call('sub.subscribe', { topic: 'server' })
