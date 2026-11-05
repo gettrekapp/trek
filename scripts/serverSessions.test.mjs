@@ -467,3 +467,61 @@ test('start: unknown providers, long titles and control characters are BAD_REQUE
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', title: 'x'.repeat(200), ...size })
   assert.equal(s.wx().sessions[0].title.length, 200)
 })
+
+test('rename trims, guards with expected, and refuses an empty title', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.rename({ projectId: s.projectId, sessionId, title: '  New  ' })
+  assert.equal(s.wx().sessions[0].title, 'New')
+  assert.throws(() => s.sessions.rename({ projectId: s.projectId, sessionId, title: 'X', expected: 'Old' }), (e) => e.code === 'CONFLICT')
+  assert.throws(() => s.sessions.rename({ projectId: s.projectId, sessionId, title: '   ' }), (e) => e.code === 'BAD_REQUEST')
+  assert.throws(() => s.sessions.rename({ projectId: s.projectId, sessionId, title: 'x'.repeat(201) }), (e) => e.code === 'BAD_REQUEST')
+  assert.throws(() => s.sessions.rename({ projectId: s.projectId, sessionId, title: 'a\u0007b' }), (e) => e.code === 'BAD_REQUEST')
+  assert.equal(s.wx().sessions[0].title, 'New')
+})
+
+test('enqueue appends, setQueue replaces; both are saved', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const before = s.saves.length
+  s.sessions.enqueue({ projectId: s.projectId, sessionId, text: 'one' })
+  s.sessions.enqueue({ projectId: s.projectId, sessionId, text: 'two' })
+  assert.deepEqual(s.wx().sessions[0].queue, ['one', 'two'])
+  s.sessions.setQueue({ projectId: s.projectId, sessionId, queue: ['two'] })
+  assert.deepEqual(s.wx().sessions[0].queue, ['two'])
+  assert.equal(s.saves.length, before + 3)
+  assert.throws(() => s.sessions.enqueue({ projectId: s.projectId, sessionId, text: '' }), (e) => e.code === 'BAD_REQUEST')
+  assert.throws(() => s.sessions.setQueue({ projectId: s.projectId, sessionId, queue: ['ok', 3] }), (e) => e.code === 'BAD_REQUEST')
+})
+
+test('sendPrompt pastes with CRs, bracketed when the agent asked for it, then presses enter', async (t) => {
+  const s = setup(t)
+  const { sessionId, ptyId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const proc = s.spawned[0]
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'a\nb' })
+  assert.deepEqual(proc.written, ['a\rb'])
+  await new Promise((r) => setTimeout(r, 200))
+  assert.deepEqual(proc.written, ['a\rb', '\r'])
+  proc.emit('\x1b[?2004h')
+  await s.sessions.terminals.settled(ptyId)
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'c' })
+  assert.equal(proc.written[2], '\x1b[200~c\x1b[201~')
+  proc.exit(0)
+  await assert.rejects(Promise.resolve().then(() => s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'd' })), (e) => e.code === 'BAD_REQUEST')
+})
+
+test('seen clears attention and done; markComplete false resumes tracking', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  for (const status of ['attention', 'done']) {
+    s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees[1].sessions[0].status = status })
+    s.sessions.seen({ projectId: s.projectId, sessionId })
+    assert.equal(s.wx().sessions[0].status, 'idle')
+  }
+  s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: true })
+  s.sessions.seen({ projectId: s.projectId, sessionId })
+  assert.equal(s.wx().sessions[0].status, 'complete', 'seen leaves complete alone')
+  s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: false })
+  assert.equal(s.wx().sessions[0].status, 'idle')
+  assert.throws(() => s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: 'yes' }), (e) => e.code === 'BAD_REQUEST')
+})

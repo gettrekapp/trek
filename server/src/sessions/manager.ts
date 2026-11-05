@@ -18,7 +18,7 @@ import { codedError } from '../errors.ts'
 import { assertNotRepository, findRegistered } from '../projects/model.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
-import { isRecord, requireBoolean, requireString } from '../validate.ts'
+import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
@@ -217,6 +217,60 @@ export class SessionManager {
       if (complete) s.status = 'complete'
       else if (s.status === 'complete') s.status = 'idle'
     })
+    return null
+  }
+
+  rename(p: any): null {
+    const title = checkTitle(requireName(p.title, 'title'), 'title')
+    this.mutate(p.projectId, p.sessionId, (s) => {
+      checkExpected('title', s.title, p.expected)
+      s.title = title
+    })
+    return null
+  }
+
+  enqueue(p: any): null {
+    const text = requireString(p.text, 'text')
+    if (text === '') throw bad('text must not be empty')
+    this.mutate(p.projectId, p.sessionId, (s) => { s.queue = [...s.queue, text] })
+    return null
+  }
+
+  setQueue(p: any): null {
+    if (!Array.isArray(p.queue) || p.queue.some((q: unknown) => typeof q !== 'string' || q === '')) {
+      throw bad('queue must be an array of non-empty strings')
+    }
+    const queue = [...p.queue] as string[]
+    this.mutate(p.projectId, p.sessionId, (s) => { s.queue = queue })
+    return null
+  }
+
+  /** Types `text` into the running session as the desktop pastes it, then presses enter. */
+  async sendPrompt(p: any): Promise<null> {
+    const text = requireString(p.text, 'text')
+    const { session } = findSession(this.deps.projects.require(p.projectId), p.sessionId)
+    const ptyId = session.ptyId
+    if (!ptyId || !this.terminals.has(ptyId)) throw bad('the session is not running')
+    await this.terminals.settled(ptyId)
+    if (!this.terminals.has(ptyId)) throw bad('the session is not running')
+    const normalized = text.replace(/\r?\n/g, '\r')
+    this.terminals.write(ptyId, this.terminals.bracketedPaste(ptyId) ? `\x1b[200~${normalized}\x1b[201~` : normalized)
+    setTimeout(() => {
+      if (this.terminals.has(ptyId)) this.terminals.write(ptyId, '\r')
+    }, 150).unref()
+    return null
+  }
+
+  /** A client showed the session to the user. */
+  seen(p: any): null {
+    this.mutate(
+      p.projectId,
+      p.sessionId,
+      (s) => {
+        if (s.status === 'attention' || s.status === 'done') s.status = 'idle'
+      },
+      false
+    )
     return null
   }
 
