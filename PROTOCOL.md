@@ -86,6 +86,8 @@ rejected with `PATH_DENIED`.
 | `git.checkout` | `{repoPath, branch}` | `null` |
 | `git.defaultBranch` | `{repoPath}` | `string \| null` |
 
+Branch arguments (`branch` in `git.addWorktree` and `git.checkout`, and the other branch-taking git methods) must be valid git branch names (no leading `-`, no `:`, whitespace, `..` and so on); others fail with `GIT_ERROR`.
+
 ### Worktree move support
 
 | Method | Params | Result |

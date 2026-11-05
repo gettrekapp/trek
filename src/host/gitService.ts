@@ -13,6 +13,31 @@ import type {
 
 const execFileAsync = promisify(execFile)
 
+/**
+ * Rejects names git would refuse as a ref (git check-ref-format) plus a
+ * leading dash, so a branch can never act as an option or inject a refspec.
+ */
+export function assertSafeBranch(branch: string): void {
+  const bad =
+    typeof branch !== 'string' ||
+    branch === '' ||
+    branch.startsWith('-') ||
+    branch === '@' ||
+    branch === 'HEAD' ||
+    // eslint-disable-next-line no-control-regex
+    /[\s\x00-\x1f\x7f:^~?*[\\]/.test(branch) ||
+    branch.includes('..') ||
+    branch.includes('@{') ||
+    branch.startsWith('/') ||
+    branch.endsWith('/') ||
+    branch.startsWith('.') ||
+    branch.endsWith('.') ||
+    branch.endsWith('.lock') ||
+    branch.includes('//') ||
+    branch.includes('/.')
+  if (bad) throw new Error(`invalid branch name: ${JSON.stringify(branch)}`)
+}
+
 export async function git(repoPath: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
     timeout: 60_000,
@@ -145,23 +170,24 @@ export async function addWorktree(
   branch: string,
   createBranch: boolean
 ): Promise<void> {
+  assertSafeBranch(branch)
   if (createBranch) {
     // New branches are cut from the latest default branch, not whatever
     // the main checkout happens to have checked out.
     const base = await defaultBaseBranch(repoPath)
     if (base?.startsWith('origin/')) {
       try {
-        await git(repoPath, ['fetch', 'origin', base.slice('origin/'.length)])
+        await git(repoPath, ['fetch', 'origin', '--', base.slice('origin/'.length)])
       } catch {
         // offline or fetch failed — branch from the last-known remote state
       }
     }
     const args = base
-      ? ['worktree', 'add', '-b', branch, worktreePath, base]
-      : ['worktree', 'add', '-b', branch, worktreePath]
+      ? ['worktree', 'add', '-b', branch, '--', worktreePath, base]
+      : ['worktree', 'add', '-b', branch, '--', worktreePath]
     await git(repoPath, args)
   } else {
-    await git(repoPath, ['worktree', 'add', worktreePath, branch])
+    await git(repoPath, ['worktree', 'add', '--', worktreePath, branch])
   }
 }
 
@@ -205,6 +231,8 @@ export async function removeWorktree(repoPath: string, worktreePath: string): Pr
 }
 
 export async function checkout(repoPath: string, branch: string): Promise<void> {
+  assertSafeBranch(branch)
+  // No `--` here: `checkout -- <x>` means paths.
   await git(repoPath, ['checkout', branch])
 }
 
@@ -247,9 +275,10 @@ export async function push(
   branch: string,
   setUpstream: boolean
 ): Promise<void> {
+  assertSafeBranch(branch)
   // A full ref, so a branch name can never be read as an option (-u still tracks origin/<branch>).
   const ref = `refs/heads/${branch}`
-  const args = setUpstream ? ['push', '-u', 'origin', ref] : ['push', 'origin', ref]
+  const args = setUpstream ? ['push', '-u', 'origin', '--', ref] : ['push', 'origin', '--', ref]
   await git(worktreePath, args)
 }
 
@@ -258,8 +287,9 @@ export async function push(
  * branch aborts with an error instead of creating a surprise merge commit.
  */
 export async function pull(worktreePath: string, branch: string): Promise<void> {
+  assertSafeBranch(branch)
   // A full ref, so a branch name can never be read as an option.
-  await git(worktreePath, ['pull', '--ff-only', 'origin', `refs/heads/${branch}`])
+  await git(worktreePath, ['pull', '--ff-only', 'origin', '--', `refs/heads/${branch}`])
 }
 
 /**
@@ -268,7 +298,8 @@ export async function pull(worktreePath: string, branch: string): Promise<void> 
  * a diverged stale local branch is a legitimate abort the user must resolve.
  */
 export async function fetchBranch(repoPath: string, branch: string): Promise<void> {
-  await git(repoPath, ['fetch', 'origin', `${branch}:${branch}`])
+  assertSafeBranch(branch)
+  await git(repoPath, ['fetch', 'origin', '--', `${branch}:${branch}`])
 }
 
 /**
@@ -283,8 +314,9 @@ export async function fetchPullRequestHead(
   prNumber: number,
   branch: string
 ): Promise<void> {
+  assertSafeBranch(branch)
   try {
-    await git(repoPath, ['fetch', 'origin', `refs/pull/${prNumber}/head:refs/heads/${branch}`])
+    await git(repoPath, ['fetch', 'origin', '--', `refs/pull/${prNumber}/head:refs/heads/${branch}`])
   } finally {
     await trackPullRequestBranch(repoPath, prNumber, branch).catch(() => {})
   }
@@ -300,17 +332,18 @@ async function trackPullRequestBranch(
   prNumber: number,
   branch: string
 ): Promise<void> {
+  assertSafeBranch(branch)
   const prRef = `refs/pull/${prNumber}/head`
   const branchRef = `refs/heads/${branch}`
   const shas = new Map(
-    (await git(repoPath, ['ls-remote', 'origin', prRef, branchRef]))
+    (await git(repoPath, ['ls-remote', 'origin', '--', prRef, branchRef]))
       .trim()
       .split('\n')
       .map((line) => line.split('\t').reverse() as [string, string])
   )
   if (!shas.get(branchRef) || shas.get(branchRef) !== shas.get(prRef)) return
-  await git(repoPath, ['fetch', 'origin', `+${branchRef}:refs/remotes/origin/${branch}`])
-  await git(repoPath, ['branch', `--set-upstream-to=origin/${branch}`, branch])
+  await git(repoPath, ['fetch', 'origin', '--', `+${branchRef}:refs/remotes/origin/${branch}`])
+  await git(repoPath, ['branch', `--set-upstream-to=origin/${branch}`, '--', branch])
 }
 
 /** Checks out an existing branch into a new worktree (no -b). */
@@ -319,7 +352,8 @@ export async function addWorktreeAt(
   worktreePath: string,
   branch: string
 ): Promise<void> {
-  await git(repoPath, ['worktree', 'add', worktreePath, branch])
+  assertSafeBranch(branch)
+  await git(repoPath, ['worktree', 'add', '--', worktreePath, branch])
 }
 
 /** Only used after a move is verified on the target — bypasses the dirty check. */

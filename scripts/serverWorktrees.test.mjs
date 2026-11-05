@@ -381,7 +381,7 @@ test('worktree.pull uses the branch that is checked out now, not the one the row
   assert.equal(s.worktree(wt.id).branch, 'a', 'the row has not been polled yet')
   const res = await s.call('worktree.pull', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(res.error?.code, 'GIT_ERROR', JSON.stringify(res))
-  assert.match(res.error.message, /origin refs\/heads\/b\b/)
+  assert.match(res.error.message, /origin (-- )?refs\/heads\/b\b/)
   assert.doesNotMatch(res.error.message, /refs\/heads\/a\b/)
   assert.equal(s.worktree(wt.id).branch, 'b')
 })
