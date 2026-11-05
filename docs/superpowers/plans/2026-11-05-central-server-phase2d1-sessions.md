@@ -1752,7 +1752,7 @@ Append to `scripts/serverSessions.test.mjs`. Add `import { dispatchV2 } from '..
 ```js
 function v2(s) {
   const events = []
-  const terminal = { send: (event, payload) => events.push({ event, ...payload }), congested: () => false }
+  const terminal = { send: (event, payload) => events.push({ event, ...payload }), bufferedAmount: () => 0 }
   const call = (method, params) =>
     dispatchV2(method, params, { store: s.store, hub: undefined, subscriber: undefined, projects: s.projects, poller: undefined, sessions: s.sessions, terminal })
   return { events, terminal, call }
@@ -1923,11 +1923,11 @@ In `server/src/server.ts`:
     /** This connection as a receiver of v2 pty events */
     const terminal: TerminalSink = {
       send: (event, payload) => sendFrame(ws, { type: 'event', event, payload } as ServerFrameV2),
-      congested: () => ws.bufferedAmount > TERMINAL_HIGH_WATER
+      bufferedAmount: () => ws.bufferedAmount
     }
 ```
 
-  Add `const TERMINAL_HIGH_WATER = 4 * 1024 * 1024` with the other constants near the top. If `sendFrame`'s parameter type does not accept the event frame, cast it as shown, or build it with the existing v2 event frame type in `src/shared/protocolV2.ts`.
+  The host applies its own high/low water marks (`SINK_HIGH_WATER`/`SINK_LOW_WATER` in `terminalHost.ts`). If `sendFrame`'s parameter type does not accept the event frame, cast it as shown, or build it with the existing v2 event frame type in `src/shared/protocolV2.ts`.
 - Pass `sessions` and `terminal` in the `dispatchV2` context: `{ store, hub, subscriber, projects, poller, sessions, terminal }`.
 - In `ws.on('close')`, add `sessions.terminals.detachAll(terminal)` next to `ptys.detachAll(ws)`.
 - In `shutdown`, call `sessions.stopAll()` after `poller.stop()`.
