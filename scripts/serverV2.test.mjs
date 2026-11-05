@@ -39,8 +39,14 @@ function setup(t) {
   })
   const sent = []
   const subscriber = { send: (topic, rev, ops) => sent.push({ topic, rev, ops }) }
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects })
-  return { dir, a, store, sent, call }
+  /** Records what the handlers ask of the session manager */
+  const forgotten = []
+  const sessions = {
+    forgetProject: (projectId) => forgotten.push(['project', projectId, holder.projects.list().some((x) => x.id === projectId)]),
+    forgetRepo: (projectId, repoId) => forgotten.push(['repo', projectId, repoId])
+  }
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects, sessions })
+  return { dir, a, store, sent, call, forgotten, projects: holder.projects }
 }
 
 test('subscribing to server returns identity, repos and no projects', async (t) => {
@@ -356,4 +362,24 @@ test('repo.update rejects an own __proto__ key in environments', async (t) => {
   const r = await call('repo.update', { projectId, repoId, environments: JSON.parse('{"__proto__":{"x":1}}') })
   assert.equal(r.error.code, 'BAD_REQUEST')
   assert.equal((await call('repo.update', { projectId, repoId, name: 'Still works' })).ok, true)
+})
+
+test('project.delete and repo.remove end their sessions, and only once the removal is done', async (t) => {
+  const { dir, call, projectId, snap, forgotten, projects } = await withProject(t)
+  const b = join(dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', b])
+  await call('server.addRepo', { path: b })
+  const { repoId } = (await call('repo.add', { projectId, path: b })).result
+  const first = (await snap()).repositories[0].id
+  await call('repo.remove', { projectId, repoId: 'nope' })
+  assert.deepEqual(forgotten, [], 'a refused remove ends nothing')
+  await call('repo.remove', { projectId, repoId })
+  assert.deepEqual(forgotten, [['repo', projectId, repoId]])
+  assert.equal((await call('repo.remove', { projectId, repoId: first })).error.code, 'BAD_REQUEST')
+  assert.equal(forgotten.length, 1, 'the last repository is not removed, so its sessions keep running')
+  assert.equal((await call('project.delete', { projectId })).ok, true)
+  assert.deepEqual(forgotten[1], ['project', projectId, false])
+  assert.throws(() => projects.require(projectId))
+  await call('project.delete', { projectId })
+  assert.equal(forgotten.length, 2, 'an unknown project ends nothing')
 })

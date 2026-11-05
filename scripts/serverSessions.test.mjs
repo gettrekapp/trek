@@ -40,7 +40,10 @@ test('findWorktree', () => {
 
 function fakeSpawner() {
   const spawned = []
+  const hooks = { calls: 0, failAt: new Set(), onSpawn: undefined }
   const spawner = (opts) => {
+    hooks.calls++
+    if (hooks.failAt.has(hooks.calls)) throw new Error(`spawn ${hooks.calls} failed`)
     const proc = {
       opts, written: [], killed: false, dataCb: () => {}, exitCb: () => {},
       onData(cb) { this.dataCb = cb }, onExit(cb) { this.exitCb = cb },
@@ -49,9 +52,10 @@ function fakeSpawner() {
       emit(d) { this.dataCb(d) }, exit(code) { this.exitCb(code) }
     }
     spawned.push(proc)
+    hooks.onSpawn?.(proc)
     return proc
   }
-  return { spawned, spawner }
+  return { spawned, spawner, hooks }
 }
 
 const tick = () => new Promise((r) => setImmediate(r))
@@ -80,9 +84,14 @@ function setup(t, { llm } = {}) {
   const fake = fakeSpawner()
   const discoveries = []
   const scheduled = []
+  const clock = { t: 1_000_000 }
   const sessions = new SessionManager({
-    projects, store, spawner: fake.spawner,
-    discover: async (cwd, ageMs, exclude) => { discoveries.push({ cwd, exclude }); return sessions.__nextDiscovery },
+    projects, store, spawner: fake.spawner, now: () => clock.t,
+    discover: async (cwd, ageMs, exclude) => {
+      discoveries.push({ cwd, ageMs, exclude })
+      const next = sessions.__nextDiscovery
+      return typeof next === 'function' ? next() : next
+    },
     schedule: (fn, ms) => { const job = { fn, ms, cancelled: false }; scheduled.push(job); return { cancel: () => { job.cancelled = true } } }
   })
   t.after(() => sessions.stopAll())
@@ -94,7 +103,7 @@ function setup(t, { llm } = {}) {
   const project = () => projects.require(projectId)
   const main = () => project().repositories[0].worktrees[0]
   const wx = () => project().repositories[0].worktrees[1]
-  return { dir, a, b, store, projects, sessions, saves, projectId, project, main, wx, ...fake, discoveries, scheduled }
+  return { dir, a, b, store, projects, sessions, saves, projectId, project, main, wx, ...fake, discoveries, scheduled, clock }
 }
 
 const size = { cols: 100, rows: 30 }
@@ -269,4 +278,192 @@ test('stopAll kills every pty and ignores their exits', async (t) => {
   await tick()
   assert.equal(s.spawned[0].killed, true)
   assert.notEqual(s.wx().sessions[0].status, 'exited')
+})
+
+const codeOf = (fn) => { try { fn() } catch (e) { return e.code } return 'ok' }
+const codex = { llm: { provider: 'codex' } }
+/** The last job scheduled and not cancelled. */
+const live = (s) => s.scheduled.filter((j) => !j.cancelled)
+
+test('Codex discovery in one folder binds the oldest pending session first', async (t) => {
+  const s = setup(t)
+  const older = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  s.clock.t += 500
+  const newer = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  assert.equal(s.scheduled.length, 1, 'one poll loop per folder')
+  const ids = ['c1', 'c2']
+  s.sessions.__nextDiscovery = () => ids.shift()
+  await s.scheduled[0].fn()
+  assert.equal(s.discoveries[0].ageMs, 500, 'the scan is for the older session')
+  assert.equal(s.scheduled.length, 2, 'the newer one is still pending')
+  await s.scheduled[1].fn()
+  assert.deepEqual(s.discoveries[1].exclude, ['c1'])
+  assert.equal(s.discoveries[1].ageMs, 0, 'then for the newer one')
+  const byId = Object.fromEntries(s.wx().sessions.map((x) => [x.id, x.agentSessionId]))
+  assert.deepEqual(byId, { [older.sessionId]: 'c1', [newer.sessionId]: 'c2' })
+  assert.equal(s.scheduled.length, 2, 'nothing pending: the loop ends')
+  assert.equal(s.saves.at(-1).repositories[0].worktrees[1].sessions.find((x) => x.id === newer.sessionId).agentSessionId, 'c2', 'a discovered id is saved')
+})
+
+test('Codex discovery: the poll delay follows the claimant age; an id another session took is dropped', async (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  assert.equal(s.scheduled[0].ms, 2000)
+  s.clock.t += 61_000
+  s.sessions.__nextDiscovery = undefined
+  await s.scheduled[0].fn()
+  assert.equal(s.scheduled[1].ms, 15_000)
+  // While the scan runs, another session is bound to the id it will find.
+  s.sessions.__nextDiscovery = () => {
+    s.projects.apply(s.projectId, (d) => { d.globalSessions.push({ id: 'other', agentSessionId: 'taken', title: 'o', llm: { provider: 'codex' }, queue: [], status: 'idle' }) })
+    return 'taken'
+  }
+  await s.scheduled[1].fn()
+  assert.equal(s.wx().sessions[0].agentSessionId, undefined)
+  assert.equal(s.scheduled.length, 3, 'still pending: polls again')
+})
+
+function deferred() {
+  let resolve
+  const promise = new Promise((r) => { resolve = r })
+  return { promise, resolve }
+}
+
+test('Codex discovery: a stale result is not applied after close or restart', async (t) => {
+  const s = setup(t)
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  let d = deferred()
+  s.sessions.__nextDiscovery = () => d.promise
+  let polling = s.scheduled[0].fn()
+  s.spawned[0].exit(1)
+  s.sessions.restart({ projectId: s.projectId, sessionId: one.sessionId, ...size })
+  const before = s.scheduled.length
+  d.resolve('stale')
+  await polling
+  assert.equal(s.wx().sessions[0].agentSessionId, undefined, 'not applied after a restart')
+  assert.equal(s.scheduled.length, before, 'the stale poll schedules nothing')
+
+  d = deferred()
+  polling = live(s).at(-1).fn()
+  s.sessions.close({ projectId: s.projectId, sessionId: one.sessionId })
+  d.resolve('stale2')
+  await polling
+  assert.equal(s.scheduled.length, before, 'nothing scheduled after close')
+})
+
+test('Codex discovery: closing a session cancels its discovery', async (t) => {
+  const s = setup(t)
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  s.sessions.close({ projectId: s.projectId, sessionId: one.sessionId })
+  assert.equal(s.scheduled[0].cancelled, true)
+  await s.scheduled[0].fn()
+  assert.equal(s.discoveries.length, 0)
+})
+
+test('Codex discovery stops when the session record disappears without close', async (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees[1].sessions = [] })
+  await s.scheduled[0].fn()
+  assert.equal(s.discoveries.length, 0)
+  assert.equal(s.scheduled.length, 1, 'no further polls')
+})
+
+test('loadWorktree: a failed spawn marks that session exited and loads the rest', (t) => {
+  const s = setup(t)
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[1].sessions = ['a', 'b', 'c'].map((id) => ({ id, agentSessionId: undefined, title: id, llm: { provider: 'claude' }, queue: [], status: 'idle' }))
+  })
+  s.hooks.failAt.add(2)
+  const errors = []
+  t.mock.method(console, 'error', (...args) => errors.push(args))
+  s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  assert.equal(s.wx().loaded, true)
+  assert.equal(s.spawned.length, 2)
+  const [a, b, c] = s.wx().sessions
+  assert.ok(a.ptyId && s.sessions.terminals.has(a.ptyId))
+  assert.ok(c.ptyId && s.sessions.terminals.has(c.ptyId))
+  assert.deepEqual([b.status, b.exitCode, b.ptyId], ['exited', -1, undefined])
+  assert.equal(errors.length, 1, 'the failure is logged')
+  s.sessions.restart({ projectId: s.projectId, sessionId: 'b', ...size })
+  assert.equal(s.wx().sessions[1].status, 'idle')
+})
+
+test('forgetProject kills every session of the project, Global ones too, and stops discovery', async (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...codex, ...size })
+  const other = s.projects.create('Q', [{ registered: { id: 'a', name: 'a', path: s.a }, name: undefined }])
+  s.sessions.start({ projectId: other, worktreeId: null, ...size })
+  s.sessions.forgetProject(s.projectId)
+  assert.deepEqual(s.spawned.map((p) => p.killed), [true, true, true, false])
+  assert.equal(s.scheduled[0].cancelled, true)
+  s.projects.delete(s.projectId)
+  await tick()
+  assert.equal(s.projects.require(other).globalSessions[0].status, 'idle')
+})
+
+test('forgetRepo kills the sessions of that repository only', async (t) => {
+  const s = setup(t)
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories.push({ id: 'rb', name: 'b', path: s.b, branchData: {}, worktrees: [{ id: 'mb', name: 'b', path: s.b, isMain: true, loaded: true, sessions: [] }] })
+  })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'mb', ...codex, ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.sessions.forgetRepo(s.projectId, 'rb')
+  assert.deepEqual(s.spawned.map((p) => p.killed), [false, true, false])
+  assert.equal(s.scheduled[0].cancelled, true)
+  await tick()
+  assert.equal(s.project().repositories[1].worktrees[0].sessions[0].status, 'idle', 'its exit is not recorded')
+})
+
+test('Global sessions: a missing main worktree, a blocked path, an unregistered repo or a denied addDir is refused', (t) => {
+  const s = setup(t)
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees[0].missing = true })
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })), 'BAD_REQUEST')
+  s.projects.apply(s.projectId, (d) => { delete d.repositories[0].worktrees[0].missing })
+  const unblock = s.sessions.blockPath(s.a)
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })), 'IN_USE')
+  unblock()
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories.push({ id: 'rz', name: 'z', path: '/elsewhere/z', branchData: {}, worktrees: [{ id: 'mz', name: 'z', path: '/elsewhere/z', isMain: true, loaded: false, sessions: [] }] })
+  })
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })), 'PATH_DENIED', 'an addDir outside the allowlist')
+  s.projects.apply(s.projectId, (d) => { d.repositories.pop(); d.repositories[0].path = d.repositories[0].worktrees[0].path = join(s.dir, 'repos', 'a-x') })
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })), 'PATH_DENIED', 'a main worktree whose repo is not registered')
+  assert.equal(s.spawned.length, 0)
+  assert.deepEqual(s.project().globalSessions, [])
+})
+
+test('after stopAll, start, restart and load refuse', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.stopAll()
+  const shut = (fn) => { try { fn() } catch (e) { return /shutting down/.test(e.message) } return false }
+  assert.ok(shut(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })))
+  assert.ok(shut(() => s.sessions.restart({ projectId: s.projectId, sessionId, ...size })))
+  assert.ok(shut(() => s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'm' })))
+})
+
+test('a spawn whose record vanished kills the new pty', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].exit(0)
+  s.hooks.onSpawn = () => s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees[1].sessions = [] })
+  assert.equal(codeOf(() => s.sessions.restart({ projectId: s.projectId, sessionId, ...size })), 'NOT_FOUND')
+  assert.equal(s.spawned[1].killed, true)
+})
+
+test('start: unknown providers, long titles and control characters are BAD_REQUEST', (t) => {
+  const s = setup(t)
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'nope' }, ...size })), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', title: 'x'.repeat(201), ...size })), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', title: 'a\u001b[2Jb', ...size })), 'BAD_REQUEST')
+  s.projects.apply(s.projectId, (d) => { d.settings.sessionTypes = [{ id: 'bad', name: 'Bad\nname' }] })
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', sessionTypeId: 'bad', ...size })), 'BAD_REQUEST')
+  assert.equal(s.spawned.length, 0)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', title: 'x'.repeat(200), ...size })
+  assert.equal(s.wx().sessions[0].title.length, 200)
 })

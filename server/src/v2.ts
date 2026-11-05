@@ -12,6 +12,7 @@ import { worktreeHandlers } from './worktreeHandlers.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
+import type { SessionManager } from './sessions/manager.ts'
 import { applySettingsPatch, isSettingsKey } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
 import {
@@ -35,6 +36,8 @@ export interface V2Context {
   projects: ProjectState
   /** Re-reads git after a worktree command */
   poller: GitPoller
+  /** Agent sessions and their ptys */
+  sessions: SessionManager
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -111,7 +114,11 @@ const handlers: Record<string, Handler> = {
   },
 
   'project.delete': (p, ctx) => {
-    ctx.projects.delete(p.projectId)
+    const { id } = ctx.projects.require(p.projectId)
+    ctx.projects.delete(id)
+    // Only once the project is gone: a delete that fails leaves its sessions running.
+    // The manager tracks its ptys itself, so the records are not needed for this.
+    ctx.sessions.forgetProject(id)
     return null
   },
 
@@ -145,7 +152,7 @@ const handlers: Record<string, Handler> = {
   },
 
   'repo.remove': (p, ctx) => {
-    ctx.projects.apply(p.projectId, (d) => {
+    const { projectId, repoId } = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       if (d.repositories.length === 1) throw codedError('BAD_REQUEST', 'a project needs at least one repository')
       d.repositories = d.repositories.filter((r) => r !== repo)
@@ -154,7 +161,10 @@ const handlers: Record<string, Handler> = {
         if (order.length > 0) d.settings.worktreeOrder = order
         else delete d.settings.worktreeOrder
       }
+      return { projectId: d.id, repoId: repo.id }
     })
+    // Only once the repository is removed: a refused remove ends none of its sessions.
+    ctx.sessions.forgetRepo(projectId, repoId)
     return null
   },
 

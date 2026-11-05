@@ -24,6 +24,7 @@ import { activeTokenHashes, matchToken } from './tokens'
 import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2 } from './v2'
 import { GitPoller } from './git/poller'
+import { SessionManager } from './sessions/manager'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -36,6 +37,7 @@ export interface TrekServer {
   hub: TopicHub
   projects: ProjectState
   poller: GitPoller
+  sessions: SessionManager
   shutdown(reason: string): void
 }
 
@@ -62,6 +64,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     registry: () => store.config.repos,
     onHealth: () => refreshServerTopic()
   })
+  const sessions = new SessionManager({ projects, store })
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -220,7 +223,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
       }
       const id = frame.id
       if (protocolVersion === PROTOCOL_VERSION_V2) {
-        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects, poller })
+        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects, poller, sessions })
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
         if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
@@ -255,6 +258,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
 
   const shutdown = (reason: string): void => {
     poller.stop()
+    sessions.stopAll()
     store.off('change', onConfigChange)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
@@ -267,7 +271,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     httpServer.close()
   }
 
-  return { httpServer, ptys, hub, projects, poller, shutdown }
+  return { httpServer, ptys, hub, projects, poller, sessions, shutdown }
 }
 
 function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {

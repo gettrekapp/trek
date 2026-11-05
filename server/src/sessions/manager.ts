@@ -4,8 +4,8 @@
 import { randomUUID } from 'node:crypto'
 import { discoverCodexSession } from '../../../src/host/agentService.ts'
 import type { Project, Session, Worktree } from '../../../src/shared/model/types'
-import { pollDelay } from '../../../src/shared/providers/discovery.ts'
-import { getProvider } from '../../../src/shared/providers/registry.ts'
+import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
+import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import {
   resolveGlobalLlm,
   resolveNewSessionLlm,
@@ -15,10 +15,10 @@ import {
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
-import { assertNotRepository } from '../projects/model.ts'
+import { assertNotRepository, findRegistered } from '../projects/model.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
-import { requireBoolean, requireString } from '../validate.ts'
+import { isRecord, requireBoolean, requireString } from '../validate.ts'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
@@ -26,7 +26,16 @@ import { TerminalHost, type PtySpawner } from './terminalHost.ts'
 export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
 
+export const MAX_TITLE_LENGTH = 200
+
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
+
+/** A session title: at most MAX_TITLE_LENGTH characters, no control characters. */
+export function checkTitle(title: string, field: string): string {
+  if (title.length > MAX_TITLE_LENGTH) throw bad(`${field} must be at most ${MAX_TITLE_LENGTH} characters`)
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(title)) throw bad(`${field} must not contain control characters`)
+  return title
+}
 
 export interface ScheduledJob {
   cancel(): void
@@ -48,9 +57,28 @@ function requireSize(p: any): { cols: number; rows: number } {
   return { cols: p.cols, rows: p.rows }
 }
 
-/** One pending Codex discovery; `job` is the timer for its next poll. */
-interface Discovery {
+/** A Codex session whose id is not found yet. */
+interface PendingDiscovery {
+  projectId: string
+  sessionId: string
+  /** Unset for a Global session */
+  repoId?: string
+  cwd: string
+  /** realOrResolved(cwd): sessions in one folder are discovered one at a time */
+  folder: string
+  startedAt: number
+}
+
+/** A folder's poll loop; `job` is the timer for its next poll. */
+interface FolderLoop {
   job: ScheduledJob
+}
+
+interface Owner {
+  projectId: string
+  sessionId: string
+  /** Unset for a Global session */
+  repoId?: string
 }
 
 export class SessionManager {
@@ -61,9 +89,11 @@ export class SessionManager {
   private readonly discover: NonNullable<SessionManagerDeps['discover']>
   private readonly schedule: NonNullable<SessionManagerDeps['schedule']>
   /** ptyId → the session it runs */
-  private readonly owners = new Map<string, { projectId: string; sessionId: string }>()
-  /** sessionId → the pending Codex discovery */
-  private readonly discoveries = new Map<string, Discovery>()
+  private readonly owners = new Map<string, Owner>()
+  /** sessionId → its pending Codex discovery */
+  private readonly pending = new Map<string, PendingDiscovery>()
+  /** folder → its poll loop, while it has pending sessions */
+  private readonly loops = new Map<string, FolderLoop>()
   /** realpaths a worktree.remove is working on */
   private readonly blocked = new Set<string>()
   private stopped = false
@@ -91,6 +121,7 @@ export class SessionManager {
   }
 
   start(p: any): { sessionId: string; ptyId: string } {
+    this.assertRunning()
     const { cols, rows } = requireSize(p)
     const project = this.deps.projects.require(p.projectId)
     const global = p.worktreeId === null
@@ -105,6 +136,8 @@ export class SessionManager {
     }
     let pick: LlmSelection | undefined
     if (p.llm !== undefined) {
+      // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead.
+      if (!isRecord(p.llm) || !isProviderId(p.llm.provider)) throw bad('llm.provider must be a known provider')
       pick = sanitizeLlmSelection(p.llm)
       if (!pick) throw bad('llm must be an LLM selection')
     }
@@ -113,6 +146,8 @@ export class SessionManager {
       ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
       : resolveNewSessionLlm({ pick, sessionType: sessionType?.llm, projectDefault: settings.llmDefault, appDefault: serverDefault })
     if (p.title !== undefined && typeof p.title !== 'string') throw bad('title must be a string')
+    const title = p.title?.trim() ? checkTitle(p.title.trim(), 'title') : undefined
+    const typeTitle = sessionType?.name ? checkTitle(sessionType.name, `session type "${sessionType.id}" name`) : undefined
     if (p.initialMessage !== undefined && typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
 
     if (worktree && !worktree.loaded) this.loadWorktree({ projectId: project.id, worktreeId: worktree.id })
@@ -124,7 +159,7 @@ export class SessionManager {
     const sessionId = this.newId()
     const session: Session = {
       id: sessionId,
-      title: p.title?.trim() || sessionType?.name || this.defaultTitle(provider.label, list.length, worktree),
+      title: title || typeTitle || this.defaultTitle(provider.label, list.length, worktree),
       llm,
       queue: [],
       status: 'idle'
@@ -155,6 +190,7 @@ export class SessionManager {
   }
 
   restart(p: any): { ptyId: string } {
+    this.assertRunning()
     const { cols, rows } = requireSize(p)
     const project = this.deps.projects.require(p.projectId)
     const found = findSession(project, p.sessionId)
@@ -185,6 +221,7 @@ export class SessionManager {
   }
 
   loadWorktree(p: any): null {
+    this.assertRunning()
     const project = this.deps.projects.require(p.projectId)
     const worktree = this.usableWorktree(project, p.worktreeId)
     if (worktree.loaded) return null
@@ -192,7 +229,21 @@ export class SessionManager {
     // spawnSession re-reads each session from the current project; only the ids come from this snapshot.
     for (const session of worktree.sessions) {
       if (session.ptyId && this.terminals.has(session.ptyId)) continue
-      this.spawnSession(project.id, session.id, { cols: LOAD_COLS, rows: LOAD_ROWS })
+      try {
+        this.spawnSession(project.id, session.id, { cols: LOAD_COLS, rows: LOAD_ROWS })
+      } catch (err) {
+        // The worktree still counts as loaded: this session shows as exited and can be restarted.
+        console.error(`could not resume session ${session.id} in ${worktree.path}`, err)
+        try {
+          this.mutate(project.id, session.id, (s) => {
+            delete s.ptyId
+            s.status = 'exited'
+            s.exitCode = -1
+          }, false)
+        } catch {
+          // the session is gone
+        }
+      }
     }
     return null
   }
@@ -220,15 +271,45 @@ export class SessionManager {
     return null
   }
 
+  /**
+   * The project is being deleted: stop discovery and kill the pty of each of its
+   * sessions, Global ones included. Their exits are not recorded.
+   */
+  forgetProject(projectId: string): void {
+    this.forget((o) => o.projectId === projectId)
+  }
+
+  /** A repository is leaving the project: as forgetProject, for that repository's sessions only. */
+  forgetRepo(projectId: string, repoId: string): void {
+    this.forget((o) => o.projectId === projectId && o.repoId === repoId)
+  }
+
   /** Server shutdown: kill every pty; their exits are ignored. */
   stopAll(): void {
     this.stopped = true
-    for (const d of this.discoveries.values()) d.job.cancel()
-    this.discoveries.clear()
+    for (const loop of this.loops.values()) loop.job.cancel()
+    this.loops.clear()
+    this.pending.clear()
     this.terminals.disposeAll()
   }
 
   // ---- internals ----
+
+  private assertRunning(): void {
+    if (this.stopped) throw codedError('INTERNAL', 'the server is shutting down')
+  }
+
+  /** Works from the manager's own maps, not the records, so it can run after the records are gone. */
+  private forget(match: (o: Owner) => boolean): void {
+    for (const entry of [...this.pending.values()]) {
+      if (match(entry)) this.stopDiscovery(entry.sessionId)
+    }
+    for (const [ptyId, owner] of [...this.owners]) {
+      if (!match(owner)) continue
+      this.owners.delete(ptyId)
+      if (this.terminals.has(ptyId)) this.terminals.kill(ptyId)
+    }
+  }
 
   /** A worktree a session may run in: present, inside the allowlist, not a registered repo of its own, not being removed. */
   private usableWorktree(project: Project, worktreeId: unknown): Worktree {
@@ -259,15 +340,29 @@ export class SessionManager {
     run: { cols: number; rows: number; fresh?: boolean; initialMessage?: string }
   ): string {
     const project = this.deps.projects.require(projectId)
-    const { session, worktree } = findSession(project, sessionId)
+    const { session, worktree, repo } = findSession(project, sessionId)
     const provider = getProvider(session.llm.provider)
     // A new session's preset id names a conversation the agent has not created yet: start it, don't resume it.
     const launch = run.fresh
       ? { sessionId: session.agentSessionId ?? this.newId(), resume: false }
       : sessionLaunch(provider.capabilities, session.agentSessionId, this.newId)
-    const first = project.repositories[0]
-    if (!worktree && !first) throw bad('the project has no repositories')
-    const cwd = worktree ? worktree.path : (first.worktrees.find((w) => w.isMain) ?? first.worktrees[0])?.path ?? first.path
+    let cwd: string
+    let addDirs: string[] | undefined
+    if (worktree) {
+      cwd = worktree.path
+    } else {
+      // A Global session runs in the first repository's main worktree: check it as usableWorktree does.
+      const first = project.repositories[0]
+      if (!first) throw bad('the project has no repositories')
+      const main = first.worktrees.find((w) => w.isMain) ?? first.worktrees[0]
+      if (main?.missing) throw bad(`${main.path} no longer exists`)
+      cwd = main?.path ?? first.path
+      findRegistered(this.deps.store.config.repos, first.path)
+      this.deps.store.guard.check(cwd)
+      if (this.blocked.has(real(cwd))) throw codedError('IN_USE', `${cwd} is being removed`)
+      addDirs = project.repositories.slice(1).map((r) => r.path)
+      for (const dir of addDirs) this.deps.store.guard.check(dir)
+    }
     const spec = agentCommand(
       {
         llm: session.llm,
@@ -276,7 +371,7 @@ export class SessionManager {
         global: !worktree,
         systemPrompt: session.systemPrompt,
         initialMessage: launch.resume ? undefined : run.initialMessage,
-        addDirs: worktree ? undefined : project.repositories.slice(1).map((r) => r.path)
+        addDirs
       },
       project.settings,
       this.deps.store.llmSettings()
@@ -289,22 +384,29 @@ export class SessionManager {
       cols: run.cols,
       rows: run.rows
     })
-    this.owners.set(ptyId, { projectId, sessionId })
+    this.owners.set(ptyId, { projectId, sessionId, repoId: repo?.id })
     // A preset-id agent whose saved id was unusable got a fresh one: that must reach disk.
     const idChanged = provider.capabilities.presetSessionId && session.agentSessionId !== launch.sessionId
-    this.deps.projects.apply(
-      projectId,
-      (d) => {
-        const s = findSession(d, sessionId).session
-        s.ptyId = ptyId
-        delete s.exitCode
-        if (s.status === 'exited') s.status = 'idle'
-        if (provider.capabilities.presetSessionId) s.agentSessionId = launch.sessionId
-      },
-      { persist: idChanged }
-    )
+    try {
+      this.deps.projects.apply(
+        projectId,
+        (d) => {
+          const s = findSession(d, sessionId).session
+          s.ptyId = ptyId
+          delete s.exitCode
+          if (s.status === 'exited') s.status = 'idle'
+          if (provider.capabilities.presetSessionId) s.agentSessionId = launch.sessionId
+        },
+        { persist: idChanged }
+      )
+    } catch (err) {
+      // No record points at the new pty: nothing could ever reach or kill it.
+      this.owners.delete(ptyId)
+      this.terminals.kill(ptyId)
+      throw err
+    }
     if (!provider.capabilities.presetSessionId && provider.capabilities.resume && !launch.resume) {
-      this.startDiscovery(projectId, sessionId, cwd, this.now())
+      this.startDiscovery({ projectId, sessionId, repoId: repo?.id, cwd, folder: real(cwd), startedAt: this.now() })
     }
     return ptyId
   }
@@ -342,44 +444,106 @@ export class SessionManager {
     this.deps.projects.apply(projectId, (d) => fn(findSession(d, sessionId).session), { persist })
   }
 
-  private startDiscovery(projectId: string, sessionId: string, cwd: string, startedAt: number): void {
-    this.stopDiscovery(sessionId)
-    // Identity check: a poll still awaiting when this discovery is stopped (or replaced by a
-    // restart's) must neither apply its result nor schedule another poll.
-    const discovery: Discovery = { job: { cancel: () => {} } }
-    const live = (): boolean => !this.stopped && this.discoveries.get(sessionId) === discovery
-    const poll = async (): Promise<void> => {
-      if (!live()) return
-      const exclude: string[] = []
-      for (const p of this.deps.projects.all()) {
-        for (const s of [...p.globalSessions, ...p.repositories.flatMap((r) => r.worktrees.flatMap((w) => w.sessions))]) {
-          if (s.agentSessionId) exclude.push(s.agentSessionId)
-        }
-      }
-      let found: string | undefined
-      try {
-        found = await this.discover(cwd, this.now() - startedAt, exclude)
-      } catch (err) {
-        console.warn(`codex session discovery in ${cwd} failed`, err)
-      }
-      if (!live()) return
-      if (found) {
-        this.discoveries.delete(sessionId)
-        try {
-          this.mutate(projectId, sessionId, (s) => { s.agentSessionId = found })
-        } catch {
-          // the session is gone
-        }
-        return
-      }
-      discovery.job = this.schedule(poll, pollDelay(this.now() - startedAt))
-    }
-    this.discoveries.set(sessionId, discovery)
-    discovery.job = this.schedule(poll, pollDelay(0))
+  /**
+   * Discovery runs one poll loop per folder. Each poll scans for the oldest-started
+   * pending session there (pickClaimant), so two Codex sessions started together in
+   * one folder bind their rollouts in launch order instead of racing for the same one.
+   */
+  private startDiscovery(entry: PendingDiscovery): void {
+    this.stopDiscovery(entry.sessionId)
+    this.pending.set(entry.sessionId, entry)
+    if (!this.loops.has(entry.folder)) this.scheduleLoop(entry.folder)
   }
 
   private stopDiscovery(sessionId: string): void {
-    this.discoveries.get(sessionId)?.job.cancel()
-    this.discoveries.delete(sessionId)
+    const entry = this.pending.get(sessionId)
+    if (!entry) return
+    this.pending.delete(sessionId)
+    if (this.inFolder(entry.folder).length > 0) return
+    this.loops.get(entry.folder)?.job.cancel()
+    this.loops.delete(entry.folder)
+  }
+
+  private inFolder(folder: string): PendingDiscovery[] {
+    return [...this.pending.values()].filter((e) => e.folder === folder)
+  }
+
+  private claimant(folder: string): PendingDiscovery | undefined {
+    const tabs = this.inFolder(folder).map((entry) => ({
+      id: entry.sessionId,
+      status: 'idle',
+      sessionPending: true,
+      startedAt: entry.startedAt,
+      entry
+    }))
+    return pickClaimant(tabs)?.entry
+  }
+
+  /** Schedules the folder's next poll, timed by its claimant's age; ends the loop when none is pending. */
+  private scheduleLoop(folder: string): void {
+    const claimant = this.claimant(folder)
+    if (!claimant) {
+      this.loops.delete(folder)
+      return
+    }
+    const loop: FolderLoop = { job: { cancel: () => {} } }
+    this.loops.set(folder, loop)
+    loop.job = this.schedule(() => this.poll(folder, loop), pollDelay(this.now() - claimant.startedAt))
+  }
+
+  /** Every agent id held by a session on this server. */
+  private claimedIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const p of this.deps.projects.all()) {
+      for (const s of [...p.globalSessions, ...p.repositories.flatMap((r) => r.worktrees.flatMap((w) => w.sessions))]) {
+        if (s.agentSessionId) ids.add(s.agentSessionId)
+      }
+    }
+    return ids
+  }
+
+  /** Whether the session's record still exists and still waits for an id. */
+  private stillPending(entry: PendingDiscovery): boolean {
+    try {
+      const project = this.deps.projects.require(entry.projectId)
+      return !findSession(project, entry.sessionId).session.agentSessionId
+    } catch {
+      return false
+    }
+  }
+
+  private async poll(folder: string, loop: FolderLoop): Promise<void> {
+    // Identity check: a loop that was cancelled (or replaced) while its poll was due or awaiting
+    // must neither apply a result nor schedule another poll.
+    const current = (): boolean => !this.stopped && this.loops.get(folder) === loop
+    if (!current()) return
+    // A record removed without close (its repo or project went away) stops its discovery.
+    for (const entry of this.inFolder(folder)) {
+      if (!this.stillPending(entry)) this.pending.delete(entry.sessionId)
+    }
+    const claimant = this.claimant(folder)
+    if (!claimant) {
+      this.loops.delete(folder)
+      return
+    }
+    let found: string | undefined
+    try {
+      found = await this.discover(claimant.cwd, this.now() - claimant.startedAt, [...this.claimedIds()])
+    } catch (err) {
+      console.warn(`codex session discovery in ${claimant.cwd} failed`, err)
+    }
+    if (!current()) return
+    // Re-check after the await: the claimant may have been closed or restarted, and another
+    // session may have taken the id meanwhile.
+    if (found && this.pending.get(claimant.sessionId) === claimant && !this.claimedIds().has(found)) {
+      this.pending.delete(claimant.sessionId)
+      const id = found
+      try {
+        this.mutate(claimant.projectId, claimant.sessionId, (s) => { s.agentSessionId = id })
+      } catch {
+        // the session is gone
+      }
+    }
+    this.scheduleLoop(folder)
   }
 }
