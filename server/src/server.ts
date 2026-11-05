@@ -23,6 +23,7 @@ import { publishServerState } from './serverState'
 import { activeTokenHashes, matchToken } from './tokens'
 import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2 } from './v2'
+import { GitPoller } from './git/poller'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -34,6 +35,7 @@ export interface TrekServer {
   ptys: PtyRegistry
   hub: TopicHub
   projects: ProjectState
+  poller: GitPoller
   shutdown(reason: string): void
 }
 
@@ -54,6 +56,12 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
   let refreshServerTopic = (): void => {}
   const projects = projectsSetup.create(hub, () => refreshServerTopic())
   store.setUsage((repo) => projects.usage(repo.path))
+  const poller = new GitPoller({
+    projects,
+    hub,
+    registry: () => store.config.repos,
+    onHealth: () => refreshServerTopic()
+  })
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -79,10 +87,11 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
   store.on('change', onConfigChange)
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
-    health: () => projectsSetup.store.health()
+    health: () => [...projectsSetup.store.health(), ...poller.health()]
   })
   refreshServerTopic = serverState.refresh
   projectsSetup.store.on('health', serverState.refresh)
+  poller.start()
 
   const httpServer = createServer((_req, res) => {
     res.writeHead(426, { 'content-type': 'text/plain' })
@@ -211,7 +220,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
       }
       const id = frame.id
       if (protocolVersion === PROTOCOL_VERSION_V2) {
-        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects })
+        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects, poller })
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
         if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
@@ -245,6 +254,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
   })
 
   const shutdown = (reason: string): void => {
+    poller.stop()
     store.off('change', onConfigChange)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
@@ -257,7 +267,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     httpServer.close()
   }
 
-  return { httpServer, ptys, hub, projects, shutdown }
+  return { httpServer, ptys, hub, projects, poller, shutdown }
 }
 
 function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {
