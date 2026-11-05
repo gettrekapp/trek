@@ -1,36 +1,54 @@
-import { randomBytes } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { hostname } from 'node:os'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
-import { defaultConfigPath, loadConfig, saveConfig } from './config'
-import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from './repos'
-import { hashToken, startServer } from './server'
+import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig } from './config'
+import { ConfigStore } from './configStore'
+import { formatRepoList } from './repos'
+import { startServer } from './server'
+import {
+  addToken,
+  DEFAULT_TOKEN_NAME,
+  formatTokenList,
+  listTokens,
+  migrateLegacyToken,
+  revokeToken
+} from './tokens'
+
+const COMMANDS = ['start', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
+const TOKEN_ACTIONS = ['add', 'list', 'revoke'] as const
 
 interface CliArgs {
   command: (typeof COMMANDS)[number]
   configPath: string
+  /** --config was given, so the legacy trek-daemon config is not migrated */
+  configExplicit: boolean
   /** `add`: the repo path. `remove`: an id or path. Both default to the current directory. */
   repoPath?: string
   repoId?: string
   repoName?: string
+  /** `token <action>`; none means rotate "default" */
+  tokenAction?: (typeof TOKEN_ACTIONS)[number]
+  tokenName?: string
   port?: number
   host?: string
   insecure: boolean
 }
 
-const COMMANDS = ['start', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
-
-const USAGE = `Usage: trek-daemon [command] [options]
-       trek-daemon <path>         Same as \`trek-daemon add <path>\`
+const USAGE = `Usage: trek-server [command] [options]
+       trek-server <path>           Same as \`trek-server add <path>\`
 
 Commands:
-  start            Run the daemon (default)
-  token            Generate a new access token, replacing any previous one
-  add [path]       Add the git repo at path (default: current directory)
-  list             List the configured repos
-  remove [id|path] Remove a repo by id or path (default: current directory)
-  help             Show this help
-  version          Print the daemon version
+  start                Run the server (default)
+  add [path]           Add the git repo at path (default: current directory)
+  list                 List the configured repos
+  remove [id|path]     Remove a repo by id or path (default: current directory)
+  token                Create or rotate the token named "${DEFAULT_TOKEN_NAME}"
+  token add <name>     Create or rotate a named token (one per device)
+  token list           List tokens
+  token revoke <name>  Revoke a token; a running server closes its connections
+  help                 Show this help
+  version              Print the server version
 
 Options:
   --config <path>  Config file (default: ${defaultConfigPath()})
@@ -40,7 +58,9 @@ Options:
   --id <id>        add: repo id (default: slug of the directory name)
   --name <name>    add: display name (default: the directory name)
   -h, --help       Show this help
-  -v, --version    Print the daemon version
+  -v, --version    Print the server version
+
+A running server picks up repo and token changes without a restart.
 `
 
 function usageError(message: string): never {
@@ -49,7 +69,12 @@ function usageError(message: string): never {
 }
 
 function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { command: 'start', configPath: defaultConfigPath(), insecure: false }
+  const args: CliArgs = {
+    command: 'start',
+    configPath: defaultConfigPath(),
+    configExplicit: false,
+    insecure: false
+  }
   const value = (i: number, flag: string): string => {
     const next = argv[i]
     if (next === undefined || next.startsWith('-')) usageError(`${flag} needs a value`)
@@ -58,18 +83,28 @@ function parseArgs(argv: string[]): CliArgs {
   let sawCommand = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (
-      !sawCommand &&
-      (COMMANDS as readonly string[]).includes(arg)
-    ) {
+    const positional = !arg.startsWith('-')
+    if (!sawCommand && (COMMANDS as readonly string[]).includes(arg)) {
       args.command = arg as CliArgs['command']
       sawCommand = true
-    } else if (!arg.startsWith('-') &&
+    } else if (positional && args.command === 'token' && args.tokenAction === undefined) {
+      if (!(TOKEN_ACTIONS as readonly string[]).includes(arg)) usageError(`Unknown token action: ${arg}`)
+      args.tokenAction = arg as CliArgs['tokenAction']
+    } else if (
+      positional &&
+      args.command === 'token' &&
+      (args.tokenAction === 'add' || args.tokenAction === 'revoke') &&
+      args.tokenName === undefined
+    ) {
+      args.tokenName = arg
+    } else if (
+      positional &&
       (args.command === 'add' || args.command === 'remove') &&
-      args.repoPath === undefined) {
+      args.repoPath === undefined
+    ) {
       args.repoPath = arg
-    } else if (!arg.startsWith('-') && !sawCommand && isDirectory(arg)) {
-      // `trek-daemon .` / `trek-daemon ~/repos/x` — shorthand for add.
+    } else if (positional && !sawCommand && isDirectory(arg)) {
+      // `trek-server .` / `trek-server ~/repos/x` — shorthand for add.
       args.command = 'add'
       args.repoPath = arg
       sawCommand = true
@@ -77,18 +112,23 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--name') args.repoName = value(++i, arg)
     else if (arg === '-h' || arg === '--help') args.command = 'help'
     else if (arg === '-v' || arg === '--version') args.command = 'version'
-    else if (arg === '--config') args.configPath = value(++i, arg)
-    else if (arg === '--port') {
+    else if (arg === '--config') {
+      args.configPath = value(++i, arg)
+      args.configExplicit = true
+    } else if (arg === '--port') {
       const port = Number(value(++i, arg))
       if (!Number.isInteger(port) || port < 1 || port > 65535) usageError(`Invalid port: ${argv[i]}`)
       args.port = port
     } else if (arg === '--host') args.host = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
-    else if (!arg.startsWith('-')) usageError(`Unknown command, and not a directory: ${arg}`)
+    else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
     else usageError(`Unknown argument: ${arg}`)
   }
   if ((args.repoId !== undefined || args.repoName !== undefined) && args.command !== 'add') {
     usageError('--id and --name only apply to `add`')
+  }
+  if ((args.tokenAction === 'add' || args.tokenAction === 'revoke') && args.tokenName === undefined) {
+    usageError(`\`token ${args.tokenAction}\` needs a name`)
   }
   return args
 }
@@ -101,13 +141,22 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function daemonVersion(): string {
+function serverVersion(): string {
   try {
     const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'))
     return pkg.version ?? '0.0.0'
   } catch {
     return '0.0.0'
   }
+}
+
+function fail(message: string): never {
+  console.error(message)
+  process.exit(1)
+}
+
+if (basename(process.argv[1] ?? '').startsWith('trek-daemon')) {
+  console.error('Note: trek-daemon is now trek-server; the old name will be removed in a later release.')
 }
 
 const args = parseArgs(process.argv.slice(2))
@@ -117,88 +166,127 @@ if (args.command === 'help') {
   process.exit(0)
 }
 if (args.command === 'version') {
-  console.log(daemonVersion())
+  console.log(serverVersion())
   process.exit(0)
+}
+
+if (!args.configExplicit && migrateLegacyConfig(args.configPath, legacyConfigPath())) {
+  console.error(`Copied ${legacyConfigPath()} to ${args.configPath}.`)
+}
+
+let store: ConfigStore
+try {
+  store = new ConfigStore(args.configPath)
+} catch (err) {
+  fail(`Cannot read ${args.configPath}: ${(err as Error).message}`)
 }
 
 if (args.command === 'add') {
   try {
-    const config = loadConfig(args.configPath)
-    const root = resolveRepoRoot(args.repoPath ?? process.cwd())
-    const { repo, added } = addRepo(config, root, { id: args.repoId, name: args.repoName })
+    const { repo, added } = store.addRepo(args.repoPath ?? process.cwd(), {
+      id: args.repoId,
+      name: args.repoName,
+      requireAllowedRoot: false
+    })
     if (!added) {
       console.log(`${repo.path} is already configured as "${repo.id}".`)
       process.exit(0)
     }
-    saveConfig(args.configPath, config)
     console.log(`Added ${repo.name} (id "${repo.id}") at ${repo.path}`)
-    console.log(`Saved to ${args.configPath}. Restart a running daemon to pick it up.`)
+    console.log(`Saved to ${args.configPath}. A running server picks it up automatically.`)
     process.exit(0)
   } catch (err) {
-    console.error((err as Error).message)
-    process.exit(1)
+    fail((err as Error).message)
   }
 }
 
 if (args.command === 'list') {
-  console.log(formatRepoList(loadConfig(args.configPath).repos))
+  console.log(formatRepoList(store.config.repos))
   process.exit(0)
 }
 
 if (args.command === 'remove') {
-  const config = loadConfig(args.configPath)
   const target = args.repoPath ?? process.cwd()
-  const removed = removeRepo(config, target)
-  if (!removed) {
-    console.error(`No configured repo matches "${target}". Run \`trek-daemon list\` to see them.`)
-    process.exit(1)
+  try {
+    const removed = store.removeRepo(target)
+    console.log(`Removed ${removed.name} (id "${removed.id}") at ${removed.path}`)
+    console.log('The repo itself is untouched. A running server picks this up automatically.')
+    process.exit(0)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'NOT_FOUND') {
+      fail(`No configured repo matches "${target}". Run \`trek-server list\` to see them.`)
+    }
+    fail((err as Error).message)
   }
-  saveConfig(args.configPath, config)
-  console.log(`Removed ${removed.name} (id "${removed.id}") at ${removed.path}`)
-  console.log('The repo itself is untouched. Restart a running daemon to pick it up.')
-  process.exit(0)
 }
 
 if (args.command === 'token') {
-  const config = loadConfig(args.configPath)
-  const token = randomBytes(32).toString('base64url')
-  config.tokenHash = hashToken(token)
-  saveConfig(args.configPath, config)
-  console.log('New token (shown once — configure it in the app now):\n')
+  if (args.tokenAction === 'list') {
+    console.log(formatTokenList(listTokens(store.config)))
+    process.exit(0)
+  }
+  if (args.tokenAction === 'revoke') {
+    const name = args.tokenName!
+    if (!listTokens(store.config).some((t) => t.name === name)) {
+      fail(`No token named "${name}". Run \`trek-server token list\` to see them.`)
+    }
+    store.update((c) => {
+      revokeToken(c, name)
+    })
+    console.log(`Revoked "${name}". A running server closes its connections.`)
+    process.exit(0)
+  }
+  const name = args.tokenAction === 'add' ? args.tokenName! : DEFAULT_TOKEN_NAME
+  let token = ''
+  try {
+    store.update((c) => {
+      token = addToken(c, name)
+    })
+  } catch (err) {
+    fail((err as Error).message)
+  }
+  console.log(`New token "${name}" (shown once — configure it in the app now):\n`)
   console.log(`  ${token}\n`)
-  console.log(`Its hash was saved to ${args.configPath}; any previous token is now invalid.`)
+  console.log(`Its hash was saved to ${args.configPath}; any previous "${name}" token is now invalid.`)
   process.exit(0)
 }
 
-const config = loadConfig(args.configPath)
-const host = args.host ?? config.host ?? '127.0.0.1'
-const port = args.port ?? config.port ?? DEFAULT_DAEMON_PORT
-
-if (!config.tokenHash) {
-  console.error(`No token configured. Run \`trek-daemon token\` first (config: ${args.configPath}).`)
-  process.exit(1)
+// start
+const config = store.config
+if (!config.serverId || !config.name || config.tokenHash) {
+  store.update((c) => {
+    ensureIdentity(c, hostname())
+    migrateLegacyToken(c)
+  })
 }
-if (config.repos.length === 0) {
-  console.error(`No repos configured. Run \`trek-daemon add <path>\` (config: ${args.configPath}).`)
-  process.exit(1)
+if (listTokens(store.config).length === 0) {
+  fail(`No token configured. Run \`trek-server token\` first (config: ${args.configPath}).`)
 }
+if (store.config.repos.length === 0) {
+  fail(`No repos configured. Run \`trek-server add <path>\` (config: ${args.configPath}).`)
+}
+const host = args.host ?? store.config.host ?? '127.0.0.1'
+const port = args.port ?? store.config.port ?? DEFAULT_DAEMON_PORT
 if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && !args.insecure) {
-  console.error(
+  fail(
     `Refusing to bind ${host} without TLS. Put a TLS-terminating reverse proxy (Caddy) in front\n` +
       'of the loopback listener, or pass --insecure if you really know what you are doing.'
   )
-  process.exit(1)
 }
 
-const server = startServer(config, daemonVersion())
+const server = startServer(store, serverVersion())
+store.watch()
 server.httpServer.listen(port, host, () => {
-  console.log(`trek-daemon ${daemonVersion()} listening on ws://${host}:${port}`)
-  console.log(`repos: ${config.repos.map((r) => `${r.name} (${r.path})`).join(', ')}`)
+  console.log(
+    `trek-server ${serverVersion()} "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${port}`
+  )
+  console.log(`repos: ${store.config.repos.map((r) => `${r.name} (${r.path})`).join(', ')}`)
 })
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
-    console.log(`\n${signal} — shutting down (all Claude sessions will end)`)
+    console.log(`\n${signal} — shutting down (all agent sessions will end)`)
+    store.close()
     server.shutdown(signal)
     process.exit(0)
   })
