@@ -240,9 +240,12 @@ change, so it would almost always fail. Everything else is last-write-wins.
 server polls `git worktree list` and adds or removes rows to match. Projects
 that share a repository see the same worktrees, each with its own ids and
 sessions. A worktree git no longer lists is dropped, unless it holds sessions:
-then it stays with `missing: true` (no status; commands other than
-`worktree.remove` fail with `BAD_REQUEST`) and comes back by itself if git
-lists the path again. A worktree whose directory is gone but which git still
+then it stays with `missing: true` and comes back by itself if git lists the
+path again. A `missing` worktree has no status. `worktree.unload`,
+`worktree.remove` and `session.close` work on it; other worktree and session
+commands fail with `BAD_REQUEST`. A worktree that goes missing while loaded
+keeps its sessions' ptys running until it is unloaded (`worktree.remove` on a
+loaded worktree is `IN_USE`, so unload it first). A worktree whose directory is gone but which git still
 lists counts as vanished: git marks it prunable, and the server treats it as
 not listed. The main worktree is never dropped. If a registered repository path
 is itself a linked worktree, that checkout is the project's main worktree, and
@@ -441,7 +444,7 @@ kills the worktree's ptys and marks it unloaded. Its sessions stay and become
 `idle` (a `complete` session stays `complete`). `worktree.remove` on a loaded
 worktree is `IN_USE`. While `worktree.remove` runs git on a path and then re-reads
 the repository, `session.start`, `session.restart` and `worktree.load` on that path
-(or on a Global session whose main worktree it is) are `IN_USE`. The path is
+are `IN_USE`. The path is
 released when the call ends, also when git refuses the removal.
 
 **Closing.** `session.close` kills the session's pty, stops its id discovery and
@@ -467,7 +470,7 @@ stopped one, a `pty.write` whose `data` is longer than 1 MiB (1,048,576 UTF-16
 code units) and a `pty.attach` refused as congested (below). `IN_USE` as above.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
-buffer of up to 2 MiB) as `pty.data` events with `replay: true`, then streams live
+buffer of up to 2 Mi UTF-16 code units) as `pty.data` events with `replay: true`, then streams live
 data, as in v1. The server also keeps a headless copy of the screen (2000 lines of
 scrollback) so it can tell whether the agent turned on bracketed paste. Any number
 of connections can attach to one pty, and any of them may `pty.write`. `pty.resize`
