@@ -27,7 +27,12 @@ writeFileSync(configPath, JSON.stringify({
   repos: [{ id: 'smoke', name: 'Smoke', path: repo }]
 }))
 
-const daemon = spawn('npx', ['tsx', 'src/index.ts', 'start', '--config', configPath, '--port', String(PORT)], {
+// `--built` runs the bundled CLI (npm run build) instead of the TypeScript source.
+const daemonArgs = ['start', '--config', configPath, '--port', String(PORT)]
+const [cmd, cmdArgs] = process.argv.includes('--built')
+  ? [process.execPath, ['dist/trek-daemon.cjs', ...daemonArgs]]
+  : ['npx', ['tsx', 'src/index.ts', ...daemonArgs]]
+const daemon = spawn(cmd, cmdArgs, {
   cwd: new URL('..', import.meta.url).pathname,
   stdio: ['ignore', 'pipe', 'inherit']
 })

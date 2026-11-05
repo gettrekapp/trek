@@ -3,7 +3,17 @@
   "version": "0.1.0",
   "description": "Companion daemon: remote worktrees and Claude sessions for Trek Dev",
   "private": true,
+  "bin": {
+    "trek-daemon": "dist/trek-daemon.cjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
+    "build": "node scripts/build.mjs",
     "start": "tsx src/index.ts start",
     "token": "tsx src/index.ts token",
     "typecheck": "tsc --noEmit",
@@ -15,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.12",
+    "esbuild": "^0.28.2",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }

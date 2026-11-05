@@ -5,7 +5,8 @@
 #   systemctl --user enable --now trek-daemon
 #   loginctl enable-linger $USER   # keep it (and Claude sessions) running after logout
 #
-# Adjust WorkingDirectory to wherever you cloned the repo.
+# Run `npm run build` in daemon/ first. Adjust WorkingDirectory and the
+# ExecStart path to wherever you cloned the repo.
 [Unit]
 Description=Trek Dev companion daemon
 After=network.target
@@ -13,7 +14,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/Trek.Developer/daemon
-ExecStart=/usr/bin/env npm start
+ExecStart=/usr/bin/env node %h/Trek.Developer/daemon/dist/trek-daemon.cjs start
 Restart=always
 RestartSec=3
 

@@ -23,8 +23,14 @@ git clone <this repo> ~/Trek.Developer
 cd ~/Trek.Developer
 npm install --omit=dev        # installs node-pty only (compiles from source)
 cd daemon
-npm install                   # ws + tsx
+npm install                   # ws, plus tsx/esbuild for building
+npm run build                 # bundles dist/trek-daemon.cjs
+npm link                      # puts `trek-daemon` on your PATH
 ```
+
+Rerun `npm run build` after pulling changes. Without linking, run
+`./dist/trek-daemon.cjs` directly, or `npm start` to run from source with tsx.
+`trek-daemon --help` lists every command and option.
 
 ## Configure
 
@@ -46,7 +52,7 @@ for extra locations.
 Generate the access token (prints once; stores only its sha256 hash):
 
 ```sh
-npm run token
+trek-daemon token
 ```
 
 Paste the token into the app under Settings → Servers. Rerunning the command
@@ -55,7 +61,8 @@ rotates the token and invalidates the old one.
 ## Run
 
 ```sh
-npm start                     # listens on ws://127.0.0.1:7345
+trek-daemon                   # same as `trek-daemon start`; ws://127.0.0.1:7345
+trek-daemon --port 7400 --config ./other-config.json
 ```
 
 For real use, install the systemd user unit (see comments in
@@ -96,7 +103,8 @@ Then configure the app with `wss://dev.example.com`.
 ## Smoke test
 
 ```sh
-npm run smoke
+npm run smoke                 # against the TypeScript source
+npm run smoke -- --built      # against dist/trek-daemon.cjs (run npm run build first)
 ```
 
 Starts a throwaway daemon on loopback with a temp repo, exercises the

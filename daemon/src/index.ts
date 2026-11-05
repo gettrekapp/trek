@@ -6,26 +6,55 @@ import { defaultConfigPath, loadConfig, saveConfig } from './config'
 import { hashToken, startServer } from './server'
 
 interface CliArgs {
-  command: 'start' | 'token'
+  command: 'start' | 'token' | 'help' | 'version'
   configPath: string
   port?: number
   host?: string
   insecure: boolean
 }
 
+const USAGE = `Usage: trek-daemon [command] [options]
+
+Commands:
+  start            Run the daemon (default)
+  token            Generate a new access token, replacing any previous one
+  help             Show this help
+  version          Print the daemon version
+
+Options:
+  --config <path>  Config file (default: ${defaultConfigPath()})
+  --port <port>    Port to listen on (default: config.port or ${DEFAULT_DAEMON_PORT})
+  --host <host>    Interface to bind (default: config.host or 127.0.0.1)
+  --insecure       Allow binding a non-loopback host without TLS
+  -h, --help       Show this help
+  -v, --version    Print the daemon version
+`
+
+function usageError(message: string): never {
+  console.error(`${message}\n\n${USAGE}`)
+  process.exit(2)
+}
+
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { command: 'start', configPath: defaultConfigPath(), insecure: false }
+  const value = (i: number, flag: string): string => {
+    const next = argv[i]
+    if (next === undefined || next.startsWith('-')) usageError(`${flag} needs a value`)
+    return next
+  }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (arg === 'start' || arg === 'token') args.command = arg
-    else if (arg === '--config') args.configPath = argv[++i]
-    else if (arg === '--port') args.port = Number(argv[++i])
-    else if (arg === '--host') args.host = argv[++i]
+    if (arg === 'start' || arg === 'token' || arg === 'help' || arg === 'version') args.command = arg
+    else if (arg === '-h' || arg === '--help') args.command = 'help'
+    else if (arg === '-v' || arg === '--version') args.command = 'version'
+    else if (arg === '--config') args.configPath = value(++i, arg)
+    else if (arg === '--port') {
+      const port = Number(value(++i, arg))
+      if (!Number.isInteger(port) || port < 1 || port > 65535) usageError(`Invalid port: ${argv[i]}`)
+      args.port = port
+    } else if (arg === '--host') args.host = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
-    else {
-      console.error(`Unknown argument: ${arg}`)
-      process.exit(2)
-    }
+    else usageError(`Unknown argument: ${arg}`)
   }
   return args
 }
@@ -40,6 +69,15 @@ function daemonVersion(): string {
 }
 
 const args = parseArgs(process.argv.slice(2))
+
+if (args.command === 'help') {
+  process.stdout.write(USAGE)
+  process.exit(0)
+}
+if (args.command === 'version') {
+  console.log(daemonVersion())
+  process.exit(0)
+}
 
 if (args.command === 'token') {
   const config = loadConfig(args.configPath)
@@ -57,7 +95,7 @@ const host = args.host ?? config.host ?? '127.0.0.1'
 const port = args.port ?? config.port ?? DEFAULT_DAEMON_PORT
 
 if (!config.tokenHash) {
-  console.error(`No token configured. Run \`npm run token\` first (config: ${args.configPath}).`)
+  console.error(`No token configured. Run \`trek-daemon token\` first (config: ${args.configPath}).`)
   process.exit(1)
 }
 if (config.repos.length === 0) {
