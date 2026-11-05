@@ -53,7 +53,7 @@ Rerun `npm run build` after pulling changes. Without linking, run
 
 ## Configure
 
-Pre-clone the repo(s) you want to work on, then add each one:
+The server starts with no repos; add them any time. Pre-clone the repo(s) you want to work on, then add each one:
 
 ```sh
 cd ~/repos/Trek && trek-server .        # the repo you're in (any subdirectory works)
@@ -89,6 +89,19 @@ so the repo's parent directory is automatically allowed. Add `worktreeRoots`
 for extra locations. The file also holds `serverId` (generated on first start;
 clients key their cache by it) and `name` (defaults to the hostname; shown in
 clients).
+
+## Projects
+
+Clients create projects from registered repos (`trek-server add`). Each
+project is stored as one JSON file in the data dir:
+
+- Linux: `$XDG_DATA_HOME/trek-server/projects/` (default `~/.local/share/trek-server/projects/`)
+- macOS: `~/Library/Application Support/trek-server/projects/`
+- Windows: `%LOCALAPPDATA%\trek-server\projects\`
+
+Set `"dataDir"` in the config or pass `--data-dir` to put them elsewhere.
+`start --data-dir` remembers the directory in the config, so later commands use it too.
+`trek-server remove` refuses to remove a repo that a project still uses.
 
 Create a token for each device that will connect (each prints once; only its
 sha256 hash is stored):

@@ -1,7 +1,7 @@
 // Daemon smoke test: throwaway config + temp git repo, then handshake,
 // git.listWorktrees, pty spawn/echo/kill, and an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
@@ -35,7 +35,7 @@ const [cmd, cmdPrefix] = process.argv.includes('--built')
 const serverDir = new URL('..', import.meta.url).pathname
 const cli = (...args) =>
   execFileSync(cmd, [...cmdPrefix, ...args, '--config', configPath], { cwd: serverDir, encoding: 'utf8' })
-const daemon = spawn(cmd, [...cmdPrefix, 'start', '--config', configPath, '--port', String(PORT)], {
+const daemon = spawn(cmd, [...cmdPrefix, 'start', '--config', configPath, '--port', String(PORT), '--data-dir', join(work, 'data')], {
   cwd: serverDir,
   stdio: ['ignore', 'pipe', 'pipe']
 })
@@ -370,6 +370,38 @@ alive.sock.close()
 }
 
 v2.sock.close()
+
+// --- projects ---
+const pc = await connect(2, token)
+let srv = (await pc.req('sub.subscribe', { topic: 'server' })).result
+const created = await pc.req('project.create', { name: 'Smoke', repositories: [{ path: realpathSync(repo) }] })
+if (!created.ok) fail(`project.create: ${JSON.stringify(created)}`)
+const projectId = created.result.projectId
+srv = await nextPatch(pc, 'server', srv)
+if (!srv.snapshot.projects.some((p) => p.id === projectId)) fail('server topic lacks the new project')
+else ok('project.create: listed in the server topic')
+
+let proj = (await pc.req('sub.subscribe', { topic: `project:${projectId}` })).result
+const repoId = proj.snapshot.repositories[0].id
+await pc.req('branch.setNote', { projectId, repoId, branch: 'main', note: 'from smoke' })
+proj = await nextPatch(pc, `project:${projectId}`, proj)
+if (proj.snapshot.repositories[0].branchData.main?.note !== 'from smoke') fail('branch.setNote not patched')
+else ok('branch.setNote: patched into the project topic')
+
+const inUse = await pc.req('server.removeRepo', { repoId: 'smoke' })
+if (inUse.ok || inUse.error.code !== 'IN_USE') fail(`removeRepo while used: ${JSON.stringify(inUse)}`)
+else ok('server.removeRepo: IN_USE while a project uses it')
+
+await new Promise((r) => setTimeout(r, 400)) // debounced save
+const stored = join(work, 'data', 'projects', `${projectId}.json`)
+const onDisk = JSON.parse(readFileSync(stored, 'utf8'))
+if (onDisk.schema !== 1 || onDisk.project.repositories[0].branchData.main?.note !== 'from smoke') fail('project not persisted')
+else ok('project persisted to the data dir')
+
+const deleted = await pc.req('project.delete', { projectId })
+if (!deleted.ok || existsSync(stored)) fail(`project.delete: ${JSON.stringify(deleted)}`)
+else ok('project.delete: removed from disk')
+pc.sock.close()
 
 // --- bad token rejected ---
 const badWs = new WebSocket(`ws://127.0.0.1:${PORT}`)

@@ -1,10 +1,9 @@
 # Trek Server Wire Protocol
 
 Version 1 is described first; [Protocol v2](#protocol-v2) follows it. trek-server serves v1
-fully. In v2 it serves the handshake, the `server` and `attention` topics,
-`sub.subscribe`/`sub.unsubscribe`, `server.addRepo`/`server.removeRepo`,
-`sys.ping` and an empty `project.list`; other v2 methods currently fail with
-`NOT_FOUND` (later phases add them).
+fully. In v2 it serves the handshake, the `server`, `attention` and `project:<id>` topics,
+`sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*` and `sys.ping`.
+`worktree.*`, `session.*` and v2 `pty.*` fail with `NOT_FOUND` until later phases add them.
 
 The companion daemon exposes the operations a client needs to manage git
 worktrees and Claude Code terminal sessions on a remote machine. Any client
@@ -194,7 +193,7 @@ comes from the `server` topic.
 
 | Topic | Snapshot |
 |---|---|
-| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}` |
+| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) |
 | `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session), sessions in `attention` or `done` |
 | `project:<id>` | the whole `Project` tree |
 
@@ -246,9 +245,32 @@ ids, and each session keeps its old id as `agentSessionId` so it resumes. The
 server assigns the project's id; nested ids are kept. It
 rejects the import with `BAD_REQUEST` if any repository, worktree or session id
 is empty, contains a space, or already exists on that server, and with
-`PATH_DENIED` if any repository path is outside its allowlist. It resets runtime
+`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no non-main worktree path that is another registered repository or contains one, and no own `__proto__` key anywhere in the payload (settings values included); otherwise `BAD_REQUEST`. It resets runtime
 fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
 `dirty`, `ahead`, `behind` and `head`.
+
+Projects use registered repositories only. `project.create`, `repo.add` and
+`project.import` fail with `PATH_DENIED` for a repository path that is not in
+the server's registry (`trek-server add`, `server.addRepo`), compared by
+realpath. Worktree paths in an import must be under the allowlist. A new
+project's repositories each start with just their main worktree. Branch names
+(the keys of `branchData`) may be any string except `__proto__`.
+
+A non-string `projectId`, `repoId` or `branch` fails with `BAD_REQUEST`; an
+unknown id fails with `NOT_FOUND`. A key in `expected` that the command does not
+guard is `BAD_REQUEST`: for `project.updateSettings`, a key that is not a
+setting; for `repo.update`, a key other than `name`, `linkedDirs` or
+`environments`.
+
+`repo.remove` refuses to remove a project's last repository (`BAD_REQUEST`) and
+drops that repository's `worktreeOrder` entries. `repo.listBranches` fails with
+`GIT_ERROR` when git does. A `branch.*` call with `null` or an empty string
+clears `tag`, `note`, `ticket`, `pr` or `env`. `branch.setCustomTags` with
+`customTags: null` or `[]` clears the custom tags; omitting `customTags` is
+`BAD_REQUEST`. A branch whose data becomes empty is removed from `branchData`.
+
+Deleting a project removes it from the `server` topic's `projects`; its
+`project:<id>` topic stops, and subscribing to it fails with `NOT_FOUND`.
 
 `server.addRepo {path, name?}` registers the git repository containing `path`
 and returns `{repoId}`. Both `path` and the repository's top level must be under
