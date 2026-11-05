@@ -16,6 +16,7 @@ import { playReadyAlert } from './audio'
 import { scheduleAutoSave, sessionSnapshot } from './persistence'
 import { sameWorktree } from '../../shared/types'
 import { getProvider } from '../../shared/providers/registry'
+import { GLOBAL_SYSTEM_PROMPT, globalAgentPrompt } from '../../shared/providers/prompts'
 import {
   effectiveEffort,
   persistedLlm,
@@ -190,14 +191,6 @@ const VOICE_PROMPT =
 function voicePrompt(): string | undefined {
   const voice = useAppStore.getState().voice
   return voice?.hasApiKey && voice.promptSessions ? VOICE_PROMPT : undefined
-}
-
-const GLOBAL_SYSTEM_PROMPT =
-  'You are the global Claude session of Trek Dev, an app that runs Claude Code sessions across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their Claude sessions.'
-
-/** The global session's role for agents other than Claude, whose prompt stays as it was. */
-function globalAgentPrompt(label: string): string {
-  return `You are the global ${label} session of Trek Dev, an app that runs coding-agent sessions (Claude Code, Codex, Gemini and others) across the git worktrees of the repositories in this project. Use the trek-dev MCP tools to inspect worktrees and to start, prompt, monitor and manage their sessions.`
 }
 
 interface LaunchRequest {
