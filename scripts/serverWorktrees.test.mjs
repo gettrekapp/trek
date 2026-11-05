@@ -180,7 +180,7 @@ test('worktree.remove blocks the worktree path while git removes it, then unbloc
   const wt = await withWorktree(s, 'blk')
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(res.ok, true, JSON.stringify(res))
-  assert.deepEqual(s.blocked, [wt.row.path, `unblock ${wt.row.path}`])
+  assert.deepEqual(s.blocked, [wt.path, `unblock ${wt.path}`])
 })
 
 test('worktree.remove deletes a clean worktree and its worktreeOrder entry', async (t) => {
