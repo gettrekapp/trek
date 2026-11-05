@@ -2,7 +2,7 @@
 // the poller before answering, so the client's next patch already shows it.
 // worktree.load / worktree.unload start and stop sessions and arrive in 2d.
 import { existsSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import * as gitService from '../../src/host/gitService.ts'
 import type { Project, Repository, Worktree } from '../../src/shared/model/types'
 import { codedError } from './errors.ts'
@@ -29,13 +29,26 @@ async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-async function checkBranchName(repoPath: string, branch: string): Promise<void> {
+/** Only a real branch name: not a revision expression like @{-1}, nor HEAD, a tag or a SHA. */
+async function checkBranchName(repoPath: string, branch: string, mustExist: boolean): Promise<void> {
   if (branch.startsWith('-')) throw bad('branch must not start with "-"')
+  if (branch === '@' || branch === 'HEAD') throw bad(`"${branch}" is not a valid branch name`)
   try {
     await gitService.git(repoPath, ['check-ref-format', '--branch', branch])
+    await gitService.git(repoPath, ['check-ref-format', `refs/heads/${branch}`])
   } catch {
     throw bad(`"${branch}" is not a valid branch name`)
   }
+  if (!mustExist) return
+  const exists = await gitService.git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then(() => true, () => false)
+  if (exists) return
+  // git creates a tracking branch from a remote branch of the same name.
+  const remotes = await viaGit(() => gitService.git(repoPath, ['for-each-ref', '--format=%(refname)', 'refs/remotes']))
+  const tracked = remotes.split('\n').some((ref) => {
+    const rest = ref.startsWith('refs/remotes/') ? ref.slice('refs/remotes/'.length) : ''
+    return rest.slice(rest.indexOf('/') + 1) === branch && rest.includes('/')
+  })
+  if (!tracked) throw codedError('GIT_ERROR', `no branch named "${branch}"`)
 }
 
 /** The worktree with this id and its repository; NOT_FOUND if unknown. */
@@ -79,7 +92,11 @@ export const worktreeHandlers: Record<string, Handler> = {
     const target = ctx.store.guard.check(requested)
     assertNotRepository(ctx.store.config.repos, target, 'path', requested)
     if (existsSync(target)) throw bad(`${requested} already exists`)
-    await checkBranchName(repo.path, branch)
+    const inside = (root: string): boolean => target.startsWith(real(root) + sep)
+    if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
+      throw bad(`${requested} is inside an existing checkout`)
+    }
+    await checkBranchName(repo.path, branch, !createBranch && fromPr === undefined)
 
     await viaGit(async () => {
       if (fromPr === undefined) {
@@ -104,7 +121,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     const worktreeId = ctx.projects.apply(p.projectId, (d) => {
       const r = repoIn(d, repo.id)
       const created = r.worktrees.find((w) => !w.isMain && real(w.path) === target)
-      if (!created) throw new Error(`git created ${target} but does not list it`)
+      if (!created) throw codedError('GIT_ERROR', `git created ${target} but does not list it`)
       const firstTag = d.settings.worktreeTags?.[0]?.id
       const data = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
       if (firstTag && !data?.tag) r.branchData[branch] = { ...data, tag: firstTag }
