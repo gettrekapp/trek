@@ -3,7 +3,12 @@ import { basename, join } from 'node:path'
 import { hostname } from 'node:os'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig } from './config'
+import type { Project } from '../../src/shared/model/types'
 import { ConfigStore } from './configStore'
+import { defaultDataDir, projectsDir } from './dataDir'
+import { projectsUsingRepo } from './projects/model'
+import { ProjectState } from './projects/state'
+import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
 import {
@@ -32,6 +37,7 @@ interface CliArgs {
   tokenName?: string
   port?: number
   host?: string
+  dataDir?: string
   insecure: boolean
 }
 
@@ -55,6 +61,7 @@ Options:
   --port <port>    Port to listen on (default: config.port or ${DEFAULT_DAEMON_PORT})
   --host <host>    Interface to bind (default: config.host or 127.0.0.1)
   --insecure       Allow binding a non-loopback host without TLS
+  --data-dir <path> start/remove: where projects are stored (default: config.dataDir or the platform data dir)
   --id <id>        add: repo id (default: slug of the directory name)
   --name <name>    add: display name (default: the directory name)
   -h, --help       Show this help
@@ -124,6 +131,7 @@ function parseArgs(argv: string[]): CliArgs {
       if (!Number.isInteger(port) || port < 1 || port > 65535) usageError(`Invalid port: ${argv[i]}`)
       args.port = port
     } else if (arg === '--host') args.host = value(++i, arg)
+    else if (arg === '--data-dir') args.dataDir = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
     else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
     else usageError(`Unknown argument: ${arg}`)
@@ -134,6 +142,9 @@ function parseArgs(argv: string[]): CliArgs {
   }
   if ((args.port !== undefined || args.host !== undefined || args.insecure) && args.command !== 'start') {
     usageError('--port, --host and --insecure only apply to `start`')
+  }
+  if (args.dataDir !== undefined && args.command !== 'start' && args.command !== 'remove') {
+    usageError('--data-dir only applies to `start` and `remove`')
   }
   if ((args.repoId !== undefined || args.repoName !== undefined) && args.command !== 'add') {
     usageError('--id and --name only apply to `add`')
@@ -189,6 +200,12 @@ function openStore(path: string): ConfigStore {
   }
 }
 
+function openProjects(config: { dataDir?: string }): { dir: string; files: ProjectStore; loaded: Project[] } {
+  const dir = projectsDir(args.dataDir ?? config.dataDir ?? defaultDataDir())
+  const files = new ProjectStore(dir)
+  return { dir, files, loaded: files.loadAll() }
+}
+
 /** Copies the trek-daemon config into place if there is no trek-server config yet. */
 function migrateConfig(): void {
   if (!args.configExplicit && migrateLegacyConfig(args.configPath, legacyConfigPath())) {
@@ -231,6 +248,8 @@ if (args.command === 'list') {
 if (args.command === 'remove') {
   const target = args.repoPath ?? process.cwd()
   try {
+    const { loaded } = openProjects(store.config)
+    store.setUsage((repo) => projectsUsingRepo(loaded, repo.path))
     const removed = store.removeRepo(target)
     console.log(`Removed ${removed.name} (id "${removed.id}") at ${removed.path}`)
     console.log('The repo itself is untouched. A running server picks this up automatically.')
@@ -282,9 +301,6 @@ if (args.command === 'token') {
 if (listTokens(store.config).length === 0) {
   fail(`No token configured. Run \`trek-server token\` first (config: ${args.configPath}).`)
 }
-if (store.config.repos.length === 0) {
-  fail(`No repos configured. Run \`trek-server add <path>\` (config: ${args.configPath}).`)
-}
 const host = args.host ?? store.config.host ?? '127.0.0.1'
 const port = args.port ?? store.config.port ?? DEFAULT_DAEMON_PORT
 if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && !args.insecure) {
@@ -309,7 +325,12 @@ if (!config.serverId || !config.name || config.tokenHash) {
   }
 }
 
-const server = startServer(store, serverVersion())
+const projectFiles = openProjects(store.config)
+const server = startServer(store, serverVersion(), {
+  create: (hub, onSummariesChange) =>
+    new ProjectState({ hub, store: projectFiles.files, onSummariesChange }, projectFiles.loaded),
+  store: projectFiles.files
+})
 store.watch()
 server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
@@ -323,7 +344,12 @@ server.httpServer.listen(port, host, () => {
   console.log(
     `trek-server ${serverVersion()} "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${port}`
   )
-  console.log(`repos: ${store.config.repos.map((r) => `${r.name} (${r.path})`).join(', ')}`)
+  console.log(
+    store.config.repos.length > 0
+      ? `repos: ${store.config.repos.map((r) => `${r.name} (${r.path})`).join(', ')}`
+      : 'No repos registered yet. Add one with `trek-server add <path>`.'
+  )
+  console.log(`projects: ${projectFiles.loaded.length} in ${projectFiles.dir}`)
 })
 
 const SHUTDOWN_FLUSH_MS = 200
@@ -335,6 +361,10 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     console.log(`\n${signal} — shutting down (all agent sessions will end)`)
     store.close()
     server.shutdown(signal)
+    projectFiles.files.flush()
+    // close() may flush itself and return the ids that failed to save (older versions return nothing)
+    const failed = (projectFiles.files.close() as string[] | undefined) ?? []
+    if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
     // Give the daemon.shutdown frames and close handshakes a moment to flush.
     setTimeout(() => process.exit(0), SHUTDOWN_FLUSH_MS)
   })

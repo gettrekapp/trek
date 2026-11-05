@@ -15,6 +15,8 @@ import {
 import type { Outcome } from './errors'
 import { isRecord } from './validate'
 import type { ConfigStore } from './configStore'
+import type { ProjectState } from './projects/state'
+import type { ProjectStore } from './projects/store'
 import { PtyRegistry } from './ptyRegistry'
 import { dispatch } from './rpc'
 import { publishServerState } from './serverState'
@@ -31,16 +33,27 @@ export interface TrekServer {
   httpServer: Server
   ptys: PtyRegistry
   hub: TopicHub
+  projects: ProjectState
   shutdown(reason: string): void
 }
 
-export function startServer(store: ConfigStore, daemonVersion: string): TrekServer {
+export interface ProjectsSetup {
+  /** Builds the project state on the server's hub; call onSummariesChange when names or ids change */
+  create: (hub: TopicHub, onSummariesChange: () => void) => ProjectState
+  /** Persistence, for health warnings */
+  store: ProjectStore
+}
+
+export function startServer(store: ConfigStore, daemonVersion: string, projectsSetup: ProjectsSetup): TrekServer {
   const ptys = new PtyRegistry({
     send(ws, event, payload) {
       sendFrame(ws, { type: 'event', event, payload })
     }
   })
   const hub = new TopicHub()
+  let refreshServerTopic = (): void => {}
+  const projects = projectsSetup.create(hub, () => refreshServerTopic())
+  store.setUsage((repo) => projects.usage(repo.path))
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -64,7 +77,12 @@ export function startServer(store: ConfigStore, daemonVersion: string): TrekServ
   // Registered before publishServerState's listener, so a revoked socket is
   // already closing (and gets no frames) when the new server state is published.
   store.on('change', onConfigChange)
-  const stopPublishing = publishServerState(store, hub, daemonVersion)
+  const serverState = publishServerState(store, hub, daemonVersion, {
+    projects: () => projects.list(),
+    health: () => projectsSetup.store.health()
+  })
+  refreshServerTopic = serverState.refresh
+  projectsSetup.store.on('health', serverState.refresh)
 
   const httpServer = createServer((_req, res) => {
     res.writeHead(426, { 'content-type': 'text/plain' })
@@ -193,7 +211,7 @@ export function startServer(store: ConfigStore, daemonVersion: string): TrekServ
       }
       const id = frame.id
       if (protocolVersion === PROTOCOL_VERSION_V2) {
-        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber })
+        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects })
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
         if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
@@ -228,7 +246,8 @@ export function startServer(store: ConfigStore, daemonVersion: string): TrekServ
 
   const shutdown = (reason: string): void => {
     store.off('change', onConfigChange)
-    stopPublishing()
+    serverState.stop()
+    projectsSetup.store.off('health', serverState.refresh)
     for (const ws of wss.clients) {
       sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload: { reason } })
       ws.close(1001, 'server shutting down')
@@ -238,7 +257,7 @@ export function startServer(store: ConfigStore, daemonVersion: string): TrekServ
     httpServer.close()
   }
 
-  return { httpServer, ptys, hub, shutdown }
+  return { httpServer, ptys, hub, projects, shutdown }
 }
 
 function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {
