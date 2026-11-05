@@ -3,7 +3,7 @@
 // watches the file, so CLI edits apply without a restart.
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
-import { basename, dirname } from 'node:path'
+import { basename, dirname, isAbsolute } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
 import { isRecord } from './validate.ts'
 import { saveConfig, type TrekServerConfig } from './config.ts'
@@ -24,7 +24,6 @@ export type RepoUsage = (repo: RemoteRepo) => string[]
 
 const RELOAD_DEBOUNCE_MS = 100
 
-
 /** Checks the shape of a parsed config file. Token entries are filtered later by tokens.ts. */
 export function validateConfig(raw: unknown): TrekServerConfig {
   if (!isRecord(raw)) throw new Error('config must be a JSON object')
@@ -34,6 +33,7 @@ export function validateConfig(raw: unknown): TrekServerConfig {
     for (const key of ['id', 'name', 'path']) {
       if (typeof repo[key] !== 'string') throw new Error(`config.repos[${i}].${key} must be a string`)
     }
+    if (!isAbsolute(repo.path as string)) throw new Error(`config.repos[${i}].path must be an absolute path`)
   })
   if (raw.tokens !== undefined && !Array.isArray(raw.tokens)) throw new Error('config.tokens must be an array')
   if (raw.worktreeRoots !== undefined && (!Array.isArray(raw.worktreeRoots) || raw.worktreeRoots.some((r) => typeof r !== 'string'))) {

@@ -1,17 +1,8 @@
 // Pure helpers for building and inspecting v2 projects on the server.
-import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
-
-function real(path: string): string {
-  try {
-    return realpathSync(resolve(path))
-  } catch {
-    return resolve(path)
-  }
-}
+import { realOrResolved as real } from '../repos.ts'
 
 /** The registered repo at `path` (compared by realpath), or PATH_DENIED. */
 export function findRegistered(registry: readonly RemoteRepo[], path: string): RemoteRepo {
@@ -48,7 +39,8 @@ export function newProject(
 
 function resetSession(s: Session): Session {
   const { ptyId: _p, exitCode: _e, ...rest } = s
-  return { ...rest, status: 'idle' }
+  // `complete` is the user marking a session finished, not something that was running.
+  return { ...rest, status: s.status === 'complete' ? 'complete' : 'idle' }
 }
 
 function resetWorktree(w: Worktree): Worktree {
@@ -56,7 +48,7 @@ function resetWorktree(w: Worktree): Worktree {
   return { ...rest, loaded: false, sessions: w.sessions.map(resetSession) }
 }
 
-/** Nothing runs after a load or an import: statuses idle, worktrees unloaded, git state unknown. */
+/** Nothing runs after a load or an import: statuses idle (except `complete`), worktrees unloaded, git state unknown. */
 export function resetRuntime(project: Project): Project {
   return {
     ...project,

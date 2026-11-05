@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
-import { ConfigStore } from '../server/src/configStore.ts'
+import { ConfigStore, validateConfig } from '../server/src/configStore.ts'
 
 const loadConfig = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
@@ -291,4 +291,9 @@ test('setUsage replaces the usage lookup', (t) => {
   const { store } = setup(t)
   store.setUsage(() => ['P'])
   assert.throws(() => store.removeRepo('a'), (err) => err.code === 'IN_USE')
+})
+
+test('validateConfig requires absolute repo paths', () => {
+  assert.doesNotThrow(() => validateConfig({ repos: [{ id: 'a', name: 'a', path: '/abs/a' }] }))
+  assert.throws(() => validateConfig({ repos: [{ id: 'a', name: 'a', path: 'rel/a' }] }), /config\.repos\[0\]\.path must be an absolute path/)
 })

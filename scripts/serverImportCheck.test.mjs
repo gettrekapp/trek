@@ -1,7 +1,7 @@
 // scripts/serverImportCheck.test.mjs — what project.import accepts.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { checkImport } from '../server/src/projects/importCheck.ts'
@@ -99,4 +99,76 @@ test('shape, settings and branch keys are checked', (t) => {
   const q = project()
   q.repositories[0].worktrees[1].sessions[0].queue = [1]
   assert.equal(code(() => checkImport(q, ctx)), 'BAD_REQUEST')
+})
+
+test('a nested __proto__ key anywhere in the payload is BAD_REQUEST', (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const p = project()
+  p.repositories[0].environments = JSON.parse('{"dev":{"vars":{"__proto__":{"x":1}}}}')
+  assert.throws(() => checkImport(p, ctx), (err) => {
+    assert.equal(err.code, 'BAD_REQUEST')
+    assert.match(err.message, /environments/)
+    return true
+  })
+})
+
+test('two repositories that resolve to the same registered repo are BAD_REQUEST', (t) => {
+  const { dir, registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  symlinkSync(join(dir, 'repo'), join(dir, 'repo-link'))
+  const a = project()
+  const b = project()
+  b.repositories[0].path = join(dir, 'repo-link')
+  b.repositories[0].worktrees[1].path = join(dir, 'repo-feature2')
+  mkdirSync(join(dir, 'repo-feature2'))
+  a.repositories.push(b.repositories[0])
+  assert.equal(code(() => checkImport(a, ctx)), 'BAD_REQUEST')
+})
+
+test('the main worktree takes the registry path', (t) => {
+  const { dir, repo, registry, guard, project } = setup(t)
+  symlinkSync(repo, join(dir, 'main-link'))
+  const p = project()
+  p.repositories[0].worktrees[0].path = join(dir, 'main-link')
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'pid' })
+  assert.equal(out.repositories[0].worktrees[0].path, registry[0].path)
+})
+
+test('a non-main worktree path is stored as its realpath', (t) => {
+  const { dir, registry, guard, project } = setup(t)
+  symlinkSync(join(dir, 'repo-feature'), join(dir, 'feature-link'))
+  const p = project()
+  p.repositories[0].worktrees[1].path = join(dir, 'feature-link')
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'pid' })
+  assert.equal(out.repositories[0].worktrees[1].path, join(dir, 'repo-feature'))
+})
+
+test('each repository needs exactly one main worktree', (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const none = project()
+  none.repositories[0].worktrees[0].isMain = false
+  assert.equal(code(() => checkImport(none, ctx)), 'BAD_REQUEST')
+  const two = project()
+  two.repositories[0].worktrees[1].isMain = true
+  assert.equal(code(() => checkImport(two, ctx)), 'BAD_REQUEST')
+})
+
+test('a non-main worktree may not be another repository or contain one', (t) => {
+  const { dir, registry, guard, project } = setup(t)
+  const other = join(dir, 'other')
+  mkdirSync(other)
+  const twoRepos = [...registry, { id: 'other', name: 'other', path: other }]
+  const ctx = { registry: twoRepos, guard: new PathGuard({ repos: twoRepos }), existingIds: new Set(), projectId: 'pid' }
+  const a = project()
+  a.repositories[0].worktrees[1].path = other
+  assert.throws(() => checkImport(a, ctx), (err) => {
+    assert.equal(err.code, 'BAD_REQUEST')
+    assert.match(err.message, /is another repository/)
+    return true
+  })
+  const b = project()
+  b.repositories[0].worktrees[1].path = dir
+  assert.equal(code(() => checkImport(b, ctx)), 'BAD_REQUEST')
 })

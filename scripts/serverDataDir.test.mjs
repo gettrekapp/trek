@@ -1,6 +1,7 @@
 // scripts/serverDataDir.test.mjs — where trek-server keeps projects.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { defaultDataDir, projectsDir } from '../server/src/dataDir.ts'
 
@@ -13,4 +14,8 @@ test('platform defaults', () => {
 
 test('projects live in a projects/ subdirectory', () => {
   assert.equal(projectsDir('/d'), join('/d', 'projects'))
+})
+
+test('without HOME or USERPROFILE the home directory comes from os.homedir()', () => {
+  assert.equal(defaultDataDir('linux', {}), join(homedir(), '.local', 'share', 'trek-server'))
 })

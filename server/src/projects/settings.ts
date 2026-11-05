@@ -3,7 +3,7 @@
 // server stores and returns, not acts on.
 import type { ProjectSettings } from '../../../src/shared/model/types'
 import { codedError } from '../errors.ts'
-import { isRecord } from '../validate.ts'
+import { assertNoProtoKeys, isRecord } from '../validate.ts'
 
 type Kind = 'string' | 'boolean' | 'array' | 'stringArray' | 'object'
 
@@ -50,6 +50,7 @@ function checkValue(key: string, value: unknown, field: string): void {
     : kind === 'stringArray' ? Array.isArray(value) && value.every((v) => typeof v === 'string')
     : isRecord(value)
   if (!ok) throw codedError('BAD_REQUEST', `${field}.${key} must be ${KIND_TEXT[kind]}`)
+  assertNoProtoKeys(value, `${field}.${key}`)
 }
 
 /** A whole settings object (from an import). */

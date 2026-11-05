@@ -50,6 +50,20 @@ export function requireAbsolutePath(value: unknown, field: string): string {
   return path
 }
 
+/**
+ * Throws BAD_REQUEST, naming the path, if any object nested in `value` (arrays
+ * included) has an own `__proto__` key: clients cannot apply a patch at one,
+ * and the JSON diff throws when it walks one.
+ */
+export function assertNoProtoKeys(value: unknown, where: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => assertNoProtoKeys(v, `${where}[${i}]`))
+  } else if (typeof value === 'object' && value !== null) {
+    if (Object.hasOwn(value, '__proto__')) throw bad(`${where} must not have a "__proto__" key`)
+    for (const [key, v] of Object.entries(value)) assertNoProtoKeys(v, `${where}.${key}`)
+  }
+}
+
 /** Branch names key `branchData`; `__proto__` cannot be patched on clients. */
 export function requireBranch(value: unknown): string {
   const branch = requireString(value, 'branch')

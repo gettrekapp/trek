@@ -78,3 +78,38 @@ test('projectsUsingRepo and collectIds', () => {
   assert.deepEqual(projectsUsingRepo(projects, '/c'), [])
   assert.deepEqual([...collectIds(projects[1])].sort(), ['p2', 'p2-g', 'p2-r0', 'p2-s0', 'p2-w0'])
 })
+
+test('findRegistered matches when the registry entry itself is the symlink', (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-model-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'a'))
+  symlinkSync(join(dir, 'a'), join(dir, 'link'))
+  const registry = [{ id: 'a', name: 'A', path: join(dir, 'link') }]
+  assert.equal(findRegistered(registry, join(dir, 'a')).id, 'a')
+  assert.equal(findRegistered(registry, join(dir, 'link')).path, join(dir, 'link'))
+})
+
+test('newProject gives every repository and worktree a distinct id', () => {
+  n = 0
+  const p = newProject('P', [
+    { registered: { id: 'a', name: 'A', path: '/r/a' }, name: undefined },
+    { registered: { id: 'b', name: 'B', path: '/r/b' }, name: 'Bee' }
+  ], newId)
+  const ids = [p.id, ...p.repositories.flatMap((r) => [r.id, ...r.worktrees.map((w) => w.id)])]
+  assert.equal(ids.length, 5)
+  assert.equal(new Set(ids).size, 5)
+  assert.ok(ids.every((id) => id !== ''))
+})
+
+test('resetRuntime keeps a complete status; every other status becomes idle', () => {
+  const s = (id, status) => ({ id, title: 't', llm: { provider: 'claude' }, queue: [], status })
+  const p = {
+    id: 'p', name: 'P', settings: {}, globalSessions: [s('g1', 'complete'), s('g2', 'attention')],
+    repositories: [{ id: 'r', name: 'R', path: '/r', branchData: {}, worktrees: [
+      { id: 'w', name: 'W', path: '/r', isMain: true, loaded: true, sessions: [s('s1', 'complete'), s('s2', 'working'), s('s3', 'idle')] }
+    ] }]
+  }
+  const out = resetRuntime(p)
+  assert.deepEqual(out.globalSessions.map((x) => x.status), ['complete', 'idle'])
+  assert.deepEqual(out.repositories[0].worktrees[0].sessions.map((x) => x.status), ['complete', 'idle', 'idle'])
+})

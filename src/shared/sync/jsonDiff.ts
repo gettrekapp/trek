@@ -9,7 +9,9 @@
 // Snapshots must be plain JSON data: plain objects, arrays, strings, finite
 // numbers, booleans and null. No Dates, NaN, undefined array elements or
 // functions. Non-plain objects are compared by identity and replaced whole.
-// An own `__proto__` key can never be applied by clients, so diffing one throws.
+// Clients can never apply an op at an own `__proto__` key, so the diff throws
+// when it walks one. Values carried whole by an add or replace are not
+// inspected; the server validates its input for this (assertNoProtoKeys).
 // No runtime imports beyond jsonPatch.ts.
 import { formatPointer, type PatchOp } from './jsonPatch.ts'
 

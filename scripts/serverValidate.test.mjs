@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  assertNoProtoKeys,
   checkExpected,
   optionalName,
   optionalString,
@@ -60,4 +61,15 @@ test('checkExpected: absent passes; deep equality; null means absent', () => {
   assert.equal(code(() => checkExpected('note', 'x', null)), 'CONFLICT')
   assert.equal(code(() => checkExpected('dirs', ['a', 'b'], ['a', 'b'])), 'ok')
   assert.equal(code(() => checkExpected('dirs', ['a'], ['a', 'b'])), 'CONFLICT')
+})
+
+test('assertNoProtoKeys walks objects and arrays and names the path', () => {
+  assert.equal(code(() => assertNoProtoKeys({ a: [1, { b: 'x' }], constructor: 1 }, 'v')), 'ok')
+  assert.equal(code(() => assertNoProtoKeys(null, 'v')), 'ok')
+  assert.equal(code(() => assertNoProtoKeys(JSON.parse('{"__proto__":1}'), 'v')), 'BAD_REQUEST')
+  assert.throws(() => assertNoProtoKeys(JSON.parse('{"a":[0,{"b":{"__proto__":{}}}]}'), 'v'), (err) => {
+    assert.equal(err.code, 'BAD_REQUEST')
+    assert.match(err.message, /v\.a\[1\]\.b/)
+    return true
+  })
 })

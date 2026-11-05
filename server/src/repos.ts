@@ -25,8 +25,8 @@ export function resolveRepoRoot(path: string): string {
   return realpathSync(top)
 }
 
-/** Hand-written config paths may be relative or symlinked. */
-function realOrResolved(path: string): string {
+/** The realpath of `path`, or just its resolved form when it does not exist (hand-written paths may be symlinked). */
+export function realOrResolved(path: string): string {
   try {
     return realpathSync(resolve(path))
   } catch {

@@ -151,7 +151,14 @@ test('seeded random pairs round-trip through the wire', () => {
     assertRoundTrip(a, b)
   }
   function mutate(v) {
-    if (Array.isArray(v)) return v.map((x) => (rnd() < 0.5 ? mutate(x) : x))
+    if (Array.isArray(v)) {
+      const out = v.map((x) => (rnd() < 0.5 ? mutate(x) : x))
+      // grow or shrink at the tail so add/remove ops get exercised
+      const r = rnd()
+      if (r < 0.25) out.push(gen(2))
+      else if (r < 0.5 && out.length > 0) out.pop()
+      return out
+    }
     if (v && typeof v === 'object') {
       const o = {}
       for (const k of keys) {
