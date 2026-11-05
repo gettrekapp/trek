@@ -124,7 +124,8 @@ export const worktreeHandlers: Record<string, Handler> = {
       if (!created) throw codedError('GIT_ERROR', `git created ${target} but does not list it`)
       const firstTag = d.settings.worktreeTags?.[0]?.id
       const data = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
-      if (firstTag && !data?.tag) r.branchData[branch] = { ...data, tag: firstTag }
+      // Only when git really checked the branch out (a same-named tag would leave HEAD detached).
+      if (firstTag && !data?.tag && created.branch === branch) r.branchData[branch] = { ...data, tag: firstTag }
       return created.id
     })
     return { worktreeId }
