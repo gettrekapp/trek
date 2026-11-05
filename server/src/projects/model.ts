@@ -1,8 +1,10 @@
 // Pure helpers for building and inspecting v2 projects on the server.
+import { sep } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
 import { realOrResolved as real } from '../repos.ts'
+import { requireString } from '../validate.ts'
 
 /** The registered repo at `path` (compared by realpath), or PATH_DENIED. */
 export function findRegistered(registry: readonly RemoteRepo[], path: string): RemoteRepo {
@@ -44,7 +46,7 @@ function resetSession(s: Session): Session {
 }
 
 function resetWorktree(w: Worktree): Worktree {
-  const { head: _h, dirty: _d, ahead: _a, behind: _b, ...rest } = w
+  const { head: _h, dirty: _d, ahead: _a, behind: _b, missing: _m, ...rest } = w
   return { ...rest, loaded: false, sessions: w.sessions.map(resetSession) }
 }
 
@@ -77,4 +79,24 @@ export function collectIds(project: Project): Set<string> {
     }
   }
   return ids
+}
+
+/** The project's repository with this id; BAD_REQUEST if not a string, NOT_FOUND if unknown. */
+export function repoIn(project: Project, repoId: unknown): Repository {
+  const id = requireString(repoId, 'repoId')
+  const repo = project.repositories.find((r) => r.id === id)
+  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${id}" in this project`)
+  return repo
+}
+
+/**
+ * BAD_REQUEST if `path` (already resolved) is a registered repository or contains one:
+ * a worktree there would let a project act on that repo. `shown` is the path as the client wrote it.
+ */
+export function assertNotRepository(registry: readonly RemoteRepo[], path: string, where: string, shown = path): void {
+  const clash = registry.find((r) => {
+    const repo = real(r.path)
+    return repo === path || repo.startsWith(path.endsWith(sep) ? path : path + sep)
+  })
+  if (clash) throw codedError('BAD_REQUEST', `${where}: worktree path ${shown} is another repository (${clash.path}) or contains one`)
 }

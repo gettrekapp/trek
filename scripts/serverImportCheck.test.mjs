@@ -179,3 +179,12 @@ test('a relative non-main worktree path is BAD_REQUEST', (t) => {
   p.repositories[0].worktrees[1].path = 'repo-feature'
   assert.equal(code(() => checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' })), 'BAD_REQUEST')
 })
+
+test('a worktree path listed twice in one repository is refused', (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  const extra = p.repositories[0].worktrees[1]
+  p.repositories[0].worktrees.push({ ...extra, id: 'dup-wt', sessions: extra.sessions.map((s, i) => ({ ...s, id: `dup-s${i}` })) })
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  assert.throws(() => checkImport(p, ctx), (e) => e.code === 'BAD_REQUEST' && /listed twice/.test(e.message))
+})

@@ -50,6 +50,11 @@ export function requireAbsolutePath(value: unknown, field: string): string {
   return path
 }
 
+export function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') throw bad(`${field} must be a boolean`)
+  return value
+}
+
 /**
  * Throws BAD_REQUEST, naming the path, if any object nested in `value` (arrays
  * included) has an own `__proto__` key: clients cannot apply a patch at one,

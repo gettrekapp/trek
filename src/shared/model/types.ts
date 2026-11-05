@@ -64,6 +64,11 @@ export interface Worktree {
   dirty?: boolean
   ahead?: number
   behind?: number
+  /**
+   * Git no longer lists this worktree, but it holds sessions, so the server
+   * keeps the row. Not polled for status; worktree.remove drops it.
+   */
+  missing?: boolean
   /** Whether the worktree's sessions are running (loaded) or only saved */
   loaded: boolean
   sessions: Session[]
@@ -104,7 +109,7 @@ export interface Project {
 }
 
 export interface HealthWarning {
-  code: 'PERSIST_FAILED' | 'LOAD_FAILED'
+  code: 'PERSIST_FAILED' | 'LOAD_FAILED' | 'REPO_UNAVAILABLE'
   message: string
   /** Epoch ms when the condition started */
   since: number

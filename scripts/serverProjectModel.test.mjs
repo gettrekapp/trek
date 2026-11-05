@@ -5,11 +5,13 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  assertNotRepository,
   collectIds,
   findRegistered,
   newProject,
   newRepository,
   projectsUsingRepo,
+  repoIn,
   resetRuntime
 } from '../server/src/projects/model.ts'
 
@@ -112,4 +114,28 @@ test('resetRuntime keeps a complete status; every other status becomes idle', ()
   const out = resetRuntime(p)
   assert.deepEqual(out.globalSessions.map((x) => x.status), ['complete', 'idle'])
   assert.deepEqual(out.repositories[0].worktrees[0].sessions.map((x) => x.status), ['complete', 'idle', 'idle'])
+})
+
+test('resetRuntime drops missing', () => {
+  const project = {
+    id: 'p', name: 'P', settings: {}, globalSessions: [],
+    repositories: [{ id: 'r', name: 'R', path: '/r/a', branchData: {}, worktrees: [
+      { id: 'w', name: 'x', path: '/r/a-x', isMain: false, loaded: false, missing: true, sessions: [] }
+    ] }]
+  }
+  assert.equal('missing' in resetRuntime(project).repositories[0].worktrees[0], false)
+})
+
+test('assertNotRepository refuses a registered repo or a parent of one', () => {
+  const registry = [{ id: 'a', name: 'a', path: '/r/a' }]
+  assert.throws(() => assertNotRepository(registry, '/r/a', 'path'), /is another repository/)
+  assert.throws(() => assertNotRepository(registry, '/r', 'path'), (e) => e.code === 'BAD_REQUEST')
+  assertNotRepository(registry, '/r/a-feat', 'path')
+})
+
+test('repoIn finds a repository or answers NOT_FOUND / BAD_REQUEST', () => {
+  const project = { id: 'p', name: 'P', settings: {}, globalSessions: [], repositories: [{ id: 'r', worktrees: [] }] }
+  assert.equal(repoIn(project, 'r').id, 'r')
+  assert.throws(() => repoIn(project, 'nope'), (e) => e.code === 'NOT_FOUND')
+  assert.throws(() => repoIn(project, 7), (e) => e.code === 'BAD_REQUEST')
 })

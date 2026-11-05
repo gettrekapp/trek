@@ -6,9 +6,9 @@ import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches } from '../../src/host/gitService.ts'
-import type { BranchData, Project, Repository } from '../../src/shared/model/types'
+import type { BranchData, Repository } from '../../src/shared/model/types'
 import { checkImport } from './projects/importCheck.ts'
-import { findRegistered, newRepository } from './projects/model.ts'
+import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
 import { applySettingsPatch, isSettingsKey } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
@@ -34,13 +34,6 @@ export interface V2Context {
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
-
-function repoIn(project: Project, repoId: unknown): Repository {
-  const id = requireString(repoId, 'repoId')
-  const repo = project.repositories.find((r) => r.id === id)
-  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${id}" in this project`)
-  return repo
-}
 
 /** A clearable string field: null or "" clears it; anything else must be a string. */
 function clearableString(value: unknown, field: string): string | null {

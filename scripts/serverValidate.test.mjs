@@ -8,6 +8,7 @@ import {
   optionalString,
   optionalStringArray,
   requireAbsolutePath,
+  requireBoolean,
   requireBranch,
   requireName,
   requireRecord,
@@ -72,4 +73,11 @@ test('assertNoProtoKeys walks objects and arrays and names the path', () => {
     assert.match(err.message, /v\.a\[1\]\.b/)
     return true
   })
+})
+
+test('requireBoolean', () => {
+  assert.equal(requireBoolean(true, 'force'), true)
+  assert.equal(requireBoolean(false, 'force'), false)
+  assert.throws(() => requireBoolean('yes', 'force'), (e) => e.code === 'BAD_REQUEST' && /force must be a boolean/.test(e.message))
+  assert.throws(() => requireBoolean(undefined, 'force'), (e) => e.code === 'BAD_REQUEST')
 })

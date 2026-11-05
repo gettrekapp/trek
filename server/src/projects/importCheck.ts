@@ -2,14 +2,13 @@
 // and returns it ready to store: the server's project id, nested ids kept,
 // repository and main worktree paths taken from the registry, other worktree
 // paths realpath'd, runtime state reset.
-import { sep } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
 import type { PathGuard } from '../paths.ts'
 import { realOrResolved } from '../repos.ts'
 import { assertNoProtoKeys, isRecord, requireAbsolutePath, requireName } from '../validate.ts'
-import { findRegistered, resetRuntime } from './model.ts'
+import { assertNotRepository, findRegistered, resetRuntime } from './model.ts'
 import { validateSettings } from './settings.ts'
 
 export interface ImportContext {
@@ -53,11 +52,7 @@ function checkWorktree(raw: unknown, where: string, ctx: ImportContext, seen: Se
   if (!raw.isMain) {
     path = ctx.guard.check(requireAbsolutePath(raw.path, `${where}.path`))
     // A worktree at (or above) a registered repo would let the project act on that repo.
-    const clash = ctx.registry.find((r) => {
-      const repo = realOrResolved(r.path)
-      return repo === path || repo.startsWith(path.endsWith(sep) ? path : path + sep)
-    })
-    if (clash) throw bad(`${where}: worktree path ${raw.path} is another repository (${clash.path}) or contains one`)
+    assertNotRepository(ctx.registry, path, where, raw.path)
   }
   if (raw.branch !== undefined && typeof raw.branch !== 'string') throw bad(`${where}.branch must be a string`)
   if (!Array.isArray(raw.sessions)) throw bad(`${where}.sessions must be an array`)
@@ -83,6 +78,12 @@ function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: 
   if (raw.environments !== undefined && !isRecord(raw.environments)) throw bad(`${where}.environments must be an object`)
   if (!Array.isArray(raw.worktrees)) throw bad(`${where}.worktrees must be an array`)
   const worktrees = raw.worktrees.map((w, i) => checkWorktree(w, `${where}.worktrees[${i}]`, ctx, seen, registered))
+  const paths = new Set<string>()
+  worktrees.forEach((w, i) => {
+    const key = realOrResolved(w.path)
+    if (paths.has(key)) throw bad(`${where}.worktrees[${i}]: path ${w.path} is listed twice`)
+    paths.add(key)
+  })
   const mains = worktrees.filter((w) => w.isMain).length
   if (mains !== 1) throw bad(`${where}.worktrees must have exactly one isMain worktree (found ${mains})`)
   return { ...(raw as unknown as Repository), path: registered.path, worktrees }
