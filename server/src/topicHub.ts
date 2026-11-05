@@ -18,6 +18,21 @@ interface TopicEntry {
 
 export class TopicHub {
   private topics = new Map<Topic, TopicEntry>()
+  private subscribeListeners = new Set<(topic: Topic) => void>()
+
+  /**
+   * Called after a subscriber joins a topic it was not on. Runs inside subscribe(),
+   * before the response is written, so a listener must not publish synchronously.
+   * Returns a function that removes the listener.
+   */
+  onSubscribe(listener: (topic: Topic) => void): () => void {
+    this.subscribeListeners.add(listener)
+    return () => this.subscribeListeners.delete(listener)
+  }
+
+  subscriberCount(topic: Topic): number {
+    return this.topics.get(topic)?.subscribers.size ?? 0
+  }
 
   /** Sets the topic's state. The first publish starts at rev 0; an unchanged snapshot sends nothing. */
   publish(topic: Topic, snapshot: unknown): void {
@@ -49,7 +64,17 @@ export class TopicHub {
   subscribe(topic: Topic, subscriber: Subscriber): { snapshot: unknown; rev: number } | undefined {
     const entry = this.topics.get(topic)
     if (!entry) return undefined
+    const joined = !entry.subscribers.has(subscriber)
     entry.subscribers.add(subscriber)
+    if (joined) {
+      for (const listener of [...this.subscribeListeners]) {
+        try {
+          listener(topic)
+        } catch (err) {
+          console.warn(`topic ${topic}: subscribe listener failed`, err)
+        }
+      }
+    }
     return { snapshot: entry.snapshot, rev: entry.rev }
   }
 
