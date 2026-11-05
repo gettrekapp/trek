@@ -34,8 +34,20 @@ Rerun `npm run build` after pulling changes. Without linking, run
 
 ## Configure
 
-Pre-clone the repo(s) you want to work on, then create
-`~/.config/trek-daemon/config.json`:
+Pre-clone the repo(s) you want to work on, then add each one:
+
+```sh
+cd ~/repos/Trek && trek-daemon .        # the repo you're in (any subdirectory works)
+trek-daemon add ~/repos/Other           # or name a path
+trek-daemon add ~/repos/x --id x --name "Project X"
+```
+
+The id defaults to a slug of the directory name and the name to the
+directory name. Adding a path that's already configured does nothing. A
+running daemon only reads its config at startup, so restart it afterwards.
+
+This writes `~/.config/trek-daemon/config.json` (pass `--config` for another
+file), which you can also edit by hand:
 
 ```json
 {

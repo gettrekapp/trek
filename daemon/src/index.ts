@@ -1,23 +1,30 @@
 import { randomBytes } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { defaultConfigPath, loadConfig, saveConfig } from './config'
+import { addRepo, resolveRepoRoot } from './repos'
 import { hashToken, startServer } from './server'
 
 interface CliArgs {
-  command: 'start' | 'token' | 'help' | 'version'
+  command: 'start' | 'token' | 'add' | 'help' | 'version'
   configPath: string
+  /** `add`: the repo path (defaults to the current directory). */
+  repoPath?: string
+  repoId?: string
+  repoName?: string
   port?: number
   host?: string
   insecure: boolean
 }
 
 const USAGE = `Usage: trek-daemon [command] [options]
+       trek-daemon <path>         Same as \`trek-daemon add <path>\`
 
 Commands:
   start            Run the daemon (default)
   token            Generate a new access token, replacing any previous one
+  add [path]       Add the git repo at path (default: current directory)
   help             Show this help
   version          Print the daemon version
 
@@ -26,6 +33,8 @@ Options:
   --port <port>    Port to listen on (default: config.port or ${DEFAULT_DAEMON_PORT})
   --host <host>    Interface to bind (default: config.host or 127.0.0.1)
   --insecure       Allow binding a non-loopback host without TLS
+  --id <id>        add: repo id (default: slug of the directory name)
+  --name <name>    add: display name (default: the directory name)
   -h, --help       Show this help
   -v, --version    Print the daemon version
 `
@@ -42,9 +51,24 @@ function parseArgs(argv: string[]): CliArgs {
     if (next === undefined || next.startsWith('-')) usageError(`${flag} needs a value`)
     return next
   }
+  let sawCommand = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (arg === 'start' || arg === 'token' || arg === 'help' || arg === 'version') args.command = arg
+    if (
+      !sawCommand &&
+      (arg === 'start' || arg === 'token' || arg === 'add' || arg === 'help' || arg === 'version')
+    ) {
+      args.command = arg
+      sawCommand = true
+    } else if (!arg.startsWith('-') && args.command === 'add' && args.repoPath === undefined) {
+      args.repoPath = arg
+    } else if (!arg.startsWith('-') && !sawCommand && isDirectory(arg)) {
+      // `trek-daemon .` / `trek-daemon ~/repos/x` — shorthand for add.
+      args.command = 'add'
+      args.repoPath = arg
+      sawCommand = true
+    } else if (arg === '--id') args.repoId = value(++i, arg)
+    else if (arg === '--name') args.repoName = value(++i, arg)
     else if (arg === '-h' || arg === '--help') args.command = 'help'
     else if (arg === '-v' || arg === '--version') args.command = 'version'
     else if (arg === '--config') args.configPath = value(++i, arg)
@@ -54,9 +78,21 @@ function parseArgs(argv: string[]): CliArgs {
       args.port = port
     } else if (arg === '--host') args.host = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
+    else if (!arg.startsWith('-')) usageError(`Unknown command, and not a directory: ${arg}`)
     else usageError(`Unknown argument: ${arg}`)
   }
+  if ((args.repoId !== undefined || args.repoName !== undefined) && args.command !== 'add') {
+    usageError('--id and --name only apply to `add`')
+  }
   return args
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 function daemonVersion(): string {
@@ -79,6 +115,25 @@ if (args.command === 'version') {
   process.exit(0)
 }
 
+if (args.command === 'add') {
+  try {
+    const config = loadConfig(args.configPath)
+    const root = resolveRepoRoot(args.repoPath ?? process.cwd())
+    const { repo, added } = addRepo(config, root, { id: args.repoId, name: args.repoName })
+    if (!added) {
+      console.log(`${repo.path} is already configured as "${repo.id}".`)
+      process.exit(0)
+    }
+    saveConfig(args.configPath, config)
+    console.log(`Added ${repo.name} (id "${repo.id}") at ${repo.path}`)
+    console.log(`Saved to ${args.configPath}. Restart a running daemon to pick it up.`)
+    process.exit(0)
+  } catch (err) {
+    console.error((err as Error).message)
+    process.exit(1)
+  }
+}
+
 if (args.command === 'token') {
   const config = loadConfig(args.configPath)
   const token = randomBytes(32).toString('base64url')
@@ -99,8 +154,7 @@ if (!config.tokenHash) {
   process.exit(1)
 }
 if (config.repos.length === 0) {
-  console.error(`No repos configured. Add repos to ${args.configPath}:`)
-  console.error('  { "repos": [{ "id": "trek", "name": "Trek", "path": "/home/dev/repos/Trek" }] }')
+  console.error(`No repos configured. Run \`trek-daemon add <path>\` (config: ${args.configPath}).`)
   process.exit(1)
 }
 if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && !args.insecure) {
