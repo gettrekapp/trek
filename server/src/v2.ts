@@ -1,12 +1,14 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
-// and projects, repositories and branch data. worktree.*, session.* and v2
-// pty.* come in later phases.
+// projects, repositories and branch data, and worktree.create. worktree.load/unload,
+// session.* and v2 pty.* come in 2d.
 import { parseTopic } from '../../src/shared/model/topics.ts'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
 import { listBranches } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
+import type { GitPoller } from './git/poller.ts'
+import { worktreeHandlers } from './worktreeHandlers.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
@@ -31,6 +33,8 @@ export interface V2Context {
   /** This connection, as a topic subscriber */
   subscriber: Subscriber
   projects: ProjectState
+  /** Re-reads git after a worktree command */
+  poller: GitPoller
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -224,7 +228,9 @@ const handlers: Record<string, Handler> = {
     // By id only: the CLI's path fallback is not offered over the wire.
     ctx.store.removeRepo(repoId, { idOnly: true })
     return null
-  }
+  },
+
+  ...worktreeHandlers
 }
 
 /**
