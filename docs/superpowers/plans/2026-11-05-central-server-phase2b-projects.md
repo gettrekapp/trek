@@ -1911,6 +1911,47 @@ test('importProject stores the checked project under a new id', () => {
   assert.equal(id, 'id1')
   assert.equal(state.require(id).repositories[0].id, 'rX')
 })
+
+test('delete is atomic: a failing store.remove leaves the project, its topic and summaries alone', () => {
+  const hub = new TopicHub()
+  let summaries = 0
+  const store = { save: () => {}, remove: () => { throw new Error('disk') } }
+  const state = new ProjectState({ hub, store, newId: () => 'p1', onSummariesChange: () => summaries++ })
+  const id = state.create('P', [{ registered: { id: 'a', name: 'A', path: '/r/a' }, name: undefined }])
+  summaries = 0
+  assert.throws(() => state.delete(id), /disk/)
+  assert.deepEqual(state.list(), [{ id, name: 'P' }])
+  assert.equal(hub.subscribe(`project:${id}`, sub()).snapshot.name, 'P')
+  assert.equal(summaries, 0)
+})
+
+test('a failing publish leaves memory unchanged and saves nothing', () => {
+  const { hub, saved, state, registered } = setup()
+  const id = state.create('P', [{ registered, name: undefined }])
+  const publish = hub.publish
+  hub.publish = () => { throw new Error('publish') }
+  assert.throws(() => state.apply(id, (d) => { d.name = 'Q' }), /publish/)
+  hub.publish = publish
+  assert.equal(state.require(id).name, 'P')
+  assert.equal(saved.length, 1)
+})
+
+test('apply with persist: false publishes a patch but does not save', () => {
+  const { hub, saved, state, registered } = setup()
+  const id = state.create('P', [{ registered, name: undefined }])
+  const s = sub()
+  hub.subscribe(`project:${id}`, s)
+  state.apply(id, (d) => { d.repositories[0].branchData.main = { note: 'rt' } }, { persist: false })
+  assert.equal(s.sent.length, 1)
+  assert.equal(state.require(id).repositories[0].branchData.main.note, 'rt')
+  assert.equal(saved.length, 1)
+})
+
+test('a non-string project id is BAD_REQUEST', () => {
+  const { state } = setup()
+  assert.throws(() => state.require(5), (err) => err.code === 'BAD_REQUEST')
+  assert.throws(() => state.apply(undefined, () => {}), (err) => err.code === 'BAD_REQUEST')
+})
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
@@ -1932,6 +1973,7 @@ import type { RemoteRepo } from '../../../src/shared/protocol'
 import { deepEqual } from '../../../src/shared/sync/jsonDiff.ts'
 import { codedError } from '../errors.ts'
 import type { TopicHub } from '../topicHub.ts'
+import { requireString } from '../validate.ts'
 import { collectIds, newProject, projectsUsingRepo } from './model.ts'
 
 export interface ProjectPersistence {
@@ -1969,21 +2011,30 @@ export class ProjectState {
     return this.projects.values()
   }
 
-  /** The project, or NOT_FOUND. Treat as read-only; change it through apply(). */
+  /** The project; BAD_REQUEST if the id is not a string, NOT_FOUND if unknown. Treat as read-only; change it through apply(). */
   require(projectId: unknown): Project {
-    const project = typeof projectId === 'string' ? this.projects.get(projectId) : undefined
-    if (!project) throw codedError('NOT_FOUND', `No project with id "${String(projectId)}"`)
+    const id = requireString(projectId, 'projectId')
+    const project = this.projects.get(id)
+    if (!project) throw codedError('NOT_FOUND', `No project with id "${id}"`)
     return project
   }
 
-  /** Runs `mutate` on a copy; publishes and saves only if something changed. Returns `mutate`'s result. */
-  apply<T>(projectId: unknown, mutate: (draft: Project) => T): T {
+  /**
+   * Runs `mutate` on a copy; publishes (and saves) only if something changed.
+   * Returns `mutate`'s result.
+   *
+   * `persist: false` is for runtime-only fields (git status, session status):
+   * the change is published and kept in memory but not written to disk. It
+   * reaches disk only with a later persisted change (the store resets runtime
+   * fields on load either way).
+   */
+  apply<T>(projectId: unknown, mutate: (draft: Project) => T, options: { persist?: boolean } = {}): T {
     const current = this.require(projectId)
     const draft = structuredClone(current)
     const result = mutate(draft)
     if (draft.id !== current.id) throw new Error('a mutation must not change the project id')
     if (deepEqual(draft, current)) return result
-    this.commit(draft)
+    this.commit(draft, options.persist ?? true)
     if (draft.name !== current.name) this.deps.onSummariesChange()
     return result
   }
@@ -2004,11 +2055,12 @@ export class ProjectState {
     return projectId
   }
 
+  /** Removes the file first: if that throws, the project stays (in memory and on its topic). */
   delete(projectId: unknown): void {
     const project = this.require(projectId)
+    this.deps.store.remove(project.id)
     this.projects.delete(project.id)
     this.deps.hub.drop(projectTopic(project.id))
-    this.deps.store.remove(project.id)
     this.deps.onSummariesChange()
   }
 
@@ -2023,10 +2075,11 @@ export class ProjectState {
     return ids
   }
 
-  private commit(project: Project): void {
-    this.projects.set(project.id, project)
+  /** Publishes first, so a publish that throws leaves memory unchanged. */
+  private commit(project: Project, persist = true): void {
     this.deps.hub.publish(projectTopic(project.id), project)
-    this.deps.store.save(project)
+    this.projects.set(project.id, project)
+    if (persist) this.deps.store.save(project)
   }
 }
 ```
@@ -2071,6 +2124,10 @@ In `scripts/serverV2.test.mjs`, add `import { ProjectState } from '../server/src
 Make the existing tests use `server.stop()` instead of `stop()`. Update the existing assertion `'project.list is empty'` so it expects `[]` before any project is created. Then add:
 
 ```js
+async function snapshotOf(call, projectId) {
+  return (await call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
+}
+
 test('project.create from registered repos; listed, subscribable and in the server topic', async (t) => {
   const { a, call } = setup(t)
   const server = await call('sub.subscribe', { topic: 'server' })
@@ -2110,6 +2167,9 @@ test('project.updateSettings merges, null removes, expected is per key', async (
   const snap = (await call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
   assert.deepEqual(snap.settings, { claudeCommand: 'c' })
   assert.equal((await call('project.updateSettings', { projectId, settings: { nope: 1 } })).error.code, 'BAD_REQUEST')
+  const inherited = await call('project.updateSettings', { projectId, settings: { claudeCommand: 'y' }, expected: { toString: null } })
+  assert.equal(inherited.error.code, 'BAD_REQUEST')
+  assert.equal((await snapshotOf(call, projectId)).settings.claudeCommand, 'c')
 })
 
 test('project.delete removes it everywhere; removeRepo is IN_USE until then', async (t) => {
@@ -2190,7 +2250,7 @@ export function publishServerState(
 
 - [ ] **Step 4: Add the project handlers to `server/src/v2.ts`**
 
-Add `projects: ProjectState` to `V2Context` (`import type { ProjectState } from './projects/state.ts'`). Add the imports `findRegistered` from `./projects/model.ts`, `checkImport` from `./projects/importCheck.ts`, `applySettingsPatch` from `./projects/settings.ts`, and `checkExpected`, `requireName`, `optionalName`, `requireRecord`, `isRecord`, `requireString` from `./validate.ts`. Replace the `'project.list'` handler and add the rest:
+Add `projects: ProjectState` to `V2Context` (`import type { ProjectState } from './projects/state.ts'`). Add the imports `findRegistered` from `./projects/model.ts`, `checkImport` from `./projects/importCheck.ts`, `applySettingsPatch` and `isSettingsKey` from `./projects/settings.ts`, and `checkExpected`, `requireName`, `optionalName`, `requireRecord`, `isRecord`, `requireString` from `./validate.ts`. Replace the `'project.list'` handler and add the rest:
 
 ```ts
   'project.list': (_p, ctx) => ctx.projects.list(),
@@ -2240,7 +2300,10 @@ Add `projects: ProjectState` to `V2Context` (`import type { ProjectState } from 
     const expected = p.expected === undefined ? undefined : requireRecord(p.expected, 'expected')
     ctx.projects.apply(p.projectId, (d) => {
       const current = d.settings as Record<string, unknown>
-      for (const [key, value] of Object.entries(expected ?? {})) checkExpected(`settings.${key}`, current[key], value)
+      for (const [key, value] of Object.entries(expected ?? {})) {
+        if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
+        checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
+      }
       d.settings = applySettingsPatch(d.settings, patch)
     })
     return null
@@ -2268,11 +2331,13 @@ git commit -m "feat: v2 project commands and projects in the server topic"
 
 - [ ] **Step 1: Add failing tests to `scripts/serverV2.test.mjs`**
 
+Add `symlinkSync` to the `node:fs` import, then add:
+
 ```js
 async function withProject(t) {
   const env = setup(t)
   const { projectId } = (await env.call('project.create', { name: 'P', repositories: [{ path: env.a }] })).result
-  const snap = async () => (await env.call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
+  const snap = () => snapshotOf(env.call, projectId)
   return { ...env, projectId, snap }
 }
 
@@ -2316,6 +2381,17 @@ test('repo.update: name, linkedDirs, environments, null removes, expected guards
   assert.equal((await call('repo.update', { projectId, repoId, name: 'X', expected: { name: 'old' } })).error.code, 'CONFLICT')
   assert.equal((await call('repo.update', { projectId, repoId, name: ' ' })).error.code, 'BAD_REQUEST')
   assert.equal((await call('repo.update', { projectId, repoId, environments: [] })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.update', { projectId, repoId, name: 'Y', expected: { linkedDir: [] } })).error.code, 'BAD_REQUEST')
+  assert.equal((await snap()).repositories[0].name, 'Main')
+})
+
+test('repo.add compares paths by realpath', async (t) => {
+  const { a, dir, store, call, projectId } = await withProject(t)
+  const link = join(dir, 'link-a')
+  symlinkSync(a, link)
+  // The registry now spells the project's repo through a symlink.
+  store.update((c) => { c.repos[0].path = link })
+  assert.equal((await call('repo.add', { projectId, path: link })).error.code, 'BAD_REQUEST')
 })
 
 test('repo.listBranches lists git branches', async (t) => {
@@ -2349,6 +2425,24 @@ test('branch.* set and clear branch data; an empty entry disappears', async (t) 
   assert.equal((await snap()).repositories[0].branchData['feature/x'], undefined)
 })
 
+test('branch.*: empty strings and null customTags clear; missing customTags is BAD_REQUEST', async (t) => {
+  const { call, projectId, snap } = await withProject(t)
+  const repoId = (await snap()).repositories[0].id
+  const ref = { projectId, repoId, branch: 'b' }
+  await call('branch.setTag', { ...ref, tag: 'review' })
+  await call('branch.setCustomTags', { ...ref, customTags: ['ui'] })
+  await call('branch.setNote', { ...ref, note: 'n' })
+  assert.equal((await call('branch.setTag', { ...ref, tag: '' })).ok, true)
+  assert.equal((await call('branch.setCustomTags', { ...ref, customTags: null })).ok, true)
+  assert.deepEqual((await snap()).repositories[0].branchData.b, { note: 'n' })
+  for (const [method, field] of [['branch.setNote', 'note'], ['branch.setTicket', 'ticket'], ['branch.setPr', 'pr'], ['branch.setEnv', 'env']]) {
+    await call(method, { ...ref, [field]: 'v' })
+    assert.equal((await call(method, { ...ref, [field]: '' })).ok, true)
+  }
+  assert.equal((await snap()).repositories[0].branchData.b, undefined)
+  assert.equal((await call('branch.setCustomTags', ref)).error.code, 'BAD_REQUEST')
+})
+
 test('branch names: constructor works, __proto__ is refused', async (t) => {
   const { call, projectId, snap } = await withProject(t)
   const repoId = (await snap()).repositories[0].id
@@ -2356,6 +2450,17 @@ test('branch names: constructor works, __proto__ is refused', async (t) => {
   assert.equal((await snap()).repositories[0].branchData.constructor.note, 'n')
   assert.equal((await call('branch.setNote', { projectId, repoId, branch: '__proto__', note: 'n' })).error.code, 'BAD_REQUEST')
   assert.equal((await call('branch.setTag', { projectId, repoId, branch: 'b', tag: 5 })).error.code, 'BAD_REQUEST')
+})
+
+test('wrong id types are BAD_REQUEST, not NOT_FOUND', async (t) => {
+  const { a, call } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  assert.equal((await call('project.rename', { projectId: 5, name: 'Q' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('project.delete', {})).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.update', { projectId, repoId: 5, name: 'X' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.listBranches', { projectId, repoId: null })).error.code, 'BAD_REQUEST')
+  const repoId = (await snapshotOf(call, projectId)).repositories[0].id
+  assert.equal((await call('branch.setNote', { projectId, repoId, branch: 7, note: 'n' })).error.code, 'BAD_REQUEST')
 })
 ```
 
@@ -2365,21 +2470,24 @@ Run: `node --test scripts/serverV2.test.mjs`. Expected: the new tests FAIL with 
 
 - [ ] **Step 3: Implement**
 
-In `server/src/v2.ts`, add the imports `listBranches` from `'../../src/host/gitService.ts'`, `newRepository` from `./projects/model.ts`, `requireBranch` and `optionalStringArray` from `./validate.ts`, and `import type { BranchData, Project, Repository } from '../../src/shared/model/types'`. Add these helpers above `handlers`:
+In `server/src/v2.ts`, add the imports `listBranches` from `'../../src/host/gitService.ts'`, `newRepository` from `./projects/model.ts`, `realOrResolved` from `./repos.ts`, `requireBranch` and `optionalStringArray` from `./validate.ts`, and `import type { BranchData, Project, Repository } from '../../src/shared/model/types'`. Add these helpers above `handlers`:
 
 ```ts
 function repoIn(project: Project, repoId: unknown): Repository {
-  const repo = project.repositories.find((r) => r.id === repoId)
-  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${String(repoId)}" in this project`)
+  const id = requireString(repoId, 'repoId')
+  const repo = project.repositories.find((r) => r.id === id)
+  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${id}" in this project`)
   return repo
 }
 
-/** A nullable string field: null clears it; anything else must be a string. */
-function nullableString(value: unknown, field: string): string | null {
-  if (value === null) return null
+/** A clearable string field: null or "" clears it; anything else must be a string. */
+function clearableString(value: unknown, field: string): string | null {
+  if (value === null || value === '') return null
   if (typeof value !== 'string') throw codedError('BAD_REQUEST', `${field} must be a string or null`)
   return value
 }
+
+const REPO_GUARD_KEYS = ['name', 'linkedDirs', 'environments'] as const
 
 /** Sets or clears one branch-data field; an entry left empty is removed. */
 function setBranchField<K extends keyof BranchData>(
@@ -2411,7 +2519,8 @@ Add these handlers:
     const registered = findRegistered(ctx.store.config.repos, requireString(p.path, 'path'))
     const name = optionalName(p.name, 'name')
     const repoId = ctx.projects.apply(p.projectId, (d) => {
-      if (d.repositories.some((r) => r.path === registered.path)) {
+      const target = realOrResolved(registered.path)
+      if (d.repositories.some((r) => realOrResolved(r.path) === target)) {
         throw codedError('BAD_REQUEST', `${registered.path} is already in this project`)
       }
       const repo = newRepository(registered, name, ctx.projects.newId)
@@ -2440,9 +2549,14 @@ Add these handlers:
     const linkedDirs = p.linkedDirs === null ? null : optionalStringArray(p.linkedDirs, 'linkedDirs')
     const environments = p.environments === null || p.environments === undefined ? p.environments : requireRecord(p.environments, 'environments')
     const expected = p.expected === undefined ? {} : requireRecord(p.expected, 'expected')
+    for (const key of Object.keys(expected)) {
+      if (!(REPO_GUARD_KEYS as readonly string[]).includes(key)) {
+        throw codedError('BAD_REQUEST', `expected.${key} must be one of ${REPO_GUARD_KEYS.join(', ')}`)
+      }
+    }
     ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
-      for (const key of ['name', 'linkedDirs', 'environments'] as const) {
+      for (const key of REPO_GUARD_KEYS) {
         if (Object.hasOwn(expected, key)) checkExpected(key, repo[key], expected[key])
       }
       if (name !== undefined) repo.name = name
@@ -2463,16 +2577,17 @@ Add these handlers:
     }
   },
 
-  'branch.setTag': (p, ctx) => setBranchField(ctx, p, 'tag', nullableString(p.tag, 'tag')),
+  'branch.setTag': (p, ctx) => setBranchField(ctx, p, 'tag', clearableString(p.tag, 'tag')),
   'branch.setCustomTags': (p, ctx) => {
-    const tags = optionalStringArray(p.customTags, 'customTags')
-    if (tags === undefined) throw codedError('BAD_REQUEST', 'customTags is required')
+    if (p.customTags === undefined) throw codedError('BAD_REQUEST', 'customTags is required')
+    // null or [] clears; setBranchField drops an empty array.
+    const tags = p.customTags === null ? null : optionalStringArray(p.customTags, 'customTags')!
     return setBranchField(ctx, p, 'customTags', tags)
   },
-  'branch.setNote': (p, ctx) => setBranchField(ctx, p, 'note', nullableString(p.note, 'note'), p.expected),
-  'branch.setTicket': (p, ctx) => setBranchField(ctx, p, 'ticket', nullableString(p.ticket, 'ticket')),
-  'branch.setPr': (p, ctx) => setBranchField(ctx, p, 'pr', nullableString(p.pr, 'pr')),
-  'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', nullableString(p.env, 'env')),
+  'branch.setNote': (p, ctx) => setBranchField(ctx, p, 'note', clearableString(p.note, 'note'), p.expected),
+  'branch.setTicket': (p, ctx) => setBranchField(ctx, p, 'ticket', clearableString(p.ticket, 'ticket')),
+  'branch.setPr': (p, ctx) => setBranchField(ctx, p, 'pr', clearableString(p.pr, 'pr')),
+  'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env')),
 ```
 
 `ProjectState.apply` returns the mutation's result, which is how `repo.add` gets `repoId`.
@@ -2532,12 +2647,12 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
 ```
 
 - **v2 dispatch:** pass `projects` in the context: `dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects })`.
-- **`shutdown`:** replace `stopPublishing()` with `serverState.stop()` followed by `projectsSetup.store.off('health', serverState.refresh)`.
+- **`shutdown`:** replace `stopPublishing()` with `serverState.stop()`, `projectsSetup.store.off('health', serverState.refresh)` and `store.setUsage(() => [])`.
 - **Return value:** return `{ httpServer, ptys, hub, projects, shutdown }`.
 
 - [ ] **Step 2: `server/src/index.ts`**
 
-- **Imports:**
+- **Imports:** add `resolve` to the `node:path` import, and:
 
 ```ts
 import type { Project } from '../../src/shared/model/types'
@@ -2587,6 +2702,25 @@ function openProjects(config: { dataDir?: string }): { dir: string; files: Proje
   `IN_USE` reaches the existing `fail((err as Error).message)`, and that message names the projects.
 - **`start`:**
   - Delete the `if (store.config.repos.length === 0) fail(...)` block.
+  - Remember `--data-dir` in the config, in the same `store.update` as the identity (after the start checks), so a later plain `trek-server remove` reads the same projects. Replace the identity block with:
+
+```ts
+const config = store.config
+// --data-dir is remembered, so a later plain `trek-server remove` checks the same projects.
+const dataDir = args.dataDir === undefined ? undefined : resolve(args.dataDir)
+if (!config.serverId || !config.name || config.tokenHash || (dataDir !== undefined && config.dataDir !== dataDir)) {
+  try {
+    store.update((c) => {
+      ensureIdentity(c, hostname())
+      migrateLegacyToken(c)
+      if (dataDir !== undefined) c.dataDir = dataDir
+    })
+  } catch (err) {
+    fail(`Cannot update ${args.configPath}: ${(err as Error).message}`)
+  }
+}
+```
+
   - Replace `const server = startServer(store, serverVersion())` with:
 
 ```ts
@@ -2609,11 +2743,12 @@ const server = startServer(store, serverVersion(), {
   console.log(`projects: ${projectFiles.loaded.length} in ${projectFiles.dir}`)
 ```
 
-  - In the signal handler, before `server.shutdown(signal)`, add:
+  - In the signal handler, after `server.shutdown(signal)`, add (`close()` flushes first):
 
 ```ts
-    projectFiles.files.flush()
-    projectFiles.files.close()
+    // close() flushes pending saves and returns the ids that could not be written.
+    const failed = projectFiles.files.close()
+    if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
 ```
 
 - [ ] **Step 3: Verify**
@@ -2635,6 +2770,10 @@ mkdir -p "$D/data/projects"
 printf '{"schema":1,"project":{"id":"p1","name":"Uses","settings":{},"globalSessions":[],"repositories":[{"id":"r1","name":"r","path":"%s","branchData":{},"worktrees":[]}]}}' "$(cd .. && pwd -P)" > "$D/data/projects/p1.json"
 npx tsx src/index.ts --config "$C" --data-dir "$D/data" remove ..; echo "exit $?"   # "... is used by: Uses", exit 1
 npx tsx src/index.ts --config "$C" --data-dir "$D/data" list --data-dir x; echo "exit $?"   # usage error, exit 2
+npx tsx src/index.ts --config "$C" token >/dev/null
+npx tsx src/index.ts --config "$C" --data-dir "$D/data" start --port 7991 & sleep 2; kill $!   # writes config.dataDir before listening
+grep dataDir "$C"
+npx tsx src/index.ts --config "$C" remove ..; echo "exit $?"   # no --data-dir: still "... is used by: Uses", exit 1
 cd ..
 ```
 
@@ -2736,6 +2875,7 @@ project is stored as one JSON file in the data dir:
 - Windows: `%LOCALAPPDATA%\trek-server\projects\`
 
 Set `"dataDir"` in the config or pass `--data-dir` to put them elsewhere.
+`start --data-dir` remembers the directory in the config, so later commands use it too.
 `trek-server remove` refuses to remove a repo that a project still uses.
 ```
 
