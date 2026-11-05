@@ -7,13 +7,30 @@ import { TopicHub } from '../server/src/topicHub.ts'
 
 const A = { id: 'a', name: 'A', path: '/r/a' }
 
-function setup(t) {
+/** A promise the test opens by hand. */
+function gate() {
+  let open
+  const promise = new Promise((resolve) => { open = resolve })
+  return { promise, open }
+}
+
+/** Lets pending reads reach the fake git. */
+const turn = () => new Promise((resolve) => setImmediate(resolve))
+
+function setup(t, { onHealth } = {}) {
   const hub = new TopicHub()
   const saves = []
+  const failSave = new Set()
   let n = 0
   const projects = new ProjectState({
     hub,
-    store: { save: (p) => saves.push(structuredClone(p)), remove: () => {} },
+    store: {
+      save: (p) => {
+        if (failSave.has(p.id)) throw new Error('disk full')
+        saves.push(structuredClone(p))
+      },
+      remove: () => {}
+    },
     onSummariesChange: () => {},
     newId: () => `id${++n}`
   })
@@ -24,25 +41,34 @@ function setup(t) {
     { path: '/r/a-feat', branch: 'feat', head: 'h2', isMain: false }
   ]]])
   const statuses = new Map()
+  // A read sees git as it is when the read starts, then waits on its gate if one is set.
+  const gates = { list: undefined, status: undefined }
   const git = {
     async listWorktrees(path) {
       calls.list.push(path)
       const value = listing.get(path)
-      if (value instanceof Error) throw value
-      return structuredClone(value ?? [])
+      const result = value instanceof Error ? value : structuredClone(value ?? [])
+      await gates.list?.promise
+      if (result instanceof Error) throw result
+      return result
     },
     async worktreeStatuses(paths) {
       calls.status.push([...paths].sort())
-      return paths.map((path) => statuses.get(path) ?? { path })
+      const result = paths.map((path) => structuredClone(statuses.get(path) ?? { path }))
+      await gates.status?.promise
+      return result
     }
   }
   const registry = [A]
   let healthChanges = 0
-  const poller = new GitPoller({ projects, hub, registry: () => registry, onHealth: () => healthChanges++, git, now: () => clock })
+  const poller = new GitPoller({
+    projects, hub, registry: () => registry, git, now: () => clock,
+    onHealth: () => { healthChanges++; onHealth?.() }
+  })
   t.after(() => poller.stop())
   const sub = { send: () => {} }
   return {
-    hub, projects, saves, calls, listing, statuses, registry, poller, sub,
+    hub, projects, saves, failSave, calls, listing, statuses, gates, registry, poller, sub,
     advance: (ms) => { clock += ms },
     healthChanges: () => healthChanges,
     project: (id) => projects.require(id)
@@ -177,15 +203,132 @@ test('refresh() reads now and waits for a read already in flight', async (t) => 
   const s = setup(t)
   const id = s.projects.create('P', [{ registered: A, name: undefined }])
   await s.poller.tick()
+  s.advance(60_000)
+  s.gates.list = gate()
+  const inFlight = s.poller.tick()
+  await turn()
+  assert.equal(s.calls.list.length, 2, 'the tick read is blocked in git')
   s.listing.get('/r/a').push({ path: '/r/a-new', branch: 'new', head: 'h4', isMain: false })
-  await s.poller.refresh('/r/a')
+  const refreshed = s.poller.refresh('/r/a')
+  s.gates.list.open()
+  assert.equal(await refreshed, true)
+  await inFlight
+  assert.equal(s.calls.list.length, 3, 'refresh read again after the in-flight read')
   assert.ok(s.project(id).repositories[0].worktrees.some((w) => w.path === '/r/a-new'))
 })
 
 test('a project deleted mid-read is skipped', async (t) => {
   const s = setup(t)
-  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  const gone = s.projects.create('Gone', [{ registered: A, name: undefined }])
+  const kept = s.projects.create('Kept', [{ registered: A, name: undefined }])
+  s.gates.list = gate()
   const read = s.poller.tick()
-  s.projects.delete(id)
+  await turn()
+  assert.equal(s.calls.list.length, 1, 'the read is blocked in git')
+  s.projects.delete(gone)
+  s.gates.list.open()
   await read
+  assert.equal(s.project(kept).repositories[0].worktrees.length, 2)
+  assert.throws(() => s.project(gone))
+})
+
+test('a throwing health listener does not reject tick(); the warning is still recorded', async (t) => {
+  const s = setup(t, { onHealth: () => { throw new Error('listener broke') } })
+  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  s.registry.length = 0
+  await s.poller.tick()
+  assert.equal(s.poller.health().length, 1)
+  assert.equal(s.healthChanges(), 1)
+  // Dropping the warning announces from tick() itself, outside any read.
+  s.projects.delete(id)
+  await s.poller.tick()
+  assert.deepEqual(s.poller.health(), [])
+  assert.equal(s.healthChanges(), 2)
+})
+
+test('one project failing to apply does not stop the others sharing the repo', async (t) => {
+  const s = setup(t)
+  const p1 = s.projects.create('P1', [{ registered: A, name: undefined }])
+  const p2 = s.projects.create('P2', [{ registered: A, name: undefined }])
+  s.failSave.add(p1)
+  await s.poller.tick()
+  assert.equal(s.project(p2).repositories[0].worktrees.length, 2)
+  assert.equal(s.calls.status.length, 1, 'rows were added, so statuses were still read')
+})
+
+test('refresh() reports whether the list was read; warning() says why not', async (t) => {
+  const s = setup(t)
+  s.projects.create('P', [{ registered: A, name: undefined }])
+  assert.equal(await s.poller.refresh('/r/a'), true)
+  assert.equal(await s.poller.refresh('/r/a', { list: false }), true)
+  assert.equal(s.poller.warning('/r/a'), undefined)
+
+  s.registry.length = 0
+  assert.equal(await s.poller.refresh('/r/a'), false)
+  assert.match(s.poller.warning('/r/a').message, /not a registered repo/)
+
+  s.registry.push(A)
+  s.listing.set('/r/a', new Error('fatal: not a git repository'))
+  assert.equal(await s.poller.refresh('/r/a'), false)
+  assert.match(s.poller.warning('/r/a').message, /not a git repository/)
+})
+
+test('a failed list skips the status read it was asked for', async (t) => {
+  const s = setup(t)
+  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  s.statuses.set('/r/a-feat', { path: '/r/a-feat', dirty: true, ahead: 1, behind: 0 })
+  await s.poller.tick()
+  assert.equal(s.calls.status.length, 1)
+  s.statuses.clear()
+  s.listing.set('/r/a', new Error('fatal: not a git repository'))
+  assert.equal(await s.poller.refresh('/r/a', { status: true }), false)
+  assert.equal(s.calls.status.length, 1)
+  assert.equal(s.project(id).repositories[0].worktrees[1].dirty, true)
+})
+
+test('only the first subscriber of a project triggers a read', async (t) => {
+  const s = setup(t)
+  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  await s.poller.tick()
+  s.hub.subscribe(`project:${id}`, s.sub)
+  await s.poller.settled()
+  const lists = s.calls.list.length
+  s.hub.subscribe(`project:${id}`, { send: () => {} })
+  await turn()
+  await s.poller.settled()
+  assert.equal(s.calls.list.length, lists)
+})
+
+test('a status read that started before a head moved does not write onto the moved row', async (t) => {
+  const s = setup(t)
+  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  await s.poller.tick()
+  const published = []
+  const publish = s.hub.publish.bind(s.hub)
+  s.hub.publish = (topic, snapshot) => {
+    published.push(structuredClone(snapshot))
+    publish(topic, snapshot)
+  }
+
+  s.statuses.set('/r/a-feat', { path: '/r/a-feat', dirty: true, ahead: 2, behind: 1 })
+  s.gates.status = gate()
+  const oldStatus = s.poller.refresh('/r/a', { list: false, status: true })
+  await turn()
+  assert.equal(s.calls.status.length, 2, 'the status read on h2 is blocked in git')
+
+  s.listing.get('/r/a')[1].head = 'h3'
+  const moved = s.poller.refresh('/r/a')
+  await turn()
+  assert.equal(s.project(id).repositories[0].worktrees[1].head, 'h3')
+
+  s.statuses.set('/r/a-feat', { path: '/r/a-feat', dirty: false, ahead: 0, behind: 0 })
+  s.gates.status.open()
+  await oldStatus
+  await moved
+  for (const p of published) {
+    const feat = p.repositories[0].worktrees.find((w) => w.path === '/r/a-feat')
+    assert.ok(!(feat.head === 'h3' && (feat.dirty || feat.ahead || feat.behind)), 'h2 numbers were written onto h3')
+  }
+  const feat = s.project(id).repositories[0].worktrees[1]
+  assert.deepEqual([feat.dirty, feat.ahead, feat.behind], [false, 0, 0], 'the follow-up read on h3 applied')
 })
