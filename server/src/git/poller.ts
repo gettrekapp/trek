@@ -227,6 +227,7 @@ export class GitPoller {
   }
 
   private async readList(key: string): Promise<ListResult> {
+    if (this.stopped) return { listed: false, stale: false }
     const use = this.repoUses().get(key)
     if (!use) return { listed: false, stale: false }
     const registered = this.deps.registry().find((r) => real(r.path) === key)
@@ -242,6 +243,8 @@ export class GitPoller {
       this.warn(key, `cannot list the worktrees of ${registered.path}: ${(err as Error).message}`)
       return { listed: false, stale: false }
     }
+    // stop() may have come while git ran: apply nothing.
+    if (this.stopped) return { listed: false, stale: false }
     this.clearWarning(key)
     let stale = false
     for (const projectId of this.repoUses().get(key)?.projectIds ?? []) {
@@ -273,6 +276,7 @@ export class GitPoller {
   }
 
   private async readStatus(key: string): Promise<void> {
+    if (this.stopped) return
     const use = this.repoUses().get(key)
     if (!use || !this.deps.registry().some((r) => real(r.path) === key)) return
     // The head each path had when the read started: a list (another coalescer
@@ -290,6 +294,7 @@ export class GitPoller {
     }
     if (paths.length === 0) return
     const statuses = await this.git.worktreeStatuses(paths)
+    if (this.stopped) return
     for (const projectId of this.repoUses().get(key)?.projectIds ?? []) {
       if (!this.find(projectId)) continue
       try {

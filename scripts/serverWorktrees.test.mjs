@@ -405,3 +405,18 @@ test('worktree commands refuse a worktree path outside the allowlist', async (t)
   assert.equal((await s.call('worktree.diff', ids)).error?.code, 'PATH_DENIED')
   assert.equal((await callWithInertPoller(s, 'worktree.pull', ids)).error?.code, 'PATH_DENIED')
 })
+
+test('worktree commands refuse a worktree that is itself a registered repo', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'other')
+  s.store.addRepo(wt.path, {})
+  for (const force of [false, true]) {
+    const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id, force })
+    assert.equal(res.ok, false)
+    assert.equal(res.error.code, 'BAD_REQUEST', JSON.stringify(res))
+    assert.ok(existsSync(wt.path))
+  }
+  const changes = await s.call('worktree.changes', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(changes.ok, false)
+  assert.equal(changes.error.code, 'BAD_REQUEST', JSON.stringify(changes))
+})

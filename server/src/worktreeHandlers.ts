@@ -73,6 +73,7 @@ function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree
     throw bad(`${found.worktree.path} no longer exists; remove the worktree or create its branch again`)
   }
   ctx.store.guard.check(found.worktree.path)
+  assertNotRepository(ctx.store.config.repos, real(found.worktree.path), 'worktree')
   return found
 }
 
@@ -159,6 +160,9 @@ export const worktreeHandlers: Record<string, Handler> = {
 
     if (!worktree.missing) {
       findRegistered(ctx.store.config.repos, repo.path)
+      // Another registered repo's checkout may be listed as a row here.
+      ctx.store.guard.check(worktree.path)
+      assertNotRepository(ctx.store.config.repos, real(worktree.path), 'worktree')
       // A directory that is already gone is removed from git's list too, and
       // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
       await viaGit(() => force

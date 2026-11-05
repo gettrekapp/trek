@@ -332,3 +332,17 @@ test('a status read that started before a head moved does not write onto the mov
   const feat = s.project(id).repositories[0].worktrees[1]
   assert.deepEqual([feat.dirty, feat.ahead, feat.behind], [false, 0, 0], 'the follow-up read on h3 applied')
 })
+
+test('a list read that finishes after stop() applies nothing', async (t) => {
+  const s = setup(t)
+  const id = s.projects.create('P', [{ registered: A, name: undefined }])
+  await s.poller.tick()
+  s.gates.list = gate()
+  s.listing.get('/r/a').push({ path: '/r/a-new', branch: 'new', head: 'h4', isMain: false })
+  const refreshed = s.poller.refresh('/r/a')
+  await turn()
+  s.poller.stop()
+  s.gates.list.open()
+  await refreshed
+  assert.ok(!s.project(id).repositories[0].worktrees.some((w) => w.path === '/r/a-new'))
+})
