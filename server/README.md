@@ -90,6 +90,30 @@ for extra locations. The file also holds `serverId` (generated on first start;
 clients key their cache by it) and `name` (defaults to the hostname; shown in
 clients).
 
+## Agent settings
+
+Which agent CLI each session runs, and how, comes from an optional `llm`
+section in the same config file. It has the shape of the desktop's LLM settings:
+
+```json
+{
+  "llm": {
+    "llmDefault": { "provider": "claude" },
+    "providers": {
+      "claude": { "command": "claude", "approvalMode": "acceptEdits" },
+      "local": { "backend": "ollama", "baseUrl": "http://127.0.0.1:11434" }
+    }
+  }
+}
+```
+
+The server reloads the file live, so edits apply to the next session you start
+or resume. A project's own settings (default LLM, Claude command and permission
+mode, system prompts, session types) override it. There is no command or API to
+edit this section; edit the file. Agents run as `$SHELL -ilc '<command>'`, so the
+command is found the way it is in your terminal; set `SHELL` for the server if it
+runs without one.
+
 ## Projects
 
 Clients create projects from registered repos (`trek-server add`). Each

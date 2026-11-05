@@ -2,8 +2,10 @@
 
 Version 1 is described first; [Protocol v2](#protocol-v2) follows it. trek-server serves v1
 fully. In v2 it serves the handshake, the `server`, `attention` and `project:<id>` topics,
-`sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*`, `worktree.*` (except `load` and `unload`) and `sys.ping`.
-`worktree.load`, `worktree.unload`, `session.*` and v2 `pty.*` fail with `NOT_FOUND` until phase 2d.
+`sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*`, `worktree.*`,
+`session.*`, v2 `pty.*` and `sys.ping`. The statuses that come from a session's output
+(`working`, `attention`, `done`), the contents of the `attention` topic and automatic
+sending of queued prompts arrive in phase 2d-2.
 
 The companion daemon exposes the operations a client needs to manage git
 worktrees and Claude Code terminal sessions on a remote machine. Any client
@@ -217,7 +219,7 @@ comes from the `server` topic.
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
-| Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 |
+| Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
@@ -336,7 +338,11 @@ clears `tag`, `note`, `ticket`, `pr` or `env`. `branch.setCustomTags` with
 `BAD_REQUEST`. A branch whose data becomes empty is removed from `branchData`.
 
 Deleting a project removes it from the `server` topic's `projects`; its
-`project:<id>` topic stops, and subscribing to it fails with `NOT_FOUND`.
+`project:<id>` topic stops, and subscribing to it fails with `NOT_FOUND`. Once
+`project.delete` succeeds, the server kills the ptys of the project's sessions
+(Global ones included) and stops their Codex id discovery. Once `repo.remove`
+succeeds, it does the same for that repository's sessions. A refused or failed
+removal ends nothing.
 
 `server.addRepo {path, name?}` registers the git repository containing `path`
 and returns `{repoId}`. Both `path` and the repository's top level must be under
@@ -354,6 +360,114 @@ token closes its open connections with `4003`.
 
 The v1 `git.*`, `repo.list`, `agents.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
 internal to a v2 server.
+
+## Sessions
+
+A session is one agent (Claude, Codex, Gemini, Grok or a local model) running in a
+pty on the server. The server builds every agent command line; a client never
+sends one.
+
+**Agent settings.** Provider settings come from the `llm` section of the server's
+config file (see `server/README.md`), which has the shape of the desktop's
+`LlmSettings`: `llmDefault` and per-provider `command`, `approvalMode` and, for
+the local provider, `backend` and `baseUrl`. The file reloads live. A project's
+settings override it: `llmDefault`, `globalLlm`, `claudePermissionMode`,
+`claudeCommand`, `claudeArgs`, `sessionTypes`, `sessionSystemPrompt` and
+`globalSystemPrompt`. No method edits the `llm` section; edit the file.
+
+**Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
+initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
+starts a Global session. `cols` and `rows` are integers from 1 to 1000. The agent
+is chosen from `llm`, else the session type's, else the project's default, else
+the server's. An unknown `llm.provider` is `BAD_REQUEST`, as is an unknown
+`sessionTypeId`, a `worktreeId` that is `missing` or a project with no
+repositories (for Global). A worktree that is not loaded is loaded first. A title
+(of `session.start`, of a session type's name, or of `session.rename`) is at most
+200 characters with no control characters, else `BAD_REQUEST`. If the agent
+cannot be spawned, no session is left behind.
+
+**Running the agent.** The agent runs as the command of a login shell, so the pty
+ends when the agent quits. On POSIX that is `$SHELL -ilc '<command>'` (`/bin/sh`
+when `SHELL` is unset); there is no `exec`, so env-prefixed and compound commands
+and shell aliases work as they do when typed into a terminal. On Windows it is
+`%COMSPEC% /d /s /c <command>`. When the process ends, the session becomes
+`exited` with `exitCode` set and loses its `ptyId`.
+
+**Environment.** The pty gets the provider's env plus `TREK_SESSION_ID` and
+`TREK_TERMINAL_ID` (both the session id). A worktree session also gets
+`TREK_WORKTREE_ID` and `TREK_WORKTREE_PATH`. Provider env cannot override these.
+
+**Global sessions** run in the first repository's main worktree, with the other
+repositories as additional directories, and get the project's `globalSystemPrompt`.
+The built-in Global role prompt is added only for sessions with MCP access, which
+arrives in phase 2e. They have no load state. The path checks of a worktree
+session apply: the main worktree must not be `missing`, and its path and the
+additional directories must be under the allowlist (`PATH_DENIED`).
+
+**Ids.** `Session.id` is the server's handle. For agents that accept a preset id
+(Claude, local, Gemini), `agentSessionId` equals `id`. Codex picks its own id, so
+the server finds it in Codex's session files: it polls every 2 s for the first
+minute, then every 15 s. There is one poll loop per folder; when several Codex
+sessions start in one folder, the oldest claims first, and ids that another
+session on the server already holds are skipped. Until the id is found,
+`agentSessionId` is unset and a restart starts a fresh conversation. Each run gets
+a new `ptyId`.
+
+**Statuses in this phase.** A spawned session is `idle`. A session whose process
+ended is `exited`. `session.markComplete {complete}` sets or clears `complete`.
+`session.seen` turns `attention` or `done` into `idle`. `working`, `attention`
+and `done` are not set by the server yet.
+
+**Restart.** `session.restart {projectId, sessionId, cols, rows}` returns a new
+`{ptyId}` for a session that has no running pty: `exited`, or `idle` after a
+server restart. It resumes the agent where the agent supports it. A running
+session, and a worktree session in a worktree that is not loaded ("load the
+worktree first"), answer `BAD_REQUEST`. A Global session is resumed with
+`session.restart`; clients do that when they open the Global tabs.
+
+**Load and unload.** `worktree.load` marks the worktree loaded and resumes each of
+its sessions that is not running, at 120x32 until a client resizes. A session
+that cannot be spawned does not stop the others: it becomes `exited` with
+`exitCode` -1 and can be restarted, and the worktree stays loaded. `worktree.unload`
+kills the worktree's ptys and marks it unloaded. Its sessions stay and become
+`idle` (a `complete` session stays `complete`). `worktree.remove` on a loaded
+worktree is `IN_USE`. While `worktree.remove` runs git on a path, `session.start`,
+`session.restart` and `worktree.load` on that path (or on a Global session whose
+main worktree it is) are `IN_USE`.
+
+**Closing.** `session.close` kills the session's pty, stops its id discovery and
+removes the record.
+
+**Prompts.** `session.sendPrompt {text}` types the text into the running session as
+the desktop pastes it: newlines become `\r`, the text is wrapped in bracketed
+paste when the agent has turned that mode on, and `\r` follows 150 ms later. It
+answers `BAD_REQUEST` when the session has no running pty. `session.enqueue
+{text}` appends to the session's `queue` and `session.setQueue {queue}` replaces
+it; text and queue entries must be non-empty strings. Both only store the queue:
+sending it automatically arrives in phase 2d-2.
+
+**Shutdown.** When the server stops it kills every session pty. On the next
+start, sessions load as `idle` and their worktrees as unloaded. Commands that
+would start a pty (`session.start`, `session.restart`, `worktree.load`) fail with
+`INTERNAL` while the server is shutting down.
+
+**Errors.** `NOT_FOUND` for an unknown project, worktree or session id.
+`PTY_NOT_FOUND` for an unknown pty, or one that is being killed. `BAD_REQUEST` for
+bad sizes, titles or types, restarting a running session and `sendPrompt` to a
+stopped one. `IN_USE` as above.
+
+**Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
+buffer of up to 2 MiB) as `pty.data` events with `replay: true`, then streams live
+data, as in v1. The server also keeps a headless copy of the screen (2000 lines of
+scrollback) so it can tell whether the agent turned on bracketed paste. Any number
+of connections can attach to one pty, and any of them may `pty.write`. `pty.resize`
+from any attached connection sets the size; the most recent call wins. The pty
+pauses while any attached connection has more than 4 MiB unsent, or the server's
+screen parser falls far behind, and resumes once every connection is under 2 MiB.
+`pty.exit` goes to every attached connection, also when the server killed the pty.
+A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
+meanwhile the pty counts as gone. Only session ptys are reachable through v2;
+v1's `pty.spawn` stays v1-only.
 
 ## Events
 

@@ -106,9 +106,9 @@ export interface MethodParamsV2 {
   }
   /** Without `force`, a dirty worktree fails with GIT_ERROR; a loaded one is IN_USE */
   'worktree.remove': WorktreeRef & { force?: boolean }
-  /** Phase 2d */
+  /** Marks the worktree loaded and resumes its sessions that are not running */
   'worktree.load': WorktreeRef
-  /** Phase 2d */
+  /** Ends the worktree's ptys and marks it unloaded; its sessions stay, idle */
   'worktree.unload': WorktreeRef
   'worktree.pull': WorktreeRef
   'worktree.push': WorktreeRef & { setUpstream: boolean }
@@ -137,7 +137,7 @@ export interface MethodParamsV2 {
   'session.rename': SessionRef & { title: string; expected?: string }
   /** Types the text into the session now */
   'session.sendPrompt': SessionRef & { text: string }
-  /** Appends to the session's queue; sent when the session is next ready */
+  /** Appends to the session's queue; sent automatically from phase 2d-2 */
   'session.enqueue': SessionRef & { text: string }
   'session.setQueue': SessionRef & { queue: string[] }
   /** true = fully complete (tracking paused); false = resume tracking */
