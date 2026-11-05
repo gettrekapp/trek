@@ -114,7 +114,7 @@ test('removeRepo idOnly matches ids only, never paths', (t) => {
 
 test('removeRepo is IN_USE while projects use the repo', (t) => {
   const { store } = setup(t)
-  store.usage = (repo) => (repo.id === 'a' ? ['Project One', 'Project Two'] : [])
+  store.setUsage((repo) => (repo.id === 'a' ? ['Project One', 'Project Two'] : []))
   assert.throws(() => store.removeRepo('a'), (err) => {
     assert.equal(err.code, 'IN_USE')
     assert.match(err.message, /Project One, Project Two/)
@@ -285,4 +285,10 @@ test('the store\'s own update while watching emits exactly one change', async (t
   })
   await new Promise((r) => setTimeout(r, 500))
   assert.equal(changes(), 1)
+})
+
+test('setUsage replaces the usage lookup', (t) => {
+  const { store } = setup(t)
+  store.setUsage(() => ['P'])
+  assert.throws(() => store.removeRepo('a'), (err) => err.code === 'IN_USE')
 })

@@ -19,7 +19,7 @@ export interface AddRepoRequest extends AddRepoOptions {
   requireAllowedRoot: boolean
 }
 
-/** Names of the projects using `repo`. Phase 2b supplies the real lookup. */
+/** Names of the projects using `repo`. */
 export type RepoUsage = (repo: RemoteRepo) => string[]
 
 const RELOAD_DEBOUNCE_MS = 100
@@ -48,7 +48,7 @@ export function validateConfig(raw: unknown): TrekServerConfig {
 
 export class ConfigStore extends EventEmitter<{ change: [] }> {
   readonly path: string
-  usage: RepoUsage = () => []
+  private usage: RepoUsage = () => []
   private current: TrekServerConfig
   private currentGuard: PathGuard
   private watcher?: FSWatcher
@@ -100,6 +100,11 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     const result = addRepo(next, root, { id: request.id, name: request.name })
     if (result.added) this.commit(next)
     return result
+  }
+
+  /** Who uses a repo: the project state sets this so removeRepo can refuse with IN_USE. */
+  setUsage(usage: RepoUsage): void {
+    this.usage = usage
   }
 
   /** By id, or by path (or a path inside the checkout). `idOnly` skips the path fallback. */

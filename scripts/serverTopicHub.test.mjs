@@ -96,3 +96,16 @@ test('a throwing subscriber is dropped without affecting the others', (t) => {
   assert.deepEqual(b.sent.map((s) => s.rev), [1, 2])
   assert.equal(calls, 1)
 })
+
+test('drop forgets the topic and its subscribers; publishing again starts at rev 0', () => {
+  const hub = new TopicHub()
+  hub.publish('project:p', { n: 0 })
+  const sub = recorder()
+  hub.subscribe('project:p', sub)
+  hub.publish('project:p', { n: 1 })
+  hub.drop('project:p')
+  assert.equal(hub.subscribe('project:p', recorder()), undefined)
+  hub.publish('project:p', { n: 5 })
+  assert.equal(hub.subscribe('project:p', recorder()).rev, 0)
+  assert.equal(sub.sent.length, 1)
+})

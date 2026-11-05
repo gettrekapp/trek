@@ -110,9 +110,9 @@ test('server.removeRepo: unknown id, in use, then removed', async (t) => {
   const { call, store, sent } = setup(t)
   await call('sub.subscribe', { topic: 'server' })
   assert.equal((await call('server.removeRepo', { repoId: 'nope' })).error.code, 'NOT_FOUND')
-  store.usage = () => ['Proj']
+  store.setUsage(() => ['Proj'])
   assert.equal((await call('server.removeRepo', { repoId: 'a' })).error.code, 'IN_USE')
-  store.usage = () => []
+  store.setUsage(() => [])
   assert.deepEqual(await call('server.removeRepo', { repoId: 'a' }), { ok: true, result: null })
   assert.equal(sent.length, 1)
   assert.deepEqual(store.config.repos, [])

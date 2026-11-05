@@ -53,6 +53,11 @@ export class TopicHub {
     return { snapshot: entry.snapshot, rev: entry.rev }
   }
 
+  /** Forgets the topic (a deleted project). Subscribers learn about it from the `server` topic. */
+  drop(topic: Topic): void {
+    this.topics.delete(topic)
+  }
+
   unsubscribe(topic: Topic, subscriber: Subscriber): void {
     this.topics.get(topic)?.subscribers.delete(subscriber)
   }
