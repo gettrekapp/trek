@@ -1,12 +1,15 @@
 // Subscription topics of protocol v2 and the snapshot each one carries.
+import type { RemoteRepo } from '../protocol.ts'
 import type { AttentionEntry, Project, ProjectSummary, ServerInfo } from './types.ts'
 
 export type Topic = 'server' | 'attention' | `project:${string}`
 
-/** `server`: who the server is, its health, and its projects. */
+/** `server`: who the server is, its health, its projects and its repo registry. */
 export interface ServerTopic {
   server: ServerInfo
   projects: ProjectSummary[]
+  /** Repos registered with `trek-server add` or `server.addRepo`; projects use only these */
+  repos: RemoteRepo[]
 }
 
 /** `attention`: sessions in attention/done across this server's projects. */

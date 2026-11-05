@@ -145,6 +145,12 @@ export interface MethodParamsV2 {
   'pty.detach': { ptyId: string }
   'pty.write': { ptyId: string; data: string }
   'pty.resize': { ptyId: string; cols: number; rows: number }
+  // Server repo registry
+  /** Registers the git repo containing `path`; it must be under an allowed root */
+  'server.addRepo': { path: string; name?: string }
+  /** Fails with IN_USE while a project uses the repo */
+  'server.removeRepo': { repoId: string }
+
   // Subscriptions
   'sub.subscribe': { topic: Topic }
   'sub.unsubscribe': { topic: Topic }
@@ -196,6 +202,9 @@ export interface MethodResultsV2 {
   'pty.detach': null
   'pty.write': null
   'pty.resize': null
+  /** The id of the new repo, or of the existing one if the path was already registered */
+  'server.addRepo': { repoId: string }
+  'server.removeRepo': null
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }
