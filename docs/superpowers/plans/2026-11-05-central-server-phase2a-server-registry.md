@@ -1626,14 +1626,14 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ```ts
 import { createServer, type Server } from 'node:http'
-import { WebSocketServer, WebSocket } from 'ws'
+import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import {
   CLOSE_HELLO_TIMEOUT,
   CLOSE_UNAUTHORIZED,
   CLOSE_UNSUPPORTED_VERSION,
   PROTOCOL_VERSION,
-  type ClientFrame,
-  type ServerFrame
+  type ServerFrame,
+  type WireError
 } from '../../src/shared/protocol'
 import {
   PROTOCOL_VERSION_V2,
@@ -1651,6 +1651,7 @@ import { dispatchV2 } from './v2'
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
 const HEARTBEAT_INTERVAL_MS = 15_000
+const REVOKE_TERMINATE_MS = 1000
 
 export interface DaemonServer {
   httpServer: Server
@@ -1666,10 +1667,11 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
     }
   })
   const hub = new TopicHub()
-  const stopPublishing = publishServerState(store, hub, daemonVersion)
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
+  /** Revoked sockets that have not finished closing yet; terminated if the close handshake stalls. */
+  const revokeTimers = new Map<WebSocket, NodeJS.Timeout>()
   const onConfigChange = (): void => {
     const active = activeTokenHashes(store.config)
     for (const [ws, hash] of authed) {
@@ -1677,9 +1679,18 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
       console.warn('[auth] token revoked; closing its connection')
       authed.delete(ws)
       ws.close(CLOSE_UNAUTHORIZED, 'token revoked')
+      revokeTimers.set(
+        ws,
+        setTimeout(() => {
+          if (ws.readyState !== WebSocket.CLOSED) ws.terminate()
+        }, REVOKE_TERMINATE_MS)
+      )
     }
   }
+  // Registered before publishServerState's listener, so a revoked socket is
+  // already closing (and gets no frames) when the new server state is published.
   store.on('change', onConfigChange)
+  const stopPublishing = publishServerState(store, hub, daemonVersion)
 
   const httpServer = createServer((_req, res) => {
     res.writeHead(426, { 'content-type': 'text/plain' })
@@ -1691,6 +1702,9 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
     /** Set once hello is accepted. */
     let protocolVersion: number | undefined
     let missedPongs = 0
+    /** Set when hello is rejected: every later frame is ignored until the delayed close. */
+    let rejected = false
+    let rejectTimer: NodeJS.Timeout | undefined
     const subscriber: Subscriber = {
       send(topic, rev, ops) {
         sendFrame(ws, { type: 'event', event: 'state.patch', payload: { topic, rev, ops } })
@@ -1716,18 +1730,37 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
       missedPongs = 0
     })
 
-    ws.on('message', async (raw, isBinary) => {
+    const respond = (id: number, outcome: Outcome): void => {
+      if (outcome.ok) {
+        sendFrame(ws, { type: 'res', id, ok: true, result: outcome.result })
+      } else {
+        sendFrame(ws, { type: 'res', id, ok: false, error: outcome.error })
+      }
+    }
+    const internalError = (err: unknown): void => {
+      console.error('[ws] error handling a frame:', err)
+      if (ws.readyState === WebSocket.OPEN) ws.close(1011, 'internal error')
+    }
+
+    const onMessage = (raw: RawData, isBinary: boolean): void => {
+      // A rejected hello, a revoked token or any close() we started: stop reading.
+      if (rejected || ws.readyState !== WebSocket.OPEN) return
       if (isBinary) {
         ws.close(1003, 'text frames only')
         return
       }
-      let frame: ClientFrame
+      let parsed: unknown
       try {
-        frame = JSON.parse(raw.toString())
+        parsed = JSON.parse(raw.toString())
       } catch {
         ws.close(1002, 'invalid JSON')
         return
       }
+      if (!isRecord(parsed) || typeof parsed.type !== 'string') {
+        ws.close(1002, 'invalid frame')
+        return
+      }
+      const frame = parsed
 
       if (protocolVersion === undefined) {
         if (frame.type !== 'hello') {
@@ -1735,21 +1768,27 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
           return
         }
         clearTimeout(helloTimer)
+        if (typeof frame.protocolVersion !== 'number' || (frame.token !== undefined && typeof frame.token !== 'string')) {
+          ws.close(1002, 'invalid hello')
+          return
+        }
         if (!SUPPORTED_PROTOCOL_VERSIONS.includes(frame.protocolVersion)) {
           ws.close(CLOSE_UNSUPPORTED_VERSION, 'unsupported protocol version')
           return
         }
-        const token = frame.token ?? headerToken
+        // An empty frame token falls back to the Authorization header.
+        const token = (frame.token as string | undefined) || headerToken
         const entry = token ? matchToken(store.config, token) : undefined
         if (!entry) {
           console.warn(`[auth] rejected connection from ${req.socket.remoteAddress}`)
-          setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, 'unauthorized'), BAD_TOKEN_CLOSE_DELAY_MS)
+          rejected = true
+          rejectTimer = setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, 'unauthorized'), BAD_TOKEN_CLOSE_DELAY_MS)
           return
         }
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
         console.log(
-          `[auth] ${frame.client}/${frame.clientVersion} (token "${entry.name}", protocol ${protocolVersion}) ` +
+          `[auth] ${String(frame.client)}/${String(frame.clientVersion)} (token "${entry.name}", protocol ${protocolVersion}) ` +
             `connected from ${req.socket.remoteAddress}`
         )
         if (protocolVersion === PROTOCOL_VERSION_V2) {
@@ -1772,25 +1811,39 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
         return
       }
 
+      if (!authed.has(ws)) return
       if (frame.type !== 'req') return
-      const outcome =
-        protocolVersion === PROTOCOL_VERSION_V2
-          ? await dispatchV2(frame.method, frame.params, { store, hub, subscriber })
-          : await dispatch(frame.method, frame.params, {
-              config: store.config,
-              guard: store.guard,
-              ptys,
-              ws
-            })
-      if (outcome.ok) {
-        sendFrame(ws, { type: 'res', id: frame.id, ok: true, result: outcome.result })
+      if (typeof frame.id !== 'number' || typeof frame.method !== 'string') {
+        ws.close(1002, 'invalid request')
+        return
+      }
+      const id = frame.id
+      if (protocolVersion === PROTOCOL_VERSION_V2) {
+        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber })
+        // Answer synchronous handlers in this tick: a sub.subscribe response
+        // must reach the client before any patch for the topic it subscribed to.
+        if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
+        else respond(id, outcome)
       } else {
-        sendFrame(ws, { type: 'res', id: frame.id, ok: false, error: outcome.error })
+        dispatch(frame.method, frame.params, { config: store.config, guard: store.guard, ptys, ws })
+          .then((o) => respond(id, o))
+          .catch(internalError)
+      }
+    }
+
+    ws.on('message', (raw, isBinary) => {
+      try {
+        onMessage(raw, isBinary)
+      } catch (err) {
+        internalError(err)
       }
     })
 
     ws.on('close', () => {
       clearTimeout(helloTimer)
+      clearTimeout(rejectTimer)
+      clearTimeout(revokeTimers.get(ws))
+      revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
       hub.unsubscribeAll(subscriber)
@@ -1812,6 +1865,12 @@ export function startServer(store: ConfigStore, daemonVersion: string): DaemonSe
   }
 
   return { httpServer, ptys, hub, shutdown }
+}
+
+type Outcome = { ok: true; result: unknown } | { ok: false; error: WireError }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {
@@ -2311,6 +2370,8 @@ cd server && npm run smoke && npm run build && npm run smoke -- --built && cd ..
 ```
 
 Expected: every `ok:` line prints, with no `FAIL:`, ending in `DAEMON SMOKE PASS` for both runs.
+
+> **Added after review:** the smoke also checks the transport fixes: a `sub.subscribe` response precedes the patch from a pipelined `server.addRepo` (back-to-back sends, and both frames in one TCP write); frames a revoked socket sends after the server closed it are ignored; malformed frames (`null`, `"x"`, `[]`, a non-string hello token, a non-numeric `protocolVersion` or req `id`) close with 1002 and the server keeps answering; a good hello pipelined behind a rejected one gets no `welcome` and closes with 4003; an empty hello token falls back to the `Authorization` header; and the CLI's `-h`/`-v` win anywhere and `--port` outside `start` exits 2.
 
 - [ ] **Step 4: Commit**
 
