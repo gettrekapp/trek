@@ -24,6 +24,10 @@ export type WireErrorCode =
   | 'UNSUPPORTED_VERSION'
   /** v2: an `expected` guard failed because the field changed since the client read it. */
   | 'CONFLICT'
+  /** v2: `server.addRepo` was given a path that is not inside a git repository. */
+  | 'NOT_A_REPO'
+  /** v2: `server.removeRepo` on a repo that projects still use. */
+  | 'IN_USE'
 
 export interface WireError {
   code: WireErrorCode

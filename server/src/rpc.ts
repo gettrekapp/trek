@@ -3,7 +3,8 @@ import type { WebSocket } from 'ws'
 import * as gitService from '../../src/host/gitService'
 import * as claudeSessions from '../../src/host/claudeSessionService'
 import * as agentService from '../../src/host/agentService'
-import type { WireError, WireErrorCode } from '../../src/shared/protocol'
+import type { WireError } from '../../src/shared/protocol'
+import { toWireError } from './errors'
 import type { DaemonConfig } from './config'
 import { PathGuard } from './paths'
 import { PtyRegistry } from './ptyRegistry'
@@ -161,14 +162,4 @@ export async function dispatch(
   } catch (err) {
     return { ok: false, error: toWireError(method, err) }
   }
-}
-
-function toWireError(method: string, err: unknown): WireError {
-  const message = err instanceof Error ? err.message : String(err)
-  const code = (err as NodeJS.ErrnoException)?.code
-  let wireCode: WireErrorCode = 'INTERNAL'
-  if (code === 'PATH_DENIED') wireCode = 'PATH_DENIED'
-  else if (code === 'PTY_NOT_FOUND') wireCode = 'PTY_NOT_FOUND'
-  else if (method.startsWith('git.')) wireCode = 'GIT_ERROR'
-  return { code: wireCode, message }
 }
