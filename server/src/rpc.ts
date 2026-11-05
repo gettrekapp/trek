@@ -152,7 +152,7 @@ export async function dispatch(
   params: unknown,
   ctx: RpcContext
 ): Promise<{ ok: true; result: unknown } | { ok: false; error: WireError }> {
-  const handler = handlers[method]
+  const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
   if (!handler) {
     return { ok: false, error: { code: 'NOT_FOUND', message: `Unknown method: ${method}` } }
   }

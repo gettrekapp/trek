@@ -55,6 +55,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   private reloadTimer?: NodeJS.Timeout
 
   private warnedMissing = false
+  private warnedServerId = false
 
   /** Throws if the file exists but is not valid JSON or has the wrong shape. A missing file is an empty config. */
   constructor(path: string) {
@@ -132,6 +133,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     this.warnedMissing = false
     try {
       next = validateConfig(JSON.parse(readFileSync(this.path, 'utf8')))
+      this.keepIdentity(next)
       if (JSON.stringify(next) === JSON.stringify(this.current)) return false
       this.swap(next)
     } catch (err) {
@@ -139,6 +141,17 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
       return false
     }
     return true
+  }
+
+  /** A reloaded file must not change the running server's identity. */
+  private keepIdentity(next: DaemonConfig): void {
+    const { serverId, name } = this.current
+    if (serverId && next.serverId !== serverId) {
+      if (!this.warnedServerId) console.warn('[config] serverId changes are ignored until restart')
+      this.warnedServerId = true
+      next.serverId = serverId
+    }
+    if (name && !next.name) next.name = name
   }
 
   /** Watches the file's directory (atomic saves replace the file) and reloads on change. */

@@ -311,6 +311,14 @@ if (!config.serverId || !config.name || config.tokenHash) {
 
 const server = startServer(store, serverVersion())
 store.watch()
+server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${port} on ${host} is already in use (is trek-daemon or another trek-server still running?)`)
+  } else {
+    console.error(err.message)
+  }
+  process.exit(1)
+})
 server.httpServer.listen(port, host, () => {
   console.log(
     `trek-server ${serverVersion()} "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${port}`

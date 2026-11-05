@@ -104,6 +104,10 @@ const wt = await req('git.listWorktrees', { repoPath: repo })
 if (!wt.ok || wt.result.length !== 1 || !wt.result[0].isMain) fail(`listWorktrees: ${JSON.stringify(wt)}`)
 else ok(`listWorktrees: ${wt.result.length} entry, branch ${wt.result[0].branch}`)
 
+const proto = await req('constructor', {})
+if (proto.ok || proto.error.code !== 'NOT_FOUND') fail(`prototype-named method: ${JSON.stringify(proto)}`)
+else ok('v1 unknown prototype-named method is NOT_FOUND')
+
 const denied = await req('git.listWorktrees', { repoPath: tmpdir() })
 if (denied.ok || denied.error.code !== 'PATH_DENIED') fail(`path guard: ${JSON.stringify(denied)}`)
 else ok('path guard: PATH_DENIED for out-of-root path')

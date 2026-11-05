@@ -1,7 +1,10 @@
-# Trek Daemon Wire Protocol
+# Trek Server Wire Protocol
 
-Version 1 is described first; [Protocol v2](#protocol-v2) follows it. v2 is
-defined but not yet served by the daemon.
+Version 1 is described first; [Protocol v2](#protocol-v2) follows it. trek-server serves v1
+fully. In v2 it serves the handshake, the `server` and `attention` topics,
+`sub.subscribe`/`sub.unsubscribe`, `server.addRepo`/`server.removeRepo`,
+`sys.ping` and an empty `project.list`; other v2 methods currently fail with
+`NOT_FOUND` (later phases add them).
 
 The companion daemon exposes the operations a client needs to manage git
 worktrees and Claude Code terminal sessions on a remote machine. Any client
@@ -41,7 +44,10 @@ defined in `src/shared/protocol.ts`.
    |---|---|
    | `4001` | no `hello` within 5s |
    | `4002` | unsupported `protocolVersion` |
-   | `4003` | bad token (closed after a short delay; no detail given) |
+   | `1002` | malformed JSON or frame |
+| `1003` | binary frame |
+| `1011` | internal error |
+| `4003` | bad token (closed after a short delay; no detail given) |
 
 ## Requests
 
@@ -161,7 +167,9 @@ topics they subscribe to. Frame shapes: `src/shared/protocolV2.ts`; model:
 The transport, `hello`, `req`/`res`/`event` frames, auth and close codes are the
 same as v1. A client selects v2 with `"protocolVersion": 2` in `hello`. A v2
 server keeps accepting v1 clients; a client the server can no longer serve is
-closed with `4002` and the reason `UPGRADE_CLIENT`.
+closed with `4002` and the reason `UPGRADE_CLIENT`. Today an unsupported
+version closes with `4002` and the reason `unsupported protocol version`;
+`UPGRADE_CLIENT` is reserved for when v1 support is removed.
 
 ## Welcome
 
@@ -247,7 +255,7 @@ and returns `{repoId}`. Both `path` and the repository's top level must be under
 an allowed root (a registered repo's parent directory or a `worktreeRoots`
 entry); otherwise it fails with `PATH_DENIED`. A path that is not in a git
 repository fails with `NOT_A_REPO`. A path that is already registered returns
-the existing id. `server.removeRepo {repoId}` fails with `NOT_FOUND` for an
+the existing id and `name` is ignored. `server.removeRepo {repoId}` fails with `NOT_FOUND` for an
 unknown id and with `IN_USE` while a project uses the repo. Both change the
 server's config file and patch the `server` topic. Edits made with the
 `trek-server` CLI on the server reach subscribers the same way, without a

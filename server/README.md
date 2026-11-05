@@ -2,7 +2,7 @@
 
 The Trek server: run git worktrees and agent sessions on a machine and connect
 to it from the desktop app (and, later, the mobile app). Formerly
-`trek-server`; that command still works for one release and prints a notice.
+`trek-daemon`; the `trek-daemon` command still works for one release and prints a notice.
 Wire protocol: see `../PROTOCOL.md`.
 
 Claude sessions **survive disconnects** — close your laptop and the session
@@ -33,6 +33,19 @@ Upgrading from `trek-daemon`: run `npm link` again in `server/`. On first
 start, `~/.config/trek-daemon/config.json` is copied to
 `~/.config/trek-server/config.json` (unless that already exists); your token
 keeps working as the token named `default`.
+
+If you installed the old systemd unit, replace it:
+
+```sh
+systemctl --user disable --now trek-daemon
+rm ~/.config/systemd/user/trek-daemon.service
+# install trek-server.service as described under Run, then:
+systemctl --user daemon-reload && systemctl --user enable --now trek-server
+```
+
+Also remove the leftover untracked `daemon/` directory in your checkout
+(`rm -rf daemon`; it holds the old `dist/` and `node_modules/`), then run
+`npm link` in `server/`.
 
 Rerun `npm run build` after pulling changes. Without linking, run
 `./dist/trek-server.cjs` directly, or `npm start` to run from source with tsx.

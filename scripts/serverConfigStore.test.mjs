@@ -150,6 +150,25 @@ test('reload picks up an external change and ignores an identical file', (t) => 
   assert.equal(changes(), 1)
 })
 
+test('reload keeps serverId, and a missing name, but allows a renamed server', (t) => {
+  const { configPath, store } = setup(t)
+  const warn = t.mock.method(console, 'warn', () => {})
+  store.update((c) => {
+    c.serverId = 'id-1'
+    c.name = 'one'
+  })
+  const file = loadConfig(configPath)
+  saveConfig(configPath, { ...file, serverId: 'id-2', name: undefined, worktreeRoots: ['/tmp'] })
+  assert.equal(store.reload(), true)
+  assert.equal(store.config.serverId, 'id-1')
+  assert.equal(store.config.name, 'one')
+  saveConfig(configPath, { ...file, serverId: undefined, name: 'two' })
+  store.reload()
+  assert.equal(store.config.serverId, 'id-1')
+  assert.equal(store.config.name, 'two')
+  assert.equal(warn.mock.callCount(), 1)
+})
+
 test('reload keeps the old config when the file is not valid JSON', (t) => {
   const { configPath, store, changes } = setup(t)
   writeFileSync(configPath, '{ not json')
