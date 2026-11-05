@@ -106,7 +106,7 @@ test('a branch switch at the same head drops status and flags heads changed', ()
   assert.equal(out.headsChanged, true)
 })
 
-test('a repository registered at a linked worktree keeps one row at its path, with that checkout\'s branch and head', () => {
+test('a repository registered at a linked worktree keeps one main row at its path, with that checkout\'s branch and head', () => {
   const stored = { id: 'm', name: 'Repo', path: '/r/a-feat', isMain: true, loaded: false, sessions: [] }
   const r = { id: 'r', name: 'Repo', path: '/r/a-feat', branchData: {}, worktrees: [stored] }
   const out = reconcileWorktrees(r, [
@@ -114,9 +114,9 @@ test('a repository registered at a linked worktree keeps one row at its path, wi
     { path: '/r/a-feat', branch: 'feat', head: 'h2', isMain: false }
   ], ids())
   assert.equal(out.worktrees.filter((w) => w.path === '/r/a-feat').length, 1)
-  assert.equal(out.worktrees.some((w) => w.path === '/r/a'), false)
-  assert.equal(out.worktrees.length, 1)
   assert.deepEqual(out.worktrees[0], { ...stored, branch: 'feat', head: 'h2' })
+  // git's own main checkout is still shown, as an ordinary worktree
+  assert.deepEqual(out.worktrees.slice(1).map((w) => [w.path, w.isMain, w.branch]), [['/r/a', false, 'main']])
 })
 
 test('parseWorktreeList marks prunable entries, with or without a reason', () => {

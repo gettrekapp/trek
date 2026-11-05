@@ -10,7 +10,7 @@ export interface Reconciled {
   worktrees: Worktree[]
   /** Rows were added, dropped or merged: worth writing to disk. */
   membershipChanged: boolean
-  /** A row was added, restored or its head moved: statuses are stale. */
+  /** A row was added or restored, or its head or branch changed: statuses are stale. */
   headsChanged: boolean
 }
 
@@ -52,13 +52,14 @@ export function reconcileWorktrees(repo: Repository, listed: readonly GitWorktre
 
   // Git flags its first entry as main, but a repository registered at a linked
   // worktree has its own checkout elsewhere in the list: prefer the entry at the
-  // main row's path, else git's main. Other entries at that path are not rows.
+  // main row's path, else git's main. Other entries at that path are not rows;
+  // git's own main checkout then shows as an ordinary worktree.
   const mainReal = real(repo.worktrees.find((w) => w.isMain)?.path ?? repo.path)
   const mainInfo = listed.find((i) => real(i.path) === mainReal) ?? listed.find((i) => i.isMain)
   const entries: GitWorktreeInfo[] = []
   for (const i of listed) {
     if (i === mainInfo) entries.push({ ...i, isMain: true })
-    else if (!i.isMain && !i.prunable && real(i.path) !== mainReal) entries.push(i)
+    else if (!i.prunable && real(i.path) !== mainReal) entries.push({ ...i, isMain: false })
   }
 
   const listedKeys = new Set<string>()
