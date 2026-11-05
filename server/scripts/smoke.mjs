@@ -1,11 +1,12 @@
 // Daemon smoke test: throwaway config + temp git repo, then handshake,
 // git.listWorktrees, pty spawn/echo/kill, and an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import WebSocket from 'ws'
+import { applyStatePatch } from '../../src/shared/sync/topicState.ts'
 
 const PORT = 17345
 const token = randomBytes(16).toString('base64url')
@@ -28,12 +29,14 @@ writeFileSync(configPath, JSON.stringify({
 }))
 
 // `--built` runs the bundled CLI (npm run build) instead of the TypeScript source.
-const daemonArgs = ['start', '--config', configPath, '--port', String(PORT)]
-const [cmd, cmdArgs] = process.argv.includes('--built')
-  ? [process.execPath, ['dist/trek-server.cjs', ...daemonArgs]]
-  : ['npx', ['tsx', 'src/index.ts', ...daemonArgs]]
-const daemon = spawn(cmd, cmdArgs, {
-  cwd: new URL('..', import.meta.url).pathname,
+const [cmd, cmdPrefix] = process.argv.includes('--built')
+  ? [process.execPath, ['dist/trek-server.cjs']]
+  : ['npx', ['tsx', 'src/index.ts']]
+const serverDir = new URL('..', import.meta.url).pathname
+const cli = (...args) =>
+  execFileSync(cmd, [...cmdPrefix, ...args, '--config', configPath], { cwd: serverDir, encoding: 'utf8' })
+const daemon = spawn(cmd, [...cmdPrefix, 'start', '--config', configPath, '--port', String(PORT)], {
+  cwd: serverDir,
   stdio: ['ignore', 'pipe', 'inherit']
 })
 
@@ -139,6 +142,113 @@ if (!killed.ok) fail(`pty.kill: ${JSON.stringify(killed)}`)
 else ok('pty.kill')
 
 ws.close()
+
+// --- protocol v2 ---
+const gitEnv = {
+  ...process.env,
+  GIT_AUTHOR_NAME: 'smoke', GIT_AUTHOR_EMAIL: 's@s', GIT_COMMITTER_NAME: 'smoke', GIT_COMMITTER_EMAIL: 's@s'
+}
+const mkRepo = (path) => { execFileSync('git', ['init', '-q', '-b', 'main', path], { env: gitEnv }); return path }
+
+/** A connection that records frames; `req` resolves with the res frame. */
+async function connect(protocolVersion, tok) {
+  const sock = new WebSocket(`ws://127.0.0.1:${PORT}`)
+  const frames = []
+  const waiting = new Map()
+  let id = 1
+  sock.on('message', (raw) => {
+    const f = JSON.parse(raw.toString())
+    frames.push(f)
+    if (f.type === 'res') { waiting.get(f.id)?.(f); waiting.delete(f.id) }
+  })
+  await new Promise((r) => sock.on('open', r))
+  sock.send(JSON.stringify({ type: 'hello', protocolVersion, token: tok, client: 'smoke-v2', clientVersion: '0' }))
+  const closed = new Promise((r) => sock.on('close', (code) => r(code)))
+  await new Promise((r) => setTimeout(r, 300))
+  return {
+    sock, frames, closed,
+    welcome: frames.find((f) => f.type === 'welcome'),
+    req: (method, params) => new Promise((resolve, reject) => {
+      const n = id++
+      waiting.set(n, resolve)
+      sock.send(JSON.stringify({ type: 'req', id: n, method, params }))
+      setTimeout(() => { if (waiting.has(n)) reject(new Error(`timeout: ${method}`)) }, 10000)
+    })
+  }
+}
+
+/** Waits for the next state.patch on `topic` past `state.rev` and applies it. */
+async function nextPatch(conn, topic, state, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const patch = conn.frames.find((f) => f.type === 'event' && f.event === 'state.patch' &&
+      f.payload.topic === topic && f.payload.rev === state.rev + 1)
+    if (patch) {
+      const outcome = applyStatePatch(state, patch.payload)
+      if (outcome.kind !== 'applied') throw new Error(`patch did not apply: ${outcome.kind}`)
+      return outcome.state
+    }
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  throw new Error(`no patch for ${topic} after rev ${state.rev}`)
+}
+
+const v2 = await connect(2, token)
+if (v2.welcome?.protocolVersion !== 2 || !/^[0-9a-f-]{36}$/.test(v2.welcome.serverId ?? '')) {
+  fail(`v2 welcome: ${JSON.stringify(v2.welcome)}`)
+} else ok(`v2 welcome: server "${v2.welcome.serverName}" ${v2.welcome.serverId}`)
+
+const subbed = await v2.req('sub.subscribe', { topic: 'server' })
+let serverState = subbed.result
+if (!subbed.ok || serverState.snapshot.repos.length !== 1 || serverState.snapshot.repos[0].path !== repo) {
+  fail(`subscribe server: ${JSON.stringify(subbed)}`)
+} else ok('subscribe server: snapshot lists the configured repo')
+
+const repo2 = mkRepo(join(work, 'repo2'))
+const added = await v2.req('server.addRepo', { path: repo2 })
+if (!added.ok || added.result.repoId !== 'repo2') fail(`server.addRepo: ${JSON.stringify(added)}`)
+serverState = await nextPatch(v2, 'server', serverState)
+if (serverState.snapshot.repos.length !== 2) fail(`after addRepo: ${JSON.stringify(serverState.snapshot.repos)}`)
+else ok('server.addRepo: registered and patched')
+
+const outside = mkRepo(mkdtempSync(join(tmpdir(), 'trek-server-outside-')))
+const deniedAdd = await v2.req('server.addRepo', { path: outside })
+rmSync(outside, { recursive: true, force: true })
+if (deniedAdd.ok || deniedAdd.error.code !== 'PATH_DENIED') fail(`addRepo outside: ${JSON.stringify(deniedAdd)}`)
+else ok('server.addRepo: PATH_DENIED outside the allowed roots')
+
+mkdirSync(join(work, 'plain'))
+const notRepo = await v2.req('server.addRepo', { path: join(work, 'plain') })
+if (notRepo.ok || notRepo.error.code !== 'NOT_A_REPO') fail(`addRepo plain dir: ${JSON.stringify(notRepo)}`)
+else ok('server.addRepo: NOT_A_REPO for a plain directory')
+
+const repo3 = mkRepo(join(work, 'repo3'))
+cli('add', repo3)
+serverState = await nextPatch(v2, 'server', serverState)
+if (!serverState.snapshot.repos.some((r) => r.path === realpathSync(repo3))) fail('CLI add not picked up: ' + JSON.stringify(serverState.snapshot.repos))
+else ok('CLI add on a running server: picked up without a restart')
+
+const removed = await v2.req('server.removeRepo', { repoId: 'repo2' })
+if (!removed.ok) fail(`server.removeRepo: ${JSON.stringify(removed)}`)
+serverState = await nextPatch(v2, 'server', serverState)
+if (serverState.snapshot.repos.some((r) => r.id === 'repo2')) fail('removeRepo not reflected')
+else ok('server.removeRepo: removed and patched')
+
+const phoneToken = /^ {2}(\S+)$/m.exec(cli('token', 'add', 'phone'))?.[1]
+// The running server reloads the config file asynchronously; retry until it knows the token.
+let phone = await connect(2, phoneToken)
+for (let attempt = 0; attempt < 10 && phone.welcome?.protocolVersion !== 2; attempt++) {
+  await new Promise((r) => setTimeout(r, 300))
+  phone = await connect(2, phoneToken)
+}
+if (phone.welcome?.protocolVersion !== 2) fail(`named token login: ${JSON.stringify(phone.frames)}`)
+else ok('named token "phone" authenticates')
+cli('token', 'revoke', 'phone')
+const revokedCode = await Promise.race([phone.closed, new Promise((r) => setTimeout(() => r('open'), 4000))])
+if (revokedCode !== 4003) fail(`revoked token connection: ${revokedCode}`)
+else ok('token revoke closes its live connection with 4003')
+
+v2.sock.close()
 
 // --- bad token rejected ---
 const badWs = new WebSocket(`ws://127.0.0.1:${PORT}`)
