@@ -93,8 +93,10 @@ export interface MethodParamsV2 {
   // Worktrees
   /**
    * `path` defaults to `<repo>-<branch>` next to the repository, each `/` in the
-   * branch replaced by `-`. `fromPr`: check out GitHub PR #n's head into the new
-   * branch (works for fork PRs).
+   * branch replaced by `-`. `fromPr`: fetch GitHub PR #n's head into `branch`
+   * and check it out (works for fork PRs); needs `createBranch: false`.
+   * Not atomic: if git creates the worktree but the list cannot be re-read, the
+   * call fails with GIT_ERROR and the worktree stays on disk.
    */
   'worktree.create': RepoRef & {
     branch: string
@@ -102,9 +104,11 @@ export interface MethodParamsV2 {
     path?: string
     fromPr?: number
   }
-  /** Without `force`, a dirty worktree fails with GIT_ERROR */
+  /** Without `force`, a dirty worktree fails with GIT_ERROR; a loaded one is IN_USE */
   'worktree.remove': WorktreeRef & { force?: boolean }
+  /** Phase 2d */
   'worktree.load': WorktreeRef
+  /** Phase 2d */
   'worktree.unload': WorktreeRef
   'worktree.pull': WorktreeRef
   'worktree.push': WorktreeRef & { setUpstream: boolean }

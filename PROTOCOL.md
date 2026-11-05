@@ -2,8 +2,8 @@
 
 Version 1 is described first; [Protocol v2](#protocol-v2) follows it. trek-server serves v1
 fully. In v2 it serves the handshake, the `server`, `attention` and `project:<id>` topics,
-`sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*` and `sys.ping`.
-`worktree.*`, `session.*` and v2 `pty.*` fail with `NOT_FOUND` until later phases add them.
+`sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*`, `worktree.*` (except `load` and `unload`) and `sys.ping`.
+`worktree.load`, `worktree.unload`, `session.*` and v2 `pty.*` fail with `NOT_FOUND` until phase 2d.
 
 The companion daemon exposes the operations a client needs to manage git
 worktrees and Claude Code terminal sessions on a remote machine. Any client
@@ -76,7 +76,7 @@ rejected with `PATH_DENIED`.
 | Method | Params | Result |
 |---|---|---|
 | `repo.list` | – | `RemoteRepo[]` (same as `welcome.repos`) |
-| `git.listWorktrees` | `{repoPath}` | `GitWorktreeInfo[]` — one git process; carries no dirty/ahead/behind |
+| `git.listWorktrees` | `{repoPath}` | `GitWorktreeInfo[]` — one git process; carries no dirty/ahead/behind. An entry may carry `prunable: true`: git lists it, but its directory is gone |
 | `git.worktreeStatuses` | `{worktreePaths}` | `WorktreeStatus[]` — dirty/ahead/behind, two git processes per worktree, so clients poll it on a slower cadence than the list |
 | `git.worktreeChanges` | `{worktreePath}` | `WorktreeChanges` — `{base, files}`: commits since the merge-base with the default branch, plus staged, unstaged and untracked files. Clients poll it for the selected worktree only |
 | `git.worktreeDiff` | `{worktreePath}` | `Record<string, string>` — patch text per changed file; entries are omitted for binary, too-large and unreadable files, and for patches past an 8 MB total (kept in sorted path order, smaller later files still included) |
@@ -193,7 +193,7 @@ comes from the `server` topic.
 
 | Topic | Snapshot |
 |---|---|
-| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) |
+| `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) and `REPO_UNAVAILABLE` (see Worktrees below) |
 | `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session), sessions in `attention` or `done` |
 | `project:<id>` | the whole `Project` tree |
 
@@ -232,11 +232,61 @@ and `repo.update`, only the keys listed in `expected` are compared. A
 project-wide rev guard is not used because the rev moves on every status or git
 change, so it would almost always fail. Everything else is last-write-wins.
 
-`worktree.create` defaults `path` to `<repo>-<branch>` next to the repository,
-with each `/` in the branch replaced by `-`. `fromPr` checks out GitHub PR #n's
-head into the new branch (works for fork PRs). `worktree.remove` on a dirty
-worktree fails with `GIT_ERROR` unless `force: true`, so a client can confirm
-with the user and retry with `force: true`.
+**Worktrees.** A project lists every git worktree of its repositories: the
+server polls `git worktree list` and adds or removes rows to match. Projects
+that share a repository see the same worktrees, each with its own ids and
+sessions. A worktree git no longer lists is dropped, unless it holds sessions:
+then it stays with `missing: true` (no status; commands other than
+`worktree.remove` fail with `BAD_REQUEST`) and comes back by itself if git
+lists the path again. A worktree whose directory is gone but which git still
+lists counts as vanished: git marks it prunable, and the server treats it as
+not listed. The main worktree is never dropped. If a registered repository path
+is itself a linked worktree, that checkout is the project's main worktree, and
+git's own main checkout shows as an ordinary worktree.
+
+The poller reads a repository's worktree list every 5 s and their
+dirty/ahead/behind every 30 s while any client subscribes to a project that uses
+it, and lists every 60 s otherwise. Only a project's first subscriber triggers
+an immediate read, after its `sub.subscribe` response. These changes are patched
+into `project:<id>` but written to disk only when rows are added or removed. A
+head move or a branch switch clears a worktree's dirty/ahead/behind until the
+next status read. A repository that is no longer registered, or whose worktree
+list fails, is reported as a `REPO_UNAVAILABLE` health warning in the `server`
+topic until a list succeeds; worktree commands on an unregistered repository
+fail with `PATH_DENIED`.
+
+`worktree.create {projectId, repoId, branch, createBranch, path?, fromPr?}`
+defaults `path` to `<repo>-<branch>` next to the repository, with each `/` in
+the branch replaced by `-`. The path must be under the allowlist
+(`PATH_DENIED`) and must not exist. It must not be a registered repository or
+contain one, and must not be inside a registered repository or inside another
+worktree of the same repository (`BAD_REQUEST`). The branch must pass
+`git check-ref-format --branch` and also be valid as `refs/heads/<branch>`, so
+forms like `@{-1}` are refused. It must not start with `-` and must not be `@`
+or `HEAD`; each of these is `BAD_REQUEST`. `createBranch: true` cuts the branch
+from the default branch (fetched first when it is on origin). With
+`createBranch: false` and no `fromPr`, the branch must already exist locally or
+on a remote; otherwise the result is `GIT_ERROR` "no branch named …". Tags and
+commit SHAs are not accepted. `fromPr: n` fetches GitHub PR #n's head into
+`branch` (works for fork PRs) and needs `createBranch: false`; the client
+supplies the branch name and sets the PR link with `branch.setPr`. The server
+symlinks the repository's `linkedDirs` into the new worktree and gives the
+branch the first workflow tag unless it has one, and only when the new worktree
+really has `branch` checked out. The response comes after the new row is in the
+project topic. The command is not atomic: if git created the worktree but the
+server could not re-read the list, it answers `GIT_ERROR` saying so, and the
+worktree stays on disk.
+
+`worktree.remove {projectId, worktreeId, force?}` runs `git worktree remove`
+and drops the row. A dirty worktree fails with `GIT_ERROR` unless
+`force: true`, so a client can confirm with the user and retry. The main
+worktree is `BAD_REQUEST`; a worktree that any project has loaded is `IN_USE`.
+For a worktree whose directory was deleted but which git still lists, it runs
+`git worktree prune` instead. A `missing` worktree's row is just dropped.
+`worktree.pull` (fast-forward only) and `worktree.push {setUpstream}` need a
+checked-out branch (`BAD_REQUEST` when detached) and refresh the worktree's
+status before answering. `worktree.changes` and `worktree.diff` return what v1's
+`git.worktreeChanges` and `git.worktreeDiff` do.
 
 `project.import` takes one of the projects that `importProjectFile()`
 (`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
@@ -245,9 +295,9 @@ ids, and each session keeps its old id as `agentSessionId` so it resumes. The
 server assigns the project's id; nested ids are kept. It
 rejects the import with `BAD_REQUEST` if any repository, worktree or session id
 is empty, contains a space, or already exists on that server, and with
-`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no non-main worktree path that is another registered repository or contains one, and no own `__proto__` key anywhere in the payload (settings values included); otherwise `BAD_REQUEST`. It resets runtime
+`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no worktree path listed twice in one repository, no non-main worktree path that is another registered repository or contains one, and no own `__proto__` key anywhere in the payload (settings values included); otherwise `BAD_REQUEST`. It resets runtime
 fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
-`dirty`, `ahead`, `behind` and `head`.
+`dirty`, `ahead`, `behind`, `head` and `missing`.
 
 Projects use registered repositories only. `project.create`, `repo.add` and
 `project.import` fail with `PATH_DENIED` for a repository path that is not in
