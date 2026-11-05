@@ -48,14 +48,17 @@ test('other providers, local backend env and an invalid selection', () => {
   assert.match(agentCommand({ ...base, llm: { provider: 'nope' } }, {}, DEFAULT_LLM_SETTINGS).command, /^claude /)
 })
 
-test('shellLaunch: exec in a login shell; cmd /c on Windows', () => {
-  assert.deepEqual(shellLaunch('claude --x', 'linux', { SHELL: '/bin/bash' }), { file: '/bin/bash', args: ['-ilc', 'exec claude --x'] })
-  assert.deepEqual(shellLaunch('claude', 'darwin', {}), { file: '/bin/sh', args: ['-ilc', 'exec claude'] })
+test('shellLaunch: a login shell with -c; cmd /c on Windows', () => {
+  assert.deepEqual(shellLaunch('claude --x', 'linux', { SHELL: '/bin/bash' }), { file: '/bin/bash', args: ['-ilc', 'claude --x'] })
+  assert.deepEqual(shellLaunch('claude', 'darwin', {}), { file: '/bin/sh', args: ['-ilc', 'claude'] })
+  // env prefixes and compound commands stay shell syntax, as when the desktop types them
+  assert.deepEqual(shellLaunch('CLAUDE_CONFIG_DIR=/w claude && true', 'linux', { SHELL: '/bin/zsh' }).args, ['-ilc', 'CLAUDE_CONFIG_DIR=/w claude && true'])
   assert.deepEqual(shellLaunch('claude', 'win32', { COMSPEC: 'C:\\cmd.exe' }), { file: 'C:\\cmd.exe', args: ['/d', '/s', '/c', 'claude'] })
 })
 
 test('sessionEnv', () => {
   assert.deepEqual(sessionEnv('s1', undefined, { A: '1' }), { TREK_SESSION_ID: 's1', TREK_TERMINAL_ID: 's1', A: '1' })
+  assert.equal(sessionEnv('s1', undefined, { TREK_SESSION_ID: 'forged' }).TREK_SESSION_ID, 's1')
   assert.deepEqual(sessionEnv('s1', { id: 'w1', path: '/r/a-x' }), {
     TREK_SESSION_ID: 's1', TREK_TERMINAL_ID: 's1', TREK_WORKTREE_ID: 'w1', TREK_WORKTREE_PATH: '/r/a-x'
   })

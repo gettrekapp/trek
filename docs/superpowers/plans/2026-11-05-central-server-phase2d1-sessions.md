@@ -31,7 +31,7 @@ Task 9 records these in `PROTOCOL.md`.
      "providers": { "claude": {"command": "…", "approvalMode": "…"}, "local": {"backend": "ollama", "baseUrl": "…"} } }
    ```
    It is read through `sanitizeLlmSettings` and reloads live with the rest of the config. Project settings still override it as they do today: `llmDefault`, `globalLlm`, `claudePermissionMode`, `claudeCommand`, `claudeArgs`, `sessionTypes`, `sessionSystemPrompt` and `globalSystemPrompt`. There is no CLI or RPC to edit it in 2d-1; you edit the file.
-2. **Agents run with `exec` in a login shell** (the user's choice). On POSIX this is `$SHELL -ilc 'exec <command>'`, falling back to `/bin/sh`. The pty ends when the agent quits, so the session becomes `exited` with the agent's exit code and can be restarted. On Windows it is `%COMSPEC% /d /s /c <command>`; provider commands use POSIX quoting there, as they do today.
+2. **Agents run as the command of a login shell** (the user's choice: the pty ends with the agent). On POSIX this is `$SHELL -ilc '<command>'`, falling back to `/bin/sh`. Not `exec <command>`, which a review showed breaks env-prefixed (`VAR=x claude`) and compound commands and skips aliases. The pty ends when the agent quits, so the session becomes `exited` with the agent's exit code and can be restarted. On Windows it is `%COMSPEC% /d /s /c <command>`; provider commands use POSIX quoting there, as they do today.
 3. **Status in 2d-1:**
    - A spawned session is `idle`.
    - A session whose process ended is `exited`, with `exitCode` set.
@@ -995,8 +995,8 @@ function fakeSpawner() {
 }
 
 const tick = () => new Promise((r) => setImmediate(r))
-/** The agent command a spawn ran (the part after `exec `). */
-const cmd = (proc) => proc.opts.args.at(-1).replace(/^exec /, '')
+/** The agent command a spawn ran (the shell's -c argument). */
+const cmd = (proc) => proc.opts.args.at(-1)
 
 function setup(t, { llm } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
@@ -1958,7 +1958,7 @@ In the v2 section:
 - Update the "served methods" sentence near the top. `session.*`, `worktree.load`, `worktree.unload` and v2 `pty.*` are served. Output-driven statuses (`working`, `attention`, `done`), the `attention` topic contents and automatic queue sends arrive in phase 2d-2.
 - Add a **Sessions** subsection that states the decisions of this plan as protocol behaviour:
   - Decision 1: where agent settings come from (the server config `llm` section, with project settings overriding).
-  - Decision 2: exec in a login shell, and `exited` with `exitCode`.
+  - Decision 2: the agent as a login shell's `-c` command, and `exited` with `exitCode`.
   - Decision 3: statuses in this phase.
   - Decision 4: `sendPrompt`, `enqueue` and `setQueue`.
   - Decision 5: load and unload.

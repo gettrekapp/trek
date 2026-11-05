@@ -53,26 +53,31 @@ export function agentCommand(launch: AgentLaunch, settings: ProjectSettings, llm
   })
 }
 
-/** The process that runs `command`: exec in a login shell, so the pty ends with the agent. */
+/**
+ * The process that runs `command`: a login shell with `-c`, so the pty ends when
+ * the agent does and carries its exit status. Not `exec <command>`: that breaks
+ * env-prefixed (`VAR=x claude`) and compound commands, and skips aliases, all of
+ * which work when the desktop types the command into a shell.
+ */
 export function shellLaunch(
   command: string,
   platform: string = process.platform,
   env: Record<string, string | undefined> = process.env
 ): { file: string; args: string[] } {
   if (platform === 'win32') return { file: env.COMSPEC || 'cmd.exe', args: ['/d', '/s', '/c', command] }
-  return { file: env.SHELL || '/bin/sh', args: ['-ilc', `exec ${command}`] }
+  return { file: env.SHELL || '/bin/sh', args: ['-ilc', command] }
 }
 
-/** Tells a session's agent where it runs; the provider's env goes on top. */
+/** Tells a session's agent where it runs. The provider's env cannot override the TREK_* identity. */
 export function sessionEnv(
   sessionId: string,
   worktree: { id: string; path: string } | undefined,
   extra: Record<string, string> = {}
 ): Record<string, string> {
   return {
+    ...extra,
     TREK_SESSION_ID: sessionId,
     TREK_TERMINAL_ID: sessionId,
-    ...(worktree ? { TREK_WORKTREE_ID: worktree.id, TREK_WORKTREE_PATH: worktree.path } : {}),
-    ...extra
+    ...(worktree ? { TREK_WORKTREE_ID: worktree.id, TREK_WORKTREE_PATH: worktree.path } : {})
   }
 }
