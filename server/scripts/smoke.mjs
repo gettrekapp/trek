@@ -390,6 +390,39 @@ proj = await nextPatch(pc, `project:${projectId}`, proj)
 if (proj.snapshot.repositories[0].branchData.main?.note !== 'from smoke') fail('branch.setNote not patched')
 else ok('branch.setNote: patched into the project topic')
 
+// --- worktrees ---
+// The poller also patches the project topic, so apply patches until `cond` holds (bounded).
+const projWorktrees = () => proj.snapshot.repositories[0].worktrees
+const patchUntil = async (cond, max = 15) => {
+  for (let i = 0; i < max && !cond(); i++) {
+    try { proj = await nextPatch(pc, `project:${projectId}`, proj, 2000) } catch { break }
+  }
+  return cond()
+}
+
+const wtCreated = await pc.req('worktree.create', { projectId, repoId, branch: 'smoke-wt', createBranch: true })
+if (!wtCreated.ok) fail(`worktree.create: ${JSON.stringify(wtCreated)}`)
+const wtId = wtCreated.result?.worktreeId
+await patchUntil(() => projWorktrees().some((w) => w.id === wtId))
+const wtRow = projWorktrees().find((w) => w.id === wtId)
+if (!wtRow || wtRow.branch !== 'smoke-wt' || !existsSync(wtRow.path)) fail(`worktree.create row: ${JSON.stringify(wtRow)}`)
+else ok('worktree.create: created on disk and patched into the project topic')
+
+await patchUntil(() => { const m = projWorktrees().find((w) => w.isMain); return m?.branch === 'main' && !!m.head })
+const mainRow = projWorktrees().find((w) => w.isMain)
+if (mainRow?.branch !== 'main' || !mainRow.head) fail(`poller did not fill the main worktree: ${JSON.stringify(mainRow)}`)
+else ok('git poller: main worktree has branch and head')
+
+const wtChanges = await pc.req('worktree.changes', { projectId, worktreeId: wtId })
+if (!wtChanges.ok || !Array.isArray(wtChanges.result.files)) fail(`worktree.changes: ${JSON.stringify(wtChanges)}`)
+else ok('worktree.changes answers')
+
+const wtRemoved = await pc.req('worktree.remove', { projectId, worktreeId: wtId })
+if (!wtRemoved.ok || existsSync(wtRow?.path ?? '')) fail(`worktree.remove: ${JSON.stringify(wtRemoved)}`)
+await patchUntil(() => !projWorktrees().some((w) => w.id === wtId))
+if (projWorktrees().some((w) => w.id === wtId)) fail('removed worktree still in the project topic')
+else ok('worktree.remove: removed from disk and the project topic')
+
 const inUse = await pc.req('server.removeRepo', { repoId: 'smoke' })
 if (inUse.ok || inUse.error.code !== 'IN_USE') fail(`removeRepo while used: ${JSON.stringify(inUse)}`)
 else ok('server.removeRepo: IN_USE while a project uses it')
