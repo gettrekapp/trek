@@ -1,6 +1,7 @@
 // Structural diff producing the RFC 6902 subset that jsonPatch.ts applies, so a
 // server can publish a new snapshot and send subscribers only what changed.
-// Objects are diffed key by key; same-length arrays index by index; anything
+// Objects are diffed key by key; same-length arrays index by index; an array
+// that only grew or shrank at the end gets add/remove ops for the tail; anything
 // else that differs is replaced whole. Keys whose value is undefined count as
 // absent (JSON drops them); presence always means an OWN property, so names
 // like `constructor` behave as ordinary keys. applyPatch(a, diffJson(a, b))
@@ -73,9 +74,26 @@ function walk(a: unknown, b: unknown, path: string[], ops: PatchOp[]): void {
     }
     return
   }
-  if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) {
-    for (let i = 0; i < a.length; i++) walk(a[i], b[i], [...path, String(i)], ops)
-    return
+  if (Array.isArray(a) && Array.isArray(b)) {
+    const shared = Math.min(a.length, b.length)
+    // Same length: index by index. Grown or shrunk at the end only (the shared
+    // prefix unchanged): add, or remove last-first, the tail. Anything else is
+    // replaced whole.
+    if (a.length === b.length || prefixEqual(a, b, shared)) {
+      for (let i = 0; i < shared; i++) walk(a[i], b[i], [...path, String(i)], ops)
+      if (b.length > a.length) {
+        for (let i = a.length; i < b.length; i++) ops.push({ op: 'add', path: formatPointer([...path, String(i)]), value: b[i] })
+      } else {
+        for (let i = a.length - 1; i >= b.length; i--) ops.push({ op: 'remove', path: formatPointer([...path, String(i)]) })
+      }
+      return
+    }
   }
   ops.push({ op: 'replace', path: formatPointer(path), value: b })
+}
+
+/** True when the first `shared` elements of both arrays are equal. */
+function prefixEqual(a: unknown[], b: unknown[], shared: number): boolean {
+  for (let i = 0; i < shared; i++) if (!deepEqual(a[i], b[i])) return false
+  return true
 }

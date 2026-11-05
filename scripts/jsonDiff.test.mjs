@@ -27,10 +27,36 @@ test('same-length arrays are diffed per index', () => {
   ])
 })
 
-test('arrays of different length are replaced whole', () => {
-  assert.deepEqual(diffJson({ xs: [1, 2] }, { xs: [1, 2, 3] }), [
-    { op: 'replace', path: '/xs', value: [1, 2, 3] }
+test('arrays of different length: a grown prefix gets adds', () => {
+  assert.deepEqual(diffJson({ xs: [1, 2] }, { xs: [1, 2, 3] }), [{ op: 'add', path: '/xs/2', value: 3 }])
+})
+
+test('an array that grows at the end gets add ops at the new indexes', () => {
+  assert.deepEqual(diffJson({ xs: [1, { a: 1 }] }, { xs: [1, { a: 1 }, 3, 4] }), [
+    { op: 'add', path: '/xs/2', value: 3 },
+    { op: 'add', path: '/xs/3', value: 4 }
   ])
+})
+
+test('an array that shrinks at the end gets remove ops, last index first', () => {
+  assert.deepEqual(diffJson({ xs: [1, 2, 3, 4] }, { xs: [1, 2] }), [
+    { op: 'remove', path: '/xs/3' },
+    { op: 'remove', path: '/xs/2' }
+  ])
+})
+
+test('a shorter array that is not a prefix is still replaced whole', () => {
+  assert.deepEqual(diffJson({ xs: [1, 2, 3] }, { xs: [2, 3] }), [{ op: 'replace', path: '/xs', value: [2, 3] }])
+})
+
+test('growing and shrinking round-trip through the wire', () => {
+  const cases = [
+    [{ s: [] }, { s: [{ id: 'a', q: [] }] }],
+    [{ s: [{ id: 'a' }] }, { s: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }],
+    [{ s: [{ id: 'a' }, { id: 'b' }] }, { s: [] }],
+    [[1, 2, 3], [1]]
+  ]
+  for (const [a, b] of cases) assert.deepEqual(applyPatch(wire(a), wire(diffJson(a, b))), wire(b))
 })
 
 test('a changed root is replaced at ""', () => {
