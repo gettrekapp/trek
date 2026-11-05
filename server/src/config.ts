@@ -1,11 +1,19 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
+import type { TokenEntry } from './tokens'
 
 export interface DaemonConfig {
-  /** sha256 hex of the bearer token — the token itself is never stored. */
+  /** Stable UUID of this server, generated on first start. */
+  serverId?: string
+  /** Display name shown in clients; defaults to the hostname. */
+  name?: string
+  /** v1's single token hash. Moved into `tokens` as "default" on start. */
   tokenHash?: string
+  /** Named tokens; only sha256 hashes are stored. */
+  tokens?: TokenEntry[]
   /** Repos clients may operate on. `id` is any stable slug. */
   repos: RemoteRepo[]
   /**
@@ -19,7 +27,23 @@ export interface DaemonConfig {
 }
 
 export function defaultConfigPath(): string {
+  return join(homedir(), '.config', 'trek-server', 'config.json')
+}
+
+/** Where trek-daemon (before the rename) kept its config. */
+export function legacyConfigPath(): string {
   return join(homedir(), '.config', 'trek-daemon', 'config.json')
+}
+
+/**
+ * Copies the trek-daemon config to `target` when `target` does not exist yet
+ * and `legacy` does. Returns true if it copied. The legacy file is kept.
+ */
+export function migrateLegacyConfig(target: string, legacy: string): boolean {
+  if (existsSync(target) || !existsSync(legacy)) return false
+  mkdirSync(dirname(target), { recursive: true })
+  copyFileSync(legacy, target)
+  return true
 }
 
 export function loadConfig(path: string): DaemonConfig {
@@ -34,7 +58,27 @@ export function loadConfig(path: string): DaemonConfig {
   return config
 }
 
+/**
+ * Write-then-rename, so a running server watching the file never reads a
+ * half-written config. The file is 0600: it holds token hashes.
+ */
 export function saveConfig(path: string, config: DaemonConfig): void {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(config, null, 2) + '\n', 'utf8')
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+  renameSync(tmp, path)
+}
+
+/** Fills in `serverId` and `name` if missing. Returns true if it changed the config. */
+export function ensureIdentity(config: DaemonConfig, hostname: string): boolean {
+  let changed = false
+  if (!config.serverId) {
+    config.serverId = randomUUID()
+    changed = true
+  }
+  if (!config.name) {
+    config.name = hostname
+    changed = true
+  }
+  return changed
 }
