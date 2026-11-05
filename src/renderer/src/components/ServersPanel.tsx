@@ -5,7 +5,7 @@ import type { HostStatus, ServerConfig, ServerTestResult } from '../../../shared
 
 /**
  * Remote server management: each entry is a machine running the companion
- * daemon (see daemon/README.md). The access token is stored encrypted on this
+ * daemon (see server/README.md). The access token is stored encrypted on this
  * machine only — never in the project file.
  */
 
@@ -181,7 +181,7 @@ export function ServersPanel(): React.JSX.Element {
       })}
       {servers.length === 0 && !form && (
         <p className="muted servers-empty">
-          No servers yet. Run the daemon on a machine (see daemon/README.md), then add it here.
+          No servers yet. Run the daemon on a machine (see server/README.md), then add it here.
         </p>
       )}
 

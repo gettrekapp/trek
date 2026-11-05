@@ -1,10 +1,11 @@
 {
-  "name": "trek-daemon",
-  "version": "0.1.0",
-  "description": "Companion daemon: remote worktrees and Claude sessions for Trek Dev",
+  "name": "trek-server",
+  "version": "0.2.0",
+  "description": "Trek server: projects, worktrees and agent sessions for Trek Dev clients",
   "private": true,
   "bin": {
-    "trek-daemon": "dist/trek-daemon.cjs"
+    "trek-server": "dist/trek-server.cjs",
+    "trek-daemon": "dist/trek-server.cjs"
   },
   "files": [
     "dist"

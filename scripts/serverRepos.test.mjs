@@ -1,14 +1,14 @@
-// scripts/daemonRepos.test.mjs — `trek-daemon add`: resolving a repo root and adding it to the config.
+// scripts/serverRepos.test.mjs — `trek-server add`: resolving a repo root and adding it to the config.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from '../daemon/src/repos.ts'
+import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from '../server/src/repos.ts'
 
 function tempDir(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-daemon-repos-')))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-repos-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }

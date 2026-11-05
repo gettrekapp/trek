@@ -34,7 +34,7 @@ export function startServer(config: DaemonConfig, daemonVersion: string): Daemon
 
   const httpServer = createServer((_req, res) => {
     res.writeHead(426, { 'content-type': 'text/plain' })
-    res.end('trek-daemon: WebSocket only\n')
+    res.end('trek-server: WebSocket only\n')
   })
   const wss = new WebSocketServer({ server: httpServer })
 

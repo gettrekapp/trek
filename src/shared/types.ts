@@ -85,7 +85,7 @@ export interface WorktreeInstance {
 }
 
 /**
- * A remote machine running the companion daemon (daemon/). The access token
+ * A remote machine running the companion daemon (server/). The access token
  * is deliberately NOT here — the .trekproj is plain JSON; tokens live in
  * Electron safeStorage keyed by server id.
  */

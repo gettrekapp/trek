@@ -6,7 +6,7 @@ import type { DaemonConfig } from './config'
 
 /**
  * Resolves `path` to the top level of the git checkout containing it, so
- * `trek-daemon add` works from any subdirectory. Throws with a user-facing
+ * `trek-server add` works from any subdirectory. Throws with a user-facing
  * message when the path is missing or not in a repo.
  */
 export function resolveRepoRoot(path: string): string {

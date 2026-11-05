@@ -11,7 +11,7 @@ const PORT = 17345
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
 
-const work = mkdtempSync(join(tmpdir(), 'trek-daemon-smoke-'))
+const work = mkdtempSync(join(tmpdir(), 'trek-server-smoke-'))
 const repo = join(work, 'repo')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'], {
@@ -30,7 +30,7 @@ writeFileSync(configPath, JSON.stringify({
 // `--built` runs the bundled CLI (npm run build) instead of the TypeScript source.
 const daemonArgs = ['start', '--config', configPath, '--port', String(PORT)]
 const [cmd, cmdArgs] = process.argv.includes('--built')
-  ? [process.execPath, ['dist/trek-daemon.cjs', ...daemonArgs]]
+  ? [process.execPath, ['dist/trek-server.cjs', ...daemonArgs]]
   : ['npx', ['tsx', 'src/index.ts', ...daemonArgs]]
 const daemon = spawn(cmd, cmdArgs, {
   cwd: new URL('..', import.meta.url).pathname,

@@ -1,0 +1,22 @@
+# systemd user unit — install with:
+#   mkdir -p ~/.config/systemd/user
+#   cp trek-server.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now trek-server
+#   loginctl enable-linger $USER   # keep it (and agent sessions) running after logout
+#
+# Run `npm run build` in server/ first. Adjust WorkingDirectory and the
+# ExecStart path to wherever you cloned the repo.
+[Unit]
+Description=Trek server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Trek.Developer/server
+ExecStart=/usr/bin/env node %h/Trek.Developer/server/dist/trek-server.cjs start
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
