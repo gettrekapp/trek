@@ -206,14 +206,41 @@ test('worktree.remove: the main worktree, bad force, unknown ids', async (t) => 
   assert.equal((await s.call('worktree.remove', { projectId: s.projectId, worktreeId: 'nope' })).error.code, 'NOT_FOUND')
 })
 
-test('worktree.remove is IN_USE while any project has the path loaded', async (t) => {
+/** A second project on the same repository, polled so it lists the same worktrees. */
+async function secondProject(s, name) {
+  const created = await s.call('project.create', { name, repositories: [{ path: s.a }] })
+  assert.equal(created.ok, true, JSON.stringify(created))
+  await s.poller.refresh(s.a)
+  const id = created.result.projectId
+  const row = (path) => s.projects.require(id).repositories[0].worktrees.find((w) => w.path === path)
+  return { id, row }
+}
+
+test('worktree.remove is IN_USE while another project has the path loaded, and names it', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'busy')
-  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).loaded = true })
+  const other = await secondProject(s, 'Elsewhere')
+  s.projects.apply(other.id, (d) => { d.repositories[0].worktrees.find((w) => w.path === wt.path).loaded = true })
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(res.error.code, 'IN_USE')
-  assert.match(res.error.message, /P/)
+  assert.match(res.error.message, /in Elsewhere;/)
   assert.ok(existsSync(wt.path))
+})
+
+test('worktree.remove in one project leaves another project\'s rows for that path to the poller', async (t) => {
+  const s = await setup(t)
+  const withSessions = await withWorktree(s, 'kept-by-other')
+  const plain = await withWorktree(s, 'dropped-by-other')
+  const other = await secondProject(s, 'Other')
+  const session = { id: 'other-sess', title: 'S', llm: { provider: 'claude' }, queue: [], status: 'idle' }
+  s.projects.apply(other.id, (d) => { d.repositories[0].worktrees.find((w) => w.path === withSessions.path).sessions.push(session) })
+  for (const wt of [withSessions, plain]) {
+    const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+    assert.equal(res.ok, true, JSON.stringify(res))
+  }
+  assert.equal(other.row(plain.path), undefined)
+  assert.equal(other.row(withSessions.path).missing, true)
+  assert.equal(other.row(withSessions.path).sessions[0].id, 'other-sess')
 })
 
 test('a vanished worktree with sessions is kept as missing; remove just drops the row', async (t) => {
@@ -231,7 +258,7 @@ test('a vanished worktree with sessions is kept as missing; remove just drops th
   assert.equal(s.worktree(wt.id), undefined)
 })
 
-test('worktree.remove prunes a worktree whose directory is gone but git still lists', async (t) => {
+test('worktree.remove removes a worktree whose directory is gone but git still lists', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'stale')
   rmSync(wt.path, { recursive: true, force: true })
@@ -285,4 +312,96 @@ test('worktree.pull/push refusals: detached HEAD, bad setUpstream, no remote', a
   git(wt.path, 'checkout', '-q', '--detach')
   await s.poller.refresh(s.a)
   assert.equal((await s.call('worktree.pull', { projectId: s.projectId, worktreeId: wt.id })).error.code, 'BAD_REQUEST')
+})
+
+test('worktree.remove of a stale worktree leaves the repo\'s other stale worktrees alone', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'stale-one')
+  const unmounted = await withWorktree(s, 'stale-two')
+  rmSync(wt.path, { recursive: true, force: true })
+  rmSync(unmounted.path, { recursive: true, force: true })
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  const listed = git(s.a, 'worktree', 'list')
+  assert.doesNotMatch(listed, /stale-one/)
+  assert.match(listed, /stale-two/, 'not pruned along with it')
+})
+
+test('worktree.pull, push and diff refuse a missing worktree', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'gone-soon')
+  const session = { id: 'sess-m', title: 'S', llm: { provider: 'claude' }, queue: [], status: 'idle' }
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).sessions.push(session) })
+  rmSync(wt.path, { recursive: true, force: true })
+  git(s.a, 'worktree', 'prune')
+  await s.poller.refresh(s.a)
+  assert.equal(s.worktree(wt.id).missing, true)
+  const ids = { projectId: s.projectId, worktreeId: wt.id }
+  assert.equal((await s.call('worktree.pull', ids)).error?.code, 'BAD_REQUEST')
+  assert.equal((await s.call('worktree.push', { ...ids, setUpstream: false })).error?.code, 'BAD_REQUEST')
+  assert.equal((await s.call('worktree.diff', ids)).error?.code, 'BAD_REQUEST')
+})
+
+/** dispatchV2 with a poller whose refresh changes nothing, so a row keeps what was written into it. */
+const callWithInertPoller = (s, method, params) => dispatchV2(method, params,
+  { store: s.store, hub: new TopicHub(), subscriber: { send: () => {} }, projects: s.projects, poller: { refresh: async () => true, warning: () => undefined } })
+
+test('worktree.pull and push refuse a branch name that git would read as an option', async (t) => {
+  const s = await setup(t)
+  const origin = join(s.dir, 'origin.git')
+  execFileSync('git', ['init', '-q', '--bare', origin], { env: gitEnv })
+  git(s.a, 'remote', 'add', 'origin', origin)
+  git(s.a, 'push', '-q', 'origin', 'main')
+  const wt = await withWorktree(s, 'victim')
+  const pwned = join(s.dir, 'PWNED')
+  for (const branch of ['--mirror', `--upload-pack=touch ${pwned}; git-upload-pack`]) {
+    s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).branch = branch })
+    const ids = { projectId: s.projectId, worktreeId: wt.id }
+    assert.equal((await callWithInertPoller(s, 'worktree.pull', ids)).error?.code, 'BAD_REQUEST', `pull ${branch}`)
+    assert.equal((await callWithInertPoller(s, 'worktree.push', { ...ids, setUpstream: true })).error?.code, 'BAD_REQUEST', `push ${branch}`)
+    assert.equal((await callWithInertPoller(s, 'worktree.push', { ...ids, setUpstream: false })).error?.code, 'BAD_REQUEST', `push ${branch}`)
+  }
+  assert.equal(existsSync(pwned), false)
+  assert.doesNotMatch(git(s.a, 'ls-remote', 'origin'), /victim/, 'nothing was pushed')
+})
+
+test('worktree.push refuses a checked-out branch whose name starts with "-"', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'plain')
+  git(wt.path, 'update-ref', 'refs/heads/--mirror', 'HEAD')
+  git(wt.path, 'symbolic-ref', 'HEAD', 'refs/heads/--mirror')
+  const res = await s.call('worktree.push', { projectId: s.projectId, worktreeId: wt.id, setUpstream: false })
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res))
+})
+
+test('worktree.pull uses the branch that is checked out now, not the one the row last saw', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'a')
+  git(wt.path, 'checkout', '-q', '-b', 'b')
+  assert.equal(s.worktree(wt.id).branch, 'a', 'the row has not been polled yet')
+  const res = await s.call('worktree.pull', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.error?.code, 'GIT_ERROR', JSON.stringify(res))
+  assert.match(res.error.message, /origin refs\/heads\/b\b/)
+  assert.doesNotMatch(res.error.message, /refs\/heads\/a\b/)
+  assert.equal(s.worktree(wt.id).branch, 'b')
+})
+
+test('worktree.pull is BAD_REQUEST once the worktree turns out to be detached', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'soon-detached')
+  git(wt.path, 'checkout', '-q', '--detach')
+  assert.equal((await s.call('worktree.pull', { projectId: s.projectId, worktreeId: wt.id })).error?.code, 'BAD_REQUEST')
+})
+
+test('worktree commands refuse a worktree path outside the allowlist', async (t) => {
+  const s = await setup(t)
+  const outside = join(s.dir, 'outside')
+  execFileSync('git', ['init', '-q', '-b', 'main', outside], { env: gitEnv })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.push({ id: 'planted', name: 'planted', path: outside, isMain: false, loaded: false, branch: 'main', sessions: [] })
+  })
+  const ids = { projectId: s.projectId, worktreeId: 'planted' }
+  assert.equal((await s.call('worktree.changes', ids)).error?.code, 'PATH_DENIED')
+  assert.equal((await s.call('worktree.diff', ids)).error?.code, 'PATH_DENIED')
+  assert.equal((await callWithInertPoller(s, 'worktree.pull', ids)).error?.code, 'PATH_DENIED')
 })

@@ -188,3 +188,16 @@ test('a worktree path listed twice in one repository is refused', (t) => {
   const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
   assert.throws(() => checkImport(p, ctx), (e) => e.code === 'BAD_REQUEST' && /listed twice/.test(e.message))
 })
+
+test('a worktree branch that git could read as an option is BAD_REQUEST', (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  for (const branch of ['--x', '-x', 'a b', 'tab\there', 'nl\nhere', 'del\u007f']) {
+    const p = project()
+    p.repositories[0].worktrees[1].branch = branch
+    assert.equal(code(() => checkImport(p, ctx)), 'BAD_REQUEST', JSON.stringify(branch))
+  }
+  const ok = project()
+  ok.repositories[0].worktrees[1].branch = 'feat/x-1'
+  assert.equal(code(() => checkImport(ok, ctx)), 'ok')
+})

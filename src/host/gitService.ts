@@ -201,7 +201,7 @@ export async function linkDirs(
 
 /** Refuses (throws) if the worktree has uncommitted changes — deliberately no --force. */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath, ['worktree', 'remove', worktreePath])
+  await git(repoPath, ['worktree', 'remove', '--', worktreePath])
 }
 
 export async function checkout(repoPath: string, branch: string): Promise<void> {
@@ -247,7 +247,9 @@ export async function push(
   branch: string,
   setUpstream: boolean
 ): Promise<void> {
-  const args = setUpstream ? ['push', '-u', 'origin', branch] : ['push', 'origin', branch]
+  // A full ref, so a branch name can never be read as an option (-u still tracks origin/<branch>).
+  const ref = `refs/heads/${branch}`
+  const args = setUpstream ? ['push', '-u', 'origin', ref] : ['push', 'origin', ref]
   await git(worktreePath, args)
 }
 
@@ -256,7 +258,8 @@ export async function push(
  * branch aborts with an error instead of creating a surprise merge commit.
  */
 export async function pull(worktreePath: string, branch: string): Promise<void> {
-  await git(worktreePath, ['pull', '--ff-only', 'origin', branch])
+  // A full ref, so a branch name can never be read as an option.
+  await git(worktreePath, ['pull', '--ff-only', 'origin', `refs/heads/${branch}`])
 }
 
 /**
@@ -321,7 +324,7 @@ export async function addWorktreeAt(
 
 /** Only used after a move is verified on the target — bypasses the dirty check. */
 export async function removeWorktreeForce(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath, ['worktree', 'remove', '--force', worktreePath])
+  await git(repoPath, ['worktree', 'remove', '--force', '--', worktreePath])
 }
 
 export async function defaultBranch(repoPath: string): Promise<string | null> {

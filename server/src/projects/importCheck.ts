@@ -54,7 +54,12 @@ function checkWorktree(raw: unknown, where: string, ctx: ImportContext, seen: Se
     // A worktree at (or above) a registered repo would let the project act on that repo.
     assertNotRepository(ctx.registry, path, where, raw.path)
   }
-  if (raw.branch !== undefined && typeof raw.branch !== 'string') throw bad(`${where}.branch must be a string`)
+  if (raw.branch !== undefined) {
+    if (typeof raw.branch !== 'string') throw bad(`${where}.branch must be a string`)
+    // The branch goes on git command lines (pull, push); the handlers check the full ref format.
+    if (raw.branch.startsWith('-')) throw bad(`${where}.branch must not start with "-"`)
+    if (/[\s\x00-\x1f\x7f]/.test(raw.branch)) throw bad(`${where}.branch must not contain whitespace or control characters`)
+  }
   if (!Array.isArray(raw.sessions)) throw bad(`${where}.sessions must be an array`)
   raw.sessions.forEach((s, i) => checkSession(s, `${where}.sessions[${i}]`, seen, ctx.existingIds))
   return { ...(raw as unknown as Worktree), path }

@@ -61,19 +61,35 @@ function locate(project: Project, worktreeId: unknown): { repo: Repository; work
   throw codedError('NOT_FOUND', `No worktree with id "${id}" in this project`)
 }
 
-/** A worktree git still has, in a repository the registry still has. */
+/**
+ * A worktree git still has, in a repository the registry still has, at a path
+ * the allowlist covers (a row from a hand-edited file or a not-yet-polled
+ * import may not be).
+ */
 function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree } {
   const found = locate(ctx.projects.require(p.projectId), p.worktreeId)
   findRegistered(ctx.store.config.repos, found.repo.path)
   if (found.worktree.missing) {
     throw bad(`${found.worktree.path} no longer exists; remove the worktree or create its branch again`)
   }
+  ctx.store.guard.check(found.worktree.path)
   return found
 }
 
-function checkedOutBranch(worktree: Worktree): string {
+/**
+ * The worktree and the branch git has checked out in it now: the row can lag a
+ * `git checkout` by a poll, so the repo is re-read first. The branch must be a
+ * real branch name, since it goes on a git command line.
+ */
+async function checkedOut(ctx: V2Context, p: any): Promise<{ repo: Repository; worktree: Worktree; branch: string }> {
+  const { repo } = present(ctx, p)
+  if (!(await ctx.poller.refresh(repo.path))) {
+    throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
+  }
+  const { worktree } = present(ctx, p)
   if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD)`)
-  return worktree.branch
+  await checkBranchName(repo.path, worktree.branch, false)
+  return { repo, worktree, branch: worktree.branch }
 }
 
 export const worktreeHandlers: Record<string, Handler> = {
@@ -143,11 +159,11 @@ export const worktreeHandlers: Record<string, Handler> = {
 
     if (!worktree.missing) {
       findRegistered(ctx.store.config.repos, repo.path)
-      await viaGit(async () => {
-        if (!existsSync(worktree.path)) await gitService.git(repo.path, ['worktree', 'prune'])
-        else if (force) await gitService.removeWorktreeForce(repo.path, worktree.path)
-        else await gitService.removeWorktree(repo.path, worktree.path)
-      })
+      // A directory that is already gone is removed from git's list too, and
+      // only this one: a repo-wide prune would drop worktrees on unmounted volumes.
+      await viaGit(() => force
+        ? gitService.removeWorktreeForce(repo.path, worktree.path)
+        : gitService.removeWorktree(repo.path, worktree.path))
       // Git has removed it. Even if the re-read fails, the row goes below.
       await ctx.poller.refresh(repo.path)
     }
@@ -168,8 +184,7 @@ export const worktreeHandlers: Record<string, Handler> = {
   },
 
   'worktree.pull': async (p, ctx) => {
-    const { repo, worktree } = present(ctx, p)
-    const branch = checkedOutBranch(worktree)
+    const { repo, worktree, branch } = await checkedOut(ctx, p)
     await viaGit(() => gitService.pull(worktree.path, branch))
     await ctx.poller.refresh(repo.path, { status: true })
     return null
@@ -177,8 +192,7 @@ export const worktreeHandlers: Record<string, Handler> = {
 
   'worktree.push': async (p, ctx) => {
     const setUpstream = requireBoolean(p.setUpstream, 'setUpstream')
-    const { repo, worktree } = present(ctx, p)
-    const branch = checkedOutBranch(worktree)
+    const { repo, worktree, branch } = await checkedOut(ctx, p)
     await viaGit(() => gitService.push(worktree.path, branch, setUpstream))
     await ctx.poller.refresh(repo.path, { status: true })
     return null
