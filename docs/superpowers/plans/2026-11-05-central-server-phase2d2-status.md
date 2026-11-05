@@ -27,7 +27,7 @@ Task 6 records these in `PROTOCOL.md`.
      - Every chunk restarts a 2500 ms quiet timer.
      - The output is scanned for the provider's `statusMarkers`, for example Claude's `esc to interrupt`. The previous chunk's tail is kept so a marker split across two chunks still matches.
    - **The quiet timer fires while `working`:** the status becomes `done` if a marker was seen since the last settle, otherwise `idle`. The marker flag is then cleared.
-   - **Bell** (from the headless screen; a BEL that only ends an OSC sequence is not a bell): `attention`, unless the session is `complete`.
+   - **Bell** (from the headless screen; a BEL that only ends an OSC sequence is not a bell): `attention`, unless the session is `complete` or `exited`. (The desktop has no `exited` guard; the server needs one because parsing is asynchronous, so a final BEL can be parsed after the exit.)
    - **User input** while `attention` or `complete`: `working`.
 2. **What counts as user input.**
    - A `pty.write` counts, unless its data is only terminal replies that xterm.js sends on its own:
@@ -36,6 +36,9 @@ Task 6 records these in `PROTOCOL.md`.
      - status reports (`ESC [ n n`)
      - focus in/out (`ESC [ I`, `ESC [ O`)
      - OSC color replies (`ESC ] 1x ; rgb:… BEL|ST`)
+     - DECXCPR (`ESC [ ? n ; m R`), DECRPM mode reports (`ESC [ ? m ; v $ y`), DECRQSS (`ESC P 0|1 $ r … ST`) and window reports (`ESC [ 4|6|8 ; n ; m t`), added after review against the xterm.js 6 source
+     - mouse reports (`ESC [ < … M|m`, `ESC [ M` + 3 bytes). The desktop's `onKey` never counted them, and pointer motion must not clear `attention`.
+   - Known gap: Shift/Ctrl/Alt+F3 sends `ESC [ 1 ; <mod> R`, which is identical to a cursor report, so that key is not seen as input.
    - `session.sendPrompt` counts as input.
    - The desktop used xterm's `onKey`, which the server cannot see; the filter is its equivalent.
 3. **`since`.** The server records when a session entered `attention` or `done` (epoch ms, runtime only). A restart resets every status anyway.

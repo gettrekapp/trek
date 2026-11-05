@@ -28,7 +28,7 @@ export function onOutput(
   if (status === 'complete') return { status, activity, restartTimer: false }
   const window = activity.scanTail + data
   const lower = window.toLowerCase()
-  const processingSeen = activity.processingSeen || markers.some((m) => lower.includes(m))
+  const processingSeen = activity.processingSeen || markers.some((m) => lower.includes(m.toLowerCase()))
   const longest = Math.max(1, ...markers.map((m) => m.length))
   const next: Activity = { processingSeen, scanTail: window.slice(Math.max(0, window.length - longest + 1)) }
   // A bell means the agent waits on the user: redraws must not clear it.
@@ -52,9 +52,14 @@ export function onInput(status: SessionStatus): SessionStatus {
   return status === 'attention' || status === 'complete' ? 'working' : status
 }
 
-// Replies xterm.js sends by itself: cursor position, device attributes,
-// status reports, focus in/out, OSC color queries' answers.
-const REPLY = /\x1b\[\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\d+n|\x1b\[[IO]|\x1b\]\d+;[^\x07\x1b]*(?:\x07|\x1b\\)/y
+// What xterm.js sends without the user typing: replies to the program's
+// queries (cursor position and DECXCPR, device attributes, status and mode
+// reports, DECRQSS, window reports, OSC color answers), focus in/out, and mouse
+// reports (the desktop's onKey never counted those, and pointer motion must not
+// clear attention). Shift/Ctrl/Alt+F3 sends ESC[1;<mod>R, which is byte-for-byte
+// a cursor report, so that key is not seen as input.
+const REPLY =
+  /\x1b\[\??\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\d+n|\x1b\[\??\d+;\d+\$y|\x1bP[01]\$r[^\x1b]*\x1b\\|\x1b\[[468];\d+;\d+t|\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}|\x1b\]\d+;[^\x07\x1b]*(?:\x07|\x1b\\)/y
 
 /** True when `data` is only terminal replies (or empty): not the user typing. */
 export function isTerminalReply(data: string): boolean {
@@ -74,10 +79,11 @@ export function attentionEntries(
   now: () => number
 ): AttentionEntry[] {
   const entries: AttentionEntry[] = []
+  const fallback = now()
   for (const project of projects) {
     const add = (worktreeId: string | null, s: Project['globalSessions'][number]): void => {
       if (s.status !== 'attention' && s.status !== 'done') return
-      entries.push({ projectId: project.id, worktreeId, sessionId: s.id, title: s.title, status: s.status, since: since.get(s.id) ?? now() })
+      entries.push({ projectId: project.id, worktreeId, sessionId: s.id, title: s.title, status: s.status, since: since.get(s.id) ?? fallback })
     }
     for (const s of project.globalSessions) add(null, s)
     for (const r of project.repositories) for (const w of r.worktrees) for (const s of w.sessions) add(w.id, s)

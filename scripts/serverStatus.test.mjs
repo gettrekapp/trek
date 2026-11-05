@@ -47,10 +47,12 @@ test('bell means attention unless complete; input clears attention and complete'
 
 test('terminal replies are not user input', () => {
   for (const reply of ['\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;276;0c', '\x1b[0n', '\x1b[I', '\x1b[O',
-    '\x1b]11;rgb:0d0d/0d0d/0f0f\x07', '\x1b]10;rgb:c9c9/c9c9/cfcf\x1b\\', '\x1b[I\x1b[12;1R']) {
+    '\x1b]11;rgb:0d0d/0d0d/0f0f\x07', '\x1b]10;rgb:c9c9/c9c9/cfcf\x1b\\', '\x1b[I\x1b[12;1R',
+    '\x1b[?12;40R', '\x1b[?2026;2$y', '\x1b[4;1$y', '\x1bP1$r0m\x1b\\', '\x1bP0$r\x1b\\', '\x1b[8;24;80t',
+    '\x1b[<35;10;5M', '\x1b[<0;10;5m', '\x1b[M #!']) {
     assert.equal(isTerminalReply(reply), true, JSON.stringify(reply))
   }
-  for (const input of ['a', '\r', '\x1b[A', '\x03', 'hello\r', '\x1b[200~paste\x1b[201~', '', '\x1b[I a']) {
+  for (const input of ['a', '\r', '\x1b[A', '\x03', 'hello\r', '\x1b[200~paste\x1b[201~', '', '\x1b[I a', '\x1ba', '\x1bOR', '\x1b[15~']) {
     assert.equal(isTerminalReply(input), input === '' ? true : false, JSON.stringify(input))
   }
 })
