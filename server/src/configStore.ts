@@ -5,6 +5,8 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
+import { sanitizeLlmSettings } from '../../src/shared/providers/settings.ts'
+import type { LlmSettings } from '../../src/shared/providers/types'
 import { isRecord } from './validate.ts'
 import { saveConfig, type TrekServerConfig } from './config.ts'
 import { codedError } from './errors.ts'
@@ -40,6 +42,7 @@ export function validateConfig(raw: unknown): TrekServerConfig {
     throw new Error('config.worktreeRoots must be an array of strings')
   }
   if (raw.port !== undefined && typeof raw.port !== 'number') throw new Error('config.port must be a number')
+  if (raw.llm !== undefined && !isRecord(raw.llm)) throw new Error('config.llm must be an object')
   for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
   }
@@ -69,6 +72,11 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   /** Treat as read-only; change it through update(). */
   get config(): TrekServerConfig {
     return this.current
+  }
+
+  /** The agent CLI settings, sanitized (unknown providers and fields dropped). */
+  llmSettings(): LlmSettings {
+    return sanitizeLlmSettings(this.current.llm)
   }
 
   get guard(): PathGuard {

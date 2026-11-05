@@ -30,6 +30,12 @@ export interface TrekServerConfig {
    */
   worktreeRoots?: string[]
   port?: number
+  /**
+   * Agent CLI settings: the default LLM and per-provider command, approval
+   * mode and local backend. Same shape as the desktop's LlmSettings; read
+   * through ConfigStore.llmSettings(). Project settings override it.
+   */
+  llm?: unknown
   host?: string
   /** Where projects are stored (default: the platform data dir, see dataDir.ts). */
   dataDir?: string
