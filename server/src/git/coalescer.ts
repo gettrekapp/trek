@@ -2,6 +2,11 @@
 // queues one follow-up; every caller that arrives before it starts shares it.
 // So a caller always gets a job that started after its call, and a burst of
 // callers costs at most one extra run.
+//
+// Use one key per kind of job: a shared follow-up runs the first queued
+// caller's `job`. A job must settle (git calls time out), and must never await
+// run() for its own key or for a key that awaits it back: that deadlocks the
+// key for good, since every later caller would share the stuck follow-up.
 const ignore = (): void => {}
 
 export class Coalescer {
