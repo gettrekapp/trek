@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addRepo, resolveRepoRoot } from '../daemon/src/repos.ts'
+import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from '../daemon/src/repos.ts'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-daemon-repos-')))
@@ -74,4 +74,50 @@ test('addRepo refuses an explicit id that is already taken', () => {
 
 test('addRepo falls back to "repo" when the name has no slug characters', () => {
   assert.equal(addRepo({ repos: [] }, '/home/dev/___').repo.id, 'repo')
+})
+
+test('removeRepo removes by id', () => {
+  const config = { repos: [{ id: 'a', name: 'A', path: '/x/a' }, { id: 'b', name: 'B', path: '/x/b' }] }
+  assert.deepEqual(removeRepo(config, 'a'), { id: 'a', name: 'A', path: '/x/a' })
+  assert.deepEqual(config.repos.map((r) => r.id), ['b'])
+})
+
+test('removeRepo removes by path, including from a subdirectory', (t) => {
+  const repo = gitInit(join(tempDir(t), 'proj'))
+  mkdirSync(join(repo, 'src'))
+  const config = { repos: [{ id: 'proj', name: 'proj', path: repo }] }
+  assert.equal(removeRepo(config, join(repo, 'src')).id, 'proj')
+  assert.equal(config.repos.length, 0)
+})
+
+test('removeRepo prefers an id over a path with the same name', (t) => {
+  const dir = tempDir(t)
+  const config = {
+    repos: [
+      { id: 'other', name: 'other', path: join(dir, 'b') },
+      { id: join(dir, 'b'), name: 'odd', path: '/elsewhere' }
+    ]
+  }
+  assert.equal(removeRepo(config, join(dir, 'b')).name, 'odd')
+})
+
+test('removeRepo returns undefined and changes nothing when there is no match', (t) => {
+  const config = { repos: [{ id: 'a', name: 'A', path: '/x/a' }] }
+  assert.equal(removeRepo(config, join(tempDir(t), 'missing')), undefined)
+  assert.equal(config.repos.length, 1)
+})
+
+test('formatRepoList aligns columns', () => {
+  const out = formatRepoList([
+    { id: 'trek', name: 'Trek', path: '/r/trek' },
+    { id: 'my-repo', name: 'My Repo', path: '/r/my' }
+  ])
+  assert.equal(
+    out,
+    ['ID       NAME     PATH', 'trek     Trek     /r/trek', 'my-repo  My Repo  /r/my'].join('\n')
+  )
+})
+
+test('formatRepoList says when there are none', () => {
+  assert.equal(formatRepoList([]), 'No repos configured.')
 })

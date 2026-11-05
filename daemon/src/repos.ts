@@ -75,3 +75,33 @@ export function addRepo(
   config.repos.push(repo)
   return { repo, added: true }
 }
+
+/**
+ * Removes the repo whose id is `target`, or failing that, whose path is
+ * `target` (or the git checkout containing it). Returns the removed repo, or
+ * undefined when nothing matched.
+ */
+export function removeRepo(config: DaemonConfig, target: string): RemoteRepo | undefined {
+  let index = config.repos.findIndex((r) => r.id === target)
+  if (index === -1) {
+    const candidates = new Set([realOrResolved(target)])
+    try {
+      candidates.add(resolveRepoRoot(target))
+    } catch {
+      // Not a git checkout (or already deleted) — match the literal path only.
+    }
+    index = config.repos.findIndex((r) => candidates.has(realOrResolved(r.path)))
+  }
+  if (index === -1) return undefined
+  const [removed] = config.repos.splice(index, 1)
+  return removed
+}
+
+export function formatRepoList(repos: RemoteRepo[]): string {
+  if (repos.length === 0) return 'No repos configured.'
+  const rows = [['ID', 'NAME', 'PATH'], ...repos.map((r) => [r.id, r.name, r.path])]
+  const widths = [0, 1].map((col) => Math.max(...rows.map((row) => row[col].length)))
+  return rows
+    .map((row) => `${row[0].padEnd(widths[0])}  ${row[1].padEnd(widths[1])}  ${row[2]}`)
+    .join('\n')
+}

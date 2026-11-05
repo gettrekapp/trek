@@ -3,13 +3,13 @@ import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { defaultConfigPath, loadConfig, saveConfig } from './config'
-import { addRepo, resolveRepoRoot } from './repos'
+import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from './repos'
 import { hashToken, startServer } from './server'
 
 interface CliArgs {
-  command: 'start' | 'token' | 'add' | 'help' | 'version'
+  command: (typeof COMMANDS)[number]
   configPath: string
-  /** `add`: the repo path (defaults to the current directory). */
+  /** `add`: the repo path. `remove`: an id or path. Both default to the current directory. */
   repoPath?: string
   repoId?: string
   repoName?: string
@@ -18,6 +18,8 @@ interface CliArgs {
   insecure: boolean
 }
 
+const COMMANDS = ['start', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
+
 const USAGE = `Usage: trek-daemon [command] [options]
        trek-daemon <path>         Same as \`trek-daemon add <path>\`
 
@@ -25,6 +27,8 @@ Commands:
   start            Run the daemon (default)
   token            Generate a new access token, replacing any previous one
   add [path]       Add the git repo at path (default: current directory)
+  list             List the configured repos
+  remove [id|path] Remove a repo by id or path (default: current directory)
   help             Show this help
   version          Print the daemon version
 
@@ -56,11 +60,13 @@ function parseArgs(argv: string[]): CliArgs {
     const arg = argv[i]
     if (
       !sawCommand &&
-      (arg === 'start' || arg === 'token' || arg === 'add' || arg === 'help' || arg === 'version')
+      (COMMANDS as readonly string[]).includes(arg)
     ) {
-      args.command = arg
+      args.command = arg as CliArgs['command']
       sawCommand = true
-    } else if (!arg.startsWith('-') && args.command === 'add' && args.repoPath === undefined) {
+    } else if (!arg.startsWith('-') &&
+      (args.command === 'add' || args.command === 'remove') &&
+      args.repoPath === undefined) {
       args.repoPath = arg
     } else if (!arg.startsWith('-') && !sawCommand && isDirectory(arg)) {
       // `trek-daemon .` / `trek-daemon ~/repos/x` — shorthand for add.
@@ -132,6 +138,25 @@ if (args.command === 'add') {
     console.error((err as Error).message)
     process.exit(1)
   }
+}
+
+if (args.command === 'list') {
+  console.log(formatRepoList(loadConfig(args.configPath).repos))
+  process.exit(0)
+}
+
+if (args.command === 'remove') {
+  const config = loadConfig(args.configPath)
+  const target = args.repoPath ?? process.cwd()
+  const removed = removeRepo(config, target)
+  if (!removed) {
+    console.error(`No configured repo matches "${target}". Run \`trek-daemon list\` to see them.`)
+    process.exit(1)
+  }
+  saveConfig(args.configPath, config)
+  console.log(`Removed ${removed.name} (id "${removed.id}") at ${removed.path}`)
+  console.log('The repo itself is untouched. Restart a running daemon to pick it up.')
+  process.exit(0)
 }
 
 if (args.command === 'token') {

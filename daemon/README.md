@@ -46,6 +46,14 @@ The id defaults to a slug of the directory name and the name to the
 directory name. Adding a path that's already configured does nothing. A
 running daemon only reads its config at startup, so restart it afterwards.
 
+```sh
+trek-daemon list                        # show configured repos
+trek-daemon remove trek                 # remove by id...
+trek-daemon remove ~/repos/Other        # ...or by path (default: current directory)
+```
+
+Removing only edits the config; the checkout and its worktrees stay on disk.
+
 This writes `~/.config/trek-daemon/config.json` (pass `--config` for another
 file), which you can also edit by hand:
 
