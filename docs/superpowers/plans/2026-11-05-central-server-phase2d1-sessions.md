@@ -55,6 +55,8 @@ Task 9 records these in `PROTOCOL.md`.
     - `pty.exit` goes to every attached connection.
     - `pty.*` only reaches ptys that belong to sessions. v1's `pty.spawn` stays v1-only.
 11. **Removal races (carried over from 2c).** While `worktree.remove` runs git, it blocks the path. `session.start` and `worktree.load` on a blocked path answer `IN_USE`.
+13. **Deleting a project or removing a repository ends its sessions** (decided during review). After `project.delete` or `repo.remove` succeeds, the manager kills those sessions' ptys and stops their Codex discovery (`forgetProject`, `forgetRepo`). A refused or failed removal kills nothing.
+14. **Titles** are at most 200 characters with no control characters (`checkTitle`), else `BAD_REQUEST`. This applies to `session.start`, session-type names and `session.rename`.
 12. **Shutdown** kills every session pty. On the next start, sessions load as `idle` and unloaded (2b's `resetRuntime`).
 
 ## Conventions
@@ -1738,6 +1740,8 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(se
 ---
 
 ### Task 7: v2 handlers
+
+> **Already landed during the Task 5 review fixes (3280043):** `V2Context.sessions`, plus in `server.ts` building the `SessionManager`, passing `sessions` to `dispatchV2`, `sessions.stopAll()` in `shutdown`, and `sessions` on `TrekServer`. Tasks 7–8 add only what is still missing: `V2Context.terminal`, the handlers, the per-connection sink, `detachAll` on close, and `blockPath` in `worktree.remove`.
 
 **Files:**
 - Create: `server/src/sessionHandlers.ts`
