@@ -8,7 +8,7 @@ import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
 import type { PathGuard } from '../paths.ts'
 import { realOrResolved } from '../repos.ts'
-import { assertNoProtoKeys, isRecord, requireName } from '../validate.ts'
+import { assertNoProtoKeys, isRecord, requireAbsolutePath, requireName } from '../validate.ts'
 import { findRegistered, resetRuntime } from './model.ts'
 import { validateSettings } from './settings.ts'
 
@@ -51,7 +51,7 @@ function checkWorktree(raw: unknown, where: string, ctx: ImportContext, seen: Se
   if (typeof raw.isMain !== 'boolean') throw bad(`${where}.isMain must be a boolean`)
   let path = registered.path
   if (!raw.isMain) {
-    path = ctx.guard.check(raw.path)
+    path = ctx.guard.check(requireAbsolutePath(raw.path, `${where}.path`))
     // A worktree at (or above) a registered repo would let the project act on that repo.
     const clash = ctx.registry.find((r) => {
       const repo = realOrResolved(r.path)

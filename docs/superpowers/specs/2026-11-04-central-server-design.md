@@ -193,7 +193,7 @@ Electron, on Linux, macOS and Windows.
   - `project.create` and `repo.add` accept only registered paths (`PATH_DENIED`
     otherwise); the client calls `server.addRepo` first.
   - v1's `welcome.repos` is read from the same registry.
-- **Store:** a project references repos by registry id plus path.
+- **Store:** a project's repository is matched to the registry by realpath (phase 2b).
 - **Named tokens** land in this phase, since remote windows need one token per device.
 - **Code sharing:** `src/host/` and `src/shared/` move into a workspace package
   (`packages/core`) imported by both `server/` and the app. Nothing is duplicated.
@@ -335,7 +335,7 @@ Electron, on Linux, macOS and Windows.
 | Server unreachable | Tree read-only and greyed out with "last seen …"; commands disabled, not queued; terminals show a reconnecting overlay and reattach with replay on reconnect |
 | Client v2, server v1-only | Server shown as `incompatible` with an "upgrade server" hint |
 | Client older than server | Server closes with `4002` and reason `UPGRADE_CLIENT`; client shows "update Trek" |
-| Server restart | PTYs die; sessions come back as `exited` and resume with `--resume` when loaded |
+| Server restart | PTYs die; sessions come back as `idle` (a `complete` session stays `complete`) and resume with `--resume` when loaded |
 | Persistence failure | The mutation applies in memory; the server sets a `health` warning in the `server` topic and keeps retrying; clients show a banner |
 | Path outside the allowlist | `PATH_DENIED`, including repos named in `project.import` |
 | Stale `expected` guard | `CONFLICT`; the client refreshes and shows the newer value |

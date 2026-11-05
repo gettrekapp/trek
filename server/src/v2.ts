@@ -1,5 +1,6 @@
-// Protocol v2 request dispatch. Phase 2a serves the handshake topics and the
-// repo registry; later sub-plans add the rest of MethodParamsV2.
+// Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
+// and projects, repositories and branch data. worktree.*, session.* and v2
+// pty.* come in later phases.
 import { parseTopic } from '../../src/shared/model/topics.ts'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
@@ -12,6 +13,7 @@ import type { ProjectState } from './projects/state.ts'
 import { applySettingsPatch, isSettingsKey } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
 import {
+  assertNoProtoKeys,
   checkExpected,
   isRecord,
   optionalName,
@@ -163,6 +165,7 @@ const handlers: Record<string, Handler> = {
     const name = optionalName(p.name, 'name')
     const linkedDirs = p.linkedDirs === null ? null : optionalStringArray(p.linkedDirs, 'linkedDirs')
     const environments = p.environments === null || p.environments === undefined ? p.environments : requireRecord(p.environments, 'environments')
+    if (environments) assertNoProtoKeys(environments, 'environments')
     const expected = p.expected === undefined ? {} : requireRecord(p.expected, 'expected')
     for (const key of Object.keys(expected)) {
       if (!(REPO_GUARD_KEYS as readonly string[]).includes(key)) {

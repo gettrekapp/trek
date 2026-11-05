@@ -1,5 +1,6 @@
-// Daemon smoke test: throwaway config + temp git repo, then handshake,
-// git.listWorktrees, pty spawn/echo/kill, and an auth-rejection check.
+// trek-server smoke test: throwaway config + temp git repo, then handshake,
+// git.listWorktrees, pty spawn/echo/kill, the projects flow (create, branch
+// note, persist, delete) and an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -383,7 +384,8 @@ else ok('project.create: listed in the server topic')
 
 let proj = (await pc.req('sub.subscribe', { topic: `project:${projectId}` })).result
 const repoId = proj.snapshot.repositories[0].id
-await pc.req('branch.setNote', { projectId, repoId, branch: 'main', note: 'from smoke' })
+const noted = await pc.req('branch.setNote', { projectId, repoId, branch: 'main', note: 'from smoke' })
+if (!noted.ok) fail(`branch.setNote: ${JSON.stringify(noted)}`)
 proj = await nextPatch(pc, `project:${projectId}`, proj)
 if (proj.snapshot.repositories[0].branchData.main?.note !== 'from smoke') fail('branch.setNote not patched')
 else ok('branch.setNote: patched into the project topic')
@@ -401,6 +403,9 @@ else ok('project persisted to the data dir')
 const deleted = await pc.req('project.delete', { projectId })
 if (!deleted.ok || existsSync(stored)) fail(`project.delete: ${JSON.stringify(deleted)}`)
 else ok('project.delete: removed from disk')
+srv = await nextPatch(pc, 'server', srv)
+if (srv.snapshot.projects.some((p) => p.id === projectId)) fail('server topic still lists the deleted project')
+else ok('project.delete: gone from the server topic')
 pc.sock.close()
 
 // --- bad token rejected ---

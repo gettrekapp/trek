@@ -57,15 +57,15 @@ Commands:
   version              Print the server version
 
 Options:
-  --config <path>  Config file (default: ${defaultConfigPath()})
-  --port <port>    Port to listen on (default: config.port or ${DEFAULT_DAEMON_PORT})
-  --host <host>    Interface to bind (default: config.host or 127.0.0.1)
-  --insecure       Allow binding a non-loopback host without TLS
-  --data-dir <path> start/remove: where projects are stored (default: config.dataDir or the platform data dir)
-  --id <id>        add: repo id (default: slug of the directory name)
-  --name <name>    add: display name (default: the directory name)
-  -h, --help       Show this help
-  -v, --version    Print the server version
+  --config <path>   Config file (default: ${defaultConfigPath()})
+  --port <port>     Port to listen on (default: config.port or ${DEFAULT_DAEMON_PORT})
+  --host <host>     Interface to bind (default: config.host or 127.0.0.1)
+  --insecure        Allow binding a non-loopback host without TLS
+  --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
+  --id <id>         add: repo id (default: slug of the directory name)
+  --name <name>     add: display name (default: the directory name)
+  -h, --help        Show this help
+  -v, --version     Print the server version
 
 A running server picks up repo and token changes without a restart.
 To add a directory named like a command, use ./<dir>.
@@ -328,7 +328,12 @@ if (!config.serverId || !config.name || config.tokenHash || (dataDir !== undefin
   }
 }
 
-const projectFiles = openProjects(store.config)
+let projectFiles: ReturnType<typeof openProjects>
+try {
+  projectFiles = openProjects(store.config)
+} catch (err) {
+  fail(`Cannot read projects from ${projectsDir(args.dataDir ?? store.config.dataDir ?? defaultDataDir())}: ${(err as Error).message}`)
+}
 const server = startServer(store, serverVersion(), {
   create: (hub, onSummariesChange) =>
     new ProjectState({ hub, store: projectFiles.files, onSummariesChange }, projectFiles.loaded),

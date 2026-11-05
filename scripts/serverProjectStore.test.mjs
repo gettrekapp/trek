@@ -263,3 +263,18 @@ test('a throwing health listener cannot fail a save or escape a timer', (t) => {
   assert.deepEqual(store.flush(), [])
   assert.ok(warn.mock.calls.some((c) => String(c.arguments.join(' ')).includes('listener broke')))
 })
+
+test('a steady stream of saves is written once maxWaitMs has passed', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const dir = tempDir(t)
+  const store = new ProjectStore(dir, { debounceMs: 200, maxWaitMs: 500 })
+  t.after(() => store.close())
+  for (let at = 0; at < 450; at += 150) {
+    store.save(project('p1', `v${at}`))
+    t.mock.timers.tick(150)
+  }
+  assert.equal(existsSync(join(dir, 'p1.json')), false)
+  store.save(project('p1', 'last'))
+  t.mock.timers.tick(50)
+  assert.equal(existsSync(join(dir, 'p1.json')), true)
+})

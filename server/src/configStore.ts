@@ -43,6 +43,7 @@ export function validateConfig(raw: unknown): TrekServerConfig {
   for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
   }
+  if (typeof raw.dataDir === 'string' && !isAbsolute(raw.dataDir)) throw new Error('config.dataDir must be an absolute path')
   return raw as unknown as TrekServerConfig
 }
 

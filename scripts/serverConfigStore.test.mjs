@@ -297,3 +297,8 @@ test('validateConfig requires absolute repo paths', () => {
   assert.doesNotThrow(() => validateConfig({ repos: [{ id: 'a', name: 'a', path: '/abs/a' }] }))
   assert.throws(() => validateConfig({ repos: [{ id: 'a', name: 'a', path: 'rel/a' }] }), /config\.repos\[0\]\.path must be an absolute path/)
 })
+
+test('validateConfig requires an absolute dataDir', () => {
+  assert.doesNotThrow(() => validateConfig({ repos: [], dataDir: '/abs/data' }))
+  assert.throws(() => validateConfig({ repos: [], dataDir: 'rel/data' }), /config\.dataDir must be an absolute path/)
+})

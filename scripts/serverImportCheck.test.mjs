@@ -172,3 +172,10 @@ test('a non-main worktree may not be another repository or contain one', (t) => 
   b.repositories[0].worktrees[1].path = dir
   assert.equal(code(() => checkImport(b, ctx)), 'BAD_REQUEST')
 })
+
+test('a relative non-main worktree path is BAD_REQUEST', (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  p.repositories[0].worktrees[1].path = 'repo-feature'
+  assert.equal(code(() => checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' })), 'BAD_REQUEST')
+})

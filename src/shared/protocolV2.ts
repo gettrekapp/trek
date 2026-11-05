@@ -112,7 +112,7 @@ export interface MethodParamsV2 {
   'worktree.diff': WorktreeRef
   // Branch data (null clears)
   'branch.setTag': BranchRef & { tag: string | null }
-  'branch.setCustomTags': BranchRef & { customTags: string[] }
+  'branch.setCustomTags': BranchRef & { customTags: string[] | null }
   'branch.setNote': BranchRef & { note: string | null; expected?: string | null }
   'branch.setTicket': BranchRef & { ticket: string | null }
   'branch.setPr': BranchRef & { pr: string | null }

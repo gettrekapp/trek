@@ -14,6 +14,8 @@ export const STORE_SCHEMA = 1
 export interface ProjectStoreOptions {
   /** Delay between a change and its write (default 200 ms) */
   debounceMs?: number
+  /** Longest a change may wait for its write while saves keep coming (default 2 s) */
+  maxWaitMs?: number
   /** Delay before retrying failed writes (default 5 s) */
   retryMs?: number
 }
@@ -42,7 +44,10 @@ function decode(raw: unknown, file: string): Project {
 export class ProjectStore extends EventEmitter<{ health: [] }> {
   private readonly dir: string
   private readonly debounceMs: number
+  private readonly maxWaitMs: number
   private readonly retryMs: number
+  /** When each project's oldest unsaved change was queued. */
+  private firstPending = new Map<string, number>()
   private pending = new Map<string, Project>()
   private timers = new Map<string, NodeJS.Timeout>()
   /** Ids whose last write failed; PERSIST_FAILED is set while this is non-empty. */
@@ -56,6 +61,7 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
     super()
     this.dir = dir
     this.debounceMs = options.debounceMs ?? 200
+    this.maxWaitMs = options.maxWaitMs ?? 2000
     this.retryMs = options.retryMs ?? 5000
   }
 
@@ -93,8 +99,12 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
   save(project: Project): void {
     if (this.closed) return
     this.pending.set(project.id, project)
+    const now = Date.now()
+    const first = this.firstPending.get(project.id) ?? now
+    this.firstPending.set(project.id, first)
     clearTimeout(this.timers.get(project.id))
-    this.timers.set(project.id, setTimeout(() => this.guarded(() => this.write(project.id)), this.debounceMs))
+    const wait = Math.max(0, Math.min(this.debounceMs, first + this.maxWaitMs - now))
+    this.timers.set(project.id, setTimeout(() => this.guarded(() => this.write(project.id)), wait))
   }
 
   /**
@@ -108,6 +118,7 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
     this.pending.delete(projectId)
+    this.firstPending.delete(projectId)
     clearTimeout(this.timers.get(projectId))
     this.timers.delete(projectId)
     this.failed.delete(projectId)
@@ -151,6 +162,7 @@ export class ProjectStore extends EventEmitter<{ health: [] }> {
   private write(projectId: string): void {
     clearTimeout(this.timers.get(projectId))
     this.timers.delete(projectId)
+    this.firstPending.delete(projectId)
     const project = this.pending.get(projectId)
     if (!project) return
     let error: Error | undefined

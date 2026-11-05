@@ -349,3 +349,11 @@ test('branch names: constructor works, __proto__ is refused', async (t) => {
   assert.equal((await call('branch.setNote', { projectId, repoId, branch: '__proto__', note: 'n' })).error.code, 'BAD_REQUEST')
   assert.equal((await call('branch.setTag', { projectId, repoId, branch: 'b', tag: 5 })).error.code, 'BAD_REQUEST')
 })
+
+test('repo.update rejects an own __proto__ key in environments', async (t) => {
+  const { call, projectId, snap } = await withProject(t)
+  const repoId = (await snap()).repositories[0].id
+  const r = await call('repo.update', { projectId, repoId, environments: JSON.parse('{"__proto__":{"x":1}}') })
+  assert.equal(r.error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.update', { projectId, repoId, name: 'Still works' })).ok, true)
+})
