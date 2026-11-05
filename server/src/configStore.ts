@@ -2,10 +2,10 @@
 // repos through this class, so validation is the same; a running server
 // watches the file, so CLI edits apply without a restart.
 import { EventEmitter } from 'node:events'
-import { watch, type FSWatcher } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
 import { basename, dirname } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
-import { loadConfig, saveConfig, type DaemonConfig } from './config.ts'
+import { saveConfig, type DaemonConfig } from './config.ts'
 import { codedError } from './errors.ts'
 import { PathGuard } from './paths.ts'
 import { addRepo, removeRepo, resolveRepoRoot, type AddRepoOptions } from './repos.ts'
@@ -23,6 +23,29 @@ export type RepoUsage = (repo: RemoteRepo) => string[]
 
 const RELOAD_DEBOUNCE_MS = 100
 
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** Checks the shape of a parsed config file. Token entries are filtered later by tokens.ts. */
+export function validateConfig(raw: unknown): DaemonConfig {
+  if (!isObject(raw)) throw new Error('config must be a JSON object')
+  if (!Array.isArray(raw.repos)) throw new Error('config.repos must be an array')
+  raw.repos.forEach((repo, i) => {
+    if (!isObject(repo)) throw new Error(`config.repos[${i}] must be an object`)
+    for (const key of ['id', 'name', 'path']) {
+      if (typeof repo[key] !== 'string') throw new Error(`config.repos[${i}].${key} must be a string`)
+    }
+  })
+  if (raw.tokens !== undefined && !Array.isArray(raw.tokens)) throw new Error('config.tokens must be an array')
+  if (raw.worktreeRoots !== undefined && (!Array.isArray(raw.worktreeRoots) || raw.worktreeRoots.some((r) => typeof r !== 'string'))) {
+    throw new Error('config.worktreeRoots must be an array of strings')
+  }
+  if (raw.port !== undefined && typeof raw.port !== 'number') throw new Error('config.port must be a number')
+  for (const key of ['host', 'serverId', 'name', 'tokenHash']) {
+    if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
+  }
+  return raw as unknown as DaemonConfig
+}
+
 export class ConfigStore extends EventEmitter<{ change: [] }> {
   readonly path: string
   usage: RepoUsage = () => []
@@ -31,11 +54,13 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   private watcher?: FSWatcher
   private reloadTimer?: NodeJS.Timeout
 
-  /** Throws if the file exists but is not valid JSON. */
+  private warnedMissing = false
+
+  /** Throws if the file exists but is not valid JSON or has the wrong shape. A missing file is an empty config. */
   constructor(path: string) {
     super()
     this.path = path
-    this.current = loadConfig(path)
+    this.current = existsSync(path) ? validateConfig(JSON.parse(readFileSync(path, 'utf8'))) : { repos: [] }
     this.currentGuard = new PathGuard(this.current)
   }
 
@@ -50,12 +75,14 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
 
   /** Applies `mutate` to a copy, saves it and swaps it in. If `mutate` throws, nothing changes. */
   update(mutate: (config: DaemonConfig) => void): void {
+    this.syncFromDisk()
     const next = structuredClone(this.current)
     mutate(next)
     this.commit(next)
   }
 
   addRepo(path: string, request: AddRepoRequest): { repo: RemoteRepo; added: boolean } {
+    this.syncFromDisk()
     if (request.requireAllowedRoot) this.currentGuard.check(path)
     let root: string
     try {
@@ -63,7 +90,11 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     } catch (err) {
       throw codedError('NOT_A_REPO', (err as Error).message)
     }
-    if (request.requireAllowedRoot) this.currentGuard.check(root)
+    if (request.requireAllowedRoot) {
+      this.currentGuard.check(root)
+      // Adding must not widen the guard beyond space that is already allowed.
+      this.currentGuard.check(dirname(root))
+    }
     const next = structuredClone(this.current)
     const result = addRepo(next, root, { id: request.id, name: request.name })
     if (result.added) this.commit(next)
@@ -72,6 +103,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
 
   /** By id, or by path (or a path inside the checkout). */
   removeRepo(target: string): RemoteRepo {
+    this.syncFromDisk()
     const next = structuredClone(this.current)
     const removed = removeRepo(next, target)
     if (!removed) throw codedError('NOT_FOUND', `No configured repo matches "${target}"`)
@@ -86,25 +118,44 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   /** Re-reads the file. Returns true (and emits change) if it differs from what is loaded. */
   reload(): boolean {
     let next: DaemonConfig
-    try {
-      next = loadConfig(this.path)
-    } catch (err) {
-      console.warn(`[config] ignoring unreadable ${this.path}: ${(err as Error).message}`)
+    if (!existsSync(this.path)) {
+      if (!this.warnedMissing) console.warn(`[config] ${this.path} does not exist; keeping the current config`)
+      this.warnedMissing = true
       return false
     }
-    if (JSON.stringify(next) === JSON.stringify(this.current)) return false
-    this.swap(next)
+    this.warnedMissing = false
+    try {
+      next = validateConfig(JSON.parse(readFileSync(this.path, 'utf8')))
+      if (JSON.stringify(next) === JSON.stringify(this.current)) return false
+      this.swap(next)
+    } catch (err) {
+      console.warn(`[config] ignoring invalid ${this.path}: ${(err as Error).message}`)
+      return false
+    }
     return true
   }
 
   /** Watches the file's directory (atomic saves replace the file) and reloads on change. */
   watch(): void {
     if (this.watcher) return
-    this.watcher = watch(dirname(this.path), (_event, file) => {
+    mkdirSync(dirname(this.path), { recursive: true })
+    const watcher = watch(dirname(this.path), (_event, file) => {
       if (file && file.toString() !== basename(this.path)) return
       clearTimeout(this.reloadTimer)
-      this.reloadTimer = setTimeout(() => this.reload(), RELOAD_DEBOUNCE_MS)
+      this.reloadTimer = setTimeout(() => {
+        try {
+          this.reload()
+        } catch (err) {
+          console.warn(`[config] reload failed: ${(err as Error).message}`)
+        }
+      }, RELOAD_DEBOUNCE_MS)
     })
+    watcher.on('error', (err) => {
+      console.warn(`[config] watcher for ${this.path} failed: ${err.message}`)
+      this.watcher?.close()
+      this.watcher = undefined
+    })
+    this.watcher = watcher
   }
 
   close(): void {
@@ -113,14 +164,25 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     clearTimeout(this.reloadTimer)
   }
 
+  /** Each read-modify-write starts from the file on disk, so CLI edits are not lost. */
+  private syncFromDisk(): void {
+    clearTimeout(this.reloadTimer)
+    this.reload()
+  }
+
   private commit(next: DaemonConfig): void {
+    // Build the guard first: if it throws, neither disk nor memory has changed.
+    const guard = new PathGuard(next)
     saveConfig(this.path, next)
-    this.swap(next)
+    this.current = next
+    this.currentGuard = guard
+    this.emit('change')
   }
 
   private swap(next: DaemonConfig): void {
+    const guard = new PathGuard(next)
     this.current = next
-    this.currentGuard = new PathGuard(next)
+    this.currentGuard = guard
     this.emit('change')
   }
 }

@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig, saveConfig } from '../server/src/config.ts'
@@ -148,16 +148,110 @@ test('reload keeps the old config when the file is not valid JSON', (t) => {
   assert.equal(changes(), 0)
 })
 
-test('watch reloads when another process rewrites the file', async (t) => {
+test('RPC add cannot climb: a root whose parent is not allowed is PATH_DENIED', (t) => {
+  const { dir, store } = setup(t)
+  gitInit(join(dir, 'repos'))
+  gitInit(dir)
+  assert.equal(codeOf(() => store.addRepo(join(dir, 'repos'), { requireAllowedRoot: true })), 'PATH_DENIED')
+  const b = gitInit(join(dir, 'repos', 'b'))
+  assert.equal(store.addRepo(b, { requireAllowedRoot: true }).added, true)
+  assert.equal(store.config.repos.length, 2)
+})
+
+test('reload keeps the config when the file is missing', (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const { configPath, store, changes } = setup(t)
+  unlinkSync(configPath)
+  assert.equal(store.reload(), false)
+  assert.equal(store.config.repos.length, 1)
+  assert.equal(changes(), 0)
+})
+
+test('reload keeps the config when the file has the wrong shape', (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const { configPath, store, changes } = setup(t)
+  for (const body of ['{"repos":[{"id":"q"}]}', '[]', '{"repos":[],"port":"x"}', 'null']) {
+    writeFileSync(configPath, body)
+    assert.equal(store.reload(), false, body)
+    assert.deepEqual(store.config.repos.map((r) => r.id), ['a'])
+  }
+  assert.equal(changes(), 0)
+})
+
+test('the constructor throws on a wrongly shaped file', (t) => {
+  const dir = tempDir(t)
+  const configPath = join(dir, 'config.json')
+  writeFileSync(configPath, '[]')
+  assert.throws(() => new ConfigStore(configPath), /config/i)
+})
+
+test('a failing save leaves memory and disk unchanged', (t) => {
+  const { configPath, store, changes } = setup(t)
+  assert.throws(() =>
+    store.update((c) => {
+      c.worktreeRoots = [42]
+      c.name = 'bad'
+    })
+  )
+  assert.equal(store.config.name, undefined)
+  assert.equal(loadConfig(configPath).name, undefined)
+  assert.equal(changes(), 0)
+})
+
+test('watch on a missing config directory does not throw', (t) => {
+  const dir = tempDir(t)
+  const store = new ConfigStore(join(dir, 'nested', 'config.json'))
+  t.after(() => store.close())
+  assert.doesNotThrow(() => store.watch())
+})
+
+test('update starts from the file on disk, not a stale snapshot', (t) => {
   const { dir, configPath, store } = setup(t)
-  store.watch()
-  const changed = new Promise((resolve) => store.once('change', resolve))
   const next = loadConfig(configPath)
   next.repos.push({ id: 'z', name: 'z', path: join(dir, 'repos', 'z') })
   saveConfig(configPath, next)
-  await Promise.race([
-    changed,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('no change event')), 3000))
-  ])
-  assert.deepEqual(store.config.repos.map((r) => r.id), ['a', 'z'])
+  store.update((c) => {
+    c.name = 'n'
+  })
+  for (const config of [store.config, loadConfig(configPath)]) {
+    assert.deepEqual(config.repos.map((r) => r.id), ['a', 'z'])
+    assert.equal(config.name, 'n')
+  }
+})
+
+test('watch reloads when another process rewrites the file', async (t) => {
+  const { dir, configPath, store } = setup(t)
+  store.watch()
+  await new Promise((r) => setTimeout(r, 250))
+  const timers = []
+  let resolveChanged
+  const changed = new Promise((resolve) => (resolveChanged = resolve))
+  store.once('change', () => resolveChanged(true))
+  const write = () => {
+    const next = loadConfig(configPath)
+    if (!next.repos.some((r) => r.id === 'z')) next.repos.push({ id: 'z', name: 'z', path: join(dir, 'repos', 'z') })
+    else next.port = (next.port ?? 1000) + 1
+    saveConfig(configPath, next)
+  }
+  write()
+  const interval = setInterval(write, 300)
+  timers.push(interval)
+  const timeout = new Promise((_, reject) => timers.push(setTimeout(() => reject(new Error('no change event')), 5000)))
+  try {
+    await Promise.race([changed, timeout])
+  } finally {
+    timers.forEach((id) => (clearInterval(id), clearTimeout(id)))
+  }
+  assert.ok(store.config.repos.some((r) => r.id === 'z'))
+})
+
+test('the store\'s own update while watching emits exactly one change', async (t) => {
+  const { store, changes } = setup(t)
+  store.watch()
+  await new Promise((r) => setTimeout(r, 250))
+  store.update((c) => {
+    c.name = 'solo'
+  })
+  await new Promise((r) => setTimeout(r, 500))
+  assert.equal(changes(), 1)
 })
