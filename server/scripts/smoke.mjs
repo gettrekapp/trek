@@ -24,7 +24,11 @@ execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'],
 })
 
 const configPath = join(work, 'config.json')
+// A fake agent: prints its args, lingers briefly, exits 7.
+const fakeAgent = join(work, 'fake-agent.sh')
+writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nsleep 1\nexit 7\n', { mode: 0o755 })
 writeFileSync(configPath, JSON.stringify({
+  llm: { providers: { claude: { command: fakeAgent } } },
   tokenHash,
   repos: [{ id: 'smoke', name: 'Smoke', path: repo }]
 }))
@@ -422,6 +426,63 @@ if (!wtRemoved.ok || existsSync(wtRow?.path ?? '')) fail(`worktree.remove: ${JSO
 await patchUntil(() => !projWorktrees().some((w) => w.id === wtId))
 if (projWorktrees().some((w) => w.id === wtId)) fail('removed worktree still in the project topic')
 else ok('worktree.remove: removed from disk and the project topic')
+
+// --- sessions (fake agent) ---
+{
+  const mainWt = () => projWorktrees().find((w) => w.isMain)
+  const mainId = mainRow?.id
+  const sessionOf = (sid) => mainWt()?.sessions.find((s) => s.id === sid)
+  const ptyText = (id) => pc.frames
+    .filter((f) => f.type === 'event' && f.event === 'pty.data' && f.payload.ptyId === id)
+    .map((f) => f.payload.data).join('')
+
+  const started = await pc.req('session.start', { projectId, worktreeId: mainId, cols: 80, rows: 24 })
+  if (!started.ok || !started.result?.sessionId || !started.result?.ptyId) fail(`session.start: ${JSON.stringify(started)}`)
+  else {
+    const { sessionId, ptyId: agentPty } = started.result
+    ok('session.start: returned a sessionId and ptyId')
+
+    const attached = await pc.req('pty.attach', { ptyId: agentPty })
+    if (!attached.ok) fail(`pty.attach: ${JSON.stringify(attached)}`)
+    const sawArgs = await waitFor(() => ptyText(agentPty).includes('FAKE_AGENT') && ptyText(agentPty).includes(`--session-id ${sessionId}`), 4000)
+    if (!sawArgs) fail(`agent output missing args: ${JSON.stringify(ptyText(agentPty))}`)
+    else ok('pty.attach: fake agent printed its --session-id launch args')
+
+    const exited = await waitFor(() => pc.frames.some((f) => f.type === 'event' && f.event === 'pty.exit' && f.payload.ptyId === agentPty), 6000)
+    const exitFrame = pc.frames.find((f) => f.type === 'event' && f.event === 'pty.exit' && f.payload.ptyId === agentPty)
+    if (!exited || exitFrame.payload.exitCode !== 7) fail(`pty.exit: ${JSON.stringify(exitFrame)}`)
+    else ok('pty.exit: exitCode 7')
+    await patchUntil(() => sessionOf(sessionId)?.status === 'exited')
+    const sx = sessionOf(sessionId)
+    if (sx?.status !== 'exited' || sx.exitCode !== 7 || sx.ptyId) fail(`session after exit: ${JSON.stringify(sx)}`)
+    else ok('project topic: session exited with exitCode 7')
+
+    const restarted = await pc.req('session.restart', { projectId, sessionId, cols: 80, rows: 24 })
+    if (!restarted.ok || !restarted.result?.ptyId || restarted.result.ptyId === agentPty) fail(`session.restart: ${JSON.stringify(restarted)}`)
+    else {
+      const pty2 = restarted.result.ptyId
+      const att2 = await pc.req('pty.attach', { ptyId: pty2 })
+      if (!att2.ok) fail(`pty.attach after restart: ${JSON.stringify(att2)}`)
+      const resumed = await waitFor(() => ptyText(pty2).includes(`--resume ${sessionId}`), 4000)
+      if (!resumed) fail(`restart output missing --resume: ${JSON.stringify(ptyText(pty2))}`)
+      else ok('session.restart: new pty resumed with --resume')
+    }
+
+    const unloaded = await pc.req('worktree.unload', { projectId, worktreeId: mainId })
+    if (!unloaded.ok) fail(`worktree.unload: ${JSON.stringify(unloaded)}`)
+    await patchUntil(() => mainWt()?.loaded === false && !sessionOf(sessionId)?.ptyId)
+    const su = sessionOf(sessionId)
+    if (mainWt()?.loaded !== false || !su || su.ptyId || !['idle', 'exited'].includes(su.status)) {
+      fail(`after unload: loaded ${mainWt()?.loaded}, session ${JSON.stringify(su)}`)
+    } else ok(`worktree.unload: session kept without a pty (${su.status}), worktree not loaded`)
+
+    const closedS = await pc.req('session.close', { projectId, sessionId })
+    if (!closedS.ok) fail(`session.close: ${JSON.stringify(closedS)}`)
+    await patchUntil(() => !sessionOf(sessionId))
+    if (sessionOf(sessionId)) fail('closed session still in the topic')
+    else ok('session.close: removed from the topic')
+  }
+}
 
 const inUse = await pc.req('server.removeRepo', { repoId: 'smoke' })
 if (inUse.ok || inUse.error.code !== 'IN_USE') fail(`removeRepo while used: ${JSON.stringify(inUse)}`)
