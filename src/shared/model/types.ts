@@ -104,7 +104,7 @@ export interface Project {
 }
 
 export interface HealthWarning {
-  code: 'PERSIST_FAILED'
+  code: 'PERSIST_FAILED' | 'LOAD_FAILED'
   message: string
   /** Epoch ms when the condition started */
   since: number
