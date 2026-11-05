@@ -129,5 +129,41 @@ export const worktreeHandlers: Record<string, Handler> = {
       return created.id
     })
     return { worktreeId }
+  },
+
+  'worktree.remove': async (p, ctx) => {
+    const force = p.force === undefined ? false : requireBoolean(p.force, 'force')
+    const { repo, worktree } = locate(ctx.projects.require(p.projectId), p.worktreeId)
+    if (worktree.isMain) throw bad('the main worktree cannot be removed')
+    const key = real(worktree.path)
+    const running = [...ctx.projects.all()]
+      .filter((project) => project.repositories.some((r) => r.worktrees.some((w) => w.loaded && real(w.path) === key)))
+      .map((project) => project.name)
+    if (running.length > 0) throw codedError('IN_USE', `${worktree.path} has running sessions in ${running.join(', ')}; unload it first`)
+
+    if (!worktree.missing) {
+      findRegistered(ctx.store.config.repos, repo.path)
+      await viaGit(async () => {
+        if (!existsSync(worktree.path)) await gitService.git(repo.path, ['worktree', 'prune'])
+        else if (force) await gitService.removeWorktreeForce(repo.path, worktree.path)
+        else await gitService.removeWorktree(repo.path, worktree.path)
+      })
+      // Git has removed it. Even if the re-read fails, the row goes below.
+      await ctx.poller.refresh(repo.path)
+    }
+
+    // The poller keeps a vanished row that has sessions (as missing); an explicit remove drops it.
+    ctx.projects.apply(p.projectId, (d) => {
+      const r = d.repositories.find((x) => x.id === repo.id)
+      if (!r) return
+      r.worktrees = r.worktrees.filter((w) => w.id !== worktree.id)
+      const orderKey = `${repo.id} ${worktree.path}`
+      if (d.settings.worktreeOrder) {
+        const order = d.settings.worktreeOrder.filter((k) => k !== orderKey)
+        if (order.length > 0) d.settings.worktreeOrder = order
+        else delete d.settings.worktreeOrder
+      }
+    })
+    return null
   }
 }

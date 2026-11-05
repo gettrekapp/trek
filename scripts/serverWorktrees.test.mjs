@@ -166,3 +166,77 @@ test('worktree.create reports a refresh that could not list the repo', async (t)
   assert.equal(res.error?.code, 'GIT_ERROR')
   assert.match(res.error.message, /boom/)
 })
+
+async function withWorktree(s, branch) {
+  const res = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch, createBranch: true })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  return s.worktree(res.result.worktreeId)
+}
+
+test('worktree.remove deletes a clean worktree and its worktreeOrder entry', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'gone')
+  const key = `${s.repoId} ${wt.path}`
+  await s.call('project.updateSettings', { projectId: s.projectId, settings: { worktreeOrder: [key] } })
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.deepEqual(res, { ok: true, result: null })
+  assert.equal(existsSync(wt.path), false)
+  assert.equal(s.worktree(wt.id), undefined)
+  assert.equal(s.project().settings.worktreeOrder, undefined)
+})
+
+test('worktree.remove refuses a dirty worktree unless forced', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'dirty')
+  writeFileSync(join(wt.path, 'scratch.txt'), 'x')
+  const refused = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(refused.error.code, 'GIT_ERROR')
+  assert.ok(existsSync(wt.path))
+  const forced = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id, force: true })
+  assert.equal(forced.ok, true, JSON.stringify(forced))
+  assert.equal(existsSync(wt.path), false)
+})
+
+test('worktree.remove: the main worktree, bad force, unknown ids', async (t) => {
+  const s = await setup(t)
+  const mainId = s.project().repositories[0].worktrees[0].id
+  assert.equal((await s.call('worktree.remove', { projectId: s.projectId, worktreeId: mainId })).error.code, 'BAD_REQUEST')
+  const wt = await withWorktree(s, 'x')
+  assert.equal((await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id, force: 'yes' })).error.code, 'BAD_REQUEST')
+  assert.equal((await s.call('worktree.remove', { projectId: s.projectId, worktreeId: 'nope' })).error.code, 'NOT_FOUND')
+})
+
+test('worktree.remove is IN_USE while any project has the path loaded', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'busy')
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).loaded = true })
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.error.code, 'IN_USE')
+  assert.match(res.error.message, /P/)
+  assert.ok(existsSync(wt.path))
+})
+
+test('a vanished worktree with sessions is kept as missing; remove just drops the row', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'vanish')
+  const session = { id: 'sess-1', title: 'S', llm: { provider: 'claude' }, queue: [], status: 'idle' }
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).sessions.push(session) })
+  rmSync(wt.path, { recursive: true, force: true })
+  git(s.a, 'worktree', 'prune')
+  await s.poller.refresh(s.a)
+  assert.equal(s.worktree(wt.id).missing, true)
+  assert.equal((await s.call('worktree.changes', { projectId: s.projectId, worktreeId: wt.id })).error.code, 'BAD_REQUEST')
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(s.worktree(wt.id), undefined)
+})
+
+test('worktree.remove prunes a worktree whose directory is gone but git still lists', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'stale')
+  rmSync(wt.path, { recursive: true, force: true })
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(s.worktree(wt.id), undefined)
+  assert.doesNotMatch(git(s.a, 'worktree', 'list'), /stale/)
+})
