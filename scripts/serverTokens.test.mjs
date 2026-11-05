@@ -90,3 +90,24 @@ test('formatTokenList aligns names and shows unknown dates', () => {
   )
   assert.match(formatTokenList([]), /No tokens/)
 })
+
+test('malformed token entries are skipped, not thrown on', () => {
+  const good = { name: 'ok', hash: hashToken('good'), createdAt: '' }
+  const config = { repos: [], tokens: [{ name: 'bad' }, { name: 'x', hash: 42 }, { hash: hashToken('n') }, good] }
+  assert.deepEqual(listTokens(config), [good])
+  assert.equal(matchToken(config, 'good').name, 'ok')
+  assert.equal(matchToken(config, 'other'), undefined)
+})
+
+test('a tokens "default" entry wins over a stale v1 tokenHash', () => {
+  const config = {
+    repos: [],
+    tokenHash: hashToken('old'),
+    tokens: [{ name: 'default', hash: hashToken('new'), createdAt: '' }]
+  }
+  assert.equal(matchToken(config, 'old'), undefined)
+  assert.equal(matchToken(config, 'new').name, 'default')
+  migrateLegacyToken(config)
+  assert.deepEqual(config.tokens.filter((t) => t.name === 'default').map((t) => t.hash), [hashToken('new')])
+  assert.equal(config.tokens.length, 1)
+})

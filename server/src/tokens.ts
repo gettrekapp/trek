@@ -21,7 +21,10 @@ export function hashToken(token: string): string {
 
 /** Every token the config accepts, counting an unmigrated v1 tokenHash as "default". */
 export function listTokens(config: DaemonConfig): TokenEntry[] {
-  const tokens = [...(config.tokens ?? [])]
+  // Hand-edited entries that are malformed are dropped (fail closed).
+  const tokens = (config.tokens ?? []).filter(
+    (t) => t && typeof t.name === 'string' && t.name !== '' && typeof t.hash === 'string' && t.hash !== ''
+  )
   if (config.tokenHash && !tokens.some((t) => t.name === DEFAULT_TOKEN_NAME)) {
     tokens.push({ name: DEFAULT_TOKEN_NAME, hash: config.tokenHash, createdAt: '' })
   }
@@ -53,7 +56,7 @@ export function addToken(config: DaemonConfig, name: string, now: Date = new Dat
   return token
 }
 
-/** Returns true if a token of that name existed. */
+/** Returns true if a token of that name existed. Also migrates a v1 tokenHash into `tokens`. */
 export function revokeToken(config: DaemonConfig, name: string): boolean {
   migrateLegacyToken(config)
   const tokens = config.tokens ?? []

@@ -1,5 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocol'
@@ -42,7 +52,15 @@ export function legacyConfigPath(): string {
 export function migrateLegacyConfig(target: string, legacy: string): boolean {
   if (existsSync(target) || !existsSync(legacy)) return false
   mkdirSync(dirname(target), { recursive: true })
-  copyFileSync(legacy, target)
+  try {
+    // COPYFILE_EXCL closes the exists/copy race: never overwrite a target.
+    copyFileSync(legacy, target, constants.COPYFILE_EXCL)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+    throw err
+  }
+  // The copy inherits the legacy file's mode; the file holds token hashes.
+  chmodSync(target, 0o600)
   return true
 }
 
@@ -65,8 +83,23 @@ export function loadConfig(path: string): DaemonConfig {
 export function saveConfig(path: string, config: DaemonConfig): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.${process.pid}.tmp`
-  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
-  renameSync(tmp, path)
+  // A stale temp file would keep its own (possibly looser) mode, so start fresh.
+  try {
+    unlinkSync(tmp)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+  }
+  try {
+    writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    renameSync(tmp, path)
+  } catch (err) {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      // best effort
+    }
+    throw err
+  }
 }
 
 /** Fills in `serverId` and `name` if missing. Returns true if it changed the config. */

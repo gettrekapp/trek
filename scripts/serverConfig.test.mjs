@@ -1,7 +1,7 @@
 // scripts/serverConfig.test.mjs — trek-server config: legacy migration, atomic save, identity.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -69,4 +69,34 @@ test('ensureIdentity fills serverId and name once', () => {
   assert.equal(ensureIdentity(config, 'other'), false)
   assert.equal(config.serverId, id)
   assert.equal(config.name, 'build-box')
+})
+
+test('migrateLegacyConfig makes the copy private even from a 0644 legacy file', (t) => {
+  const dir = tempDir(t)
+  const legacy = join(dir, 'legacy.json')
+  const target = join(dir, 'sub', 'target.json')
+  writeFileSync(legacy, JSON.stringify({ repos: [] }))
+  chmodSync(legacy, 0o644)
+  assert.equal(migrateLegacyConfig(target, legacy), true)
+  if (process.platform !== 'win32') assert.equal(statSync(target).mode & 0o777, 0o600)
+})
+
+test('saveConfig tightens a pre-existing 0644 config', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 'config.json')
+  writeFileSync(path, '{}')
+  chmodSync(path, 0o644)
+  saveConfig(path, { repos: [] })
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
+})
+
+test('saveConfig does not inherit the mode of a stale temp file', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 'config.json')
+  const tmp = `${path}.${process.pid}.tmp`
+  writeFileSync(tmp, 'stale')
+  chmodSync(tmp, 0o644)
+  saveConfig(path, { repos: [] })
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
+  assert.deepEqual(readdirSync(dir), ['config.json'])
 })
