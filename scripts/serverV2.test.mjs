@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -151,6 +151,10 @@ test('server.addRepo needs an absolute path', async (t) => {
   assert.equal((await call('server.addRepo', { path: 'repos/a' })).error.code, 'BAD_REQUEST')
 })
 
+async function snapshotOf(call, projectId) {
+  return (await call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
+}
+
 test('project.create from registered repos; listed, subscribable and in the server topic', async (t) => {
   const { a, call } = setup(t)
   const server = await call('sub.subscribe', { topic: 'server' })
@@ -190,6 +194,20 @@ test('project.updateSettings merges, null removes, expected is per key', async (
   const snap = (await call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
   assert.deepEqual(snap.settings, { claudeCommand: 'c' })
   assert.equal((await call('project.updateSettings', { projectId, settings: { nope: 1 } })).error.code, 'BAD_REQUEST')
+  const inherited = await call('project.updateSettings', { projectId, settings: { claudeCommand: 'y' }, expected: { toString: null } })
+  assert.equal(inherited.error.code, 'BAD_REQUEST')
+  assert.equal((await snapshotOf(call, projectId)).settings.claudeCommand, 'c')
+})
+
+test('wrong id types are BAD_REQUEST, not NOT_FOUND', async (t) => {
+  const { a, call } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  assert.equal((await call('project.rename', { projectId: 5, name: 'Q' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('project.delete', {})).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.update', { projectId, repoId: 5, name: 'X' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.listBranches', { projectId, repoId: null })).error.code, 'BAD_REQUEST')
+  const repoId = (await snapshotOf(call, projectId)).repositories[0].id
+  assert.equal((await call('branch.setNote', { projectId, repoId, branch: 7, note: 'n' })).error.code, 'BAD_REQUEST')
 })
 
 test('project.delete removes it everywhere; removeRepo is IN_USE until then', async (t) => {
@@ -217,7 +235,7 @@ test('project.import accepts a project from importProjectFile', async (t) => {
 async function withProject(t) {
   const env = setup(t)
   const { projectId } = (await env.call('project.create', { name: 'P', repositories: [{ path: env.a }] })).result
-  const snap = async () => (await env.call('sub.subscribe', { topic: `project:${projectId}` })).result.snapshot
+  const snap = () => snapshotOf(env.call, projectId)
   return { ...env, projectId, snap }
 }
 
@@ -261,6 +279,17 @@ test('repo.update: name, linkedDirs, environments, null removes, expected guards
   assert.equal((await call('repo.update', { projectId, repoId, name: 'X', expected: { name: 'old' } })).error.code, 'CONFLICT')
   assert.equal((await call('repo.update', { projectId, repoId, name: ' ' })).error.code, 'BAD_REQUEST')
   assert.equal((await call('repo.update', { projectId, repoId, environments: [] })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('repo.update', { projectId, repoId, name: 'Y', expected: { linkedDir: [] } })).error.code, 'BAD_REQUEST')
+  assert.equal((await snap()).repositories[0].name, 'Main')
+})
+
+test('repo.add compares paths by realpath', async (t) => {
+  const { a, dir, store, call, projectId } = await withProject(t)
+  const link = join(dir, 'link-a')
+  symlinkSync(a, link)
+  // The registry now spells the project's repo through a symlink.
+  store.update((c) => { c.repos[0].path = link })
+  assert.equal((await call('repo.add', { projectId, path: link })).error.code, 'BAD_REQUEST')
 })
 
 test('repo.listBranches lists git branches', async (t) => {
@@ -292,6 +321,24 @@ test('branch.* set and clear branch data; an empty entry disappears', async (t) 
   }
   await call('branch.setCustomTags', { ...ref, customTags: [] })
   assert.equal((await snap()).repositories[0].branchData['feature/x'], undefined)
+})
+
+test('branch.*: empty strings and null customTags clear; missing customTags is BAD_REQUEST', async (t) => {
+  const { call, projectId, snap } = await withProject(t)
+  const repoId = (await snap()).repositories[0].id
+  const ref = { projectId, repoId, branch: 'b' }
+  await call('branch.setTag', { ...ref, tag: 'review' })
+  await call('branch.setCustomTags', { ...ref, customTags: ['ui'] })
+  await call('branch.setNote', { ...ref, note: 'n' })
+  assert.equal((await call('branch.setTag', { ...ref, tag: '' })).ok, true)
+  assert.equal((await call('branch.setCustomTags', { ...ref, customTags: null })).ok, true)
+  assert.deepEqual((await snap()).repositories[0].branchData.b, { note: 'n' })
+  for (const [method, field] of [['branch.setNote', 'note'], ['branch.setTicket', 'ticket'], ['branch.setPr', 'pr'], ['branch.setEnv', 'env']]) {
+    await call(method, { ...ref, [field]: 'v' })
+    assert.equal((await call(method, { ...ref, [field]: '' })).ok, true)
+  }
+  assert.equal((await snap()).repositories[0].branchData.b, undefined)
+  assert.equal((await call('branch.setCustomTags', ref)).error.code, 'BAD_REQUEST')
 })
 
 test('branch names: constructor works, __proto__ is refused', async (t) => {

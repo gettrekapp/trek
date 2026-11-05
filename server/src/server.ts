@@ -248,6 +248,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     store.off('change', onConfigChange)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
+    store.setUsage(() => [])
     for (const ws of wss.clients) {
       sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload: { reason } })
       ws.close(1001, 'server shutting down')

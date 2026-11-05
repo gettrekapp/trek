@@ -88,3 +88,44 @@ test('importProject stores the checked project under a new id', () => {
   assert.equal(id, 'id1')
   assert.equal(state.require(id).repositories[0].id, 'rX')
 })
+
+test('delete is atomic: a failing store.remove leaves the project, its topic and summaries alone', () => {
+  const hub = new TopicHub()
+  let summaries = 0
+  const store = { save: () => {}, remove: () => { throw new Error('disk') } }
+  const state = new ProjectState({ hub, store, newId: () => 'p1', onSummariesChange: () => summaries++ })
+  const id = state.create('P', [{ registered: { id: 'a', name: 'A', path: '/r/a' }, name: undefined }])
+  summaries = 0
+  assert.throws(() => state.delete(id), /disk/)
+  assert.deepEqual(state.list(), [{ id, name: 'P' }])
+  assert.equal(hub.subscribe(`project:${id}`, sub()).snapshot.name, 'P')
+  assert.equal(summaries, 0)
+})
+
+test('a failing publish leaves memory unchanged and saves nothing', () => {
+  const { hub, saved, state, registered } = setup()
+  const id = state.create('P', [{ registered, name: undefined }])
+  const publish = hub.publish
+  hub.publish = () => { throw new Error('publish') }
+  assert.throws(() => state.apply(id, (d) => { d.name = 'Q' }), /publish/)
+  hub.publish = publish
+  assert.equal(state.require(id).name, 'P')
+  assert.equal(saved.length, 1)
+})
+
+test('apply with persist: false publishes a patch but does not save', () => {
+  const { hub, saved, state, registered } = setup()
+  const id = state.create('P', [{ registered, name: undefined }])
+  const s = sub()
+  hub.subscribe(`project:${id}`, s)
+  state.apply(id, (d) => { d.repositories[0].branchData.main = { note: 'rt' } }, { persist: false })
+  assert.equal(s.sent.length, 1)
+  assert.equal(state.require(id).repositories[0].branchData.main.note, 'rt')
+  assert.equal(saved.length, 1)
+})
+
+test('a non-string project id is BAD_REQUEST', () => {
+  const { state } = setup()
+  assert.throws(() => state.require(5), (err) => err.code === 'BAD_REQUEST')
+  assert.throws(() => state.apply(undefined, () => {}), (err) => err.code === 'BAD_REQUEST')
+})

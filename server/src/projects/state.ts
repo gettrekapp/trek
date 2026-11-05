@@ -8,6 +8,7 @@ import type { RemoteRepo } from '../../../src/shared/protocol'
 import { deepEqual } from '../../../src/shared/sync/jsonDiff.ts'
 import { codedError } from '../errors.ts'
 import type { TopicHub } from '../topicHub.ts'
+import { requireString } from '../validate.ts'
 import { collectIds, newProject, projectsUsingRepo } from './model.ts'
 
 export interface ProjectPersistence {
@@ -45,21 +46,30 @@ export class ProjectState {
     return this.projects.values()
   }
 
-  /** The project, or NOT_FOUND. Treat as read-only; change it through apply(). */
+  /** The project; BAD_REQUEST if the id is not a string, NOT_FOUND if unknown. Treat as read-only; change it through apply(). */
   require(projectId: unknown): Project {
-    const project = typeof projectId === 'string' ? this.projects.get(projectId) : undefined
-    if (!project) throw codedError('NOT_FOUND', `No project with id "${String(projectId)}"`)
+    const id = requireString(projectId, 'projectId')
+    const project = this.projects.get(id)
+    if (!project) throw codedError('NOT_FOUND', `No project with id "${id}"`)
     return project
   }
 
-  /** Runs `mutate` on a copy; publishes and saves only if something changed. Returns `mutate`'s result. */
-  apply<T>(projectId: unknown, mutate: (draft: Project) => T): T {
+  /**
+   * Runs `mutate` on a copy; publishes (and saves) only if something changed.
+   * Returns `mutate`'s result.
+   *
+   * `persist: false` is for runtime-only fields (git status, session status):
+   * the change is published and kept in memory but not written to disk. It
+   * reaches disk only with a later persisted change (the store resets runtime
+   * fields on load either way).
+   */
+  apply<T>(projectId: unknown, mutate: (draft: Project) => T, options: { persist?: boolean } = {}): T {
     const current = this.require(projectId)
     const draft = structuredClone(current)
     const result = mutate(draft)
     if (draft.id !== current.id) throw new Error('a mutation must not change the project id')
     if (deepEqual(draft, current)) return result
-    this.commit(draft)
+    this.commit(draft, options.persist ?? true)
     if (draft.name !== current.name) this.deps.onSummariesChange()
     return result
   }
@@ -80,11 +90,12 @@ export class ProjectState {
     return projectId
   }
 
+  /** Removes the file first: if that throws, the project stays (in memory and on its topic). */
   delete(projectId: unknown): void {
     const project = this.require(projectId)
+    this.deps.store.remove(project.id)
     this.projects.delete(project.id)
     this.deps.hub.drop(projectTopic(project.id))
-    this.deps.store.remove(project.id)
     this.deps.onSummariesChange()
   }
 
@@ -99,9 +110,10 @@ export class ProjectState {
     return ids
   }
 
-  private commit(project: Project): void {
-    this.projects.set(project.id, project)
+  /** Publishes first, so a publish that throws leaves memory unchanged. */
+  private commit(project: Project, persist = true): void {
     this.deps.hub.publish(projectTopic(project.id), project)
-    this.deps.store.save(project)
+    this.projects.set(project.id, project)
+    if (persist) this.deps.store.save(project)
   }
 }

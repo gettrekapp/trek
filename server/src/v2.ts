@@ -9,7 +9,8 @@ import type { BranchData, Project, Repository } from '../../src/shared/model/typ
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
-import { applySettingsPatch } from './projects/settings.ts'
+import { applySettingsPatch, isSettingsKey } from './projects/settings.ts'
+import { realOrResolved } from './repos.ts'
 import {
   checkExpected,
   isRecord,
@@ -33,17 +34,20 @@ export interface V2Context {
 type Handler = (params: any, ctx: V2Context) => unknown
 
 function repoIn(project: Project, repoId: unknown): Repository {
-  const repo = project.repositories.find((r) => r.id === repoId)
-  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${String(repoId)}" in this project`)
+  const id = requireString(repoId, 'repoId')
+  const repo = project.repositories.find((r) => r.id === id)
+  if (!repo) throw codedError('NOT_FOUND', `No repository with id "${id}" in this project`)
   return repo
 }
 
-/** A nullable string field: null clears it; anything else must be a string. */
-function nullableString(value: unknown, field: string): string | null {
-  if (value === null) return null
+/** A clearable string field: null or "" clears it; anything else must be a string. */
+function clearableString(value: unknown, field: string): string | null {
+  if (value === null || value === '') return null
   if (typeof value !== 'string') throw codedError('BAD_REQUEST', `${field} must be a string or null`)
   return value
 }
+
+const REPO_GUARD_KEYS = ['name', 'linkedDirs', 'environments'] as const
 
 /** Sets or clears one branch-data field; an entry left empty is removed. */
 function setBranchField<K extends keyof BranchData>(
@@ -117,7 +121,10 @@ const handlers: Record<string, Handler> = {
     const expected = p.expected === undefined ? undefined : requireRecord(p.expected, 'expected')
     ctx.projects.apply(p.projectId, (d) => {
       const current = d.settings as Record<string, unknown>
-      for (const [key, value] of Object.entries(expected ?? {})) checkExpected(`settings.${key}`, current[key], value)
+      for (const [key, value] of Object.entries(expected ?? {})) {
+        if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
+        checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
+      }
       d.settings = applySettingsPatch(d.settings, patch)
     })
     return null
@@ -127,7 +134,8 @@ const handlers: Record<string, Handler> = {
     const registered = findRegistered(ctx.store.config.repos, requireString(p.path, 'path'))
     const name = optionalName(p.name, 'name')
     const repoId = ctx.projects.apply(p.projectId, (d) => {
-      if (d.repositories.some((r) => r.path === registered.path)) {
+      const target = realOrResolved(registered.path)
+      if (d.repositories.some((r) => realOrResolved(r.path) === target)) {
         throw codedError('BAD_REQUEST', `${registered.path} is already in this project`)
       }
       const repo = newRepository(registered, name, ctx.projects.newId)
@@ -156,9 +164,14 @@ const handlers: Record<string, Handler> = {
     const linkedDirs = p.linkedDirs === null ? null : optionalStringArray(p.linkedDirs, 'linkedDirs')
     const environments = p.environments === null || p.environments === undefined ? p.environments : requireRecord(p.environments, 'environments')
     const expected = p.expected === undefined ? {} : requireRecord(p.expected, 'expected')
+    for (const key of Object.keys(expected)) {
+      if (!(REPO_GUARD_KEYS as readonly string[]).includes(key)) {
+        throw codedError('BAD_REQUEST', `expected.${key} must be one of ${REPO_GUARD_KEYS.join(', ')}`)
+      }
+    }
     ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
-      for (const key of ['name', 'linkedDirs', 'environments'] as const) {
+      for (const key of REPO_GUARD_KEYS) {
         if (Object.hasOwn(expected, key)) checkExpected(key, repo[key], expected[key])
       }
       if (name !== undefined) repo.name = name
@@ -179,16 +192,17 @@ const handlers: Record<string, Handler> = {
     }
   },
 
-  'branch.setTag': (p, ctx) => setBranchField(ctx, p, 'tag', nullableString(p.tag, 'tag')),
+  'branch.setTag': (p, ctx) => setBranchField(ctx, p, 'tag', clearableString(p.tag, 'tag')),
   'branch.setCustomTags': (p, ctx) => {
-    const tags = optionalStringArray(p.customTags, 'customTags')
-    if (tags === undefined) throw codedError('BAD_REQUEST', 'customTags is required')
+    if (p.customTags === undefined) throw codedError('BAD_REQUEST', 'customTags is required')
+    // null or [] clears; setBranchField drops an empty array.
+    const tags = p.customTags === null ? null : optionalStringArray(p.customTags, 'customTags')!
     return setBranchField(ctx, p, 'customTags', tags)
   },
-  'branch.setNote': (p, ctx) => setBranchField(ctx, p, 'note', nullableString(p.note, 'note'), p.expected),
-  'branch.setTicket': (p, ctx) => setBranchField(ctx, p, 'ticket', nullableString(p.ticket, 'ticket')),
-  'branch.setPr': (p, ctx) => setBranchField(ctx, p, 'pr', nullableString(p.pr, 'pr')),
-  'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', nullableString(p.env, 'env')),
+  'branch.setNote': (p, ctx) => setBranchField(ctx, p, 'note', clearableString(p.note, 'note'), p.expected),
+  'branch.setTicket': (p, ctx) => setBranchField(ctx, p, 'ticket', clearableString(p.ticket, 'ticket')),
+  'branch.setPr': (p, ctx) => setBranchField(ctx, p, 'pr', clearableString(p.pr, 'pr')),
+  'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env')),
 
   'sub.subscribe': (p, ctx) => {
     if (!parseTopic(p.topic)) throw codedError('BAD_REQUEST', `Unknown topic: ${String(p.topic)}`)

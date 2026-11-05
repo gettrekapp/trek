@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig } from './config'
@@ -314,11 +314,14 @@ if (readLegacyInPlace) {
   store = openStore(args.configPath)
 }
 const config = store.config
-if (!config.serverId || !config.name || config.tokenHash) {
+// --data-dir is remembered, so a later plain `trek-server remove` checks the same projects.
+const dataDir = args.dataDir === undefined ? undefined : resolve(args.dataDir)
+if (!config.serverId || !config.name || config.tokenHash || (dataDir !== undefined && config.dataDir !== dataDir)) {
   try {
     store.update((c) => {
       ensureIdentity(c, hostname())
       migrateLegacyToken(c)
+      if (dataDir !== undefined) c.dataDir = dataDir
     })
   } catch (err) {
     fail(`Cannot update ${args.configPath}: ${(err as Error).message}`)
@@ -361,9 +364,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     console.log(`\n${signal} — shutting down (all agent sessions will end)`)
     store.close()
     server.shutdown(signal)
-    projectFiles.files.flush()
-    // close() may flush itself and return the ids that failed to save (older versions return nothing)
-    const failed = (projectFiles.files.close() as string[] | undefined) ?? []
+    // close() flushes pending saves and returns the ids that could not be written.
+    const failed = projectFiles.files.close()
     if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
     // Give the daemon.shutdown frames and close handshakes a moment to flush.
     setTimeout(() => process.exit(0), SHUTDOWN_FLUSH_MS)

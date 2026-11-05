@@ -40,8 +40,13 @@ const SETTINGS_KINDS: Record<keyof ProjectSettings, Kind> = {
   worktreeOrder: 'stringArray'
 }
 
+/** Whether `key` is a project setting (an own key of the settings table). */
+export function isSettingsKey(key: string): key is keyof ProjectSettings {
+  return Object.hasOwn(SETTINGS_KINDS, key)
+}
+
 function checkValue(key: string, value: unknown, field: string): void {
-  if (!Object.hasOwn(SETTINGS_KINDS, key)) throw codedError('BAD_REQUEST', `${field}.${key} is not a project setting`)
+  if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `${field}.${key} is not a project setting`)
   const kind = SETTINGS_KINDS[key as keyof ProjectSettings]
   const ok =
     kind === 'string' ? typeof value === 'string'
@@ -65,7 +70,7 @@ export function applySettingsPatch(current: ProjectSettings, patch: Record<strin
   const next: Record<string, unknown> = { ...current }
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
-      if (!Object.hasOwn(SETTINGS_KINDS, key)) throw codedError('BAD_REQUEST', `settings.${key} is not a project setting`)
+      if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `settings.${key} is not a project setting`)
       delete next[key]
     } else if (value !== undefined) {
       checkValue(key, value, 'settings')
