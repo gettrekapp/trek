@@ -22,7 +22,7 @@ import { realOrResolved as real } from '../repos.ts'
 import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
-import { MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, checkQueue, checkTitle } from './limits.ts'
+import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import {
   IDLE_MS,
@@ -59,8 +59,8 @@ export interface SessionManagerDeps {
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
-  const ok = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 1000
-  if (!ok(p.cols) || !ok(p.rows)) throw bad('cols and rows must be integers from 1 to 1000')
+  const ok = (v: unknown, max: number): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= max
+  if (!ok(p.cols, MAX_COLS) || !ok(p.rows, MAX_ROWS)) throw bad('cols must be 1–500 and rows 1–200')
   return { cols: p.cols, rows: p.rows }
 }
 
@@ -179,6 +179,8 @@ export class SessionManager {
 
     // Before the lazy load: at the cap, loading would only mark the worktree's sessions exited -1.
     this.assertCapacity()
+    const records = project.globalSessions.length + project.repositories.reduce((n, r) => n + r.worktrees.reduce((m, w) => m + w.sessions.length, 0), 0)
+    if (records >= MAX_SESSIONS_PER_PROJECT) throw codedError('CAPACITY', `a project holds at most ${MAX_SESSIONS_PER_PROJECT} sessions; close some first`)
     if (worktree && !worktree.loaded) this.loadWorktree({ projectId: project.id, worktreeId: worktree.id })
 
     // Loading replaced the project snapshot: count the sessions in the current one.
@@ -436,7 +438,7 @@ export class SessionManager {
    */
   private assertCapacity(): void {
     const max = this.deps.store.maxSessions()
-    if (this.terminals.count() >= max) throw bad(`the server is running its maximum of ${max} sessions`)
+    if (this.terminals.count() >= max) throw codedError('CAPACITY', `the server is running its maximum of ${max} sessions`)
   }
 
   /** Works from the manager's own maps, not the records, so it can run after the records are gone. */

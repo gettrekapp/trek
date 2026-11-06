@@ -26,6 +26,8 @@ export type WireErrorCode =
   | 'CONFLICT'
   /** v2: `server.addRepo` was given a path that is not inside a git repository. */
   | 'NOT_A_REPO'
+  /** v2: the server is at a session limit (`maxSessions` or the per-project session-record cap). */
+  | 'CAPACITY'
   /** v2: `server.removeRepo` on a repo that projects still use. */
   | 'IN_USE'
 

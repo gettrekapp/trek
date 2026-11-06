@@ -849,12 +849,12 @@ test('maxSessions caps running sessions; load marks the rest exited -1', async (
   const s = setup(t, { maxSessions: 2 })
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   const second = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
-  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'BAD_REQUEST' && /maximum of 2/.test(e.message))
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'CAPACITY' && /maximum of 2/.test(e.message))
   assert.equal(s.wx().sessions.length, 2, 'a refused start leaves no record')
   // An exit frees a slot
   s.spawned[1].exit(0)
   s.sessions.restart({ projectId: s.projectId, sessionId: second.sessionId, ...size })
-  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }), (e) => e.code === 'BAD_REQUEST')
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }), (e) => e.code === 'CAPACITY')
   // Unload frees both; loading three dormant sessions with a cap of 2 runs two
   s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
   await new Promise((r) => setImmediate(r))
@@ -874,7 +874,7 @@ test('maxSessions counts a closed session whose process has not exited yet', asy
   s.sessions.close({ projectId: s.projectId, sessionId: one.sessionId })
   await tick()
   assert.equal(s.spawned[0].killed, true)
-  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'BAD_REQUEST' && /maximum of 2/.test(e.message))
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'CAPACITY' && /maximum of 2/.test(e.message))
   // The dying process ends (SIGKILL, or it gives in): its slot is free.
   s.spawned[0].exit(137)
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
@@ -888,7 +888,7 @@ test('at the cap, start on an unloaded worktree refuses before loading it', (t) 
   s.projects.apply(s.projectId, (d) => {
     d.repositories[0].worktrees[1].sessions.push({ id: 'dormant', agentSessionId: '33333333-3333-4333-8333-333333333333', title: 'D', llm: { provider: 'claude' }, queue: [], status: 'idle' })
   })
-  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'BAD_REQUEST' && /maximum of 2/.test(e.message))
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'CAPACITY' && /maximum of 2/.test(e.message))
   assert.equal(s.wx().loaded, false, 'the worktree is not loaded')
   assert.deepEqual(s.wx().sessions.map((x) => [x.id, x.status, x.exitCode]), [['dormant', 'idle', undefined]])
 })
@@ -960,4 +960,30 @@ test('attention entries are oldest first with their since; markComplete drops on
   )
   s.sessions.markComplete({ projectId: s.projectId, sessionId: first.sessionId, complete: true })
   assert.deepEqual(attention(s).map((e) => e.sessionId), [second.sessionId])
+})
+
+test('maxSessions refusals use CAPACITY', (t) => {
+  const s = setup(t, { maxSessions: 1 })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'CAPACITY')
+})
+
+test('a project holds at most MAX_SESSIONS_PER_PROJECT session records', async (t) => {
+  const { MAX_SESSIONS_PER_PROJECT } = await import('../server/src/sessions/limits.ts')
+  const s = setup(t)
+  s.projects.apply(s.projectId, (d) => {
+    for (let i = 0; i < MAX_SESSIONS_PER_PROJECT; i++) {
+      d.repositories[0].worktrees[1].sessions.push({ id: `r${i}`, title: 't', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+    }
+  })
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'CAPACITY')
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }), (e) => e.code === 'CAPACITY', 'Global sessions count too')
+  assert.equal(s.wx().loaded, false, 'refused before loading')
+})
+
+test('terminal sizes are capped at 500 columns and 200 rows', (t) => {
+  const s = setup(t)
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', cols: 501, rows: 30 }), (e) => e.code === 'BAD_REQUEST')
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', cols: 80, rows: 201 }), (e) => e.code === 'BAD_REQUEST')
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', cols: 500, rows: 200 })
 })

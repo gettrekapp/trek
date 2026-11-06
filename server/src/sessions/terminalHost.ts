@@ -11,6 +11,7 @@ import type { Terminal as HeadlessTerminal } from '@xterm/headless'
 import type { PtyInfo } from '../../../src/shared/protocol'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
+import { MAX_COLS, MAX_ROWS } from './limits.ts'
 
 const { Terminal } = (xtermNamespace as { default?: typeof xtermNamespace }).default ?? xtermNamespace
 
@@ -117,8 +118,8 @@ export const nodePtySpawner: PtySpawner = (opts) => {
 }
 
 function validateSize(cols: number, rows: number): void {
-  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > 1000 || rows > 1000) {
-    throw codedError('BAD_REQUEST', 'cols and rows must be integers from 1 to 1000')
+  if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols > MAX_COLS || rows > MAX_ROWS) {
+    throw codedError('BAD_REQUEST', 'cols must be 1–500 and rows 1–200')
   }
 }
 

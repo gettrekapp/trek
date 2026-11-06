@@ -10,6 +10,11 @@ export const MAX_QUEUE_ENTRY = 100_000
 /** The most prompts a session's queue holds. */
 export const MAX_QUEUE_LENGTH = 100
 export const MAX_TITLE_LENGTH = 200
+/** The widest and tallest pty (and headless screen) a client may ask for. */
+export const MAX_COLS = 500
+export const MAX_ROWS = 200
+/** The most session records one project holds, running or not. */
+export const MAX_SESSIONS_PER_PROJECT = 500
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 

@@ -431,3 +431,14 @@ test('forceKillAll sends SIGKILL to every pty still alive', (t) => {
   host.forceKillAll()
   assert.deepEqual(signals, ['SIGKILL', 'SIGKILL'])
 })
+
+test('spawn and resize cap sizes at 500 columns and 200 rows', (t) => {
+  const { host } = setup(t)
+  const bad = (e) => e.code === 'BAD_REQUEST'
+  assert.throws(() => host.spawn('p1', { ...opts, cols: 501 }), bad)
+  assert.throws(() => host.spawn('p1', { ...opts, rows: 201 }), bad)
+  host.spawn('p1', { ...opts, cols: 500, rows: 200 })
+  assert.throws(() => host.resize('p1', 501, 24), bad)
+  assert.throws(() => host.resize('p1', 80, 201), bad)
+  host.resize('p1', 500, 200)
+})
