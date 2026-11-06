@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type {
+  AppServerInfo,
+  AppServerTest,
   ContainerAction,
   ContainerInfo,
   DockerLogEvent,
@@ -185,6 +187,16 @@ const api = {
   voiceSetConfig: (patch: Partial<VoiceConfig>): Promise<VoiceConfig> =>
     ipcRenderer.invoke('voice:setConfig', patch),
   voiceSynthesize: (text: string): Promise<Uint8Array> => ipcRenderer.invoke('voice:synthesize', text),
+
+  // App-wide trek-servers (protocol v2). Tokens can be set, never read.
+  appServers: {
+    list: (): Promise<AppServerInfo[]> => ipcRenderer.invoke('appServers:list'),
+    save: (input: { id?: string; name: string; url: string; token?: string }): Promise<AppServerInfo> =>
+      ipcRenderer.invoke('appServers:save', input),
+    setToken: (id: string, token: string): Promise<void> => ipcRenderer.invoke('appServers:setToken', id, token),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke('appServers:remove', id),
+    test: (id: string): Promise<AppServerTest> => ipcRenderer.invoke('appServers:test', id)
+  },
 
   // Remote servers
   connectServer: (config: ServerConfig): Promise<void> =>

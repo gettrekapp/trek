@@ -17,6 +17,7 @@ import { registerEnvironmentHandlers } from './environments'
 import { registerStackHandlers } from './stacks'
 import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
+import { registerAppServerHandlers } from './appServers'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
@@ -125,6 +126,7 @@ app.whenReady().then(async () => {
   registerStackHandlers()
   registerClaudeSessionHandlers()
   registerServerHandlers()
+  registerAppServerHandlers()
   registerMcpHandlers()
   registerBotHandlers()
   registerVoiceHandlers()

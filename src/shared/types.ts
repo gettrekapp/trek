@@ -120,6 +120,24 @@ export interface ServerTestResult {
   claudeVersion?: string
 }
 
+/** An app-wide trek-server (protocol v2) as the renderer sees it: never the token. */
+export interface AppServerInfo {
+  /** Client-side id */
+  id: string
+  name: string
+  url: string
+  hasToken: boolean
+}
+
+/** The result of a one-shot v2 connection test. */
+export interface AppServerTest {
+  status: string
+  message: string
+  serverName?: string
+  daemonVersion?: string
+  capabilities?: string[]
+}
+
 /** Identifies a worktree across machines — path alone is ambiguous. */
 export interface WorktreeLocator {
   serverId?: string
