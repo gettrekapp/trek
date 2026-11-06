@@ -128,8 +128,9 @@ Nothing is wired into a server window yet; 3c-2 does that.
     - `TerminalPane` attaches to the entry when it mounts (`TerminalPane.tsx:29-35`), so the entry must already exist.
     - `syncV2Terminals` runs before the slice reaches the store.
 17. **A v2 entry remembers the pty it last saw end** (`spent`), so the planner doesn't re-attach to a dead pty on every patch until the session's `ptyId` changes.
-    - `spent` is set only for a real end: `onExit` (which the stream also sends when its re-attach after a reconnect gets PTY_NOT_FOUND, and when the connection closes for good), and an attach rejected with `PTY_NOT_FOUND`.
-    - Any other failure leaves the pty possibly alive, so it is not `spent`. The entry keeps an `AttachFailure` instead (`terminalSync.ts`): `planTerminalSync` holds the attach back until the back-off is over (1 s, doubling to 30 s), and `syncV2Terminals` schedules a re-sync for then. `retryV2Terminals()` clears every failure and re-syncs at once; 3c-2 calls it when the connection status becomes `connected`. The terminal shows `[could not attach: … — retrying]` on the first failure in a row. This covers the stream's `onError` (re-attach after a reconnect failed with CONGESTED after its retries, or with anything but PTY_NOT_FOUND) and an attach rejected with anything but CONGESTED or PTY_NOT_FOUND.
+    - `spent` is set only for a real end: `onExit` with the process's code, and an attach rejected with `PTY_NOT_FOUND`. The stream also calls `onExit(-1)` when its re-attach after a reconnect gets PTY_NOT_FOUND, and when the connection closes for good; `exitKind` reads -1 as the stream ending the pty, which writes `[connection closed]` and leaves the entry not spent, so the next snapshot (or a new stream) attaches again.
+    - Once an attach resolves, `attachResize` decides the sizes. An opened terminal fits and sends its size to the pty. One not opened yet (a background tab or unselected worktree, still at xterm's default 80×24) sends nothing and takes the pty's size from the `PtyInfo`, so it never shrinks the real process for other clients. `term.onResize` likewise sends only for an opened terminal.
+    - Any other failure leaves the pty possibly alive, so it is not `spent`. The entry keeps an `AttachFailure` instead (`terminalSync.ts`): `planTerminalSync` holds the attach back until the back-off is over (1 s, doubling to 30 s), and `syncV2Terminals` schedules a re-sync for then. `retryV2Terminals()` clears every failure and re-syncs at once; 3c-2 calls it when the connection status becomes `connected`. The terminal shows `[could not attach: … — retrying]` once per pty (`announced`), not again after `retryV2Terminals`, until an attach succeeds. This covers the stream's `onError` (re-attach after a reconnect failed with CONGESTED after its retries, or with anything but PTY_NOT_FOUND) and an attach rejected with anything but CONGESTED or PTY_NOT_FOUND.
     - An exit followed by `session.restart` is normally a plain `attach`: the server clears `ptyId` in the same apply as the exit (`server/src/sessions/manager.ts:607-610`), so the next patch plans `detach` (which clears `spent`), and the restart arrives later as an `attach`. A restart seen in one patch, or after a spent pty the mirror still listed, plans a `reattach`. Either way, the first output of a pty other than the one the terminal last showed is preceded by `[restarted]`, like legacy's `[restarting]` (`terminals.ts:838`), so the old scrollback and the new replay stay apart. An attach to a pty that already sent this terminal data (a retry after a failure) resets the terminal first instead, as `onReset` does, because the replay repeats its scrollback.
     - CONGESTED clears the link and re-syncs after 500 ms.
 18. **No dev-only test hook.** The v2 terminal path has no caller until 3c-2, whose extended `smoke:v2` exercises it end to end. Here the pure planner is unit-tested and the rest is typechecked and built.
@@ -2447,6 +2448,8 @@ import type {
 import type { PtyStream } from '../../shared/client/index.ts'
 import type { Project } from '../../shared/model/types'
 import {
+  attachResize,
+  exitKind,
   planTerminalSync,
   recordAttachFailure,
   terminalTargets,
@@ -2468,6 +2471,12 @@ interface V2Link {
   spent: string | null
   /** The last attach that failed while its pty may still be alive: tried again after a back-off */
   failed: AttachFailure | null
+  /**
+   * The pty whose failed attach the terminal already announced: survives
+   * `retryV2Terminals`, so a reconnect does not print the line again; cleared
+   * by a successful attach.
+   */
+  announced: string | null
   /** The pty whose output the terminal shows (the last one that sent data); null before any */
   shown: string | null
 }
@@ -2651,7 +2660,7 @@ function cancelV2Sync(): void {
 
 function createV2Entry(id: string, ptys: PtyStream): Entry {
   const { term, fit } = newXterm()
-  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, shown: null }
+  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null }
   const entry: Entry = {
     term,
     fit,
@@ -2665,21 +2674,26 @@ function createV2Entry(id: string, ptys: PtyStream): Entry {
   term.onData((data) => {
     if (link.ptyId) void link.ptys.write(link.ptyId, data).catch(() => {})
   })
+  // Only an opened terminal drives the pty's size: one not in the DOM still
+  // has xterm's default, or the pty's own size (attachResize).
   term.onResize(({ cols, rows }) => {
-    if (link.ptyId) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
+    if (link.ptyId && term.element) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
   })
   return entry
 }
 
 /**
  * The attach failed, but the pty may still be alive (unlike an exit, it is not
- * spent): say so once, and try again after the back-off.
+ * spent): say so once per pty until an attach succeeds, and try again after
+ * the back-off.
  */
 function attachFailed(entry: Entry, link: V2Link, ptyId: string, err: unknown): void {
   link.ptyId = null
-  const first = link.failed?.ptyId !== ptyId
   link.failed = recordAttachFailure(link.failed, ptyId, Date.now())
-  if (first) entry.term.write(dim(`[could not attach: ${errorText(err)} — retrying]`))
+  if (link.announced !== ptyId) {
+    link.announced = ptyId
+    entry.term.write(dim(`[could not attach: ${errorText(err)} — retrying]`))
+  }
   scheduleV2Sync(Math.max(0, link.failed.retryAt - Date.now()))
 }
 
@@ -2704,10 +2718,18 @@ function attachV2(id: string, ptyId: string): void {
         }
         entry.term.write(data)
       },
-      // A real end (the stream also reports a re-attach's PTY_NOT_FOUND, and a closed connection, here).
+      // The process exited, or (code -1) the stream ended it: the connection
+      // closed for good, or a re-attach after a reconnect found no such pty.
       onExit: (exitCode) => {
         if (!current()) return
         link.ptyId = null
+        if (exitKind(exitCode) === 'stream-ended') {
+          // Not spent: the pty may live on, and the next snapshot (or a new
+          // stream after a url change) attaches it again. Gone for real, that
+          // attach is refused with PTY_NOT_FOUND and the entry is spent then.
+          entry.term.write(dim('[connection closed]'))
+          return
+        }
         link.spent = ptyId
         entry.term.write(dim(`[process exited with code ${exitCode}]`))
       },
@@ -2722,12 +2744,18 @@ function attachV2(id: string, ptyId: string): void {
       }
     })
     .then(
-      () => {
+      (info) => {
         if (!current()) return
         link.failed = null
-        // The pty keeps the size of whoever attached last: send ours so the TUI repaints for it.
-        fitTerminal(id)
-        void ptys.resize(ptyId, entry.term.cols, entry.term.rows).catch(() => {})
+        link.announced = null
+        // The pty keeps the size of whoever resized it last, for every client.
+        // Opened, send ours so the TUI repaints for it; not opened yet, take
+        // the pty's size instead of sending xterm's default 80x24.
+        const opened = entry.term.element !== undefined
+        if (opened) fitTerminal(id)
+        const step = attachResize(opened, entry.term, info)
+        if (step.resizePty) void ptys.resize(ptyId, step.resizePty.cols, step.resizePty.rows).catch(() => {})
+        if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
       },
       (err: unknown) => {
         if (!current()) return
@@ -2829,7 +2857,7 @@ Why the planner sees `ptyId ?? spent` as the entry's pty, and the rest of Decisi
 - After an exit, the mirror may still list the old pty for a moment. Reporting the spent pty keeps the planner from attaching to it again.
 - The server clears `ptyId` in the same apply as the exit (`server/src/sessions/manager.ts:607-610`), so the next patch normally plans a `detach` (no `pty.detach` goes out, because `link.ptyId` is already null; `spent` is cleared). `session.restart` then arrives as a plain `attach`. Only a restart seen in one patch, or after a spent pty still listed, plans a `reattach`.
 - Either way, the first output of a pty other than the one the terminal shows (`shown`) writes `[restarted]` before it, so the old scrollback and the new replay are visibly apart. It is written on the first `onData`, not when the attach goes out, so a CONGESTED retry neither writes it twice nor wipes the old scrollback.
-- `spent` is set only for a real end: `onExit` and an attach rejected with PTY_NOT_FOUND. Anything else (the stream's `onError`, or another rejection than CONGESTED) may leave the pty alive, so `attachFailed` records an `AttachFailure` instead, writes `[could not attach: … — retrying]` on the first failure in a row, and schedules a re-sync for the end of the back-off. An attach to a pty that already sent data to this terminal resets it first, because the replay repeats its scrollback. `retryV2Terminals()` clears every failure for a reconnect (Notes for 3c-2).
+- `spent` is set only for a real end: `onExit` with the process's code and an attach rejected with PTY_NOT_FOUND. `onExit(-1)` is the stream ending the pty (closed connection, or no such pty on re-attach): `[connection closed]`, not spent. Anything else (the stream's `onError`, or another rejection than CONGESTED) may leave the pty alive, so `attachFailed` records an `AttachFailure` instead, writes `[could not attach: … — retrying]` once per pty until an attach succeeds (`announced` survives `retryV2Terminals`), and schedules a re-sync for the end of the back-off. An attach to a pty that already sent data to this terminal resets it first, because the replay repeats its scrollback. `retryV2Terminals()` clears every failure for a reconnect (Notes for 3c-2).
 - A failure for a pty the session no longer runs is dropped at the next sync, so it never keeps a timer going.
 - `disposeEntry` also clears `discoveries` and `idleTimer`. Both are always empty for v2 entries.
 
@@ -2937,7 +2965,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ap
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# fail 0`. The pass count is the baseline (1074 at 07a1604) plus 23 new tests (3, 14 and 6).
+Expected: `# fail 0`. The pass count is the baseline (1051 at 07a1604) plus 39 new tests (3 in `backendFeatures.test.mjs`, 23 in `v2Projector.test.mjs`, 13 in `v2TerminalSync.test.mjs`), which is 1090, plus the final review's 2 (`attachResize` and `exitKind` in `v2TerminalSync.test.mjs`): 1092.
 
 - [ ] **Step 2: Typecheck and build**
 
@@ -3016,3 +3044,8 @@ Found while reviewing Tasks 1–2. The interface already has the shape these nee
 9. **A missing worktree's row looks normal and offers Load.** It is projected with `prunable: true` (Decision 10), but no renderer reads that, so the sidebar shows it like any other worktree. 3c-2 should mark it and not offer Load (the server would fail it).
 10. **Reconnect and failed attaches.** `syncV2Terminals` only sees the `PtyStream`, not the connection. 3c-2 calls `retryV2Terminals()` from the registry's status listener when the server's status becomes `connected`, so terminals whose attach failed while the link was down attach at once instead of after their back-off (Decision 17).
 11. **`V2IdMap.legacyByWorktree`** leads from a v2 worktree id to the legacy instance id (a primary id for a main checkout), for server events and responses that name a worktree, such as `worktree.create`'s `worktreeId`.
+12. **Pty size.** `TerminalPane` must send `ptys.resize` for a v2 entry on mount or show, and after the stream re-attaches on reconnect. `fit()` alone sends nothing when xterm's size is unchanged, and the pty keeps the last resizer's size. (An entry attached before it was opened took the pty's size, so its first fit often changes nothing.)
+13. **Leaving a server window.** Call `disposeV2Terminals()` and `clearV2Projection()`, clear the projected slice from the store, and remove the setter overrides. Legacy `disposeAllTerminals` must never run on v2 entries: it skips `detachV2`, leaving stream handlers pointing at disposed xterms, and it sends `disposePty` IPC.
+14. **Connection-closed line.** `PtyStream` has no separate signal for a closed connection: `onClosed` (and a re-attach that gets PTY_NOT_FOUND) call `onExit(-1)`. `exitKind` reads -1 as the stream ending the pty: the terminal writes `[connection closed]` and the entry is not spent, so a new stream (url change) or the next snapshot attaches again, and a pty that is really gone is then refused with PTY_NOT_FOUND and marked spent silently. A process whose own exit code is -1 would show `[connection closed]` too. If that matters, give `PtyHandlers` an `onClosed` (or a reason argument) and use it here.
+15. **Dropped input.** Keystrokes typed while a terminal is detached, failed or reconnecting are dropped on purpose. The disconnected overlay must cover the pane. `sendPrompt` and queued prompts use `session.sendPrompt`, never `pasteToTerminal`.
+16. **Wiring.** Feed `applyV2Project(update.snapshot, registered.ptys)` from the existing `mirror.subscribe('project:<id>')` in `ServerProjectWindow`, skipping the `'error' in update` branch. Call `retryV2Terminals()` from `connection.on('status')` when the status is `connected`.

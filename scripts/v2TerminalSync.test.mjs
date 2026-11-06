@@ -4,10 +4,13 @@ import assert from 'node:assert/strict'
 import {
   ATTACH_RETRY_MAX_MS,
   ATTACH_RETRY_MIN_MS,
+  attachResize,
   attachRetryDelay,
+  exitKind,
   planTerminalSync,
   recordAttachFailure,
   shouldRetry,
+  STREAM_ENDED_EXIT_CODE,
   terminalTargets
 } from '../src/renderer/src/v2/terminalSync.ts'
 
@@ -154,4 +157,19 @@ test('the back-off doubles per failure in a row, capped; a new pty starts again'
   assert.equal(shouldRetry(failed, 'p1', failed.retryAt - 1), false)
   assert.equal(shouldRetry(failed, 'p1', failed.retryAt), true)
   assert.equal(shouldRetry(failed, 'p9', 0), true)
+})
+
+test('attachResize: an opened terminal sends its size; one not opened takes the pty\'s', () => {
+  assert.deepEqual(attachResize(true, { cols: 120, rows: 40 }, { cols: 100, rows: 30 }), { resizePty: { cols: 120, rows: 40 } })
+  assert.deepEqual(attachResize(true, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), { resizePty: { cols: 100, rows: 30 } })
+  assert.deepEqual(attachResize(false, { cols: 80, rows: 24 }, { cols: 100, rows: 30 }), { resizeLocal: { cols: 100, rows: 30 } })
+  assert.deepEqual(attachResize(false, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), {})
+})
+
+test('exitKind: -1 is the stream ending the pty; any other code is the process\'s exit', () => {
+  assert.equal(STREAM_ENDED_EXIT_CODE, -1)
+  assert.equal(exitKind(-1), 'stream-ended')
+  assert.equal(exitKind(0), 'exited')
+  assert.equal(exitKind(1), 'exited')
+  assert.equal(exitKind(137), 'exited')
 })

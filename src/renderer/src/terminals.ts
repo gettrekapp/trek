@@ -38,6 +38,8 @@ import type {
 import type { PtyStream } from '../../shared/client/index.ts'
 import type { Project } from '../../shared/model/types'
 import {
+  attachResize,
+  exitKind,
   planTerminalSync,
   recordAttachFailure,
   terminalTargets,
@@ -59,6 +61,12 @@ interface V2Link {
   spent: string | null
   /** The last attach that failed while its pty may still be alive: tried again after a back-off */
   failed: AttachFailure | null
+  /**
+   * The pty whose failed attach the terminal already announced: survives
+   * `retryV2Terminals`, so a reconnect does not print the line again; cleared
+   * by a successful attach.
+   */
+  announced: string | null
   /** The pty whose output the terminal shows (the last one that sent data); null before any */
   shown: string | null
 }
@@ -1105,7 +1113,7 @@ function cancelV2Sync(): void {
 
 function createV2Entry(id: string, ptys: PtyStream): Entry {
   const { term, fit } = newXterm()
-  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, shown: null }
+  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null }
   const entry: Entry = {
     term,
     fit,
@@ -1119,21 +1127,26 @@ function createV2Entry(id: string, ptys: PtyStream): Entry {
   term.onData((data) => {
     if (link.ptyId) void link.ptys.write(link.ptyId, data).catch(() => {})
   })
+  // Only an opened terminal drives the pty's size: one not in the DOM still
+  // has xterm's default, or the pty's own size (attachResize).
   term.onResize(({ cols, rows }) => {
-    if (link.ptyId) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
+    if (link.ptyId && term.element) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
   })
   return entry
 }
 
 /**
  * The attach failed, but the pty may still be alive (unlike an exit, it is not
- * spent): say so once, and try again after the back-off.
+ * spent): say so once per pty until an attach succeeds, and try again after
+ * the back-off.
  */
 function attachFailed(entry: Entry, link: V2Link, ptyId: string, err: unknown): void {
   link.ptyId = null
-  const first = link.failed?.ptyId !== ptyId
   link.failed = recordAttachFailure(link.failed, ptyId, Date.now())
-  if (first) entry.term.write(dim(`[could not attach: ${errorText(err)} — retrying]`))
+  if (link.announced !== ptyId) {
+    link.announced = ptyId
+    entry.term.write(dim(`[could not attach: ${errorText(err)} — retrying]`))
+  }
   scheduleV2Sync(Math.max(0, link.failed.retryAt - Date.now()))
 }
 
@@ -1158,10 +1171,18 @@ function attachV2(id: string, ptyId: string): void {
         }
         entry.term.write(data)
       },
-      // A real end (the stream also reports a re-attach's PTY_NOT_FOUND, and a closed connection, here).
+      // The process exited, or (code -1) the stream ended it: the connection
+      // closed for good, or a re-attach after a reconnect found no such pty.
       onExit: (exitCode) => {
         if (!current()) return
         link.ptyId = null
+        if (exitKind(exitCode) === 'stream-ended') {
+          // Not spent: the pty may live on, and the next snapshot (or a new
+          // stream after a url change) attaches it again. Gone for real, that
+          // attach is refused with PTY_NOT_FOUND and the entry is spent then.
+          entry.term.write(dim('[connection closed]'))
+          return
+        }
         link.spent = ptyId
         entry.term.write(dim(`[process exited with code ${exitCode}]`))
       },
@@ -1176,12 +1197,18 @@ function attachV2(id: string, ptyId: string): void {
       }
     })
     .then(
-      () => {
+      (info) => {
         if (!current()) return
         link.failed = null
-        // The pty keeps the size of whoever attached last: send ours so the TUI repaints for it.
-        fitTerminal(id)
-        void ptys.resize(ptyId, entry.term.cols, entry.term.rows).catch(() => {})
+        link.announced = null
+        // The pty keeps the size of whoever resized it last, for every client.
+        // Opened, send ours so the TUI repaints for it; not opened yet, take
+        // the pty's size instead of sending xterm's default 80x24.
+        const opened = entry.term.element !== undefined
+        if (opened) fitTerminal(id)
+        const step = attachResize(opened, entry.term, info)
+        if (step.resizePty) void ptys.resize(ptyId, step.resizePty.cols, step.resizePty.rows).catch(() => {})
+        if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
       },
       (err: unknown) => {
         if (!current()) return
