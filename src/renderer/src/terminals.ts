@@ -25,6 +25,7 @@ import {
 } from '../../shared/providers/selection'
 import { isUnknownMethodError, pickClaimant, pollDelay } from '../../shared/providers/discovery'
 import type { DiscoveryTab } from '../../shared/providers/discovery'
+import { keySequence } from '../../shared/keys'
 import type { LaunchSpec, LlmSelection } from '../../shared/providers/types'
 import { globalSessionLlm, llmSettings, newSessionLlm } from './llm'
 import type {
@@ -907,27 +908,11 @@ export function pasteToTerminal(id: string, text: string, focus = true): void {
   }, 150)
 }
 
-const KEY_SEQUENCES: Record<string, string> = {
-  enter: '\r',
-  escape: '\x1b',
-  esc: '\x1b',
-  tab: '\t',
-  'shift-tab': '\x1b[Z',
-  up: '\x1b[A',
-  down: '\x1b[B',
-  right: '\x1b[C',
-  left: '\x1b[D',
-  backspace: '\x7f',
-  space: ' ',
-  'ctrl-c': '\x03',
-  'ctrl-d': '\x04'
-}
-
-/** Send named keys (see KEY_SEQUENCES) or literal text, as if typed. */
+/** Send named keys (see shared/keys) or literal text, as if typed. */
 export function sendKeysToTerminal(id: string, keys: string[]): boolean {
   if (!entries.has(id)) return false
   for (const key of keys) {
-    window.api.writePty(id, KEY_SEQUENCES[key.toLowerCase()] ?? key)
+    window.api.writePty(id, keySequence(key))
   }
   // Same as real keyboard input: the prompt is being answered.
   const store = useAppStore.getState()

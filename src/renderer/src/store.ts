@@ -157,49 +157,12 @@ export function pullRequestLabel(url: string): string {
   return match ? `#${match[1]}` : 'PR'
 }
 
-/** Linear issue identifiers look like "TOW-123"; Azure DevOps ids are bare numbers. */
-export function isLinearTicket(ticketId: string): boolean {
-  return /^[A-Z][A-Z0-9]*-\d+$/.test(ticketId)
-}
+export { isLinearTicket, parseTicket, ticketUrl, type ParsedTicket } from '../../shared/tickets'
+import { isLinearTicket } from '../../shared/tickets'
 
 /** Short label for a linked ticket: "TOW-123" for Linear, "#12345" for Azure DevOps. */
 export function ticketLabel(ticketId: string): string {
   return isLinearTicket(ticketId) ? ticketId : `#${ticketId}`
-}
-
-export interface ParsedTicket {
-  ticketId: string
-  /** Present when the input was a Linear URL */
-  linearWorkspace?: string
-  /** Present when the input was an Azure DevOps URL */
-  azureDevOpsBaseUrl?: string
-}
-
-/** Parses a Linear issue id/URL or an Azure DevOps work item id/URL. */
-export function parseTicket(input: string): ParsedTicket | null {
-  const trimmed = input.trim()
-  const linearUrl = trimmed.match(/^https?:\/\/linear\.app\/([^/]+)\/issue\/([a-z][a-z0-9]*-\d+)/i)
-  if (linearUrl) return { ticketId: linearUrl[2].toUpperCase(), linearWorkspace: linearUrl[1] }
-  const adoUrl = trimmed.match(/^(https?:\/\/.+?)\/_workitems\/edit\/(\d+)/i)
-  if (adoUrl) return { ticketId: adoUrl[2], azureDevOpsBaseUrl: adoUrl[1] }
-  if (/^[a-z][a-z0-9]*-\d+$/i.test(trimmed)) return { ticketId: trimmed.toUpperCase() }
-  if (/^\d+$/.test(trimmed)) return { ticketId: trimmed }
-  return null
-}
-
-/** Browser URL for a linked ticket, when its workspace/base URL is known. */
-export function ticketUrl(
-  project: ProjectFile,
-  ticketId: string,
-  issue?: LinearIssue
-): string | null {
-  if (isLinearTicket(ticketId)) {
-    if (issue) return issue.url
-    if (!project.linearWorkspace) return null
-    return `https://linear.app/${project.linearWorkspace}/issue/${ticketId}`
-  }
-  if (!project.azureDevOpsBaseUrl) return null
-  return `${project.azureDevOpsBaseUrl.replace(/\/+$/, '')}/_workitems/edit/${ticketId}`
 }
 
 /** repoId is stamped on selection, so a row that later vanishes still has a repository. */
