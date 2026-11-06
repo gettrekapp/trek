@@ -835,7 +835,14 @@ gets `onExit(-1)` and the stream is emptied; an `attach()` still in flight just
 rejects with `NOT_CONNECTED`.
 
 **Registry.** `ServerRegistry` holds one connection, mirror and pty stream per
-server. `add(entry)` creates and connects, and throws for a duplicate id.
+server. An entry's `id` is the client's own name for it (any string, chosen when
+the server is added); the server's id is `connection.welcome.serverId`, known
+only after the welcome. `add(entry)` creates and connects, and throws for a
+duplicate id. It builds the mirror before the pty stream, so on every welcome the
+mirror's listener runs first: the `sub.subscribe` requests go out before the
+`pty.attach` replays, and snapshots are not queued behind megabytes of
+scrollback. Anyone wiring a `ServerConnection` by hand should do the same:
+construct the `TopicMirror` before the `PtyStream`.
 `update(id, {url?, token?})` throws for an unknown id; a new token reconnects the
 same `RegisteredServer`, but a new URL cannot (a connection's URL is fixed), so it
 removes the entry and adds a fresh one: `get(id)` returns a new `RegisteredServer`

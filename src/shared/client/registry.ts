@@ -5,7 +5,7 @@ import { PtyStream } from './ptyStream.ts'
 import type { SocketFactory, Timers } from './socket.ts'
 
 export interface ServerEntry {
-  /** Client-side id for this server entry */
+  /** Client-side id for this server entry; the server's own id is `connection.welcome.serverId` */
   id: string
   url: string
   token: string
@@ -55,10 +55,13 @@ export class ServerRegistry {
       client: this.opts.client,
       clientVersion: this.opts.clientVersion
     })
+    // Mirror first: welcome listeners run in order, so the subscribes go out
+    // before the pty re-attach replays.
+    const mirror = new TopicMirror(connection)
     const registered: RegisteredServer = {
       entry: { ...entry },
       connection,
-      mirror: new TopicMirror(connection),
+      mirror,
       ptys: new PtyStream(connection)
     }
     this.servers.set(entry.id, registered)
