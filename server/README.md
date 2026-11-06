@@ -118,16 +118,30 @@ runs without one.
 
 An optional `maxSessions` in the same config file caps the agent sessions
 running at once (default 64). Starting or restarting one beyond the cap fails
-with `BAD_REQUEST`; loading a worktree marks the sessions it cannot start as
+with `CAPACITY`; loading a worktree marks the sessions it cannot start as
 exited, and they can be restarted later. A closed session holds its slot until
 its process exits (at most 3 s). Each running session takes memory for a headless
 screen of about 2000 + rows lines × cols cells plus a ring buffer of up to 2 Mi
 UTF-16 code units of output, so size `maxSessions` to the machine. WebSocket
-frames are limited to 16 MiB.
+frames are limited to 16 MiB. A project holds at most 500 sessions (running or
+not; close some to start more), and a terminal is at most 500 columns by 200 rows.
+`pty.spawn` (the v1 shell API) is not counted against `maxSessions`.
 
 ```json
 { "maxSessions": 64 }
 ```
+
+## MCP for agents
+
+Every agent session the server starts gets the `trek-dev` MCP tools, scoped to
+its own project (worktrees, sessions, prompts, terminal reads, branch data and
+session types). They are served on `127.0.0.1` only, on a random port, with one
+bearer token per project; nothing is exposed to the network. The token lives in
+memory, so each start of the server makes new ones. The config files agents
+launch with are written to `<dataDir>/mcp` (mode 0600, in a 0700 directory) and
+removed when their project is deleted or the server next starts. If that
+directory cannot be used, the server logs a warning and runs without MCP.
+See `../PROTOCOL.md` for the tools.
 
 ## Projects
 

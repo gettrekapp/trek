@@ -65,7 +65,10 @@ Responses correlate by `id`:
 
 Error codes: `UNAUTHORIZED`, `BAD_REQUEST`, `NOT_FOUND`, `PATH_DENIED`,
 `GIT_ERROR`, `PTY_NOT_FOUND`, `INTERNAL`, `UNSUPPORTED_VERSION`, and (v2)
-`CONFLICT`, `NOT_A_REPO`, `IN_USE`.
+`CONFLICT`, `NOT_A_REPO`, `IN_USE`, `CAPACITY`. `CAPACITY` means a server or project limit
+was reached (`maxSessions`, the session records of a project, or the waits of an
+MCP tool); it is retryable once something frees up. Before phase 2e the
+`maxSessions` refusal was `BAD_REQUEST`.
 
 Every path param (`repoPath`, `worktreePath`, `cwd`) is realpath-resolved and
 must fall under a configured repo root or worktree root; anything else is
@@ -382,12 +385,13 @@ settings override it: `llmDefault`, `globalLlm`, `claudePermissionMode`,
 
 **Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
 initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
-starts a Global session. `cols` and `rows` are integers from 1 to 1000. The agent
+starts a Global session. `cols` is an integer from 1 to 500 and `rows` from 1 to 200 (as for `session.restart`
+and `pty.resize`), else `BAD_REQUEST`. The agent
 is chosen from `llm`, else the session type's, else the project's default, else
 the server's. An unknown `llm.provider` is `BAD_REQUEST`, as is an unknown
 `sessionTypeId`, a `worktreeId` that is `missing` or a project with no
 repositories (for Global). A worktree that is not loaded is loaded first; at
-`maxSessions` the call is refused before that load. A title
+`maxSessions` (`CAPACITY`) the call is refused before that load. A title
 (of `session.start`, of a session type's name, or of `session.rename`) is at most
 200 characters with no control characters, else `BAD_REQUEST`. If the agent
 cannot be spawned, no session is left behind.
@@ -405,8 +409,8 @@ and shell aliases work as they do when typed into a terminal. On Windows it is
 
 **Global sessions** run in the first repository's main worktree, with the other
 repositories as additional directories, and get the project's `globalSystemPrompt`.
-The built-in Global role prompt is added only for sessions with MCP access, which
-arrives in phase 2e. They have no load state. The path checks of a worktree
+They also get the built-in Global role prompt, which sends the agent to the
+trek-dev MCP tools (see [MCP](#mcp-trek-dev-on-the-server)). They have no load state. The path checks of a worktree
 session apply: the main worktree must not be `missing`, and its path and the
 additional directories must be under the allowlist (`PATH_DENIED`). Removing any
 repository from the project ends the running Global sessions (see `repo.remove`).
@@ -479,7 +483,8 @@ Known gaps, the same as on the desktop unless noted:
   (Server only.)
 - Memory per pty is bounded but not small: the headless screen holds about
   2000 + rows lines of cols cells, and the ring buffer up to 2 Mi UTF-16 code units.
-  `maxSessions` bounds the total.
+  `maxSessions` bounds the total, and the size cap (500 columns, 200 rows) bounds one
+  screen at about 18 MB.
 
 **Restart.** `session.restart {projectId, sessionId, cols, rows}` returns a new
 `{ptyId}` for a session that has no running pty: `exited`, or `idle` after a
@@ -514,12 +519,18 @@ it; text and queue entries must be non-empty strings. A queue entry is at most
 a queued prompt itself, with `session.sendPrompt`, when the user chooses.
 
 **Session limit.** The config field `maxSessions` (default 64) caps the running
-session ptys. `session.start` and `session.restart` beyond it answer `BAD_REQUEST`
+session ptys. `session.start` and `session.restart` beyond it answer `CAPACITY`
 ("the server is running its maximum of N sessions"). A pty that was killed (by
 `session.close`, `worktree.unload` and the like) holds its slot until its process
 exits, up to the 3 s SIGKILL timeout, so closing a session and at once starting
 another can be refused at the cap. `worktree.load` marks each
 session it cannot start `exited` with `exitCode` -1, as for any other spawn failure.
+
+A project also holds at most 500 session records, running or not, Global ones
+included. `session.start` beyond that answers `CAPACITY` ("close some first"); closing
+a session removes its record. v1's `pty.spawn` ptys are outside `maxSessions` and
+`forceKillAll`: they are not counted, and a shutdown does not SIGKILL stragglers among
+them. That stays until v1 is retired in phase 4.
 
 **Shutdown.** When the server stops it kills every session pty, and after the
 200 ms it allows for `daemon.shutdown` frames to flush it sends SIGKILL to any pty
@@ -530,12 +541,14 @@ would start a pty (`session.start`, `session.restart`, `worktree.load`) fail wit
 
 **Errors.** `NOT_FOUND` for an unknown project, worktree or session id.
 `PTY_NOT_FOUND` for an unknown pty, or one that is being killed. `BAD_REQUEST` for
-bad sizes, titles or types, restarting a running session, `sendPrompt` to a
+bad sizes (columns 1 to 500, rows 1 to 200), titles or types, restarting a running session, `sendPrompt` to a
 stopped one or with text over 1 MiB, an over-long queue entry or queue,
-`session.start` or `session.restart` over `maxSessions`, a `pty.write` whose `data`
+a `pty.write` whose `data`
 is longer than 1 MiB (1,048,576 UTF-16 code units), a `pty.write` or `pty.resize`
 from a connection that has not attached to the pty ("attach to the pty first") and
-a `pty.attach` refused as congested (below). `IN_USE` as above.
+a `pty.attach` refused as congested (below). `CAPACITY` for `session.start` or
+`session.restart` over `maxSessions`, and for `session.start` over the 500 records of
+a project. `IN_USE` as above.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
 buffer of up to 2 Mi UTF-16 code units) as `pty.data` events with `replay: true`, then streams live
@@ -555,7 +568,166 @@ drained. `session.sendPrompt` needs no attach.
 `pty.exit` goes to every attached connection, also when the server killed the pty.
 A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
 meanwhile the pty counts as gone. Only session ptys are reachable through v2;
-v1's `pty.spawn` stays v1-only.
+v1's `pty.spawn` stays v1-only and outside `maxSessions`.
+
+## MCP (trek-dev) on the server
+
+Every agent session the server runs gets the `trek-dev` MCP tools, served by the
+server itself. The desktop has its own MCP server for its own sessions; this is
+the server's, and it is separate from the WebSocket port.
+
+**Scope.** A session's tools see only its own project. A token belongs to one
+project, and every tool resolves worktrees and sessions inside that project;
+an id from another project is `NOT_FOUND`.
+
+**Endpoint.** A second HTTP server inside `trek-server`, bound to `127.0.0.1` on
+an OS-chosen port, so it is never exposed (agents run on the server's machine). It
+starts with the server and is closed at shutdown.
+
+- `POST /mcp` only. Any other path is 404, any other method on `/mcp` is 405 with
+  `Allow: POST`, and a missing or wrong `Authorization: Bearer <token>` header is 401.
+  Auth is checked before the body is read.
+- A `Host` header other than `127.0.0.1:<port>` or `localhost:<port>` is 403 (a guard
+  against DNS rebinding from a browser on the same machine). It is checked first.
+- A body over 1 MiB is 413, sent before the body is read when `Content-Length` says
+  so. A request has 30 s to arrive in full (`requestTimeout` and `headersTimeout`).
+- When the client disconnects before it has its answer, the call is aborted: a
+  waiting tool stops waiting.
+- JSON-RPC 2.0 with the methods `initialize`, `ping`, `tools/list` and `tools/call`;
+  anything else is `-32601`. Protocol versions `2025-06-18` (the default, used when
+  the client asks for a version the server does not know), `2025-03-26` and
+  `2024-11-05` are accepted. Responses are plain JSON: no SSE, no `Mcp-Session-Id`.
+- An `id` must be a string, a number or `null`; any other type is `-32600`. A message
+  without an `id`, or with a `null` one, is a notification and gets no answer; a body
+  that has no answers (notifications only) gets 202 with no body. A body that is not
+  JSON is 400 with `-32700`.
+- Batches are supported. A batch holds at most 50 messages and an empty batch is
+  an error (`-32600`, in a 200 reply).
+- A tool call's result is `{content: [{type: "text", text: <JSON of the result,
+  indented by 2>}], isError: false}`. A tool that fails answers `isError: true`
+  with the error message as the text (the wire code is not carried). An unlisted
+  tool is the JSON-RPC error `-32602` "Unknown tool: <name>".
+
+**Tokens and files.** A project gets a token (32 random bytes, hex) the first time
+one of its sessions launches. Tokens live in memory only: every server start
+makes new ones and a new port. The files go in `<dataDir>/mcp`, a directory with
+mode 0700:
+
+- `<projectId>.json`, the Claude `--mcp-config` file;
+- `<projectId>.gemini.json`, the Gemini settings file.
+
+Both are written atomically with mode 0600, and again whenever the token or the
+port changes. Codex gets the URL on its command line and the token in
+`TREK_MCP_TOKEN`, as the provider adapter does. When the store starts, it deletes
+every `.json` and `.tmp` file in the directory (the tokens of an earlier start are
+dead anyway), and it refuses a directory that is a symlink, is not a directory, or
+is owned by another user. A project id must match `^[A-Za-z0-9][A-Za-z0-9-]*$`
+to get a token. `project.delete` revokes the project's token and deletes its
+two files.
+
+If the directory is refused, or the listener does not start, the server logs a
+warning, runs without MCP and carries on. A session whose access cannot be made
+launches without MCP (the error is logged).
+
+**Which sessions.** Every session, worktree and Global, launches with the
+project's MCP access (for providers that support MCP; Grok does not). A Global
+session also gets the built-in Global role prompt (Claude's own wording for
+Claude, a generic one for other agents), ahead of the project's `globalSystemPrompt`.
+
+**Ids.** The parameter keeps the desktop's name `terminalId`; its value is the
+session id, which is `TREK_TERMINAL_ID` / `TREK_SESSION_ID` in the agent's env. A
+`worktree` parameter accepts a worktree id, path, branch or name, matched in that
+order; a branch or name that matches in several repositories is `BAD_REQUEST` and
+lists the paths. Arguments are validated: a field of the wrong type is
+`BAD_REQUEST`, not read as empty.
+
+**Global sessions.** A Global session can only be read, through
+`get_current_session`, which answers with `worktree: null`. Every other tool that
+takes a `terminalId` refuses it with `BAD_REQUEST` ("the Global session can't be
+targeted by tools"). An unknown session is `NOT_FOUND`.
+
+A *worktree entry* below is what `list_worktrees` returns for one worktree:
+`{worktree, repo, repoId, path, branch, primary, missing, tag, customTags, ticket,
+pullRequest, note, dirty, ahead, behind, loaded, sessions: [{terminalId, title,
+status, llm, queue}]}`.
+
+| Tool | Parameters | Result |
+|---|---|---|
+| `list_worktrees` | none | an array of worktree entries |
+| `create_worktree` | `branch`; `existingBranch?` (check out an existing branch; default false); `repo?` (name or id; required with several repositories) | the new worktree entry |
+| `load_worktree` | `worktree` | `{loaded: true, sessions}` |
+| `unload_worktree` | `worktree` | `{unloaded: true}` |
+| `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, worktree}`, `worktree` being an entry (`null` for a Global session) |
+| `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
+| `close_session` | `terminalId` | `{closed: true}` |
+| `send_prompt` | `terminalId`, `text` | `{sent: true}` |
+| `enqueue_prompt` | `terminalId`, `text` | `{queue}` |
+| `remove_queued_prompt` | `terminalId`, `index` (0-based) | `{removed, queue}` |
+| `send_keys` | `terminalId`, `keys` (named keys `enter`, `escape`, `tab`, `shift-tab`, `up`, `down`, `left`, `right`, `backspace`, `space`, `ctrl-c`, `ctrl-d`; anything else is typed literally) | `{sent: <count>}` |
+| `read_terminal` | `terminalId`; `lines?` (default 80, 1 to 2000) | `{status, output}`, from the headless screen and its scrollback |
+| `wait_for_sessions` | `terminalIds`; `until?` (`all`, the default, or `any`); `timeoutSeconds?` (default 300, at most 600) | `{timedOut, sessions: [{terminalId, status}]}` |
+| `set_worktree_tag` | `worktree`; `tag?` (name or id; omit to clear) | `{branch, tag}` |
+| `set_worktree_custom_tag` | `worktree`, `tag`; `enabled?` (default true) | `{branch, customTags}` |
+| `set_worktree_note` | `worktree`, `note` (empty clears) | `{branch}` |
+| `set_worktree_ticket` | `worktree`; `ticket?` (a Linear id or URL, or an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
+| `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
+| `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
+| `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
+| `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
+
+That is 21 tools. Tags are matched by name or id, case-insensitively, and an
+unknown name fails with the list of valid ones. `set_worktree_ticket` takes the
+Linear workspace or Azure DevOps base URL from a URL and saves it to the project's
+settings. A worktree with a detached HEAD has no branch data, so the `set_worktree_*`
+tools refuse it. `save_session_type` updates the type with the given `id` (an
+unknown `id` is `NOT_FOUND`), else the one with the same name, else creates one,
+and needs a `name` to create. A name already used by another type is `BAD_REQUEST`.
+`start_session` opens the pty with 120 columns and 32 rows.
+
+**Left out.** These tools exist on the desktop and are not on the server; they are
+not listed, and calling one is `-32602`.
+
+- Desktop UI only: `get_selected_worktree` and `focus_session` (selection lives in
+  clients), `promote_to_primary` (it needs a confirmation dialog), and
+  `request_decision` (the decision flag and its notification belong to phase 3's
+  notifications menu).
+- Phase 5: `speak_summary` (voice) and `get_stack`, `start_stack`, `stop_stack`,
+  `read_stack_log` (Docker).
+
+**Readiness and waiting.**
+
+- A session is *settled* when it is `exited`, or its status is not `working` and it
+  has produced output. A session that has never printed anything counts as not
+  settled, because the server has no `starting` status.
+- `send_prompt` (and `start_session` with a `prompt`) waits only before the session's
+  first output: up to 60 s for it, then up to 30 s until the status is not `working`.
+  Once a session has printed, `send_prompt` sends at once. If a wait times out the
+  prompt is sent anyway. `send_prompt` to a session that has exited is
+  `BAD_REQUEST`. `start_session` does not fail once the session exists; if the
+  prompt cannot be sent (the session exited or was closed, the client left, the send
+  was refused) it answers `promptSent: false` with a `reason`, so the caller still
+  gets the `terminalId`.
+- `wait_for_sessions` takes 1 to 50 distinct `terminalIds` (duplicates are dropped), all
+  worktree sessions of the project. When the condition already holds it first waits
+  1.5 s, since a prompt sent a moment ago may not have produced output yet. A
+  session that has gone reports the status `closed`, and counts as settled. It
+  polls every 250 ms.
+- A project runs at most 16 tool waits at once (`wait_for_sessions`, and the
+  readiness waits above). Another is refused with `CAPACITY` ("too many waits in
+  progress"). A `start_session` with a `prompt` takes its slot before it starts the
+  session, so a refusal leaves no session behind.
+
+**Limits.** `send_prompt` and `start_session`'s `prompt` are at most 1 MiB;
+`enqueue_prompt` text is at most 100,000 characters and the queue holds at most
+100 (the rules of `session.enqueue`); `send_keys` types at most 1 MiB in all. A
+project holds at most 100 session types. A session type's `name` follows the
+title rules (at most 200 characters, no control characters), and its `systemPrompt`
+and `initialMessage` are at most 100,000 characters each. These session type rules
+also apply to `project.updateSettings` and `project.import`, which validate every
+entry of `sessionTypes` (`id` and `name` strings, a known `llm.provider`); the
+tools save through `project.updateSettings`. `parseTicket` accepts a Linear
+workspace only of word characters and hyphens, and an Azure DevOps base only as an
+`http` or `https` URL, each at most 200 characters.
 
 ## Events
 
