@@ -316,3 +316,99 @@ test('retry jitter spans 0.85x to 1.15x of the backoff, capped at 30s', () => {
   for (let i = 0; i < 8; i++) { server.last().serverClose(1006, ''); clock.advance(30_000) }
   assert.equal(server.sockets.length, 9, 'delay never exceeds 30s even with +15 % jitter')
 })
+
+/** Runs `fn` with console.error captured; returns what was logged. */
+function quietly(fn) {
+  const logged = []
+  const orig = console.error
+  console.error = (...a) => logged.push(a)
+  try {
+    fn()
+  } finally {
+    console.error = orig
+  }
+  return logged
+}
+
+test('a status listener that closes on connected: no ping, no welcome listeners', () => {
+  const { server, clock, conn } = setup()
+  const welcomed = []
+  conn.on('welcome', (w) => welcomed.push(w))
+  conn.on('status', ({ status }) => {
+    if (status === 'connected') conn.close()
+  })
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  assert.equal(conn.status, 'closed')
+  assert.deepEqual(welcomed, [])
+  assert.equal(clock.pending(), 0, 'no ping timer (and no retry) pending')
+  clock.advance(60_000)
+  assert.equal(sock.sent.filter((f) => f.method === 'sys.ping').length, 0)
+})
+
+test('a status listener that reconnects on connected: the old welcome does not start a ping or reach welcome listeners', () => {
+  const { server, clock, conn } = setup()
+  const welcomed = []
+  conn.on('welcome', (w) => welcomed.push(w))
+  let once = true
+  conn.on('status', ({ status }) => {
+    if (status === 'connected' && once) {
+      once = false
+      conn.reconnect()
+    }
+  })
+  conn.connect()
+  server.last().open()
+  server.last().welcome()
+  assert.equal(server.sockets.length, 2)
+  assert.equal(conn.status, 'connecting')
+  assert.deepEqual(welcomed, [])
+  assert.equal(clock.pending(), 0)
+})
+
+test('a throwing status, welcome or event listener is logged and does not stop the others', () => {
+  const { server, conn, statuses } = setup()
+  const seen = []
+  conn.on('status', () => {
+    throw new Error('status boom')
+  })
+  conn.on('status', (s) => seen.push(['status', s.status]))
+  conn.on('welcome', () => {
+    throw new Error('welcome boom')
+  })
+  conn.on('welcome', (w) => seen.push(['welcome', w.serverId]))
+  conn.on('event', () => {
+    throw new Error('event boom')
+  })
+  conn.on('event', (e) => seen.push(['event', e.event]))
+  const logged = quietly(() => {
+    conn.connect()
+    const sock = server.last()
+    sock.open()
+    sock.welcome()
+    sock.event('x.y', {})
+  })
+  assert.deepEqual(seen, [['status', 'connecting'], ['status', 'connected'], ['welcome', 'sid'], ['event', 'x.y']])
+  assert.deepEqual(statuses, ['connecting', 'connected'])
+  assert.equal(conn.status, 'connected')
+  assert.equal(logged.length, 4, 'two status throws, one welcome, one event')
+})
+
+test('a hello send that throws drops the socket and retries', () => {
+  const { server, clock, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.send = () => {
+    throw new Error('send failed')
+  }
+  const logged = quietly(() => sock.open())
+  assert.equal(logged.length, 1)
+  assert.equal(conn.status, 'disconnected')
+  assert.ok(sock.closedWith, 'the socket was closed')
+  clock.advance(1000)
+  assert.equal(server.sockets.length, 2)
+  server.last().open()
+  assert.equal(server.last().sent[0].type, 'hello')
+})

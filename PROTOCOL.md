@@ -775,7 +775,13 @@ jitter (the cap applies after jitter). A welcome resets the backoff, as does
 timeout; a timeout closes the socket (code 4000) and reconnects. A ping that gets
 an error reply does not reconnect: the server answered. A socket that is not open
 at ping time (stuck in CLOSING) is abandoned at once, without waiting for its
-close event.
+close event. So is a socket whose `hello` send throws (the error is logged).
+
+**Listeners.** `on('status' | 'welcome' | 'event', listener)` returns an
+unsubscribe function. Each listener call is isolated: one that throws is logged
+with `console.error` and the others still run. A status listener may call
+`close()`, `reconnect()` or `setToken()`, even on `connected`: the welcome is
+then stale, so no ping starts and no welcome listener runs for it.
 
 **Requests.** They are never queued. Anything sent while the status is not
 `connected` fails with `NOT_CONNECTED`, and so does every request still pending

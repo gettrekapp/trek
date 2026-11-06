@@ -65,8 +65,8 @@ const BACKOFF_MAX_MS = 30_000
 const PING_INTERVAL_MS = 15_000
 const PING_TIMEOUT_MS = 10_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
-/** Our own close code for a failed ping; any non-auth, non-version code reconnects. */
-const CLOSE_PING_TIMEOUT = 4000
+/** Our own close code for a socket we give up on (failed ping or hello); any non-auth, non-version code reconnects. */
+const CLOSE_ABANDONED = 4000
 
 type Listener<T> = (value: T) => void
 
@@ -216,15 +216,20 @@ export class ServerConnection {
     this.socket = socket
     socket.addEventListener('open', () => {
       if (this.socket !== socket) return
-      socket.send(
-        JSON.stringify({
-          type: 'hello',
-          protocolVersion: PROTOCOL_VERSION_V2,
-          token: this.token,
-          client: this.opts.client ?? 'trek-client',
-          clientVersion: this.opts.clientVersion ?? '0'
-        })
-      )
+      try {
+        socket.send(
+          JSON.stringify({
+            type: 'hello',
+            protocolVersion: PROTOCOL_VERSION_V2,
+            token: this.token,
+            client: this.opts.client ?? 'trek-client',
+            clientVersion: this.opts.clientVersion ?? '0'
+          })
+        )
+      } catch (err) {
+        console.error('trek client: sending hello failed', err)
+        this.abandon(socket, 'hello failed')
+      }
     })
     socket.addEventListener('message', (event) => {
       if (this.socket !== socket) return
@@ -234,7 +239,7 @@ export class ServerConnection {
       } catch {
         return
       }
-      if (frame && typeof frame === 'object') this.onFrame(frame)
+      if (frame && typeof frame === 'object') this.onFrame(socket, frame)
     })
     socket.addEventListener('close', (event) => this.onClose(socket, event.code, event.reason))
     socket.addEventListener('error', () => {
@@ -242,7 +247,7 @@ export class ServerConnection {
     })
   }
 
-  private onFrame(frame: IncomingFrame): void {
+  private onFrame(socket: SocketLike, frame: IncomingFrame): void {
     if (frame.type === 'welcome') {
       if (this.status !== 'connecting') return
       const welcome: WelcomeInfo = {
@@ -254,8 +259,10 @@ export class ServerConnection {
       this.welcome = welcome
       this.backoff = BACKOFF_MIN_MS
       this.setStatus('connected', '')
+      // A status listener may have closed or reconnected us: this welcome is then stale.
+      if (this.closed || this.socket !== socket) return
       this.startPing()
-      for (const l of [...this.welcomeListeners]) l(welcome)
+      this.emit(this.welcomeListeners, welcome, 'welcome')
       return
     }
     if (frame.type === 'res') {
@@ -275,7 +282,7 @@ export class ServerConnection {
     }
     if (frame.type === 'event' && typeof frame.event === 'string') {
       const ev: ServerEvent = { event: frame.event, payload: frame.payload }
-      for (const l of [...this.eventListeners]) l(ev)
+      this.emit(this.eventListeners, ev, 'event')
     }
   }
 
@@ -342,28 +349,28 @@ export class ServerConnection {
       if (!socket) return
       // Stuck in CLOSING (or otherwise not open): no ping can succeed, so give up now.
       if (socket.readyState !== OPEN) {
-        this.abandon(socket)
+        this.abandon(socket, 'ping timeout')
         return
       }
-      this.send('sys.ping', { t: Date.now() }, PING_TIMEOUT_MS, () => this.abandon(socket)).catch(() => {
+      this.send('sys.ping', { t: Date.now() }, PING_TIMEOUT_MS, () => this.abandon(socket, 'ping timeout')).catch(() => {
         // The timeout is handled above; a close fails it with NOT_CONNECTED.
       })
     }, PING_INTERVAL_MS)
   }
 
   /**
-   * Unresponsive socket: force the close/reconnect path. A real socket's close
-   * handshake can hang on a dead peer, so don't wait for its close event;
-   * onClose ignores that event once the socket is detached.
+   * Unresponsive or broken socket: force the close/reconnect path. A real
+   * socket's close handshake can hang on a dead peer, so don't wait for its
+   * close event; onClose ignores that event once the socket is detached.
    */
-  private abandon(socket: SocketLike): void {
+  private abandon(socket: SocketLike, reason: string): void {
     if (this.socket !== socket) return
     try {
-      socket.close(CLOSE_PING_TIMEOUT, 'ping timeout')
+      socket.close(CLOSE_ABANDONED, reason)
     } catch {
       // already closing
     }
-    this.onClose(socket, CLOSE_PING_TIMEOUT, 'ping timeout')
+    this.onClose(socket, CLOSE_ABANDONED, reason)
   }
 
   private stopPing(): void {
@@ -387,6 +394,17 @@ export class ServerConnection {
     this.status = status
     this.statusMessage = message
     const change: StatusChange = { status, message }
-    for (const l of [...this.statusListeners]) l(change)
+    this.emit(this.statusListeners, change, 'status')
+  }
+
+  /** A throwing listener must not skip the others, nor throw into the socket handler. */
+  private emit<T>(listeners: Set<Listener<T>>, value: T, kind: string): void {
+    for (const l of [...listeners]) {
+      try {
+        l(value)
+      } catch (err) {
+        console.error(`trek client: ${kind} listener threw`, err)
+      }
+    }
   }
 }
