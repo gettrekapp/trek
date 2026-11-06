@@ -35,7 +35,7 @@
    - `WindowState` gains `target: WindowTarget | null`, where `WindowTarget` is `{kind: 'file', path}` or `{kind: 'server', serverEntryId, projectId}`. It replaces `filePath` and `hasProject`, keeping their behaviour for files.
    - `decideOpen` is unchanged. "Already open" now compares targets: file paths by realpath, server targets by both ids.
    - `InitialWindowState` gains `server: {serverEntryId, projectId} | null`.
-5. **Recents.** `recent-projects.json` holds either a string (a file path, as today) or `{kind: 'server', serverEntryId, projectId, name, serverName}`. It still keeps at most 8. File entries are dropped when the file is missing. Server entries are kept until the user removes them; if the server entry is gone, they show "Server removed". The start screen shows a server entry as `name — serverName`.
+5. **Recents.** `recent-projects.json` holds either a string (a file path, as today) or `{kind: 'server', serverEntryId, projectId, name, serverName}`. It still keeps at most 8. File entries are dropped when the file is missing. Server entries are kept until the user removes them; if the server entry is gone, they show "Server removed". The start screen shows a server entry as its name with a `server` chip, and `serverName` (or "Server removed") on the line below. Each recent has a × remove control.
 6. **Closing a server window** needs no prompt and no save: its sessions run on the server. The renderer answers the close request at once. Its sockets close and the server keeps everything running.
 7. **Start screen.**
    - **Connect to server…** joins New Project / Open Project.
@@ -937,7 +937,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ap
 2. **Create a project.** Click **Projects** and **New Project…**, enter a name, tick the registered repo and click **Create**. The window becomes the server window: the title shows the project name, and the tree shows the repo with its `main` worktree.
 3. **Live updates.** From the test, create a worktree through a separate SDK connection (`worktree.create`, like the contract script). The window's tree shows the new worktree without a reload.
 4. **Focus instead of reopening.** Open a second window (File → New Window, or `createWindow` via `app.evaluate`). In it, use Connect → Projects → **Open** on the same project. No third window appears and the first window is focused (check through `BrowserWindow.getFocusedWindow()`).
-5. **Recents.** A fresh empty window's start screen lists the project as `name — serverName`.
+5. **Recents.** A fresh empty window's start screen lists the project by name with a `server` chip and the server name beneath it.
 6. **Restore.** Quit the app and relaunch it with the same user-data dir. The server window comes back and shows the tree.
 7. **Disconnect.** Stop `trek-server`. The window shows the disconnected banner and the tree stays visible.
 8. **Bad token.** Add a second server entry with a wrong token. Its dot shows needs-auth.
