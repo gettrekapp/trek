@@ -20,6 +20,7 @@
     "smoke:env": "npm run build && node scripts/env-smoke.mjs",
     "smoke:providers": "npm run build && node scripts/providers-smoke.mjs",
     "smoke:client": "npm --prefix server run build && node scripts/client-contract.mjs",
+    "smoke:v2": "npm run build && npm --prefix server run build && node scripts/v2-smoke.mjs",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "electron-vite build && electron-builder --mac --arm64"
   },
