@@ -130,7 +130,7 @@ Nothing is wired into a server window yet; 3c-2 does that.
 17. **A v2 entry remembers the pty it last saw end** (`spent`), so the planner doesn't re-attach to a dead pty on every patch until the session's `ptyId` changes.
     - `spent` is set only for a real end: `onExit` (which the stream also sends when its re-attach after a reconnect gets PTY_NOT_FOUND, and when the connection closes for good), and an attach rejected with `PTY_NOT_FOUND`.
     - Any other failure leaves the pty possibly alive, so it is not `spent`. The entry keeps an `AttachFailure` instead (`terminalSync.ts`): `planTerminalSync` holds the attach back until the back-off is over (1 s, doubling to 30 s), and `syncV2Terminals` schedules a re-sync for then. `retryV2Terminals()` clears every failure and re-syncs at once; 3c-2 calls it when the connection status becomes `connected`. The terminal shows `[could not attach: … — retrying]` on the first failure in a row. This covers the stream's `onError` (re-attach after a reconnect failed with CONGESTED after its retries, or with anything but PTY_NOT_FOUND) and an attach rejected with anything but CONGESTED or PTY_NOT_FOUND.
-    - An exit followed by `session.restart` is normally a plain `attach`: the server clears `ptyId` in the same apply as the exit (`server/src/sessions/manager.ts:607-610`), so the next patch plans `detach` (which clears `spent`), and the restart arrives later as an `attach`. A restart seen in one patch, or after a spent pty the mirror still listed, plans a `reattach`. Either way, an attach to a different pty than the one the entry last showed writes `[restarted]` first, like legacy's `[restarting]` (`terminals.ts:838`), so the old scrollback and the new replay stay apart. An attach to the same pty again (a retry after a failure) resets the terminal instead, as `onReset` does, because the replay repeats its scrollback.
+    - An exit followed by `session.restart` is normally a plain `attach`: the server clears `ptyId` in the same apply as the exit (`server/src/sessions/manager.ts:607-610`), so the next patch plans `detach` (which clears `spent`), and the restart arrives later as an `attach`. A restart seen in one patch, or after a spent pty the mirror still listed, plans a `reattach`. Either way, the first output of a pty other than the one the terminal last showed is preceded by `[restarted]`, like legacy's `[restarting]` (`terminals.ts:838`), so the old scrollback and the new replay stay apart. An attach to a pty that already sent this terminal data (a retry after a failure) resets the terminal first instead, as `onReset` does, because the replay repeats its scrollback.
     - CONGESTED clears the link and re-syncs after 500 ms.
 18. **No dev-only test hook.** The v2 terminal path has no caller until 3c-2, whose extended `smoke:v2` exercises it end to end. Here the pure planner is unit-tested and the rest is typechecked and built.
 
@@ -179,8 +179,8 @@ Nothing is wired into a server window yet; 3c-2 does that.
 | `src/renderer/src/App.tsx` | modify | the new-terminal and close-tab menu items through the backend |
 | `src/renderer/src/linear.ts` | modify | `features.linear` gate |
 | `src/renderer/src/v2/projector.ts` | create | `projectV2`, `reconcileView`, `legacyStatus`, `LEGACY_STATUS`, `legacyOrderKey`, `v2WorktreeOrder`, `V2IdMap` (pure) |
-| `src/renderer/src/v2/terminalSync.ts` | create | `terminalTargets`, `planTerminalSync` (pure) |
-| `src/renderer/src/terminals.ts` | modify | the `V2Link` entry, `newXterm`, `writeToPty`, `syncV2Terminals`, `disposeV2Terminals` |
+| `src/renderer/src/v2/terminalSync.ts` | create | `terminalTargets`, `planTerminalSync`, the attach-failure back-off (`AttachFailure`, `recordAttachFailure`, `attachRetryDelay`, `shouldRetry`) (pure) |
+| `src/renderer/src/terminals.ts` | modify | the `V2Link` entry, `newXterm`, `writeToPty`, `syncV2Terminals`, `retryV2Terminals`, `disposeV2Terminals` |
 | `src/renderer/src/v2/terminals.typecheck.ts` | create | compile-time checks of the v2 terminal API |
 | `src/renderer/src/v2/applyProjection.ts` | create | `applyV2Project`, `v2Ids`, `clearV2Projection`, the global-id guard |
 | `scripts/backendFeatures.test.mjs`, `scripts/v2Projector.test.mjs`, `scripts/v2TerminalSync.test.mjs` | create | unit tests |
@@ -2382,7 +2382,7 @@ Create `src/renderer/src/v2/terminals.typecheck.ts`:
 // Type-level checks for the server-window terminal API, run by `npm run typecheck`. Never executed or imported.
 import type { PtyStream } from '../../../shared/client/index.ts'
 import type { Project } from '../../../shared/model/types'
-import type { disposeV2Terminals, syncV2Terminals } from '../terminals'
+import type { disposeV2Terminals, retryV2Terminals, syncV2Terminals } from '../terminals'
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 function assertType<T extends true>(): T | void {}
@@ -2390,6 +2390,7 @@ function assertType<T extends true>(): T | void {}
 export function checks(): void {
   assertType<Equal<typeof syncV2Terminals, (project: Project, ptys: PtyStream) => void>>()
   assertType<Equal<typeof disposeV2Terminals, () => void>>()
+  assertType<Equal<typeof retryV2Terminals, () => void>>()
 }
 ```
 
@@ -2398,8 +2399,9 @@ export function checks(): void {
 Run: `npm run typecheck 2>&1 | grep error | head -2`
 
 Expected:
-- `src/renderer/src/v2/terminals.typecheck.ts(3,15): error TS2724: '"../terminals"' has no exported member named 'disposeV2Terminals'. Did you mean 'disposeTerminal'?`
-- `src/renderer/src/v2/terminals.typecheck.ts(3,35): error TS2305: Module '"../terminals"' has no exported member 'syncV2Terminals'.`
+- `src/renderer/src/v2/terminals.typecheck.ts(4,15): error TS2724: '"../terminals"' has no exported member named 'disposeV2Terminals'. Did you mean 'disposeTerminal'?`
+- `src/renderer/src/v2/terminals.typecheck.ts(4,35): error TS2305: Module '"../terminals"' has no exported member 'retryV2Terminals'.`
+- `src/renderer/src/v2/terminals.typecheck.ts(4,53): error TS2305: Module '"../terminals"' has no exported member 'syncV2Terminals'.`
 
 - [ ] **Step 3: Implement the `V2Link` entry and the imports**
 
@@ -2444,7 +2446,12 @@ import type {
 } from '../../shared/types'
 import type { PtyStream } from '../../shared/client/index.ts'
 import type { Project } from '../../shared/model/types'
-import { planTerminalSync, terminalTargets } from './v2/terminalSync'
+import {
+  planTerminalSync,
+  recordAttachFailure,
+  terminalTargets,
+  type AttachFailure
+} from './v2/terminalSync'
 import { errorCode, errorText } from './v2/errors'
 
 /**
@@ -2457,8 +2464,12 @@ interface V2Link {
   ptys: PtyStream
   /** The pty attached now (or being attached); null when none is */
   ptyId: string | null
-  /** The last pty that ended or refused the attach: not tried again until the session's pty changes */
+  /** The last pty that ended (exited, or the server no longer has it): not tried again until the session's pty changes */
   spent: string | null
+  /** The last attach that failed while its pty may still be alive: tried again after a back-off */
+  failed: AttachFailure | null
+  /** The pty whose output the terminal shows (the last one that sent data); null before any */
+  shown: string | null
 }
 
 interface Entry {
@@ -2611,14 +2622,36 @@ Append to the end of `src/renderer/src/terminals.ts`, after `disposeAllTerminals
 /** A re-try after the server refused an attach as CONGESTED. */
 const CONGESTED_RETRY_MS = 500
 
-/** The last project and stream synced, for that re-try. */
+/** The last project and stream synced, for the re-tries. */
 let lastV2: { project: Project; ptys: PtyStream } | null = null
+
+/** The one pending re-sync (CONGESTED or a failed attach's back-off), at its earliest time. */
+let v2SyncTimer: { handle: ReturnType<typeof setTimeout>; at: number } | null = null
 
 const dim = (text: string): string => `\r\n\x1b[90m${text}\x1b[0m\r\n`
 
+/** Re-sync after `delay` ms with the last project, unless one is already due sooner. */
+function scheduleV2Sync(delay: number): void {
+  const at = Date.now() + delay
+  if (v2SyncTimer && v2SyncTimer.at <= at) return
+  if (v2SyncTimer) clearTimeout(v2SyncTimer.handle)
+  v2SyncTimer = {
+    at,
+    handle: setTimeout(() => {
+      v2SyncTimer = null
+      if (lastV2) syncV2Terminals(lastV2.project, lastV2.ptys)
+    }, delay)
+  }
+}
+
+function cancelV2Sync(): void {
+  if (v2SyncTimer) clearTimeout(v2SyncTimer.handle)
+  v2SyncTimer = null
+}
+
 function createV2Entry(id: string, ptys: PtyStream): Entry {
   const { term, fit } = newXterm()
-  const link: V2Link = { ptys, ptyId: null, spent: null }
+  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, shown: null }
   const entry: Entry = {
     term,
     fit,
@@ -2638,17 +2671,40 @@ function createV2Entry(id: string, ptys: PtyStream): Entry {
   return entry
 }
 
+/**
+ * The attach failed, but the pty may still be alive (unlike an exit, it is not
+ * spent): say so once, and try again after the back-off.
+ */
+function attachFailed(entry: Entry, link: V2Link, ptyId: string, err: unknown): void {
+  link.ptyId = null
+  const first = link.failed?.ptyId !== ptyId
+  link.failed = recordAttachFailure(link.failed, ptyId, Date.now())
+  if (first) entry.term.write(dim(`[could not attach: ${errorText(err)} — retrying]`))
+  scheduleV2Sync(Math.max(0, link.failed.retryAt - Date.now()))
+}
+
 function attachV2(id: string, ptyId: string): void {
   const entry = entries.get(id)
   const link = entry?.v2
   if (!entry || !link) return
   link.ptyId = ptyId
   link.spent = null
+  // The replay repeats a pty's scrollback: attached again after a failure, the
+  // same pty starts from a clean screen, as onReset does.
+  if (link.shown === ptyId) entry.term.reset()
   const { ptys } = link
   const current = (): boolean => entries.get(id) === entry && link.ptyId === ptyId
   ptys
     .attach(ptyId, {
-      onData: (data) => entry.term.write(data),
+      onData: (data) => {
+        // The first output of a new pty (a restart): mark it off from the old scrollback.
+        if (link.shown !== ptyId) {
+          if (link.shown !== null) entry.term.write(dim('[restarted]'))
+          link.shown = ptyId
+        }
+        entry.term.write(data)
+      },
+      // A real end (the stream also reports a re-attach's PTY_NOT_FOUND, and a closed connection, here).
       onExit: (exitCode) => {
         if (!current()) return
         link.ptyId = null
@@ -2657,33 +2713,37 @@ function attachV2(id: string, ptyId: string): void {
       },
       // A reconnect replays the scrollback again: start from a clean screen.
       onReset: () => entry.term.reset(),
+      // The re-attach after a reconnect failed, or a handler threw: the pty may be alive.
       onError: (err) => {
         if (!current()) return
-        link.ptyId = null
-        link.spent = ptyId
-        entry.term.write(dim(`[terminal stream failed: ${err.message}]`))
+        // The stream has usually dropped it already; a handler that threw leaves it attached.
+        void ptys.detach(ptyId)
+        attachFailed(entry, link, ptyId, err)
       }
     })
     .then(
       () => {
         if (!current()) return
+        link.failed = null
         // The pty keeps the size of whoever attached last: send ours so the TUI repaints for it.
         fitTerminal(id)
         void ptys.resize(ptyId, entry.term.cols, entry.term.rows).catch(() => {})
       },
       (err: unknown) => {
         if (!current()) return
-        link.ptyId = null
         const code = errorCode(err)
         if (code === 'CONGESTED') {
-          setTimeout(() => {
-            if (lastV2) syncV2Terminals(lastV2.project, lastV2.ptys)
-          }, CONGESTED_RETRY_MS)
+          link.ptyId = null
+          scheduleV2Sync(CONGESTED_RETRY_MS)
           return
         }
-        link.spent = ptyId
-        // Gone between the snapshot and the attach: the next patch says what happened.
-        if (code !== 'PTY_NOT_FOUND') entry.term.write(dim(`[could not attach: ${errorText(err)}]`))
+        if (code === 'PTY_NOT_FOUND') {
+          // Gone between the snapshot and the attach: the next patch says what happened.
+          link.ptyId = null
+          link.spent = ptyId
+          return
+        }
+        attachFailed(entry, link, ptyId, err)
       }
     )
 }
@@ -2704,7 +2764,10 @@ function detachV2(entry: Entry): void {
  */
 export function syncV2Terminals(project: Project, ptys: PtyStream): void {
   lastV2 = { project, ptys }
-  const current: { id: string; ptyId: string | null }[] = []
+  const now = Date.now()
+  const targets = terminalTargets(project)
+  const wanted = new Map(targets.map((t) => [t.id, t.ptyId]))
+  const current: { id: string; ptyId: string | null; failed: AttachFailure | null }[] = []
   for (const [id, entry] of entries) {
     const link = entry.v2
     if (!link) continue
@@ -2713,10 +2776,13 @@ export function syncV2Terminals(project: Project, ptys: PtyStream): void {
       link.ptys = ptys
       link.ptyId = null
       link.spent = null
+      link.failed = null
     }
-    current.push({ id, ptyId: link.ptyId ?? link.spent })
+    // A failure for a pty the session no longer runs holds nothing back.
+    if (link.failed && wanted.get(id) !== link.failed.ptyId) link.failed = null
+    current.push({ id, ptyId: link.ptyId ?? link.spent, failed: link.failed })
   }
-  const plan = planTerminalSync(current, terminalTargets(project))
+  const plan = planTerminalSync(current, targets, now)
   for (const id of plan.dispose) {
     const entry = entries.get(id)
     if (entry) detachV2(entry)
@@ -2728,15 +2794,29 @@ export function syncV2Terminals(project: Project, ptys: PtyStream): void {
     if (entry) detachV2(entry)
   }
   for (const { id, ptyId } of plan.attach) attachV2(id, ptyId)
-  for (const { id, to } of plan.reattach) {
-    entries.get(id)?.term.write(dim('[restarted]'))
-    attachV2(id, to)
+  for (const { id, to } of plan.reattach) attachV2(id, to)
+  // Failed attaches still in their back-off: come back when the first is due.
+  for (const entry of entries.values()) {
+    const link = entry.v2
+    if (link?.failed && link.ptyId === null && link.failed.retryAt > now) {
+      scheduleV2Sync(link.failed.retryAt - now)
+    }
   }
+}
+
+/**
+ * Try every failed attach again now, without waiting for its back-off. 3c-2
+ * calls it when the server's connection status becomes `connected`.
+ */
+export function retryV2Terminals(): void {
+  for (const entry of entries.values()) if (entry.v2) entry.v2.failed = null
+  if (lastV2) syncV2Terminals(lastV2.project, lastV2.ptys)
 }
 
 /** The server window is closing or switching: detach and drop every v2 entry. */
 export function disposeV2Terminals(): void {
   lastV2 = null
+  cancelV2Sync()
   for (const [id, entry] of [...entries]) {
     if (!entry.v2) continue
     detachV2(entry)
@@ -2745,10 +2825,13 @@ export function disposeV2Terminals(): void {
 }
 ```
 
-Why the planner sees `ptyId ?? spent` as the entry's pty:
+Why the planner sees `ptyId ?? spent` as the entry's pty, and the rest of Decision 17:
 - After an exit, the mirror may still list the old pty for a moment. Reporting the spent pty keeps the planner from attaching to it again.
-- Once `session.restart` gives the session a new pty, the planner sees a `reattach` from the spent pty to the new one. `detachV2` then sends no `pty.detach`, because `link.ptyId` is already null, and the entry writes `[restarted]` before attaching.
-- `disposeEntry` (line 977) also clears `discoveries` and `idleTimer`. Both are always empty for v2 entries.
+- The server clears `ptyId` in the same apply as the exit (`server/src/sessions/manager.ts:607-610`), so the next patch normally plans a `detach` (no `pty.detach` goes out, because `link.ptyId` is already null; `spent` is cleared). `session.restart` then arrives as a plain `attach`. Only a restart seen in one patch, or after a spent pty still listed, plans a `reattach`.
+- Either way, the first output of a pty other than the one the terminal shows (`shown`) writes `[restarted]` before it, so the old scrollback and the new replay are visibly apart. It is written on the first `onData`, not when the attach goes out, so a CONGESTED retry neither writes it twice nor wipes the old scrollback.
+- `spent` is set only for a real end: `onExit` and an attach rejected with PTY_NOT_FOUND. Anything else (the stream's `onError`, or another rejection than CONGESTED) may leave the pty alive, so `attachFailed` records an `AttachFailure` instead, writes `[could not attach: … — retrying]` on the first failure in a row, and schedules a re-sync for the end of the back-off. An attach to a pty that already sent data to this terminal resets it first, because the replay repeats its scrollback. `retryV2Terminals()` clears every failure for a reconnect (Notes for 3c-2).
+- A failure for a pty the session no longer runs is dropped at the next sync, so it never keeps a timer going.
+- `disposeEntry` also clears `discoveries` and `idleTimer`. Both are always empty for v2 entries.
 
 - [ ] **Step 7: Typecheck, test, build and the legacy smokes**
 

@@ -35,11 +35,33 @@ import type {
   WorktreeInstance,
   WorktreeLocator
 } from '../../shared/types'
+import type { PtyStream } from '../../shared/client/index.ts'
+import type { Project } from '../../shared/model/types'
+import {
+  planTerminalSync,
+  recordAttachFailure,
+  terminalTargets,
+  type AttachFailure
+} from './v2/terminalSync'
+import { errorCode, errorText } from './v2/errors'
 
 /**
  * Owns the live xterm instances and their PTY sessions. These live outside
  * React so switching tabs never destroys terminal state.
  */
+
+/** A server window's entry: its stream, and the pty it shows. */
+interface V2Link {
+  ptys: PtyStream
+  /** The pty attached now (or being attached); null when none is */
+  ptyId: string | null
+  /** The last pty that ended (exited, or the server no longer has it): not tried again until the session's pty changes */
+  spent: string | null
+  /** The last attach that failed while its pty may still be alive: tried again after a back-off */
+  failed: AttachFailure | null
+  /** The pty whose output the terminal shows (the last one that sent data); null before any */
+  shown: string | null
+}
 
 interface Entry {
   term: Terminal
@@ -51,6 +73,8 @@ interface Entry {
   scanTail: string
   /** Lower-case text this terminal's agent prints only while working */
   markers: string[]
+  /** Set for a server window's entry: its input and output go through the server, not pty IPC */
+  v2?: V2Link
 }
 
 const entries = new Map<string, Entry>()
@@ -384,8 +408,8 @@ export async function startClaudeSession(
   return createTerminal(instance.id, instance.path, undefined, sessionType, llm)
 }
 
-/** The xterm instance and its input/status wiring, outside React. */
-function createEntry(id: string, markers: string[]): Entry {
+/** A fresh xterm with the fit addon, not yet in the DOM. */
+function newXterm(): { term: Terminal; fit: FitAddon } {
   const term = new Terminal({
     fontFamily: 'Menlo, "SF Mono", Monaco, monospace',
     fontSize: 13,
@@ -397,6 +421,12 @@ function createEntry(id: string, markers: string[]): Entry {
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
+  return { term, fit }
+}
+
+/** The xterm instance and its input/status wiring, outside React. */
+function createEntry(id: string, markers: string[]): Entry {
+  const { term, fit } = newXterm()
 
   const entry: Entry = {
     term,
@@ -898,21 +928,31 @@ export function pasteToTerminal(id: string, text: string, focus = true): void {
   const entry = entries.get(id)
   if (!entry) return
   const normalized = text.replace(/\r?\n/g, '\r')
-  window.api.writePty(
+  writeToPty(
     id,
     entry.term.modes.bracketedPasteMode ? `\x1b[200~${normalized}\x1b[201~` : normalized
   )
   if (focus) entry.term.focus()
   setTimeout(() => {
-    if (entries.has(id)) window.api.writePty(id, '\r')
+    if (entries.has(id)) writeToPty(id, '\r')
   }, 150)
+}
+
+/** Input for a terminal's pty: over pty IPC (legacy) or to its server (a server window's entry). */
+function writeToPty(id: string, data: string): void {
+  const link = entries.get(id)?.v2
+  if (!link) {
+    window.api.writePty(id, data)
+    return
+  }
+  if (link.ptyId) void link.ptys.write(link.ptyId, data).catch(() => {})
 }
 
 /** Send named keys (see shared/keys) or literal text, as if typed. */
 export function sendKeysToTerminal(id: string, keys: string[]): boolean {
   if (!entries.has(id)) return false
   for (const key of keys) {
-    window.api.writePty(id, keySequence(key))
+    writeToPty(id, keySequence(key))
   }
   // Same as real keyboard input: the prompt is being answered.
   const store = useAppStore.getState()
@@ -1019,4 +1059,221 @@ export function disposePendingTerminals(): void {
 
 export function disposeAllTerminals(): void {
   for (const id of [...entries.keys()]) disposeTerminal(id)
+}
+
+/**
+ * Server windows (protocol v2)
+ *
+ * The server runs the sessions and computes their status; this window only
+ * shows them. Each session of a loaded worktree, and each Global session, has
+ * an xterm entry keyed by its session id (stable across restarts), attached to
+ * the session's current pty through the server's PtyStream. None of the legacy
+ * wiring applies: no pty IPC, no status heuristics, no Codex discovery, and
+ * keys and bells do not touch the status (the server clears attention on input
+ * and filters terminal replies). The status comes only from the mirror.
+ */
+
+/** A re-try after the server refused an attach as CONGESTED. */
+const CONGESTED_RETRY_MS = 500
+
+/** The last project and stream synced, for the re-tries. */
+let lastV2: { project: Project; ptys: PtyStream } | null = null
+
+/** The one pending re-sync (CONGESTED or a failed attach's back-off), at its earliest time. */
+let v2SyncTimer: { handle: ReturnType<typeof setTimeout>; at: number } | null = null
+
+const dim = (text: string): string => `\r\n\x1b[90m${text}\x1b[0m\r\n`
+
+/** Re-sync after `delay` ms with the last project, unless one is already due sooner. */
+function scheduleV2Sync(delay: number): void {
+  const at = Date.now() + delay
+  if (v2SyncTimer && v2SyncTimer.at <= at) return
+  if (v2SyncTimer) clearTimeout(v2SyncTimer.handle)
+  v2SyncTimer = {
+    at,
+    handle: setTimeout(() => {
+      v2SyncTimer = null
+      if (lastV2) syncV2Terminals(lastV2.project, lastV2.ptys)
+    }, delay)
+  }
+}
+
+function cancelV2Sync(): void {
+  if (v2SyncTimer) clearTimeout(v2SyncTimer.handle)
+  v2SyncTimer = null
+}
+
+function createV2Entry(id: string, ptys: PtyStream): Entry {
+  const { term, fit } = newXterm()
+  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, shown: null }
+  const entry: Entry = {
+    term,
+    fit,
+    idleTimer: null,
+    processingSeen: false,
+    scanTail: '',
+    markers: [],
+    v2: link
+  }
+  entries.set(id, entry)
+  term.onData((data) => {
+    if (link.ptyId) void link.ptys.write(link.ptyId, data).catch(() => {})
+  })
+  term.onResize(({ cols, rows }) => {
+    if (link.ptyId) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
+  })
+  return entry
+}
+
+/**
+ * The attach failed, but the pty may still be alive (unlike an exit, it is not
+ * spent): say so once, and try again after the back-off.
+ */
+function attachFailed(entry: Entry, link: V2Link, ptyId: string, err: unknown): void {
+  link.ptyId = null
+  const first = link.failed?.ptyId !== ptyId
+  link.failed = recordAttachFailure(link.failed, ptyId, Date.now())
+  if (first) entry.term.write(dim(`[could not attach: ${errorText(err)} — retrying]`))
+  scheduleV2Sync(Math.max(0, link.failed.retryAt - Date.now()))
+}
+
+function attachV2(id: string, ptyId: string): void {
+  const entry = entries.get(id)
+  const link = entry?.v2
+  if (!entry || !link) return
+  link.ptyId = ptyId
+  link.spent = null
+  // The replay repeats a pty's scrollback: attached again after a failure, the
+  // same pty starts from a clean screen, as onReset does.
+  if (link.shown === ptyId) entry.term.reset()
+  const { ptys } = link
+  const current = (): boolean => entries.get(id) === entry && link.ptyId === ptyId
+  ptys
+    .attach(ptyId, {
+      onData: (data) => {
+        // The first output of a new pty (a restart): mark it off from the old scrollback.
+        if (link.shown !== ptyId) {
+          if (link.shown !== null) entry.term.write(dim('[restarted]'))
+          link.shown = ptyId
+        }
+        entry.term.write(data)
+      },
+      // A real end (the stream also reports a re-attach's PTY_NOT_FOUND, and a closed connection, here).
+      onExit: (exitCode) => {
+        if (!current()) return
+        link.ptyId = null
+        link.spent = ptyId
+        entry.term.write(dim(`[process exited with code ${exitCode}]`))
+      },
+      // A reconnect replays the scrollback again: start from a clean screen.
+      onReset: () => entry.term.reset(),
+      // The re-attach after a reconnect failed, or a handler threw: the pty may be alive.
+      onError: (err) => {
+        if (!current()) return
+        // The stream has usually dropped it already; a handler that threw leaves it attached.
+        void ptys.detach(ptyId)
+        attachFailed(entry, link, ptyId, err)
+      }
+    })
+    .then(
+      () => {
+        if (!current()) return
+        link.failed = null
+        // The pty keeps the size of whoever attached last: send ours so the TUI repaints for it.
+        fitTerminal(id)
+        void ptys.resize(ptyId, entry.term.cols, entry.term.rows).catch(() => {})
+      },
+      (err: unknown) => {
+        if (!current()) return
+        const code = errorCode(err)
+        if (code === 'CONGESTED') {
+          link.ptyId = null
+          scheduleV2Sync(CONGESTED_RETRY_MS)
+          return
+        }
+        if (code === 'PTY_NOT_FOUND') {
+          // Gone between the snapshot and the attach: the next patch says what happened.
+          link.ptyId = null
+          link.spent = ptyId
+          return
+        }
+        attachFailed(entry, link, ptyId, err)
+      }
+    )
+}
+
+function detachV2(entry: Entry): void {
+  const link = entry.v2
+  if (!link) return
+  if (link.ptyId) void link.ptys.detach(link.ptyId)
+  link.ptyId = null
+  link.spent = null
+}
+
+/**
+ * Brings this window's entries in line with a v2 project snapshot: an entry for
+ * every session that should have one, attached to the pty running it now.
+ * Call it before the projected slice reaches the store, so a TerminalPane never
+ * mounts for a session that has no entry.
+ */
+export function syncV2Terminals(project: Project, ptys: PtyStream): void {
+  lastV2 = { project, ptys }
+  const now = Date.now()
+  const targets = terminalTargets(project)
+  const wanted = new Map(targets.map((t) => [t.id, t.ptyId]))
+  const current: { id: string; ptyId: string | null; failed: AttachFailure | null }[] = []
+  for (const [id, entry] of entries) {
+    const link = entry.v2
+    if (!link) continue
+    // A new RegisteredServer (the url changed) has a new stream; the old one is closed.
+    if (link.ptys !== ptys) {
+      link.ptys = ptys
+      link.ptyId = null
+      link.spent = null
+      link.failed = null
+    }
+    // A failure for a pty the session no longer runs holds nothing back.
+    if (link.failed && wanted.get(id) !== link.failed.ptyId) link.failed = null
+    current.push({ id, ptyId: link.ptyId ?? link.spent, failed: link.failed })
+  }
+  const plan = planTerminalSync(current, targets, now)
+  for (const id of plan.dispose) {
+    const entry = entries.get(id)
+    if (entry) detachV2(entry)
+    disposeEntry(id)
+  }
+  for (const id of plan.create) createV2Entry(id, ptys)
+  for (const { id } of [...plan.detach, ...plan.reattach]) {
+    const entry = entries.get(id)
+    if (entry) detachV2(entry)
+  }
+  for (const { id, ptyId } of plan.attach) attachV2(id, ptyId)
+  for (const { id, to } of plan.reattach) attachV2(id, to)
+  // Failed attaches still in their back-off: come back when the first is due.
+  for (const entry of entries.values()) {
+    const link = entry.v2
+    if (link?.failed && link.ptyId === null && link.failed.retryAt > now) {
+      scheduleV2Sync(link.failed.retryAt - now)
+    }
+  }
+}
+
+/**
+ * Try every failed attach again now, without waiting for its back-off. 3c-2
+ * calls it when the server's connection status becomes `connected`.
+ */
+export function retryV2Terminals(): void {
+  for (const entry of entries.values()) if (entry.v2) entry.v2.failed = null
+  if (lastV2) syncV2Terminals(lastV2.project, lastV2.ptys)
+}
+
+/** The server window is closing or switching: detach and drop every v2 entry. */
+export function disposeV2Terminals(): void {
+  lastV2 = null
+  cancelV2Sync()
+  for (const [id, entry] of [...entries]) {
+    if (!entry.v2) continue
+    detachV2(entry)
+    disposeEntry(id)
+  }
 }
