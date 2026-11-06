@@ -1,14 +1,13 @@
 import { app } from 'electron'
 import { access, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-
-const MAX_RECENTS = 8
+import { addRecentEntry, keepRecents, parseRecents, serializeRecents, type RecentEntry } from './recentsRules'
 
 function recentsFile(): string {
   return join(app.getPath('userData'), 'recent-projects.json')
 }
 
-async function readRecents(): Promise<string[]> {
+async function readRecents(): Promise<RecentEntry[]> {
   const paths = [
     recentsFile(),
     // Pre-rename userData dir (app was "trek-developer" before "Trek Dev")
@@ -16,9 +15,7 @@ async function readRecents(): Promise<string[]> {
   ]
   for (const path of paths) {
     try {
-      const raw = await readFile(path, 'utf8')
-      const parsed = JSON.parse(raw)
-      return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : []
+      return parseRecents(JSON.parse(await readFile(path, 'utf8')))
     } catch {
       // try the next location
     }
@@ -26,23 +23,28 @@ async function readRecents(): Promise<string[]> {
   return []
 }
 
-/** Recent project files that still exist on disk, most recent first. */
-export async function getRecents(): Promise<string[]> {
+async function writeRecents(list: RecentEntry[]): Promise<void> {
+  await writeFile(recentsFile(), JSON.stringify(serializeRecents(list), null, 2), 'utf8')
+}
+
+/**
+ * Most recent first. File entries whose file was moved or deleted are dropped;
+ * server entries stay until the user removes them, even when their server entry is gone.
+ */
+export async function getRecents(): Promise<RecentEntry[]> {
   const recents = await readRecents()
-  const existing: string[] = []
-  for (const path of recents) {
-    try {
-      await access(path)
-      existing.push(path)
-    } catch {
-      // dropped: file was moved or deleted
-    }
+  const missing = new Set<string>()
+  for (const entry of recents) {
+    if (entry.kind !== 'file') continue
+    await access(entry.path).catch(() => missing.add(entry.path))
   }
-  return existing
+  return keepRecents(recents, missing)
 }
 
 export async function addRecent(filePath: string): Promise<void> {
-  const recents = await readRecents()
-  const updated = [filePath, ...recents.filter((p) => p !== filePath)].slice(0, MAX_RECENTS)
-  await writeFile(recentsFile(), JSON.stringify(updated, null, 2), 'utf8')
+  await writeRecents(addRecentEntry(await readRecents(), { kind: 'file', path: filePath }))
+}
+
+export async function addRecentServer(entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> {
+  await writeRecents(addRecentEntry(await readRecents(), entry))
 }

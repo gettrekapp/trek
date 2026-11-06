@@ -79,3 +79,14 @@ export function boundsOnScreen(bounds: WindowBounds, workAreas: WindowBounds[]):
       bounds.y + bounds.height > area.y
   )
 }
+
+/** What `window:takeInitial` hands a new window: a file to read, or a server project to show. */
+export function initialFromTarget(target: WindowTarget | null): {
+  filePath: string | null
+  server: { serverEntryId: string; projectId: string } | null
+} {
+  if (!target) return { filePath: null, server: null }
+  return target.kind === 'file'
+    ? { filePath: target.path, server: null }
+    : { filePath: null, server: { serverEntryId: target.serverEntryId, projectId: target.projectId } }
+}

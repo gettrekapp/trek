@@ -267,7 +267,14 @@ export interface GlobalSession {
 export interface InitialWindowState {
   opened: OpenedProject | null
   menu: 'open-project' | null
+  /** Set when the window holds a server project; `opened` is then null. */
+  server: { serverEntryId: string; projectId: string } | null
 }
+
+/** One entry in recent-projects.json: a project file, or a project on an app-wide trek-server. */
+export type RecentEntry =
+  | { kind: 'file'; path: string }
+  | { kind: 'server'; serverEntryId: string; projectId: string; name: string; serverName: string }
 
 export interface OpenedProject {
   filePath: string

@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { readFile, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { app } from 'electron'
-import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeChanges, WorktreeStatus } from '../shared/types'
+import type { GitWorktreeInfo, OpenedProject, ProjectFile, RecentEntry, WorktreeChanges, WorktreeStatus } from '../shared/types'
 import { getHost } from './hosts/registry'
 import type { RawProjectFile } from '../shared/migration'
 import { addRecent, getRecents } from './recents'
@@ -32,7 +32,7 @@ async function openForSender(sender: WebContents, filePath: string): Promise<Ope
       focusWindowHoldingFile(filePath)
       return null
     case 'new-window':
-      createWindow({ initialProject: filePath })
+      createWindow({ initialTarget: { kind: 'file', path: filePath } })
       await addRecent(opened.filePath)
       return null
     case 'use-sender':
@@ -65,7 +65,7 @@ export function registerProjectHandlers(): void {
 
   ipcMain.handle('project:openPath', (event, filePath: string) => openForSender(event.sender, filePath))
 
-  ipcMain.handle('recents:get', async (): Promise<string[]> => {
+  ipcMain.handle('recents:get', async (): Promise<RecentEntry[]> => {
     return getRecents()
   })
 

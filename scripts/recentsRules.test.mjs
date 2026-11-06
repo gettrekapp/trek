@@ -1,7 +1,7 @@
 // scripts/recentsRules.test.mjs — recents of both kinds: parsing and adding.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addRecentEntry, parseRecents, MAX_RECENTS } from '../src/main/recentsRules.ts'
+import { addRecentEntry, keepRecents, parseRecents, serializeRecents, MAX_RECENTS } from '../src/main/recentsRules.ts'
 
 const server = (projectId, name = 'P') => ({ kind: 'server', serverEntryId: 's', projectId, name, serverName: 'box' })
 
@@ -22,4 +22,11 @@ test('addRecentEntry puts the entry first, dedupes and caps the list', () => {
   assert.equal(list[0].name, 'Renamed')
   assert.equal(list.filter((e) => e.projectId === 'p5').length, 1)
   assert.deepEqual(addRecentEntry([{ kind: 'file', path: '/a' }], { kind: 'file', path: '/a' }), [{ kind: 'file', path: '/a' }])
+})
+
+test('keepRecents drops missing files only, and serializeRecents keeps files as strings', () => {
+  const list = [{ kind: 'file', path: '/gone' }, server('p1'), { kind: 'file', path: '/here' }]
+  assert.deepEqual(keepRecents(list, new Set(['/gone'])), [server('p1'), { kind: 'file', path: '/here' }])
+  assert.deepEqual(serializeRecents(list), ['/gone', server('p1'), '/here'])
+  assert.deepEqual(parseRecents(serializeRecents(list)), list)
 })

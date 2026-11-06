@@ -19,6 +19,7 @@ import type {
   InitialWindowState,
   OpenedProject,
   ProjectFile,
+  RecentEntry,
   PtyDataEvent,
   PtyDetachedEvent,
   PtyExitEvent,
@@ -51,7 +52,15 @@ const api = {
   openProject: (): Promise<OpenedProject | null> => ipcRenderer.invoke('project:open'),
   openProjectPath: (filePath: string): Promise<OpenedProject | null> =>
     ipcRenderer.invoke('project:openPath', filePath),
-  getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('recents:get'),
+  getRecentProjects: (): Promise<RecentEntry[]> => ipcRenderer.invoke('recents:get'),
+  openServerProject: (
+    serverEntryId: string,
+    projectId: string,
+    name: string,
+    serverName: string
+  ): Promise<{ opened: boolean }> =>
+    ipcRenderer.invoke('window:openServerProject', serverEntryId, projectId, name, serverName),
+  reportTitle: (name: string | null): void => ipcRenderer.send('window:reportTitle', name),
   focusWindow: (): Promise<void> => ipcRenderer.invoke('window:focus'),
   takeInitialWindowState: (): Promise<InitialWindowState> => ipcRenderer.invoke('window:takeInitial'),
   reportWindowProject: (hasProject: boolean, filePath: string | null, name: string | null): void =>

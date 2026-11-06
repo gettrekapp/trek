@@ -1,7 +1,7 @@
 // scripts/windowRules.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { boundsOnScreen, decideOpen, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
+import { boundsOnScreen, decideOpen, initialFromTarget, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
 
 test('an open project is focused, whatever the sender holds', () => {
   assert.equal(decideOpen(true, true), 'focus-existing')
@@ -68,4 +68,13 @@ test('parseOpenWindows reads legacy file entries and server entries', () => {
 test('serializeOpenWindow writes file entries in the legacy shape', () => {
   assert.deepEqual(serializeOpenWindow({ target: { kind: 'file', path: '/a' } }), { filePath: '/a' })
   assert.deepEqual(serializeOpenWindow({ target: { kind: 'server', serverEntryId: 's', projectId: 'p' }, bounds: { x: 0, y: 0, width: 1, height: 1 } }), { kind: 'server', serverEntryId: 's', projectId: 'p', bounds: { x: 0, y: 0, width: 1, height: 1 } })
+})
+
+test('initialFromTarget hands a file path or the server ids, never both', () => {
+  assert.deepEqual(initialFromTarget(null), { filePath: null, server: null })
+  assert.deepEqual(initialFromTarget({ kind: 'file', path: '/a.trekproj' }), { filePath: '/a.trekproj', server: null })
+  assert.deepEqual(initialFromTarget({ kind: 'server', serverEntryId: 's', projectId: 'p' }), {
+    filePath: null,
+    server: { serverEntryId: 's', projectId: 'p' }
+  })
 })

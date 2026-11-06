@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react'
 import { baseName, useAppStore } from '../store'
 import { syncWindowProject } from '../windowLifecycle'
-import type { OpenedProject, ProjectFile } from '../../../shared/types'
+import type { OpenedProject, ProjectFile, RecentEntry } from '../../../shared/types'
 
 export function StartScreen(): React.JSX.Element {
   const setProject = useAppStore((s) => s.setProject)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [recents, setRecents] = useState<string[]>([])
+  const [recents, setRecents] = useState<RecentEntry[]>([])
+  /** Ids of the app-wide servers; null until loaded, so nothing shows "Server removed" early. */
+  const [serverIds, setServerIds] = useState<Set<string> | null>(null)
 
   useEffect(() => {
     window.api.getRecentProjects().then(setRecents).catch(() => setRecents([]))
+    window.api.appServers
+      .list()
+      .then((list) => setServerIds(new Set(list.map((s) => s.id))))
+      .catch(() => setServerIds(null))
   }, [])
 
   // Worktrees open unloaded: the sidebar loads each one's saved Claude
@@ -66,7 +72,20 @@ export function StartScreen(): React.JSX.Element {
     } catch (err) {
       syncWindowProject() // main claimed the file for a project that didn't load
       setError(`Could not open project: ${String(err)}`)
-      setRecents((r) => r.filter((p) => p !== filePath))
+      setRecents((r) => r.filter((e) => e.kind !== 'file' || e.path !== filePath))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Task 8 boots the window into the server view when `opened` is true.
+  const openServerRecent = async (entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      await window.api.openServerProject(entry.serverEntryId, entry.projectId, entry.name, entry.serverName)
+    } catch (err) {
+      setError(`Could not open project: ${String(err)}`)
     } finally {
       setBusy(false)
     }
@@ -89,14 +108,27 @@ export function StartScreen(): React.JSX.Element {
         <div className="recent-projects">
           <h3>Recent projects</h3>
           <ul>
-            {recents.map((filePath) => (
-              <li key={filePath}>
-                <button disabled={busy} onClick={() => void openRecent(filePath)}>
-                  <span className="recent-name">{baseName(filePath).replace(/\.trekproj$/, '')}</span>
-                  <span className="recent-path">{filePath}</span>
-                </button>
-              </li>
-            ))}
+            {recents.map((entry) =>
+              entry.kind === 'file' ? (
+                <li key={`file:${entry.path}`}>
+                  <button disabled={busy} onClick={() => void openRecent(entry.path)}>
+                    <span className="recent-name">{baseName(entry.path).replace(/\.trekproj$/, '')}</span>
+                    <span className="recent-path">{entry.path}</span>
+                  </button>
+                </li>
+              ) : (
+                <li key={`server:${entry.serverEntryId}:${entry.projectId}`}>
+                  <button disabled={busy} onClick={() => void openServerRecent(entry)}>
+                    <span className="recent-name">
+                      {entry.name} — {entry.serverName}
+                    </span>
+                    {serverIds && !serverIds.has(entry.serverEntryId) && (
+                      <span className="recent-path">Server removed</span>
+                    )}
+                  </button>
+                </li>
+              )
+            )}
           </ul>
         </div>
       )}

@@ -7,7 +7,18 @@ import { releaseBotWindow } from './bot'
 import { releaseMcpWindow } from './mcp'
 import { openUrl } from './openUrl'
 import { releaseWindowPtys } from './pty'
-import { boundsOnScreen, parseOpenWindows, serializeOpenWindow, type OpenWindowEntry, type WindowBounds } from './windowRules'
+import { addRecentServer } from './recents'
+import {
+  boundsOnScreen,
+  decideOpen,
+  initialFromTarget,
+  parseOpenWindows,
+  sameTarget,
+  serializeOpenWindow,
+  type OpenWindowEntry,
+  type WindowBounds,
+  type WindowTarget
+} from './windowRules'
 
 // icon.png is extracted from AppIcon.icns (the packaging icon) — nativeImage
 // needs a PNG for the runtime dock icon.
@@ -28,10 +39,11 @@ interface PendingClose {
 interface WindowState {
   win: BrowserWindow
   id: number
-  hasProject: boolean
-  /** Normalized path; a project file is claimed by at most one window. */
-  filePath: string | null
-  initial: { filePath: string | null; menu: InitialWindowState['menu'] } | null
+  /** What the window holds. File paths are normalized; a target is claimed by at most one window. */
+  target: WindowTarget | null
+  /** A file project that has never been saved: it has no target, but the window is not empty. */
+  unsavedProject: boolean
+  initial: (ReturnType<typeof initialFromTarget> & { menu: InitialWindowState['menu'] }) | null
   /** The renderer is listening, so closing has to ask it first. */
   rendererReady: boolean
   /** Dialogs open on this window's behalf, during which the close timer is paused. */
@@ -52,17 +64,26 @@ function normalizeProjectPath(filePath: string): string {
   }
 }
 
+function normalizeTarget(target: WindowTarget): WindowTarget {
+  return target.kind === 'file' ? { kind: 'file', path: normalizeProjectPath(target.path) } : target
+}
+
 export function windowHasProject(contents: WebContents): boolean {
-  return windows.get(contents.id)?.hasProject ?? false
+  const state = windows.get(contents.id)
+  return !!state && (state.target !== null || state.unsavedProject)
 }
 
 export function fileIsOpen(filePath: string): boolean {
   return windowHoldingFile(filePath) !== undefined
 }
 
+function windowHolding(target: WindowTarget): WindowState | undefined {
+  const wanted = normalizeTarget(target)
+  return [...windows.values()].find((state) => state.target !== null && sameTarget(state.target, wanted))
+}
+
 function windowHoldingFile(filePath: string): WindowState | undefined {
-  const path = normalizeProjectPath(filePath)
-  return [...windows.values()].find((state) => state.filePath === path)
+  return windowHolding({ kind: 'file', path: filePath })
 }
 
 export function fileOpenInOtherWindow(contents: WebContents, filePath: string): boolean {
@@ -81,16 +102,20 @@ export function focusWindowHoldingFile(filePath: string): void {
   if (holder) focusWindow(holder.win)
 }
 
-export function claimProject(contents: WebContents, filePath: string): void {
+function claimTarget(contents: WebContents, target: WindowTarget): void {
   const state = windows.get(contents.id)
   if (!state) return
-  state.hasProject = true
-  state.filePath = normalizeProjectPath(filePath)
+  state.target = normalizeTarget(target)
+  state.unsavedProject = false
   schedulePersist()
 }
 
+export function claimProject(contents: WebContents, filePath: string): void {
+  claimTarget(contents, { kind: 'file', path: filePath })
+}
+
 export function createWindow(
-  opts: { initialProject?: string; menu?: 'open-project'; bounds?: WindowBounds } = {}
+  opts: { initialTarget?: WindowTarget; menu?: 'open-project'; bounds?: WindowBounds } = {}
 ): BrowserWindow {
   const win = new BrowserWindow({
     width: 1400,
@@ -111,13 +136,13 @@ export function createWindow(
 
   let markTaken = (): void => {}
   const taken = new Promise<void>((done) => (markTaken = done))
-  const initialPath = opts.initialProject ? normalizeProjectPath(opts.initialProject) : null
   const state: WindowState = {
     win,
     id: win.webContents.id,
-    hasProject: initialPath !== null,
-    filePath: initialPath,
-    initial: { filePath: opts.initialProject ?? null, menu: opts.menu ?? null },
+    target: opts.initialTarget ? normalizeTarget(opts.initialTarget) : null,
+    unsavedProject: false,
+    // The file is read by the path as given, as before; only the claim is normalized.
+    initial: { ...initialFromTarget(opts.initialTarget ?? null), menu: opts.menu ?? null },
     rendererReady: false,
     prompts: 0,
     closing: null,
@@ -204,7 +229,7 @@ export async function whileWindowPrompts<T>(contents: WebContents, prompt: () =>
 }
 
 function finishClose(state: WindowState): void {
-  if (quit) quit.entries.push(entryFor(state))
+  if (quit && state.target) quit.entries.push(entryFor(state, state.target))
   state.win.destroy() // no 'close' event; 'closed' does the cleanup
 }
 
@@ -249,7 +274,7 @@ export async function closeAllForQuit(): Promise<boolean> {
       return false
     }
   }
-  await writeOpenWindows(quit.entries.filter((e) => e.target.kind === 'file'))
+  await writeOpenWindows(quit.entries)
   return true
 }
 
@@ -259,13 +284,12 @@ const openWindowsFile = (): string => join(app.getPath('userData'), 'open-window
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
-function entryFor(state: WindowState): OpenWindowEntry {
-  const bounds = state.win.getNormalBounds()
-  return { target: { kind: 'file', path: state.filePath ?? '' }, bounds }
+function entryFor(state: WindowState, target: WindowTarget): OpenWindowEntry {
+  return { target, bounds: state.win.getNormalBounds() }
 }
 
 function currentEntries(): OpenWindowEntry[] {
-  return [...windows.values()].filter((s) => s.filePath).map(entryFor)
+  return [...windows.values()].flatMap((s) => (s.target ? [entryFor(s, s.target)] : []))
 }
 
 async function writeOpenWindows(entries: OpenWindowEntry[]): Promise<void> {
@@ -301,15 +325,16 @@ export async function restoreWindows(): Promise<void> {
   const workAreas = screen.getAllDisplays().map((d) => d.workArea)
   let restored = 0
   for (const { target, bounds } of await readOpenWindows()) {
-    if (target.kind !== 'file') continue // server windows come back in a later task
-    const filePath = target.path
-    const exists = await access(filePath).then(
-      () => true,
-      () => false
-    )
-    if (!exists) continue
+    // A server window comes back even if its entry is gone: it shows "Server removed".
+    if (target.kind === 'file') {
+      const exists = await access(target.path).then(
+        () => true,
+        () => false
+      )
+      if (!exists) continue
+    }
     const win = createWindow({
-      initialProject: filePath,
+      initialTarget: target,
       bounds: bounds && boundsOnScreen(bounds, workAreas) ? bounds : undefined
     })
     restored++
@@ -327,23 +352,29 @@ export async function restoreWindows(): Promise<void> {
 export function registerWindowHandlers(readProject: (path: string) => Promise<OpenedProject>): void {
   ipcMain.handle('window:takeInitial', async (event): Promise<InitialWindowState> => {
     const state = windows.get(event.sender.id)
-    if (!state) return { opened: null, menu: null }
+    if (!state) return { opened: null, menu: null, server: null }
     state.rendererReady = true
     const initial = state.initial
     state.initial = null
-    // A reload lands here too, with an empty store: forget the old claim.
+    // A server window keeps its target across a reload: its state lives on the server.
+    const server = initial ? initial.server : state.target?.kind === 'server' ? initialFromTarget(state.target).server : null
+    if (server) {
+      state.markTaken()
+      return { opened: null, menu: initial?.menu ?? null, server }
+    }
+    // A reload of a file window lands here too, with an empty store: forget the old claim.
     if (!initial?.filePath) {
-      state.hasProject = false
-      state.filePath = null
+      state.target = null
+      state.unsavedProject = false
       state.markTaken()
       schedulePersist()
-      return { opened: null, menu: initial?.menu ?? null }
+      return { opened: null, menu: initial?.menu ?? null, server: null }
     }
     try {
-      return { opened: await readProject(initial.filePath), menu: initial.menu }
+      return { opened: await readProject(initial.filePath), menu: initial.menu, server: null }
     } catch (err) {
-      state.hasProject = false
-      state.filePath = null
+      state.target = null
+      state.unsavedProject = false
       schedulePersist()
       throw err
     } finally {
@@ -355,11 +386,38 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
     'window:projectChanged',
     (event, hasProject: boolean, filePath: string | null, name: string | null) => {
       const state = windows.get(event.sender.id)
-      if (!state) return
-      state.hasProject = hasProject
-      state.filePath = filePath ? normalizeProjectPath(filePath) : null
+      // A server window has no file project in its store; it reports its title through window:reportTitle.
+      if (!state || state.target?.kind === 'server') return
+      state.target = hasProject && filePath ? { kind: 'file', path: normalizeProjectPath(filePath) } : null
+      state.unsavedProject = hasProject && !filePath
       if (!state.win.isDestroyed()) state.win.setTitle(name ?? 'Trek Dev')
       schedulePersist()
+    }
+  )
+
+  ipcMain.on('window:reportTitle', (event, name: string | null) => {
+    const state = windows.get(event.sender.id)
+    if (state && !state.win.isDestroyed()) state.win.setTitle(name || 'Trek Dev')
+  })
+
+  ipcMain.handle(
+    'window:openServerProject',
+    async (event, serverEntryId: string, projectId: string, name: string, serverName: string): Promise<{ opened: boolean }> => {
+      const target: WindowTarget = { kind: 'server', serverEntryId, projectId }
+      const holder = windowHolding(target)
+      switch (decideOpen(windowHasProject(event.sender), holder !== undefined)) {
+        case 'focus-existing':
+          focusWindow(holder!.win)
+          return { opened: false }
+        case 'new-window':
+          createWindow({ initialTarget: target })
+          await addRecentServer({ kind: 'server', serverEntryId, projectId, name, serverName })
+          return { opened: false }
+        case 'use-sender':
+          claimTarget(event.sender, target)
+          await addRecentServer({ kind: 'server', serverEntryId, projectId, name, serverName })
+          return { opened: true }
+      }
     }
   )
 

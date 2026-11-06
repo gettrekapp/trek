@@ -1,9 +1,9 @@
 // Recent projects of both kinds, as stored in recent-projects.json. Pure.
-export const MAX_RECENTS = 8
+import type { RecentEntry } from '../shared/types.ts'
 
-export type RecentEntry =
-  | { kind: 'file'; path: string }
-  | { kind: 'server'; serverEntryId: string; projectId: string; name: string; serverName: string }
+export type { RecentEntry }
+
+export const MAX_RECENTS = 8
 
 export function parseRecents(raw: unknown): RecentEntry[] {
   if (!Array.isArray(raw)) return []
@@ -33,4 +33,9 @@ export function addRecentEntry(list: readonly RecentEntry[], entry: RecentEntry)
 /** File entries stay plain strings on disk, so an older Trek can still read them. */
 export function serializeRecents(list: readonly RecentEntry[]): unknown[] {
   return list.map((e) => (e.kind === 'file' ? e.path : e))
+}
+
+/** Drops file entries listed in `missingFiles`; server entries are never dropped here. */
+export function keepRecents(list: readonly RecentEntry[], missingFiles: ReadonlySet<string>): RecentEntry[] {
+  return list.filter((e) => e.kind !== 'file' || !missingFiles.has(e.path))
 }
