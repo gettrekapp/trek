@@ -14,7 +14,7 @@ test('a project file window keeps every feature', () => {
   for (const name of FEATURE_NAMES) assert.equal(LEGACY_FEATURES[name], true, name)
 })
 
-test('a server window hides what runs against local paths, and keeps Linear', () => {
+test('a server window starts with every feature off (Linear waits for phase 5)', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['linear'])
+  assert.deepEqual(on, [])
 })

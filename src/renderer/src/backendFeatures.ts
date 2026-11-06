@@ -52,15 +52,16 @@ export const LEGACY_FEATURES: BackendFeatures = {
  * A server window (3c-2). Off: anything that reads or runs things on this
  * machine against the project's paths (the paths are on the server), the bot
  * and voice (local MCP tools), and the git flows protocol v2 has no command for.
- * Settings are read-only in v2. Linear stays: it only reads ticket ids from the
- * project and uses this machine's API key.
+ * Settings are read-only in v2, and Linear is hidden until phase 5 (the spec).
+ * A ceiling: the v2 backend's features are these AND the server's welcome
+ * capabilities.
  */
 export const V2_FEATURES: BackendFeatures = {
   docker: false,
   env: false,
   stacks: false,
   bot: false,
-  linear: true,
+  linear: false,
   voice: false,
   skills: false,
   moveWorktree: false,

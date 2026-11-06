@@ -7,6 +7,11 @@
 // Terminal streams are not here: a server window attaches to its server's
 // PtyStream directly (syncV2Terminals in terminals.ts), and a legacy window
 // keeps its pty IPC.
+//
+// Errors: every method returns a promise, so a v2 backend can reject with the
+// server's ClientError. `worktrees.create` rejects for its caller (the Add
+// Worktree dialog) to show; `worktrees.remove` and `repos.*` report failures
+// through their own dialogs and resolve, as legacy does today.
 import { GLOBAL_WORKTREE_ID, allWorktrees, hostRepoPath, repoById, useAppStore } from './store'
 import {
   closeGlobalTerminal,
@@ -68,30 +73,38 @@ export interface WindowBackend {
   readonly sessions: {
     /** Resolves the new terminal id, or null when the target is unknown */
     start(target: SessionTarget, sessionType?: SessionType, llm?: LlmSelection): Promise<string | null>
-    /** A new Global panel tab */
-    startGlobal(): Promise<string | undefined>
+    /** A new Global panel tab: resolves its terminal id, or null when none started */
+    startGlobal(): Promise<string | null>
     /** The Global panel opened with no tabs: resume the saved ones, or start one */
     openGlobal(): Promise<void>
     restart(terminalId: string): Promise<void>
     /** Ends the session for good, wherever it runs */
-    close(terminalId: string): void
-    rename(terminalId: string, title: string): void
+    close(terminalId: string): Promise<void>
+    rename(terminalId: string, title: string): Promise<void>
     /** Types the text into the session and submits it */
-    sendPrompt(terminalId: string, text: string, focus?: boolean): void
-    enqueue(terminalId: string, text: string): void
-    setQueue(terminalId: string, queue: string[]): void
-    markComplete(terminalId: string, complete: boolean): void
+    sendPrompt(terminalId: string, text: string, focus?: boolean): Promise<void>
+    enqueue(terminalId: string, text: string): Promise<void>
+    setQueue(terminalId: string, queue: string[]): Promise<void>
+    markComplete(terminalId: string, complete: boolean): Promise<void>
     /** The user has seen the session: clears attention and done */
-    seen(terminalId: string): void
+    seen(terminalId: string): Promise<void>
   }
   readonly worktrees: {
     load(worktreeId: string): Promise<void>
     unload(worktreeId: string): Promise<void>
     unloadAll(): Promise<void>
-    /** Resolves the new worktree's path */
-    create(req: CreateWorktreeRequest): Promise<{ path: string }>
-    /** Asks the user first; resolves without removing anything if they decline */
+    /**
+     * Resolves the new worktree's path and, in a server window, its v2 id
+     * (legacy leaves it undefined). Rejects on failure, for the caller to show.
+     */
+    create(req: CreateWorktreeRequest): Promise<{ path: string; worktreeId?: string }>
+    /**
+     * Asks the user first; resolves without removing anything if they decline.
+     * Reports a failure in its own dialog and resolves.
+     */
     remove(info: GitWorktreeInfo, instance: WorktreeInstance | undefined): Promise<void>
+    /** The sidebar's worktree order, as legacy `worktreeKey`s */
+    setOrder(keys: string[]): Promise<void>
   }
   readonly git: {
     listWorktrees(repoId: string, serverId?: string): Promise<GitWorktreeInfo[]>
@@ -103,13 +116,19 @@ export interface WindowBackend {
   }
   /** Branch data; null or an empty text clears the value */
   readonly branch: {
-    setTag(repoId: string, branch: string, tagId: string | null): void
-    setCustomTag(repoId: string, branch: string, tagId: string, enabled: boolean): void
-    setNote(repoId: string, branch: string, text: string): void
-    setTicket(repoId: string, branch: string, ticketId: string | null): void
-    setPullRequest(repoId: string, branch: string, url: string | null): void
-    setEnvVars(repoId: string, branch: string, text: string): void
+    setTag(repoId: string, branch: string, tagId: string | null): Promise<void>
+    setCustomTag(repoId: string, branch: string, tagId: string, enabled: boolean): Promise<void>
+    /**
+     * `expected` is the note the edit started from (null = none): a v2 backend
+     * sends it as a compare-and-set, so a concurrent edit isn't overwritten.
+     * Legacy ignores it.
+     */
+    setNote(repoId: string, branch: string, text: string, expected?: string | null): Promise<void>
+    setTicket(repoId: string, branch: string, ticketId: string | null): Promise<void>
+    setPullRequest(repoId: string, branch: string, url: string | null): Promise<void>
+    setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
+  /** Both report a failure in their own dialog and resolve. */
   readonly repos: {
     /** Asks the user which repository to add */
     add(): Promise<void>
@@ -140,34 +159,34 @@ export const legacyBackend: WindowBackend = {
       const instance = project ? allWorktrees(project).find((w) => w.id === target.worktreeId) : undefined
       return instance ? createTerminal(instance.id, instance.path, undefined, sessionType, llm) : null
     },
-    startGlobal: () => startGlobalTerminal(),
+    startGlobal: async () => (await startGlobalTerminal()) ?? null,
     openGlobal: () => openGlobalTerminals(),
     restart: (terminalId) => restartTerminal(terminalId),
-    close: (terminalId) => {
+    close: async (terminalId) => {
       if (isGlobal(terminalId)) closeGlobalTerminal(terminalId)
       else disposeTerminal(terminalId)
     },
-    rename: (terminalId, title) => {
+    rename: async (terminalId, title) => {
       const global = isGlobal(terminalId)
       useAppStore.getState().renameTerminal(terminalId, title)
       if (global) saveGlobalSessions()
       else scheduleAutoSave()
     },
-    sendPrompt: (terminalId, text, focus = true) => pasteToTerminal(terminalId, text, focus),
-    enqueue: (terminalId, text) => {
+    sendPrompt: async (terminalId, text, focus = true) => pasteToTerminal(terminalId, text, focus),
+    enqueue: async (terminalId, text) => {
       useAppStore.getState().enqueueTerminalText(terminalId, text)
       scheduleAutoSave()
     },
-    setQueue: (terminalId, queue) => {
+    setQueue: async (terminalId, queue) => {
       useAppStore.getState().setTerminalQueue(terminalId, queue)
       scheduleAutoSave()
     },
-    markComplete: (terminalId, complete) => {
+    markComplete: async (terminalId, complete) => {
       const state = useAppStore.getState()
       const status = state.terminals[terminalId]?.status
       if (status && (status === 'complete') !== complete) state.toggleTerminalComplete(terminalId)
     },
-    seen: (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId)
+    seen: async (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId)
   },
   worktrees: {
     load: (worktreeId) => loadWorktree(worktreeId),
@@ -192,7 +211,8 @@ export const legacyBackend: WindowBackend = {
       tagNewBranch(repoId, branch)
       return { path }
     },
-    remove: (info, instance) => deleteWorktree(info, instance)
+    remove: (info, instance) => deleteWorktree(info, instance),
+    setOrder: async (keys) => useAppStore.getState().setWorktreeOrder(keys)
   },
   git: {
     listWorktrees: async (repoId, serverId) =>
@@ -205,15 +225,17 @@ export const legacyBackend: WindowBackend = {
     push: (loc, branch) => window.api.pushBranch(loc.serverId ?? null, loc.path, branch)
   },
   branch: {
-    setTag: (repoId, branch, tagId) => useAppStore.getState().setBranchTag(repoId, branch, tagId),
-    setCustomTag: (repoId, branch, tagId, enabled) =>
+    setTag: async (repoId, branch, tagId) => useAppStore.getState().setBranchTag(repoId, branch, tagId),
+    setCustomTag: async (repoId, branch, tagId, enabled) =>
       useAppStore.getState().setBranchCustomTag(repoId, branch, tagId, enabled),
-    setNote: (repoId, branch, text) => useAppStore.getState().setBranchNote(repoId, branch, text),
-    setTicket: (repoId, branch, ticketId) =>
+    // A project file has one writer, this window: nothing to compare against.
+    setNote: async (repoId, branch, text) => useAppStore.getState().setBranchNote(repoId, branch, text),
+    setTicket: async (repoId, branch, ticketId) =>
       useAppStore.getState().setBranchTicket(repoId, branch, ticketId),
-    setPullRequest: (repoId, branch, url) =>
+    setPullRequest: async (repoId, branch, url) =>
       useAppStore.getState().setBranchPullRequest(repoId, branch, url),
-    setEnvVars: (repoId, branch, text) => useAppStore.getState().setBranchEnvVars(repoId, branch, text)
+    setEnvVars: async (repoId, branch, text) =>
+      useAppStore.getState().setBranchEnvVars(repoId, branch, text)
   },
   repos: {
     add: () => addRepository(),
@@ -223,12 +245,23 @@ export const legacyBackend: WindowBackend = {
 
 let current: WindowBackend = legacyBackend
 
-/** This window's backend: legacy unless a server window set its own at boot. */
+/**
+ * The backend for the window's current kind. A window can change kind (a
+ * project file window opens a server project, a server window goes back to
+ * pick another), so read it at the time of the action, not once.
+ */
 export function getBackend(): WindowBackend {
   return current
 }
 
-/** Called once, before the window's first render. Not reactive: components read it while rendering. */
+/**
+ * Installs the backend for the window's kind. `followWindowKind`
+ * (windowKind.ts) calls it inside every `setServerWindow`, in the same tick, so
+ * the render that shows the new kind already sees its backend. Components read
+ * `getBackend().features` while rendering; that holds only because the kind
+ * change re-renders them. A backend installed later (3c-2, once connected) needs
+ * a reactive read, such as a `useFeatures()` hook.
+ */
 export function setBackend(backend: WindowBackend): void {
   current = backend
 }
