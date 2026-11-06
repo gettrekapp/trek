@@ -14,7 +14,7 @@ import type { ConfigStore } from '../configStore'
 import { codedError } from '../errors.ts'
 import type { GitPoller } from '../git/poller.ts'
 import type { ProjectState } from '../projects/state.ts'
-import { MAX_PTY_WRITE } from '../sessions/limits.ts'
+import { checkTitle, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
 import { findSession, type FoundSession } from '../sessions/locate.ts'
 import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
@@ -63,7 +63,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'create_worktree',
     description:
-      'Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the project. By default cuts a new branch; set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.',
+      'Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the project. By default cuts a new branch from the latest master/main (fetched from origin first); set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -302,6 +302,32 @@ const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 const notFound = (message: string): Error => codedError('NOT_FOUND', message)
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
 
+/** A string argument, trimmed; absent or null reads as ''. Any other type is refused rather than read as empty. */
+function strArg(value: unknown, field: string): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value !== 'string') throw bad(`${field} must be a string`)
+  return value.trim()
+}
+
+/** Like strArg, for ticket and PR references that agents often pass as a bare number. */
+function refArg(value: unknown, field: string): string {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return strArg(value, field)
+}
+
+/** A string argument that must stay verbatim (not trimmed); absent or null is undefined. */
+function rawArg(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'string') throw bad(`${field} must be a string`)
+  return value
+}
+
+/** Matches a tag by id or name, case-insensitively; skips malformed saved entries. */
+const tagMatches = (t: { id?: unknown; name?: unknown }, name: string): boolean =>
+  typeof t?.name === 'string' && (String(t.id).toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase())
+const tagNames = (tags: { name?: unknown }[]): string =>
+  tags.flatMap((t) => (typeof t?.name === 'string' ? [t.name] : [])).join(', ') || 'none configured'
+
 /** The repository a create_worktree call targets: by id, then name (case-insensitive). Required once a project has several. */
 function targetRepository(project: Project, ref: unknown): Repository {
   const repositories = project.repositories
@@ -357,7 +383,7 @@ function withoutIcon(type: SessionType): Omit<SessionType, 'icon'> {
 
 function findSessionType(types: SessionType[], ref: string): SessionType | undefined {
   const name = ref.trim().toLowerCase()
-  return types.find((t) => t.id === ref || t.name.trim().toLowerCase() === name)
+  return types.find((t) => t.id === ref || (typeof t?.name === 'string' && t.name.trim().toLowerCase() === name))
 }
 
 /** Returns `(projectId) => call`: the tool caller for one project's sessions. */
@@ -500,43 +526,38 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       set_worktree_tag: async (args, project) => {
         const { repo, branch } = branchOf(project, args.worktree)
-        const name = text(args.tag)
+        const name = strArg(args.tag, 'tag')
         const tags = project.settings.worktreeTags ?? []
-        const tag = name ? tags.find((t) => t.id.toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase()) : null
-        if (tag === undefined) {
-          const valid = tags.map((t) => t.name).join(', ') || 'none configured'
-          throw bad(`Unknown tag "${name}". Valid tags: ${valid}`)
-        }
+        const tag = name ? tags.find((t) => tagMatches(t, name)) : null
+        if (tag === undefined) throw bad(`Unknown tag "${name}". Valid tags: ${tagNames(tags)}`)
         await v2('branch.setTag', { repoId: repo.id, branch, tag: tag?.id ?? null })
         return { branch, tag: tag?.name ?? null }
       },
 
       set_worktree_custom_tag: async (args, project) => {
         const { repo, branch } = branchOf(project, args.worktree)
-        const name = text(args.tag)
+        const name = strArg(args.tag, 'tag')
+        if (args.enabled !== undefined && typeof args.enabled !== 'boolean') throw bad('enabled must be a boolean')
         const tags = project.settings.customTags ?? []
-        const tag = tags.find((t) => t.id.toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase())
-        if (!name || !tag) {
-          const valid = tags.map((t) => t.name).join(', ') || 'none configured'
-          throw bad(`Unknown custom tag "${name}". Valid custom tags: ${valid}`)
-        }
+        const tag = name ? tags.find((t) => tagMatches(t, name)) : undefined
+        if (!tag) throw bad(`Unknown custom tag "${name}". Valid custom tags: ${tagNames(tags)}`)
         const current = branchData(repo, branch).customTags ?? []
         const next = args.enabled === false
           ? current.filter((id) => id !== tag.id)
           : current.includes(tag.id) ? current : [...current, tag.id]
         await v2('branch.setCustomTags', { repoId: repo.id, branch, customTags: next })
-        return { branch, customTags: next.map((id) => tags.find((t) => t.id === id)?.name ?? id) }
+        return { branch, customTags: next.map((id) => tags.find((t) => t?.id === id)?.name ?? id) }
       },
 
       set_worktree_note: async (args, project) => {
         const { repo, branch } = branchOf(project, args.worktree)
-        await v2('branch.setNote', { repoId: repo.id, branch, note: typeof args.note === 'string' ? args.note : '' })
+        await v2('branch.setNote', { repoId: repo.id, branch, note: rawArg(args.note, 'note') ?? '' })
         return { branch }
       },
 
       set_worktree_ticket: async (args, project) => {
         const { repo, branch } = branchOf(project, args.worktree)
-        const input = text(args.ticket)
+        const input = refArg(args.ticket, 'ticket')
         if (!input) {
           await v2('branch.setTicket', { repoId: repo.id, branch, ticket: null })
           return { branch, ticket: null }
@@ -556,7 +577,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       set_worktree_pull_request: async (args, project) => {
         const { repo, branch } = branchOf(project, args.worktree)
-        const input = text(args.pullRequest)
+        const input = refArg(args.pullRequest, 'pullRequest')
         const url = input ? pullRequestUrl(input, repo) : null
         await v2('branch.setPr', { repoId: repo.id, branch, pr: url })
         return { branch, pullRequest: url }
@@ -566,9 +587,14 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       save_session_type: async (args, project) => {
         const types = project.settings.sessionTypes ?? []
-        const name = typeof args.name === 'string' ? args.name.trim() : undefined
-        const systemPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
-        const initialMessage = typeof args.initialMessage === 'string' ? args.initialMessage : undefined
+        const name = rawArg(args.name, 'name')?.trim()
+        const systemPrompt = rawArg(args.systemPrompt, 'systemPrompt')
+        const initialMessage = rawArg(args.initialMessage, 'initialMessage')
+        if (name) checkTitle(name, 'name')
+        for (const [field, value] of [['systemPrompt', systemPrompt], ['initialMessage', initialMessage]] as const) {
+          if (value !== undefined && value.length > MAX_QUEUE_ENTRY) throw bad(`${field} must be at most ${MAX_QUEUE_ENTRY} characters`)
+        }
+        if (args.id !== undefined && args.id !== null && typeof args.id !== 'string') throw bad('id must be a string')
         if (args.llm !== undefined && args.llm !== null && (typeof args.llm !== 'object' || Array.isArray(args.llm))) {
           throw bad('llm must be an object { provider, model?, effort? } or null')
         }
@@ -582,6 +608,10 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           existing = findSessionType(types, name)
         }
         if (existing) {
+          const renamed = existing
+          if (name && types.some((t) => t.id !== renamed.id && typeof t?.name === 'string' && t.name.trim().toLowerCase() === name.toLowerCase())) {
+            throw bad(`Another session type is already named "${name}"`)
+          }
           const { llm: _oldLlm, ...rest } = existing
           const updated: SessionType = {
             ...(llm === null ? rest : existing),
@@ -594,6 +624,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           return withoutIcon(updated)
         }
         if (!name) throw bad('name is required to create a session type')
+        if (types.length >= MAX_SESSION_TYPES) throw bad(`A project holds at most ${MAX_SESSION_TYPES} session types`)
         const created: SessionType = {
           id: randomUUID(),
           name,
@@ -611,7 +642,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (!ref) throw bad('sessionType is required')
         const type = findSessionType(types, ref)
         if (!type) {
-          const names = types.map((t) => t.name).join(', ') || 'none configured'
+          const names = tagNames(types)
           throw notFound(`No session type matches "${ref}". Session types: ${names}`)
         }
         await saveSessionTypes(types.filter((t) => t.id !== type.id))
@@ -628,7 +659,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           const types = project.settings.sessionTypes ?? []
           const type = ref ? findSessionType(types, ref) : undefined
           if (!type) {
-            const names = types.map((t) => t.name).join(', ') || 'none configured'
+            const names = tagNames(types)
             throw notFound(`No session type matches "${String(args.sessionType)}". Session types: ${names}`)
           }
           sessionTypeId = type.id

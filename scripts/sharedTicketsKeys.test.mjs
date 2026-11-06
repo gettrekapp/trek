@@ -14,6 +14,16 @@ test('parseTicket', () => {
   assert.equal(isLinearTicket('12'), false)
 })
 
+test('parseTicket refuses odd Linear workspaces and Azure DevOps bases', () => {
+  assert.equal(parseTicket('https://linear.app/a%20b/issue/TOW-1'), null)
+  assert.equal(parseTicket('https://linear.app/a.b/issue/TOW-1'), null)
+  assert.equal(parseTicket(`https://linear.app/${'a'.repeat(201)}/issue/TOW-1`), null)
+  assert.deepEqual(parseTicket('https://linear.app/my_team-1/issue/TOW-1'), { ticketId: 'TOW-1', linearWorkspace: 'my_team-1' })
+  assert.equal(parseTicket(`https://${'a'.repeat(200)}.com/_workitems/edit/5`), null)
+  assert.equal(parseTicket('http://[bad/_workitems/edit/5'), null)
+  assert.deepEqual(parseTicket('http://tfs.local/DefaultCollection/p/_workitems/edit/5'), { ticketId: '5', azureDevOpsBaseUrl: 'http://tfs.local/DefaultCollection/p' })
+})
+
 test('ticketUrl', () => {
   assert.equal(ticketUrl({ linearWorkspace: 'acme' }, 'TOW-1'), 'https://linear.app/acme/issue/TOW-1')
   assert.equal(ticketUrl({}, 'TOW-1'), null)

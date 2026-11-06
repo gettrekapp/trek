@@ -11,6 +11,7 @@ export function describeWorktree(project: Project, repo: Repository, w: Worktree
   return {
     worktree: w.id,
     repo: repo.name,
+    repoId: repo.id,
     path: w.path,
     branch: w.branch,
     primary: w.isMain,

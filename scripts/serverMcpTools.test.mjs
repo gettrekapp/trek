@@ -37,7 +37,7 @@ const project = {
 
 test('describeWorktree', () => {
   assert.deepEqual(describeWorktree(project, project.repositories[0], project.repositories[0].worktrees[1]), {
-    worktree: 'af', repo: 'A', path: '/r/a-feat', branch: 'feat', primary: false, missing: false,
+    worktree: 'af', repo: 'A', repoId: 'ra', path: '/r/a-feat', branch: 'feat', primary: false, missing: false,
     tag: 'Todo', customTags: ['Hot'], ticket: 'TOW-1', pullRequest: 'https://github.com/o/r/pull/3', note: 'n',
     dirty: true, ahead: 1, behind: 0, loaded: true,
     sessions: [{ terminalId: 's1', title: 's1', status: 'working', llm: { provider: 'claude' }, queue: ['q'] }]
@@ -245,4 +245,130 @@ test('tools see only their own project', async (t) => {
   const otherCall = s.callerFor(other)
   const { terminalId } = await s.call('start_session', { worktree: 'main' })
   await assert.rejects(otherCall('get_current_session', { terminalId }), /No session/)
+})
+
+const codeOf = (promise) => promise.then(() => 'ok', (e) => e.code)
+
+/** A second real git repo, registered and polled, for multi-repo and cross-project cases. */
+async function secondRepo(s, name = 'b') {
+  const dir = join(s.dir, 'repos', name)
+  execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: gitEnv })
+  execFileSync('git', ['-C', dir, 'commit', '--allow-empty', '-q', '-m', 'init'], { env: gitEnv })
+  return { id: name, name, path: dir }
+}
+
+test('a second project cannot reach the first project worktrees by id, path or branch', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('create_worktree', { branch: 'feat/x' })
+  const b = await secondRepo(s)
+  const other = s.projects.create('Other', [{ registered: b, name: undefined }])
+  const otherCall = s.callerFor(other)
+  for (const ref of [created.worktree, created.path, 'feat/x']) {
+    assert.equal(await codeOf(otherCall('load_worktree', { worktree: ref })), 'NOT_FOUND', ref)
+    assert.equal(await codeOf(otherCall('set_worktree_note', { worktree: ref, note: 'x' })), 'NOT_FOUND', ref)
+  }
+})
+
+test('create_worktree: repo is required, ambiguous or unknown in a multi-repo project', async (t) => {
+  const s = await toolSetup(t)
+  const b = await secondRepo(s)
+  const dup = await secondRepo(s, 'a2')
+  const multi = s.projects.create('Multi', [{ registered: s.registered, name: undefined }, { registered: b, name: undefined }, { registered: dup, name: 'b', }])
+  const call = s.callerFor(multi)
+  assert.equal(await codeOf(call('create_worktree', { branch: 'x' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(call('create_worktree', { branch: 'x', repo: 'nope' })), 'NOT_FOUND')
+  // Two repositories called "b": the name is ambiguous, an id is not.
+  assert.equal(await codeOf(call('create_worktree', { branch: 'x', repo: 'b' })), 'BAD_REQUEST')
+})
+
+test('create_worktree with existingBranch checks out a branch that exists', async (t) => {
+  const s = await toolSetup(t)
+  execFileSync('git', ['-C', s.a, 'branch', 'old'], { env: gitEnv })
+  assert.notEqual(await codeOf(s.call('create_worktree', { branch: 'old' })), 'ok')
+  const created = await s.call('create_worktree', { branch: 'old', existingBranch: true })
+  assert.equal(created.branch, 'old')
+  assert.equal(created.repoId, s.projects.require(s.projectId).repositories[0].id)
+})
+
+test('tags: clear, custom off, unknown custom, wrong types', async (t) => {
+  const s = await toolSetup(t)
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.worktreeTags = [{ id: 'todo', name: 'Todo', color: '#fff' }]
+    d.settings.customTags = [{ id: 'hot', name: 'Hot', color: '#f00' }]
+  })
+  await s.call('set_worktree_tag', { worktree: 'main', tag: 'todo' })
+  assert.deepEqual(await s.call('set_worktree_tag', { worktree: 'main' }), { branch: 'main', tag: null })
+  assert.equal(s.projects.require(s.projectId).repositories[0].branchData.main?.tag ?? null, null)
+  await s.call('set_worktree_custom_tag', { worktree: 'main', tag: 'hot' })
+  assert.deepEqual(await s.call('set_worktree_custom_tag', { worktree: 'main', tag: 'Hot', enabled: false }), { branch: 'main', customTags: [] })
+  assert.equal(await codeOf(s.call('set_worktree_custom_tag', { worktree: 'main', tag: 'cold' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('set_worktree_tag', { worktree: 'main', tag: 5 })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('set_worktree_custom_tag', { worktree: 'main', tag: 'hot', enabled: 'false' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('set_worktree_note', { worktree: 'main', note: 7 })), 'BAD_REQUEST')
+  // Nothing was cleared by the refused calls.
+  assert.deepEqual(s.projects.require(s.projectId).repositories[0].branchData.main?.customTags ?? [], [])
+})
+
+test('tickets: numbers, Azure DevOps URLs, unrecognised input, wrong types', async (t) => {
+  const s = await toolSetup(t)
+  const n = await s.call('set_worktree_ticket', { worktree: 'main', ticket: 123 })
+  assert.equal(n.ticket, '123')
+  assert.equal(s.projects.require(s.projectId).repositories[0].branchData.main.ticket, '123')
+  const ado = await s.call('set_worktree_ticket', { worktree: 'main', ticket: 'https://dev.azure.com/o/p/_workitems/edit/42' })
+  assert.equal(ado.ticket, '42')
+  assert.equal(ado.url, 'https://dev.azure.com/o/p/_workitems/edit/42')
+  assert.equal(s.projects.require(s.projectId).settings.azureDevOpsBaseUrl, 'https://dev.azure.com/o/p')
+  assert.equal(await codeOf(s.call('set_worktree_ticket', { worktree: 'main', ticket: 'not a ticket' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('set_worktree_ticket', { worktree: 'main', ticket: { id: 1 } })), 'BAD_REQUEST')
+  assert.equal(s.projects.require(s.projectId).repositories[0].branchData.main.ticket, '42')
+  assert.deepEqual(await s.call('set_worktree_ticket', { worktree: 'main' }), { branch: 'main', ticket: null })
+})
+
+test('pull requests: #n inferred from another branch PR, none to infer from, wrong types', async (t) => {
+  const s = await toolSetup(t)
+  await s.call('create_worktree', { branch: 'feat' })
+  assert.equal(await codeOf(s.call('set_worktree_pull_request', { worktree: 'feat', pullRequest: '#42' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('set_worktree_pull_request', { worktree: 'feat', pullRequest: 'nope' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('set_worktree_pull_request', { worktree: 'feat', pullRequest: true })), 'BAD_REQUEST')
+  await s.call('set_worktree_pull_request', { worktree: 'main', pullRequest: 'https://github.com/o/r/pull/9' })
+  assert.deepEqual(await s.call('set_worktree_pull_request', { worktree: 'feat', pullRequest: '#42' }), { branch: 'feat', pullRequest: 'https://github.com/o/r/pull/42' })
+  assert.deepEqual(await s.call('set_worktree_pull_request', { worktree: 'feat', pullRequest: 43 }), { branch: 'feat', pullRequest: 'https://github.com/o/r/pull/43' })
+  assert.deepEqual(await s.call('set_worktree_pull_request', { worktree: 'feat' }), { branch: 'feat', pullRequest: null })
+})
+
+test('save_session_type: by id, unknown id, llm null, rename clash, bad arguments', async (t) => {
+  const s = await toolSetup(t)
+  const one = await s.call('save_session_type', { name: 'One', systemPrompt: 'p', llm: { provider: 'codex' } })
+  assert.equal(one.llm.provider, 'codex')
+  const two = await s.call('save_session_type', { name: 'Two' })
+  const renamed = await s.call('save_session_type', { id: one.id, name: 'Uno', llm: null })
+  assert.equal(renamed.name, 'Uno')
+  assert.equal(renamed.systemPrompt, 'p')
+  assert.equal('llm' in renamed, false)
+  assert.equal(await codeOf(s.call('save_session_type', { id: 'nope', name: 'X' })), 'NOT_FOUND')
+  assert.equal(await codeOf(s.call('save_session_type', { id: 5, name: 'X' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('save_session_type', { id: two.id, name: ' uno ' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('save_session_type', { name: 'x'.repeat(201) })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('save_session_type', { id: two.id, name: 'a\nb' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('save_session_type', { name: 'Big', systemPrompt: 'x'.repeat(100_001) })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('save_session_type', { name: 'Big', initialMessage: 'x'.repeat(100_001) })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('save_session_type', { name: 'Big', systemPrompt: 5 })), 'BAD_REQUEST')
+  assert.deepEqual((await s.call('list_session_types', {})).map((x) => x.name), ['Uno', 'Two'])
+})
+
+test('save_session_type caps the number of types', async (t) => {
+  const s = await toolSetup(t)
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.sessionTypes = Array.from({ length: 100 }, (_, i) => ({ id: `t${i}`, name: `T${i}`, systemPrompt: '' }))
+  })
+  assert.equal(await codeOf(s.call('save_session_type', { name: 'One more' })), 'BAD_REQUEST')
+  assert.equal((await s.call('save_session_type', { id: 't0', name: 'Renamed' })).name, 'Renamed')
+})
+
+test('delete_session_type: unknown type is NOT_FOUND, and malformed saved entries do not break the lookup', async (t) => {
+  const s = await toolSetup(t)
+  assert.equal(await codeOf(s.call('delete_session_type', { sessionType: 'nope' })), 'NOT_FOUND')
+  s.projects.apply(s.projectId, (d) => { d.settings.sessionTypes = [{ id: 'z' }, { id: 'k', name: 'Keep', systemPrompt: '' }] })
+  assert.equal(await codeOf(s.call('delete_session_type', { sessionType: 'nope' })), 'NOT_FOUND')
+  assert.deepEqual(await s.call('list_session_types', {}), [{ id: 'z' }, { id: 'k', name: 'Keep', systemPrompt: '' }])
 })

@@ -13,13 +13,26 @@ export interface ParsedTicket {
   azureDevOpsBaseUrl?: string
 }
 
+const MAX_BASE = 200
+
+/** An http(s) URL of a sensible length. */
+function validBase(base: string): boolean {
+  if (base.length > MAX_BASE) return false
+  try {
+    const { protocol } = new URL(base)
+    return protocol === 'http:' || protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /** Parses a Linear issue id/URL or an Azure DevOps work item id/URL. */
 export function parseTicket(input: string): ParsedTicket | null {
   const trimmed = input.trim()
   const linearUrl = trimmed.match(/^https?:\/\/linear\.app\/([^/]+)\/issue\/([a-z][a-z0-9]*-\d+)/i)
-  if (linearUrl) return { ticketId: linearUrl[2].toUpperCase(), linearWorkspace: linearUrl[1] }
+  if (linearUrl && /^[\w-]+$/.test(linearUrl[1]) && linearUrl[1].length <= MAX_BASE) return { ticketId: linearUrl[2].toUpperCase(), linearWorkspace: linearUrl[1] }
   const adoUrl = trimmed.match(/^(https?:\/\/.+?)\/_workitems\/edit\/(\d+)/i)
-  if (adoUrl) return { ticketId: adoUrl[2], azureDevOpsBaseUrl: adoUrl[1] }
+  if (adoUrl && validBase(adoUrl[1])) return { ticketId: adoUrl[2], azureDevOpsBaseUrl: adoUrl[1] }
   if (/^[a-z][a-z0-9]*-\d+$/i.test(trimmed)) return { ticketId: trimmed.toUpperCase() }
   if (/^\d+$/.test(trimmed)) return { ticketId: trimmed }
   return null

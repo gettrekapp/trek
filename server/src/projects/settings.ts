@@ -2,7 +2,9 @@
 // Values are checked by kind only: their contents are client preferences the
 // server stores and returns, not acts on.
 import type { ProjectSettings } from '../../../src/shared/model/types'
+import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { codedError } from '../errors.ts'
+import { checkTitle, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
 import { assertNoProtoKeys, isRecord } from '../validate.ts'
 
 type Kind = 'string' | 'boolean' | 'array' | 'stringArray' | 'object'
@@ -45,6 +47,27 @@ export function isSettingsKey(key: string): key is keyof ProjectSettings {
   return Object.hasOwn(SETTINGS_KINDS, key)
 }
 
+/** Session types are acted on at every session.start, so their fields are checked, not just their kind. */
+function checkSessionTypes(types: unknown[], field: string): void {
+  const bad = (message: string): Error => codedError('BAD_REQUEST', `${field}${message}`)
+  if (types.length > MAX_SESSION_TYPES) throw bad(` must hold at most ${MAX_SESSION_TYPES} session types`)
+  types.forEach((t, i) => {
+    const at = `[${i}]`
+    if (!isRecord(t)) throw bad(`${at} must be an object`)
+    if (typeof t.id !== 'string' || !t.id) throw bad(`${at}.id must be a non-empty string`)
+    if (typeof t.name !== 'string') throw bad(`${at}.name must be a string`)
+    checkTitle(t.name, `${field}${at}.name`)
+    if (typeof t.systemPrompt !== 'string') throw bad(`${at}.systemPrompt must be a string`)
+    if (t.systemPrompt.length > MAX_QUEUE_ENTRY) throw bad(`${at}.systemPrompt must be at most ${MAX_QUEUE_ENTRY} characters`)
+    if (t.initialMessage !== undefined) {
+      if (typeof t.initialMessage !== 'string') throw bad(`${at}.initialMessage must be a string`)
+      if (t.initialMessage.length > MAX_QUEUE_ENTRY) throw bad(`${at}.initialMessage must be at most ${MAX_QUEUE_ENTRY} characters`)
+    }
+    if (t.llm !== undefined && (!isRecord(t.llm) || !isProviderId(t.llm.provider))) throw bad(`${at}.llm must have a known provider`)
+    if (t.icon !== undefined && typeof t.icon !== 'string') throw bad(`${at}.icon must be a string`)
+  })
+}
+
 function checkValue(key: string, value: unknown, field: string): void {
   if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `${field}.${key} is not a project setting`)
   const kind = SETTINGS_KINDS[key as keyof ProjectSettings]
@@ -56,6 +79,7 @@ function checkValue(key: string, value: unknown, field: string): void {
     : isRecord(value)
   if (!ok) throw codedError('BAD_REQUEST', `${field}.${key} must be ${KIND_TEXT[kind]}`)
   assertNoProtoKeys(value, `${field}.${key}`)
+  if (key === 'sessionTypes') checkSessionTypes(value as unknown[], `${field}.${key}`)
 }
 
 /** A whole settings object (from an import). */

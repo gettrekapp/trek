@@ -51,3 +51,27 @@ test('applySettingsPatch does not mutate current', () => {
 test('a null delete of an unknown key is BAD_REQUEST', () => {
   assert.equal(code(() => applySettingsPatch({}, { nope: null })), 'BAD_REQUEST')
 })
+
+test('sessionTypes elements are validated', () => {
+  const ok = { id: 'a', name: 'Review', systemPrompt: 'p', initialMessage: 'go', llm: { provider: 'claude' }, icon: 'data:x' }
+  assert.equal(code(() => applySettingsPatch({}, { sessionTypes: [ok, { id: 'b', name: 'B', systemPrompt: '' }] })), 'ok')
+  const bad = (patch) => code(() => applySettingsPatch({}, { sessionTypes: [{ ...ok, ...patch }] }))
+  assert.equal(bad({ id: '' }), 'BAD_REQUEST')
+  assert.equal(bad({ id: 1 }), 'BAD_REQUEST')
+  assert.equal(bad({ name: 'x'.repeat(201) }), 'BAD_REQUEST')
+  assert.equal(bad({ name: 'a\u0007b' }), 'BAD_REQUEST')
+  assert.equal(bad({ name: undefined }), 'BAD_REQUEST')
+  assert.equal(bad({ systemPrompt: 3 }), 'BAD_REQUEST')
+  assert.equal(bad({ systemPrompt: 'x'.repeat(100_001) }), 'BAD_REQUEST')
+  assert.equal(bad({ initialMessage: 3 }), 'BAD_REQUEST')
+  assert.equal(bad({ initialMessage: 'x'.repeat(100_001) }), 'BAD_REQUEST')
+  assert.equal(bad({ llm: { provider: 'nope' } }), 'BAD_REQUEST')
+  assert.equal(bad({ llm: 'claude' }), 'BAD_REQUEST')
+  assert.equal(bad({ icon: 5 }), 'BAD_REQUEST')
+  assert.equal(code(() => applySettingsPatch({}, { sessionTypes: ['x'] })), 'BAD_REQUEST')
+  const many = (n) => Array.from({ length: n }, (_, i) => ({ id: `t${i}`, name: `T${i}`, systemPrompt: '' }))
+  assert.equal(code(() => applySettingsPatch({}, { sessionTypes: many(100) })), 'ok')
+  assert.equal(code(() => applySettingsPatch({}, { sessionTypes: many(101) })), 'BAD_REQUEST')
+  // Imports go through validateSettings, so they are covered too.
+  assert.equal(code(() => validateSettings({ sessionTypes: [{ ...ok, name: 'x'.repeat(201) }] }, 'settings')), 'BAD_REQUEST')
+})
