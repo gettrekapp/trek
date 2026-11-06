@@ -1,0 +1,196 @@
+// scripts/clientConnection.test.mjs — v2 handshake, typed requests, statuses, reconnect with backoff, ping.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { ServerConnection } from '../src/shared/client/connection.ts'
+import { fakeServer, fakeTimers } from './clientFakes.mjs'
+
+function setup() {
+  const server = fakeServer()
+  const clock = fakeTimers()
+  const statuses = []
+  const conn = new ServerConnection({ url: 'ws://x', token: 't0k', createSocket: server.factory, timers: clock.timers, client: 'test', clientVersion: '1' })
+  conn.on('status', (s) => statuses.push(s.status))
+  return { server, clock, conn, statuses }
+}
+
+test('connect sends hello v2 with the token; welcome makes it connected', () => {
+  const { server, conn, statuses } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  assert.deepEqual(sock.sent[0], { type: 'hello', protocolVersion: 2, token: 't0k', client: 'test', clientVersion: '1' })
+  assert.equal(conn.status, 'connecting')
+  sock.welcome()
+  assert.equal(conn.status, 'connected')
+  assert.deepEqual(conn.welcome, { serverId: 'sid', serverName: 'box', daemonVersion: '0.2.0', capabilities: ['mcp'] })
+  assert.deepEqual(statuses, ['connecting', 'connected'])
+})
+
+test('requests resolve, fail with the wire code, time out, and reject when not connected', async () => {
+  const { server, clock, conn } = setup()
+  await assert.rejects(conn.request('sys.ping', { t: 1 }), (e) => e.code === 'NOT_CONNECTED')
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  const ok = conn.request('project.list', {})
+  sock.reply(sock.lastReq('project.list'), [{ id: 'p', name: 'P' }])
+  assert.deepEqual(await ok, [{ id: 'p', name: 'P' }])
+  const bad = conn.request('project.rename', { projectId: 'p', name: 'x' })
+  sock.fail(sock.lastReq('project.rename'), 'CONFLICT', 'changed')
+  await assert.rejects(bad, (e) => e.code === 'CONFLICT' && e.message === 'changed')
+  const slow = conn.request('project.list', {}, { timeoutMs: 1000 })
+  clock.advance(1000)
+  await assert.rejects(slow, (e) => e.code === 'TIMEOUT')
+  const cut = conn.request('project.list', {})
+  sock.serverClose(1006, '')
+  await assert.rejects(cut, (e) => e.code === 'NOT_CONNECTED')
+})
+
+test('reconnects with backoff 1s, 2s, 4s… capped at 30s, reset by welcome', () => {
+  const { server, clock, conn, statuses } = setup()
+  conn.connect()
+  server.last().serverClose(1006, '')
+  assert.equal(conn.status, 'disconnected')
+  assert.equal(server.sockets.length, 1)
+  clock.advance(999)
+  assert.equal(server.sockets.length, 1)
+  clock.advance(1)
+  assert.equal(server.sockets.length, 2)
+  server.last().serverClose(1006, '')
+  clock.advance(2000)
+  assert.equal(server.sockets.length, 3)
+  for (let i = 0; i < 6; i++) { server.last().serverClose(1006, ''); clock.advance(30_000) }
+  assert.equal(server.sockets.length, 9, 'never more than the 30s cap between tries')
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  sock.serverClose(1006, '')
+  clock.advance(1000)
+  assert.equal(server.sockets.length, 10, 'welcome reset the backoff to 1s')
+  assert.ok(statuses.includes('disconnected'))
+})
+
+test('4003 → needs-auth with no retries until setToken', () => {
+  const { server, clock, conn } = setup()
+  conn.connect()
+  server.last().open()
+  server.last().serverClose(4003, 'unauthorized')
+  assert.equal(conn.status, 'needs-auth')
+  clock.advance(60_000)
+  assert.equal(server.sockets.length, 1)
+  conn.setToken('new')
+  assert.equal(server.sockets.length, 2)
+  server.last().open()
+  assert.equal(server.last().sent[0].token, 'new')
+})
+
+test('4002 → incompatible: UPGRADE_CLIENT means update Trek, otherwise upgrade the server', () => {
+  const a = setup()
+  a.conn.connect()
+  a.server.last().serverClose(4002, 'UPGRADE_CLIENT')
+  assert.equal(a.conn.status, 'incompatible')
+  assert.match(a.conn.statusMessage, /update Trek/i)
+  const b = setup()
+  b.conn.connect()
+  b.server.last().serverClose(4002, 'unsupported protocol version')
+  assert.equal(b.conn.status, 'incompatible')
+  assert.match(b.conn.statusMessage, /upgrade the server/i)
+  b.clock.advance(60_000)
+  assert.equal(b.server.sockets.length, 1)
+})
+
+test('ping every 15s; a ping without an answer in 10s closes with 4000 and reconnects', () => {
+  const { server, clock, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  clock.advance(15_000)
+  const ping = sock.lastReq('sys.ping')
+  assert.ok(ping)
+  sock.reply(ping, { t: ping.params.t })
+  clock.advance(15_000)
+  assert.ok(sock.lastReq('sys.ping') !== ping)
+  clock.advance(10_000)
+  assert.equal(sock.closedWith?.code, 4000)
+  assert.equal(conn.status, 'disconnected')
+  clock.advance(1000)
+  assert.equal(server.sockets.length, 2, 'reconnected after the backoff')
+})
+
+test('a ping timeout reconnects even when the dead socket never fires close', () => {
+  const { server, clock, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  sock.close = (code, reason) => { sock.closedWith = { code, reason } } // close handshake hangs
+  clock.advance(25_000)
+  assert.equal(sock.closedWith?.code, 4000)
+  assert.equal(conn.status, 'disconnected')
+  clock.advance(1000)
+  assert.equal(server.sockets.length, 2)
+  sock.serverClose(1006, '') // the late close event is ignored
+  assert.equal(conn.status, 'connecting')
+})
+
+test('close() is final; events are delivered to listeners', () => {
+  const { server, clock, conn } = setup()
+  const events = []
+  conn.on('event', (e) => events.push(e))
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  sock.event('pty.data', { ptyId: 'p', seq: 0, data: 'x' })
+  assert.deepEqual(events, [{ event: 'pty.data', payload: { ptyId: 'p', seq: 0, data: 'x' } }])
+  conn.close()
+  assert.equal(conn.status, 'closed')
+  clock.advance(60_000)
+  assert.equal(server.sockets.length, 1)
+})
+
+test('a socket factory that throws gives status error and a retry', () => {
+  const clock = fakeTimers()
+  let calls = 0
+  const conn = new ServerConnection({ url: 'bad', token: 't', createSocket: () => { calls++; throw new Error('bad url') }, timers: clock.timers })
+  conn.connect()
+  assert.equal(conn.status, 'error')
+  assert.match(conn.statusMessage, /bad url/)
+  clock.advance(1000)
+  assert.equal(calls, 2)
+})
+
+test('reconnect() drops the old socket: pending requests reject, its ping stops', async () => {
+  const { server, clock, conn } = setup()
+  conn.connect()
+  const old = server.last()
+  old.open()
+  old.welcome()
+  const inflight = conn.request('project.list', {})
+  conn.reconnect()
+  await assert.rejects(inflight, (e) => e.code === 'NOT_CONNECTED')
+  assert.equal(old.closedWith?.code, 1000)
+  assert.equal(server.sockets.length, 2)
+  assert.equal(conn.status, 'connecting')
+  const before = old.sent.length
+  clock.advance(60_000)
+  assert.equal(old.sent.length, before, 'no pings on the dropped socket')
+  assert.equal(server.sockets.length, 2, 'the dropped socket does not schedule a retry')
+})
+
+test('a factory that throws reports error, then connecting on each retry', () => {
+  const clock = fakeTimers()
+  const statuses = []
+  const conn = new ServerConnection({ url: 'bad', token: 't', createSocket: () => { throw new Error('bad url') }, timers: clock.timers })
+  conn.on('status', (s) => statuses.push(s.status))
+  conn.connect()
+  clock.advance(1000)
+  clock.advance(2000)
+  assert.deepEqual(statuses, ['connecting', 'error', 'connecting', 'error', 'connecting', 'error'])
+  conn.close()
+  clock.advance(60_000)
+  assert.equal(conn.status, 'closed')
+  assert.equal(clock.pending(), 0)
+})
