@@ -752,3 +752,66 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 All clients see the same state and the same patches. A pty's size is set by the
 client that most recently wrote to or focused it. `session.seen` from any client
 clears that session's `attention`/`done` status for all of them.
+
+## Client SDK
+
+A v2 client lives in `src/shared/client/`. It is pure TypeScript: the socket
+(`SocketFactory`) and the timers (`Timers`, including `random`) are injected, and
+nothing imports Node, DOM or Electron modules, so the same code runs in the
+renderer, in main and in React Native. It has four parts: `ServerConnection`,
+`TopicMirror`, `PtyStream` and `ServerRegistry`.
+
+**Statuses.** `connecting`, `connected`, `disconnected`, `needs-auth`,
+`incompatible`, `error` and `closed`. `disconnected` (a dropped or failed socket)
+and `error` (the socket factory threw) retry. `needs-auth` (close code
+`CLOSE_UNAUTHORIZED`) and `incompatible` (`CLOSE_UNSUPPORTED_VERSION`) do not:
+`setToken` or `reconnect` is the way out. `closed` is final, after `close()`.
+
+**Backoff and ping.** A retry waits 1 s, doubling to a cap of 30 s, with ±15 %
+jitter (the cap applies after jitter). A welcome resets the backoff, as does
+`reconnect()`. While connected, `sys.ping` goes out every 15 s with a 10 s
+timeout; a timeout closes the socket (code 4000) and reconnects. A ping that gets
+an error reply does not reconnect: the server answered. A socket that is not open
+at ping time (stuck in CLOSING) is abandoned at once, without waiting for its
+close event.
+
+**Requests.** They are never queued. Anything sent while the status is not
+`connected` fails with `NOT_CONNECTED`, and so does every request still pending
+when the socket closes. The default timeout is 60 s (`requestTimeoutMs`, or
+`timeoutMs` per call); a timeout fails with `TIMEOUT`. Error replies reject with a
+`ClientError` carrying the server's `code`.
+
+**Mirror.** `TopicMirror.subscribe(topic, listener)` reference-counts per topic:
+the first listener sends `sub.subscribe`, later ones get the current state at
+once, and the last unsubscribe sends `sub.unsubscribe`. Listeners get the state
+(`{snapshot, rev}`) or `{error}`. A `state.patch` that arrives before the
+snapshot, or while a (re)subscribe is in flight, is ignored: it is older than the
+snapshot on its way. On a gap, an invalid patch, or a reconnect (every welcome),
+the mirror resubscribes; the old state stays visible until the new snapshot
+replaces it. `NOT_FOUND` clears the state and reports the error; the topic is
+subscribed again after the next reconnect. A resubscribe that fails with
+`NOT_CONNECTED` is silent: the next welcome retries it.
+
+**PtyStream.** `attach(ptyId, handlers)` registers the handlers before the request
+(the replay arrives first, as `onData(data, true)`) and resolves with the
+`PtyInfo`. It rejects with `ALREADY_ATTACHED` if the stream has that pty (also
+while the first attach is in flight), and with `DETACHED` if `detach` was called
+before the answer arrived. After a reconnect the stream re-attaches its ptys one
+at a time, because the server refuses an attach from a connection that still has
+a large backlog unsent, and parallel replays would cause that. `onReset` runs
+before each replay, so the terminal can clear. If a re-attach fails with
+`PTY_NOT_FOUND`, the pty is dropped and `onExit(-1)` runs; any other error drops
+it and calls `onError` (without an `onError`, it is logged and `onExit(-1)`
+runs). A drop mid-pass (`NOT_CONNECTED`) just waits for the next welcome.
+
+**Registry.** `ServerRegistry` holds one connection, mirror and pty stream per
+server. `add(entry)` creates and connects, and throws for a duplicate id.
+`update(id, {url?, token?})` throws for an unknown id; a new token reconnects the
+same `RegisteredServer`, but a new URL cannot (a connection's URL is fixed), so it
+removes the entry and adds a fresh one: `get(id)` returns a new `RegisteredServer`
+and anything holding the old one is stale. `remove(id)` closes the connection;
+its status events, including the final `closed`, no longer reach registry
+listeners.
+
+**Contract test.** `npm run smoke:client` builds `trek-server` and runs the client
+against it; it prints `CLIENT CONTRACT PASS`.
