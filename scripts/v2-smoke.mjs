@@ -17,15 +17,22 @@
 //     first and adds no window.
 //   - Recents: a fresh empty window lists the project with a `server` chip and the server name.
 //   - Not found, through the real path: a project opened from Connect → Projects is deleted on
-//     the server and the window reloaded; it says "Project not found on <server>" and Pick
-//     another project goes back to the server's project list and releases the window title.
+//     the server; the open window says "Project not found on <server>" by itself (from the
+//     `server` topic), and again after a reload (NOT_FOUND); Pick another project goes back to
+//     the server's project list and releases the window title.
 //   - Restore: quit, relaunch with the same user data; the server window comes back with its tree.
 //   - Disconnect: stopping the server shows the banner and keeps the tree; restarting clears it.
 //   - Closing a server window shows no prompt; its recent reopens it in an empty window.
+//   - A needs-auth window reconnects on focus once its token is set in another window.
 //   - A needs-auth window notices its entry removed on focus; a removed server is terminal
 //     (no further v2socket:open calls) and its recents say Server removed; × removes them.
 //   - No console or page errors in any window, including later and restored ones.
-// Every wait is bounded, and a watchdog fails the whole run after WATCHDOG_MS.
+// Every wait is bounded, and a watchdog fails the whole run after WATCHDOG_MS. Ctrl+C (or
+// SIGTERM) still stops the server and removes the temp dirs.
+//
+// Electron internals: the relay-open count reads ipcMain._invokeHandlers (private), and the
+// focus check patches BrowserWindow.prototype.focus. Either may need updating on an Electron
+// upgrade; the first falls back to the view alone, the second fails the run with a message.
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
@@ -38,6 +45,7 @@ import { ServerConnection, globalSocketFactory } from '../src/shared/client/inde
 
 const WATCHDOG_MS = 240_000
 const DAEMON_READY_MS = 15_000
+const APP_CLOSE_MS = 10_000
 
 const checks = []
 const check = (name, actual, expected) => {
@@ -266,7 +274,19 @@ const finish = async (reason) => {
   if (finished) return
   finished = true
   if (reason) console.error(reason)
-  await app?.close().catch(() => {})
+  // A wedged app must not hang the run: give close 10 s, then kill the process.
+  if (app) {
+    let timer
+    const closed = await Promise.race([
+      app.close().then(
+        () => true,
+        () => true
+      ),
+      new Promise((resolve) => (timer = setTimeout(() => resolve(false), APP_CLOSE_MS)))
+    ])
+    clearTimeout(timer)
+    if (!closed) console.error(`app.close() did not finish within ${APP_CLOSE_MS} ms; killing Electron`)
+  }
   try {
     app?.process().kill('SIGKILL')
   } catch {}
@@ -275,6 +295,22 @@ const finish = async (reason) => {
   rmSync(outside, { recursive: true, force: true })
   console.log(exitCode === 0 ? `V2 SMOKE PASS (${checks.length} checks)` : `V2 SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''})`)
   process.exit(exitCode)
+}
+// Interrupted: no time for a graceful close, but leave no server process or temp dirs behind.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    console.error(`\n${signal}: cleaning up`)
+    try {
+      app?.process().kill('SIGKILL')
+    } catch {}
+    try {
+      daemon?.kill('SIGKILL')
+    } catch {}
+    rmSync(work, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+    console.log('V2 SMOKE FAIL (interrupted)')
+    process.exit(130)
+  })
 }
 setTimeout(() => {
   exitCode = 1
@@ -438,9 +474,13 @@ try {
   await app.evaluate(({ app: electronApp, BrowserWindow }) => {
     electronApp.focus({ steal: true })
     globalThis.__focusCalls = []
+    // Electron internals: focus lives on BrowserWindow's prototype chain (BaseWindow today).
     let proto = BrowserWindow.prototype
     while (proto && !Object.prototype.hasOwnProperty.call(proto, 'focus')) proto = Object.getPrototypeOf(proto)
-    if (!proto || proto.__smokeWrapped) return
+    if (!proto || typeof proto.focus !== 'function') {
+      throw new Error('v2-smoke: no focus() on the BrowserWindow prototype chain; Electron internals changed, update the focus patch')
+    }
+    if (proto.__smokeWrapped) return
     const original = proto.focus
     proto.focus = function (...args) {
       globalThis.__focusCalls?.push(this.getTitle())
@@ -484,14 +524,16 @@ try {
   check('and titles it', await until(() => titleOf('w3'), 'Doomed', 5000), 'Doomed')
   check('it adds no window', await windowCount(), 3)
   await sdk.request('project.delete', { projectId: doomedId })
-  // An open window does not learn of the delete by itself: the server drops the topic and
-  // announces it only on the `server` topic, which the project window does not watch. A
-  // reload (as Cmd+R, or a relaunch) subscribes again and gets NOT_FOUND.
+  // The server drops the project topic silently and announces the delete on the `server`
+  // topic, which the open window watches: it says so without a reload.
+  await w3.locator('.server-window-message h2', { hasText: 'Project not found' }).waitFor({ timeout: 10_000 })
+  check('a project deleted on the server says so, live', await w3.locator('.server-window-message h2').textContent(), 'Project not found on Local box')
+  // A reload (as Cmd+R, or a relaunch) subscribes again and gets NOT_FOUND.
   await w3.reload()
   await w3.waitForLoadState('domcontentloaded')
   await tag(w3, 'w3')
   await w3.locator('.server-window-message h2', { hasText: 'Project not found' }).waitFor({ timeout: 10_000 })
-  check('a project deleted on the server says so', await w3.locator('.server-window-message h2').textContent(), 'Project not found on Local box')
+  check('and again after a reload', await w3.locator('.server-window-message h2').textContent(), 'Project not found on Local box')
   await w3.locator('.server-window-message button', { hasText: 'Pick another project' }).click()
   const w3Projects = w3.locator('.connect-server-item', { hasText: 'Local box' }).locator('.connect-project-list .recent-name')
   await w3Projects.first().waitFor({ timeout: 5000 })
@@ -548,6 +590,23 @@ try {
   await tree5.locator('.wt-name', { hasText: 'feature-x' }).waitFor({ timeout: 10_000 })
   check('its recent reopens it in the empty window', await w5.evaluate(() => window.__store.getState().serverWindow?.projectId), target.projectId)
   check('which takes its title', await until(() => titleOf('w5'), 'Demo', 5000), 'Demo')
+
+  // ---- A window stuck in needs-auth never retries by itself: on focus it reconnects, so a
+  // token set in another window takes.
+  const fixable = await w5.evaluate((url) => window.api.appServers.save({ name: 'Fixable', url, token: 'wrong-token' }), `ws://127.0.0.1:${port}`)
+  await w5.evaluate(([id, projectId]) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId }), [fixable.id, target.projectId])
+  await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).waitFor({ timeout: 10_000 })
+  check('a wrong-token window is stuck in needs-auth', await w5.locator('.server-window-banner strong').textContent(), 'Token rejected')
+  const w6 = await newWindow()
+  await tag(w6, 'w6')
+  await w6.evaluate(([id, t]) => window.api.appServers.setToken(id, t), [fixable.id, token])
+  await w5.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await w5.locator('.server-window-banner').waitFor({ state: 'detached', timeout: 10_000 })
+  await tree5.locator('.wt-name', { hasText: 'feature-x' }).waitFor({ timeout: 10_000 })
+  check('on focus it reconnects with the new token', [await w5.locator('.server-window-banner').count(), await tree5.isVisible()], [0, true])
+  await closeTagged('w6')
+  check('the token window closes', await until(windowCount, 1), 1)
+  await w5.evaluate((id) => window.api.appServers.remove(id), fixable.id)
 
   // ---- A window stuck in needs-auth never retries, so only the focus re-check of the
   // server list can see its entry removed from another window.

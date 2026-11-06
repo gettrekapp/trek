@@ -134,10 +134,15 @@ keeps their worktrees and sessions running on that machine. Server windows are
   list of servers. **Add server** takes a name, a `ws://` or `wss://` URL and a token;
   each server then has **Set token**, **Test**, **Edit** and **Remove**, and a dot
   for its connection status. Plain `ws://` to anything but this machine is allowed
-  (Tailscale, LAN) but shows an "Unencrypted" warning. Create tokens on the server
+  (Tailscale, LAN) but shows an "Unencrypted" warning, the app-side half of the
+  server's rule never to expose its plain `ws://` listener beyond loopback (see
+  [Security notes](server/README.md#security-notes)). Create tokens on the server
   with `trek-server token add <device>` (see [the server README](server/README.md#projects)).
 - **Tokens** are encrypted with the OS keychain (Electron safeStorage) in
-  `app-server-tokens.json` in the user-data directory, owner-only. They never reach
+  `app-server-tokens.json` in the user-data directory, owner-only. When no OS
+  keyring is available (for example on Linux without one) safeStorage can't
+  encrypt, and tokens are stored only base64-encoded with a `plain:` prefix, so the
+  file's owner-only permissions are then the only protection. They never reach
   the window: main opens the WebSocket, relays it, and puts the token into the
   `hello` itself. Changing a server's URL to another origin (scheme, host or port)
   clears its token, so you enter it again.
@@ -149,9 +154,12 @@ keeps their worktrees and sessions running on that machine. Server windows are
 - **Server windows**: one per server project, focused if it's already open. It
   lists the repositories, their worktrees (branch, missing, dirty/ahead/behind,
   loaded) and each worktree's sessions, plus Global sessions, updating live. If the
-  connection drops, a banner says so and the last tree stays. A project the server
-  doesn't know shows "Project not found" with **Pick another project**; a server
-  you removed from the list shows "Server removed". Closing the window asks
+  connection drops, a banner says so and the last tree stays. A project deleted on
+  the server, or one it doesn't know when the window opens, shows "Project not
+  found" with **Pick another project**; a server
+  you removed from the list shows "Server removed". A window stuck on a rejected
+  token or an incompatible server tries again when you focus it, so a token set in
+  another window takes. Closing the window asks
   nothing, since the sessions keep running on the server. Server windows appear in
   recents and come back on launch like file windows.
 - **Still to come**: a working server window with terminals and sessions (phase 3c),
