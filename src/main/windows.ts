@@ -424,6 +424,16 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
     if (state && !state.win.isDestroyed()) state.win.setTitle(capLabel(name) || 'Trek Dev')
   })
 
+  // A server window gives up its project (Pick another project): it is an empty window again.
+  ipcMain.handle('window:releaseTarget', (event): void => {
+    const state = windows.get(event.sender.id)
+    if (!state || state.target?.kind !== 'server') return
+    state.target = null
+    state.unsavedProject = false
+    if (!state.win.isDestroyed()) state.win.setTitle('Trek Dev')
+    schedulePersist()
+  })
+
   ipcMain.handle(
     'window:openServerProject',
     async (event, serverEntryId: unknown, projectId: unknown, name: unknown, serverName: unknown): Promise<{ opened: boolean }> => {

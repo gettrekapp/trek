@@ -29,6 +29,11 @@ function closeReady(): void {
 /** Main asked to close the window: save what needs saving, then answer. */
 export async function handleWindowCloseRequest(): Promise<void> {
   const state = useAppStore.getState()
+  // A server window: nothing to save and its sessions run on the server, so close at once.
+  if (state.serverWindow) {
+    closeReady()
+    return
+  }
   const hasSessions = Object.keys(state.terminals).length > 0
   if (!state.project || (!state.dirty && !hasSessions)) {
     closeReady()

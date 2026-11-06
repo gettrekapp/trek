@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { errorText } from '../v2/errors'
@@ -74,7 +74,7 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
   const [servers, setServers] = useState<AppServerInfo[] | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const [statuses, setStatuses] = useState<Record<string, StatusChange>>({})
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(() => useAppStore.getState().connectServerId)
   const [form, setForm] = useState<FormState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -82,10 +82,20 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
   const [tokenValue, setTokenValue] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  /** Ids from the last list read, so the next read can drop removed entries' connections. */
+  const knownIds = useRef<Set<string>>(new Set())
+  const tokenInputId = useId()
 
   const load = useCallback(async (): Promise<AppServerInfo[] | null> => {
     try {
       const list = await window.api.appServers.list()
+      // Removed (here or in another window): close its connection, so it stops
+      // retrying. A server window shows its own entry's "Server removed" state,
+      // but that window renders no Connect view, so skip it only to be safe.
+      const ids = new Set(list.map((s) => s.id))
+      const shown = useAppStore.getState().serverWindow?.serverEntryId
+      for (const id of knownIds.current) if (!ids.has(id) && id !== shown) dropServerEntry(id)
+      knownIds.current = ids
       setServers(list)
       setListError(null)
       return list
@@ -93,6 +103,11 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
       setListError(`Could not read the server list: ${errorText(err)}`)
       return null
     }
+  }, [])
+
+  // connectServerId is a one-shot: picked above, now cleared.
+  useEffect(() => {
+    if (useAppStore.getState().connectServerId) useAppStore.getState().setConnectServerId(null)
   }, [])
 
   useEffect(() => {
@@ -209,8 +224,9 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
       return
     }
     dropServerEntry(server.id)
-    if (selectedId === server.id) setSelectedId(null)
-    if (form?.id === server.id) setForm(null)
+    // Functional updates: the confirm and remove awaits may have outlived this render's state.
+    setSelectedId((id) => (id === server.id ? null : id))
+    setForm((f) => (f?.id === server.id ? null : f))
     await load()
     onServersChanged()
   }
@@ -286,8 +302,9 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
 
             {tokenFor === server.id && (
               <div className="server-form-row connect-token-row">
-                <span>Access token</span>
+                <label htmlFor={`${tokenInputId}-${server.id}`}>Access token</label>
                 <input
+                  id={`${tokenInputId}-${server.id}`}
                   type="password"
                   autoFocus
                   value={tokenValue}
@@ -369,7 +386,15 @@ interface ServerFormProps {
 function ServerForm({ form, setForm, tokenRequired, hasToken, error, saving, canSave, onSave, onCancel }: ServerFormProps): React.JSX.Element {
   const moved = needsTokenAgain(form)
   return (
-    <div className="server-form">
+    <div
+      className="server-form"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation()
+          onCancel()
+        }
+      }}
+    >
       <h4>{form.id ? `Edit ${form.name || 'server'}` : 'Add server'}</h4>
       <label className="server-form-row">
         <span>Name</span>

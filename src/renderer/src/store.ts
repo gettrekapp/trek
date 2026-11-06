@@ -198,9 +198,12 @@ export interface PendingDecision {
 
 interface AppState {
   filePath: string | null
-  /** A v2 server project shown in this window (Task 8 renders it); separate from the legacy `project`. */
+  /** A v2 server project shown in this window; separate from the legacy `project`. A window is one or the other. */
   serverWindow: { serverEntryId: string; projectId: string } | null
   setServerWindow: (target: { serverEntryId: string; projectId: string } | null) => void
+  /** The start screen opens on Connect with this server picked (once), after Pick another project. */
+  connectServerId: string | null
+  setConnectServerId: (id: string | null) => void
   project: ProjectFile | null
   dirty: boolean
   activeWorktreeId: string | null
@@ -357,6 +360,8 @@ export const useAppStore = create<AppState>((set) => ({
   filePath: null,
   serverWindow: null,
   setServerWindow: (serverWindow) => set({ serverWindow }),
+  connectServerId: null,
+  setConnectServerId: (connectServerId) => set({ connectServerId }),
   project: null,
   dirty: false,
   activeWorktreeId: null,

@@ -2997,7 +2997,8 @@ button:disabled {
   font-size: 12px;
 }
 
-.server-form-row span {
+.server-form-row span,
+.server-form-row > label {
   flex: 0 0 140px;
   color: var(--text-muted);
 }
@@ -3932,4 +3933,100 @@ body.resizing-row {
 .exited-overlay .exited-hint {
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* For screen readers only */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Read-only server project window (3b) */
+.server-window {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.server-window-banner {
+  flex: 0 0 auto;
+  margin: 10px 12px 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(226, 163, 54, 0.35);
+  background: rgba(226, 163, 54, 0.12);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.server-window-last-seen {
+  color: var(--text-muted);
+}
+
+.server-window-tree {
+  flex: 1;
+  max-width: 720px;
+  width: 100%;
+  padding-top: 10px;
+}
+
+.server-window-tree .wt-row {
+  cursor: default;
+}
+
+.server-window-loading,
+.server-window-empty {
+  margin: 4px 22px;
+  font-size: 12px;
+}
+
+.server-window-missing {
+  color: var(--danger);
+}
+
+.server-window-sessions {
+  list-style: none;
+  margin: 0 8px 4px 36px;
+  padding: 0;
+}
+
+.server-window-sessions li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.server-window-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-window-message {
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.server-window-message h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.server-window-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }

@@ -8,7 +8,8 @@ import type { OpenedProject, ProjectFile, RecentEntry } from '../../../shared/ty
 export function StartScreen(): React.JSX.Element {
   const setProject = useAppStore((s) => s.setProject)
   const setServerWindow = useAppStore((s) => s.setServerWindow)
-  const [view, setView] = useState<'home' | 'connect'>('home')
+  // After Pick another project in a server window: straight to Connect, with that server picked.
+  const [view, setView] = useState<'home' | 'connect'>(() => (useAppStore.getState().connectServerId ? 'connect' : 'home'))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recents, setRecents] = useState<RecentEntry[]>([])

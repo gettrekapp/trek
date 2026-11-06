@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { GLOBAL_WORKTREE_ID, migrateProject, useAppStore } from './store'
 import { saveProject } from './persistence'
 import { handleWindowCloseRequest, syncWindowProject, watchWindowProject } from './windowLifecycle'
@@ -10,6 +10,7 @@ import {
   startClaudeSession
 } from './terminals'
 import { StartScreen } from './components/StartScreen'
+import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { Workspace } from './components/Workspace'
 import { GlobalClaude } from './components/GlobalClaude'
 import { handleMcpCall } from './mcpTools'
@@ -24,6 +25,9 @@ export default function App(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
   const filePath = useAppStore((s) => s.filePath)
   const dirty = useAppStore((s) => s.dirty)
+  const serverWindow = useAppStore((s) => s.serverWindow)
+  /** The server project's name, reported by ServerProjectWindow. */
+  const [serverTitle, setServerTitle] = useState<string | null>(null)
   useLinearSync()
 
   useEffect(() => {
@@ -84,7 +88,11 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     window.api
       .takeInitialWindowState()
-      .then(async ({ opened, menu }) => {
+      .then(async ({ opened, menu, server }) => {
+        if (server) {
+          useAppStore.getState().setServerWindow(server)
+          return
+        }
         if (opened) useAppStore.getState().setProject(opened.project, opened.filePath)
         if (menu === 'open-project') await openProject()
       })
@@ -104,7 +112,9 @@ export default function App(): React.JSX.Element {
       >
         <div className="title-side" />
         <span className="title-text">
-          {project ? (
+          {serverWindow ? (
+            serverTitle ?? 'Trek Dev'
+          ) : project ? (
             <>
               {project.logoImage && <img className="title-logo" src={project.logoImage} alt="" />}
               {project.name}
@@ -119,7 +129,14 @@ export default function App(): React.JSX.Element {
         </span>
         <div className="title-side" />
       </header>
-      {project ? (
+      {serverWindow ? (
+        <ServerProjectWindow
+          key={`${serverWindow.serverEntryId}:${serverWindow.projectId}`}
+          serverEntryId={serverWindow.serverEntryId}
+          projectId={serverWindow.projectId}
+          onTitle={setServerTitle}
+        />
+      ) : project ? (
         <>
           <Workspace />
           <GlobalClaude />

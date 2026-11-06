@@ -62,6 +62,8 @@ const api = {
   ): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke('window:openServerProject', serverEntryId, projectId, name, serverName),
   reportTitle: (name: string | null): void => ipcRenderer.send('window:reportTitle', name),
+  /** A server window gives up its target and becomes an empty window. */
+  releaseTarget: (): Promise<void> => ipcRenderer.invoke('window:releaseTarget'),
   focusWindow: (): Promise<void> => ipcRenderer.invoke('window:focus'),
   takeInitialWindowState: (): Promise<InitialWindowState> => ipcRenderer.invoke('window:takeInitial'),
   reportWindowProject: (hasProject: boolean, filePath: string | null, name: string | null): void =>

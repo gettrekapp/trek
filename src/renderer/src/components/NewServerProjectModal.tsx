@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { errorCode, errorText } from '../v2/errors'
 import type { RegisteredServer } from '../../../shared/client/index.ts'
 import type { RemoteRepo } from '../../../shared/protocol'
@@ -29,6 +29,11 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
   const [addError, setAddError] = useState<{ message: string; hint: boolean } | null>(null)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Enter can fire again before the re-render that disables the buttons: guard on refs.
+  const addingRef = useRef(false)
+  const creatingRef = useRef(false)
+  const nameId = useId()
+  const pathId = useId()
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -40,7 +45,13 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
 
   const allRepos = [...repos, ...added.filter((a) => !repos.some((r) => r.id === a.id))]
   const chosen = allRepos.filter((r) => ticked.has(r.id))
-  const canCreate = !!name.trim() && chosen.length > 0 && !creating
+  /**
+   * Ticked repos added here whose `server` topic patch has not arrived yet. Create
+   * waits for it, so project.create gets the server's canonical repo path (the
+   * resolved repo root), never the path as typed.
+   */
+  const awaitingTopic = chosen.some((r) => !repos.some((t) => t.id === r.id))
+  const canCreate = !!name.trim() && chosen.length > 0 && !awaitingTopic && !creating
 
   const toggle = (id: string): void =>
     setTicked((t) => {
@@ -52,7 +63,8 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
 
   const addRepo = async (): Promise<void> => {
     const path = addPath.trim()
-    if (!path) return
+    if (!path || addingRef.current) return
+    addingRef.current = true
     setAdding(true)
     setAddError(null)
     try {
@@ -64,23 +76,27 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
       const code = errorCode(err)
       setAddError({ message: errorText(err), hint: code === 'PATH_DENIED' || code === 'NOT_A_REPO' })
     } finally {
+      addingRef.current = false
       setAdding(false)
     }
   }
 
   const create = async (): Promise<void> => {
-    if (!canCreate) return
+    if (!canCreate || creatingRef.current) return
+    creatingRef.current = true
     setCreating(true)
     setCreateError(null)
     try {
       const projectName = name.trim()
       const { projectId } = await registered.connection.request('project.create', {
         name: projectName,
-        repositories: chosen.map((r) => ({ path: r.path }))
+        // From the topic: canCreate waits until every ticked repo is in it.
+        repositories: chosen.map((r) => ({ path: repos.find((t) => t.id === r.id)?.path ?? r.path }))
       })
       onCreated(projectId, projectName)
     } catch (err) {
       setCreateError(`Could not create the project: ${errorText(err)}`)
+      creatingRef.current = false
       setCreating(false)
     }
   }
@@ -90,7 +106,11 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
       <div className="modal new-server-project" onMouseDown={(e) => e.stopPropagation()}>
         <h2>New project on {serverName || 'server'}</h2>
         <div className="create-row">
+          <label className="visually-hidden" htmlFor={nameId}>
+            Project name
+          </label>
           <input
+            id={nameId}
             type="text"
             autoFocus
             placeholder="Project name"
@@ -121,9 +141,12 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
           </ul>
         )}
 
-        <h3>Add repo by path…</h3>
+        <h3>
+          <label htmlFor={pathId}>Add repo by path…</label>
+        </h3>
         <div className="create-row">
           <input
+            id={pathId}
             type="text"
             placeholder="/home/dev/repos/my-app (a path on the server)"
             spellCheck={false}
@@ -152,7 +175,7 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
         <div className="modal-footer new-server-project-footer">
           <button onClick={onClose}>Cancel</button>
           <button className="primary" disabled={!canCreate} onClick={() => void create()}>
-            {creating ? 'Creating…' : 'Create'}
+            {creating ? 'Creating…' : awaitingTopic ? 'Waiting for the server…' : 'Create'}
           </button>
         </div>
       </div>
