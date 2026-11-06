@@ -25,7 +25,11 @@ Task 11 records these in `PROTOCOL.md`.
 2. **The endpoint.**
    - It is a second HTTP server inside `trek-server`, on `127.0.0.1` and an OS-chosen port, so it is not on the clients' WebSocket port.
    - `POST /mcp` only. Any other path is 404. A non-POST is 405 with `Allow: POST`. A missing or wrong `Authorization: Bearer` header is 401.
-   - Bodies are limited to 1 MiB (413 above that).
+   - Bodies are limited to 1 MiB (413 above that, sent before the body is read when `Content-Length` says so).
+   - A `Host` header other than `127.0.0.1:<port>` or `localhost:<port>` is 403. This guards against DNS rebinding from a browser on the same machine.
+   - Requests time out after 30 s (`requestTimeout`/`headersTimeout`).
+   - Auth is checked before the body is read.
+   - A batch holds at most 50 messages.
    - JSON-RPC behaves as on the desktop:
      - methods `initialize`, `ping`, `tools/list` and `tools/call`;
      - a message without an `id` is a notification; a request made only of notifications gets 202 with no body;
