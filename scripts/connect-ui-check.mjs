@@ -237,20 +237,53 @@ try {
   await win.locator('.server-window-banner').waitFor({ state: 'detached', timeout: 20000 })
   check('the banner goes once reconnected', await win.locator('.server-window-banner').count(), 0)
 
-  // Server removed (as from another window): terminal, no retries.
+  // A window stuck in needs-auth never retries, so only the focus re-check of the
+  // server list can see its entry removed from another window.
+  const stuck = await win.evaluate((url) => window.api.appServers.save({ name: 'Stuck', url, token: 'wrong-token' }), `ws://127.0.0.1:${port}`)
+  await win.evaluate((id) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId: 'whatever' }), stuck.id)
+  await win.locator('.server-window-banner', { hasText: 'Token rejected' }).waitFor({ timeout: 10000 })
+  await win.evaluate((id) => window.api.appServers.remove(id), stuck.id)
+  await sleep(500)
+  check('a stuck window does not notice the removal by itself', await win.locator('.server-window-banner', { hasText: 'Token rejected' }).count(), 1)
+  await win.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await win.locator('.server-window-message h2', { hasText: 'Server removed' }).waitFor({ timeout: 5000 })
+  check('on focus it re-reads the list and shows Server removed', await win.locator('.server-window-message h2').textContent(), 'Server removed')
+  await win.evaluate(([id, projectId]) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId }), [entryId, target.projectId])
+  await tree.waitFor({ timeout: 10000 })
+  await win.locator('.title-text', { hasText: 'Demo' }).waitFor({ timeout: 5000 })
+
+  // Count the relay opens in main (Electron's private handler map; falls back to the status alone).
+  const hooked = await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    const original = handlers?.get('v2socket:open')
+    if (!original) return false
+    globalThis.__v2Opens = 0
+    handlers.set('v2socket:open', (...args) => {
+      globalThis.__v2Opens++
+      return original(...args)
+    })
+    return true
+  })
+  const opens = () => app.evaluate(() => globalThis.__v2Opens)
+
+  // Server removed (as from another window): the relay's removed result is terminal, no retries.
   await win.evaluate((id) => window.api.appServers.remove(id), entryId)
   await win.locator('.server-window-message h2', { hasText: 'Server removed' }).waitFor({ timeout: 10000 })
   check('a removed server shows Server removed', await win.locator('.server-window-message button').allTextContents(), ['Close'])
-  // A relay open for the removed entry rejects; the ipc socket turns that into a terminal close.
-  const msg = await win.evaluate(async (id) => {
-    try {
-      await window.api.v2Socket.open(id)
-      return 'opened'
-    } catch (e) {
-      return String(e.message)
-    }
-  }, entryId)
-  check('a removed entry refuses to open', msg.endsWith('Server removed'), true)
+  check('both titles say Server removed', [await win.locator('.title-text').textContent(), await windowTitle()], ['Server removed', 'Server removed'])
+  if (hooked) {
+    const before = await opens()
+    check('the hook saw the refused retry', before >= 1, true)
+    await sleep(3000)
+    check('no further relay opens over 3 s', (await opens()) - before, 0)
+  } else {
+    console.log('   (no ipcMain handler map: checking the view alone)')
+    await sleep(3000)
+  }
+  check('it stays Server removed', await win.locator('.server-window-message h2').textContent(), 'Server removed')
+  // A relay open for the removed entry resolves a structured refusal, never a close code.
+  const refused = await win.evaluate((id) => window.api.v2Socket.open(id), entryId)
+  check('a removed entry refuses to open, structurally', refused, { ok: false, removed: true, reason: 'Server removed' })
 
   // Back to the start screen: the recent shows Server removed, × removes it.
   await win.evaluate(async () => {

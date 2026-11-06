@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ipcSocketFactory } from '../src/renderer/src/v2/ipcSocket.ts'
 import { cleanIpcMessage, errorCode, errorText } from '../src/renderer/src/v2/errors.ts'
-import { CLOSE_SERVER_REMOVED, ClientError, ServerConnection } from '../src/shared/client/connection.ts'
+import { ClientError, ServerConnection } from '../src/shared/client/connection.ts'
 import { fakeTimers } from './clientFakes.mjs'
 
 function fakeApi() {
@@ -18,7 +18,15 @@ function fakeApi() {
     close: (id, code, reason) => closed.push([id, code, reason]),
     onEvent: (cb) => { listener = cb; return () => { listener = () => {} } }
   }
-  return { api, sent, closed, fire: (e) => listener(e), resolveOpen: (id) => openResolve(id), rejectOpen: (err) => openReject(err) }
+  return {
+    api,
+    sent,
+    closed,
+    fire: (e) => listener(e),
+    resolveOpen: (id) => openResolve({ ok: true, socketId: id }),
+    refuseOpen: (reason, removed = false) => openResolve({ ok: false, removed, reason }),
+    rejectOpen: (err) => openReject(err)
+  }
 }
 
 const flush = () => new Promise((r) => setImmediate(r))
@@ -48,44 +56,65 @@ test('open, message, send and close round-trip through the relay', async () => {
   assert.deepEqual(log, ['open', ['message', '{"type":"welcome"}'], ['close', 4000, 'bye']])
 })
 
-test('send before open throws, like a WebSocket; a failed open closes with 1006', async () => {
+test('send before open throws, like a WebSocket; a removed refusal closes with removed: true', async () => {
   const f = fakeApi()
   const sock = ipcSocketFactory(f.api)('missing')
   assert.throws(() => sock.send('x'))
   const closes = []
-  sock.addEventListener('close', (e) => closes.push([e.code, e.reason]))
+  sock.addEventListener('close', (e) => closes.push(e))
   const errors = []
   sock.addEventListener('error', () => errors.push('error'))
-  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
+  f.refuseOpen('Server removed', true)
   await flush()
   assert.equal(sock.readyState, 3)
-  assert.deepEqual(closes, [[CLOSE_SERVER_REMOVED, 'Server removed']])
-  assert.equal(CLOSE_SERVER_REMOVED, 4404)
+  assert.deepEqual(closes, [{ code: 1006, reason: 'Server removed', removed: true }])
   assert.deepEqual(errors, [], 'no error event: the SDK would replace the reason with "connection failed"')
 })
 
-test('a connection over a refused open reports the reason as its status message', async () => {
-  const f = fakeApi()
-  const conn = new ServerConnection({ url: 'gone', token: '', createSocket: ipcSocketFactory(f.api), timers: fakeTimers().timers })
-  const seen = []
-  conn.on('status', (s) => seen.push([s.status, s.message]))
-  conn.connect()
-  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
-  await flush()
-  assert.deepEqual(seen.at(-1), ['error', 'Server removed'])
-  conn.close()
-})
-
-test('"Server removed" is terminal: no retry, however long we wait', async () => {
+test('a relay-reported removal is terminal: status error "Server removed", no retry, however long we wait', async () => {
   const f = fakeApi()
   const clock = fakeTimers()
   const conn = new ServerConnection({ url: 'gone', token: '', createSocket: ipcSocketFactory(f.api), timers: clock.timers })
+  const seen = []
+  conn.on('status', (s) => seen.push(s))
   conn.connect()
-  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
+  f.refuseOpen('Server removed', true)
   await flush()
+  assert.deepEqual(seen.at(-1), { status: 'error', message: 'Server removed', removed: true })
+  assert.equal(conn.removed, true)
   clock.advance(120_000)
   assert.deepEqual(f.sent.filter((s) => s[0] === 'open').length, 1)
   assert.equal(conn.status, 'error')
+  conn.close()
+  assert.equal(conn.removed, false)
+})
+
+test('a server-sent 4404 close through the relay is not a removal: it retries', async () => {
+  const f = fakeApi()
+  const clock = fakeTimers()
+  const conn = new ServerConnection({ url: 'e', token: '', createSocket: ipcSocketFactory(f.api), timers: clock.timers })
+  conn.connect()
+  f.resolveOpen('s1')
+  await flush()
+  f.fire({ socketId: 's1', type: 'open' })
+  f.fire({ socketId: 's1', type: 'close', code: 4404, reason: 'Server removed', removed: true })
+  assert.equal(conn.status, 'disconnected')
+  assert.equal(conn.removed, false)
+  clock.advance(2000)
+  assert.equal(f.sent.filter((s) => s[0] === 'open').length, 2)
+  conn.close()
+})
+
+test('the text "Server removed" alone (a thrown invoke) is not a removal: it retries', async () => {
+  const f = fakeApi()
+  const clock = fakeTimers()
+  const conn = new ServerConnection({ url: 'e', token: '', createSocket: ipcSocketFactory(f.api), timers: clock.timers })
+  conn.connect()
+  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
+  await flush()
+  assert.equal(conn.status, 'disconnected')
+  clock.advance(2000)
+  assert.equal(f.sent.filter((s) => s[0] === 'open').length, 2)
   conn.close()
 })
 
@@ -96,7 +125,7 @@ test('any other refused open (say "Server changed") closes with 1006 and is retr
   const seen = []
   conn.on('status', (s) => seen.push([s.status, s.message]))
   conn.connect()
-  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server changed"))
+  f.refuseOpen('Server changed')
   await flush()
   assert.deepEqual(seen.at(-1), ['disconnected', 'Server changed'])
   clock.advance(2000)
@@ -157,7 +186,7 @@ test('two sockets from one factory do not see each other\'s events', async () =>
   const listeners = []
   const ids = ['a', 'b']
   const api = {
-    open: async () => ids.shift(),
+    open: async () => ({ ok: true, socketId: ids.shift() }),
     send: () => {},
     close: () => {},
     onEvent: (cb) => { listeners.push(cb); return () => listeners.splice(listeners.indexOf(cb), 1) }

@@ -769,6 +769,17 @@ and `error` (the socket factory threw) retry. `needs-auth` (close code
 `CLOSE_UNAUTHORIZED`) and `incompatible` (`CLOSE_UNSUPPORTED_VERSION`) do not:
 `setToken` or `reconnect` is the way out. `closed` is final, after `close()`.
 
+**Removed.** A socket factory may add `removed: true` to a close event to say
+the server it stands for is gone for good (the desktop relay does so when its
+server entry was removed). The status is then `error` with the message `Server
+removed`, `connection.removed` is true, the status change carries `removed:
+true`, and nothing retries; `reconnect()` clears it. This is structural: no close
+code means "removed". A server's close code, `4404` included, has no special
+meaning to the client and reconnects like any other. In the desktop app,
+`v2socket:open` resolves `{ok: true, socketId}` or `{ok: false, removed,
+reason}`; only `removed: true` is terminal, and relayed closes carry only the
+server's code and reason.
+
 **Backoff and ping.** A retry waits 1 s, doubling to a cap of 30 s, with ±15 %
 jitter (the cap applies after jitter). A welcome resets the backoff, as does
 `reconnect()`. While connected, `sys.ping` goes out every 15 s with a 10 s

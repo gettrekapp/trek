@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
-import { connectServerEntry } from './serverClients'
+import { connectServerEntry, dropServerEntry } from './serverClients'
 import { errorCode, errorText } from './errors'
-import { SERVER_REMOVED_MESSAGE, type ConnectionStatus, type StatusChange } from '../../../shared/client/index.ts'
+import { gitStatusLabel } from '../components/Sidebar'
+import { SERVER_REMOVED_MESSAGE, type ConnectionStatus, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
 import type { Project, Session, SessionStatus, Worktree } from '../../../shared/model/types'
 import type { AppServerInfo } from '../../../shared/types'
 
@@ -45,66 +46,98 @@ function sessionDot(status: SessionStatus): string {
   }
 }
 
-/** As the legacy sidebar's gitStatusLabel. */
-function gitLabel(wt: Worktree): string {
-  const bits: string[] = []
-  if (wt.ahead) bits.push(`↑${wt.ahead}`)
-  if (wt.behind) bits.push(`↓${wt.behind}`)
-  if (wt.dirty) bits.push('● dirty')
-  return bits.join(' ')
+function currentStatus(connection: ServerConnection): StatusChange {
+  const { status, statusMessage: message, removed } = connection
+  return removed ? { status, message, removed: true } : { status, message }
+}
+
+/** The time, plus the date when it isn't today. */
+function formatLastSeen(t: number): string {
+  const d = new Date(t)
+  return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString() : d.toLocaleString()
 }
 
 type View = { project: Project } | { notFound: true } | { error: string } | null
 
 export function ServerProjectWindow({ serverEntryId, projectId, onTitle }: Props): React.JSX.Element {
-  /** undefined while loading, null when the entry is gone. */
+  /** undefined while loading, null when the entry is gone (for good: it never comes back). */
   const [entry, setEntry] = useState<AppServerInfo | null | undefined>(undefined)
   const [listError, setListError] = useState<string | null>(null)
+  const loaded = useRef(false)
 
+  const markRemoved = useCallback(() => {
+    loaded.current = true
+    setEntry(null)
+    // Stop the connection retrying (it may be stuck in needs-auth or error, or not exist).
+    dropServerEntry(serverEntryId)
+  }, [serverEntryId])
+
+  // At mount and on every focus: a removal or rename in another window shows here
+  // even while the connection is stuck (needs-auth, incompatible, error) and never retries.
   useEffect(() => {
     let live = true
-    window.api.appServers
-      .list()
-      .then((list) => {
-        if (live) setEntry(list.find((s) => s.id === serverEntryId) ?? null)
-      })
-      .catch((err: unknown) => {
-        if (live) setListError(`Could not read the server list: ${errorText(err)}`)
-      })
+    const check = (): void => {
+      window.api.appServers
+        .list()
+        .then((list) => {
+          if (!live) return
+          const found = list.find((s) => s.id === serverEntryId)
+          if (!found) return markRemoved()
+          loaded.current = true
+          setListError(null)
+          setEntry((prev) => (prev === null ? null : found))
+        })
+        .catch((err: unknown) => {
+          // A failed re-check keeps what is shown; only a failed first read says so.
+          if (live && !loaded.current) setListError(`Could not read the server list: ${errorText(err)}`)
+        })
+    }
+    check()
+    window.addEventListener('focus', check)
     return () => {
       live = false
+      window.removeEventListener('focus', check)
     }
-  }, [serverEntryId])
+  }, [serverEntryId, markRemoved])
 
   useEffect(() => () => onTitle(null), [onTitle])
 
   if (listError) return <ServerWindowMessage title={listError} />
   if (entry === undefined) return <div className="server-window" />
-  if (entry === null) return <ServerRemoved />
-  return <ServerProjectTree entry={entry} projectId={projectId} onTitle={onTitle} />
+  if (entry === null) return <ServerRemoved onTitle={onTitle} />
+  return <ServerProjectTree entry={entry} projectId={projectId} onTitle={onTitle} onRemoved={markRemoved} />
 }
 
 function ServerProjectTree({
   entry,
   projectId,
-  onTitle
+  onTitle,
+  onRemoved
 }: {
   entry: AppServerInfo
   projectId: string
   onTitle: (name: string | null) => void
+  /** The relay reported the entry gone: the parent shows "Server removed". */
+  onRemoved: () => void
 }): React.JSX.Element {
-  const registered = useMemo(() => connectServerEntry(entry.id), [entry.id])
-  const [status, setStatus] = useState<StatusChange>({
-    status: registered.connection.status,
-    message: registered.connection.statusMessage
-  })
+  // The window is keyed by entry and project, so the entry id never changes here.
+  const [registered] = useState(() => connectServerEntry(entry.id))
+  const [status, setStatus] = useState<StatusChange>(() => currentStatus(registered.connection))
   const [view, setView] = useState<View>(null)
-  const [lastSeen, setLastSeen] = useState<number | null>(null)
+  /** The last patch, and the time the connection last dropped: "last seen" is the later. */
+  const [lastPatchAt, setLastPatchAt] = useState<number | null>(null)
+  const [droppedAt, setDroppedAt] = useState<number | null>(null)
 
   useEffect(() => {
     const { connection, mirror } = registered
-    setStatus({ status: connection.status, message: connection.statusMessage })
-    const offStatus = connection.on('status', setStatus)
+    let previous = connection.status
+    const onStatus = (change: StatusChange): void => {
+      if (previous === 'connected' && change.status !== 'connected') setDroppedAt(Date.now())
+      previous = change.status
+      setStatus(change)
+    }
+    setStatus(currentStatus(connection))
+    const offStatus = connection.on('status', onStatus)
     const offTopic = mirror.subscribe(`project:${projectId}`, (update) => {
       if ('error' in update) {
         if (errorCode(update.error) === 'NOT_FOUND') setView({ notFound: true })
@@ -113,7 +146,7 @@ function ServerProjectTree({
         return
       }
       setView({ project: update.snapshot })
-      setLastSeen(Date.now())
+      setLastPatchAt(Date.now())
     })
     return () => {
       offStatus()
@@ -121,25 +154,31 @@ function ServerProjectTree({
     }
   }, [registered, projectId])
 
+  // Structural (the relay's open result), never the message text.
+  const removed = status.removed === true
+  useEffect(() => {
+    if (removed) onRemoved()
+  }, [removed, onRemoved])
+
   const name = view && 'project' in view ? view.project.name : null
   useEffect(() => {
+    if (removed) return
     onTitle(name)
     window.api.reportTitle(name)
-  }, [name, onTitle])
+  }, [name, onTitle, removed])
 
-  if (status.status === 'error' && status.message === SERVER_REMOVED_MESSAGE) return <ServerRemoved />
+  if (removed) return <div className="server-window" />
   if (view && 'notFound' in view) return <ProjectNotFound entry={entry} />
 
   const connected = status.status === 'connected'
+  const lastSeen = lastPatchAt === null && droppedAt === null ? null : Math.max(lastPatchAt ?? 0, droppedAt ?? 0)
   return (
     <div className="server-window">
       {!connected && (
         <div className="server-window-banner" role="status">
           <strong>{STATUS_LABELS[status.status]}</strong>
           {status.message ? ` — ${status.message}` : ''}
-          {lastSeen !== null && (
-            <span className="server-window-last-seen"> · last seen {new Date(lastSeen).toLocaleTimeString()}</span>
-          )}
+          {lastSeen !== null && <span className="server-window-last-seen"> · last seen {formatLastSeen(lastSeen)}</span>}
         </div>
       )}
       {view && 'error' in view && <div className="error">Could not load the project: {view.error}</div>}
@@ -180,7 +219,7 @@ function ProjectTree({ project }: { project: Project }): React.JSX.Element {
 }
 
 function WorktreeRow({ worktree: wt }: { worktree: Worktree }): React.JSX.Element {
-  const git = gitLabel(wt)
+  const git = gitStatusLabel(wt)
   return (
     <div className="server-window-worktree">
       <div className="wt-row" title={wt.path}>
@@ -233,9 +272,13 @@ function ServerWindowMessage({ title, children }: { title: string; children?: Re
   )
 }
 
-function ServerRemoved(): React.JSX.Element {
-  useEffect(() => window.api.reportTitle('Server removed'), [])
-  return <ServerWindowMessage title="Server removed" />
+/** Both titles (the window's and the in-app title bar) say so. */
+function ServerRemoved({ onTitle }: { onTitle: (name: string | null) => void }): React.JSX.Element {
+  useEffect(() => {
+    onTitle(SERVER_REMOVED_MESSAGE)
+    window.api.reportTitle(SERVER_REMOVED_MESSAGE)
+  }, [onTitle])
+  return <ServerWindowMessage title={SERVER_REMOVED_MESSAGE} />
 }
 
 function ProjectNotFound({ entry }: { entry: AppServerInfo }): React.JSX.Element {

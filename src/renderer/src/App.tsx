@@ -28,6 +28,8 @@ export default function App(): React.JSX.Element {
   const serverWindow = useAppStore((s) => s.serverWindow)
   /** The server project's name, reported by ServerProjectWindow. */
   const [serverTitle, setServerTitle] = useState<string | null>(null)
+  /** False until main says what this window shows, so the start screen never flashes first. */
+  const [booted, setBooted] = useState(false)
   useLinearSync()
 
   useEffect(() => {
@@ -91,12 +93,15 @@ export default function App(): React.JSX.Element {
       .then(async ({ opened, menu, server }) => {
         if (server) {
           useAppStore.getState().setServerWindow(server)
+          setBooted(true)
           return
         }
         if (opened) useAppStore.getState().setProject(opened.project, opened.filePath)
+        setBooted(true)
         if (menu === 'open-project') await openProject()
       })
       .catch(async (err) => {
+        setBooted(true)
         syncWindowProject()
         await window.api.showError('Could not open project', String(err))
       })
@@ -141,9 +146,9 @@ export default function App(): React.JSX.Element {
           <Workspace />
           <GlobalClaude />
         </>
-      ) : (
+      ) : booted ? (
         <StartScreen />
-      )}
+      ) : null}
       <SummaryBubble />
     </div>
   )

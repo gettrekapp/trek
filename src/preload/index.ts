@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type {
   AppServerInfo,
+  V2SocketOpenResult,
   AppServerTest,
   ContainerAction,
   ContainerInfo,
@@ -211,7 +212,7 @@ const api = {
   },
   // v2 WebSockets relayed through main, by server entry id; main injects the token into hello.
   v2Socket: {
-    open: (serverEntryId: string): Promise<string> => ipcRenderer.invoke('v2socket:open', serverEntryId),
+    open: (serverEntryId: string): Promise<V2SocketOpenResult> => ipcRenderer.invoke('v2socket:open', serverEntryId),
     send: (socketId: string, text: string): void => ipcRenderer.send('v2socket:send', socketId, text),
     close: (socketId: string, code?: number, reason?: string): void =>
       ipcRenderer.send('v2socket:close', socketId, code, reason),

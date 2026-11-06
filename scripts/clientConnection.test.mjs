@@ -1,7 +1,7 @@
 // scripts/clientConnection.test.mjs — v2 handshake, typed requests, statuses, reconnect with backoff, ping.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { CLOSE_SERVER_REMOVED, ServerConnection } from '../src/shared/client/connection.ts'
+import { ServerConnection } from '../src/shared/client/connection.ts'
 import { fakeServer, fakeTimers } from './clientFakes.mjs'
 
 function setup() {
@@ -85,15 +85,28 @@ test('4003 → needs-auth with no retries until setToken', () => {
   assert.equal(server.last().sent[0].token, 'new')
 })
 
-test('4404 (client-local: the server entry is gone) → error "Server removed", never retried; reconnect() still works', () => {
+test('a close the socket factory marks removed → error "Server removed", never retried; reconnect() still works', () => {
   const { server, clock, conn } = setup()
   conn.connect()
-  server.last().serverClose(CLOSE_SERVER_REMOVED, 'Server removed')
+  server.last().serverClose(1006, 'Server removed', { removed: true })
   assert.equal(conn.status, 'error')
   assert.equal(conn.statusMessage, 'Server removed')
+  assert.equal(conn.removed, true)
   clock.advance(120_000)
   assert.equal(server.sockets.length, 1)
   conn.reconnect()
+  assert.equal(server.sockets.length, 2)
+  assert.equal(conn.removed, false)
+})
+
+test('a server-sent 4404 has no special meaning: it disconnects and retries', () => {
+  const { server, clock, conn } = setup()
+  conn.connect()
+  server.last().open()
+  server.last().serverClose(4404, 'Server removed')
+  assert.equal(conn.status, 'disconnected')
+  assert.equal(conn.removed, false)
+  clock.advance(2000)
   assert.equal(server.sockets.length, 2)
 })
 

@@ -1,7 +1,10 @@
 // A SocketLike over the main-process relay (src/main/v2relay.ts): the "url" the
 // SDK passes is the app-server entry id. Pure: the relay API is injected.
-import type { SocketFactory, SocketLike } from '../../../shared/client/socket.ts'
-import { CLOSE_SERVER_REMOVED, SERVER_REMOVED_MESSAGE } from '../../../shared/client/connection.ts'
+// A relay refusal with `removed: true` becomes a close event with `removed: true`,
+// the SDK's structural terminal signal. A close relayed from the server only ever
+// carries its code and reason, so no server (whatever code it sends) can fake it.
+import type { SocketCloseEvent, SocketFactory, SocketLike } from '../../../shared/client/socket.ts'
+import type { V2SocketOpenResult } from '../../../shared/types.ts'
 import { cleanIpcMessage } from './errors.ts'
 
 export interface RelayEvent {
@@ -13,7 +16,7 @@ export interface RelayEvent {
 }
 
 export interface RelayApi {
-  open(serverEntryId: string): Promise<string>
+  open(serverEntryId: string): Promise<V2SocketOpenResult>
   send(socketId: string, text: string): void
   close(socketId: string, code?: number, reason?: string): void
   onEvent(cb: (e: RelayEvent) => void): () => void
@@ -46,12 +49,13 @@ export function ipcSocketFactory(api: RelayApi): SocketFactory {
         }
       }
     }
-    const finish = (code: number, reason: string): void => {
+    const finish = (code: number, reason: string, removed = false): void => {
       if (state === CLOSED) return
       state = CLOSED
       early = null
       unsubscribe?.()
-      dispatch('close', { code, reason })
+      const event: SocketCloseEvent = removed ? { code, reason, removed: true } : { code, reason }
+      dispatch('close', event)
     }
     const handle = (e: RelayEvent): void => {
       if (state === CLOSED) return
@@ -88,22 +92,25 @@ export function ipcSocketFactory(api: RelayApi): SocketFactory {
       if (socketId === null) early?.push(e)
       else if (e.socketId === socketId) handle(e)
     })
+    // A refusal is a close only, no 'error' first: the SDK treats a pre-open
+    // 'error' as "connection failed" and would drop the reason (say, "Server removed").
     api.open(serverEntryId).then(
-      (id) => {
+      (result) => {
+        if (!result.ok) {
+          // removed: the entry is gone for good (terminal). Anything else (say,
+          // "Server changed" mid-open) is transient and retried.
+          finish(1006, result.reason, result.removed === true)
+          return
+        }
+        const id = result.socketId
         socketId = id
         const buffered = early ?? []
         early = null
         if (pendingClose) api.close(id, pendingClose.code, pendingClose.reason)
         for (const e of buffered) if (e.socketId === id) handle(e)
       },
-      (err: unknown) => {
-        // A close only, no 'error' first: the SDK treats a pre-open 'error' as
-        // "connection failed" and would drop this reason (say, "Server removed").
-        const reason = cleanIpcMessage(err instanceof Error ? err.message : String(err))
-        // The entry is gone for good: a client-local code the SDK treats as terminal.
-        // Anything else (say, "Server changed" mid-open) is transient and retried.
-        finish(reason === SERVER_REMOVED_MESSAGE ? CLOSE_SERVER_REMOVED : 1006, reason)
-      }
+      // An unexpected failure (the invoke itself threw): transient, whatever its text.
+      (err: unknown) => finish(1006, cleanIpcMessage(err instanceof Error ? err.message : String(err)))
     )
     return sock
   }

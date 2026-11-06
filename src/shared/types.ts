@@ -129,6 +129,12 @@ export interface AppServerInfo {
   hasToken: boolean
 }
 
+/**
+ * `v2socket:open`: the relay socket's id, or why there is none. `removed` means
+ * the server entry is gone for good (terminal); any other refusal is transient.
+ */
+export type V2SocketOpenResult = { ok: true; socketId: string } | { ok: false; removed: boolean; reason: string }
+
 /** The result of a one-shot v2 connection test. */
 export interface AppServerTest {
   status: string

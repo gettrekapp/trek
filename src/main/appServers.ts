@@ -7,7 +7,7 @@ import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSecretStore, writeFileAtomic } from './secrets'
 import { parseAppServers, shouldClearToken, validateServerInput, type AppServer } from './appServersRules'
-import { globalSocketFactory } from '../shared/client/index.ts'
+import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
 import type { AppServerInfo, AppServerTest } from '../shared/types'
@@ -105,7 +105,7 @@ async function save(input: unknown): Promise<AppServerInfo> {
     const current = list.find((s) => s.id === entryId)
     if (!current) {
       await tokens.set(entryId, null)
-      throw new Error('Server removed')
+      throw new Error(SERVER_REMOVED_MESSAGE)
     }
     current.name = valid.name
     current.url = valid.url

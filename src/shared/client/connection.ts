@@ -23,6 +23,11 @@ export type ConnectionStatus =
 export interface StatusChange {
   status: ConnectionStatus
   message: string
+  /**
+   * Set (true) only with status 'error' when the socket factory reported that the
+   * server entry is gone for good (see `SocketCloseEvent.removed`). Terminal.
+   */
+  removed?: true
 }
 
 export interface WelcomeInfo {
@@ -68,12 +73,10 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 /** Our own close code for a socket we give up on (failed ping or hello); any non-auth, non-version code reconnects. */
 const CLOSE_ABANDONED = 4000
 /**
- * Client-local close code (never sent by a server): the socket factory knows the
- * server entry is gone for good (the desktop relay's "Server removed"). Terminal:
- * status 'error', no retry.
+ * The status message for a close whose event carries `removed: true` (the socket
+ * factory knows the server entry is gone for good), and the desktop relay's
+ * refusal reason. No close code means "removed": a server could send any code.
  */
-export const CLOSE_SERVER_REMOVED = 4404
-/** The status message that goes with CLOSE_SERVER_REMOVED (and the relay's refusal text). */
 export const SERVER_REMOVED_MESSAGE = 'Server removed'
 
 type Listener<T> = (value: T) => void
@@ -103,6 +106,8 @@ export class ServerConnection {
   status: ConnectionStatus = 'disconnected'
   statusMessage = ''
   welcome: WelcomeInfo | null = null
+  /** True while the status is the terminal 'error' of a removed server entry; any reconnect clears it. */
+  removed = false
 
   /** Options without the token: `this.token` is the only copy. */
   private readonly opts: Omit<ConnectionOptions, 'token'>
@@ -249,7 +254,7 @@ export class ServerConnection {
       }
       if (frame && typeof frame === 'object') this.onFrame(socket, frame)
     })
-    socket.addEventListener('close', (event) => this.onClose(socket, event.code, event.reason))
+    socket.addEventListener('close', (event) => this.onClose(socket, event.code, event.reason, event.removed === true))
     socket.addEventListener('error', () => {
       // An open socket's 'close' follows and schedules the retry. Before open,
       // Node 22's WebSocket fires 'error' alone (readyState stays CONNECTING, no
@@ -304,7 +309,7 @@ export class ServerConnection {
     }
   }
 
-  private onClose(socket: SocketLike, code: number, reason: string): void {
+  private onClose(socket: SocketLike, code: number, reason: string, removed = false): void {
     if (this.socket !== socket) return
     this.socket = null
     this.stopPing()
@@ -323,8 +328,9 @@ export class ServerConnection {
       )
       return
     }
-    if (code === CLOSE_SERVER_REMOVED) {
-      this.setStatus('error', SERVER_REMOVED_MESSAGE)
+    // Structural, never by code: only a socket factory (not the wire) sets `removed`.
+    if (removed) {
+      this.setStatus('error', SERVER_REMOVED_MESSAGE, true)
       return
     }
     // Arm the retry first so a status listener sees settled state and may reconnect().
@@ -411,11 +417,12 @@ export class ServerConnection {
     }
   }
 
-  private setStatus(status: ConnectionStatus, message: string): void {
-    if (this.status === status && this.statusMessage === message) return
+  private setStatus(status: ConnectionStatus, message: string, removed = false): void {
+    if (this.status === status && this.statusMessage === message && this.removed === removed) return
     this.status = status
     this.statusMessage = message
-    const change: StatusChange = { status, message }
+    this.removed = removed
+    const change: StatusChange = removed ? { status, message, removed: true } : { status, message }
     this.emit(this.statusListeners, change, 'status')
   }
 

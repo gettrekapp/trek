@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto'
 import { withToken } from './appServersRules'
 import { getAppServer, getAppServerToken } from './appServers'
 import { RelayTable, clampCloseCode, clampCloseReason, type RelayEntry } from './v2relayRules'
+import { SERVER_REMOVED_MESSAGE } from '../shared/client/index.ts'
+import type { V2SocketOpenResult } from '../shared/types'
 
 interface RelaySocket extends RelayEntry<WebContents> {
   ws: WebSocket
@@ -58,29 +60,32 @@ function watchOwner(owner: WebContents): void {
 }
 
 export function registerV2Relay(): void {
-  ipcMain.handle('v2socket:open', async (event, serverEntryId: unknown) => {
+  // Refusals resolve as {ok: false}: `removed` is the only terminal one, and it is
+  // structured so that no close code or message text can stand in for it.
+  ipcMain.handle('v2socket:open', async (event, serverEntryId: unknown): Promise<V2SocketOpenResult> => {
     if (typeof serverEntryId !== 'string' || !serverEntryId) throw new Error('serverEntryId is required')
     const owner = event.sender
+    const refuse = (reason: string, removed = false): V2SocketOpenResult => ({ ok: false, removed, reason })
     const server = getAppServer(serverEntryId)
-    if (!server) throw new Error('Server removed')
+    if (!server) return refuse(SERVER_REMOVED_MESSAGE, true)
     watchOwner(owner)
     const generation = sockets.generation(owner)
-    if (sockets.atCapacity(owner)) throw new Error('Too many sockets for this window')
+    if (sockets.atCapacity(owner)) return refuse('Too many sockets for this window')
     const token = (await getAppServerToken(serverEntryId)) ?? ''
     // While the token was read the entry may have been removed or re-pointed, or
     // the window closed, reloaded or crashed: then this token goes nowhere.
     // Removed meanwhile: final. Re-pointed meanwhile: transient, the next open reads the new URL and token.
     const now = getAppServer(serverEntryId)
-    if (!now) throw new Error('Server removed')
-    if (now.url !== server.url) throw new Error('Server changed')
-    if (owner.isDestroyed()) throw new Error('Window closed')
-    if (sockets.generation(owner) !== generation) throw new Error('Window reloaded')
-    if (sockets.atCapacity(owner)) throw new Error('Too many sockets for this window')
+    if (!now) return refuse(SERVER_REMOVED_MESSAGE, true)
+    if (now.url !== server.url) return refuse('Server changed')
+    if (owner.isDestroyed()) return refuse('Window closed')
+    if (sockets.generation(owner) !== generation) return refuse('Window reloaded')
+    if (sockets.atCapacity(owner)) return refuse('Too many sockets for this window')
     let ws: WebSocket
     try {
       ws = new WebSocket(server.url)
     } catch (err) {
-      throw new Error(`Could not open a socket: ${err instanceof Error ? err.message : String(err)}`)
+      return refuse(`Could not open a socket: ${err instanceof Error ? err.message : String(err)}`)
     }
     const s: RelaySocket = { id: randomUUID(), serverEntryId, owner, ws, token }
     sockets.add(s)
@@ -105,8 +110,9 @@ export function registerV2Relay(): void {
         closeSocket(s, 1000, '')
       }
     })
+    // Codes pass through as the server sent them; none means "removed" (that is only the open result).
     ws.addEventListener('close', (e) => end(e.code, e.reason))
-    return s.id
+    return { ok: true, socketId: s.id }
   })
 
   ipcMain.on('v2socket:send', (event, socketId: unknown, text: unknown) => {

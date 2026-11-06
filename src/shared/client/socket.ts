@@ -1,13 +1,25 @@
 // What the client needs from a WebSocket: the WHATWG subset that the global
 // WebSocket provides in Node ≥ 22, Electron, browsers and React Native.
 // Nothing here imports Node, DOM or Electron modules.
+/**
+ * A close as the client sees it. `removed` is never set by a WebSocket: only a
+ * socket factory sets it, to say the server it stands for is gone for good (the
+ * desktop relay's removed entry). The connection then stops retrying. No close
+ * code carries that meaning, so nothing on the wire can fake it.
+ */
+export interface SocketCloseEvent {
+  code: number
+  reason: string
+  removed?: boolean
+}
+
 export interface SocketLike {
   readonly readyState: number
   send(data: string): void
   close(code?: number, reason?: string): void
   addEventListener(type: 'open', listener: () => void): void
   addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void
-  addEventListener(type: 'close', listener: (event: { code: number; reason: string }) => void): void
+  addEventListener(type: 'close', listener: (event: SocketCloseEvent) => void): void
   addEventListener(type: 'error', listener: () => void): void
 }
 

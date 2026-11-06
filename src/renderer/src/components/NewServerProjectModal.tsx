@@ -15,6 +15,9 @@ interface Props {
   onCreated: (projectId: string, name: string) => void
 }
 
+/** How long Create waits for an added repo's `server` topic patch before it says so. */
+const TOPIC_WAIT_MS = 5000
+
 function baseName(p: string): string {
   return p.replace(/\/+$/, '').split('/').pop() || p
 }
@@ -52,6 +55,19 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
    */
   const awaitingTopic = chosen.some((r) => !repos.some((t) => t.id === r.id))
   const canCreate = !!name.trim() && chosen.length > 0 && !awaitingTopic && !creating
+  /** The patch is overdue: say so, and offer Retry (a fresh connection resubscribes and gets a new snapshot). */
+  const [topicStalled, setTopicStalled] = useState(false)
+  const [retries, setRetries] = useState(0)
+  useEffect(() => {
+    setTopicStalled(false)
+    if (!awaitingTopic) return
+    const timer = setTimeout(() => setTopicStalled(true), TOPIC_WAIT_MS)
+    return () => clearTimeout(timer)
+  }, [awaitingTopic, retries])
+  const retryTopic = (): void => {
+    registered.connection.reconnect()
+    setRetries((n) => n + 1)
+  }
 
   const toggle = (id: string): void =>
     setTicked((t) => {
@@ -172,11 +188,23 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
         )}
 
         {createError && <div className="error">{createError}</div>}
+        {awaitingTopic && topicStalled && (
+          <div className="error">
+            The server has not confirmed the added repo yet, so Create cannot use its path on the server. The
+            connection may be down: Retry reconnects, or untick the repo.
+          </div>
+        )}
         <div className="modal-footer new-server-project-footer">
           <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!canCreate} onClick={() => void create()}>
-            {creating ? 'Creating…' : awaitingTopic ? 'Waiting for the server…' : 'Create'}
-          </button>
+          {awaitingTopic && topicStalled ? (
+            <button className="primary" onClick={retryTopic}>
+              Retry
+            </button>
+          ) : (
+            <button className="primary" disabled={!canCreate} onClick={() => void create()}>
+              {creating ? 'Creating…' : awaitingTopic ? 'Waiting for the server…' : 'Create'}
+            </button>
+          )}
         </div>
       </div>
     </div>

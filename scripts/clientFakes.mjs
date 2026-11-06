@@ -130,10 +130,11 @@ function fakeSocket(url) {
     receive(frame) {
       fire('message', { data: JSON.stringify(frame) })
     },
-    serverClose(code, reason = '') {
+    /** `extra` stands in for fields a socket factory adds (say, `{removed: true}`). */
+    serverClose(code, reason = '', extra = {}) {
       if (sock.readyState === CLOSED) return
       sock.readyState = CLOSED
-      fire('close', { code, reason })
+      fire('close', { code, reason, ...extra })
     },
     /** Stuck in CLOSING: readyState 2 and no close event ever fires. */
     stuckClosing() {

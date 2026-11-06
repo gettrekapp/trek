@@ -40,8 +40,8 @@ export function branchLabel(info: GitWorktreeInfo): string {
   return info.branch ?? (info.head ? `${info.head.slice(0, 8)} (detached)` : info.path)
 }
 
-/** "↑2 ↓1 ● dirty" — empty string when the worktree is clean/unknown. */
-export function gitStatusLabel(info: GitWorktreeInfo): string {
+/** "↑2 ↓1 ● dirty" — empty string when the worktree is clean/unknown. Structural, so a v2 `Worktree` works too. */
+export function gitStatusLabel(info: Pick<GitWorktreeInfo, 'ahead' | 'behind' | 'dirty'>): string {
   const bits: string[] = []
   if (info.ahead) bits.push(`↑${info.ahead}`)
   if (info.behind) bits.push(`↓${info.behind}`)
