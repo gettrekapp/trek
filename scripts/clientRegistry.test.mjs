@@ -95,3 +95,25 @@ test('index re-exports the client modules', () => {
     assert.equal(typeof client[name], 'function', name)
   }
 })
+
+test('update with a new url and remove end the old mirror and ptys loudly', async () => {
+  const tick = () => new Promise((r) => setImmediate(r))
+  for (const action of ['update', 'remove']) {
+    const { server, reg } = make()
+    const old = reg.add({ id: 'a', url: 'ws://a', token: 'x' })
+    const sock = server.last()
+    sock.open()
+    sock.welcome()
+    const mirrorSeen = []
+    old.mirror.subscribe('server', (s) => mirrorSeen.push(s))
+    const exits = []
+    const attached = old.ptys.attach('p1', { onData() {}, onExit: (c) => exits.push(c) })
+    sock.reply(sock.lastReq('pty.attach'), { ptyId: 'p1', cwd: '/', cols: 80, rows: 24, seq: 0 })
+    await attached
+    if (action === 'update') reg.update('a', { url: 'ws://b' })
+    else reg.remove('a')
+    await tick()
+    assert.equal(mirrorSeen.at(-1).error.code, 'CLOSED', action)
+    assert.deepEqual(exits, [-1], action)
+  }
+})

@@ -802,7 +802,10 @@ subscribed again after the next reconnect. A resubscribe that fails with
 example `TIMEOUT` or `INTERNAL`) is reported as `{error}` (the old state, if
 any, stays), then retried on the connection's timers after 1 s, doubling to a
 cap of 30 s, until it succeeds; the last unsubscribe or a reconnect cancels the
-retry (a reconnect resubscribes at once and resets the back-off).
+retry (a reconnect resubscribes at once and resets the back-off). When the
+connection is closed, every listener gets `{error}` with code `CLOSED` ("the
+connection was closed") and the topics are dropped; a `subscribe` after that
+gets the same error at once.
 
 **PtyStream.** `attach(ptyId, handlers)` registers the handlers before the request
 (the replay arrives first, as `onData(data, true)`) and resolves with the
@@ -821,16 +824,20 @@ other error. If a re-attach fails with `PTY_NOT_FOUND`, the pty is dropped and
 `onExit(-1)` runs; any other error drops it and calls `onError` (without an
 `onError`, it is logged and `onExit(-1)` runs). A drop mid-pass
 (`NOT_CONNECTED`), or a new welcome while a retry waits, ends the pass: the next
-welcome starts a new one.
+welcome starts a new one. When the connection is closed (`close()`, which is also what
+`registry.update` with a new URL and `registry.remove` do), every attached pty
+gets `onExit(-1)` and the stream is emptied; an `attach()` still in flight just
+rejects with `NOT_CONNECTED`.
 
 **Registry.** `ServerRegistry` holds one connection, mirror and pty stream per
 server. `add(entry)` creates and connects, and throws for a duplicate id.
 `update(id, {url?, token?})` throws for an unknown id; a new token reconnects the
 same `RegisteredServer`, but a new URL cannot (a connection's URL is fixed), so it
 removes the entry and adds a fresh one: `get(id)` returns a new `RegisteredServer`
-and anything holding the old one is stale. `remove(id)` closes the connection;
-its status events, including the final `closed`, no longer reach registry
-listeners.
+and anything holding the old one is stale: its ptys get `onExit(-1)` and its
+mirror listeners a `CLOSED` error, so nothing on the old object goes silent.
+`remove(id)` closes the connection the same way; its status events, including
+the final `closed`, no longer reach registry listeners.
 
 **Contract test.** `npm run smoke:client` builds `trek-server` and runs the client
 against it; it prints `CLIENT CONTRACT PASS`.

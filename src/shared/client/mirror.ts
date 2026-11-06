@@ -2,7 +2,7 @@
 // state.patch events; resubscribes on a gap or after a reconnect.
 import type { Topic } from '../model/topics.ts'
 import { applyStatePatch, type TopicState } from '../sync/topicState.ts'
-import type { ClientError, ServerConnection } from './connection.ts'
+import { ClientError, type ServerConnection } from './connection.ts'
 
 export type MirrorUpdate = TopicState<unknown> | { error: ClientError }
 type Listener = (update: MirrorUpdate) => void
@@ -41,9 +41,16 @@ export class TopicMirror {
     conn.on('event', ({ event, payload }) => {
       if (event === 'state.patch') this.onPatch(payload as { topic: Topic; rev: number; ops: [] })
     })
+    conn.on('status', ({ status }) => {
+      if (status === 'closed') this.onClosed()
+    })
   }
 
   subscribe(topic: Topic, listener: Listener): () => void {
+    if (this.conn.status === 'closed') {
+      this.call(listener, { error: closedError() })
+      return () => {}
+    }
     let entry = this.topics.get(topic)
     if (!entry) {
       entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS }
@@ -102,6 +109,20 @@ export class TopicMirror {
     )
   }
 
+  /**
+   * The connection is closed for good (also `registry.update` with a new url,
+   * and `registry.remove`): tell every listener, so none waits forever.
+   */
+  private onClosed(): void {
+    const entries = [...this.topics.values()]
+    this.topics.clear()
+    for (const entry of entries) {
+      this.cancelRetry(entry)
+      entry.attempt++
+      this.notify(entry, { error: closedError() })
+    }
+  }
+
   private scheduleRetry(topic: Topic, entry: Entry): void {
     this.cancelRetry(entry)
     const delay = entry.retryDelay
@@ -142,4 +163,8 @@ export class TopicMirror {
       console.error('mirror listener failed', err)
     }
   }
+}
+
+function closedError(): ClientError {
+  return new ClientError('CLOSED', 'the connection was closed')
 }

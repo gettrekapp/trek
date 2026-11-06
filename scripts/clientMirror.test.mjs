@@ -290,3 +290,23 @@ test('a reconnect cancels a pending subscribe retry and resets its back-off', as
   clock.advance(1000)
   assert.equal(subReqs(next).length, 2, 'back-off starts again at 1 s')
 })
+
+test('close() gives every listener a CLOSED error and drops the topics', async () => {
+  const { clock, conn, mirror, sock } = setup()
+  const a = []
+  const b = []
+  mirror.subscribe('server', (s) => a.push(s))
+  mirror.subscribe('project:p', (s) => b.push(s))
+  sock.reply(subReqs(sock)[0], { snapshot: { n: 1 }, rev: 0 })
+  sock.fail(subReqs(sock)[1], 'INTERNAL', 'boom') // leaves a retry pending
+  await tick()
+  conn.close()
+  assert.equal(a.at(-1).error.code, 'CLOSED')
+  assert.equal(a.at(-1).error.message, 'the connection was closed')
+  assert.equal(b.at(-1).error.code, 'CLOSED')
+  assert.equal(mirror.get('server'), undefined)
+  assert.equal(clock.pending(), 0, 'the retry is cancelled')
+  const late = []
+  mirror.subscribe('server', (s) => late.push(s))
+  assert.equal(late.at(-1).error.code, 'CLOSED', 'a subscribe after close hears CLOSED at once')
+})

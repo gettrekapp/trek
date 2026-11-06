@@ -37,6 +37,8 @@ export class PtyStream {
   private generation = 0
   /** The re-attach pass's pending CONGESTED back-off (the pass is serial, so at most one). */
   private retryWait: { timer: unknown; resolve: () => void } | null = null
+  /** Handlers whose first `attach()` is still in flight: its rejection reports a close, not onExit. */
+  private readonly attaching = new Set<PtyHandlers>()
 
   constructor(conn: ServerConnection) {
     this.conn = conn
@@ -58,6 +60,9 @@ export class PtyStream {
       this.cancelRetryWait()
       void this.reattachAll(++this.generation)
     })
+    conn.on('status', ({ status }) => {
+      if (status === 'closed') this.onClosed()
+    })
   }
 
   /**
@@ -74,12 +79,15 @@ export class PtyStream {
     // Registered before the request goes out: the server sends the replay
     // frames before the response.
     this.attached.set(ptyId, handlers)
+    this.attaching.add(handlers)
     let info: PtyInfo
     try {
       info = await this.conn.request('pty.attach', { ptyId })
     } catch (err) {
       if (this.attached.get(ptyId) === handlers) this.attached.delete(ptyId)
       throw err
+    } finally {
+      this.attaching.delete(handlers)
     }
     if (this.attached.get(ptyId) !== handlers) {
       // Detached (or exited) while the request was in flight. The server
@@ -153,6 +161,17 @@ export class PtyStream {
         break
       }
     }
+  }
+
+  /**
+   * The connection is closed for good (also `registry.update` with a new url,
+   * and `registry.remove`): end every attached pty so its owner hears of it.
+   */
+  private onClosed(): void {
+    this.cancelRetryWait()
+    const ended = [...this.attached].filter(([, h]) => !this.attaching.has(h))
+    this.attached.clear()
+    for (const [, h] of ended) this.call(h, () => h.onExit(-1))
   }
 
   /** Resolves after `ms` on the connection's timers, or at once when cancelled. */
