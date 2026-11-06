@@ -180,6 +180,14 @@ export class TerminalHost {
     return record !== undefined && !record.killed
   }
 
+  /**
+   * How many ptys the host holds, killed ones included: a killed pty's process may
+   * run on until the kill timeout, so it still counts against a pty cap.
+   */
+  count(): number {
+    return this.records.size
+  }
+
   /** Whether `sink` is attached to the pty. */
   isAttached(ptyId: string, sink: TerminalSink): boolean {
     return this.records.get(ptyId)?.sinks.has(sink) ?? false

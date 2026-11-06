@@ -303,6 +303,23 @@ test('a process that ignores SIGHUP gets SIGKILL after the kill timeout', async 
   assert.deepEqual(exits, [])
 })
 
+test('count includes ptys being killed until their process exits', async (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  host.spawn('p2', opts)
+  assert.equal(host.count(), 2)
+  spawned[0].ignoreHup = true
+  host.kill('p1')
+  await flush()
+  assert.equal(host.has('p1'), false)
+  assert.equal(host.count(), 2, 'a dying pty still counts')
+  spawned[0].exit(137)
+  assert.equal(host.count(), 1)
+  host.kill('p2')
+  await flush()
+  assert.equal(host.count(), 0)
+})
+
 test('a pty that exits after kill does not get SIGKILL', async (t) => {
   const { host, spawned } = setup(t, { killTimeoutMs: 30 })
   host.spawn('p1', opts)

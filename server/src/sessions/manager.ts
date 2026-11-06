@@ -16,13 +16,13 @@ import {
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
-import { MAX_PTY_WRITE } from '../sessionHandlers.ts'
 import { assertNotRepository, findRegistered } from '../projects/model.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
 import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
+import { MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import {
   IDLE_MS,
@@ -40,21 +40,7 @@ import { TerminalHost, type PtySpawner } from './terminalHost.ts'
 export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
 
-export const MAX_TITLE_LENGTH = 200
-
-/** The longest queued prompt, in UTF-16 code units. */
-export const MAX_QUEUE_ENTRY = 100_000
-/** The most prompts a session's queue holds. */
-export const MAX_QUEUE_LENGTH = 100
-
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
-
-/** A session title: at most MAX_TITLE_LENGTH characters, no control characters. */
-export function checkTitle(title: string, field: string): string {
-  if (title.length > MAX_TITLE_LENGTH) throw bad(`${field} must be at most ${MAX_TITLE_LENGTH} characters`)
-  if (/[\u0000-\u001f\u007f-\u009f]/.test(title)) throw bad(`${field} must not contain control characters`)
-  return title
-}
 
 export interface ScheduledJob {
   cancel(): void
@@ -191,6 +177,8 @@ export class SessionManager {
     const typeTitle = sessionType?.name ? checkTitle(sessionType.name, `session type "${sessionType.id}" name`) : undefined
     if (p.initialMessage !== undefined && typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
 
+    // Before the lazy load: at the cap, loading would only mark the worktree's sessions exited -1.
+    this.assertCapacity()
     if (worktree && !worktree.loaded) this.loadWorktree({ projectId: project.id, worktreeId: worktree.id })
 
     // Loading replaced the project snapshot: count the sessions in the current one.
@@ -287,12 +275,7 @@ export class SessionManager {
   }
 
   setQueue(p: any): null {
-    if (!Array.isArray(p.queue) || p.queue.some((q: unknown) => typeof q !== 'string' || q === '')) {
-      throw bad('queue must be an array of non-empty strings')
-    }
-    if (p.queue.length > MAX_QUEUE_LENGTH) throw bad(`queue must hold at most ${MAX_QUEUE_LENGTH} prompts`)
-    if (p.queue.some((q: string) => q.length > MAX_QUEUE_ENTRY)) throw bad(`each queued prompt must be at most ${MAX_QUEUE_ENTRY} characters`)
-    const queue = [...p.queue] as string[]
+    const queue = checkQueue(p.queue, 'queue')
     this.mutate(p.projectId, p.sessionId, (s) => { s.queue = queue })
     return null
   }
@@ -309,7 +292,7 @@ export class SessionManager {
     const normalized = text.replace(/\r?\n/g, '\r')
     this.terminals.write(ptyId, this.terminals.bracketedPaste(ptyId) ? `\x1b[200~${normalized}\x1b[201~` : normalized)
     // A prompt is the user acting, whatever its bytes are: no terminal-reply filter.
-    this.updateStatus(ptyId, (status) => onInput(status))
+    this.onUserInput(ptyId)
     setTimeout(() => {
       if (this.terminals.has(ptyId)) this.terminals.write(ptyId, '\r')
     }, 150).unref()
@@ -334,7 +317,7 @@ export class SessionManager {
   /** A client typed into the pty (pty.write). Terminal auto-replies are not input. */
   noteInput(ptyId: string, data: string): void {
     if (isTerminalReply(data)) return
-    this.updateStatus(ptyId, (status) => onInput(status))
+    this.onUserInput(ptyId)
   }
 
   loadWorktree(p: any): null {
@@ -447,6 +430,15 @@ export class SessionManager {
     if (this.stopped) throw codedError('INTERNAL', 'the server is shutting down')
   }
 
+  /**
+   * Refuses a new session pty at the cap. It counts the host's records, so a pty
+   * killed but still running (up to the kill timeout) holds its slot.
+   */
+  private assertCapacity(): void {
+    const max = this.deps.store.maxSessions()
+    if (this.terminals.count() >= max) throw bad(`the server is running its maximum of ${max} sessions`)
+  }
+
   /** Works from the manager's own maps, not the records, so it can run after the records are gone. */
   private forget(match: (o: Owner) => boolean): void {
     for (const entry of [...this.pending.values()]) {
@@ -492,9 +484,7 @@ export class SessionManager {
     sessionId: string,
     run: { cols: number; rows: number; fresh?: boolean; initialMessage?: string }
   ): string {
-    // owners holds one entry per live session pty (killSession and onExit drop theirs).
-    const max = this.deps.store.maxSessions()
-    if (this.owners.size >= max) throw bad(`the server is running its maximum of ${max} sessions`)
+    this.assertCapacity()
     const project = this.deps.projects.require(projectId)
     const { session, worktree, repo } = findSession(project, sessionId)
     const provider = getProvider(session.llm.provider)
@@ -603,6 +593,7 @@ export class SessionManager {
   // ---- live status ----
 
   private onPtyOutput(ptyId: string, data: string): void {
+    if (this.stopped) return
     const owner = this.owners.get(ptyId)
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
@@ -611,14 +602,37 @@ export class SessionManager {
     const r = onOutput(session.status, entry.activity, data, markers)
     entry.activity = r.activity
     this.activity.set(owner.sessionId, entry)
-    if (r.restartTimer) {
-      entry.quiet?.cancel()
-      entry.quiet = this.schedule(() => this.onQuietTimer(ptyId, entry), IDLE_MS)
-    }
+    if (r.restartTimer) this.armQuiet(ptyId, entry)
     if (r.status !== session.status) this.setStatus(owner, r.status)
   }
 
+  /** Cancels the session's pending quiet timer and schedules a new one IDLE_MS out. */
+  private armQuiet(ptyId: string, entry: { activity: Activity; quiet?: ScheduledJob }): void {
+    entry.quiet?.cancel()
+    entry.quiet = this.schedule(() => this.onQuietTimer(ptyId, entry), IDLE_MS)
+  }
+
+  /**
+   * The user typed or sent a prompt. Leaving attention or complete for working arms
+   * the quiet timer as output does, so an agent that prints nothing still settles.
+   */
+  private onUserInput(ptyId: string): void {
+    if (this.stopped) return
+    const owner = this.owners.get(ptyId)
+    const session = owner && this.sessionOf(owner)
+    if (!owner || !session) return
+    const status = onInput(session.status)
+    if (status === session.status) return
+    if (status === 'working') {
+      const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
+      this.activity.set(owner.sessionId, entry)
+      this.armQuiet(ptyId, entry)
+    }
+    this.setStatus(owner, status)
+  }
+
   private onQuietTimer(ptyId: string, entry: { activity: Activity; quiet?: ScheduledJob }): void {
+    if (this.stopped) return
     const owner = this.owners.get(ptyId)
     // A timer whose session was dropped (and maybe tracked again since) does nothing.
     if (!owner || this.activity.get(owner.sessionId) !== entry) return
@@ -631,14 +645,11 @@ export class SessionManager {
   }
 
   private onPtyBell(ptyId: string): void {
-    this.updateStatus(ptyId, (status) => onBell(status))
-  }
-
-  private updateStatus(ptyId: string, next: (status: SessionStatus) => SessionStatus): void {
+    if (this.stopped) return
     const owner = this.owners.get(ptyId)
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
-    const status = next(session.status)
+    const status = onBell(session.status)
     if (status !== session.status) this.setStatus(owner, status)
   }
 

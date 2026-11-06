@@ -3,11 +3,9 @@
 import { codedError } from './errors.ts'
 import { requireString } from './validate.ts'
 import type { V2Context } from './v2.ts'
+import { MAX_PTY_WRITE } from './sessions/limits.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
-
-/** The most a single pty.write may carry, in UTF-16 code units. */
-export const MAX_PTY_WRITE = 1024 * 1024
 
 /** pty.write and pty.resize: only a connection attached to the pty may drive it. */
 function attachedPty(ctx: V2Context, p: any): string {

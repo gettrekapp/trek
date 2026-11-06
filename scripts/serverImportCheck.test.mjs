@@ -101,6 +101,20 @@ test('shape, settings and branch keys are checked', (t) => {
   assert.equal(code(() => checkImport(q, ctx)), 'BAD_REQUEST')
 })
 
+test('session queues and titles follow the session limits', (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const withSession = (mutate) => { const p = project(); mutate(p.repositories[0].worktrees[1].sessions[0]); return p }
+  const globalWith = (mutate) => { const p = project(); mutate(p.globalSessions[0]); return p }
+  assert.equal(code(() => checkImport(withSession((s) => { s.queue = Array(101).fill('q') }), ctx)), 'BAD_REQUEST')
+  assert.equal(code(() => checkImport(withSession((s) => { s.queue = ['q'.repeat(100_001)] }), ctx)), 'BAD_REQUEST')
+  assert.equal(code(() => checkImport(withSession((s) => { s.queue = ['q', ''] }), ctx)), 'BAD_REQUEST')
+  assert.equal(code(() => checkImport(globalWith((s) => { s.queue = [''] }), ctx)), 'BAD_REQUEST')
+  assert.equal(code(() => checkImport(withSession((s) => { s.title = 'x'.repeat(201) }), ctx)), 'BAD_REQUEST')
+  assert.equal(code(() => checkImport(globalWith((s) => { s.title = 'a\u001b[2Jb' }), ctx)), 'BAD_REQUEST')
+  assert.equal(code(() => checkImport(withSession((s) => { s.queue = Array(100).fill('q'.repeat(100_000)); s.title = 'x'.repeat(200) }), ctx)), 'ok')
+})
+
 test('a nested __proto__ key anywhere in the payload is BAD_REQUEST', (t) => {
   const { registry, guard, project } = setup(t)
   const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }

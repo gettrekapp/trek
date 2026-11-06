@@ -6,6 +6,7 @@ import type { Project, Repository, Session, Worktree } from '../../../src/shared
 import type { RemoteRepo } from '../../../src/shared/protocol'
 import { codedError } from '../errors.ts'
 import type { PathGuard } from '../paths.ts'
+import { checkQueue, checkTitle } from '../sessions/limits.ts'
 import { realOrResolved } from '../repos.ts'
 import { assertNoProtoKeys, isRecord, requireAbsolutePath, requireName } from '../validate.ts'
 import { assertNotRepository, findRegistered, resetRuntime } from './model.ts'
@@ -34,8 +35,10 @@ function checkSession(raw: unknown, where: string, seen: Set<string>, existing: 
   if (!isRecord(raw)) throw bad(`${where} must be an object`)
   checkId(raw.id, where, seen, existing)
   if (typeof raw.title !== 'string') throw bad(`${where}.title must be a string`)
+  checkTitle(raw.title, `${where}.title`)
   if (!isRecord(raw.llm) || typeof raw.llm.provider !== 'string') throw bad(`${where}.llm must name a provider`)
-  if (!Array.isArray(raw.queue) || raw.queue.some((q) => typeof q !== 'string')) throw bad(`${where}.queue must be an array of strings`)
+  // The limits session.setQueue applies.
+  checkQueue(raw.queue, `${where}.queue`)
   for (const key of ['agentSessionId', 'sessionTypeId', 'systemPrompt']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw bad(`${where}.${key} must be a string`)
   }

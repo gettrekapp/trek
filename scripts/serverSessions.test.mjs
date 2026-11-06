@@ -41,7 +41,8 @@ test('findWorktree', () => {
 
 function fakeSpawner() {
   const spawned = []
-  const hooks = { calls: 0, failAt: new Set(), onSpawn: undefined }
+  // ignoreHup: kill() without SIGKILL leaves the process running, as an agent that ignores SIGHUP
+  const hooks = { calls: 0, failAt: new Set(), onSpawn: undefined, ignoreHup: false }
   const spawner = (opts) => {
     hooks.calls++
     if (hooks.failAt.has(hooks.calls)) throw new Error(`spawn ${hooks.calls} failed`)
@@ -49,7 +50,7 @@ function fakeSpawner() {
       opts, written: [], killed: false, dataCb: () => {}, exitCb: () => {},
       onData(cb) { this.dataCb = cb }, onExit(cb) { this.exitCb = cb },
       write(d) { this.written.push(d) }, resize() {}, pause() {}, resume() {},
-      kill() { this.killed = true; setImmediate(() => this.exitCb(129)) },
+      kill(signal) { this.killed = true; if (!hooks.ignoreHup || signal === 'SIGKILL') setImmediate(() => this.exitCb(129)) },
       emit(d) { this.dataCb(d) }, exit(code) { this.exitCb(code) }
     }
     spawned.push(proc)
@@ -737,6 +738,41 @@ test('complete ignores output and bells; typing re-engages tracking', async (t) 
   assert.equal(statusOf(s), 'working')
 })
 
+test('input that leaves attention or complete for working arms the quiet timer', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  fireQuiet(s)
+  assert.equal(statusOf(s), 'attention')
+  s.sessions.noteInput(ptyId, 'y')
+  assert.equal(statusOf(s), 'working')
+  fireQuiet(s)
+  assert.equal(statusOf(s), 'idle', 'no output after the input: the session settles')
+  // complete → working through sendPrompt arms it too
+  s.sessions.markComplete({ projectId: s.projectId, sessionId, complete: true })
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'go' })
+  assert.equal(statusOf(s), 'working')
+  fireQuiet(s)
+  assert.equal(statusOf(s), 'idle')
+})
+
+test('after stopAll, output, bells and input schedule nothing and publish nothing', async (t) => {
+  const s = setup(t)
+  s.hooks.ignoreHup = true
+  const { ptyId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.stopAll()
+  const scheduled = s.scheduled.length
+  const publish = t.mock.method(s.hub, 'publish')
+  s.spawned[0].emit('esc to interrupt\x07')
+  await s.sessions.terminals.settled(ptyId)
+  s.sessions.noteInput(ptyId, 'y')
+  assert.equal(s.scheduled.length, scheduled)
+  assert.equal(publish.mock.callCount(), 0)
+  assert.equal(statusOf(s), 'idle')
+  s.spawned[0].exit(137)
+})
+
 test('status changes are not saved; seen and rename update the attention topic', (t) => {
   const s = setup(t)
   const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
@@ -828,6 +864,33 @@ test('maxSessions caps running sessions; load marks the rest exited -1', async (
   s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
   const states = s.wx().sessions.map((x) => [x.status, x.exitCode])
   assert.deepEqual(states, [['idle', undefined], ['idle', undefined], ['exited', -1]])
+})
+
+test('maxSessions counts a closed session whose process has not exited yet', async (t) => {
+  const s = setup(t, { maxSessions: 2 })
+  s.hooks.ignoreHup = true
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.sessions.close({ projectId: s.projectId, sessionId: one.sessionId })
+  await tick()
+  assert.equal(s.spawned[0].killed, true)
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'BAD_REQUEST' && /maximum of 2/.test(e.message))
+  // The dying process ends (SIGKILL, or it gives in): its slot is free.
+  s.spawned[0].exit(137)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.equal(s.wx().sessions.length, 2)
+})
+
+test('at the cap, start on an unloaded worktree refuses before loading it', (t) => {
+  const s = setup(t, { maxSessions: 2 })
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[1].sessions.push({ id: 'dormant', agentSessionId: '33333333-3333-4333-8333-333333333333', title: 'D', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'BAD_REQUEST' && /maximum of 2/.test(e.message))
+  assert.equal(s.wx().loaded, false, 'the worktree is not loaded')
+  assert.deepEqual(s.wx().sessions.map((x) => [x.id, x.status, x.exitCode]), [['dormant', 'idle', undefined]])
 })
 
 test('prompt and queue limits', async (t) => {
