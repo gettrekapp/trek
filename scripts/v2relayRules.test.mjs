@@ -1,7 +1,7 @@
 // scripts/v2relayRules.test.mjs — the relay's ownership table, one watch per window, and close-code rules.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { RelayTable, clampCloseCode, clampCloseReason } from '../src/main/v2relayRules.ts'
+import { MAX_SOCKETS_PER_OWNER, RelayTable, clampCloseCode, clampCloseReason } from '../src/main/v2relayRules.ts'
 
 test('clampCloseCode keeps 1000 and 3000–4999, otherwise 1000', () => {
   for (const ok of [1000, 3000, 4000, 4999]) assert.equal(clampCloseCode(ok), ok)
@@ -53,4 +53,45 @@ test('watch is true once per window', () => {
   assert.equal(table.watch(a), true)
   assert.equal(table.watch(a), false)
   assert.equal(table.watch(b), true)
+})
+
+test('delete and has report whether the socket is still in the table', () => {
+  const a = {}
+  const table = new RelayTable()
+  table.add({ id: 's1', serverEntryId: 'x', owner: a })
+  assert.equal(table.has('s1'), true)
+  assert.equal(table.delete('s1'), true)
+  assert.equal(table.has('s1'), false)
+  assert.equal(table.delete('s1'), false, 'a second close is not reported')
+})
+
+test('generation starts at 0 per window and bumps independently', () => {
+  const a = {}
+  const b = {}
+  const table = new RelayTable()
+  assert.equal(table.generation(a), 0)
+  const before = table.generation(a)
+  assert.equal(table.bumpGeneration(a), 1)
+  assert.notEqual(table.generation(a), before, 'an open begun before the bump sees a change')
+  assert.equal(table.bumpGeneration(a), 2)
+  assert.equal(table.generation(b), 0)
+})
+
+test('atCapacity caps sockets per window, 16 by default', () => {
+  assert.equal(MAX_SOCKETS_PER_OWNER, 16)
+  const a = {}
+  const b = {}
+  const table = new RelayTable()
+  for (let i = 0; i < 15; i++) table.add({ id: `a${i}`, serverEntryId: 'x', owner: a })
+  assert.equal(table.atCapacity(a), false)
+  table.add({ id: 'a15', serverEntryId: 'x', owner: a })
+  assert.equal(table.atCapacity(a), true)
+  assert.equal(table.atCapacity(b), false, 'another window has its own budget')
+  table.delete('a0')
+  assert.equal(table.atCapacity(a), false)
+  const small = new RelayTable(2)
+  small.add({ id: '1', serverEntryId: 'x', owner: a })
+  assert.equal(small.atCapacity(a), false)
+  small.add({ id: '2', serverEntryId: 'x', owner: a })
+  assert.equal(small.atCapacity(a), true)
 })

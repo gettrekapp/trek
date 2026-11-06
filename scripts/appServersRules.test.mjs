@@ -1,7 +1,7 @@
 // scripts/appServersRules.test.mjs — app-wide server list parsing, input checks, and hello token injection.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isLoopbackUrl, parseAppServers, validateServerInput, withToken } from '../src/main/appServersRules.ts'
+import { isLoopbackUrl, parseAppServers, shouldClearToken, validateServerInput, withToken } from '../src/main/appServersRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
   assert.deepEqual(parseAppServers([
@@ -19,6 +19,18 @@ test('validateServerInput', () => {
   assert.throws(() => validateServerInput({ name: 'x', url: 'https://x' }), /ws:\/\/ or wss:\/\//)
   assert.throws(() => validateServerInput({ name: 'x', url: 'not a url' }), /URL/)
   assert.throws(() => validateServerInput({ name: 'x'.repeat(201), url: 'wss://x' }), /name/)
+  assert.throws(() => validateServerInput({ name: 'x', url: 'wss://user:pass@box:7400' }), /user name or password/)
+  assert.throws(() => validateServerInput({ name: 'x', url: 'wss://user@box' }), /user name or password/)
+})
+
+test('shouldClearToken: the token stays only on the same origin, or when a new one comes with the edit', () => {
+  assert.equal(shouldClearToken('wss://box:7400', 'wss://box:7400/v2?x=1', false), false, 'same origin, other path')
+  assert.equal(shouldClearToken('wss://box:7400', 'wss://box:7400', false), false, 'unchanged')
+  assert.equal(shouldClearToken('wss://box:7400', 'wss://evil:7400', false), true, 'other host')
+  assert.equal(shouldClearToken('wss://box:7400', 'wss://box:7401', false), true, 'other port')
+  assert.equal(shouldClearToken('ws://box:7400', 'wss://box:7400', false), true, 'ws to wss')
+  assert.equal(shouldClearToken('wss://box:7400', 'wss://evil:7400', true), false, 'a token supplied in the same call')
+  assert.equal(shouldClearToken('not a url', 'wss://box', false), true, 'an unparseable old URL clears')
 })
 
 test('isLoopbackUrl', () => {

@@ -30,9 +30,18 @@ export function clampCloseReason(reason: unknown): string {
   return out
 }
 
+/** Per window: past this, an open is refused (a runaway renderer cannot exhaust sockets). */
+export const MAX_SOCKETS_PER_OWNER = 16
+
 export class RelayTable<Owner extends object, Entry extends RelayEntry<Owner>> {
   private readonly entries = new Map<string, Entry>()
   private readonly watched = new WeakSet<Owner>()
+  private readonly generations = new WeakMap<Owner, number>()
+  private readonly maxPerOwner: number
+
+  constructor(maxPerOwner: number = MAX_SOCKETS_PER_OWNER) {
+    this.maxPerOwner = maxPerOwner
+  }
 
   get size(): number {
     return this.entries.size
@@ -42,8 +51,32 @@ export class RelayTable<Owner extends object, Entry extends RelayEntry<Owner>> {
     this.entries.set(entry.id, entry)
   }
 
-  delete(id: string): void {
-    this.entries.delete(id)
+  /** True if it was there: a socket's close is reported once, and never after its window moved on. */
+  delete(id: string): boolean {
+    return this.entries.delete(id)
+  }
+
+  has(id: string): boolean {
+    return this.entries.has(id)
+  }
+
+  /** True when `owner` already holds the maximum number of sockets. */
+  atCapacity(owner: Owner): boolean {
+    let count = 0
+    for (const e of this.entries.values()) if (e.owner === owner && ++count >= this.maxPerOwner) return true
+    return false
+  }
+
+  /** Bumped on each navigation, reload or crash of the window's page. */
+  generation(owner: Owner): number {
+    return this.generations.get(owner) ?? 0
+  }
+
+  /** The window's page went away: an open begun before this must not complete. */
+  bumpGeneration(owner: Owner): number {
+    const next = this.generation(owner) + 1
+    this.generations.set(owner, next)
+    return next
   }
 
   /** The entry, only if `owner` opened it: a window can never act on another's socket. */

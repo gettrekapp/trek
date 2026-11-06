@@ -1,6 +1,6 @@
 // One-shot v2 connection check through the 3a SDK, for appServers:test. No
 // Electron imports, so a script can run it against a real trek-server.
-import { ServerConnection, type ConnectionStatus, type SocketFactory } from '../shared/client/index.ts'
+import { ServerConnection, realTimers, type ConnectionStatus, type SocketFactory, type Timers } from '../shared/client/index.ts'
 import type { AppServerTest } from '../shared/types.ts'
 
 export interface ProbeOptions {
@@ -9,6 +9,8 @@ export interface ProbeOptions {
   createSocket: SocketFactory
   clientVersion: string
   timeoutMs?: number
+  /** Injected so tests can drive time; the real timers otherwise. */
+  timers?: Timers
 }
 
 const DEFAULT_TIMEOUT_MS = 8000
@@ -20,7 +22,9 @@ const DEFAULT_TIMEOUT_MS = 8000
  */
 export function probeServer(opts: ProbeOptions): Promise<AppServerTest> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  const timers = opts.timers ?? realTimers
   const conn = new ServerConnection({
+    timers,
     url: opts.url,
     token: opts.token,
     createSocket: opts.createSocket,
@@ -33,7 +37,7 @@ export function probeServer(opts: ProbeOptions): Promise<AppServerTest> {
     const finish = (status: ConnectionStatus, message: string): void => {
       if (done) return
       done = true
-      clearTimeout(timer)
+      timers.clearTimeout(timer)
       off()
       const result: AppServerTest = { status, message }
       if (status === 'connected' && conn.welcome) {
@@ -44,7 +48,7 @@ export function probeServer(opts: ProbeOptions): Promise<AppServerTest> {
       conn.close()
       resolve(result)
     }
-    const timer = setTimeout(() => finish('error', `Timed out after ${Math.round(timeoutMs / 1000)} s`), timeoutMs)
+    const timer = timers.setTimeout(() => finish('error', `Timed out after ${Math.round(timeoutMs / 1000)} s`), timeoutMs)
     const off = conn.on('status', ({ status, message }) => {
       if (status === 'connecting') {
         tried = true

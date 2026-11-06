@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 // When OS-level encryption is unavailable (e.g. Linux without a keyring,
@@ -10,6 +10,21 @@ const PLAIN_PREFIX = 'plain:'
 export interface SecretStore {
   get: (key: string) => Promise<string | null>
   set: (key: string, value: string | null) => Promise<void>
+}
+
+/**
+ * Writes `text` to `path` owner-only (0600) via a temp file and a rename, so a
+ * crash mid-write never leaves a truncated file. Callers serialise their writes.
+ */
+export async function writeFileAtomic(path: string, text: string): Promise<void> {
+  const temp = `${path}.${process.pid}.tmp`
+  try {
+    await writeFile(temp, text, { encoding: 'utf8', mode: 0o600 })
+    await rename(temp, path)
+  } catch (err) {
+    await unlink(temp).catch(() => undefined)
+    throw err
+  }
 }
 
 /**
@@ -27,9 +42,18 @@ export function createSecretStore(fileName: string): SecretStore {
     }
   }
 
+  /** Every set is a read-modify-write; chained so two never interleave and lose a key. */
+  let chain: Promise<unknown> = Promise.resolve()
+  const serial = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = chain.then(task)
+    chain = run.catch(() => undefined)
+    return run
+  }
+
   return {
     async get(key) {
-      const stored = (await readAll())[key]
+      // After any queued set, so a get never sees a value older than a set it followed.
+      const stored = (await serial(readAll))[key]
       if (!stored) return null
       if (stored.startsWith(PLAIN_PREFIX)) {
         return Buffer.from(stored.slice(PLAIN_PREFIX.length), 'base64').toString('utf8')
@@ -40,16 +64,18 @@ export function createSecretStore(fileName: string): SecretStore {
         return null
       }
     },
-    async set(key, value) {
-      const all = await readAll()
-      if (value === null) {
-        delete all[key]
-      } else if (safeStorage.isEncryptionAvailable()) {
-        all[key] = safeStorage.encryptString(value).toString('base64')
-      } else {
-        all[key] = PLAIN_PREFIX + Buffer.from(value, 'utf8').toString('base64')
-      }
-      await writeFile(filePath(), JSON.stringify(all, null, 2), 'utf8')
+    set(key, value) {
+      return serial(async () => {
+        const all = await readAll()
+        if (value === null) {
+          delete all[key]
+        } else if (safeStorage.isEncryptionAvailable()) {
+          all[key] = safeStorage.encryptString(value).toString('base64')
+        } else {
+          all[key] = PLAIN_PREFIX + Buffer.from(value, 'utf8').toString('base64')
+        }
+        await writeFileAtomic(filePath(), JSON.stringify(all, null, 2))
+      })
     }
   }
 }

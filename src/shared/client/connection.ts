@@ -243,7 +243,17 @@ export class ServerConnection {
     })
     socket.addEventListener('close', (event) => this.onClose(socket, event.code, event.reason))
     socket.addEventListener('error', () => {
-      // 'close' follows; the retry is scheduled there.
+      // An open socket's 'close' follows and schedules the retry. Before open,
+      // Node 22's WebSocket fires 'error' alone (readyState stays CONNECTING, no
+      // 'close' ever), so treat it as closed now; onClose then ignores the late
+      // or synthetic close of a socket it no longer holds.
+      if (this.socket !== socket || socket.readyState === OPEN) return
+      this.onClose(socket, 1006, 'connection failed')
+      try {
+        socket.close()
+      } catch {
+        // already closing
+      }
     })
   }
 

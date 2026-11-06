@@ -15,7 +15,12 @@ interface RelaySocket extends RelayEntry<WebContents> {
 
 const sockets = new RelayTable<WebContents, RelaySocket>()
 
+/** Only for a socket still in the table: once its window moved on, its page never hears of it again. */
 function emit(s: RelaySocket, event: Record<string, unknown>): void {
+  if (sockets.has(s.id)) send(s, event)
+}
+
+function send(s: RelaySocket, event: Record<string, unknown>): void {
   if (!s.owner.isDestroyed()) s.owner.send('v2socket:event', { socketId: s.id, ...event })
 }
 
@@ -27,16 +32,29 @@ function closeSocket(s: RelaySocket, code: number, reason: string): void {
   }
 }
 
+/** The window's page is gone (closed, reloaded, crashed): drop its sockets without telling it. */
 function closeForOwner(owner: WebContents, reason: string): void {
+  sockets.bumpGeneration(owner)
   for (const s of sockets.forOwner(owner)) {
     sockets.delete(s.id)
     closeSocket(s, 1000, reason)
   }
 }
 
-/** Closes every relay socket for an app server entry (it was removed). */
-export function closeForServer(serverEntryId: string): void {
-  for (const s of sockets.forServer(serverEntryId)) closeSocket(s, 1000, 'server removed')
+/** Closes every relay socket for an app server entry (removed, or its URL changed); each page sees the close. */
+export function closeForServer(serverEntryId: string, reason: string): void {
+  for (const s of sockets.forServer(serverEntryId)) closeSocket(s, 1000, reason)
+}
+
+/** Once per window, before any open awaits, so a navigation during that await is seen. */
+function watchOwner(owner: WebContents): void {
+  if (!sockets.watch(owner)) return
+  owner.once('destroyed', () => closeForOwner(owner, 'window closed'))
+  // A reload or navigation drops the renderer's sockets without destroying the WebContents.
+  owner.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) closeForOwner(owner, 'window reloaded')
+  })
+  owner.on('render-process-gone', () => closeForOwner(owner, 'renderer gone'))
 }
 
 export function registerV2Relay(): void {
@@ -45,10 +63,16 @@ export function registerV2Relay(): void {
     const owner = event.sender
     const server = getAppServer(serverEntryId)
     if (!server) throw new Error('Server removed')
+    watchOwner(owner)
+    const generation = sockets.generation(owner)
+    if (sockets.atCapacity(owner)) throw new Error('Too many sockets for this window')
     const token = (await getAppServerToken(serverEntryId)) ?? ''
-    // The entry may have been removed, or the window closed, while the token was read.
-    if (!getAppServer(serverEntryId)) throw new Error('Server removed')
+    // While the token was read the entry may have been removed or re-pointed, or
+    // the window closed, reloaded or crashed: then this token goes nowhere.
+    if (getAppServer(serverEntryId)?.url !== server.url) throw new Error('Server removed')
     if (owner.isDestroyed()) throw new Error('Window closed')
+    if (sockets.generation(owner) !== generation) throw new Error('Window reloaded')
+    if (sockets.atCapacity(owner)) throw new Error('Too many sockets for this window')
     let ws: WebSocket
     try {
       ws = new WebSocket(server.url)
@@ -57,20 +81,28 @@ export function registerV2Relay(): void {
     }
     const s: RelaySocket = { id: randomUUID(), serverEntryId, owner, ws, token }
     sockets.add(s)
-    ws.addEventListener('open', () => emit(s, { type: 'open' }))
-    ws.addEventListener('message', (e) => emit(s, { type: 'message', data: String(e.data) }))
-    ws.addEventListener('error', () => emit(s, { type: 'error' }))
-    ws.addEventListener('close', (e) => {
-      sockets.delete(s.id)
-      emit(s, { type: 'close', code: e.code, reason: e.reason })
-    })
-    if (sockets.watch(owner)) {
-      owner.once('destroyed', () => closeForOwner(owner, 'window closed'))
-      // A reload or navigation drops the renderer's sockets without destroying the WebContents.
-      owner.on('did-start-navigation', (details) => {
-        if (details.isMainFrame && !details.isSameDocument) closeForOwner(owner, 'window reloaded')
-      })
+    let opened = false
+    let ended = false
+    /** The one close the page hears, whether from a real close or a failed connect. */
+    const end = (code: number, reason: string): void => {
+      if (ended) return
+      ended = true
+      if (sockets.delete(s.id)) send(s, { type: 'close', code, reason })
     }
+    ws.addEventListener('open', () => {
+      opened = true
+      emit(s, { type: 'open' })
+    })
+    ws.addEventListener('message', (e) => emit(s, { type: 'message', data: String(e.data) }))
+    ws.addEventListener('error', () => {
+      emit(s, { type: 'error' })
+      // Node's WebSocket fires error with no close on a refused connect: report the close ourselves.
+      if (!opened) {
+        end(1006, 'connection failed')
+        closeSocket(s, 1000, '')
+      }
+    })
+    ws.addEventListener('close', (e) => end(e.code, e.reason))
     return s.id
   })
 

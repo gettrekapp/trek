@@ -3,11 +3,10 @@
 // no IPC call ever returns one. Main reads tokens for the relay and for Test only.
 import { app, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { rename, writeFile } from 'node:fs/promises'
+import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { createSecretStore } from './secrets'
-import { parseAppServers, validateServerInput, type AppServer } from './appServersRules'
+import { createSecretStore, writeFileAtomic } from './secrets'
+import { parseAppServers, shouldClearToken, validateServerInput, type AppServer } from './appServersRules'
 import { globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
@@ -23,12 +22,25 @@ function filePath(): string {
   return join(app.getPath('userData'), FILE_NAME)
 }
 
+/** A missing file is an empty list; an unreadable or corrupt one is set aside (not overwritten) and the list starts empty. */
 function loaded(): AppServer[] {
   if (servers) return servers
+  const path = filePath()
   try {
-    servers = parseAppServers(JSON.parse(readFileSync(filePath(), 'utf8')))
-  } catch {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (!Array.isArray(raw)) throw new Error('not a list')
+    servers = parseAppServers(raw)
+  } catch (err) {
     servers = []
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      const aside = `${path}.corrupt-${Date.now()}`
+      try {
+        renameSync(path, aside)
+        console.warn(`trek: ${FILE_NAME} could not be read (${err instanceof Error ? err.message : String(err)}); moved it to ${aside}`)
+      } catch (renameErr) {
+        console.warn(`trek: ${FILE_NAME} could not be read, nor moved aside`, err, renameErr)
+      }
+    }
   }
   return servers
 }
@@ -38,12 +50,7 @@ let writeChain: Promise<unknown> = Promise.resolve()
 
 function persist(): Promise<void> {
   const snapshot = JSON.stringify(loaded(), null, 2)
-  const run = writeChain.then(async () => {
-    const path = filePath()
-    const temp = `${path}.${process.pid}.tmp`
-    await writeFile(temp, snapshot, 'utf8')
-    await rename(temp, path)
-  })
+  const run = writeChain.then(() => writeFileAtomic(filePath(), snapshot))
   writeChain = run.catch(() => undefined)
   return run
 }
@@ -82,20 +89,48 @@ async function save(input: unknown): Promise<AppServerInfo> {
   const { id, name, url, token } = input as Record<string, unknown>
   const valid = validateServerInput({ name, url })
   if (token !== undefined && token !== null && typeof token !== 'string') throw new Error('token must be a string')
+  const tokenGiven = typeof token === 'string' && token !== ''
   const isNew = id === undefined || id === null || id === ''
-  const existing = isNew ? null : requireKnown(id)
-  const entryId = existing ? existing.id : randomUUID()
-  if (token) await tokens.set(entryId, token)
+  const before = isNew ? null : { ...requireKnown(id) }
+  const entryId = before ? before.id : randomUUID()
+  const urlChanged = !!before && before.url !== valid.url
+  // A stored token never follows the URL to another origin (unless this call brings its own).
+  if (tokenGiven) await tokens.set(entryId, token as string)
+  else if (before && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null)
+
+  const list = loaded()
   let entry: AppServer
-  if (existing) {
-    existing.name = valid.name
-    existing.url = valid.url
-    entry = existing
+  if (before) {
+    // Removed while the token was written: it stays removed, and so does its token.
+    const current = list.find((s) => s.id === entryId)
+    if (!current) {
+      await tokens.set(entryId, null)
+      throw new Error('Server removed')
+    }
+    current.name = valid.name
+    current.url = valid.url
+    entry = current
   } else {
     entry = { id: entryId, ...valid }
-    loaded().push(entry)
+    list.push(entry)
   }
-  await persist()
+  try {
+    await persist()
+  } catch (err) {
+    // Roll back the in-memory change, and never leave a new token on the old URL.
+    if (before) {
+      entry.name = before.name
+      entry.url = before.url
+      if (tokenGiven && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null).catch(() => undefined)
+    } else {
+      const index = list.indexOf(entry)
+      if (index >= 0) list.splice(index, 1)
+      if (tokenGiven) await tokens.set(entryId, null).catch(() => undefined)
+    }
+    throw err
+  }
+  // Open relay sockets still point at the old URL; the SDK reconnects to the new one.
+  if (urlChanged) closeForServer(entryId, 'server address changed')
   return info(entry)
 }
 
@@ -109,10 +144,17 @@ async function remove(id: unknown): Promise<void> {
   const key = requireId(id)
   const list = loaded()
   const index = list.findIndex((s) => s.id === key)
-  if (index >= 0) list.splice(index, 1)
-  closeForServer(key)
+  const [gone] = index >= 0 ? list.splice(index, 1) : []
+  closeForServer(key, 'server removed')
   await tokens.set(key, null)
-  if (index >= 0) await persist()
+  if (!gone) return
+  try {
+    await persist()
+  } catch (err) {
+    // Still on disk, so back in the list (without its token).
+    list.splice(Math.min(index, list.length), 0, gone)
+    throw err
+  }
 }
 
 /** One-shot v2 connection check through the 3a SDK; the connection is always closed. */

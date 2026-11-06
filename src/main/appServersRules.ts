@@ -43,7 +43,27 @@ export function validateServerInput(input: { name: unknown; url: unknown }): { n
     throw new Error('URL is not valid')
   }
   if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') throw new Error('URL must start with ws:// or wss://')
+  if (parsed.username || parsed.password) throw new Error('URL must not contain a user name or password')
   return { name, url }
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Editing an entry's URL to another origin (scheme, host or port) must not carry
+ * the stored token there: a renderer could otherwise point a saved token at a host
+ * it picks. Clear it unless the same call supplies a new, non-empty token.
+ */
+export function shouldClearToken(oldUrl: string, newUrl: string, tokenGiven: boolean): boolean {
+  if (tokenGiven) return false
+  const before = originOf(oldUrl)
+  return before === null || before !== originOf(newUrl)
 }
 
 export function isLoopbackUrl(url: string): boolean {

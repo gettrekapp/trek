@@ -412,3 +412,40 @@ test('a hello send that throws drops the socket and retries', () => {
   server.last().open()
   assert.equal(server.last().sent[0].type, 'hello')
 })
+
+test('error with no close (Node 22 refused connect) schedules a reconnect; a late close is harmless', () => {
+  const { server, clock, conn, statuses } = setup()
+  conn.connect()
+  const first = server.last()
+  first.error() // readyState stays CONNECTING, no close event
+  assert.equal(conn.status, 'disconnected')
+  assert.equal(conn.statusMessage, 'connection failed')
+  assert.ok(first.closedWith, 'the failed socket was closed')
+  clock.advance(1000)
+  assert.equal(server.sockets.length, 2, 'reconnected after the 1s backoff')
+  const second = server.last()
+  const before = statuses.length
+  first.serverClose(1006, '') // already closed by close(): a no-op
+  first.listeners.close.forEach((l) => l({ code: 1006, reason: '' })) // a real late close event
+  first.error()
+  assert.equal(statuses.length, before, 'the old socket changes nothing')
+  assert.equal(server.sockets.length, 2)
+  assert.equal(second.closedWith, null, 'the new socket is untouched')
+  second.open()
+  second.welcome()
+  assert.equal(conn.status, 'connected')
+  clock.advance(2000)
+  assert.equal(server.sockets.length, 2, 'no second retry was armed')
+})
+
+test('error on an open socket waits for its close', () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  sock.error()
+  assert.equal(conn.status, 'connected')
+  sock.serverClose(1006, '')
+  assert.equal(conn.status, 'disconnected')
+})
