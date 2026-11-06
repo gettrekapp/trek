@@ -1,6 +1,7 @@
 // scripts/windows-smoke.mjs
 import { _electron as electron } from 'playwright-core'
 import { execSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -293,6 +294,35 @@ try {
     projectId: serverTarget.projectId
   })
   check('and it stays recorded', persisted().some(isServerTarget), true)
+
+  // --- Navigation guard: a window never loads a foreign page; http(s) links go to the browser.
+  await app.evaluate(({ shell }) => {
+    globalThis.__opened = []
+    shell.openExternal = async (url) => void globalThis.__opened.push(url)
+  })
+  // A real page that would load if the guard let it.
+  const foreign = createServer((_req, res) => res.end('<p>foreign</p>'))
+  await new Promise((done) => foreign.listen(0, '127.0.0.1', done))
+  const foreignUrl = `http://127.0.0.1:${foreign.address().port}/trek-nav-guard`
+  const appUrl = serverPage.url()
+  await serverPage.evaluate((u) => (location.href = u), foreignUrl).catch(() => {})
+  await sleep(800)
+  await serverPage.evaluate(() => window.open('https://example.invalid/trek-open-guard'))
+  await serverPage.evaluate(() => window.open('file:///etc/hosts'))
+  await sleep(800)
+  check('a foreign page is not loaded', serverPage.url(), appUrl)
+  check('the api is still there', await serverPage.evaluate(() => typeof window.api), 'object')
+  // openUrl first asks Chrome (osascript, up to 3s each) for a matching tab.
+  const opened = () => app.evaluate(() => [...globalThis.__opened].sort())
+  for (let i = 0; i < 40 && (await opened()).length < 2; i++) await sleep(250)
+  await sleep(500)
+  check(
+    'http(s) links open externally, other schemes are dropped',
+    await opened(),
+    [foreignUrl, 'https://example.invalid/trek-open-guard'].sort()
+  )
+  foreign.close()
+  check('window.open adds no window', await windowCount(app), 3)
   await app.close()
   check('quit keeps the server target', persisted().some(isServerTarget), true)
   app = null

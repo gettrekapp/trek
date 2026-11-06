@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import type { InitialWindowState, OpenedProject } from '../shared/types'
 import { releaseBotWindow } from './bot'
 import { releaseMcpWindow } from './mcp'
+import { isAppUrl, isExternalUrl } from './navigationRules'
 import { openUrl } from './openUrl'
 import { releaseWindowPtys } from './pty'
 import { getAppServer } from './appServers'
@@ -116,6 +117,30 @@ export function claimProject(contents: WebContents, filePath: string): void {
   claimTarget(contents, { kind: 'file', path: filePath })
 }
 
+const RENDERER_DIR = join(__dirname, '../renderer')
+
+/**
+ * The window only ever shows the app's own renderer: it carries the full preload
+ * api, relay to authenticated servers included. Links leave for the browser instead.
+ */
+function guardNavigation(contents: WebContents): void {
+  const devUrl = process.env.ELECTRON_RENDERER_URL ?? null
+  const block = (event: { preventDefault(): void }, url: string): void => {
+    if (isAppUrl(url, devUrl, RENDERER_DIR)) return
+    event.preventDefault()
+    if (isExternalUrl(url)) void openUrl(url)
+  }
+  contents.on('will-navigate', (event) => block(event, event.url))
+  // Main frame only, like will-navigate: a subframe can't reach the preload api.
+  contents.on('will-redirect', (event) => {
+    if (event.isMainFrame) block(event, event.url)
+  })
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isExternalUrl(url)) void openUrl(url)
+    return { action: 'deny' }
+  })
+}
+
 export function createWindow(
   opts: { initialTarget?: WindowTarget; menu?: 'open-project'; bounds?: WindowBounds } = {}
 ): BrowserWindow {
@@ -171,15 +196,12 @@ export function createWindow(
   win.on('resize', schedulePersist)
   win.on('move', schedulePersist)
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void openUrl(url)
-    return { action: 'deny' }
-  })
+  guardNavigation(win.webContents)
 
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(RENDERER_DIR, 'index.html'))
   }
 
   schedulePersist()
