@@ -137,7 +137,7 @@ export interface MethodParamsV2 {
   'session.rename': SessionRef & { title: string; expected?: string }
   /** Types the text into the session now */
   'session.sendPrompt': SessionRef & { text: string }
-  /** Appends to the session's queue; sent automatically from phase 2d-2 */
+  /** Appends to the session's queue. Stored for a client to send; the server never sends it on its own */
   'session.enqueue': SessionRef & { text: string }
   'session.setQueue': SessionRef & { queue: string[] }
   /** true = fully complete (tracking paused); false = resume tracking */

@@ -3,9 +3,9 @@
 Version 1 is described first; [Protocol v2](#protocol-v2) follows it. trek-server serves v1
 fully. In v2 it serves the handshake, the `server`, `attention` and `project:<id>` topics,
 `sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*`, `worktree.*`,
-`session.*`, v2 `pty.*` and `sys.ping`. The statuses that come from a session's output
-(`working`, `attention`, `done`), the contents of the `attention` topic and automatic
-sending of queued prompts arrive in phase 2d-2.
+`session.*`, v2 `pty.*` and `sys.ping`. Session statuses are computed from live output
+(`working`, `attention`, `done`, `idle`) and the `attention` topic lists the sessions that
+need the user. Queued prompts stay client-sent: the server stores a queue and never sends it.
 
 The companion daemon exposes the operations a client needs to manage git
 worktrees and Claude Code terminal sessions on a remote machine. Any client
@@ -198,7 +198,7 @@ comes from the `server` topic.
 | Topic | Snapshot |
 |---|---|
 | `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) and `REPO_UNAVAILABLE` (see Worktrees below) |
-| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session), sessions in `attention` or `done` |
+| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done` across all projects, oldest `since` first (epoch ms; see Statuses) |
 | `project:<id>` | the whole `Project` tree |
 
 - `ops` are RFC 6902 JSON Patch, limited to `add`, `remove` and `replace`.
@@ -409,6 +409,8 @@ arrives in phase 2e. They have no load state. The path checks of a worktree
 session apply: the main worktree must not be `missing`, and its path and the
 additional directories must be under the allowlist (`PATH_DENIED`). Removing any
 repository from the project ends the running Global sessions (see `repo.remove`).
+`repo.add` does not touch running Global sessions: they pick up the new additional
+directories the next time they are restarted.
 
 **Path checks.** A worktree session's worktree must be under the allowlist
 (`PATH_DENIED`). A main worktree must be a registered repository and a linked
@@ -424,10 +426,50 @@ the loop carries on. Until the id is found,
 `agentSessionId` is unset and a restart starts a fresh conversation. Each run gets
 a new `ptyId`.
 
-**Statuses in this phase.** A spawned session is `idle`. A session whose process
-ended is `exited`. `session.markComplete {complete}` sets or clears `complete`.
-`session.seen` turns `attention` or `done` into `idle`. `working`, `attention`
-and `done` are not set by the server yet.
+**Statuses.** A spawned session is `idle`. A session whose process ended is `exited`.
+`session.markComplete {complete}` sets or clears `complete` (the user opted out of
+tracking). `session.seen` turns `attention` or `done` into `idle`. The rest follow
+the desktop's rules, applied to live output only; replay never changes a status.
+
+- **Output.** While the session is not `complete`, each chunk of live output makes
+  it `working`, unless it is `attention` or `exited`, and restarts a 2500 ms quiet
+  timer. The output is scanned (case-insensitively) for the agent's status markers,
+  for example Claude's `esc to interrupt`; the tail of the previous chunk is kept so
+  a marker split across two chunks still matches.
+- **Quiet.** When the timer fires while the session is `working`, it becomes `done`
+  if a marker was seen since the last settle, otherwise `idle`. The marker flag is
+  then cleared.
+- **Bell.** A bell in the terminal makes the session `attention`, unless it is
+  `complete` or `exited`. A BEL that only ends an OSC sequence is not a bell. (The
+  `exited` guard is the server's own: the screen is parsed asynchronously, so a
+  final BEL can be seen after the process ended.)
+- **Input.** Input while `attention` or `complete` makes the session `working`. A
+  `pty.write` counts as input unless its data consists only of what xterm.js sends
+  on its own: cursor position reports (`ESC [ n ; m R`, also `ESC [ ? n ; m R`),
+  device attribute replies (`ESC [ ? ... c`, `ESC [ > ... c`), status reports
+  (`ESC [ n n`), mode reports (`ESC [ ? m ; v $ y`), DECRQSS replies (`ESC P 0|1 $ r
+  ... ST`), window reports (`ESC [ 4|6|8 ; n ; m t`), focus in and out (`ESC [ I`,
+  `ESC [ O`), OSC color replies (`ESC ] n ; ... BEL|ST`), and mouse reports
+  (`ESC [ < ... M|m`, `ESC [ M` and three bytes). The desktop never counted mouse
+  reports as keys either, and pointer motion must not clear `attention`.
+  `session.sendPrompt` always counts as input.
+- **`since`.** The server records when a session entered `attention` or `done`
+  (epoch ms, kept in memory only). A session that leaves those states loses it.
+- **Runtime only.** Status changes are not saved; a server restart resets every
+  status to `idle` anyway. Only `complete` reaches disk, through
+  `session.markComplete`.
+- **The `attention` topic** is republished whenever any entry field can change: a
+  status change, `session.rename`, `session.close`, `worktree.unload`, `session.seen`,
+  `session.markComplete`, and removal of a worktree, repository or project.
+
+Known gaps, the same as on the desktop unless noted:
+
+- Any repaint clears `done`. A repaint counts as output, so `done` becomes `working`
+  and then `idle`. A resize from any client makes the agent repaint, so it does this
+  too.
+- Shift, Ctrl or Alt+F3 sends `ESC [ 1 ; <mod> R`, which is byte for byte a cursor
+  report, so that key does not count as input. (The desktop sees it as a key; the
+  server cannot.)
 
 **Restart.** `session.restart {projectId, sessionId, cols, rows}` returns a new
 `{ptyId}` for a session that has no running pty: `exited`, or `idle` after a
@@ -453,12 +495,22 @@ removes the record.
 **Prompts.** `session.sendPrompt {text}` types the text into the running session as
 the desktop pastes it: newlines become `\r`, the text is wrapped in bracketed
 paste when the agent has turned that mode on, and `\r` follows 150 ms later. It
-answers `BAD_REQUEST` when the session has no running pty. `session.enqueue
+answers `BAD_REQUEST` when the session has no running pty, or when `text` is longer
+than 1 MiB (1,048,576 UTF-16 code units), the limit of `pty.write`. `session.enqueue
 {text}` appends to the session's `queue` and `session.setQueue {queue}` replaces
-it; text and queue entries must be non-empty strings. Both only store the queue:
-sending it automatically arrives in phase 2d-2.
+it; text and queue entries must be non-empty strings. A queue entry is at most
+100,000 characters and a queue holds at most 100 entries; beyond that is
+`BAD_REQUEST`. The server only stores the queue and never sends it: a client sends
+a queued prompt itself, with `session.sendPrompt`, when the user chooses.
 
-**Shutdown.** When the server stops it kills every session pty. On the next
+**Session limit.** The config field `maxSessions` (default 64) caps the running
+session ptys. `session.start` and `session.restart` beyond it answer `BAD_REQUEST`
+("the server is running its maximum of N sessions"). `worktree.load` marks each
+session it cannot start `exited` with `exitCode` -1, as for any other spawn failure.
+
+**Shutdown.** When the server stops it kills every session pty, and after the
+200 ms it allows for `daemon.shutdown` frames to flush it sends SIGKILL to any pty
+still alive, just before the process exits. On the next
 start, sessions load as `idle` and their worktrees as unloaded. Commands that
 would start a pty (`session.start`, `session.restart`, `worktree.load`) fail with
 `INTERNAL` while the server is shutting down.
@@ -466,14 +518,19 @@ would start a pty (`session.start`, `session.restart`, `worktree.load`) fail wit
 **Errors.** `NOT_FOUND` for an unknown project, worktree or session id.
 `PTY_NOT_FOUND` for an unknown pty, or one that is being killed. `BAD_REQUEST` for
 bad sizes, titles or types, restarting a running session, `sendPrompt` to a
-stopped one, a `pty.write` whose `data` is longer than 1 MiB (1,048,576 UTF-16
-code units) and a `pty.attach` refused as congested (below). `IN_USE` as above.
+stopped one or with text over 1 MiB, an over-long queue entry or queue,
+`session.start` or `session.restart` over `maxSessions`, a `pty.write` whose `data`
+is longer than 1 MiB (1,048,576 UTF-16 code units), a `pty.write` or `pty.resize`
+from a connection that has not attached to the pty ("attach to the pty first") and
+a `pty.attach` refused as congested (below). `IN_USE` as above.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
 buffer of up to 2 Mi UTF-16 code units) as `pty.data` events with `replay: true`, then streams live
 data, as in v1. The server also keeps a headless copy of the screen (2000 lines of
-scrollback) so it can tell whether the agent turned on bracketed paste. Any number
-of connections can attach to one pty, and any of them may `pty.write`. `pty.resize`
+scrollback) so it can tell whether the agent turned on bracketed paste, and when it
+rang its bell. Any number of connections can attach to one pty, and any of them may
+`pty.write`; `pty.write` and `pty.resize` need the connection to be attached to that pty
+first, and `pty.attach` is the only way in. `pty.resize`
 from any attached connection sets the size; the most recent call wins. The pty
 pauses while any attached connection has more than 4 MiB unsent, or the server's
 screen parser falls far behind, and resumes once every connection is under 2 MiB.

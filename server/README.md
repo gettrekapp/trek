@@ -114,6 +114,17 @@ edit this section; edit the file. Agents run as `$SHELL -ilc '<command>'`, so th
 command is found the way it is in your terminal; set `SHELL` for the server if it
 runs without one.
 
+## Session limit
+
+An optional `maxSessions` in the same config file caps the agent sessions
+running at once (default 64). Starting or restarting one beyond the cap fails
+with `BAD_REQUEST`; loading a worktree marks the sessions it cannot start as
+exited, and they can be restarted later. WebSocket frames are limited to 16 MiB.
+
+```json
+{ "maxSessions": 64 }
+```
+
 ## Projects
 
 Clients create projects from registered repos (`trek-server add`). Each
