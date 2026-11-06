@@ -216,6 +216,8 @@ async function nextPatch(conn, topic, state, timeoutMs = 4000) {
 const v2 = await connect(2, token)
 if (v2.welcome?.protocolVersion !== 2 || !/^[0-9a-f-]{36}$/.test(v2.welcome.serverId ?? '')) {
   fail(`v2 welcome: ${JSON.stringify(v2.welcome)}`)
+} else if (!v2.welcome.capabilities?.includes('mcp')) {
+  fail(`v2 welcome capabilities lack mcp: ${JSON.stringify(v2.welcome.capabilities)}`)
 } else ok(`v2 welcome: server "${v2.welcome.serverName}" ${v2.welcome.serverId}`)
 
 const subbed = await v2.req('sub.subscribe', { topic: 'server' })

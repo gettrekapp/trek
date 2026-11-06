@@ -578,7 +578,14 @@ the server's, and it is separate from the WebSocket port.
 
 **Scope.** A session's tools see only its own project. A token belongs to one
 project, and every tool resolves worktrees and sessions inside that project;
-an id from another project is `NOT_FOUND`.
+an id from another project is `NOT_FOUND`. This is not a security boundary against
+a hostile agent: every agent runs as the server's user, so it can read every
+project's `<dataDir>/mcp/*.json` and use other projects' tools. The per-project
+scope keeps agents from acting on other projects by mistake. Other local users are
+kept out by the 0700 directory, the 0600 files and the bearer token.
+
+**Capabilities.** The v2 `welcome` frame's `capabilities` contains `"mcp"` when the
+server has MCP for its sessions (the listener is up), and is `[]` otherwise.
 
 **Endpoint.** A second HTTP server inside `trek-server`, bound to `127.0.0.1` on
 an OS-chosen port, so it is never exposed (agents run on the server's machine). It
@@ -617,7 +624,8 @@ mode 0700:
 - `<projectId>.gemini.json`, the Gemini settings file.
 
 Both are written atomically with mode 0600, and again whenever the token or the
-port changes. Codex gets the URL on its command line and the token in
+port changes, and again when a session launches and finds them deleted (an accidental
+second `trek-server start` on the same data dir sweeps them). Codex gets the URL on its command line and the token in
 `TREK_MCP_TOKEN`, as the provider adapter does. When the store starts, it deletes
 every `.json` and `.tmp` file in the directory (the tokens of an earlier start are
 dead anyway), and it refuses a directory that is a symlink, is not a directory, or
@@ -627,7 +635,8 @@ two files.
 
 If the directory is refused, or the listener does not start, the server logs a
 warning, runs without MCP and carries on. A session whose access cannot be made
-launches without MCP (the error is logged).
+launches without MCP (the error is logged). The same holds for a session started
+before the listener is up: it launches without MCP.
 
 **Which sessions.** Every session, worktree and Global, launches with the
 project's MCP access (for providers that support MCP; Grok does not). A Global

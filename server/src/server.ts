@@ -28,7 +28,7 @@ import { SessionManager } from './sessions/manager'
 import type { TerminalSink } from './sessions/terminalHost'
 import { McpAccessStore } from './mcp/access'
 import { startMcpListener, type McpListener } from './mcp/listener'
-import { createToolCaller, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
+import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -239,7 +239,7 @@ export function startServer(
             daemonVersion,
             serverId: store.config.serverId ?? '',
             serverName: store.config.name ?? '',
-            capabilities: []
+            capabilities: trek.mcp ? ['mcp'] : []
           })
         } else {
           sendFrame(ws, {
@@ -269,6 +269,13 @@ export function startServer(
           sessions,
           terminal,
           mcpAccess: access
+            ? {
+                revoke: (id) => {
+                  callers.delete(id)
+                  access.revoke(id)
+                }
+              }
+            : undefined
         })
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
@@ -304,13 +311,19 @@ export function startServer(
   })
 
   let stopped = false
+  const callers = new Map<string, ToolCall>()
   const trek: TrekServer = { httpServer, ptys, hub, projects, poller, sessions, shutdown: (reason) => shutdown(reason) }
   if (access) {
     const caller = createToolCaller({ store, hub, projects, poller, sessions })
+    const callerFor = (projectId: string): ToolCall => {
+      let call = callers.get(projectId)
+      if (!call) callers.set(projectId, (call = caller(projectId)))
+      return call
+    }
     startMcpListener({
       access,
       serverVersion: daemonVersion,
-      contextFor: (projectId) => ({ instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: caller(projectId) })
+      contextFor: (projectId) => ({ instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: callerFor(projectId) })
     }).then(
       (listener) => {
         if (stopped) {

@@ -147,3 +147,17 @@ test('setPort removes the files of the access it drops', (t) => {
   assert.equal(existsSync(a.configPath), false)
   assert.equal(existsSync(a.geminiSettingsPath), false)
 })
+
+test('accessFor rewrites deleted files with the same token (a second start swept them)', (t) => {
+  const { mcpDir } = setup(t)
+  const store = new McpAccessStore(mcpDir)
+  store.setPort(4321)
+  const a = store.accessFor('p1')
+  rmSync(a.configPath)
+  rmSync(a.geminiSettingsPath)
+  const b = store.accessFor('p1')
+  assert.equal(b.token, a.token)
+  assert.ok(existsSync(a.configPath) && existsSync(a.geminiSettingsPath))
+  assert.equal(JSON.parse(readFileSync(a.configPath, 'utf8')).mcpServers['trek-dev'].headers.Authorization, `Bearer ${a.token}`)
+  assert.equal(statSync(a.geminiSettingsPath).mode & 0o777, 0o600)
+})
