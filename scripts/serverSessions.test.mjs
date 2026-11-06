@@ -63,7 +63,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** The agent command a spawn ran (the shell's -c argument). */
 const cmd = (proc) => proc.opts.args.at(-1)
 
-function setup(t, { llm } = {}) {
+function setup(t, { llm, maxSessions } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
@@ -72,7 +72,7 @@ function setup(t, { llm } = {}) {
   mkdirSync(b, { recursive: true })
   mkdirSync(join(dir, 'repos', 'a-x'))
   const configPath = join(dir, 'config.json')
-  saveConfig(configPath, { repos: [{ id: 'a', name: 'a', path: a }, { id: 'b', name: 'b', path: b }], ...(llm ? { llm } : {}) })
+  saveConfig(configPath, { repos: [{ id: 'a', name: 'a', path: a }, { id: 'b', name: 'b', path: b }], ...(llm ? { llm } : {}), ...(maxSessions ? { maxSessions } : {}) })
   const store = new ConfigStore(configPath)
   t.after(() => store.close())
   const hub = new TopicHub()
@@ -674,6 +674,7 @@ test('v2: pty.write refuses data over 1 MiB', async (t) => {
   const s = setup(t)
   const { call } = v2(s)
   const { ptyId } = (await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })).result
+  await call('pty.attach', { ptyId })
   assert.equal((await call('pty.write', { ptyId, data: 'x'.repeat(1024 * 1024 + 1) })).error.code, 'BAD_REQUEST')
   assert.equal(s.spawned[0].written.length, 0)
   assert.equal((await call('pty.write', { ptyId, data: 'x'.repeat(1024 * 1024) })).ok, true)
@@ -804,4 +805,96 @@ test('close and project.delete drop attention entries and cancel the quiet timer
   assert.equal((await call('project.delete', { projectId: s.projectId })).ok, true)
   assert.equal(quietJobs(s).length, 0)
   assert.deepEqual(attention(s), [])
+})
+
+// ---- limits ----
+
+test('maxSessions caps running sessions; load marks the rest exited -1', async (t) => {
+  const s = setup(t, { maxSessions: 2 })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const second = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }), (e) => e.code === 'BAD_REQUEST' && /maximum of 2/.test(e.message))
+  assert.equal(s.wx().sessions.length, 2, 'a refused start leaves no record')
+  // An exit frees a slot
+  s.spawned[1].exit(0)
+  s.sessions.restart({ projectId: s.projectId, sessionId: second.sessionId, ...size })
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }), (e) => e.code === 'BAD_REQUEST')
+  // Unload frees both; loading three dormant sessions with a cap of 2 runs two
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  await new Promise((r) => setImmediate(r))
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[1].sessions.push({ id: 'third', agentSessionId: '33333333-3333-4333-8333-333333333333', title: 'T', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  s.sessions.loadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  const states = s.wx().sessions.map((x) => [x.status, x.exitCode])
+  assert.deepEqual(states, [['idle', undefined], ['idle', undefined], ['exited', -1]])
+})
+
+test('prompt and queue limits', async (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const big = 'x'.repeat(1024 * 1024 + 1)
+  await assert.rejects(s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: big }), (e) => e.code === 'BAD_REQUEST')
+  assert.equal(s.spawned[0].written.length, 0)
+  assert.throws(() => s.sessions.enqueue({ projectId: s.projectId, sessionId, text: 'q'.repeat(100_001) }), (e) => e.code === 'BAD_REQUEST')
+  s.sessions.enqueue({ projectId: s.projectId, sessionId, text: 'q'.repeat(100_000) })
+  assert.throws(() => s.sessions.setQueue({ projectId: s.projectId, sessionId, queue: Array(101).fill('q') }), (e) => e.code === 'BAD_REQUEST')
+  assert.throws(() => s.sessions.setQueue({ projectId: s.projectId, sessionId, queue: ['q'.repeat(100_001)] }), (e) => e.code === 'BAD_REQUEST')
+  s.sessions.setQueue({ projectId: s.projectId, sessionId, queue: Array(100).fill('q') })
+  assert.throws(() => s.sessions.enqueue({ projectId: s.projectId, sessionId, text: 'one more' }), (e) => e.code === 'BAD_REQUEST')
+  assert.equal(s.wx().sessions[0].queue.length, 100)
+})
+
+test('pty.write and pty.resize need the connection to be attached', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const { ptyId } = (await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })).result
+  assert.equal((await call('pty.write', { ptyId, data: 'x' })).error.code, 'BAD_REQUEST')
+  assert.equal((await call('pty.resize', { ptyId, cols: 90, rows: 20 })).error.code, 'BAD_REQUEST')
+  assert.equal(s.spawned[0].written.length, 0)
+  await call('pty.attach', { ptyId })
+  assert.equal((await call('pty.write', { ptyId, data: 'x' })).ok, true)
+  assert.equal((await call('pty.resize', { ptyId, cols: 90, rows: 20 })).ok, true)
+  await call('pty.detach', { ptyId })
+  assert.equal((await call('pty.write', { ptyId, data: 'x' })).error.code, 'BAD_REQUEST', 'detach ends write access')
+})
+
+// ---- status review extras ----
+
+test('sendPrompt counts as input whatever its bytes are', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  assert.equal(statusOf(s), 'attention')
+  // These bytes look like a cursor report, which pty.write would not count as input.
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: '\x1b[12;1R' })
+  assert.equal(statusOf(s), 'working')
+})
+
+test('a Global session in attention is listed with worktreeId null', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(ptyId)
+  assert.deepEqual(attention(s).map((e) => [e.sessionId, e.worktreeId, e.status]), [[sessionId, null, 'attention']])
+})
+
+test('attention entries are oldest first with their since; markComplete drops one', async (t) => {
+  const s = setup(t)
+  const first = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const second = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  // The later session in the list enters first, so the order is by since, not by position.
+  const t0 = s.clock.t
+  s.spawned[1].emit('esc to interrupt')
+  fireQuiet(s)
+  s.clock.t += 5000
+  s.spawned[0].emit('\x07')
+  await s.sessions.terminals.settled(first.ptyId)
+  assert.deepEqual(
+    attention(s).map((e) => [e.sessionId, e.status, e.since]),
+    [[second.sessionId, 'done', t0], [first.sessionId, 'attention', t0 + 5000]]
+  )
+  s.sessions.markComplete({ projectId: s.projectId, sessionId: first.sessionId, complete: true })
+  assert.deepEqual(attention(s).map((e) => e.sessionId), [second.sessionId])
 })

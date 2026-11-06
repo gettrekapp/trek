@@ -9,6 +9,13 @@ type Handler = (params: any, ctx: V2Context) => unknown
 /** The most a single pty.write may carry, in UTF-16 code units. */
 export const MAX_PTY_WRITE = 1024 * 1024
 
+/** pty.write and pty.resize: only a connection attached to the pty may drive it. */
+function attachedPty(ctx: V2Context, p: any): string {
+  const ptyId = ptyOf(ctx, p)
+  if (!ctx.sessions.terminals.isAttached(ptyId, ctx.terminal)) throw codedError('BAD_REQUEST', 'attach to the pty first')
+  return ptyId
+}
+
 function ptyOf(ctx: V2Context, p: any): string {
   const ptyId = requireString(p.ptyId, 'ptyId')
   if (!ctx.sessions.terminals.has(ptyId)) throw codedError('PTY_NOT_FOUND', `No such pty: ${ptyId}`)
@@ -35,7 +42,7 @@ export const sessionHandlers: Record<string, Handler> = {
     return null
   },
   'pty.write': (p, ctx) => {
-    const ptyId = ptyOf(ctx, p)
+    const ptyId = attachedPty(ctx, p)
     const data = requireString(p.data, 'data')
     if (data.length > MAX_PTY_WRITE) throw codedError('BAD_REQUEST', `data must be at most ${MAX_PTY_WRITE} characters`)
     ctx.sessions.noteInput(ptyId, data)
@@ -43,7 +50,7 @@ export const sessionHandlers: Record<string, Handler> = {
     return null
   },
   'pty.resize': (p, ctx) => {
-    ctx.sessions.terminals.resize(ptyOf(ctx, p), p.cols, p.rows)
+    ctx.sessions.terminals.resize(attachedPty(ctx, p), p.cols, p.rows)
     return null
   }
 }

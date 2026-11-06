@@ -37,6 +37,8 @@ export interface TrekServerConfig {
    */
   llm?: unknown
   host?: string
+  /** Most session ptys running at once (default DEFAULT_MAX_SESSIONS, 64). */
+  maxSessions?: number
   /** Where projects are stored (default: the platform data dir, see dataDir.ts). */
   dataDir?: string
 }

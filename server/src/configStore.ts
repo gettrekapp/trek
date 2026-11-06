@@ -26,6 +26,9 @@ export type RepoUsage = (repo: RemoteRepo) => string[]
 
 const RELOAD_DEBOUNCE_MS = 100
 
+/** The session pty cap when the config sets no maxSessions. */
+export const DEFAULT_MAX_SESSIONS = 64
+
 /** Checks the shape of a parsed config file. Token entries are filtered later by tokens.ts. */
 export function validateConfig(raw: unknown): TrekServerConfig {
   if (!isRecord(raw)) throw new Error('config must be a JSON object')
@@ -42,6 +45,9 @@ export function validateConfig(raw: unknown): TrekServerConfig {
     throw new Error('config.worktreeRoots must be an array of strings')
   }
   if (raw.port !== undefined && typeof raw.port !== 'number') throw new Error('config.port must be a number')
+  if (raw.maxSessions !== undefined && (!Number.isInteger(raw.maxSessions) || (raw.maxSessions as number) < 1)) {
+    throw new Error('config.maxSessions must be a positive integer')
+  }
   if (raw.llm !== undefined && !isRecord(raw.llm)) throw new Error('config.llm must be an object')
   for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
@@ -77,6 +83,11 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   /** The agent CLI settings, sanitized (unknown providers and fields dropped). */
   llmSettings(): LlmSettings {
     return sanitizeLlmSettings(this.current.llm)
+  }
+
+  /** The most session ptys that may run at once. */
+  maxSessions(): number {
+    return this.current.maxSessions ?? DEFAULT_MAX_SESSIONS
   }
 
   get guard(): PathGuard {

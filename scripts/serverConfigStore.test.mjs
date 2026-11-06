@@ -324,3 +324,19 @@ test('llmSettings: defaults without an llm section, sanitized with one', (t) => 
 test('an llm section that is not an object is refused', () => {
   assert.throws(() => validateConfig({ repos: [], llm: 'claude' }), /config.llm must be an object/)
 })
+
+test('maxSessions: default 64, a positive integer otherwise', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 'c.json')
+  saveConfig(path, { repos: [] })
+  const a = new ConfigStore(path)
+  t.after(() => a.close())
+  assert.equal(a.maxSessions(), 64)
+  saveConfig(path, { repos: [], maxSessions: 3 })
+  const b = new ConfigStore(path)
+  t.after(() => b.close())
+  assert.equal(b.maxSessions(), 3)
+  for (const bad of [0, -1, 1.5, 'x', null]) {
+    assert.throws(() => validateConfig({ repos: [], maxSessions: bad }), /config.maxSessions must be a positive integer/)
+  }
+})

@@ -16,6 +16,7 @@ import {
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import type { ConfigStore } from '../configStore.ts'
 import { codedError } from '../errors.ts'
+import { MAX_PTY_WRITE } from '../sessionHandlers.ts'
 import { assertNotRepository, findRegistered } from '../projects/model.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
@@ -40,6 +41,11 @@ export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
 
 export const MAX_TITLE_LENGTH = 200
+
+/** The longest queued prompt, in UTF-16 code units. */
+export const MAX_QUEUE_ENTRY = 100_000
+/** The most prompts a session's queue holds. */
+export const MAX_QUEUE_LENGTH = 100
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
@@ -272,7 +278,11 @@ export class SessionManager {
   enqueue(p: any): null {
     const text = requireString(p.text, 'text')
     if (text === '') throw bad('text must not be empty')
-    this.mutate(p.projectId, p.sessionId, (s) => { s.queue = [...s.queue, text] })
+    if (text.length > MAX_QUEUE_ENTRY) throw bad(`text must be at most ${MAX_QUEUE_ENTRY} characters`)
+    this.mutate(p.projectId, p.sessionId, (s) => {
+      if (s.queue.length >= MAX_QUEUE_LENGTH) throw bad(`the queue is full (${MAX_QUEUE_LENGTH} prompts)`)
+      s.queue = [...s.queue, text]
+    })
     return null
   }
 
@@ -280,6 +290,8 @@ export class SessionManager {
     if (!Array.isArray(p.queue) || p.queue.some((q: unknown) => typeof q !== 'string' || q === '')) {
       throw bad('queue must be an array of non-empty strings')
     }
+    if (p.queue.length > MAX_QUEUE_LENGTH) throw bad(`queue must hold at most ${MAX_QUEUE_LENGTH} prompts`)
+    if (p.queue.some((q: string) => q.length > MAX_QUEUE_ENTRY)) throw bad(`each queued prompt must be at most ${MAX_QUEUE_ENTRY} characters`)
     const queue = [...p.queue] as string[]
     this.mutate(p.projectId, p.sessionId, (s) => { s.queue = queue })
     return null
@@ -288,6 +300,7 @@ export class SessionManager {
   /** Types `text` into the running session as the desktop pastes it, then presses enter. */
   async sendPrompt(p: any): Promise<null> {
     const text = requireString(p.text, 'text')
+    if (text.length > MAX_PTY_WRITE) throw bad(`text must be at most ${MAX_PTY_WRITE} characters`)
     const { session } = findSession(this.deps.projects.require(p.projectId), p.sessionId)
     const ptyId = session.ptyId
     if (!ptyId || !this.terminals.has(ptyId)) throw bad('the session is not running')
@@ -295,7 +308,8 @@ export class SessionManager {
     if (!this.terminals.has(ptyId)) throw bad('the session is not running')
     const normalized = text.replace(/\r?\n/g, '\r')
     this.terminals.write(ptyId, this.terminals.bracketedPaste(ptyId) ? `\x1b[200~${normalized}\x1b[201~` : normalized)
-    this.noteInput(ptyId, text)
+    // A prompt is the user acting, whatever its bytes are: no terminal-reply filter.
+    this.updateStatus(ptyId, (status) => onInput(status))
     setTimeout(() => {
       if (this.terminals.has(ptyId)) this.terminals.write(ptyId, '\r')
     }, 150).unref()
@@ -317,7 +331,7 @@ export class SessionManager {
     return null
   }
 
-  /** A client typed into the pty (pty.write, session.sendPrompt). Terminal auto-replies are not input. */
+  /** A client typed into the pty (pty.write). Terminal auto-replies are not input. */
   noteInput(ptyId: string, data: string): void {
     if (isTerminalReply(data)) return
     this.updateStatus(ptyId, (status) => onInput(status))
@@ -478,6 +492,9 @@ export class SessionManager {
     sessionId: string,
     run: { cols: number; rows: number; fresh?: boolean; initialMessage?: string }
   ): string {
+    // owners holds one entry per live session pty (killSession and onExit drop theirs).
+    const max = this.deps.store.maxSessions()
+    if (this.owners.size >= max) throw bad(`the server is running its maximum of ${max} sessions`)
     const project = this.deps.projects.require(projectId)
     const { session, worktree, repo } = findSession(project, sessionId)
     const provider = getProvider(session.llm.provider)
