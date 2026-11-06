@@ -13,7 +13,8 @@ Nothing is wired into a server window yet; 3c-2 does that.
 **Architecture:**
 - **The hybrid (user-approved):** server windows reuse the legacy store and components.
   - A pure projector turns each mirror update into the store slice those components already render. It also returns a `V2IdMap` that leads back to v2 ids.
-  - Actions go through `getBackend()`. A project file window gets `legacyBackend`, which makes exactly the calls the UI made before. A server window (3c-2) calls `setBackend(v2Backend)` at boot.
+  - Actions go through `getBackend()`. A project file window gets `legacyBackend`, which makes exactly the calls the UI made before.
+  - The backend follows the window's current kind: `followWindowKind` (`windowKind.ts`, started in `main.tsx`) calls `setBackend` inside every `setServerWindow`. In 3c-1 both kinds get `legacyBackend`; 3c-2 returns the v2 backend there for a server window.
 - **Terminals:** a server window's terminals attach to its server's `PtyStream` directly, not through the backend.
   - `syncV2Terminals(project, ptys)` keeps one xterm entry per session of a loaded worktree, and per Global session, attached to the session's current pty.
   - The reconcile logic is a pure planner, `planTerminalSync`.
@@ -30,7 +31,7 @@ Nothing is wired into a server window yet; 3c-2 does that.
 | Sub-phase | Delivers | Visible change |
 |---|---|---|
 | **3c-1 seams and terminals** (this plan) | <ul><li>`WindowBackend` with `legacyBackend`, and every reused component routed through it</li><li>`backend.features` flags, checked where hidden features render</li><li>`v2/projector.ts`, a pure function from v2 snapshot to legacy slice plus `V2IdMap`</li><li>`v2/terminalSync.ts`, the pure planner, and `syncV2Terminals`/`disposeV2Terminals` in `terminals.ts`</li><li>`v2/applyProjection.ts`, the tiny store glue</li></ul> | None. Legacy windows behave exactly as before, and server windows are still the 3b read-only tree. |
-| **3c-2 the working window** | <ul><li>`v2/backendV2.ts` (every `WindowBackend` method sent as a v2 request; see the table under Decision 3)</li><li>store-setter overrides at v2 boot (rename, queue, complete, attention→`session.seen`, branch data)</li><li>a `V2Workspace` shell that replaces the read-only tree in `ServerProjectWindow.tsx` and reuses Sidebar, WorktreeDetail and GlobalClaude</li><li>the AddWorktreeModal v2 path (`repo.listBranches`, `worktree.create{fromPr}`; main's `githubPrHeadBranch` stays)</li><li>disconnected mode: a last-seen banner, commands disabled, and a reconnecting overlay in TerminalPane</li><li>the Global panel gated on the `mcp` capability</li><li>`smoke:v2` extended end to end</li><li>settings read-only in v2 (user decision)</li></ul> | Server windows become fully interactive. |
+| **3c-2 the working window** | <ul><li>`v2/backendV2.ts` (every `WindowBackend` method sent as a v2 request; see the table under Decision 3)</li><li>store-setter overrides (rename, queue, complete, attention→`session.seen`, branch data, worktree order), installed and removed in `windowKind.ts` at the same point as the v2 backend</li><li>a `useFeatures()` hook for components that read `features` while rendering</li><li>a `V2Workspace` shell that replaces the read-only tree in `ServerProjectWindow.tsx` and reuses Sidebar, WorktreeDetail and GlobalClaude</li><li>the AddWorktreeModal v2 path (`repo.listBranches`, `worktree.create{fromPr}`; main's `githubPrHeadBranch` stays)</li><li>disconnected mode: a last-seen banner, commands disabled, and a reconnecting overlay in TerminalPane</li><li>the Global panel gated on the `mcp` capability</li><li>`smoke:v2` extended end to end</li><li>settings read-only in v2 (user decision)</li></ul> | Server windows become fully interactive. |
 | **3c-3 server gaps and carry-overs** | <ul><li>a server-side `Session.decision`, an MCP `request_decision` tool, and clear-on-input (user decision)</li><li>the server reports which agents and providers it can launch, via a welcome capability or an RPC, and NewSessionMenu uses it (user decision)</li><li>a topic-end event for deleted projects</li><li>the main → all-windows "app servers changed" broadcast, plus one connection per server in main (3d reuses it)</li><li>registry entries dropped when ConnectServer or StartScreen unmount</li><li>settings editing via `project.updateSettings`</li></ul> | Decisions, provider lists and settings work in server windows. |
 
 ---
@@ -64,30 +65,37 @@ Nothing is wired into a server window yet; 3c-2 does that.
 3. **Which actions go where.**
    - **Through backend call sites, routed in this plan:** process-level actions (start, startGlobal, openGlobal, restart, close, sendPrompt, load, unload, unloadAll, create/remove worktree, git, add/remove repository).
      - This goes further than "route the git calls", because 3c-2 reuses WorktreeDetail, Sidebar, GlobalClaude, TerminalPane and QueuePanel as they are. Routing them now lets the legacy smokes prove each wrapper is 1:1.
-   - **Left as store setters:** data edits that are store setters today (rename, queue edits, toggle complete, `clearTerminalAttention`, the six branch setters, `setWorktreeOrder`). Components select them from the store (for example `WorktreeDetail.tsx:120-123`), so 3c-2 overrides the setters at v2 boot instead of touching call sites.
-   - The interface still has `rename`, `enqueue`, `setQueue`, `markComplete`, `seen` and `branch.*`, because they are what those overrides call. Their legacy implementations wrap the same setters and aren't called by legacy UI.
+   - **Left as store setters:** data edits that are store setters today (rename, queue edits, toggle complete, `clearTerminalAttention`, the six branch setters, `setWorktreeOrder`). Components select them from the store (for example `WorktreeDetail.tsx:120-123`), so 3c-2 overrides the setters when it installs the v2 backend (`windowKind.ts`) instead of touching call sites.
+   - The interface still has `rename`, `enqueue`, `setQueue`, `markComplete`, `seen`, `worktrees.setOrder` and `branch.*`, because they are what those overrides call. Their legacy implementations wrap the same setters and aren't called by legacy UI.
+   - **Every mutator returns `Promise<void>`**, the fire-and-forget ones included. Legacy wraps them in `async`; a v2 backend rejects with the server's `ClientError`. A call site that ignores the result writes `void getBackend()…`.
+   - **Not found is `null`:** `sessions.start` and `sessions.startGlobal` both resolve `string | null`.
 
    Backend methods and the v2 requests 3c-2 maps them to (all exist in `src/shared/protocolV2.ts:65-157`):
 
    | Backend method | v2 request |
    |---|---|
    | `sessions.start` | `session.start{worktreeId, title?, llm, sessionTypeId, initialMessage, cols, rows}`; `worktreeId` from `ids.worktrees[id].worktreeId` or `ids.worktreeByPath[path]` |
-   | `sessions.startGlobal` | `session.start{worktreeId: null}` |
+   | `sessions.startGlobal` | `session.start{worktreeId: null}`; resolves null if no session started |
    | `sessions.openGlobal` | `session.start{worktreeId: null}` when `globalSessions` is empty; otherwise nothing (the server keeps them) |
    | `sessions.restart` / `close` / `rename` / `sendPrompt` / `enqueue` / `setQueue` / `markComplete` / `seen` | `session.restart{cols,rows}` / `session.close` / `session.rename` / `session.sendPrompt` / `session.enqueue` / `session.setQueue` / `session.markComplete{complete}` / `session.seen` |
    | `worktrees.load` / `unload` / `unloadAll` | `worktree.load` / `worktree.unload` (one per loaded worktree) |
-   | `worktrees.create` | `worktree.create{branch, createBranch, fromPr}`. The server links dirs and tags the branch itself (`server/src/worktreeHandlers.ts:131-145`); the path is read from the mirror row with the returned `worktreeId`. |
-   | `worktrees.remove` | `worktree.remove{force?}` after the same confirmation |
+   | `worktrees.create` | `worktree.create{branch, createBranch, fromPr}`. The server links dirs and tags the branch itself (`server/src/worktreeHandlers.ts:131-145`). Resolves `{path, worktreeId}`; the path is read from the mirror row with the returned `worktreeId`. |
+   | `worktrees.remove` | `worktree.changes`, the same confirmation, `worktree.unload` if loaded, then `worktree.remove{force: dirty}` (see Notes for 3c-2) |
+   | `worktrees.setOrder` | `project.updateSettings{worktreeOrder}` via `v2WorktreeOrder`, the one settings write v2 allows (see Notes for 3c-2) |
    | `git.listWorktrees` | no request: `slice.hostWorktrees` from the mirror |
    | `git.listBranches` / `changes` / `diff` / `pull` | `repo.listBranches` / `worktree.changes` / `worktree.diff` / `worktree.pull` |
    | `git.push` | `worktree.push{setUpstream: true}` (legacy pushes with `-u`, `src/main/project.ts:283`) |
-   | `branch.setTag` / `setCustomTag` / `setNote` / `setTicket` / `setPullRequest` / `setEnvVars` | `branch.setTag` / `branch.setCustomTags` (the whole list, computed from the slice) / `branch.setNote` / `branch.setTicket` / `branch.setPr` / `branch.setEnv` |
-   | `repos.add` / `remove` | `repo.add{path}` (path typed in 3c-2's prompt) / `repo.remove` |
+   | `branch.setTag` / `setCustomTag` / `setNote` / `setTicket` / `setPullRequest` / `setEnvVars` | `branch.setTag` / `branch.setCustomTags` (the whole list, computed from the slice; see Notes for 3c-2) / `branch.setNote{expected}` / `branch.setTicket` / `branch.setPr` / `branch.setEnv` |
+   | `repos.add` / `remove` | `server.addRepo{path}` (path typed in 3c-2's prompt), then `repo.add{path}`, which only accepts a path the server has registered (`findRegistered`, `server/src/v2.ts:152`) / `repo.remove` |
 4. **`openInVSCode` and `revealInFinder` stay direct `window.api` calls,** gated by `features.openInEditor` and `features.reveal`. They are local by nature; a server window hides them and never needs a v2 version.
-5. **`V2_FEATURES`:** every flag is false except `linear`.
+5. **`V2_FEATURES`:** every flag is false.
    - Off: docker, env and stacks poll or run things on this machine against the project's paths, which are on the server. The bot and voice depend on local MCP tools. Skills reads `.claude/` under a local path. Move and promote have no v2 command. Reveal and editor are local-only. settingsEdit follows Decision 5 above.
-   - Linear stays on: `useLinearSync` only reads ticket ids from the store and uses this machine's API key, so it works on projected data.
-   - The flags are fixed per backend, not reactive. `setBackend` must run before the first render.
+   - Linear is off too. The spec lists it with the integrations that arrive in phase 5 (the `integrations/` row of `docs/superpowers/specs/2026-11-04-central-server-design.md`), so a server window hides it until then, even though `useLinearSync` could run on projected data.
+   - `V2_FEATURES` is a ceiling: the v2 backend's features are `V2_FEATURES` AND the welcome's `capabilities` (see Notes for 3c-2).
+   - **The backend follows the window's kind.** Each backend's flags are fixed, but the backend changes when `serverWindow` does. `followWindowKind` (`windowKind.ts`, started in `main.tsx` before the first render) runs `setBackend` inside every `setServerWindow`: zustand calls listeners inside `set`, so the swap happens in the same tick, before React renders the new kind.
+     - It lives outside `store.ts` on purpose. `backend.ts` imports the store, directly and through `terminals.ts`, `worktreeActions.ts` and the rest; the store importing `backend.ts` back would be a cycle in which those modules evaluate before the store exists. A subscriber also catches every `setServerWindow` caller (App, StartScreen, ConnectServer, ServerProjectWindow) without touching them, so `ServerProjectWindow.tsx` stays unchanged (Task 10).
+     - 3c-2 must install and remove the store-setter overrides (Decision 3) at the same point, in `backendFor`.
+     - Components read `getBackend().features` while rendering. That is correct only while every kind change re-renders them. Anything that reads `features` during render, or in an effect, must re-read it when the kind changes; 3c-2 should add a `useFeatures()` hook (see Notes for 3c-2).
 
 **Projector**
 
@@ -149,7 +157,7 @@ Nothing is wired into a server window yet; 3c-2 does that.
   git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "<msg>" -m "Co-Authored-By: <model trailer>" -- <explicit paths>
   ```
 
-  `<model trailer>` is the trailer of the model doing the work.
+  `<model trailer>` is the trailer of the model doing the work. `git commit -- <paths>` only commits tracked files: a task that creates files runs `git add <new files>` first, or the commit fails with "pathspec did not match".
 
 ## File map
 
@@ -158,6 +166,8 @@ Nothing is wired into a server window yet; 3c-2 does that.
 | `src/renderer/src/backendFeatures.ts` | create | `FeatureName`, `BackendFeatures`, `FEATURE_NAMES`, `LEGACY_FEATURES`, `V2_FEATURES` (pure) |
 | `src/renderer/src/backend.ts` | create | `WindowBackend`, `SessionTarget`, `CreateWorktreeRequest`, `legacyBackend`, `getBackend`, `setBackend` |
 | `src/renderer/src/backend.typecheck.ts` | create | compile-time checks of the backend's shape |
+| `src/renderer/src/windowKind.ts` | create | `followWindowKind`: the backend follows `serverWindow` |
+| `src/renderer/src/main.tsx` | modify | starts `followWindowKind()` before the first render |
 | `src/renderer/src/components/ChangesPanel.tsx` | modify | changes/diff through `backend.git` |
 | `src/renderer/src/components/AddWorktreeModal.tsx` | modify | list, branches and create through the backend |
 | `src/renderer/src/components/WorktreeDetail.tsx` | modify | pull/push/remove, session and load actions through the backend; feature gates |
@@ -200,9 +210,9 @@ test('a project file window keeps every feature', () => {
   for (const name of FEATURE_NAMES) assert.equal(LEGACY_FEATURES[name], true, name)
 })
 
-test('a server window hides what runs against local paths, and keeps Linear', () => {
+test('a server window starts with every feature off (Linear waits for phase 5)', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['linear'])
+  assert.deepEqual(on, [])
 })
 ```
 
@@ -271,15 +281,16 @@ export const LEGACY_FEATURES: BackendFeatures = {
  * A server window (3c-2). Off: anything that reads or runs things on this
  * machine against the project's paths (the paths are on the server), the bot
  * and voice (local MCP tools), and the git flows protocol v2 has no command for.
- * Settings are read-only in v2. Linear stays: it only reads ticket ids from the
- * project and uses this machine's API key.
+ * Settings are read-only in v2, and Linear is hidden until phase 5 (the spec).
+ * A ceiling: the v2 backend's features are these AND the server's welcome
+ * capabilities.
  */
 export const V2_FEATURES: BackendFeatures = {
   docker: false,
   env: false,
   stacks: false,
   bot: false,
-  linear: true,
+  linear: false,
   voice: false,
   skills: false,
   moveWorktree: false,
@@ -299,6 +310,7 @@ Expected: `# pass 3`, `# fail 0`.
 - [ ] **Step 5: Commit**
 
 ```bash
+git add src/renderer/src/backendFeatures.ts scripts/backendFeatures.test.mjs
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): backend feature sets for file and server windows" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/backendFeatures.ts scripts/backendFeatures.test.mjs
 ```
 
@@ -309,8 +321,9 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ap
 `backend.ts` imports the store, `terminals.ts` and `worktreeActions.ts`, which pull in xterm and `window.api`, so `node --test` can't load it. A typecheck probe is the failing check here.
 
 **Files:**
-- Create: `src/renderer/src/backend.ts`
-- Test: `src/renderer/src/backend.typecheck.ts`
+- Create: `src/renderer/src/backend.ts`, `src/renderer/src/windowKind.ts`
+- Modify: `src/renderer/src/main.tsx`
+- Test: `src/renderer/src/backend.typecheck.ts`, `npm run smoke:windows`, `npm run smoke:v2`
 
 - [ ] **Step 1: Write the failing probe**
 
@@ -323,6 +336,7 @@ import type { BackendFeatures } from './backendFeatures'
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false
 function assertType<T extends true>(): T | void {}
+type Returns<F extends (...args: never[]) => unknown, R> = Equal<ReturnType<F>, R>
 
 export function checks(backend: WindowBackend): void {
   assertType<Equal<WindowBackend['kind'], 'legacy' | 'v2'>>()
@@ -330,13 +344,37 @@ export function checks(backend: WindowBackend): void {
   // A session goes to a known instance, or to a worktree by host and path.
   const byInstance: SessionTarget = { worktreeId: 'w1' }
   const byPath: SessionTarget = { path: '/r/one-feat' }
-  assertType<Equal<ReturnType<typeof backend.sessions.start>, Promise<string | null>>>()
+  // Not found is null, for both kinds of start.
+  assertType<Returns<typeof backend.sessions.start, Promise<string | null>>>()
+  assertType<Returns<typeof backend.sessions.startGlobal, Promise<string | null>>>()
   void backend.sessions.start(byInstance)
   void backend.sessions.start(byPath)
+  // Every mutator returns a promise, so a v2 backend can reject with the server's error.
+  const { sessions, worktrees, branch } = backend
+  assertType<Returns<typeof sessions.close, Promise<void>>>()
+  assertType<Returns<typeof sessions.rename, Promise<void>>>()
+  assertType<Returns<typeof sessions.sendPrompt, Promise<void>>>()
+  assertType<Returns<typeof sessions.enqueue, Promise<void>>>()
+  assertType<Returns<typeof sessions.setQueue, Promise<void>>>()
+  assertType<Returns<typeof sessions.markComplete, Promise<void>>>()
+  assertType<Returns<typeof sessions.seen, Promise<void>>>()
+  assertType<Returns<typeof worktrees.setOrder, Promise<void>>>()
+  assertType<Returns<typeof branch.setTag, Promise<void>>>()
+  assertType<Returns<typeof branch.setCustomTag, Promise<void>>>()
+  assertType<Returns<typeof branch.setNote, Promise<void>>>()
+  assertType<Returns<typeof branch.setTicket, Promise<void>>>()
+  assertType<Returns<typeof branch.setPullRequest, Promise<void>>>()
+  assertType<Returns<typeof branch.setEnvVars, Promise<void>>>()
+  // A note edit may carry the text it started from, for a compare-and-set.
+  assertType<Equal<Parameters<typeof branch.setNote>[3], string | null | undefined>>()
+  void branch.setNote('r1', 'feat', 'new', 'old')
+  void branch.setNote('r1', 'feat', 'new', null)
+  void branch.setNote('r1', 'feat', 'new')
   const fromPr: CreateWorktreeRequest = { repoId: 'r1', branch: 'feat', createBranch: false, fromPr: 7 }
-  assertType<Equal<ReturnType<typeof backend.worktrees.create>, Promise<{ path: string }>>>()
-  void backend.worktrees.create(fromPr)
-  assertType<Equal<ReturnType<typeof backend.git.diff>, Promise<Record<string, string>>>>()
+  // A server window also learns the new worktree's v2 id.
+  assertType<Returns<typeof worktrees.create, Promise<{ path: string; worktreeId?: string }>>>()
+  void worktrees.create(fromPr)
+  assertType<Returns<typeof backend.git.diff, Promise<Record<string, string>>>>()
 }
 ```
 
@@ -365,6 +403,11 @@ Create `src/renderer/src/backend.ts`. Each legacy method is the exact call its U
 // Terminal streams are not here: a server window attaches to its server's
 // PtyStream directly (syncV2Terminals in terminals.ts), and a legacy window
 // keeps its pty IPC.
+//
+// Errors: every method returns a promise, so a v2 backend can reject with the
+// server's ClientError. `worktrees.create` rejects for its caller (the Add
+// Worktree dialog) to show; `worktrees.remove` and `repos.*` report failures
+// through their own dialogs and resolve, as legacy does today.
 import { GLOBAL_WORKTREE_ID, allWorktrees, hostRepoPath, repoById, useAppStore } from './store'
 import {
   closeGlobalTerminal,
@@ -426,30 +469,38 @@ export interface WindowBackend {
   readonly sessions: {
     /** Resolves the new terminal id, or null when the target is unknown */
     start(target: SessionTarget, sessionType?: SessionType, llm?: LlmSelection): Promise<string | null>
-    /** A new Global panel tab */
-    startGlobal(): Promise<string | undefined>
+    /** A new Global panel tab: resolves its terminal id, or null when none started */
+    startGlobal(): Promise<string | null>
     /** The Global panel opened with no tabs: resume the saved ones, or start one */
     openGlobal(): Promise<void>
     restart(terminalId: string): Promise<void>
     /** Ends the session for good, wherever it runs */
-    close(terminalId: string): void
-    rename(terminalId: string, title: string): void
+    close(terminalId: string): Promise<void>
+    rename(terminalId: string, title: string): Promise<void>
     /** Types the text into the session and submits it */
-    sendPrompt(terminalId: string, text: string, focus?: boolean): void
-    enqueue(terminalId: string, text: string): void
-    setQueue(terminalId: string, queue: string[]): void
-    markComplete(terminalId: string, complete: boolean): void
+    sendPrompt(terminalId: string, text: string, focus?: boolean): Promise<void>
+    enqueue(terminalId: string, text: string): Promise<void>
+    setQueue(terminalId: string, queue: string[]): Promise<void>
+    markComplete(terminalId: string, complete: boolean): Promise<void>
     /** The user has seen the session: clears attention and done */
-    seen(terminalId: string): void
+    seen(terminalId: string): Promise<void>
   }
   readonly worktrees: {
     load(worktreeId: string): Promise<void>
     unload(worktreeId: string): Promise<void>
     unloadAll(): Promise<void>
-    /** Resolves the new worktree's path */
-    create(req: CreateWorktreeRequest): Promise<{ path: string }>
-    /** Asks the user first; resolves without removing anything if they decline */
+    /**
+     * Resolves the new worktree's path and, in a server window, its v2 id
+     * (legacy leaves it undefined). Rejects on failure, for the caller to show.
+     */
+    create(req: CreateWorktreeRequest): Promise<{ path: string; worktreeId?: string }>
+    /**
+     * Asks the user first; resolves without removing anything if they decline.
+     * Reports a failure in its own dialog and resolves.
+     */
     remove(info: GitWorktreeInfo, instance: WorktreeInstance | undefined): Promise<void>
+    /** The sidebar's worktree order, as legacy `worktreeKey`s */
+    setOrder(keys: string[]): Promise<void>
   }
   readonly git: {
     listWorktrees(repoId: string, serverId?: string): Promise<GitWorktreeInfo[]>
@@ -461,13 +512,19 @@ export interface WindowBackend {
   }
   /** Branch data; null or an empty text clears the value */
   readonly branch: {
-    setTag(repoId: string, branch: string, tagId: string | null): void
-    setCustomTag(repoId: string, branch: string, tagId: string, enabled: boolean): void
-    setNote(repoId: string, branch: string, text: string): void
-    setTicket(repoId: string, branch: string, ticketId: string | null): void
-    setPullRequest(repoId: string, branch: string, url: string | null): void
-    setEnvVars(repoId: string, branch: string, text: string): void
+    setTag(repoId: string, branch: string, tagId: string | null): Promise<void>
+    setCustomTag(repoId: string, branch: string, tagId: string, enabled: boolean): Promise<void>
+    /**
+     * `expected` is the note the edit started from (null = none): a v2 backend
+     * sends it as a compare-and-set, so a concurrent edit isn't overwritten.
+     * Legacy ignores it.
+     */
+    setNote(repoId: string, branch: string, text: string, expected?: string | null): Promise<void>
+    setTicket(repoId: string, branch: string, ticketId: string | null): Promise<void>
+    setPullRequest(repoId: string, branch: string, url: string | null): Promise<void>
+    setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
+  /** Both report a failure in their own dialog and resolve. */
   readonly repos: {
     /** Asks the user which repository to add */
     add(): Promise<void>
@@ -498,34 +555,34 @@ export const legacyBackend: WindowBackend = {
       const instance = project ? allWorktrees(project).find((w) => w.id === target.worktreeId) : undefined
       return instance ? createTerminal(instance.id, instance.path, undefined, sessionType, llm) : null
     },
-    startGlobal: () => startGlobalTerminal(),
+    startGlobal: async () => (await startGlobalTerminal()) ?? null,
     openGlobal: () => openGlobalTerminals(),
     restart: (terminalId) => restartTerminal(terminalId),
-    close: (terminalId) => {
+    close: async (terminalId) => {
       if (isGlobal(terminalId)) closeGlobalTerminal(terminalId)
       else disposeTerminal(terminalId)
     },
-    rename: (terminalId, title) => {
+    rename: async (terminalId, title) => {
       const global = isGlobal(terminalId)
       useAppStore.getState().renameTerminal(terminalId, title)
       if (global) saveGlobalSessions()
       else scheduleAutoSave()
     },
-    sendPrompt: (terminalId, text, focus = true) => pasteToTerminal(terminalId, text, focus),
-    enqueue: (terminalId, text) => {
+    sendPrompt: async (terminalId, text, focus = true) => pasteToTerminal(terminalId, text, focus),
+    enqueue: async (terminalId, text) => {
       useAppStore.getState().enqueueTerminalText(terminalId, text)
       scheduleAutoSave()
     },
-    setQueue: (terminalId, queue) => {
+    setQueue: async (terminalId, queue) => {
       useAppStore.getState().setTerminalQueue(terminalId, queue)
       scheduleAutoSave()
     },
-    markComplete: (terminalId, complete) => {
+    markComplete: async (terminalId, complete) => {
       const state = useAppStore.getState()
       const status = state.terminals[terminalId]?.status
       if (status && (status === 'complete') !== complete) state.toggleTerminalComplete(terminalId)
     },
-    seen: (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId)
+    seen: async (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId)
   },
   worktrees: {
     load: (worktreeId) => loadWorktree(worktreeId),
@@ -550,7 +607,8 @@ export const legacyBackend: WindowBackend = {
       tagNewBranch(repoId, branch)
       return { path }
     },
-    remove: (info, instance) => deleteWorktree(info, instance)
+    remove: (info, instance) => deleteWorktree(info, instance),
+    setOrder: async (keys) => useAppStore.getState().setWorktreeOrder(keys)
   },
   git: {
     listWorktrees: async (repoId, serverId) =>
@@ -563,15 +621,17 @@ export const legacyBackend: WindowBackend = {
     push: (loc, branch) => window.api.pushBranch(loc.serverId ?? null, loc.path, branch)
   },
   branch: {
-    setTag: (repoId, branch, tagId) => useAppStore.getState().setBranchTag(repoId, branch, tagId),
-    setCustomTag: (repoId, branch, tagId, enabled) =>
+    setTag: async (repoId, branch, tagId) => useAppStore.getState().setBranchTag(repoId, branch, tagId),
+    setCustomTag: async (repoId, branch, tagId, enabled) =>
       useAppStore.getState().setBranchCustomTag(repoId, branch, tagId, enabled),
-    setNote: (repoId, branch, text) => useAppStore.getState().setBranchNote(repoId, branch, text),
-    setTicket: (repoId, branch, ticketId) =>
+    // A project file has one writer, this window: nothing to compare against.
+    setNote: async (repoId, branch, text) => useAppStore.getState().setBranchNote(repoId, branch, text),
+    setTicket: async (repoId, branch, ticketId) =>
       useAppStore.getState().setBranchTicket(repoId, branch, ticketId),
-    setPullRequest: (repoId, branch, url) =>
+    setPullRequest: async (repoId, branch, url) =>
       useAppStore.getState().setBranchPullRequest(repoId, branch, url),
-    setEnvVars: (repoId, branch, text) => useAppStore.getState().setBranchEnvVars(repoId, branch, text)
+    setEnvVars: async (repoId, branch, text) =>
+      useAppStore.getState().setBranchEnvVars(repoId, branch, text)
   },
   repos: {
     add: () => addRepository(),
@@ -581,29 +641,85 @@ export const legacyBackend: WindowBackend = {
 
 let current: WindowBackend = legacyBackend
 
-/** This window's backend: legacy unless a server window set its own at boot. */
+/**
+ * The backend for the window's current kind. A window can change kind (a
+ * project file window opens a server project, a server window goes back to
+ * pick another), so read it at the time of the action, not once.
+ */
 export function getBackend(): WindowBackend {
   return current
 }
 
-/** Called once, before the window's first render. Not reactive: components read it while rendering. */
+/**
+ * Installs the backend for the window's kind. `followWindowKind`
+ * (windowKind.ts) calls it inside every `setServerWindow`, in the same tick, so
+ * the render that shows the new kind already sees its backend. Components read
+ * `getBackend().features` while rendering; that holds only because the kind
+ * change re-renders them. A backend installed later (3c-2, once connected) needs
+ * a reactive read, such as a `useFeatures()` hook.
+ */
 export function setBackend(backend: WindowBackend): void {
   current = backend
 }
 ```
 
-`unload` and `unloadAll` wrap the synchronous legacy functions in `async`. The body still runs synchronously before the first `await`, so a click unloads in the same tick as before.
+`unload`, `unloadAll`, `setOrder` and every fire-and-forget mutator (`close`, `rename`, `sendPrompt`, `enqueue`, `setQueue`, `markComplete`, `seen`, the `branch.*` setters) wrap the synchronous legacy functions in `async`. The body still runs synchronously before the first `await`, so a click acts in the same tick as before. The one difference: a throw becomes a rejected promise, so at a `void` call site it is an unhandled rejection rather than an uncaught exception.
 
-- [ ] **Step 4: Typecheck, test and build**
+Create `src/renderer/src/windowKind.ts` (Decision 5: the backend follows the window's kind):
 
-Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)' && npm run build 2>&1 | tail -1`
+```ts
+// Keeps this window's backend in step with what the window shows. Not in
+// store.ts: backend.ts imports the store (directly and through terminals.ts,
+// worktreeActions.ts and the rest), so the store importing backend.ts back would
+// make a cycle in which those modules run before the store exists.
+import { useAppStore } from './store'
+import { legacyBackend, setBackend, type WindowBackend } from './backend'
 
-Expected: typecheck clean; `# fail 0`; `✓ built in …`.
+type ServerWindowTarget = ReturnType<typeof useAppStore.getState>['serverWindow']
+
+function backendFor(target: ServerWindowTarget): WindowBackend {
+  if (!target) return legacyBackend
+  // 3c-2 installs the v2 backend here, and swaps the store-setter overrides at the same point.
+  return legacyBackend
+}
+
+/**
+ * Installs the backend for the current kind, then again on every
+ * `setServerWindow`. zustand runs listeners inside `set`, so the backend changes
+ * in the same tick as `serverWindow`, before React renders the new kind.
+ */
+export function followWindowKind(): () => void {
+  setBackend(backendFor(useAppStore.getState().serverWindow))
+  return useAppStore.subscribe((state, previous) => {
+    if (state.serverWindow !== previous.serverWindow) setBackend(backendFor(state.serverWindow))
+  })
+}
+```
+
+In `src/renderer/src/main.tsx`, after `import { readTerminal, startClaudeSession } from './terminals'` add:
+
+```ts
+import { followWindowKind } from './windowKind'
+```
+
+and just before `ReactDOM.createRoot(` add:
+
+```ts
+// For the window's lifetime: the backend follows serverWindow from the first set on.
+followWindowKind()
+```
+
+- [ ] **Step 4: Typecheck, test, build and the window smokes**
+
+Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)' && npm run build 2>&1 | tail -1 && npm run smoke:windows 2>&1 | tail -1 && npm run smoke:v2 2>&1 | tail -1`
+
+Expected: typecheck clean; `# fail 0`; `✓ built in …`; `40/40 checks passed`; `V2 SMOKE PASS (78 checks)`. The smokes cover the `setServerWindow` subscriber in both kinds of window.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): WindowBackend seam with the legacy backend" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/backend.ts src/renderer/src/backend.typecheck.ts
+git add src/renderer/src/backend.ts src/renderer/src/backend.typecheck.ts src/renderer/src/windowKind.ts
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): WindowBackend seam with the legacy backend" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/backend.ts src/renderer/src/backend.typecheck.ts src/renderer/src/windowKind.ts src/renderer/src/main.tsx
 ```
 
 ---
@@ -1197,6 +1313,8 @@ Line 43 becomes:
     if (!connected || !idsKey || !getBackend().features.linear) return
 ```
 
+The effect re-runs when `idsKey` changes, which a projection into a server window does. A `useFeatures()` hook in 3c-2 (Decision 5) would make the dependency explicit.
+
 - [ ] **Step 6: Typecheck, test, build and the smokes**
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)' && npm run smoke 2>&1 | tail -1 && npm run smoke:windows 2>&1 | tail -1 && npm run smoke:multi 2>&1 | tail -1`
@@ -1253,8 +1371,8 @@ Then make these replacements, each a single occurrence:
 
 | Line | Old | New |
 |---|---|---|
-| 680 | `if (e.button === 1) disposeTerminal(id)` | `if (e.button === 1) getBackend().sessions.close(id)` |
-| 733 | `disposeTerminal(id)` (inside the `session-tab-close` click, after `e.stopPropagation()`) | `getBackend().sessions.close(id)` |
+| 680 | `if (e.button === 1) disposeTerminal(id)` | `if (e.button === 1) void getBackend().sessions.close(id)` |
+| 733 | `disposeTerminal(id)` (inside the `session-tab-close` click, after `e.stopPropagation()`) | `void getBackend().sessions.close(id)` |
 | 747 | `void startClaudeSession({ serverId: info.serverId, path: info.path }, sessionType, llm)` | `void getBackend().sessions.start({ serverId: info.serverId, path: info.path }, sessionType, llm)` |
 | 755 | `onClick={() => unloadWorktree(instance.id)}` | `onClick={() => void getBackend().worktrees.unload(instance.id)}` |
 | 852 | `onClick={() => void loadWorktree(instance.id)}` | `onClick={() => void getBackend().worktrees.load(instance.id)}` |
@@ -1327,8 +1445,8 @@ Then:
 |---|---|---|
 | 72 | `openGlobalTerminals().catch((err) => setError(String(err)))` | `getBackend().sessions.openGlobal().catch((err) => setError(String(err)))` |
 | 95 | `startGlobalTerminal().catch((err) => setError(String(err)))` | `getBackend().sessions.startGlobal().catch((err) => setError(String(err)))` |
-| 162 | `if (e.button === 1) closeGlobalTerminal(id)` | `if (e.button === 1) getBackend().sessions.close(id)` |
-| 196 | `closeGlobalTerminal(id)` (inside the close `×` click) | `getBackend().sessions.close(id)` |
+| 162 | `if (e.button === 1) closeGlobalTerminal(id)` | `if (e.button === 1) void getBackend().sessions.close(id)` |
+| 196 | `closeGlobalTerminal(id)` (inside the close `×` click) | `void getBackend().sessions.close(id)` |
 
 `commitRename` keeps `renameTerminal` plus `saveGlobalSessions`. It is a data edit (Decision 3).
 
@@ -1354,7 +1472,7 @@ import { agentLabel, attachTerminal, fitTerminal, focusTerminal } from '../termi
 import { getBackend } from '../backend'
 ```
 
-Line 61 becomes `onClick={() => getBackend().sessions.sendPrompt(terminalId, btn.text)}`. Line 73 becomes:
+Line 61 becomes `onClick={() => void getBackend().sessions.sendPrompt(terminalId, btn.text)}`. Line 73 becomes:
 
 ```tsx
           <button onClick={() => void getBackend().sessions.restart(terminalId)}>
@@ -1362,7 +1480,7 @@ Line 61 becomes `onClick={() => getBackend().sessions.sendPrompt(terminalId, btn
           </button>
 ```
 
-In `src/renderer/src/components/QueuePanel.tsx`, line 3 becomes `import { getBackend } from '../backend'`, and line 49 becomes `getBackend().sessions.sendPrompt(terminalId, text)`. The queue edits on lines 40, 47 and 53 (`enqueue`, `removeAt`) stay store setters.
+In `src/renderer/src/components/QueuePanel.tsx`, line 3 becomes `import { getBackend } from '../backend'`, and line 49 becomes `void getBackend().sessions.sendPrompt(terminalId, text)`. The queue edits on lines 40, 47 and 53 (`enqueue`, `removeAt`) stay store setters.
 
 - [ ] **Step 6: App menus**
 
@@ -1403,13 +1521,13 @@ Replace lines 70-73:
 with:
 
 ```ts
-          if (id) getBackend().sessions.close(id)
+          if (id) void getBackend().sessions.close(id)
         } else if (state.activeWorktreeId) {
           const id = state.activeTerminal[state.activeWorktreeId]
-          if (id) getBackend().sessions.close(id)
+          if (id) void getBackend().sessions.close(id)
 ```
 
-`sessions.close` picks `closeGlobalTerminal` for a Global tab and `disposeTerminal` otherwise, the same split as before.
+`sessions.close` picks `closeGlobalTerminal` for a Global tab and `disposeTerminal` otherwise, the same split as before. Every mutator returns a promise (Decision 3), so each call site that ignores it says `void`; `startGlobal`'s and `openGlobal`'s keep their `.catch`, and `startGlobal`'s `string | null` result is unused here.
 
 - [ ] **Step 7: See the direct calls gone**
 
@@ -2067,6 +2185,7 @@ Expected: `# pass 14`, `# fail 0`; typecheck clean.
 - [ ] **Step 5: Commit**
 
 ```bash
+git add src/renderer/src/v2/projector.ts scripts/v2Projector.test.mjs
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): project a v2 snapshot onto the legacy store slice" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/v2/projector.ts scripts/v2Projector.test.mjs
 ```
 
@@ -2226,6 +2345,7 @@ Expected: `# pass 6`, `# fail 0`.
 - [ ] **Step 5: Commit**
 
 ```bash
+git add src/renderer/src/v2/terminalSync.ts scripts/v2TerminalSync.test.mjs
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): plan a server window's terminal entries from a v2 snapshot" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/v2/terminalSync.ts scripts/v2TerminalSync.test.mjs
 ```
 
@@ -2627,6 +2747,7 @@ Expected: typecheck clean (the probe passes); `# fail 0`; `SMOKE PASS`; `40/40 c
 - [ ] **Step 8: Commit**
 
 ```bash
+git add src/renderer/src/v2/terminals.typecheck.ts
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): v2 terminal entries over the server's PtyStream" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/terminals.ts src/renderer/src/v2/terminals.typecheck.ts
 ```
 
@@ -2707,6 +2828,7 @@ Expected: `# fail 0`; `✓ built in …`.
 - [ ] **Step 4: Commit**
 
 ```bash
+git add src/renderer/src/v2/applyProjection.ts
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): apply a v2 projection to the store and terminals" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/v2/applyProjection.ts
 ```
 
@@ -2774,4 +2896,24 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 4. **Two places outside the backend still create sessions in v2.** `AddWorktreeModal`'s `addInstance` calls `addWorktreeInstance` and `createTerminal`, and `restartTerminal` is still exported. TerminalPane now restarts through the backend, but nothing stops a new call site from calling `restartTerminal` directly.
 5. **Event ordering.** If a `state.patch` that removes a `ptyId` arrives before that pty's `pty.exit`, the planner detaches first and the `[process exited …]` line is lost. The effect is cosmetic: the status is still right.
 6. **Re-render cost.** Each patch rebuilds the whole slice (Decision 15), so every store selector re-runs. With many sessions, status patches (which are frequent) may need structural sharing.
-7. **`setWorktreeOrder`** (`Sidebar.tsx:170`) is a settings write. With settings read-only in v2, 3c-2 must either send it as a narrow `project.updateSettings{worktreeOrder}` (`v2WorktreeOrder` is ready) or disable dragging.
+7. **`setWorktreeOrder`** (`Sidebar.tsx:170`) is a settings write. 3c-2 overrides the setter to call `worktrees.setOrder`, which sends a narrow `project.updateSettings{worktreeOrder}` (`v2WorktreeOrder` is ready); see Notes for 3c-2.
+
+## Notes for 3c-2
+
+Found while reviewing Tasks 1–2. The interface already has the shape these need; the v2 behaviour is 3c-2's.
+
+1. **`worktrees.remove` in v2.** The server refuses to remove a loaded worktree with `IN_USE` (`server/src/worktreeHandlers.ts:156-161`). So the v2 implementation must:
+   - read `worktree.changes`, and confirm with the user as legacy's `deleteWorktree` does (dirty or not);
+   - send `worktree.unload` if the worktree is loaded;
+   - send `worktree.remove{force: dirty}`;
+   - on a `GIT_ERROR` for uncommitted changes (the tree changed since the check), ask again and retry with `force: true`.
+
+   It keeps legacy's contract, which the backend doc comment states: `create` rejects for its caller to show, while `remove` and `repos.*` report failures in their own dialogs and resolve.
+2. **`sessions.start` in v2.**
+   - `session.start` needs `cols` and `rows`, which no pane has measured yet when the session starts. The v2 backend picks a default (for example 120×32), and the pane's first fit resizes it.
+   - `sessionTypeId` must exist in the server's `settings.sessionTypes`, so NewSessionMenu in a server window must list only the server's types, not this machine's.
+3. **`repos.add` in v2** is two requests: `server.addRepo{path}` registers the path with the server, then `repo.add{path}` adds it to the project; `repo.add` alone fails for an unregistered path (`findRegistered`, `server/src/v2.ts:152`). The method table under Decision 3 shows this.
+4. **`setCustomTag`** maps to the whole-list `branch.setCustomTags`, computed from the slice. That request has no `expected`, so two concurrent toggles can lose one edit. This is accepted for now.
+5. **Worktree order.** v2 needs `project.updateSettings{worktreeOrder}` as a narrow exception to read-only settings (Decision 5 under "Recorded"). The interface has `worktrees.setOrder(keys): Promise<void>`; legacy calls the existing `setWorktreeOrder` store setter, so no call site in this plan changes. In 3c-2 the `setWorktreeOrder` override calls `worktrees.setOrder`, which converts the keys with `v2WorktreeOrder`.
+6. **`V2_FEATURES` is a ceiling.** The v2 backend's `features` are `V2_FEATURES` AND the welcome's `capabilities`. For example, the Global panel needs the `mcp` capability.
+7. **Lifecycle.** The v2 backend is installed in `windowKind.ts`'s `backendFor` (Decision 5). The store-setter overrides (Decision 3) must be installed and removed at the same point, so a window that goes back to the picker never keeps v2 overrides on a legacy backend. If the v2 backend can only be built once the connection is up (after `setServerWindow`), install both together when it is, and add a `useFeatures()` hook (a store-backed or `useSyncExternalStore` read of the current backend's features) so components that read `features` during render re-render when the backend changes.
