@@ -3,7 +3,8 @@
 // Every tool acts on the calling session's project only, and changes state through
 // the v2 commands, run in process.
 import { randomUUID } from 'node:crypto'
-import type { BranchData, Project, Repository } from '../../../src/shared/model/types'
+import type { BranchData, Project, Repository, Session } from '../../../src/shared/model/types'
+import { keySequence } from '../../../src/shared/keys.ts'
 import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { PROVIDER_IDS, type LlmSelection } from '../../../src/shared/providers/types.ts'
@@ -13,6 +14,8 @@ import type { ConfigStore } from '../configStore'
 import { codedError } from '../errors.ts'
 import type { GitPoller } from '../git/poller.ts'
 import type { ProjectState } from '../projects/state.ts'
+import { MAX_PTY_WRITE } from '../sessions/limits.ts'
+import { findSession, type FoundSession } from '../sessions/locate.ts'
 import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
@@ -399,8 +402,72 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
     const saveSessionTypes = (types: SessionType[]) => v2('project.updateSettings', { settings: { sessionTypes: types } })
 
-    const notYet = async (): Promise<never> => {
-      throw new Error('not implemented yet')
+    const pollMs = deps.pollMs ?? 250
+    const graceMs = deps.graceMs ?? 1500
+    const firstOutputMs = deps.readyTimeouts?.firstOutputMs ?? 60_000
+    const settleMs = deps.readyTimeouts?.settleMs ?? 30_000
+    const now = deps.now ?? Date.now
+    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+
+    /** The session `terminalId` names, in the current project snapshot; NOT_FOUND reads "No session …". */
+    const sessionIn = (terminalId: unknown): FoundSession => {
+      if (typeof terminalId !== 'string' || !terminalId) throw bad('terminalId is required')
+      return findSession(deps.projects.require(projectId), terminalId)
+    }
+
+    /** The session's record now, or undefined once it (or the project) is gone. */
+    const current = (terminalId: string): Session | undefined => {
+      try {
+        return sessionIn(terminalId).session
+      } catch {
+        return undefined
+      }
+    }
+
+    /** Not working, and past its first output; exited, complete and attention always are. */
+    const settled = (session: Session): boolean =>
+      session.status === 'exited' || session.status === 'complete' || session.status === 'attention' ||
+      (session.status !== 'working' && deps.sessions.hasOutput(session.id))
+
+    /** Polls every pollMs; true once `predicate` holds, false if `timeoutMs` passes first. */
+    const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+      const deadline = now() + timeoutMs
+      for (;;) {
+        if (predicate()) return true
+        const left = deadline - now()
+        if (left <= 0) return false
+        await sleep(Math.min(pollMs, left))
+      }
+    }
+
+    /**
+     * A session that has not printed anything yet is still booting (the desktop's
+     * `starting`): wait for its first output, then for it to settle. Neither wait throws.
+     */
+    const waitUntilReady = async (terminalId: string): Promise<void> => {
+      if (deps.sessions.hasOutput(terminalId)) return
+      const gone = (s: Session | undefined) => !s || s.status === 'exited'
+      await waitFor(() => { const s = current(terminalId); return gone(s) || deps.sessions.hasOutput(terminalId) }, firstOutputMs)
+      await waitFor(() => { const s = current(terminalId); return gone(s) || s!.status !== 'working' }, settleMs)
+    }
+
+    /** The session's live pty; BAD_REQUEST when it is not running. */
+    const runningPty = (session: Session): string => {
+      const ptyId = session.ptyId
+      if (!ptyId || !deps.sessions.terminals.has(ptyId)) throw bad('That session is not running')
+      return ptyId
+    }
+
+    const describeSession = ({ session, repo, worktree }: FoundSession) => {
+      const project = deps.projects.require(projectId)
+      return {
+        terminalId: session.id,
+        title: session.title,
+        status: session.status,
+        llm: session.llm,
+        queue: session.queue,
+        worktree: repo && worktree ? describeWorktree(project, repo, worktree) : null
+      }
     }
 
     const handlers: Record<string, (args: Record<string, unknown>, project: Project) => unknown> = {
@@ -551,16 +618,119 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         return { deleted: type.name }
       },
 
-      // Sessions, prompts, terminal reads and waiting: Task 8.
-      get_current_session: notYet,
-      start_session: notYet,
-      close_session: notYet,
-      send_prompt: notYet,
-      enqueue_prompt: notYet,
-      remove_queued_prompt: notYet,
-      send_keys: notYet,
-      read_terminal: notYet,
-      wait_for_sessions: notYet
+      get_current_session: (args) => describeSession(sessionIn(args.terminalId)),
+
+      start_session: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        let sessionTypeId: string | undefined
+        if (args.sessionType !== undefined && args.sessionType !== '') {
+          const ref = text(args.sessionType)
+          const types = project.settings.sessionTypes ?? []
+          const type = ref ? findSessionType(types, ref) : undefined
+          if (!type) {
+            const names = types.map((t) => t.name).join(', ') || 'none configured'
+            throw notFound(`No session type matches "${String(args.sessionType)}". Session types: ${names}`)
+          }
+          sessionTypeId = type.id
+        }
+        const llm = llmArg(args)
+        const { sessionId } = (await v2('session.start', {
+          worktreeId: worktree.id,
+          ...(sessionTypeId ? { sessionTypeId } : {}),
+          ...(llm ? { llm } : {}),
+          cols: 120,
+          rows: 32
+        })) as { sessionId: string }
+        if (typeof args.prompt === 'string' && args.prompt.trim()) {
+          await waitUntilReady(sessionId)
+          await v2('session.sendPrompt', { sessionId, text: args.prompt })
+        }
+        return { terminalId: sessionId, status: current(sessionId)?.status ?? 'closed' }
+      },
+
+      close_session: async (args) => {
+        const { session } = sessionIn(args.terminalId)
+        await v2('session.close', { sessionId: session.id })
+        return { closed: true }
+      },
+
+      send_prompt: async (args) => {
+        const { session } = sessionIn(args.terminalId)
+        if (typeof args.text !== 'string' || !args.text.trim()) throw bad('text is required')
+        if (session.status === 'exited') throw bad('That session has exited')
+        await waitUntilReady(session.id)
+        await v2('session.sendPrompt', { sessionId: session.id, text: args.text })
+        return { sent: true }
+      },
+
+      enqueue_prompt: async (args) => {
+        const { session } = sessionIn(args.terminalId)
+        const prompt = text(args.text)
+        if (!prompt) throw bad('text is required')
+        await v2('session.enqueue', { sessionId: session.id, text: prompt })
+        return { queue: sessionIn(session.id).session.queue }
+      },
+
+      remove_queued_prompt: async (args) => {
+        const { session } = sessionIn(args.terminalId)
+        const queue = session.queue
+        const index = Number(args.index)
+        if (!Number.isInteger(index) || index < 0 || index >= queue.length) {
+          throw bad(
+            queue.length
+              ? `index must be 0–${queue.length - 1}; the queue has ${queue.length} prompt(s)`
+              : 'The queue is empty: there is no index to remove'
+          )
+        }
+        await v2('session.setQueue', { sessionId: session.id, queue: queue.filter((_, i) => i !== index) })
+        return { removed: queue[index], queue: sessionIn(session.id).session.queue }
+      },
+
+      send_keys: (args) => {
+        const { session } = sessionIn(args.terminalId)
+        const keys = Array.isArray(args.keys) ? args.keys.map(String) : []
+        if (keys.length === 0) throw bad('keys is required')
+        const sequences = keys.map(keySequence)
+        if (sequences.reduce((n, k) => n + k.length, 0) > MAX_PTY_WRITE) {
+          throw bad(`keys must total at most ${MAX_PTY_WRITE} characters`)
+        }
+        const ptyId = runningPty(session)
+        for (const sequence of sequences) deps.sessions.terminals.write(ptyId, sequence)
+        // Same as real keyboard input: the prompt is being answered.
+        deps.sessions.noteUserInput(session.id)
+        return { sent: keys.length }
+      },
+
+      read_terminal: async (args) => {
+        const { session } = sessionIn(args.terminalId)
+        const lines = Math.min(Math.max(Math.floor(Number(args.lines)) || 80, 1), 2000)
+        const ptyId = runningPty(session)
+        await deps.sessions.terminals.settled(ptyId)
+        const output = deps.sessions.terminals.screen(ptyId, lines).join('\n')
+        return { status: current(session.id)?.status ?? 'closed', output }
+      },
+
+      wait_for_sessions: async (args) => {
+        const ids = Array.isArray(args.terminalIds) ? args.terminalIds : []
+        if (ids.length === 0) throw bad('terminalIds is required')
+        for (const id of ids) sessionIn(id)
+        const terminalIds = ids as string[]
+        const any = args.until === 'any'
+        const seconds = Math.min(Number(args.timeoutSeconds) || 300, 600)
+        const done = (id: string): boolean => {
+          const s = current(id)
+          return !s || settled(s)
+        }
+        const holds = (): boolean => (any ? terminalIds.some(done) : terminalIds.every(done))
+        // A prompt sent a moment ago may not have produced output yet: don't report
+        // its still-idle status as finished.
+        if (holds()) await sleep(graceMs)
+        const completed = await waitFor(holds, seconds * 1000)
+        return {
+          timedOut: !completed,
+          sessions: terminalIds.map((id) => ({ terminalId: id, status: current(id)?.status ?? 'closed' }))
+        }
+      }
     }
 
     return async (name, args) => {

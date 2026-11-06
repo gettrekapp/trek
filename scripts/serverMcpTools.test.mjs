@@ -157,3 +157,92 @@ test('load_worktree and unload_worktree', async (t) => {
   assert.deepEqual(await s.call('load_worktree', { worktree: 'main' }), { loaded: true, sessions: [] })
   assert.deepEqual(await s.call('unload_worktree', { worktree: 'main' }), { unloaded: true })
 })
+
+test('start_session, get_current_session and close_session', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId, status } = await s.call('start_session', { worktree: 'main' })
+  assert.equal(status, 'idle')
+  const current = await s.call('get_current_session', { terminalId })
+  assert.equal(current.terminalId, terminalId)
+  assert.equal(current.worktree.worktree, s.projects.require(s.projectId).repositories[0].worktrees[0].id)
+  assert.deepEqual(await s.call('close_session', { terminalId }), { closed: true })
+  await assert.rejects(s.call('get_current_session', { terminalId }), /No session/)
+})
+
+test('send_prompt waits for the agent to be ready, then pastes', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const proc = s.spawned.at(-1)
+  setTimeout(() => proc.emit('ready'), 20)
+  assert.deepEqual(await s.call('send_prompt', { terminalId, text: 'hello' }), { sent: true })
+  assert.equal(proc.written[0], 'hello')
+})
+
+test('start_session with a prompt sends it once the agent is ready', async (t) => {
+  const s = await toolSetup(t)
+  const pending = s.call('start_session', { worktree: 'main', prompt: 'do it' })
+  setTimeout(() => s.spawned.at(-1).emit('ready'), 20)
+  await pending
+  assert.equal(s.spawned.at(-1).written[0], 'do it')
+})
+
+test('enqueue_prompt and remove_queued_prompt', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  assert.deepEqual(await s.call('enqueue_prompt', { terminalId, text: 'a' }), { queue: ['a'] })
+  await s.call('enqueue_prompt', { terminalId, text: 'b' })
+  assert.deepEqual(await s.call('remove_queued_prompt', { terminalId, index: 0 }), { removed: 'a', queue: ['b'] })
+  await assert.rejects(s.call('remove_queued_prompt', { terminalId, index: 5 }), /index/)
+})
+
+test('send_keys maps named keys and counts as input', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  assert.deepEqual(await s.call('send_keys', { terminalId, keys: ['esc', 'y', 'enter'] }), { sent: 3 })
+  assert.deepEqual(s.spawned.at(-1).written, ['\x1b', 'y', '\r'])
+  // Answering a prompt that rang the bell clears attention, as typing does.
+  s.spawned.at(-1).emit('Allow? \x07')
+  await s.sessions.terminals.settled(s.projects.require(s.projectId).repositories[0].worktrees[0].sessions[0].ptyId)
+  assert.equal((await s.call('get_current_session', { terminalId })).status, 'attention')
+  await s.call('send_keys', { terminalId, keys: ['y'] })
+  assert.equal((await s.call('get_current_session', { terminalId })).status, 'working')
+})
+
+test('read_terminal reads the headless screen', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  s.spawned.at(-1).emit('line one\r\nline two\r\n')
+  const r = await s.call('read_terminal', { terminalId, lines: 1 })
+  assert.deepEqual(r, { status: 'working', output: 'line two' })
+})
+
+test('wait_for_sessions: any, all with a timeout, and closed sessions', async (t) => {
+  const s = await toolSetup(t)
+  const a = (await s.call('start_session', { worktree: 'main' })).terminalId
+  const b = (await s.call('start_session', { worktree: 'main' })).terminalId
+  s.spawned[0].emit('x')
+  s.spawned[1].emit('x')
+  s.fireQuiet() // the first quiet timer belongs to session a: a settles to idle, b stays working
+  const any = await s.call('wait_for_sessions', { terminalIds: [a, b], until: 'any', timeoutSeconds: 1 })
+  assert.equal(any.timedOut, false)
+  const all = await s.call('wait_for_sessions', { terminalIds: [a, b], timeoutSeconds: 0.05 })
+  assert.equal(all.timedOut, true)
+  assert.deepEqual(all.sessions.map((x) => x.status), ['idle', 'working'])
+  // A session that disappears during the wait counts as settled and reports closed.
+  s.spawned[0].emit('y') // a is working again: nothing holds yet
+  const waiting = s.call('wait_for_sessions', { terminalIds: [b, a], until: 'any', timeoutSeconds: 1 })
+  setTimeout(() => { s.call('close_session', { terminalId: a }) }, 20)
+  const closed = await waiting
+  assert.equal(closed.timedOut, false)
+  assert.deepEqual(closed.sessions, [{ terminalId: b, status: 'working' }, { terminalId: a, status: 'closed' }])
+  // An id that is already gone when the wait starts is an error, as on the desktop.
+  await assert.rejects(s.call('wait_for_sessions', { terminalIds: [b, a] }), /No session/)
+})
+
+test('tools see only their own project', async (t) => {
+  const s = await toolSetup(t)
+  const other = s.projects.create('Other', [{ registered: s.registered, name: undefined }])
+  const otherCall = s.callerFor(other)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  await assert.rejects(otherCall('get_current_session', { terminalId }), /No session/)
+})

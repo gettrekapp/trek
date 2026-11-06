@@ -325,6 +325,18 @@ export class SessionManager {
     this.onUserInput(ptyId)
   }
 
+  /** Keys sent to the session by a tool (MCP send_keys): always the user acting, as a prompt is. */
+  noteUserInput(sessionId: string): void {
+    for (const [ptyId, owner] of this.owners) {
+      if (owner.sessionId === sessionId) this.onUserInput(ptyId)
+    }
+  }
+
+  /** True once the session's current run has produced live output (cleared when its pty ends). */
+  hasOutput(sessionId: string): boolean {
+    return this.activity.has(sessionId)
+  }
+
   loadWorktree(p: any): null {
     this.assertRunning()
     const project = this.deps.projects.require(p.projectId)
