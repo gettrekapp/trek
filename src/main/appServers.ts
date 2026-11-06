@@ -10,6 +10,7 @@ import { createSecretStore } from './secrets'
 import { parseAppServers, validateServerInput, type AppServer } from './appServersRules'
 import { globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
+import { closeForServer } from './v2relay'
 import type { AppServerInfo, AppServerTest } from '../shared/types'
 
 const FILE_NAME = 'app-servers.json'
@@ -109,6 +110,7 @@ async function remove(id: unknown): Promise<void> {
   const list = loaded()
   const index = list.findIndex((s) => s.id === key)
   if (index >= 0) list.splice(index, 1)
+  closeForServer(key)
   await tokens.set(key, null)
   if (index >= 0) await persist()
 }

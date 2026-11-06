@@ -197,6 +197,22 @@ const api = {
     remove: (id: string): Promise<void> => ipcRenderer.invoke('appServers:remove', id),
     test: (id: string): Promise<AppServerTest> => ipcRenderer.invoke('appServers:test', id)
   },
+  // v2 WebSockets relayed through main, by server entry id; main injects the token into hello.
+  v2Socket: {
+    open: (serverEntryId: string): Promise<string> => ipcRenderer.invoke('v2socket:open', serverEntryId),
+    send: (socketId: string, text: string): void => ipcRenderer.send('v2socket:send', socketId, text),
+    close: (socketId: string, code?: number, reason?: string): void =>
+      ipcRenderer.send('v2socket:close', socketId, code, reason),
+    onEvent: (
+      callback: (event: {
+        socketId: string
+        type: 'open' | 'message' | 'close' | 'error'
+        data?: string
+        code?: number
+        reason?: string
+      }) => void
+    ): (() => void) => subscribe('v2socket:event', callback)
+  },
 
   // Remote servers
   connectServer: (config: ServerConfig): Promise<void> =>

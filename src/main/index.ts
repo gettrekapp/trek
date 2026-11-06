@@ -18,6 +18,7 @@ import { registerStackHandlers } from './stacks'
 import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
 import { registerAppServerHandlers } from './appServers'
+import { registerV2Relay } from './v2relay'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
@@ -127,6 +128,7 @@ app.whenReady().then(async () => {
   registerClaudeSessionHandlers()
   registerServerHandlers()
   registerAppServerHandlers()
+  registerV2Relay()
   registerMcpHandlers()
   registerBotHandlers()
   registerVoiceHandlers()
