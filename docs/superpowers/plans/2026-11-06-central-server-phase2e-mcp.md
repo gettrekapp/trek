@@ -35,9 +35,9 @@ Task 11 records these in `PROTOCOL.md`.
 3. **Tokens and config files.**
    - Each project gets a token (`randomBytes(32)` hex) the first time one of its sessions launches.
    - Tokens are kept in memory and new ones are generated on every server start; the server also listens on a new port each start.
-   - The Claude `--mcp-config` file is `<dataDir>/mcp/<projectId>.json` and the Gemini settings file is `<dataDir>/mcp/<projectId>-gemini.json`. Both are written with mode 0600 in a 0700 directory.
+   - The Claude `--mcp-config` file is `<dataDir>/mcp/<projectId>.json` and the Gemini settings file is `<dataDir>/mcp/<projectId>.gemini.json`. Both are written with mode 0600 in a 0700 directory.
    - The files are rewritten whenever the token or port changes.
-   - On start the server deletes the whole `mcp/` directory's files. `project.delete` revokes the token and deletes that project's files.
+   - On start the server deletes the `.json`/`.tmp` files in `mcp/`, and refuses to start if `mcp/` is a symlink, not a directory, or owned by another user. Project ids must match `^[A-Za-z0-9][A-Za-z0-9-]*$`. `project.delete` revokes the token and deletes that project's files.
    - Codex gets the URL and the token through `TREK_MCP_TOKEN`, as the provider adapter already does.
 4. **Every session gets MCP**, worktree and Global alike. On the desktop only local worktree sessions got it, because MCP listened on the desktop's own loopback; every server session is local to the server. Global sessions also get the role prompt again (`agentCommand` adds it when `mcp` is set).
 5. **Tools in 2e.** These match the desktop's names, parameters and result shapes wherever the server has the data:
