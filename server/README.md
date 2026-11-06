@@ -119,7 +119,11 @@ runs without one.
 An optional `maxSessions` in the same config file caps the agent sessions
 running at once (default 64). Starting or restarting one beyond the cap fails
 with `BAD_REQUEST`; loading a worktree marks the sessions it cannot start as
-exited, and they can be restarted later. WebSocket frames are limited to 16 MiB.
+exited, and they can be restarted later. A closed session holds its slot until
+its process exits (at most 3 s). Each running session takes memory for a headless
+screen of about 2000 + rows lines × cols cells plus a ring buffer of up to 2 Mi
+UTF-16 code units of output, so size `maxSessions` to the machine. WebSocket
+frames are limited to 16 MiB.
 
 ```json
 { "maxSessions": 64 }

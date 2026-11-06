@@ -316,7 +316,7 @@ ids, and each session keeps its old id as `agentSessionId` so it resumes. The
 server assigns the project's id; nested ids are kept. It
 rejects the import with `BAD_REQUEST` if any repository, worktree or session id
 is empty, contains a space, or already exists on that server, and with
-`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no worktree path listed twice in one repository, no non-main worktree path that is another registered repository or contains one, no worktree `branch` that starts with `-` or contains whitespace or control characters, and no own `__proto__` key anywhere in the payload (settings values included); otherwise `BAD_REQUEST`. It resets runtime
+`PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no worktree path listed twice in one repository, no non-main worktree path that is another registered repository or contains one, no worktree `branch` that starts with `-` or contains whitespace or control characters, no own `__proto__` key anywhere in the payload (settings values included), and sessions within the session limits: a `title` of at most 200 characters with no control characters, and a `queue` of at most 100 non-empty prompts of at most 100,000 characters each (the rules of `session.rename` and `session.setQueue`); otherwise `BAD_REQUEST`. It resets runtime
 fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
 `dirty`, `ahead`, `behind`, `head` and `missing`.
 
@@ -386,7 +386,8 @@ starts a Global session. `cols` and `rows` are integers from 1 to 1000. The agen
 is chosen from `llm`, else the session type's, else the project's default, else
 the server's. An unknown `llm.provider` is `BAD_REQUEST`, as is an unknown
 `sessionTypeId`, a `worktreeId` that is `missing` or a project with no
-repositories (for Global). A worktree that is not loaded is loaded first. A title
+repositories (for Global). A worktree that is not loaded is loaded first; at
+`maxSessions` the call is refused before that load. A title
 (of `session.start`, of a session type's name, or of `session.rename`) is at most
 200 characters with no control characters, else `BAD_REQUEST`. If the agent
 cannot be spawned, no session is left behind.
@@ -443,7 +444,9 @@ the desktop's rules, applied to live output only; replay never changes a status.
   `complete` or `exited`. A BEL that only ends an OSC sequence is not a bell. (The
   `exited` guard is the server's own: the screen is parsed asynchronously, so a
   final BEL can be seen after the process ended.)
-- **Input.** Input while `attention` or `complete` makes the session `working`. A
+- **Input.** Input while `attention` or `complete` makes the session `working` and
+  (re)starts the quiet timer, as output does, so a session the agent never prints
+  to after the input still settles. A
   `pty.write` counts as input unless its data consists only of what xterm.js sends
   on its own: cursor position reports (`ESC [ n ; m R`, also `ESC [ ? n ; m R`),
   device attribute replies (`ESC [ ? ... c`, `ESC [ > ... c`), status reports
@@ -456,7 +459,7 @@ the desktop's rules, applied to live output only; replay never changes a status.
 - **`since`.** The server records when a session entered `attention` or `done`
   (epoch ms, kept in memory only). A session that leaves those states loses it.
 - **Runtime only.** Status changes are not saved; a server restart resets every
-  status to `idle` anyway. Only `complete` reaches disk, through
+  status to `idle` anyway. Only `complete` survives a restart, through
   `session.markComplete`.
 - **The `attention` topic** is republished whenever any entry field can change: a
   status change, `session.rename`, `session.close`, `worktree.unload`, `session.seen`,
@@ -470,6 +473,13 @@ Known gaps, the same as on the desktop unless noted:
 - Shift, Ctrl or Alt+F3 sends `ESC [ 1 ; <mod> R`, which is byte for byte a cursor
   report, so that key does not count as input. (The desktop sees it as a key; the
   server cannot.)
+- A slow client that keeps a pty paused for more than 2.5 s (see Terminal stream)
+  can make `done` flicker: the agent's output stops while the pty is paused, the
+  quiet timer fires, and the output that resumes turns the session `working` again.
+  (Server only.)
+- Memory per pty is bounded but not small: the headless screen holds about
+  2000 + rows lines of cols cells, and the ring buffer up to 2 Mi UTF-16 code units.
+  `maxSessions` bounds the total.
 
 **Restart.** `session.restart {projectId, sessionId, cols, rows}` returns a new
 `{ptyId}` for a session that has no running pty: `exited`, or `idle` after a
@@ -505,7 +515,10 @@ a queued prompt itself, with `session.sendPrompt`, when the user chooses.
 
 **Session limit.** The config field `maxSessions` (default 64) caps the running
 session ptys. `session.start` and `session.restart` beyond it answer `BAD_REQUEST`
-("the server is running its maximum of N sessions"). `worktree.load` marks each
+("the server is running its maximum of N sessions"). A pty that was killed (by
+`session.close`, `worktree.unload` and the like) holds its slot until its process
+exits, up to the 3 s SIGKILL timeout, so closing a session and at once starting
+another can be refused at the cap. `worktree.load` marks each
 session it cannot start `exited` with `exitCode` -1, as for any other spawn failure.
 
 **Shutdown.** When the server stops it kills every session pty, and after the
@@ -536,7 +549,9 @@ pauses while any attached connection has more than 4 MiB unsent, or the server's
 screen parser falls far behind, and resumes once every connection is under 2 MiB.
 A connection that already has more than 4 MiB unsent when it calls `pty.attach`
 gets no replay and is not attached: the call answers `BAD_REQUEST` ("the
-connection is congested; try again").
+connection is congested; try again"). A reconnecting client should therefore
+attach one pty at a time, and retry a refused attach once its own backlog has
+drained. `session.sendPrompt` needs no attach.
 `pty.exit` goes to every attached connection, also when the server killed the pty.
 A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
 meanwhile the pty counts as gone. Only session ptys are reachable through v2;
