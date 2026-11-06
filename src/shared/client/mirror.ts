@@ -15,7 +15,15 @@ interface Entry {
   attempt: number
   /** A sub.subscribe is in flight: patches meanwhile are older than its snapshot, so they are ignored */
   loading: boolean
+  /** Pending retry after a transient subscribe failure */
+  retryTimer: unknown
+  /** The next retry's delay */
+  retryDelay: number
 }
+
+/** A subscribe that fails transiently (not NOT_FOUND or NOT_CONNECTED) is retried after 1 s, doubling to 30 s. */
+const RETRY_MIN_MS = 1000
+const RETRY_MAX_MS = 30_000
 
 export class TopicMirror {
   private readonly conn: ServerConnection
@@ -24,7 +32,11 @@ export class TopicMirror {
   constructor(conn: ServerConnection) {
     this.conn = conn
     conn.on('welcome', () => {
-      for (const topic of this.topics.keys()) this.resubscribe(topic)
+      for (const [topic, entry] of this.topics) {
+        this.cancelRetry(entry)
+        entry.retryDelay = RETRY_MIN_MS
+        this.resubscribe(topic)
+      }
     })
     conn.on('event', ({ event, payload }) => {
       if (event === 'state.patch') this.onPatch(payload as { topic: Topic; rev: number; ops: [] })
@@ -34,7 +46,7 @@ export class TopicMirror {
   subscribe(topic: Topic, listener: Listener): () => void {
     let entry = this.topics.get(topic)
     if (!entry) {
-      entry = { listeners: new Set(), attempt: 0, loading: false }
+      entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS }
       this.topics.set(topic, entry)
       entry.listeners.add(listener)
       if (this.conn.status === 'connected') this.resubscribe(topic)
@@ -52,6 +64,7 @@ export class TopicMirror {
       current.listeners.delete(listener)
       if (current.listeners.size > 0) return
       this.topics.delete(topic)
+      this.cancelRetry(current)
       this.conn.request('sub.unsubscribe', { topic }).catch(() => {})
     }
   }
@@ -63,6 +76,7 @@ export class TopicMirror {
   private resubscribe(topic: Topic): void {
     const entry = this.topics.get(topic)
     if (!entry) return
+    this.cancelRetry(entry)
     const attempt = ++entry.attempt
     entry.loading = true
     this.conn.request('sub.subscribe', { topic }).then(
@@ -71,6 +85,7 @@ export class TopicMirror {
         entry.loading = false
         entry.state = { snapshot: result.snapshot, rev: result.rev }
         entry.error = undefined
+        entry.retryDelay = RETRY_MIN_MS
         this.notify(entry, entry.state)
       },
       (err: ClientError) => {
@@ -81,8 +96,26 @@ export class TopicMirror {
         if (err.code === 'NOT_FOUND') entry.state = undefined
         entry.error = err
         this.notify(entry, { error: err })
+        // Anything else (TIMEOUT, INTERNAL, ...) may pass: try again with back-off.
+        if (err.code !== 'NOT_FOUND' && this.topics.get(topic) === entry) this.scheduleRetry(topic, entry)
       }
     )
+  }
+
+  private scheduleRetry(topic: Topic, entry: Entry): void {
+    this.cancelRetry(entry)
+    const delay = entry.retryDelay
+    entry.retryDelay = Math.min(delay * 2, RETRY_MAX_MS)
+    entry.retryTimer = this.conn.timers.setTimeout(() => {
+      entry.retryTimer = null
+      if (this.topics.get(topic) === entry) this.resubscribe(topic)
+    }, delay)
+  }
+
+  private cancelRetry(entry: Entry): void {
+    if (entry.retryTimer === null) return
+    this.conn.timers.clearTimeout(entry.retryTimer)
+    entry.retryTimer = null
   }
 
   private onPatch(patch: { topic: Topic; rev: number; ops: [] }): void {

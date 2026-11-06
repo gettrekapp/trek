@@ -196,3 +196,97 @@ test('subscribing while disconnected subscribes at the next welcome; NOT_FOUND i
   await tick()
   assert.deepEqual(seen.at(-1), { snapshot: { name: 'back' }, rev: 0 })
 })
+
+const subReqs = (sock) => sock.sent.filter((f) => f.method === 'sub.subscribe')
+
+/** Advances the clock in 1 s steps, answering every sys.ping, so a long fake-time test keeps its link. */
+function pingingClock(clock, sock) {
+  const answered = new Set()
+  return (ms) => {
+    while (ms > 0) {
+      const step = Math.min(ms, 1000)
+      clock.advance(step)
+      ms -= step
+      for (const f of sock.sent) {
+        if (f.method === 'sys.ping' && !answered.has(f.id)) {
+          answered.add(f.id)
+          sock.reply(f, { t: 0 })
+        }
+      }
+    }
+  }
+}
+
+test('a transient subscribe failure is reported, then retried after 1 s, doubling', async () => {
+  const { clock, mirror, sock } = setup()
+  const seen = []
+  mirror.subscribe('server', (s) => seen.push(s))
+  sock.fail(subReqs(sock)[0], 'INTERNAL', 'boom')
+  await tick()
+  assert.equal(seen.at(-1).error.code, 'INTERNAL', 'the listener hears the error first')
+  clock.advance(999)
+  assert.equal(subReqs(sock).length, 1)
+  clock.advance(1)
+  assert.equal(subReqs(sock).length, 2)
+  sock.fail(subReqs(sock)[1], 'TIMEOUT', 'sub.subscribe timed out')
+  await tick()
+  assert.equal(seen.at(-1).error.code, 'TIMEOUT')
+  clock.advance(1999)
+  assert.equal(subReqs(sock).length, 2)
+  clock.advance(1)
+  assert.equal(subReqs(sock).length, 3)
+  sock.reply(subReqs(sock)[2], { snapshot: { n: 1 }, rev: 0 })
+  await tick()
+  assert.deepEqual(seen.at(-1), { snapshot: { n: 1 }, rev: 0 })
+  assert.deepEqual(mirror.get('server'), { snapshot: { n: 1 }, rev: 0 })
+})
+
+test('subscribe retries cap at 30 s; NOT_FOUND is not retried', async () => {
+  const { server, clock, mirror, sock } = setup()
+  const advance = pingingClock(clock, sock)
+  mirror.subscribe('server', () => {})
+  for (const [i, delay] of [1000, 2000, 4000, 8000, 16000, 30000, 30000].entries()) {
+    sock.fail(subReqs(sock)[i], 'INTERNAL', 'boom')
+    await tick()
+    advance(delay - 1)
+    assert.equal(subReqs(sock).length, i + 1, `not before ${delay} ms`)
+    advance(1)
+    assert.equal(subReqs(sock).length, i + 2, `after ${delay} ms`)
+  }
+  sock.fail(subReqs(sock).at(-1), 'NOT_FOUND', 'gone')
+  await tick()
+  const n = subReqs(sock).length
+  advance(60_000)
+  assert.equal(subReqs(sock).length, n)
+  assert.equal(server.sockets.length, 1, 'the link stayed up throughout')
+})
+
+test('unsubscribing cancels a pending subscribe retry', async () => {
+  const { clock, mirror, sock } = setup()
+  const stop = mirror.subscribe('server', () => {})
+  sock.fail(subReqs(sock)[0], 'INTERNAL', 'boom')
+  await tick()
+  stop()
+  clock.advance(5000)
+  assert.equal(subReqs(sock).length, 1)
+})
+
+test('a reconnect cancels a pending subscribe retry and resets its back-off', async () => {
+  const { server, clock, mirror, sock } = setup()
+  mirror.subscribe('server', () => {})
+  sock.fail(subReqs(sock)[0], 'INTERNAL', 'boom')
+  await tick()
+  sock.serverClose(1006, '')
+  clock.advance(1000) // the reconnect, and the time the retry was due
+  const next = server.last()
+  assert.equal(subReqs(next).length, 0, 'the retry did not fire on the new socket before its welcome')
+  next.open()
+  next.welcome()
+  assert.equal(subReqs(next).length, 1, 'the welcome resubscribes')
+  clock.advance(5000)
+  assert.equal(subReqs(next).length, 1, 'no leftover retry')
+  next.fail(subReqs(next)[0], 'INTERNAL', 'boom')
+  await tick()
+  clock.advance(1000)
+  assert.equal(subReqs(next).length, 2, 'back-off starts again at 1 s')
+})

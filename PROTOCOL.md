@@ -792,7 +792,11 @@ snapshot on its way. On a gap, an invalid patch, or a reconnect (every welcome),
 the mirror resubscribes; the old state stays visible until the new snapshot
 replaces it. `NOT_FOUND` clears the state and reports the error; the topic is
 subscribed again after the next reconnect. A resubscribe that fails with
-`NOT_CONNECTED` is silent: the next welcome retries it.
+`NOT_CONNECTED` is silent: the next welcome retries it. Any other failure (for
+example `TIMEOUT` or `INTERNAL`) is reported as `{error}` (the old state, if
+any, stays), then retried on the connection's timers after 1 s, doubling to a
+cap of 30 s, until it succeeds; the last unsubscribe or a reconnect cancels the
+retry (a reconnect resubscribes at once and resets the back-off).
 
 **PtyStream.** `attach(ptyId, handlers)` registers the handlers before the request
 (the replay arrives first, as `onData(data, true)`) and resolves with the
