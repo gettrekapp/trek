@@ -1,0 +1,116 @@
+// scripts/ipcSocket.test.mjs — the renderer's SocketLike over the main-process relay.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { ipcSocketFactory } from '../src/renderer/src/v2/ipcSocket.ts'
+
+function fakeApi() {
+  const sent = []
+  const closed = []
+  let listener = () => {}
+  let openResolve
+  let openReject
+  const api = {
+    open: (entryId) => new Promise((res, rej) => { openResolve = res; openReject = rej; sent.push(['open', entryId]) }),
+    send: (id, text) => sent.push(['send', id, text]),
+    close: (id, code, reason) => closed.push([id, code, reason]),
+    onEvent: (cb) => { listener = cb; return () => { listener = () => {} } }
+  }
+  return { api, sent, closed, fire: (e) => listener(e), resolveOpen: (id) => openResolve(id), rejectOpen: (err) => openReject(err) }
+}
+
+const flush = () => new Promise((r) => setImmediate(r))
+
+test('open, message, send and close round-trip through the relay', async () => {
+  const f = fakeApi()
+  const factory = ipcSocketFactory(f.api)
+  const sock = factory('entry-1')
+  const log = []
+  sock.addEventListener('open', () => log.push('open'))
+  sock.addEventListener('message', (e) => log.push(['message', e.data]))
+  sock.addEventListener('close', (e) => log.push(['close', e.code, e.reason]))
+  assert.equal(sock.readyState, 0)
+  assert.deepEqual(f.sent[0], ['open', 'entry-1'])
+  f.resolveOpen('sock-9')
+  await flush()
+  f.fire({ socketId: 'other', type: 'open' })
+  f.fire({ socketId: 'sock-9', type: 'open' })
+  assert.equal(sock.readyState, 1)
+  sock.send('{"type":"hello"}')
+  assert.deepEqual(f.sent[1], ['send', 'sock-9', '{"type":"hello"}'])
+  f.fire({ socketId: 'sock-9', type: 'message', data: '{"type":"welcome"}' })
+  sock.close(4000, 'bye')
+  assert.deepEqual(f.closed, [['sock-9', 4000, 'bye']])
+  f.fire({ socketId: 'sock-9', type: 'close', code: 4000, reason: 'bye' })
+  assert.equal(sock.readyState, 3)
+  assert.deepEqual(log, ['open', ['message', '{"type":"welcome"}'], ['close', 4000, 'bye']])
+})
+
+test('send before open throws, like a WebSocket; a failed open closes with 1006', async () => {
+  const f = fakeApi()
+  const sock = ipcSocketFactory(f.api)('missing')
+  assert.throws(() => sock.send('x'))
+  const closes = []
+  sock.addEventListener('close', (e) => closes.push([e.code, e.reason]))
+  f.rejectOpen(new Error('Server removed'))
+  await flush()
+  assert.equal(sock.readyState, 3)
+  assert.deepEqual(closes, [[1006, 'Server removed']])
+})
+
+test('close before the relay answers closes the socket once it exists', async () => {
+  const f = fakeApi()
+  const sock = ipcSocketFactory(f.api)('e')
+  sock.close(1000, 'early')
+  f.resolveOpen('s1')
+  await flush()
+  assert.deepEqual(f.closed, [['s1', 1000, 'early']])
+})
+
+test('events that arrive before open() resolves are buffered and replayed for this socket only', async () => {
+  const f = fakeApi()
+  const sock = ipcSocketFactory(f.api)('e')
+  const log = []
+  sock.addEventListener('open', () => log.push('open'))
+  sock.addEventListener('message', (e) => log.push(e.data))
+  f.fire({ socketId: 'mine', type: 'open' })
+  f.fire({ socketId: 'theirs', type: 'message', data: 'nope' })
+  f.fire({ socketId: 'mine', type: 'message', data: 'early' })
+  assert.equal(sock.readyState, 0)
+  f.resolveOpen('mine')
+  await flush()
+  assert.equal(sock.readyState, 1)
+  assert.deepEqual(log, ['open', 'early'])
+})
+
+test('a closed socket unsubscribes from the relay events', async () => {
+  let subs = 0
+  const f = fakeApi()
+  const api = { ...f.api, onEvent: (cb) => { subs++; const off = f.api.onEvent(cb); return () => { subs--; off() } } }
+  const sock = ipcSocketFactory(api)('e')
+  assert.equal(subs, 1)
+  f.resolveOpen('s')
+  await flush()
+  f.fire({ socketId: 's', type: 'close', code: 1000, reason: '' })
+  assert.equal(subs, 0)
+  assert.equal(sock.readyState, 3)
+})
+
+test('two sockets from one factory do not see each other\'s events', async () => {
+  const listeners = []
+  const ids = ['a', 'b']
+  const api = {
+    open: async () => ids.shift(),
+    send: () => {},
+    close: () => {},
+    onEvent: (cb) => { listeners.push(cb); return () => listeners.splice(listeners.indexOf(cb), 1) }
+  }
+  const factory = ipcSocketFactory(api)
+  const s1 = factory('e'), s2 = factory('e')
+  const got = { a: [], b: [] }
+  s1.addEventListener('message', (e) => got.a.push(e.data))
+  s2.addEventListener('message', (e) => got.b.push(e.data))
+  await flush()
+  for (const l of [...listeners]) l({ socketId: 'a', type: 'message', data: '1' })
+  for (const l of [...listeners]) l({ socketId: 'b', type: 'message', data: '2' })
+  assert.deepEqual(got, { a: ['1'], b: ['2'] })
+})
