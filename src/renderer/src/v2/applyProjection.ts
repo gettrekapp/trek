@@ -1,0 +1,39 @@
+// Puts a v2 project snapshot into the store the desktop UI renders, through the
+// projector, and keeps this window's terminal entries in step. The server
+// window (3c-2) calls it on every mirror update. Renderer-only: the logic it
+// runs is in projector.ts and terminalSync.ts, which the tests cover.
+import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
+import { syncV2Terminals } from '../terminals'
+import { projectV2, reconcileView, V2_GLOBAL_WORKTREE_ID, type V2IdMap } from './projector.ts'
+import type { PtyStream } from '../../../shared/client/index.ts'
+import type { Project } from '../../../shared/model/types'
+
+// Fails to typecheck if the projector's copy of the global id drifts from the store's.
+const _sameGlobalId: typeof GLOBAL_WORKTREE_ID = V2_GLOBAL_WORKTREE_ID
+void _sameGlobalId
+
+let currentIds: V2IdMap | null = null
+
+/** The id map of the projection now in the store, for a v2 backend to address the server. */
+export function v2Ids(): V2IdMap | null {
+  return currentIds
+}
+
+export function applyV2Project(project: Project, ptys: PtyStream): void {
+  const projection = projectV2(project)
+  // Entries first: the store update renders TerminalPanes, which attach to them.
+  syncV2Terminals(project, ptys)
+  const state = useAppStore.getState()
+  const view = reconcileView(
+    { activeWorktreeId: state.activeWorktreeId, selected: state.selected, activeTerminal: state.activeTerminal },
+    projection
+  )
+  currentIds = projection.ids
+  // filePath stays null, so scheduleAutoSave never writes a server project to disk.
+  useAppStore.setState({ ...projection.slice, ...view, filePath: null, dirty: false })
+}
+
+/** The server window went away: forget the ids (the caller disposes the terminals). */
+export function clearV2Projection(): void {
+  currentIds = null
+}
