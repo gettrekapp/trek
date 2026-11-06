@@ -31,7 +31,34 @@ function send(res: ServerResponse, status: number, json?: unknown, headers: Reco
 
 class BodyTooLarge extends Error {}
 
-/** Reads the body; rejects with BodyTooLarge as soon as it goes over the limit (without destroying the request). */
+/** How much of a refused body is read and thrown away so the client sees the answer; past this the socket is dropped. */
+export const MAX_MCP_DRAIN = 8 * MAX_MCP_BODY
+
+/**
+ * Answers a request whose body is not wanted. The rest of the body is read and thrown away first: closing a socket
+ * with unread bytes on it sends a reset, and a client still uploading then gets that reset instead of the answer.
+ * A slow sender is bounded by the request timeout (Node answers 408 and drops it), a big one by MAX_MCP_DRAIN.
+ */
+function refuse(req: IncomingMessage, res: ServerResponse, status: number, headers: Record<string, string> = {}): void {
+  req.on('error', () => {})
+  if (req.readableEnded) return send(res, status, undefined, headers)
+  const declared = Number(req.headers['content-length'])
+  if (Number.isFinite(declared) && declared > MAX_MCP_DRAIN) {
+    // Not worth reading: answer, then drop the connection (the client may see the reset instead).
+    send(res, status, undefined, { ...headers, connection: 'close' })
+    res.once('finish', () => req.destroy())
+    return
+  }
+  let drained = 0
+  req.on('data', (chunk: Buffer) => {
+    drained += chunk.length
+    if (drained > MAX_MCP_DRAIN) req.destroy()
+  })
+  req.once('end', () => send(res, status, undefined, headers))
+  req.resume()
+}
+
+/** Reads the body; rejects with BodyTooLarge as soon as it goes over the limit (without reading or destroying the rest). */
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length'])
@@ -78,24 +105,18 @@ export function startMcpListener(deps: McpListenerDeps): Promise<McpListener> {
         try {
           // A browser on this machine can be pointed at 127.0.0.1 through a hostile DNS name; only our own host names pass.
           const host = req.headers.host
-          if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return send(res, 403)
-          if ((req.url ?? '').split('?')[0] !== '/mcp') return send(res, 404)
-          if (req.method !== 'POST') return send(res, 405, undefined, { allow: 'POST' })
+          if (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`) return refuse(req, res, 403)
+          if ((req.url ?? '').split('?')[0] !== '/mcp') return refuse(req, res, 404)
+          if (req.method !== 'POST') return refuse(req, res, 405, { allow: 'POST' })
           const projectId = deps.access.projectFor(req.headers.authorization)
-          if (!projectId) return send(res, 401)
+          if (!projectId) return refuse(req, res, 401)
           let body: string
           try {
             body = await readBody(req)
           } catch (err) {
             if (!(err instanceof BodyTooLarge)) throw err
-            // Answer first and close the connection after it; drain the rest so the client reads the 413
-            // instead of a reset. The request timeout bounds how long a slow sender can keep draining.
-            send(res, 413, undefined, { connection: 'close' })
-            req.resume()
-            const kill = setTimeout(() => req.destroy(), 2000)
-            kill.unref()
-            res.once('close', () => clearTimeout(kill))
-            return
+            // The 413 goes out once the body is drained; the connection is then closed rather than reused.
+            return refuse(req, res, 413, { connection: 'close' })
           }
           const reply = await handleMcpBody(body, { serverVersion: deps.serverVersion, ...deps.contextFor(projectId) }, request.signal)
           if (reply.status === 202) return send(res, 202)

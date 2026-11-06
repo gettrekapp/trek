@@ -85,6 +85,52 @@ test('an unauthenticated oversized body is refused before it is read', async (t)
   assert.equal((await s.post('x'.repeat(1024 * 1024 + 1), {})).status, 401)
 })
 
+// A refused request that is still uploading must get its answer, not a reset: the server drains the body before it
+// closes. Repeat it, concurrently and with clients that ask for the connection to close, so a race shows up.
+function bigRequest(port, { host = `127.0.0.1:${port}`, path = '/mcp', method = 'POST', token, size = 1024 * 1024 + 1 }) {
+  return new Promise((resolve, reject) => {
+    const headers = { host, connection: 'close', 'content-type': 'application/json', 'content-length': String(size) }
+    if (token) headers.authorization = `Bearer ${token}`
+    const req = request({ host: '127.0.0.1', port, path, method, agent: false, headers }, (res) => {
+      res.resume()
+      res.on('end', () => resolve(res.statusCode))
+    })
+    req.on('error', reject)
+    req.end(Buffer.alloc(size, 'x'))
+  })
+}
+
+test('every refusal of a large body reaches the client', async (t) => {
+  const s = await setup(t)
+  const port = s.listener.port
+  for (let round = 0; round < 5; round++) {
+    const statuses = await Promise.all([
+      ...Array.from({ length: 4 }, () => s.post('x'.repeat(1024 * 1024 + 1)).then((r) => r.status)),
+      bigRequest(port, { token: s.token }),
+      bigRequest(port, { token: s.token, size: 4 * 1024 * 1024 }),
+      bigRequest(port, {}),
+      bigRequest(port, { token: s.token, host: `evil.example:${port}` }),
+      bigRequest(port, { token: s.token, path: '/other' }),
+      bigRequest(port, { token: s.token, method: 'PUT' })
+    ])
+    assert.deepEqual(statuses, [413, 413, 413, 413, 413, 413, 401, 403, 404, 405])
+  }
+})
+
+test('a stalled oversized body is cut off by the request timeout', async (t) => {
+  const s = await setup(t, { requestTimeoutMs: 300 })
+  const port = s.listener.port
+  const outcome = await new Promise((resolve) => {
+    const sock = connect(port, '127.0.0.1')
+    const guard = setTimeout(() => { sock.destroy(); resolve('hung') }, 5000)
+    sock.resume()
+    sock.on('close', () => { clearTimeout(guard); resolve('closed') })
+    sock.on('error', () => {})
+    sock.write(`POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${s.token}\r\nContent-Length: ${2 * 1024 * 1024}\r\n\r\n{"jsonrpc"`)
+  })
+  assert.equal(outcome, 'closed')
+})
+
 test('rejects a Host that is not loopback:port (DNS rebinding)', async (t) => {
   const s = await setup(t)
   const port = s.listener.port
