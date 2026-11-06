@@ -4,6 +4,8 @@
 
 export const SUPPORTED_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
+export const MAX_BATCH = 50
+
 export interface ToolDefinition {
   name: string
   description: string
@@ -32,6 +34,7 @@ const failure = (id: Message['id'], code: number, message: string) => ({ jsonrpc
 
 async function handleMessage(msg: Message, ctx: McpContext): Promise<unknown | null> {
   if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) return failure(null, -32600, 'Invalid request')
+  if (msg.id !== undefined && msg.id !== null && typeof msg.id !== 'string' && typeof msg.id !== 'number') return failure(null, -32600, 'Invalid request')
   if (msg.id === undefined || msg.id === null) return null
   const params = msg.params && typeof msg.params === 'object' ? msg.params : {}
   switch (msg.method) {
@@ -75,6 +78,8 @@ export async function handleMcpBody(body: string, ctx: McpContext): Promise<McpR
     return { status: 400, json: failure(null, -32700, 'Parse error') }
   }
   if (Array.isArray(parsed)) {
+    if (parsed.length === 0) return { status: 200, json: failure(null, -32600, 'Invalid request') }
+    if (parsed.length > MAX_BATCH) return { status: 200, json: failure(null, -32600, `Batch too large (max ${MAX_BATCH})`) }
     const replies = (await Promise.all(parsed.map((m) => handleMessage(m as Message, ctx)))).filter((r) => r !== null)
     return replies.length === 0 ? { status: 202 } : { status: 200, json: replies }
   }

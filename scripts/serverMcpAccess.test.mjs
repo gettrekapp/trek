@@ -1,7 +1,7 @@
 // scripts/serverMcpAccess.test.mjs — per-project MCP tokens and their 0600 config files.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { McpAccessStore } from '../server/src/mcp/access.ts'
@@ -25,7 +25,7 @@ test('accessFor writes the Claude and Gemini files once per project, mode 0600',
   assert.equal(a.url, 'http://127.0.0.1:4321/mcp')
   assert.match(a.token, /^[0-9a-f]{64}$/)
   assert.equal(a.configPath, join(mcpDir, 'p1.json'))
-  assert.equal(a.geminiSettingsPath, join(mcpDir, 'p1-gemini.json'))
+  assert.equal(a.geminiSettingsPath, join(mcpDir, 'p1.gemini.json'))
   assert.deepEqual(JSON.parse(readFileSync(a.configPath, 'utf8')), {
     mcpServers: { 'trek-dev': { type: 'http', url: a.url, headers: { Authorization: `Bearer ${a.token}` } } }
   })
@@ -81,4 +81,69 @@ test('setPort drops cached access: new token, new port, files rewritten', (t) =>
   assert.notEqual(b.token, a.token)
   assert.equal(JSON.parse(readFileSync(b.configPath, 'utf8')).mcpServers['trek-dev'].url, b.url)
   assert.equal(JSON.parse(readFileSync(b.geminiSettingsPath, 'utf8')).mcpServers['trek-dev'].httpUrl, b.url)
+})
+
+test('a symlinked mcp directory is refused and its target left alone', (t) => {
+  const { dir, mcpDir } = setup(t)
+  const target = join(dir, 'target')
+  mkdirSync(target)
+  chmodSync(target, 0o755)
+  writeFileSync(join(target, 'keep.json'), '{}')
+  symlinkSync(target, mcpDir)
+  assert.throws(() => new McpAccessStore(mcpDir), /symbolic link/)
+  assert.equal(existsSync(join(target, 'keep.json')), true)
+  assert.equal(statSync(target).mode & 0o777, 0o755)
+})
+
+test('an mcp path that is a file is refused', (t) => {
+  const { mcpDir } = setup(t)
+  writeFileSync(mcpDir, 'x')
+  assert.throws(() => new McpAccessStore(mcpDir))
+})
+
+test('the startup wipe removes only .json and .tmp regular files', (t) => {
+  const { mcpDir } = setup(t)
+  mkdirSync(join(mcpDir, 'sub'), { recursive: true })
+  writeFileSync(join(mcpDir, 'a.json'), '{}')
+  writeFileSync(join(mcpDir, 'b.json.tmp'), '{}')
+  writeFileSync(join(mcpDir, 'notes.txt'), 'hi')
+  writeFileSync(join(mcpDir, 'sub', 'c.json'), '{}')
+  new McpAccessStore(mcpDir)
+  assert.equal(existsSync(join(mcpDir, 'a.json')), false)
+  assert.equal(existsSync(join(mcpDir, 'b.json.tmp')), false)
+  assert.equal(existsSync(join(mcpDir, 'notes.txt')), true)
+  assert.equal(existsSync(join(mcpDir, 'sub', 'c.json')), true)
+})
+
+test('project ids are validated and -gemini ids cannot collide', (t) => {
+  const { mcpDir } = setup(t)
+  const store = new McpAccessStore(mcpDir)
+  store.setPort(1)
+  for (const bad of ['', '../x', 'a/b', '-a', 'a.b', 'a b']) {
+    assert.throws(() => store.accessFor(bad), /project id/i, bad)
+    assert.throws(() => store.revoke(bad), /project id/i, bad)
+  }
+  const a = store.accessFor('p1')
+  const b = store.accessFor('p1-gemini')
+  assert.notEqual(a.geminiSettingsPath, b.configPath)
+  assert.notEqual(b.geminiSettingsPath, a.configPath)
+})
+
+test('a failed Gemini write removes the Claude file', (t) => {
+  const { mcpDir } = setup(t)
+  const store = new McpAccessStore(mcpDir)
+  store.setPort(1)
+  mkdirSync(join(mcpDir, 'p1.gemini.json'))
+  assert.throws(() => store.accessFor('p1'))
+  assert.equal(existsSync(join(mcpDir, 'p1.json')), false)
+})
+
+test('setPort removes the files of the access it drops', (t) => {
+  const { mcpDir } = setup(t)
+  const store = new McpAccessStore(mcpDir)
+  store.setPort(1)
+  const a = store.accessFor('p1')
+  store.setPort(2)
+  assert.equal(existsSync(a.configPath), false)
+  assert.equal(existsSync(a.geminiSettingsPath), false)
 })

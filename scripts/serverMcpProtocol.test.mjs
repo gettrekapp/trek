@@ -1,7 +1,7 @@
 // scripts/serverMcpProtocol.test.mjs — MCP JSON-RPC: initialize, ping, tools/list, tools/call, notifications, batches.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handleMcpBody } from '../server/src/mcp/protocol.ts'
+import { handleMcpBody, MAX_BATCH } from '../server/src/mcp/protocol.ts'
 
 const tools = [{ name: 'echo', description: 'Echo', inputSchema: { type: 'object', properties: {} } }]
 const ctx = {
@@ -56,4 +56,31 @@ test('a body that is not JSON is a 400 parse error', async () => {
   const r = await handleMcpBody('{nope', ctx)
   assert.equal(r.status, 400)
   assert.equal(r.json.error.code, -32700)
+})
+
+test('an oversized batch gets one error and runs nothing', async () => {
+  let calls = 0
+  const counting = { ...ctx, call: async () => { calls++; return {} } }
+  const entries = Array.from({ length: MAX_BATCH + 1 }, (_, i) => ({ jsonrpc: '2.0', id: i, method: 'tools/call', params: { name: 'echo' } }))
+  const r = await handleMcpBody(body(entries), counting)
+  assert.deepEqual(r, { status: 200, json: { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Batch too large (max 50)' } } })
+  assert.equal(calls, 0)
+  const ok = await handleMcpBody(body(entries.slice(0, MAX_BATCH)), counting)
+  assert.equal(ok.json.length, MAX_BATCH)
+})
+
+test('an empty batch is an invalid request, not a 202', async () => {
+  const r = await handleMcpBody('[]', ctx)
+  assert.deepEqual(r, { status: 200, json: { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request' } } })
+})
+
+test('ids that are not string, number or null are invalid requests', async () => {
+  for (const id of [{}, [], true]) {
+    const r = await handleMcpBody(body({ jsonrpc: '2.0', id, method: 'ping' }), ctx)
+    assert.equal(r.status, 200)
+    assert.equal(r.json.id, null)
+    assert.equal(r.json.error.code, -32600)
+  }
+  assert.deepEqual(await handleMcpBody(body({ jsonrpc: '2.0', id: null, method: 'ping' }), ctx), { status: 202 })
+  assert.equal((await handleMcpBody(body({ jsonrpc: '2.0', id: 'a', method: 'ping' }), ctx)).json.id, 'a')
 })
