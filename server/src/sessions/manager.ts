@@ -21,6 +21,7 @@ import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'
 import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
+import type { McpAccess } from '../../../src/shared/providers/types'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
 import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
@@ -56,6 +57,8 @@ export interface SessionManagerDeps {
   schedule?: (fn: () => void | Promise<void>, ms: number) => ScheduledJob
   newId?: () => string
   now?: () => number
+  /** The MCP access a project's sessions launch with; without it sessions launch without MCP */
+  mcpAccess?: (projectId: string) => McpAccess | undefined
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
@@ -511,8 +514,15 @@ export class SessionManager {
       addDirs = project.repositories.slice(1).map((r) => r.path)
       for (const dir of addDirs) this.deps.store.guard.check(dir)
     }
+    let mcp: McpAccess | undefined
+    try {
+      mcp = this.deps.mcpAccess?.(projectId)
+    } catch (err) {
+      console.error(`MCP access for project ${projectId} unavailable; launching session ${sessionId} without it`, err)
+    }
     const spec = agentCommand(
       {
+        mcp,
         llm: session.llm,
         sessionId: launch.sessionId,
         resume: launch.resume,

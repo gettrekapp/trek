@@ -64,7 +64,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** The agent command a spawn ran (the shell's -c argument). */
 const cmd = (proc) => proc.opts.args.at(-1)
 
-function setup(t, { llm, maxSessions } = {}) {
+function setup(t, { llm, maxSessions, mcpAccess } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
@@ -88,7 +88,7 @@ function setup(t, { llm, maxSessions } = {}) {
   const scheduled = []
   const clock = { t: 1_000_000 }
   const sessions = new SessionManager({
-    projects, store, hub, spawner: fake.spawner, now: () => clock.t,
+    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess,
     discover: async (cwd, ageMs, exclude) => {
       discoveries.push({ cwd, ageMs, exclude })
       const next = sessions.__nextDiscovery
@@ -986,4 +986,29 @@ test('terminal sizes are capped at 500 columns and 200 rows', (t) => {
   assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', cols: 501, rows: 30 }), (e) => e.code === 'BAD_REQUEST')
   assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', cols: 80, rows: 201 }), (e) => e.code === 'BAD_REQUEST')
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', cols: 500, rows: 200 })
+})
+
+test('sessions launch with the project\'s MCP access; Global sessions get the role prompt', (t) => {
+  const s = setup(t, { mcpAccess: (projectId) => ({ configPath: `/m/${projectId}.json`, url: 'http://127.0.0.1:9/mcp', token: 'tok', geminiSettingsPath: `/m/${projectId}-g.json` }) })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.match(cmd(s.spawned[0]), new RegExp(`--mcp-config '/m/${s.projectId}.json' --allowedTools mcp__trek-dev`))
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  assert.match(cmd(s.spawned[1]), /global Claude session/)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
+  assert.equal(s.spawned[2].opts.env.TREK_MCP_TOKEN, 'tok')
+})
+
+test('without MCP access sessions launch as before', (t) => {
+  const s = setup(t)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.doesNotMatch(cmd(s.spawned[0]), /--mcp-config/)
+})
+
+test('a throwing mcpAccess is logged and the session launches without MCP', (t) => {
+  const err = t.mock.method(console, 'error', () => {})
+  const s = setup(t, { mcpAccess: () => { throw new Error('bad project') } })
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  assert.equal(s.spawned.length, 1)
+  assert.doesNotMatch(cmd(s.spawned[0]), /--mcp-config/)
+  assert.equal(err.mock.callCount(), 1)
 })
