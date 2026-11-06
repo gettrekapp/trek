@@ -7,7 +7,7 @@ import { releaseBotWindow } from './bot'
 import { releaseMcpWindow } from './mcp'
 import { openUrl } from './openUrl'
 import { releaseWindowPtys } from './pty'
-import { boundsOnScreen, parseOpenWindows, type OpenWindowEntry, type WindowBounds } from './windowRules'
+import { boundsOnScreen, parseOpenWindows, serializeOpenWindow, type OpenWindowEntry, type WindowBounds } from './windowRules'
 
 // icon.png is extracted from AppIcon.icns (the packaging icon) — nativeImage
 // needs a PNG for the runtime dock icon.
@@ -249,7 +249,7 @@ export async function closeAllForQuit(): Promise<boolean> {
       return false
     }
   }
-  await writeOpenWindows(quit.entries.filter((e) => e.filePath))
+  await writeOpenWindows(quit.entries.filter((e) => e.target.kind === 'file'))
   return true
 }
 
@@ -261,7 +261,7 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 function entryFor(state: WindowState): OpenWindowEntry {
   const bounds = state.win.getNormalBounds()
-  return { filePath: state.filePath ?? '', bounds }
+  return { target: { kind: 'file', path: state.filePath ?? '' }, bounds }
 }
 
 function currentEntries(): OpenWindowEntry[] {
@@ -270,7 +270,7 @@ function currentEntries(): OpenWindowEntry[] {
 
 async function writeOpenWindows(entries: OpenWindowEntry[]): Promise<void> {
   if (RESTORE_DISABLED) return
-  await writeFile(openWindowsFile(), JSON.stringify(entries, null, 2), 'utf8').catch((err) =>
+  await writeFile(openWindowsFile(), JSON.stringify(entries.map(serializeOpenWindow), null, 2), 'utf8').catch((err) =>
     console.error('Could not record open windows', err)
   )
 }
@@ -300,7 +300,9 @@ export async function restoreWindows(): Promise<void> {
   }
   const workAreas = screen.getAllDisplays().map((d) => d.workArea)
   let restored = 0
-  for (const { filePath, bounds } of await readOpenWindows()) {
+  for (const { target, bounds } of await readOpenWindows()) {
+    if (target.kind !== 'file') continue // server windows come back in a later task
+    const filePath = target.path
     const exists = await access(filePath).then(
       () => true,
       () => false

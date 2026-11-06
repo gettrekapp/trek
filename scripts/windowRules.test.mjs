@@ -1,7 +1,7 @@
 // scripts/windowRules.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { boundsOnScreen, decideOpen, parseOpenWindows } from '../src/main/windowRules.ts'
+import { boundsOnScreen, decideOpen, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
 
 test('an open project is focused, whatever the sender holds', () => {
   assert.equal(decideOpen(true, true), 'focus-existing')
@@ -23,7 +23,7 @@ test('parseOpenWindows drops bad entries and duplicates', () => {
       { filePath: 7 },
       null
     ]),
-    [{ filePath: '/a', bounds }, { filePath: '/b' }]
+    [{ target: { kind: 'file', path: '/a' }, bounds }, { target: { kind: 'file', path: '/b' } }]
   )
 })
 
@@ -40,4 +40,32 @@ test('boundsOnScreen needs an overlap with some display', () => {
   assert.equal(boundsOnScreen({ x: 1200, y: 100, width: 100, height: 100 }, displays), true)
   assert.equal(boundsOnScreen({ x: 3000, y: 0, width: 100, height: 100 }, displays), false)
   assert.equal(boundsOnScreen({ x: 1000, y: 0, width: 100, height: 100 }, [displays[0]]), false)
+})
+
+test('sameTarget compares file paths and server ids', () => {
+  assert.equal(sameTarget({ kind: 'file', path: '/a.trekproj' }, { kind: 'file', path: '/a.trekproj' }), true)
+  assert.equal(sameTarget({ kind: 'file', path: '/a.trekproj' }, { kind: 'file', path: '/b.trekproj' }), false)
+  assert.equal(sameTarget({ kind: 'server', serverEntryId: 's', projectId: 'p' }, { kind: 'server', serverEntryId: 's', projectId: 'p' }), true)
+  assert.equal(sameTarget({ kind: 'server', serverEntryId: 's', projectId: 'p' }, { kind: 'server', serverEntryId: 's', projectId: 'q' }), false)
+  assert.equal(sameTarget({ kind: 'file', path: 'p' }, { kind: 'server', serverEntryId: 's', projectId: 'p' }), false)
+})
+
+test('parseOpenWindows reads legacy file entries and server entries', () => {
+  assert.deepEqual(parseOpenWindows([
+    { filePath: '/a.trekproj', bounds: { x: 1, y: 2, width: 3, height: 4 } },
+    { kind: 'server', serverEntryId: 's1', projectId: 'p1' },
+    { kind: 'server', serverEntryId: 's1', projectId: 'p1' },
+    { kind: 'server', serverEntryId: '', projectId: 'p2' },
+    { kind: 'server', serverEntryId: 's1' },
+    { kind: 'file', path: '/b.trekproj' }
+  ]), [
+    { target: { kind: 'file', path: '/a.trekproj' }, bounds: { x: 1, y: 2, width: 3, height: 4 } },
+    { target: { kind: 'server', serverEntryId: 's1', projectId: 'p1' } },
+    { target: { kind: 'file', path: '/b.trekproj' } }
+  ])
+})
+
+test('serializeOpenWindow writes file entries in the legacy shape', () => {
+  assert.deepEqual(serializeOpenWindow({ target: { kind: 'file', path: '/a' } }), { filePath: '/a' })
+  assert.deepEqual(serializeOpenWindow({ target: { kind: 'server', serverEntryId: 's', projectId: 'p' }, bounds: { x: 0, y: 0, width: 1, height: 1 } }), { kind: 'server', serverEntryId: 's', projectId: 'p', bounds: { x: 0, y: 0, width: 1, height: 1 } })
 })
