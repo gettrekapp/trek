@@ -12,7 +12,10 @@ export function parseRecents(raw: unknown): RecentEntry[] {
     if (typeof item === 'string' && item) out.push({ kind: 'file', path: item })
     else if (item && typeof item === 'object' && (item as { kind?: unknown }).kind === 'server') {
       const r = item as Record<string, unknown>
-      if ([r.serverEntryId, r.projectId, r.name, r.serverName].every((v) => typeof v === 'string' && v !== '')) {
+      // Labels may be empty (a server without a configured name); the ids may not.
+      const ids = [r.serverEntryId, r.projectId].every((v) => typeof v === 'string' && v !== '')
+      const labels = [r.name, r.serverName].every((v) => typeof v === 'string')
+      if (ids && labels) {
         out.push({ kind: 'server', serverEntryId: r.serverEntryId as string, projectId: r.projectId as string, name: r.name as string, serverName: r.serverName as string })
       }
     }

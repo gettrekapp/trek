@@ -7,9 +7,11 @@ import { releaseBotWindow } from './bot'
 import { releaseMcpWindow } from './mcp'
 import { openUrl } from './openUrl'
 import { releaseWindowPtys } from './pty'
+import { getAppServer } from './appServers'
 import { addRecentServer } from './recents'
 import {
   boundsOnScreen,
+  capLabel,
   decideOpen,
   initialFromTarget,
   parseOpenWindows,
@@ -395,15 +397,33 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
     }
   )
 
-  ipcMain.on('window:reportTitle', (event, name: string | null) => {
+  ipcMain.on('window:reportTitle', (event, name: unknown) => {
     const state = windows.get(event.sender.id)
-    if (state && !state.win.isDestroyed()) state.win.setTitle(name || 'Trek Dev')
+    if (state && !state.win.isDestroyed()) state.win.setTitle(capLabel(name) || 'Trek Dev')
   })
 
   ipcMain.handle(
     'window:openServerProject',
-    async (event, serverEntryId: string, projectId: string, name: string, serverName: string): Promise<{ opened: boolean }> => {
+    async (event, serverEntryId: unknown, projectId: unknown, name: unknown, serverName: unknown): Promise<{ opened: boolean }> => {
+      if (typeof serverEntryId !== 'string' || serverEntryId === '') throw new Error('serverEntryId must be a non-empty string')
+      if (typeof projectId !== 'string' || projectId === '') throw new Error('projectId must be a non-empty string')
       const target: WindowTarget = { kind: 'server', serverEntryId, projectId }
+      // The user's own label for the server wins over the name the server reports (which may be empty).
+      const recent = {
+        kind: 'server' as const,
+        serverEntryId,
+        projectId,
+        name: capLabel(name),
+        serverName: capLabel(getAppServer(serverEntryId)?.name || serverName)
+      }
+      // The window is already claimed or created by then; a failed recents write must not fail the call.
+      const remember = async (): Promise<void> => {
+        try {
+          await addRecentServer(recent)
+        } catch (err) {
+          console.warn('[windows] could not record recent server project:', err)
+        }
+      }
       const holder = windowHolding(target)
       switch (decideOpen(windowHasProject(event.sender), holder !== undefined)) {
         case 'focus-existing':
@@ -411,11 +431,11 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
           return { opened: false }
         case 'new-window':
           createWindow({ initialTarget: target })
-          await addRecentServer({ kind: 'server', serverEntryId, projectId, name, serverName })
+          await remember()
           return { opened: false }
         case 'use-sender':
           claimTarget(event.sender, target)
-          await addRecentServer({ kind: 'server', serverEntryId, projectId, name, serverName })
+          await remember()
           return { opened: true }
       }
     }

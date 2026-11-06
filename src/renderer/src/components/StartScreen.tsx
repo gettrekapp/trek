@@ -13,10 +13,16 @@ export function StartScreen(): React.JSX.Element {
 
   useEffect(() => {
     window.api.getRecentProjects().then(setRecents).catch(() => setRecents([]))
-    window.api.appServers
-      .list()
-      .then((list) => setServerIds(new Set(list.map((s) => s.id))))
-      .catch(() => setServerIds(null))
+    // Servers can be added or removed from another window, so re-read on focus too.
+    const loadServers = (): void => {
+      window.api.appServers
+        .list()
+        .then((list) => setServerIds(new Set(list.map((s) => s.id))))
+        .catch(() => setServerIds(null))
+    }
+    loadServers()
+    window.addEventListener('focus', loadServers)
+    return () => window.removeEventListener('focus', loadServers)
   }, [])
 
   // Worktrees open unloaded: the sidebar loads each one's saved Claude
@@ -120,7 +126,7 @@ export function StartScreen(): React.JSX.Element {
                 <li key={`server:${entry.serverEntryId}:${entry.projectId}`}>
                   <button disabled={busy} onClick={() => void openServerRecent(entry)}>
                     <span className="recent-name">
-                      {entry.name} — {entry.serverName}
+                      {entry.name || entry.projectId} — {entry.serverName || 'server'}
                     </span>
                     {serverIds && !serverIds.has(entry.serverEntryId) && (
                       <span className="recent-path">Server removed</span>

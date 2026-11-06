@@ -250,6 +250,51 @@ try {
   )
   check('alpha keeps its size', [bounds.width, bounds.height], [1000, 700])
   await app.close()
+
+  // --- A server window restores, survives a reload and stays recorded. No server runs:
+  // the target only names a server entry, and main keeps it whatever the renderer shows.
+  const openWindowsPath = join(userData, 'open-windows.json')
+  const serverTarget = { kind: 'server', serverEntryId: 'smoke-missing-server', projectId: 'smoke-project' }
+  const isServerTarget = (e) =>
+    e.kind === 'server' && e.serverEntryId === serverTarget.serverEntryId && e.projectId === serverTarget.projectId
+  const persisted = () => JSON.parse(readFileSync(openWindowsPath, 'utf8'))
+  writeFileSync(openWindowsPath, JSON.stringify([...persisted(), serverTarget], null, 2))
+  app = await launch()
+  await app.firstWindow()
+  await pageFor(app, 'alpha')
+  await pageFor(app, 'beta')
+  check('the server window is restored too', await waitForWindowCount(app, 3), 3)
+  let serverPage = null
+  for (let i = 0; i < 40 && !serverPage; i++) {
+    for (const page of app.windows()) {
+      if (page.isClosed()) continue
+      const name = await page.evaluate(() => (window.__store ? window.__store.getState().project?.name ?? null : undefined)).catch(() => undefined)
+      if (name === null) serverPage = page
+    }
+    if (!serverPage) await sleep(250)
+  }
+  // The renderer took its initial state on load; asking again returns the window's server target.
+  const serverOf = (page) => page.evaluate(() => window.api.takeInitialWindowState().then((s) => s.server))
+  check('it starts with its server target', serverPage && (await serverOf(serverPage)), {
+    serverEntryId: serverTarget.serverEntryId,
+    projectId: serverTarget.projectId
+  })
+  await serverPage.reload()
+  await serverPage.waitForLoadState('domcontentloaded')
+  await sleep(500)
+  check('the target survives a reload', await serverOf(serverPage), {
+    serverEntryId: serverTarget.serverEntryId,
+    projectId: serverTarget.projectId
+  })
+  await serverPage.evaluate(() => window.api.reportWindowProject(false, null, null))
+  await sleep(1200)
+  check('projectChanged(false) keeps the server target', await serverOf(serverPage), {
+    serverEntryId: serverTarget.serverEntryId,
+    projectId: serverTarget.projectId
+  })
+  check('and it stays recorded', persisted().some(isServerTarget), true)
+  await app.close()
+  check('quit keeps the server target', persisted().some(isServerTarget), true)
   app = null
 } finally {
   await app?.close().catch(() => {})

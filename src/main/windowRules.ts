@@ -90,3 +90,11 @@ export function initialFromTarget(target: WindowTarget | null): {
     ? { filePath: target.path, server: null }
     : { filePath: null, server: { serverEntryId: target.serverEntryId, projectId: target.projectId } }
 }
+
+export const MAX_LABEL_LENGTH = 200
+
+/** A display label from IPC: anything becomes a string, capped in length. */
+export function capLabel(value: unknown): string {
+  const s = typeof value === 'string' ? value : value == null ? '' : String(value)
+  return s.length > MAX_LABEL_LENGTH ? s.slice(0, MAX_LABEL_LENGTH) : s
+}

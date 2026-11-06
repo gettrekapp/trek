@@ -13,6 +13,14 @@ test('parseRecents keeps file paths and well-formed server entries', () => {
   assert.deepEqual(parseRecents('nope'), [])
 })
 
+test('parseRecents keeps server entries with empty labels but not empty ids', () => {
+  const blank = { kind: 'server', serverEntryId: 's', projectId: 'p', name: '', serverName: '' }
+  assert.deepEqual(parseRecents([blank]), [blank])
+  assert.deepEqual(parseRecents([{ ...blank, serverEntryId: '' }, { ...blank, projectId: '' }]), [])
+  assert.deepEqual(parseRecents([{ ...blank, name: 5 }, { kind: 'server', serverEntryId: 's', projectId: 'p', name: 'n' }]), [])
+  assert.deepEqual(parseRecents(serializeRecents([blank])), [blank])
+})
+
 test('addRecentEntry puts the entry first, dedupes and caps the list', () => {
   let list = []
   for (let i = 0; i < MAX_RECENTS + 2; i++) list = addRecentEntry(list, server(`p${i}`))

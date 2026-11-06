@@ -1,7 +1,7 @@
 // scripts/windowRules.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { boundsOnScreen, decideOpen, initialFromTarget, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
+import { MAX_LABEL_LENGTH, boundsOnScreen, capLabel, decideOpen, initialFromTarget, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
 
 test('an open project is focused, whatever the sender holds', () => {
   assert.equal(decideOpen(true, true), 'focus-existing')
@@ -77,4 +77,13 @@ test('initialFromTarget hands a file path or the server ids, never both', () => 
     filePath: null,
     server: { serverEntryId: 's', projectId: 'p' }
   })
+})
+
+test('capLabel coerces to a string and caps its length', () => {
+  assert.equal(capLabel('box'), 'box')
+  assert.equal(capLabel(''), '')
+  assert.equal(capLabel(undefined), '')
+  assert.equal(capLabel(null), '')
+  assert.equal(capLabel(42), '42')
+  assert.equal(capLabel('x'.repeat(500)).length, MAX_LABEL_LENGTH)
 })
