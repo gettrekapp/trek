@@ -792,7 +792,12 @@ when the socket closes. The default timeout is 60 s (`requestTimeoutMs`, or
 **Mirror.** `TopicMirror.subscribe(topic, listener)` reference-counts per topic:
 the first listener sends `sub.subscribe`, later ones get the current state at
 once, and the last unsubscribe sends `sub.unsubscribe`. Listeners get the state
-(`{snapshot, rev}`) or `{error}`. A `state.patch` that arrives before the
+(`{snapshot, rev}`) or `{error}`. `subscribe` and `get(topic)` are typed by topic:
+the snapshot is a `TopicSnapshot<T>` (`ServerTopic`, `AttentionTopic` or
+`ProjectTopic`, from `src/shared/model/topics.ts`). Snapshots are shared and
+read-only: every listener and `get` see the same object, and patches are applied
+copy-on-write, so the next snapshot shares its untouched parts. Listeners must
+not mutate them. A `state.patch` that arrives before the
 snapshot, or while a (re)subscribe is in flight, is ignored: it is older than the
 snapshot on its way. On a gap, an invalid patch, or a reconnect (every welcome),
 the mirror resubscribes; the old state stays visible until the new snapshot

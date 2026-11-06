@@ -1,11 +1,17 @@
 // Keeps one snapshot+rev per subscribed topic in step with the server through
 // state.patch events; resubscribes on a gap or after a reconnect.
-import type { Topic } from '../model/topics.ts'
+//
+// Snapshots are shared: every listener of a topic, and `get`, see the same
+// object, and a patch builds the next one from it. Treat them as read-only.
+import type { Topic, TopicSnapshot } from '../model/topics.ts'
 import { applyStatePatch, type TopicState } from '../sync/topicState.ts'
 import { ClientError, type ServerConnection } from './connection.ts'
 
-export type MirrorUpdate = TopicState<unknown> | { error: ClientError }
-type Listener = (update: MirrorUpdate) => void
+/** What a listener of `topic` gets: the state, or an error. */
+export type MirrorUpdate<T extends Topic = Topic> = TopicState<TopicSnapshot<T>> | { error: ClientError }
+export type MirrorListener<T extends Topic = Topic> = (update: MirrorUpdate<T>) => void
+/** Internally, one entry holds listeners of one topic; the snapshot's type follows from that topic. */
+type Listener = (update: TopicState<unknown> | { error: ClientError }) => void
 
 interface Entry {
   listeners: Set<Listener>
@@ -46,7 +52,13 @@ export class TopicMirror {
     })
   }
 
-  subscribe(topic: Topic, listener: Listener): () => void {
+  /**
+   * Reference-counted per topic; returns an unsubscribe function. The listener
+   * gets the state, or `{error}`. The snapshot is shared with the other
+   * listeners and the next patch: do not mutate it.
+   */
+  subscribe<T extends Topic>(topic: T, typedListener: MirrorListener<T>): () => void {
+    const listener = typedListener as Listener
     if (this.conn.status === 'closed') {
       this.call(listener, { error: closedError() })
       return () => {}
@@ -76,8 +88,9 @@ export class TopicMirror {
     }
   }
 
-  get(topic: Topic): TopicState<unknown> | undefined {
-    return this.topics.get(topic)?.state
+  /** The current state, if a snapshot has arrived. Shared and read-only, as for listeners. */
+  get<T extends Topic>(topic: T): TopicState<TopicSnapshot<T>> | undefined {
+    return this.topics.get(topic)?.state as TopicState<TopicSnapshot<T>> | undefined
   }
 
   private resubscribe(topic: Topic): void {
@@ -151,12 +164,12 @@ export class TopicMirror {
     }
   }
 
-  private notify(entry: Entry, update: MirrorUpdate): void {
+  private notify(entry: Entry, update: TopicState<unknown> | { error: ClientError }): void {
     for (const l of [...entry.listeners]) this.call(l, update)
   }
 
   /** A throwing listener must not stop the others or break the mirror. */
-  private call(listener: Listener, update: MirrorUpdate): void {
+  private call(listener: Listener, update: TopicState<unknown> | { error: ClientError }): void {
     try {
       listener(update)
     } catch (err) {
