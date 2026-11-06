@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
-import { connectServerEntry, dropServerEntry } from './serverClients'
+import { connectServerEntry, dropServerEntry, registeredServerEntry } from './serverClients'
 import { errorCode, errorText } from './errors'
 import { gitStatusLabel } from '../components/Sidebar'
-import { SERVER_REMOVED_MESSAGE, type ConnectionStatus, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
+import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
+import { SERVER_REMOVED_MESSAGE, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
 import type { Project, Session, SessionStatus, Worktree } from '../../../shared/model/types'
 import type { AppServerInfo } from '../../../shared/types'
 
@@ -18,16 +19,6 @@ interface Props {
   projectId: string
   /** The project's name for the title bar, or null while there is none. */
   onTitle: (name: string | null) => void
-}
-
-const STATUS_LABELS: Record<ConnectionStatus, string> = {
-  connected: 'Connected',
-  connecting: 'Connecting…',
-  disconnected: 'Disconnected',
-  'needs-auth': 'Token rejected',
-  incompatible: 'Incompatible',
-  error: 'Error',
-  closed: 'Closed'
 }
 
 /** The legacy sidebar's dot colours. */
@@ -49,6 +40,12 @@ function sessionDot(status: SessionStatus): string {
 function currentStatus(connection: ServerConnection): StatusChange {
   const { status, statusMessage: message, removed } = connection
   return removed ? { status, message, removed: true } : { status, message }
+}
+
+/** A status the SDK does not retry out of (a removed entry's error is final). */
+function isStuck(connection: ServerConnection): boolean {
+  const { status, removed } = connection
+  return status === 'needs-auth' || status === 'incompatible' || (status === 'error' && !removed)
 }
 
 /** The time, plus the date when it isn't today. */
@@ -86,6 +83,9 @@ export function ServerProjectWindow({ serverEntryId, projectId, onTitle }: Props
           loaded.current = true
           setListError(null)
           setEntry((prev) => (prev === null ? null : found))
+          // Stuck states never retry by themselves; the token or URL may have been fixed in another window.
+          const connection = registeredServerEntry(serverEntryId)?.connection
+          if (connection && isStuck(connection)) connection.reconnect()
         })
         .catch((err: unknown) => {
           // A failed re-check keeps what is shown; only a failed first read says so.
@@ -148,9 +148,18 @@ function ServerProjectTree({
       setView({ project: update.snapshot })
       setLastPatchAt(Date.now())
     })
+    // A deleted project's topic just stops: the only signal is the server topic dropping it.
+    // Only once it has been listed, so a server snapshot older than a project.create is no "not found".
+    let seen = false
+    const offServer = mirror.subscribe('server', (update) => {
+      if ('error' in update) return
+      if (update.snapshot.projects.some((p) => p.id === projectId)) seen = true
+      else if (seen) setView({ notFound: true })
+    })
     return () => {
       offStatus()
       offTopic()
+      offServer()
     }
   }, [registered, projectId])
 

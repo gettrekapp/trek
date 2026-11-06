@@ -61,3 +61,12 @@ test('parseRecentRef validates an entry named over IPC', () => {
     assert.equal(parseRecentRef(bad), null, JSON.stringify(bad))
   }
 })
+
+test('parseRecents drops server entries with over-long ids', () => {
+  const ok = { kind: 'server', serverEntryId: 'x'.repeat(200), projectId: 'p', name: 'n', serverName: 'b' }
+  assert.deepEqual(parseRecents([
+    { ...ok, serverEntryId: 'x'.repeat(201) },
+    { ...ok, projectId: 'y'.repeat(201) },
+    ok
+  ]), [ok])
+})

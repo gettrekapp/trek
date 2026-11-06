@@ -15,6 +15,8 @@ import {
   capLabel,
   decideOpen,
   initialFromTarget,
+  isTargetId,
+  MAX_TARGET_ID,
   parseOpenWindows,
   sameTarget,
   serializeOpenWindow,
@@ -437,8 +439,8 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
   ipcMain.handle(
     'window:openServerProject',
     async (event, serverEntryId: unknown, projectId: unknown, name: unknown, serverName: unknown): Promise<{ opened: boolean }> => {
-      if (typeof serverEntryId !== 'string' || serverEntryId === '') throw new Error('serverEntryId must be a non-empty string')
-      if (typeof projectId !== 'string' || projectId === '') throw new Error('projectId must be a non-empty string')
+      if (!isTargetId(serverEntryId)) throw new Error(`serverEntryId must be a non-empty string of at most ${MAX_TARGET_ID} characters`)
+      if (!isTargetId(projectId)) throw new Error(`projectId must be a non-empty string of at most ${MAX_TARGET_ID} characters`)
       const target: WindowTarget = { kind: 'server', serverEntryId, projectId }
       // The user's own label for the server wins over the name the server reports (which may be empty).
       const recent = {

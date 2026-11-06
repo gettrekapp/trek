@@ -1,6 +1,7 @@
 import { app } from 'electron'
-import { access, readFile, writeFile } from 'node:fs/promises'
+import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { writeFileAtomic } from './secrets'
 import { addRecentEntry, keepRecents, parseRecents, removeRecentEntry, serializeRecents, type RecentEntry } from './recentsRules'
 
 function recentsFile(): string {
@@ -23,8 +24,16 @@ async function readRecents(): Promise<RecentEntry[]> {
   return []
 }
 
-async function writeRecents(list: RecentEntry[]): Promise<void> {
-  await writeFile(recentsFile(), JSON.stringify(serializeRecents(list), null, 2), 'utf8')
+/** Every change is a read-modify-write; chained so two never interleave and lose an entry. */
+let chain: Promise<unknown> = Promise.resolve()
+
+function update(change: (list: RecentEntry[]) => RecentEntry[]): Promise<void> {
+  const run = chain.then(async () => {
+    const next = change(await readRecents())
+    await writeFileAtomic(recentsFile(), JSON.stringify(serializeRecents(next), null, 2))
+  })
+  chain = run.catch(() => undefined)
+  return run
 }
 
 /**
@@ -41,14 +50,14 @@ export async function getRecents(): Promise<RecentEntry[]> {
   return keepRecents(recents, missing)
 }
 
-export async function addRecent(filePath: string): Promise<void> {
-  await writeRecents(addRecentEntry(await readRecents(), { kind: 'file', path: filePath }))
+export function addRecent(filePath: string): Promise<void> {
+  return update((list) => addRecentEntry(list, { kind: 'file', path: filePath }))
 }
 
-export async function addRecentServer(entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> {
-  await writeRecents(addRecentEntry(await readRecents(), entry))
+export function addRecentServer(entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> {
+  return update((list) => addRecentEntry(list, entry))
 }
 
-export async function removeRecent(entry: RecentEntry): Promise<void> {
-  await writeRecents(removeRecentEntry(await readRecents(), entry))
+export function removeRecent(entry: RecentEntry): Promise<void> {
+  return update((list) => removeRecentEntry(list, entry))
 }

@@ -13,14 +13,14 @@ export function StartScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recents, setRecents] = useState<RecentEntry[]>([])
-  /** Ids of the app-wide servers; null until loaded, so nothing shows "Server removed" early. */
-  const [serverIds, setServerIds] = useState<Set<string> | null>(null)
+  /** The app-wide servers' current labels by id; null until loaded, so nothing shows "Server removed" early. */
+  const [serverNames, setServerNames] = useState<Map<string, string> | null>(null)
 
   const loadServers = useCallback((): void => {
     window.api.appServers
       .list()
-      .then((list) => setServerIds(new Set(list.map((s) => s.id))))
-      .catch(() => setServerIds(null))
+      .then((list) => setServerNames(new Map(list.map((s) => [s.id, s.name]))))
+      .catch(() => setServerNames(null))
   }, [])
 
   useEffect(() => {
@@ -158,7 +158,9 @@ export function StartScreen(): React.JSX.Element {
                           <span className="mini-chip recent-server-chip">server</span>
                         </span>
                         <span className="recent-path">
-                          {serverIds && !serverIds.has(entry.serverEntryId) ? 'Server removed' : entry.serverName || 'server'}
+                          {serverNames && !serverNames.has(entry.serverEntryId)
+                            ? 'Server removed'
+                            : serverNames?.get(entry.serverEntryId) || entry.serverName || 'server'}
                         </span>
                       </button>
                       <RemoveRecent disabled={busy} onClick={() => void removeRecent(entry)} />

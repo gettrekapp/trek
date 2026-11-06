@@ -1,5 +1,6 @@
 // Recent projects of both kinds, as stored in recent-projects.json. Pure.
 import type { RecentEntry } from '../shared/types.ts'
+import { isTargetId } from './windowRules.ts'
 
 export type { RecentEntry }
 
@@ -12,8 +13,8 @@ export function parseRecents(raw: unknown): RecentEntry[] {
     if (typeof item === 'string' && item) out.push({ kind: 'file', path: item })
     else if (item && typeof item === 'object' && (item as { kind?: unknown }).kind === 'server') {
       const r = item as Record<string, unknown>
-      // Labels may be empty (a server without a configured name); the ids may not.
-      const ids = [r.serverEntryId, r.projectId].every((v) => typeof v === 'string' && v !== '')
+      // Labels may be empty (a server without a configured name); the ids may not, nor be over-long.
+      const ids = [r.serverEntryId, r.projectId].every(isTargetId)
       const labels = [r.name, r.serverName].every((v) => typeof v === 'string')
       if (ids && labels) {
         out.push({ kind: 'server', serverEntryId: r.serverEntryId as string, projectId: r.projectId as string, name: r.name as string, serverName: r.serverName as string })

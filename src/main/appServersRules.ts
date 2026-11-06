@@ -1,4 +1,6 @@
 // The app-wide trek-server list, validated; and the hello-token injection the relay does. Pure.
+import { originOf } from '../shared/appServerRules.ts'
+
 export interface AppServer {
   /** Client-side id */
   id: string
@@ -47,14 +49,6 @@ export function validateServerInput(input: { name: unknown; url: unknown }): { n
   return { name, url }
 }
 
-function originOf(url: string): string | null {
-  try {
-    return new URL(url).origin
-  } catch {
-    return null
-  }
-}
-
 /**
  * Editing an entry's URL to another origin (scheme, host or port) must not carry
  * the stored token there: a renderer could otherwise point a saved token at a host
@@ -64,15 +58,6 @@ export function shouldClearToken(oldUrl: string, newUrl: string, tokenGiven: boo
   if (tokenGiven) return false
   const before = originOf(oldUrl)
   return before === null || before !== originOf(newUrl)
-}
-
-export function isLoopbackUrl(url: string): boolean {
-  try {
-    const host = new URL(url).hostname
-    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
-  } catch {
-    return false
-  }
 }
 
 /** The relay's only change to outgoing frames: a hello carries the stored token. */

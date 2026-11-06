@@ -55,10 +55,6 @@ function persist(): Promise<void> {
   return run
 }
 
-export function listAppServers(): AppServer[] {
-  return loaded().map((s) => ({ ...s }))
-}
-
 export function getAppServer(id: string): AppServer | undefined {
   const found = loaded().find((s) => s.id === id)
   return found ? { ...found } : undefined
@@ -94,39 +90,54 @@ async function save(input: unknown): Promise<AppServerInfo> {
   const before = isNew ? null : { ...requireKnown(id) }
   const entryId = before ? before.id : randomUUID()
   const urlChanged = !!before && before.url !== valid.url
-  // A stored token never follows the URL to another origin (unless this call brings its own).
-  if (tokenGiven) await tokens.set(entryId, token as string)
-  else if (before && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null)
 
+  // The in-memory change and the token write start in the same synchronous step:
+  // the secret store runs gets after queued sets, so a relay open that reads the
+  // new URL also reads the new token, and one that read the old URL sees the URL
+  // change after its token read and refuses (v2relay). No token crosses origins.
   const list = loaded()
   let entry: AppServer
   if (before) {
-    // Removed while the token was written: it stays removed, and so does its token.
-    const current = list.find((s) => s.id === entryId)
-    if (!current) {
-      await tokens.set(entryId, null)
-      throw new Error(SERVER_REMOVED_MESSAGE)
-    }
-    current.name = valid.name
-    current.url = valid.url
-    entry = current
+    entry = list.find((s) => s.id === entryId)!
+    entry.name = valid.name
+    entry.url = valid.url
   } else {
     entry = { id: entryId, ...valid }
     list.push(entry)
   }
-  try {
-    await persist()
-  } catch (err) {
-    // Roll back the in-memory change, and never leave a new token on the old URL.
+  const rollback = (): void => {
     if (before) {
       entry.name = before.name
       entry.url = before.url
-      if (tokenGiven && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null).catch(() => undefined)
     } else {
       const index = list.indexOf(entry)
       if (index >= 0) list.splice(index, 1)
-      if (tokenGiven) await tokens.set(entryId, null).catch(() => undefined)
     }
+  }
+
+  // A stored token never follows the URL to another origin (unless this call brings its own).
+  try {
+    if (tokenGiven) await tokens.set(entryId, token as string)
+    else if (before && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null)
+  } catch (err) {
+    // The token write failed, so the old token (if any) is still the stored one: back to the old URL.
+    rollback()
+    throw err
+  }
+
+  // Removed while the token was written: it stays removed, and so does its token.
+  if (before && !list.includes(entry)) {
+    await tokens.set(entryId, null)
+    throw new Error(SERVER_REMOVED_MESSAGE)
+  }
+  try {
+    await persist()
+  } catch (err) {
+    // Roll back the in-memory change, and never leave a new token on the old URL
+    // (the clear is queued in the same step as the URL goes back).
+    const clear = tokenGiven && (!before || shouldClearToken(before.url, valid.url, false))
+    rollback()
+    if (clear) await tokens.set(entryId, null).catch(() => undefined)
     throw err
   }
   // Open relay sockets still point at the old URL; the SDK reconnects to the new one.

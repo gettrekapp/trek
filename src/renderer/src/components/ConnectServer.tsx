@@ -3,6 +3,7 @@ import { useAppStore } from '../store'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { errorText } from '../v2/errors'
 import { NewServerProjectModal } from './NewServerProjectModal'
+import { STATUS_LABELS, isLoopbackUrl, originOf } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerInfo, AppServerTest } from '../../../shared/types'
@@ -32,34 +33,14 @@ interface FormState {
 
 type TestState = { busy: true } | { busy: false; result: AppServerTest } | { busy: false; error: string }
 
-const STATUS_LABELS: Record<ConnectionStatus, string> = {
-  connected: 'Connected',
-  connecting: 'Connecting…',
-  disconnected: 'Disconnected',
-  'needs-auth': 'Token rejected',
-  incompatible: 'Incompatible',
-  error: 'Error',
-  closed: 'Closed'
-}
-
 function dotClass(status: ConnectionStatus | undefined): string {
   return status === 'connected' ? 'done' : status === 'connecting' ? 'running' : 'exited'
-}
-
-function originOf(url: string): string | null {
-  try {
-    return new URL(url.trim()).origin
-  } catch {
-    return null
-  }
 }
 
 /** Plain ws:// to anything but this machine: say so (allowed for Tailscale and LAN). */
 function unencryptedRemote(url: string): boolean {
   try {
-    const u = new URL(url.trim())
-    if (u.protocol !== 'ws:') return false
-    return !['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname)
+    return new URL(url.trim()).protocol === 'ws:' && !isLoopbackUrl(url)
   } catch {
     return false
   }

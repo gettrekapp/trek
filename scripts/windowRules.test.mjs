@@ -1,7 +1,7 @@
 // scripts/windowRules.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_LABEL_LENGTH, boundsOnScreen, capLabel, decideOpen, initialFromTarget, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
+import { MAX_LABEL_LENGTH, MAX_TARGET_ID, boundsOnScreen, isTargetId, capLabel, decideOpen, initialFromTarget, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
 
 test('an open project is focused, whatever the sender holds', () => {
   assert.equal(decideOpen(true, true), 'focus-existing')
@@ -86,4 +86,22 @@ test('capLabel coerces to a string and caps its length', () => {
   assert.equal(capLabel(null), '')
   assert.equal(capLabel(42), '42')
   assert.equal(capLabel('x'.repeat(500)).length, MAX_LABEL_LENGTH)
+})
+
+test('isTargetId takes non-empty strings up to MAX_TARGET_ID characters', () => {
+  assert.equal(MAX_TARGET_ID, 200)
+  assert.equal(isTargetId('s'), true)
+  assert.equal(isTargetId('x'.repeat(200)), true)
+  assert.equal(isTargetId('x'.repeat(201)), false)
+  assert.equal(isTargetId(''), false)
+  assert.equal(isTargetId(5), false)
+})
+
+test('parseOpenWindows drops server entries with over-long ids', () => {
+  const long = 'x'.repeat(201)
+  assert.deepEqual(parseOpenWindows([
+    { kind: 'server', serverEntryId: long, projectId: 'p' },
+    { kind: 'server', serverEntryId: 's', projectId: long },
+    { kind: 'server', serverEntryId: 'x'.repeat(200), projectId: 'p' }
+  ]), [{ target: { kind: 'server', serverEntryId: 'x'.repeat(200), projectId: 'p' } }])
 })

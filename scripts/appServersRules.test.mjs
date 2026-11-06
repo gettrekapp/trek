@@ -1,7 +1,8 @@
 // scripts/appServersRules.test.mjs — app-wide server list parsing, input checks, and hello token injection.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { isLoopbackUrl, parseAppServers, shouldClearToken, validateServerInput, withToken } from '../src/main/appServersRules.ts'
+import { parseAppServers, shouldClearToken, validateServerInput, withToken } from '../src/main/appServersRules.ts'
+import { STATUS_LABELS, isLoopbackUrl, originOf } from '../src/shared/appServerRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
   assert.deepEqual(parseAppServers([
@@ -38,6 +39,20 @@ test('isLoopbackUrl', () => {
   assert.equal(isLoopbackUrl('ws://localhost:7400'), true)
   assert.equal(isLoopbackUrl('ws://[::1]:7400'), true)
   assert.equal(isLoopbackUrl('ws://box.tailnet:7400'), false)
+  assert.equal(isLoopbackUrl(' ws://localhost:7400 '), true, 'trimmed')
+  assert.equal(isLoopbackUrl('not a url'), false)
+})
+
+test('originOf: scheme, host and port; null when the URL does not parse', () => {
+  assert.equal(originOf('wss://box:7400/v2?x=1'), 'wss://box:7400')
+  assert.equal(originOf(' ws://box:7400 '), 'ws://box:7400')
+  assert.equal(originOf('not a url'), null)
+})
+
+test('STATUS_LABELS names every connection status', () => {
+  for (const s of ['connected', 'connecting', 'disconnected', 'needs-auth', 'incompatible', 'error', 'closed']) {
+    assert.equal(typeof STATUS_LABELS[s], 'string')
+  }
 })
 
 test('withToken sets the token on hello frames only', () => {

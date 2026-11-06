@@ -32,7 +32,7 @@ function send(res: ServerResponse, status: number, json?: unknown, headers: Reco
 class BodyTooLarge extends Error {}
 
 /** How much of a refused body is read and thrown away so the client sees the answer; past this the socket is dropped. */
-export const MAX_MCP_DRAIN = 8 * MAX_MCP_BODY
+const MAX_MCP_DRAIN = 8 * MAX_MCP_BODY
 
 /**
  * Answers a request whose body is not wanted. The rest of the body is read and thrown away first: closing a socket

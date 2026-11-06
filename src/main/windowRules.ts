@@ -39,10 +39,18 @@ function targetKey(t: WindowTarget): string {
   return t.kind === 'file' ? `file\0${t.path}` : `server\0${t.serverEntryId}\0${t.projectId}`
 }
 
+/** The longest server entry id or project id accepted over IPC or from disk. */
+export const MAX_TARGET_ID = 200
+
+/** A server entry id or project id: a non-empty string of at most MAX_TARGET_ID characters. */
+export function isTargetId(value: unknown): value is string {
+  return typeof value === 'string' && value !== '' && value.length <= MAX_TARGET_ID
+}
+
 function readTarget(item: Record<string, unknown>): WindowTarget | null {
   const str = (v: unknown): v is string => typeof v === 'string' && v !== ''
   if (item.kind === 'server') {
-    return str(item.serverEntryId) && str(item.projectId) ? { kind: 'server', serverEntryId: item.serverEntryId, projectId: item.projectId } : null
+    return isTargetId(item.serverEntryId) && isTargetId(item.projectId) ? { kind: 'server', serverEntryId: item.serverEntryId, projectId: item.projectId } : null
   }
   if (item.kind === 'file') return str(item.path) ? { kind: 'file', path: item.path } : null
   return str(item.filePath) ? { kind: 'file', path: item.filePath } : null // legacy entry

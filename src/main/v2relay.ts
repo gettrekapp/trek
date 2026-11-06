@@ -75,6 +75,9 @@ export function registerV2Relay(): void {
     // While the token was read the entry may have been removed or re-pointed, or
     // the window closed, reloaded or crashed: then this token goes nowhere.
     // Removed meanwhile: final. Re-pointed meanwhile: transient, the next open reads the new URL and token.
+    // appServers.save changes the URL in the same step as it queues the token write, and
+    // the secret store runs this get after queued sets: so a read of the new URL never pairs
+    // with the old token, and an old URL whose token read saw the new token fails this check.
     const now = getAppServer(serverEntryId)
     if (!now) return refuse(SERVER_REMOVED_MESSAGE, true)
     if (now.url !== server.url) return refuse('Server changed')
