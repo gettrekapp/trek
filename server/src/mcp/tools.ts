@@ -1,0 +1,572 @@
+// The trek-dev MCP tools on the server (decision 5 of phase 2e). Names, parameters and
+// result shapes follow the desktop's (src/main/mcp.ts, src/renderer/src/mcpTools.ts).
+// Every tool acts on the calling session's project only, and changes state through
+// the v2 commands, run in process.
+import { randomUUID } from 'node:crypto'
+import type { BranchData, Project, Repository } from '../../../src/shared/model/types'
+import { isProviderId } from '../../../src/shared/providers/registry.ts'
+import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
+import { PROVIDER_IDS, type LlmSelection } from '../../../src/shared/providers/types.ts'
+import { parseTicket, ticketUrl } from '../../../src/shared/tickets.ts'
+import type { SessionType } from '../../../src/shared/types'
+import type { ConfigStore } from '../configStore'
+import { codedError } from '../errors.ts'
+import type { GitPoller } from '../git/poller.ts'
+import type { ProjectState } from '../projects/state.ts'
+import type { SessionManager } from '../sessions/manager.ts'
+import type { TopicHub } from '../topicHub'
+import { dispatchV2, type V2Context } from '../v2.ts'
+import { describeWorktree, resolveWorktree } from './describe.ts'
+import type { ToolDefinition } from './protocol.ts'
+
+const WORKTREE_PARAM = {
+  type: 'string',
+  description:
+    'Worktree id, path, branch or name, as returned by list_worktrees. A branch or name in several repositories is an error: pass the path.'
+}
+const TERMINAL_PARAM = { type: 'string', description: 'Session terminalId from list_worktrees' }
+const SESSION_TYPE_PARAM = {
+  type: 'string',
+  description: 'Session type id or name (case-insensitive), as returned by list_session_types'
+}
+
+const LLM_PARAMS = {
+  provider: {
+    type: 'string',
+    enum: [...PROVIDER_IDS],
+    description: "Optional agent CLI to run. Defaults to the session type's agent, then the project/app default."
+  },
+  model: { type: 'string', description: "Optional model id (with provider). Omit for the agent's default." },
+  effort: { type: 'string', description: 'Optional effort level (with provider), e.g. high.' }
+}
+
+export const MCP_TOOLS: ToolDefinition[] = [
+  {
+    name: 'list_worktrees',
+    description:
+      'List every git worktree of the project with branch, workflow tag, custom tags, ticket, PR, note, git status, whether it is the primary checkout, whether its sessions are loaded, and its agent sessions (terminalId, title, status, llm — the provider/model/effort it runs — queue — the prompts queued in its Queue panel, oldest first). Status is one of working, attention (waiting on input), done, complete, idle, exited.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_current_session',
+    description:
+      'The agent session calling this tool and the worktree it runs in. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID). Returns terminalId, title, status, llm, queue and the worktree, in the same shape as a list_worktrees entry.',
+    inputSchema: {
+      type: 'object',
+      properties: { terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' } },
+      required: ['terminalId']
+    }
+  },
+  {
+    name: 'create_worktree',
+    description:
+      'Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the project. By default cuts a new branch; set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        branch: { type: 'string', description: 'Branch name' },
+        existingBranch: {
+          type: 'boolean',
+          description: 'Check out an existing branch instead of creating a new one (default false)'
+        },
+        repo: {
+          type: 'string',
+          description:
+            'Repository name or id (the repo field of list_worktrees). Required when the project has more than one repository.'
+        }
+      },
+      required: ['branch']
+    }
+  },
+  {
+    name: 'start_session',
+    description:
+      "Start a new agent session in a worktree (the default agent unless provider is given). Optionally starts it as a session type (named after the type, with the type's system prompt appended) and sends a first prompt once the agent is ready. Returns the new terminalId.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        sessionType: { ...SESSION_TYPE_PARAM, description: `Optional. ${SESSION_TYPE_PARAM.description}` },
+        prompt: { type: 'string', description: 'Optional first prompt to send' },
+        ...LLM_PARAMS
+      },
+      required: ['worktree']
+    }
+  },
+  {
+    name: 'list_session_types',
+    description:
+      'List the configured session types (id, name, systemPrompt, initialMessage, llm). A session type is a named system prompt and optional first message, e.g. a "Review" session that knows how to review code; pass one to start_session.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'save_session_type',
+    description:
+      'Create or update a session type. Updates the type matching id (or, without id, an existing type with the same name); otherwise creates a new one. Returns the saved type.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Id of the type to update' },
+        name: { type: 'string', description: 'Name — the menu label and the tab title of its sessions' },
+        systemPrompt: { type: 'string', description: "Appended to the agent's system prompt (sent ahead of the first message for agents without one)" },
+        initialMessage: {
+          type: 'string',
+          description: 'Sent as the first message when a session of this type starts; empty for none'
+        },
+        llm: {
+          type: ['object', 'null'],
+          description: 'Agent for sessions of this type: { provider, model?, effort? }. null = use the default.',
+          properties: LLM_PARAMS
+        }
+      }
+    }
+  },
+  {
+    name: 'delete_session_type',
+    description: 'Delete a session type. Sessions already started from it keep their prompt.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionType: SESSION_TYPE_PARAM },
+      required: ['sessionType']
+    }
+  },
+  {
+    name: 'load_worktree',
+    description: "Resume a worktree's saved sessions.",
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
+    name: 'unload_worktree',
+    description:
+      "Unload a worktree's sessions to free resources. They are saved and resume on the next load.",
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
+    name: 'send_prompt',
+    description:
+      "Type a prompt into a session's agent input and submit it. Slash commands and skills work too, e.g. \"/test-in-docker\".",
+    inputSchema: {
+      type: 'object',
+      properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
+      required: ['terminalId', 'text']
+    }
+  },
+  {
+    name: 'enqueue_prompt',
+    description:
+      "Add a prompt to the end of a session's Queue panel without sending it. The user sends queued prompts by clicking them; use send_prompt to submit immediately.",
+    inputSchema: {
+      type: 'object',
+      properties: { terminalId: TERMINAL_PARAM, text: { type: 'string' } },
+      required: ['terminalId', 'text']
+    }
+  },
+  {
+    name: 'remove_queued_prompt',
+    description:
+      "Remove a prompt from a session's queue by its 0-based index (as listed in list_worktrees, oldest first).",
+    inputSchema: {
+      type: 'object',
+      properties: { terminalId: TERMINAL_PARAM, index: { type: 'integer', minimum: 0 } },
+      required: ['terminalId', 'index']
+    }
+  },
+  {
+    name: 'send_keys',
+    description:
+      'Send keystrokes to a session, e.g. to answer a permission prompt or interrupt. Named keys: enter, escape, tab, shift-tab, up, down, left, right, backspace, space, ctrl-c, ctrl-d. Any other entry is typed literally.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalId: TERMINAL_PARAM,
+        keys: { type: 'array', items: { type: 'string' } }
+      },
+      required: ['terminalId', 'keys']
+    }
+  },
+  {
+    name: 'read_terminal',
+    description: "Read the last lines of a session's terminal screen and scrollback.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalId: TERMINAL_PARAM,
+        lines: { type: 'number', description: 'How many lines (default 80, max 2000)' }
+      },
+      required: ['terminalId']
+    }
+  },
+  {
+    name: 'wait_for_sessions',
+    description:
+      'Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalIds: { type: 'array', items: { type: 'string' } },
+        until: {
+          type: 'string',
+          enum: ['all', 'any'],
+          description: 'Wait for all sessions (default) or the first one'
+        },
+        timeoutSeconds: { type: 'number', description: 'Default 300, max 600' }
+      },
+      required: ['terminalIds']
+    }
+  },
+  {
+    name: 'close_session',
+    description: 'Close a session for good, killing its agent process.',
+    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
+  },
+  {
+    name: 'set_worktree_tag',
+    description:
+      "Set a worktree branch's workflow tag, by name (case-insensitive). Tags are configured per project; an unknown name fails with the list of valid tags. Omit tag to clear it.",
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, tag: { type: 'string' } },
+      required: ['worktree']
+    }
+  },
+  {
+    name: 'set_worktree_custom_tag',
+    description:
+      "Turn one of a worktree branch's custom tags on or off, by name (case-insensitive). A branch can carry any number of custom tags alongside its workflow tag. Custom tags are configured per project; an unknown name fails with the list of valid ones.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        tag: { type: 'string' },
+        enabled: { type: 'boolean', description: 'true (default) to add the tag, false to remove it' }
+      },
+      required: ['worktree', 'tag']
+    }
+  },
+  {
+    name: 'set_worktree_note',
+    description: "Replace a worktree branch's free-form note. An empty note clears it.",
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, note: { type: 'string' } },
+      required: ['worktree', 'note']
+    }
+  },
+  {
+    name: 'set_worktree_ticket',
+    description:
+      'Link a worktree branch to a ticket: a Linear issue id (e.g. TOW-123) or URL (https://linear.app/<workspace>/issue/TOW-123/...), or an Azure DevOps work item id or URL. Omit ticket to unlink it.',
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, ticket: { type: 'string' } },
+      required: ['worktree']
+    }
+  },
+  {
+    name: 'set_worktree_pull_request',
+    description:
+      'Link a worktree branch to a GitHub pull request: its URL (https://github.com/<owner>/<repo>/pull/123), or just the number (123 or #123) when the repository already has another PR linked to infer the repo from. Omit pullRequest to unlink it.',
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' } },
+      required: ['worktree']
+    }
+  }
+]
+
+export const MCP_INSTRUCTIONS =
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID."
+
+export interface ToolDeps {
+  store: ConfigStore
+  hub: TopicHub
+  projects: ProjectState
+  poller: GitPoller
+  sessions: SessionManager
+  /** How often waits re-check session state (default 250 ms) */
+  pollMs?: number
+  /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
+  graceMs?: number
+  /** send_prompt's waits for a session's first output and then for it to settle */
+  readyTimeouts?: { firstOutputMs?: number; settleMs?: number }
+  now?: () => number
+  sleep?: (ms: number) => Promise<void>
+}
+
+export type ToolCall = (name: string, args: Record<string, unknown>) => Promise<unknown>
+
+const bad = (message: string): Error => codedError('BAD_REQUEST', message)
+const notFound = (message: string): Error => codedError('NOT_FOUND', message)
+const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
+
+/** The repository a create_worktree call targets: by id, then name (case-insensitive). Required once a project has several. */
+function targetRepository(project: Project, ref: unknown): Repository {
+  const repositories = project.repositories
+  const name = text(ref)
+  const valid = repositories.map((r) => r.name).join(', ')
+  if (!name) {
+    if (repositories.length === 1) return repositories[0]
+    throw bad(`repo is required in this project. Repositories: ${valid}`)
+  }
+  const byId = repositories.find((r) => r.id === name)
+  if (byId) return byId
+  const byName = repositories.filter((r) => r.name.toLowerCase() === name.toLowerCase())
+  if (byName.length > 1) throw bad(`"${name}" matches more than one repository. Use its id.`)
+  if (byName.length === 0) throw notFound(`Unknown repo "${name}". Repositories: ${valid}`)
+  return byName[0]
+}
+
+const PR_URL = /^https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/i
+
+/** A GitHub PR URL, or a number whose owner/repo come from another PR linked in the same repository. */
+function pullRequestUrl(input: string, repo: Repository): string {
+  const url = input.match(PR_URL)
+  if (url) return `https://github.com/${url[1]}/${url[2]}/pull/${url[3]}`
+  const num = input.match(/^#?(\d+)$/)
+  if (!num) throw bad(`Unrecognised pull request "${input}". Use its GitHub URL or number.`)
+  const known = Object.values(repo.branchData)
+    .map((d) => d.pr?.match(PR_URL))
+    .find(Boolean)
+  if (!known) throw bad('No other PR is linked to infer the repo from — pass the full GitHub URL')
+  return `https://github.com/${known[1]}/${known[2]}/pull/${num[1]}`
+}
+
+/** A { provider, model?, effort? } argument; `required` when the caller passed an llm object. */
+function llmArg(args: Record<string, unknown>, required = false): LlmSelection | undefined {
+  if (args.provider === undefined || args.provider === '') {
+    if (required) throw bad('llm needs a provider')
+    if ((args.model !== undefined && args.model !== '') || (args.effort !== undefined && args.effort !== '')) {
+      throw bad('model and effort need a provider')
+    }
+    return undefined
+  }
+  if (!isProviderId(args.provider)) {
+    throw bad(`Unknown provider "${String(args.provider)}". Use one of: ${PROVIDER_IDS.join(', ')}`)
+  }
+  return sanitizeLlmSelection({ provider: args.provider, model: args.model, effort: args.effort })
+}
+
+/** Session types as tools return them — the icon data URL is just noise to an agent. */
+function withoutIcon(type: SessionType): Omit<SessionType, 'icon'> {
+  const { icon: _icon, ...rest } = type
+  return rest
+}
+
+function findSessionType(types: SessionType[], ref: string): SessionType | undefined {
+  const name = ref.trim().toLowerCase()
+  return types.find((t) => t.id === ref || t.name.trim().toLowerCase() === name)
+}
+
+/** Returns `(projectId) => call`: the tool caller for one project's sessions. */
+export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCall {
+  const ctx: V2Context = {
+    store: deps.store,
+    hub: deps.hub,
+    projects: deps.projects,
+    poller: deps.poller,
+    sessions: deps.sessions,
+    // Tool calls subscribe to nothing and attach to no pty.
+    subscriber: { send() {} },
+    terminal: { send() {}, bufferedAmount: () => 0 }
+  }
+
+  return (projectId) => {
+    /** Runs a v2 command on this project; a refusal throws with its code and message. */
+    const v2 = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> => {
+      const outcome = await dispatchV2(method, { ...params, projectId }, ctx)
+      if (!outcome.ok) throw codedError(outcome.error.code, outcome.error.message)
+      return outcome.result
+    }
+
+    /** The worktree's repository and branch; a detached worktree has no branch data. */
+    const branchOf = (project: Project, ref: unknown): { repo: Repository; branch: string } => {
+      const { repo, worktree } = resolveWorktree(project, ref)
+      if (!worktree.branch) throw bad('That worktree has no branch (detached HEAD)')
+      return { repo, branch: worktree.branch }
+    }
+
+    const branchData = (repo: Repository, branch: string): BranchData =>
+      Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}
+
+    const describeById = (worktreeId: string) => {
+      const project = deps.projects.require(projectId)
+      for (const repo of project.repositories) {
+        const w = repo.worktrees.find((x) => x.id === worktreeId)
+        if (w) return describeWorktree(project, repo, w)
+      }
+      throw notFound(`No worktree with id "${worktreeId}" in this project`)
+    }
+
+    const saveSessionTypes = (types: SessionType[]) => v2('project.updateSettings', { settings: { sessionTypes: types } })
+
+    const notYet = async (): Promise<never> => {
+      throw new Error('not implemented yet')
+    }
+
+    const handlers: Record<string, (args: Record<string, unknown>, project: Project) => unknown> = {
+      list_worktrees: (_args, project) =>
+        project.repositories.flatMap((repo) => repo.worktrees.map((w) => describeWorktree(project, repo, w))),
+
+      create_worktree: async (args, project) => {
+        const branch = text(args.branch)
+        if (!branch) throw bad('branch is required')
+        const repo = targetRepository(project, args.repo)
+        const { worktreeId } = (await v2('worktree.create', {
+          repoId: repo.id,
+          branch,
+          createBranch: args.existingBranch !== true
+        })) as { worktreeId: string }
+        return describeById(worktreeId)
+      },
+
+      load_worktree: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        await v2('worktree.load', { worktreeId: worktree.id })
+        return { loaded: true, sessions: describeById(worktree.id).sessions }
+      },
+
+      unload_worktree: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        await v2('worktree.unload', { worktreeId: worktree.id })
+        return { unloaded: true }
+      },
+
+      set_worktree_tag: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        const name = text(args.tag)
+        const tags = project.settings.worktreeTags ?? []
+        const tag = name ? tags.find((t) => t.id.toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase()) : null
+        if (tag === undefined) {
+          const valid = tags.map((t) => t.name).join(', ') || 'none configured'
+          throw bad(`Unknown tag "${name}". Valid tags: ${valid}`)
+        }
+        await v2('branch.setTag', { repoId: repo.id, branch, tag: tag?.id ?? null })
+        return { branch, tag: tag?.name ?? null }
+      },
+
+      set_worktree_custom_tag: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        const name = text(args.tag)
+        const tags = project.settings.customTags ?? []
+        const tag = tags.find((t) => t.id.toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase())
+        if (!name || !tag) {
+          const valid = tags.map((t) => t.name).join(', ') || 'none configured'
+          throw bad(`Unknown custom tag "${name}". Valid custom tags: ${valid}`)
+        }
+        const current = branchData(repo, branch).customTags ?? []
+        const next = args.enabled === false
+          ? current.filter((id) => id !== tag.id)
+          : current.includes(tag.id) ? current : [...current, tag.id]
+        await v2('branch.setCustomTags', { repoId: repo.id, branch, customTags: next })
+        return { branch, customTags: next.map((id) => tags.find((t) => t.id === id)?.name ?? id) }
+      },
+
+      set_worktree_note: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        await v2('branch.setNote', { repoId: repo.id, branch, note: typeof args.note === 'string' ? args.note : '' })
+        return { branch }
+      },
+
+      set_worktree_ticket: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        const input = text(args.ticket)
+        if (!input) {
+          await v2('branch.setTicket', { repoId: repo.id, branch, ticket: null })
+          return { branch, ticket: null }
+        }
+        const parsed = parseTicket(input)
+        if (!parsed) {
+          throw bad(`Unrecognised ticket "${input}". Use a Linear issue id (TOW-123), a Linear issue URL, or an Azure DevOps work item id/URL.`)
+        }
+        const settings: Record<string, string> = {}
+        if (parsed.linearWorkspace) settings.linearWorkspace = parsed.linearWorkspace
+        if (parsed.azureDevOpsBaseUrl) settings.azureDevOpsBaseUrl = parsed.azureDevOpsBaseUrl
+        if (Object.keys(settings).length > 0) await v2('project.updateSettings', { settings })
+        await v2('branch.setTicket', { repoId: repo.id, branch, ticket: parsed.ticketId })
+        const fresh = deps.projects.require(projectId).settings
+        return { branch, ticket: parsed.ticketId, url: ticketUrl(fresh, parsed.ticketId) }
+      },
+
+      set_worktree_pull_request: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        const input = text(args.pullRequest)
+        const url = input ? pullRequestUrl(input, repo) : null
+        await v2('branch.setPr', { repoId: repo.id, branch, pr: url })
+        return { branch, pullRequest: url }
+      },
+
+      list_session_types: (_args, project) => (project.settings.sessionTypes ?? []).map(withoutIcon),
+
+      save_session_type: async (args, project) => {
+        const types = project.settings.sessionTypes ?? []
+        const name = typeof args.name === 'string' ? args.name.trim() : undefined
+        const systemPrompt = typeof args.systemPrompt === 'string' ? args.systemPrompt : undefined
+        const initialMessage = typeof args.initialMessage === 'string' ? args.initialMessage : undefined
+        if (args.llm !== undefined && args.llm !== null && (typeof args.llm !== 'object' || Array.isArray(args.llm))) {
+          throw bad('llm must be an object { provider, model?, effort? } or null')
+        }
+        const llm =
+          args.llm === null ? null : args.llm === undefined ? undefined : llmArg(args.llm as Record<string, unknown>, true)
+        let existing: SessionType | undefined
+        if (typeof args.id === 'string' && args.id) {
+          existing = types.find((t) => t.id === args.id)
+          if (!existing) throw notFound(`No session type with id "${args.id}"`)
+        } else if (name) {
+          existing = findSessionType(types, name)
+        }
+        if (existing) {
+          const { llm: _oldLlm, ...rest } = existing
+          const updated: SessionType = {
+            ...(llm === null ? rest : existing),
+            ...(name ? { name } : {}),
+            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+            ...(initialMessage !== undefined ? { initialMessage } : {}),
+            ...(llm ? { llm } : {})
+          }
+          await saveSessionTypes(types.map((t) => (t.id === updated.id ? updated : t)))
+          return withoutIcon(updated)
+        }
+        if (!name) throw bad('name is required to create a session type')
+        const created: SessionType = {
+          id: randomUUID(),
+          name,
+          systemPrompt: systemPrompt ?? '',
+          ...(initialMessage !== undefined ? { initialMessage } : {}),
+          ...(llm ? { llm } : {})
+        }
+        await saveSessionTypes([...types, created])
+        return created
+      },
+
+      delete_session_type: async (args, project) => {
+        const types = project.settings.sessionTypes ?? []
+        const ref = text(args.sessionType)
+        if (!ref) throw bad('sessionType is required')
+        const type = findSessionType(types, ref)
+        if (!type) {
+          const names = types.map((t) => t.name).join(', ') || 'none configured'
+          throw notFound(`No session type matches "${ref}". Session types: ${names}`)
+        }
+        await saveSessionTypes(types.filter((t) => t.id !== type.id))
+        return { deleted: type.name }
+      },
+
+      // Sessions, prompts, terminal reads and waiting: Task 8.
+      get_current_session: notYet,
+      start_session: notYet,
+      close_session: notYet,
+      send_prompt: notYet,
+      enqueue_prompt: notYet,
+      remove_queued_prompt: notYet,
+      send_keys: notYet,
+      read_terminal: notYet,
+      wait_for_sessions: notYet
+    }
+
+    return async (name, args) => {
+      const handler = Object.hasOwn(handlers, name) ? handlers[name] : undefined
+      if (!handler) throw bad(`Unknown tool: ${name}`)
+      return handler(args ?? {}, deps.projects.require(projectId))
+    }
+  }
+}
