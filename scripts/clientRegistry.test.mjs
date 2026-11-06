@@ -117,3 +117,24 @@ test('update with a new url and remove end the old mirror and ptys loudly', asyn
     assert.deepEqual(exits, [-1], action)
   }
 })
+
+test('on a welcome the mirror resubscribes before the ptys re-attach', async () => {
+  const tick = () => new Promise((r) => setImmediate(r))
+  const { server, clock, reg } = make()
+  const s = reg.add({ id: 'a', url: 'ws://a', token: 'x' })
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  s.mirror.subscribe('server', () => {})
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: {}, rev: 0 })
+  const attached = s.ptys.attach('p1', { onData() {}, onExit() {} })
+  sock.reply(sock.lastReq('pty.attach'), { ptyId: 'p1', cwd: '/', cols: 80, rows: 24, seq: 0 })
+  await attached
+  sock.serverClose(1006, '')
+  clock.advance(1000)
+  const next = server.last()
+  next.open()
+  next.welcome()
+  await tick()
+  assert.deepEqual(next.sent.filter((f) => f.type === 'req').map((f) => f.method), ['sub.subscribe', 'pty.attach'])
+})
