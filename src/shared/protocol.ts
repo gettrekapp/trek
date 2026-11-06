@@ -30,6 +30,11 @@ export type WireErrorCode =
   | 'CAPACITY'
   /** v2: `server.removeRepo` on a repo that projects still use. */
   | 'IN_USE'
+  /**
+   * v2: `pty.attach` from a connection that already has a large backlog unsent
+   * (over 4 MiB). Nothing was replayed or attached; retry once the backlog drains.
+   */
+  | 'CONGESTED'
 
 export interface WireError {
   code: WireErrorCode

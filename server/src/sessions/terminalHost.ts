@@ -216,7 +216,7 @@ export class TerminalHost {
    */
   attach(ptyId: string, sink: TerminalSink): PtyInfo {
     const record = this.require(ptyId)
-    if (sink.bufferedAmount() > SINK_HIGH_WATER) throw codedError('BAD_REQUEST', 'the connection is congested; try again')
+    if (sink.bufferedAmount() > SINK_HIGH_WATER) throw codedError('CONGESTED', 'the connection is congested; try again')
     let seq = record.bufferStartSeq
     for (const data of record.buffer) {
       sink.send('pty.data', { ptyId, seq, data, replay: true })

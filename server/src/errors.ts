@@ -12,7 +12,8 @@ const PASSTHROUGH: ReadonlySet<string> = new Set<WireErrorCode>([
   'NOT_A_REPO',
   'IN_USE',
   'CONFLICT',
-  'CAPACITY'
+  'CAPACITY',
+  'CONGESTED'
 ])
 
 export function codedError(code: WireErrorCode, message: string): Error {

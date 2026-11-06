@@ -8,6 +8,8 @@ import { fakeServer, fakeTimers } from './clientFakes.mjs'
 const tick = () => new Promise((r) => setImmediate(r))
 const info = (ptyId, seq = 0) => ({ ptyId, cwd: '/', cols: 80, rows: 24, seq })
 const attachReq = (sock, ptyId) => sock.sent.find((f) => f.method === 'pty.attach' && f.params.ptyId === ptyId)
+const attachReqs = (sock, ptyId) => sock.sent.filter((f) => f.method === 'pty.attach' && f.params.ptyId === ptyId)
+const CONGESTED_MSG = 'the connection is congested; try again'
 
 function setup() {
   const server = fakeServer()
@@ -80,9 +82,9 @@ test('a reattach failing with another error drops that stream via onError; the o
   const a = handlers()
   const b = handlers()
   const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1', 'p2'], { handlers: { p1: a, p2: b } }))
-  next.fail(attachReq(next, 'p1'), 'BAD_REQUEST', 'the connection is congested; try again')
+  next.fail(attachReq(next, 'p1'), 'INTERNAL', 'boom')
   await tick()
-  assert.deepEqual(a.log, [['reset'], ['error', 'the connection is congested; try again']])
+  assert.deepEqual(a.log, [['reset'], ['error', 'boom']])
   assert.equal(ptys.isAttached('p1'), false)
   next.reply(attachReq(next, 'p2'), info('p2'))
   await tick()
@@ -220,4 +222,92 @@ test('a handler that throws without onError is logged, not rethrown', async () =
     console.error = orig
   }
   assert.equal(logged.length, 1)
+})
+
+test('a CONGESTED reattach retries that pty after 250 ms, doubling; the next pty waits', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = handlers()
+  const b = handlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1', 'p2'], { handlers: { p1: a, p2: b } }))
+  next.fail(attachReqs(next, 'p1')[0], 'CONGESTED', CONGESTED_MSG)
+  await tick()
+  assert.equal(ptys.isAttached('p1'), true, 'kept while retrying')
+  assert.equal(attachReqs(next, 'p1').length, 1)
+  assert.equal(attachReq(next, 'p2'), undefined, 'serial: p2 waits for p1')
+  clock.advance(249)
+  await tick()
+  assert.equal(attachReqs(next, 'p1').length, 1)
+  clock.advance(1)
+  await tick()
+  assert.equal(attachReqs(next, 'p1').length, 2)
+  next.fail(attachReqs(next, 'p1')[1], 'CONGESTED', CONGESTED_MSG)
+  await tick()
+  clock.advance(499)
+  await tick()
+  assert.equal(attachReqs(next, 'p1').length, 2)
+  clock.advance(1)
+  await tick()
+  assert.equal(attachReqs(next, 'p1').length, 3)
+  next.reply(attachReqs(next, 'p1')[2], info('p1'))
+  await tick()
+  assert.deepEqual(a.log, [['reset']], 'no extra reset, no error')
+  assert.equal(ptys.isAttached('p1'), true)
+  assert.ok(attachReq(next, 'p2'), 'then p2')
+})
+
+test('a reattach still CONGESTED after 10 retries goes to onError; the delays cap at 5 s', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = handlers()
+  const b = handlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1', 'p2'], { handlers: { p1: a, p2: b } }))
+  const delays = [250, 500, 1000, 2000, 4000, 5000, 5000, 5000, 5000, 5000]
+  // The retries outlast a ping interval: answer pings so the link stays up.
+  const answered = new Set()
+  const answerPings = () => {
+    for (const f of next.sent) {
+      if (f.method === 'sys.ping' && !answered.has(f.id)) {
+        answered.add(f.id)
+        next.reply(f, { t: 0 })
+      }
+    }
+  }
+  for (const [i, delay] of delays.entries()) {
+    next.fail(attachReqs(next, 'p1')[i], 'CONGESTED', CONGESTED_MSG)
+    await tick()
+    clock.advance(delay - 1)
+    answerPings()
+    await tick()
+    assert.equal(attachReqs(next, 'p1').length, i + 1, `retry ${i + 1} not before ${delay} ms`)
+    clock.advance(1)
+    answerPings()
+    await tick()
+    assert.equal(attachReqs(next, 'p1').length, i + 2, `retry ${i + 1} after ${delay} ms`)
+  }
+  next.fail(attachReqs(next, 'p1')[10], 'CONGESTED', CONGESTED_MSG)
+  await tick()
+  assert.equal(attachReqs(next, 'p1').length, 11, '1 try + 10 retries')
+  assert.deepEqual(a.log, [['reset'], ['error', CONGESTED_MSG]])
+  assert.equal(ptys.isAttached('p1'), false)
+  assert.ok(attachReq(next, 'p2'), 'the pass moves on')
+})
+
+test('a reconnect while a CONGESTED retry waits ends that pass; the new pass starts over', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = handlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1'], { handlers: { p1: a } }))
+  next.fail(attachReqs(next, 'p1')[0], 'CONGESTED', CONGESTED_MSG)
+  await tick()
+  next.serverClose(1006, '')
+  clock.advance(1000)
+  const third = server.last()
+  third.open()
+  third.welcome()
+  assert.equal(attachReqs(third, 'p1').length, 1, 'the new pass attaches at once')
+  clock.advance(10_000)
+  await tick()
+  assert.equal(attachReqs(third, 'p1').length, 1, 'the old pass sent nothing more')
+  third.reply(attachReqs(third, 'p1')[0], info('p1'))
+  await tick()
+  assert.equal(ptys.isAttached('p1'), true)
+  assert.deepEqual(a.log, [['reset'], ['reset']])
 })

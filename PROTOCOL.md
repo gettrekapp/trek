@@ -545,8 +545,9 @@ bad sizes (columns 1 to 500, rows 1 to 200), titles or types, restarting a runni
 stopped one or with text over 1 MiB, an over-long queue entry or queue,
 a `pty.write` whose `data`
 is longer than 1 MiB (1,048,576 UTF-16 code units), a `pty.write` or `pty.resize`
-from a connection that has not attached to the pty ("attach to the pty first") and
-a `pty.attach` refused as congested (below). `CAPACITY` for `session.start` or
+from a connection that has not attached to the pty ("attach to the pty first").
+`CONGESTED` for a `pty.attach` refused because the connection is congested
+(below). `CAPACITY` for `session.start` or
 `session.restart` over `maxSessions`, and for `session.start` over the 500 records of
 a project. `IN_USE` as above.
 
@@ -561,9 +562,10 @@ from any attached connection sets the size; the most recent call wins. The pty
 pauses while any attached connection has more than 4 MiB unsent, or the server's
 screen parser falls far behind, and resumes once every connection is under 2 MiB.
 A connection that already has more than 4 MiB unsent when it calls `pty.attach`
-gets no replay and is not attached: the call answers `BAD_REQUEST` ("the
-connection is congested; try again"). A reconnecting client should therefore
-attach one pty at a time, and retry a refused attach once its own backlog has
+gets no replay and is not attached: the call answers `CONGESTED` ("the
+connection is congested; try again"). Nothing about the pty changed, so this is
+not a failure of the terminal: a reconnecting client should attach one pty at a
+time, and retry a refused attach after a delay, once its own backlog has
 drained. `session.sendPrompt` needs no attach.
 `pty.exit` goes to every attached connection, also when the server killed the pty.
 A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
@@ -796,13 +798,20 @@ subscribed again after the next reconnect. A resubscribe that fails with
 (the replay arrives first, as `onData(data, true)`) and resolves with the
 `PtyInfo`. It rejects with `ALREADY_ATTACHED` if the stream has that pty (also
 while the first attach is in flight), and with `DETACHED` if `detach` was called
-before the answer arrived. After a reconnect the stream re-attaches its ptys one
-at a time, because the server refuses an attach from a connection that still has
-a large backlog unsent, and parallel replays would cause that. `onReset` runs
-before each replay, so the terminal can clear. If a re-attach fails with
-`PTY_NOT_FOUND`, the pty is dropped and `onExit(-1)` runs; any other error drops
-it and calls `onError` (without an `onError`, it is logged and `onExit(-1)`
-runs). A drop mid-pass (`NOT_CONNECTED`) just waits for the next welcome.
+before the answer arrived. `attach()` does not retry: a caller can get
+`CONGESTED` (the connection has a large backlog unsent) and should retry after a
+delay. After a reconnect the stream re-attaches its ptys one at a time, because
+the server refuses an attach from a connection that still has a large backlog
+unsent, and parallel replays would cause that. `onReset` runs before each
+replay, so the terminal can clear. A re-attach refused with `CONGESTED` is
+retried for that pty, on the connection's timers, after 250 ms, doubling to a cap
+of 5 s, up to 10 times (`onReset` does not run again: nothing was replayed); the
+next pty waits. If it is still `CONGESTED` after that, it is handled like any
+other error. If a re-attach fails with `PTY_NOT_FOUND`, the pty is dropped and
+`onExit(-1)` runs; any other error drops it and calls `onError` (without an
+`onError`, it is logged and `onExit(-1)` runs). A drop mid-pass
+(`NOT_CONNECTED`), or a new welcome while a retry waits, ends the pass: the next
+welcome starts a new one.
 
 **Registry.** `ServerRegistry` holds one connection, mirror and pty stream per
 server. `add(entry)` creates and connects, and throws for a duplicate id.

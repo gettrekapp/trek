@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalHost } from '../server/src/sessions/terminalHost.ts'
+import { toWireError } from '../server/src/errors.ts'
 
 function fakeSpawner() {
   const spawned = []
@@ -376,7 +377,9 @@ test('attach refuses a congested connection without replaying or attaching', (t)
   host.spawn('p1', opts)
   spawned[0].emit('hello')
   const busy = sink(() => 5 * MiB)
-  assert.throws(() => host.attach('p1', busy), (e) => e.code === 'BAD_REQUEST' && /congested/.test(e.message))
+  let refused
+  assert.throws(() => host.attach('p1', busy), (e) => (refused = e).code === 'CONGESTED' && /congested/.test(e.message))
+  assert.deepEqual(toWireError('pty.attach', refused), { code: 'CONGESTED', message: 'the connection is congested; try again' })
   assert.deepEqual(busy.events, [])
   spawned[0].emit('more')
   assert.deepEqual(busy.events, [], 'not attached')

@@ -98,7 +98,8 @@ export class ServerConnection {
 
   /** Options without the token: `this.token` is the only copy. */
   private readonly opts: Omit<ConnectionOptions, 'token'>
-  private readonly timers: Timers
+  /** The injected timers (or the real ones): `TopicMirror` and `PtyStream` schedule their retries on them. */
+  readonly timers: Timers
   private token: string
   private socket: SocketLike | null = null
   private nextId = 1
