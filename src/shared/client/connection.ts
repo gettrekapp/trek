@@ -96,7 +96,8 @@ export class ServerConnection {
   statusMessage = ''
   welcome: WelcomeInfo | null = null
 
-  private readonly opts: ConnectionOptions
+  /** Options without the token: `this.token` is the only copy. */
+  private readonly opts: Omit<ConnectionOptions, 'token'>
   private readonly timers: Timers
   private token: string
   private socket: SocketLike | null = null
@@ -111,9 +112,10 @@ export class ServerConnection {
   private readonly eventListeners = new Set<Listener<ServerEvent>>()
 
   constructor(opts: ConnectionOptions) {
-    this.opts = opts
+    const { token, ...rest } = opts
+    this.opts = rest
     this.timers = opts.timers ?? realTimers
-    this.token = opts.token
+    this.token = token
   }
 
   /** Subscribe; returns an unsubscribe function. */
@@ -196,13 +198,18 @@ export class ServerConnection {
   }
 
   private open(): void {
+    // Re-entrancy safe: whatever was pending or open is replaced, never leaked.
+    this.cancelRetry()
+    this.dropSocket('superseded')
     this.setStatus('connecting', '')
+    // A status listener may have closed or reconnected us; if so, that call owns the socket.
+    if (this.closed || this.socket !== null || this.retryTimer !== null) return
     let socket: SocketLike
     try {
       socket = this.opts.createSocket(this.opts.url)
     } catch (err) {
-      this.setStatus('error', err instanceof Error ? err.message : String(err))
       this.scheduleRetry()
+      this.setStatus('error', err instanceof Error ? err.message : String(err))
       return
     }
     this.socket = socket
@@ -236,6 +243,7 @@ export class ServerConnection {
 
   private onFrame(frame: IncomingFrame): void {
     if (frame.type === 'welcome') {
+      if (this.status !== 'connecting') return
       const welcome: WelcomeInfo = {
         serverId: String(frame.serverId ?? ''),
         serverName: String(frame.serverName ?? ''),
@@ -289,8 +297,9 @@ export class ServerConnection {
       )
       return
     }
-    this.setStatus('disconnected', reason || '')
+    // Arm the retry first so a status listener sees settled state and may reconnect().
     this.scheduleRetry()
+    this.setStatus('disconnected', reason || '')
   }
 
   /** Detaches and closes the current socket; its close event is then ignored. */
@@ -309,7 +318,7 @@ export class ServerConnection {
   }
 
   private scheduleRetry(): void {
-    if (this.closed || this.retryTimer !== null) return
+    if (this.closed || this.socket !== null || this.retryTimer !== null) return
     const jitter = 0.85 + this.timers.random() * 0.3 // ±15 %
     const delay = Math.min(this.backoff * jitter, BACKOFF_MAX_MS)
     this.backoff = Math.min(this.backoff * 2, BACKOFF_MAX_MS)
@@ -330,21 +339,30 @@ export class ServerConnection {
     this.pingTimer = this.timers.setInterval(() => {
       const socket = this.socket
       if (!socket) return
-      this.send('sys.ping', { t: Date.now() }, PING_TIMEOUT_MS, () => {
-        // Unresponsive: force the close/reconnect path. A real socket's close
-        // handshake can hang on a dead peer, so don't wait for its close event;
-        // onClose ignores that event once the socket is detached.
-        if (this.socket !== socket) return
-        try {
-          socket.close(CLOSE_PING_TIMEOUT, 'ping timeout')
-        } catch {
-          // already closing
-        }
-        this.onClose(socket, CLOSE_PING_TIMEOUT, 'ping timeout')
-      }).catch(() => {
+      // Stuck in CLOSING (or otherwise not open): no ping can succeed, so give up now.
+      if (socket.readyState !== OPEN) {
+        this.abandon(socket)
+        return
+      }
+      this.send('sys.ping', { t: Date.now() }, PING_TIMEOUT_MS, () => this.abandon(socket)).catch(() => {
         // The timeout is handled above; a close fails it with NOT_CONNECTED.
       })
     }, PING_INTERVAL_MS)
+  }
+
+  /**
+   * Unresponsive socket: force the close/reconnect path. A real socket's close
+   * handshake can hang on a dead peer, so don't wait for its close event;
+   * onClose ignores that event once the socket is detached.
+   */
+  private abandon(socket: SocketLike): void {
+    if (this.socket !== socket) return
+    try {
+      socket.close(CLOSE_PING_TIMEOUT, 'ping timeout')
+    } catch {
+      // already closing
+    }
+    this.onClose(socket, CLOSE_PING_TIMEOUT, 'ping timeout')
   }
 
   private stopPing(): void {

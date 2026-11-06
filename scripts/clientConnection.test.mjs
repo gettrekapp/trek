@@ -151,17 +151,6 @@ test('close() is final; events are delivered to listeners', () => {
   assert.equal(server.sockets.length, 1)
 })
 
-test('a socket factory that throws gives status error and a retry', () => {
-  const clock = fakeTimers()
-  let calls = 0
-  const conn = new ServerConnection({ url: 'bad', token: 't', createSocket: () => { calls++; throw new Error('bad url') }, timers: clock.timers })
-  conn.connect()
-  assert.equal(conn.status, 'error')
-  assert.match(conn.statusMessage, /bad url/)
-  clock.advance(1000)
-  assert.equal(calls, 2)
-})
-
 test('reconnect() drops the old socket: pending requests reject, its ping stops', async () => {
   const { server, clock, conn } = setup()
   conn.connect()
@@ -181,16 +170,149 @@ test('reconnect() drops the old socket: pending requests reject, its ping stops'
 })
 
 test('a factory that throws reports error, then connecting on each retry', () => {
+  let calls = 0
   const clock = fakeTimers()
   const statuses = []
-  const conn = new ServerConnection({ url: 'bad', token: 't', createSocket: () => { throw new Error('bad url') }, timers: clock.timers })
+  const conn = new ServerConnection({ url: 'bad', token: 't', createSocket: () => { calls++; throw new Error('bad url') }, timers: clock.timers })
   conn.on('status', (s) => statuses.push(s.status))
   conn.connect()
+  assert.equal(conn.status, 'error')
+  assert.match(conn.statusMessage, /bad url/)
   clock.advance(1000)
+  assert.equal(calls, 2)
   clock.advance(2000)
   assert.deepEqual(statuses, ['connecting', 'error', 'connecting', 'error', 'connecting', 'error'])
   conn.close()
   clock.advance(60_000)
   assert.equal(conn.status, 'closed')
   assert.equal(clock.pending(), 0)
+})
+
+const open = (server, conn) => { conn.connect(); const s = server.last(); s.open(); s.welcome(); return s }
+
+test('a status listener that reconnects on disconnected leaves exactly one open socket', () => {
+  const { server, clock, conn } = setup()
+  conn.on('status', (s) => { if (s.status === 'disconnected') conn.reconnect() })
+  const first = open(server, conn)
+  first.serverClose(1006, '')
+  clock.advance(60_000)
+  const live = server.sockets.filter((s) => s.readyState !== 3)
+  assert.equal(live.length, 1)
+  assert.equal(live[0], server.last())
+  assert.equal(server.sockets.length, 2)
+})
+
+test('a status listener that connects on error does not leak a socket', () => {
+  const clock = fakeTimers()
+  const server = fakeServer()
+  let fail = true
+  const conn = new ServerConnection({ url: 'x', token: 't', timers: clock.timers, createSocket: (u) => { if (fail) throw new Error('no'); return server.factory(u) } })
+  conn.on('status', (s) => { if (s.status === 'error') { fail = false; conn.connect() } })
+  conn.connect()
+  clock.advance(60_000)
+  assert.equal(server.sockets.filter((s) => s.readyState !== 3).length, 1)
+})
+
+test('a socket stuck in CLOSING is treated as a ping timeout', () => {
+  const { server, clock, conn } = setup()
+  const sock = open(server, conn)
+  sock.stuckClosing()
+  clock.advance(15_000)
+  assert.equal(conn.status, 'disconnected')
+  assert.equal(sock.closedWith?.code, 4000)
+  clock.advance(1000)
+  assert.equal(server.sockets.length, 2)
+})
+
+test('a second welcome is ignored: no re-emit, no ping reset', () => {
+  const { server, clock, conn } = setup()
+  const welcomes = []
+  conn.on('welcome', (w) => welcomes.push(w))
+  const sock = open(server, conn)
+  clock.advance(10_000)
+  sock.welcome({ serverName: 'other' })
+  assert.equal(welcomes.length, 1)
+  assert.equal(conn.welcome.serverName, 'box')
+  clock.advance(5_000)
+  assert.ok(sock.lastReq('sys.ping'), 'ping still fires 15s after the first welcome')
+})
+
+test('connect() twice makes one socket', () => {
+  const { server, conn } = setup()
+  conn.connect()
+  conn.connect()
+  assert.equal(server.sockets.length, 1)
+})
+
+test('a welcome or res after close() is ignored', async () => {
+  const { server, conn } = setup()
+  const sock = open(server, conn)
+  const p = conn.request('project.list', {})
+  const req = sock.lastReq('project.list')
+  conn.close()
+  await assert.rejects(p, (e) => e.code === 'NOT_CONNECTED')
+  sock.reply(req, [])
+  sock.welcome()
+  assert.equal(conn.status, 'closed')
+})
+
+test('a late res from the old socket does not resolve a request on the new one', async () => {
+  const { server, conn } = setup()
+  const old = open(server, conn)
+  const oldReq = (conn.request('project.list', {}).catch(() => {}), old.lastReq('project.list'))
+  conn.reconnect()
+  const fresh = server.last()
+  fresh.open()
+  fresh.welcome()
+  let settled = false
+  const p = conn.request('project.list', {}).then(() => { settled = true })
+  const freshReq = fresh.lastReq('project.list')
+  old.reply({ id: freshReq.id }, 'stale')
+  await Promise.resolve()
+  assert.equal(settled, false)
+  fresh.reply(freshReq, [])
+  await p
+  assert.ok(oldReq)
+})
+
+test('setToken() while connected reconnects with the new token', () => {
+  const { server, conn } = setup()
+  const old = open(server, conn)
+  conn.setToken('fresh')
+  assert.equal(old.closedWith?.code, 1000)
+  assert.equal(server.sockets.length, 2)
+  server.last().open()
+  assert.equal(server.last().sent[0].token, 'fresh')
+})
+
+test('request() while open but before welcome is NOT_CONNECTED', async () => {
+  const { server, conn } = setup()
+  conn.connect()
+  server.last().open()
+  await assert.rejects(conn.request('project.list', {}), (e) => e.code === 'NOT_CONNECTED')
+})
+
+test('a throwing socket.send rejects with NOT_CONNECTED', async () => {
+  const { server, conn } = setup()
+  const sock = open(server, conn)
+  sock.send = () => { throw new Error('boom') }
+  await assert.rejects(conn.request('project.list', {}), (e) => e.code === 'NOT_CONNECTED' && /boom/.test(e.message))
+})
+
+test('retry jitter spans 0.85x to 1.15x of the backoff, capped at 30s', () => {
+  for (const [rand, expected] of [[0, 850], [1, 1150]]) {
+    const { server, clock, conn } = setup()
+    clock.setRandom(() => rand)
+    conn.connect()
+    server.last().serverClose(1006, '')
+    clock.advance(expected - 1)
+    assert.equal(server.sockets.length, 1, `not before ${expected}ms`)
+    clock.advance(1)
+    assert.equal(server.sockets.length, 2, `at ${expected}ms`)
+  }
+  const { server, clock, conn } = setup()
+  clock.setRandom(() => 1)
+  conn.connect()
+  for (let i = 0; i < 8; i++) { server.last().serverClose(1006, ''); clock.advance(30_000) }
+  assert.equal(server.sockets.length, 9, 'delay never exceeds 30s even with +15 % jitter')
 })

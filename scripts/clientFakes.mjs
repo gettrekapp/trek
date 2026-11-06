@@ -4,6 +4,7 @@
 
 const CONNECTING = 0
 const OPEN = 1
+const CLOSING = 2
 const CLOSED = 3
 
 /**
@@ -16,6 +17,7 @@ const CLOSED = 3
  */
 export function fakeTimers() {
   let now = 0
+  let randomFn = () => 0.5
   let nextId = 1
   let nextSeq = 1
   /** handle -> { id, seq, due, fn, interval }; `seq` orders jobs due at the same time */
@@ -47,7 +49,7 @@ export function fakeTimers() {
     clearTimeout: clear,
     setInterval: (fn, ms) => schedule(fn, ms, true),
     clearInterval: clear,
-    random: () => 0.5
+    random: () => randomFn()
   }
 
   return {
@@ -71,6 +73,10 @@ export function fakeTimers() {
         job.fn()
       }
       now = target
+    },
+    /** Replace `random()` (default 0.5), for jitter bounds. */
+    setRandom(fn) {
+      randomFn = fn
     },
     /** Current fake time in ms. */
     now: () => now,
@@ -128,6 +134,10 @@ function fakeSocket(url) {
       if (sock.readyState === CLOSED) return
       sock.readyState = CLOSED
       fire('close', { code, reason })
+    },
+    /** Stuck in CLOSING: readyState 2 and no close event ever fires. */
+    stuckClosing() {
+      sock.readyState = CLOSING
     },
     /** Fires `error` (a real socket then fires `close`; call serverClose for that). */
     error() {
