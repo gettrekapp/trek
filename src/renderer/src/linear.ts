@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { allBranchTickets, isLinearTicket, useAppStore } from './store'
+import { getBackend } from './backend'
 
 const REFRESH_MS = 5 * 60_000
 /** Window focus refreshes, but not more often than this. */
@@ -40,7 +41,7 @@ export function useLinearSync(): void {
   }, [])
 
   useEffect(() => {
-    if (!connected || !idsKey) return
+    if (!connected || !idsKey || !getBackend().features.linear) return
     void refreshLinearIssues(idsKey.split(','))
     const timer = setInterval(() => {
       if (document.hasFocus()) void refreshLinearIssues()

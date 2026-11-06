@@ -11,6 +11,7 @@ import {
   tabCycleStep
 } from '../terminals'
 import { globalSessionLlm } from '../llm'
+import { getBackend } from '../backend'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
 import { BotPanel } from './BotPanel'
@@ -63,6 +64,7 @@ export function GlobalClaude(): React.JSX.Element {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const hasTabs = order.length > 0
+  const hasBot = getBackend().features.bot
   const attention = order.some((id) => terminals[id]?.status === 'attention')
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
 
@@ -201,15 +203,17 @@ export function GlobalClaude(): React.JSX.Element {
               </div>
             )
           })}
-          <div
-            className={`global-tab bot-tab ${view === 'bot' ? 'active' : ''} ${
-              decisions[BOT_DECISION_ID] ? 'has-decision' : ''
-            }`}
-            onClick={() => useAppStore.getState().setGlobalView('bot')}
-          >
-            <DecisionIcon terminalId={BOT_DECISION_ID} />
-            <span className="global-tab-title">Bot</span>
-          </div>
+          {hasBot && (
+            <div
+              className={`global-tab bot-tab ${view === 'bot' ? 'active' : ''} ${
+                decisions[BOT_DECISION_ID] ? 'has-decision' : ''
+              }`}
+              onClick={() => useAppStore.getState().setGlobalView('bot')}
+            >
+              <DecisionIcon terminalId={BOT_DECISION_ID} />
+              <span className="global-tab-title">Bot</span>
+            </div>
+          )}
           <button className="global-tab-add" onClick={newTab} title="New Global tab">
             +
           </button>
@@ -220,7 +224,7 @@ export function GlobalClaude(): React.JSX.Element {
           ))}
           {error && <div className="global-error">Couldn't start the session: {error}</div>}
         </div>
-        <BotPanel visible={view === 'bot'} />
+        {hasBot && <BotPanel visible={view === 'bot'} />}
       </div>
       <div
         className={`global-bar ${open ? 'open' : ''} ${attention ? 'attention' : ''}`}

@@ -20,6 +20,7 @@ import { loadWorktree, unloadAllWorktrees, unloadWorktree } from '../terminals'
 import { NotificationsMenu } from './NotificationsMenu'
 import { VoiceToggle } from './VoiceToggle'
 import { addRepository, removalBlock, removeRepository } from '../repositoryActions'
+import { getBackend } from '../backend'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, HostStatus, Repository, TerminalStatus } from '../../../shared/types'
 
@@ -201,9 +202,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const pullRequest = info.branch
       ? repo.branchPullRequests?.[info.branch]
       : undefined
-    const env = info.serverId
-      ? undefined
-      : environmentFor(environments, repo.path, info.branch)
+    const env =
+      info.serverId || !getBackend().features.env
+        ? undefined
+        : environmentFor(environments, repo.path, info.branch)
     const envIsBusy = env ? !!envBusy[env.profile] : false
     const isSelected =
       (selected && sameWorktree(info, selected)) ||
@@ -454,7 +456,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           placeholder="Filter worktrees…"
           spellCheck={false}
         />
-        <VoiceToggle />
+        {getBackend().features.voice && <VoiceToggle />}
         <NotificationsMenu />
       </div>
       <div className="sidebar-heading">

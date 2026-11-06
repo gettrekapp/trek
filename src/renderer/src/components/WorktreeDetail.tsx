@@ -140,8 +140,10 @@ export function WorktreeDetail({
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
 
+  const features = getBackend().features
   const path = info?.path
-  const [stack, refreshStack] = useStackStatus(path, !!info?.serverId)
+  // A server window's paths are on the server: nothing here may poll them locally.
+  const [stack, refreshStack] = useStackStatus(path, !!info?.serverId || !features.stacks)
   const changesPaused = !!info?.serverId && serverStatus[info.serverId] !== 'connected'
   const changesState = useWorktreeChanges(path, info?.serverId, changesPaused, panel === 'changes')
   useEffect(() => {
@@ -208,7 +210,7 @@ export function WorktreeDetail({
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
 
   const envEnabled = !!repo.environments?.enabled
-  const showEnv = envEnabled && !isRemote && !!info.branch
+  const showEnv = features.env && envEnabled && !isRemote && !!info.branch
   const env = showEnv ? environmentFor(environments, repo.path, info.branch) : undefined
   const envOpBusy = env ? envBusy[env.profile] : undefined
   const envChipLabel = envOpBusy
@@ -217,7 +219,8 @@ export function WorktreeDetail({
       ? `Env${env.address ? ` · ${env.address}` : ''}`
       : 'Env stopped'
 
-  const showStack = !isRemote && !!stack?.available
+  const showStack = features.stacks && !isRemote && !!stack?.available
+  const showDocker = features.docker && isLocalMain
   const stackStateNow = stack ? stackState(stack) : 'stopped'
   const stackAppUrl = stack ? stackUrls(stack)[0]?.url : undefined
 
@@ -481,19 +484,19 @@ export function WorktreeDetail({
               </button>
             </>
           )}
-          {!isRemote && (
-            <>
-              <button className="btn btn-accent" onClick={openVSCode}>
-                Open in VS Code
-              </button>
-              <button
-                className="btn btn-ghost"
-                title="Reveal in Finder"
-                onClick={() => void window.api.revealInFinder(info.path)}
-              >
-                Reveal
-              </button>
-            </>
+          {!isRemote && features.openInEditor && (
+            <button className="btn btn-accent" onClick={openVSCode}>
+              Open in VS Code
+            </button>
+          )}
+          {!isRemote && features.reveal && (
+            <button
+              className="btn btn-ghost"
+              title="Reveal in Finder"
+              onClick={() => void window.api.revealInFinder(info.path)}
+            >
+              Reveal
+            </button>
           )}
           <button
             className={`btn btn-ghost btn-icon ${menuOpen ? 'open' : ''}`}
@@ -516,25 +519,29 @@ export function WorktreeDetail({
               </div>
             ) : (
               <>
-                <div
-                  className="detail-menu-item"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    openVSCode()
-                  }}
-                >
-                  <div className="detail-menu-name">Open in VS Code</div>
-                  <div className="detail-menu-desc">{info.path}</div>
-                </div>
-                <div
-                  className="detail-menu-item"
-                  onClick={() => {
-                    setMenuOpen(false)
-                    void window.api.revealInFinder(info.path)
-                  }}
-                >
-                  <div className="detail-menu-name">Reveal in Finder</div>
-                </div>
+                {features.openInEditor && (
+                  <div
+                    className="detail-menu-item"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      openVSCode()
+                    }}
+                  >
+                    <div className="detail-menu-name">Open in VS Code</div>
+                    <div className="detail-menu-desc">{info.path}</div>
+                  </div>
+                )}
+                {features.reveal && (
+                  <div
+                    className="detail-menu-item"
+                    onClick={() => {
+                      setMenuOpen(false)
+                      void window.api.revealInFinder(info.path)
+                    }}
+                  >
+                    <div className="detail-menu-name">Reveal in Finder</div>
+                  </div>
+                )}
               </>
             )}
             {info.branch && (
@@ -582,19 +589,21 @@ export function WorktreeDetail({
             )}
             <div className="detail-menu-divider" />
             {isLocalMain ? (
-              <div
-                className={`detail-menu-item ${busy ? 'disabled' : ''}`}
-                onClick={() => void runAction(() => promoteBranchToWorktree(repo.id, info.branch))}
-              >
-                <div className="detail-menu-name">Promote branch to worktree…</div>
-                <div className="detail-menu-desc">
-                  Move {info.branch ?? 'the current branch'} to its own worktree; main repo
-                  returns to the default branch
+              features.promote && (
+                <div
+                  className={`detail-menu-item ${busy ? 'disabled' : ''}`}
+                  onClick={() => void runAction(() => promoteBranchToWorktree(repo.id, info.branch))}
+                >
+                  <div className="detail-menu-name">Promote branch to worktree…</div>
+                  <div className="detail-menu-desc">
+                    Move {info.branch ?? 'the current branch'} to its own worktree; main repo
+                    returns to the default branch
+                  </div>
                 </div>
-              </div>
+              )
             ) : (
               <>
-                {!isRemote && !info.isMain && (
+                {features.promote && !isRemote && !info.isMain && (
                   <div
                     className={`detail-menu-item ${busy ? 'disabled' : ''}`}
                     onClick={() => void runAction(() => promoteToPrimary(info, instance))}
@@ -605,7 +614,8 @@ export function WorktreeDetail({
                     </div>
                   </div>
                 )}
-                {!info.isMain &&
+                {features.moveWorktree &&
+                  !info.isMain &&
                   info.branch &&
                   (() => {
                     // Every other host with a clone is a move target: local (if this
@@ -723,7 +733,9 @@ export function WorktreeDetail({
                     {meta.title}
                   </span>
                 )}
-                {meta.status !== 'exited' && <SkillMenu worktree={instance} terminalId={id} />}
+                {features.skills && meta.status !== 'exited' && (
+                  <SkillMenu worktree={instance} terminalId={id} />
+                )}
                 <span
                   className="session-tab-close"
                   title="Close session"
@@ -779,7 +791,7 @@ export function WorktreeDetail({
             All Notes
           </button>
         )}
-        {isLocalMain && (
+        {showDocker && (
           <button
             className={`panel-btn ${panel === 'docker' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
@@ -813,13 +825,15 @@ export function WorktreeDetail({
             />
           </button>
         )}
-        <button
-          className={`panel-btn ${panel === 'settings' ? 'active' : ''}`}
-          title="App settings"
-          onClick={() => setPanel(panel === 'settings' ? 'sessions' : 'settings')}
-        >
-          ⚙
-        </button>
+        {features.settingsEdit && (
+          <button
+            className={`panel-btn ${panel === 'settings' ? 'active' : ''}`}
+            title="App settings"
+            onClick={() => setPanel(panel === 'settings' ? 'sessions' : 'settings')}
+          >
+            ⚙
+          </button>
+        )}
       </div>
 
       <div className="terminal-card">
@@ -881,12 +895,8 @@ export function WorktreeDetail({
           state={changesState}
         />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
-        {isLocalMain && (
-          <>
-            <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />
-            <DockerPanel key={repo.id} visible={panel === 'docker'} />
-          </>
-        )}
+        {isLocalMain && <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />}
+        {showDocker && <DockerPanel key={repo.id} visible={panel === 'docker'} />}
         {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}
         {showStack && stack && (
           <StackPanel
@@ -896,7 +906,7 @@ export function WorktreeDetail({
             onChanged={refreshStack}
           />
         )}
-        <SettingsPanel visible={panel === 'settings'} />
+        {features.settingsEdit && <SettingsPanel visible={panel === 'settings'} />}
       </div>
 
       {showTicket && info.branch && (
