@@ -167,7 +167,7 @@ trek-server token revoke phone     # closes that device's open connections
 ```
 
 `trek-server token` on its own creates or rotates the token named `default`.
-Paste a token into the app under Settings → Servers.
+Paste a token into the app under **Connect to server…** on the start screen (Add server or Set token). Project files that still use per-project servers take theirs under Settings → Servers.
 
 ## Run
 
