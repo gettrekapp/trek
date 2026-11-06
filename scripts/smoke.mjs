@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright-core'
 import { execSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,7 +11,14 @@ const errors = []
 // `git worktree list` + status plumbing is exercised end to end.
 const repoPath = realpathSync(mkdtempSync(join(tmpdir(), 'twb-smoke-')))
 const worktreePath = `${repoPath}-wt`
-execSync('git init -q -b master && git -c user.email=s@s -c user.name=s commit --allow-empty -q -m init', {
+// A committed project-level slash command, so the skill menu has an item on any
+// machine (whatever is in ~/.claude) and the worktrees stay clean.
+mkdirSync(join(repoPath, '.claude', 'commands'), { recursive: true })
+writeFileSync(
+  join(repoPath, '.claude', 'commands', 'smoke-fixture.md'),
+  '---\ndescription: Smoke-test fixture command\n---\nSay hello.\n'
+)
+execSync('git init -q -b master && git add -A && git -c user.email=s@s -c user.name=s commit -q -m init', {
   cwd: repoPath,
   shell: '/bin/zsh'
 })
@@ -213,9 +220,9 @@ try {
   await win.waitForTimeout(300)
   const featureTitle = (await win.locator('.detail-title').innerText()).trim()
   const featureNoSession = await win.locator('.no-session:visible').count()
-  // All Notes and Docker are primary-only: the feature worktree keeps Notes + ⚙.
+  // All Notes and Docker are primary-only: the feature worktree keeps Changes, Notes and ⚙.
   const featurePanelBtns = await win.locator('.panel-btn').count()
-  console.log(`feature detail title: "${featureTitle}" (expect feature-x), empty state: ${featureNoSession} (expect 1), panel buttons: ${featurePanelBtns} (expect 2)`)
+  console.log(`feature detail title: "${featureTitle}" (expect feature-x), empty state: ${featureNoSession} (expect 1), panel buttons: ${featurePanelBtns} (expect 3)`)
 
   // Branch-keyed ticket/PR links: sidebar mini-chips + detail chips.
   const sidebarTicketChips = await win.locator('.wt-row .mini-chip.ticket').count()
@@ -324,7 +331,7 @@ try {
     detailPrChips === 1 &&
     featureTitle === 'feature-x' &&
     featureNoSession === 1 &&
-    featurePanelBtns === 2 &&
+    featurePanelBtns === 3 &&
     sidebarTagChips === 1 &&
     tagChipText.startsWith('In Review') &&
     tagOptions === 8 &&
