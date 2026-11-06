@@ -127,8 +127,10 @@ Nothing is wired into a server window yet; 3c-2 does that.
     - An exited session keeps its scrollback and "process exited" line, as in legacy.
     - `TerminalPane` attaches to the entry when it mounts (`TerminalPane.tsx:29-35`), so the entry must already exist.
     - `syncV2Terminals` runs before the slice reaches the store.
-17. **A v2 entry remembers the pty it last saw end or refuse** (`spent`), so the planner doesn't re-attach to a dead pty on every patch until the session's `ptyId` changes.
-    - An exit followed by `session.restart` plans a `reattach` from the spent pty to the new one, and writes `[restarted]`, like legacy's `[restarting]` (`terminals.ts:838`).
+17. **A v2 entry remembers the pty it last saw end** (`spent`), so the planner doesn't re-attach to a dead pty on every patch until the session's `ptyId` changes.
+    - `spent` is set only for a real end: `onExit` (which the stream also sends when its re-attach after a reconnect gets PTY_NOT_FOUND, and when the connection closes for good), and an attach rejected with `PTY_NOT_FOUND`.
+    - Any other failure leaves the pty possibly alive, so it is not `spent`. The entry keeps an `AttachFailure` instead (`terminalSync.ts`): `planTerminalSync` holds the attach back until the back-off is over (1 s, doubling to 30 s), and `syncV2Terminals` schedules a re-sync for then. `retryV2Terminals()` clears every failure and re-syncs at once; 3c-2 calls it when the connection status becomes `connected`. The terminal shows `[could not attach: … — retrying]` on the first failure in a row. This covers the stream's `onError` (re-attach after a reconnect failed with CONGESTED after its retries, or with anything but PTY_NOT_FOUND) and an attach rejected with anything but CONGESTED or PTY_NOT_FOUND.
+    - An exit followed by `session.restart` is normally a plain `attach`: the server clears `ptyId` in the same apply as the exit (`server/src/sessions/manager.ts:607-610`), so the next patch plans `detach` (which clears `spent`), and the restart arrives later as an `attach`. A restart seen in one patch, or after a spent pty the mirror still listed, plans a `reattach`. Either way, an attach to a different pty than the one the entry last showed writes `[restarted]` first, like legacy's `[restarting]` (`terminals.ts:838`), so the old scrollback and the new replay stay apart. An attach to the same pty again (a retry after a failure) resets the terminal instead, as `onReset` does, because the replay repeats its scrollback.
     - CONGESTED clears the link and re-syncs after 500 ms.
 18. **No dev-only test hook.** The v2 terminal path has no caller until 3c-2, whose extended `smoke:v2` exercises it end to end. Here the pure planner is unit-tested and the rest is typechecked and built.
 
@@ -2349,6 +2351,16 @@ git add src/renderer/src/v2/terminalSync.ts scripts/v2TerminalSync.test.mjs
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(app): plan a server window's terminal entries from a v2 snapshot" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/v2/terminalSync.ts scripts/v2TerminalSync.test.mjs
 ```
 
+- [ ] **Step 6: Review fixes for Tasks 6 and 7** (applied after the review, commit `fix(app): projector and planner review fixes`)
+
+The code blocks in Tasks 6 and 7 are the first versions; the files differ from them as follows.
+- `projector.ts`:
+  - drops a stray `servers` or `serverPaths` key from the settings spread at runtime (Decision 6);
+  - `reconcileView` returns `prev.activeTerminal` when the new map is shallow-equal, so subscribers don't re-render on every patch;
+  - `V2IdMap.legacyByWorktree`: v2 worktree id → legacy instance id (the primary id for a main checkout).
+- `terminalSync.ts`: `AttachFailure`, `recordAttachFailure`, `attachRetryDelay`, `shouldRetry`, and `planTerminalSync(current, targets, now)`, whose `current` slots may carry `failed` (Decision 17).
+- New tests: the order round trip, the `terminals` ↔ `terminalTargets` invariant, a loaded linked worktree, a loaded worktree with no sessions, a main checkout whose path differs from the repository's, exited-with-pty and complete-without-pty sessions, `reconcileView` with no selection and the stable active-tab map; and in the planner a spent pty still listed, spent then no pty, spent then a new pty, a mixed plan with Global, and the failure back-off. `v2Projector.test.mjs` then has 23 tests and `v2TerminalSync.test.mjs` 13.
+
 ---
 
 ### Task 8: The v2 terminal path in `terminals.ts`
@@ -2917,3 +2929,7 @@ Found while reviewing Tasks 1–2. The interface already has the shape these nee
 5. **Worktree order.** v2 needs `project.updateSettings{worktreeOrder}` as a narrow exception to read-only settings (Decision 5 under "Recorded"). The interface has `worktrees.setOrder(keys): Promise<void>`; legacy calls the existing `setWorktreeOrder` store setter, so no call site in this plan changes. In 3c-2 the `setWorktreeOrder` override calls `worktrees.setOrder`, which converts the keys with `v2WorktreeOrder`.
 6. **`V2_FEATURES` is a ceiling.** The v2 backend's `features` are `V2_FEATURES` AND the welcome's `capabilities`. For example, the Global panel needs the `mcp` capability.
 7. **Lifecycle.** The v2 backend is installed in `windowKind.ts`'s `backendFor` (Decision 5). The store-setter overrides (Decision 3) must be installed and removed at the same point, so a window that goes back to the picker never keeps v2 overrides on a legacy backend. If the v2 backend can only be built once the connection is up (after `setServerWindow`), install both together when it is, and add a `useFeatures()` hook (a store-backed or `useSyncExternalStore` read of the current backend's features) so components that read `features` during render re-render when the backend changes.
+8. **Legacy terminal helpers that iterate the whole store.** Legacy `disposePendingTerminals` (`terminals.ts`, at the end, before `disposeAllTerminals`) and the legacy `unloadWorktree` "Some sessions were not saved" warning walk every terminal in the store. A v2 terminal with `sessionPending` (a Codex session whose id is not known yet, Decision 9) would be disposed with `window.api.disposePty`, or counted as unsaved. `disposeAllTerminals` likewise calls `disposeTerminal` (pty IPC) for v2 entries. 3c-2 must guard them with `!entry.v2` or the window kind; a server window unloads through `worktree.unload` and closes with `disposeV2Terminals`.
+9. **A missing worktree's row looks normal and offers Load.** It is projected with `prunable: true` (Decision 10), but no renderer reads that, so the sidebar shows it like any other worktree. 3c-2 should mark it and not offer Load (the server would fail it).
+10. **Reconnect and failed attaches.** `syncV2Terminals` only sees the `PtyStream`, not the connection. 3c-2 calls `retryV2Terminals()` from the registry's status listener when the server's status becomes `connected`, so terminals whose attach failed while the link was down attach at once instead of after their back-off (Decision 17).
+11. **`V2IdMap.legacyByWorktree`** leads from a v2 worktree id to the legacy instance id (a primary id for a main checkout), for server events and responses that name a worktree, such as `worktree.create`'s `worktreeId`.

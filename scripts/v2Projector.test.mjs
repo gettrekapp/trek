@@ -10,6 +10,7 @@ import {
   reconcileView,
   v2WorktreeOrder
 } from '../src/renderer/src/v2/projector.ts'
+import { terminalTargets } from '../src/renderer/src/v2/terminalSync.ts'
 import { importProjectFile } from '../src/shared/model/importProject.ts'
 import { DEFAULT_WORKTREE_TAGS } from '../src/shared/types.ts'
 
@@ -191,6 +192,12 @@ test('settings spread into the project file; no servers', () => {
   assert.equal(project.sessionSystemPrompt, 'be brief')
   assert.deepEqual(project.worktreeTags, [{ id: 'wip', name: 'WIP', color: '#ffffff' }])
   assert.equal(project.servers, undefined)
+  // A stray legacy remote field in the settings never reaches the project file.
+  const stray = fixture()
+  stray.settings = { ...stray.settings, servers: [{ id: 'x', url: 'ws://x' }], serverPaths: { x: '/x' } }
+  const strayFile = projectV2(stray).slice.project
+  assert.equal('servers' in strayFile, false)
+  assert.equal('serverPaths' in strayFile, false)
   const bare = fixture()
   bare.settings = {}
   const plain = projectV2(bare).slice.project
@@ -272,4 +279,118 @@ test('reconcileView falls back to the first main checkout and fixes active tabs'
   assert.deepEqual(view.selected, { path: '/r/one', repoId: 'r1' })
   assert.equal(view.activeWorktreeId, '__primary__:r1')
   assert.deepEqual(view.activeTerminal, { '__primary__:r1': 's2', __global__: 'g2' })
+})
+
+test('ordering round-trips: legacy keys back to the v2 settings order', () => {
+  const p = fixture()
+  const { slice, ids } = projectV2(p)
+  assert.deepEqual(v2WorktreeOrder(slice.project.worktreeOrder, ids), p.settings.worktreeOrder)
+})
+
+test('every terminal in the slice is a terminal target, and the other way round', () => {
+  const p = fixture()
+  p.repositories[0].worktrees[1].loaded = true
+  for (const project of [fixture(), p]) {
+    const { slice } = projectV2(project)
+    assert.deepEqual(
+      new Set(Object.keys(slice.terminals)),
+      new Set(terminalTargets(project).map((t) => t.id))
+    )
+  }
+})
+
+test('the reverse map leads from a v2 worktree id to the legacy instance id', () => {
+  const { ids } = projectV2(fixture())
+  assert.deepEqual(ids.legacyByWorktree, {
+    'w-main': '__primary__:r1',
+    'w-feat': 'w-feat',
+    'w-gone': 'w-gone',
+    'w2-main': '__primary__:r2'
+  })
+  for (const [worktreeId, legacyId] of Object.entries(ids.legacyByWorktree)) {
+    assert.equal(ids.worktrees[legacyId].worktreeId, worktreeId)
+  }
+})
+
+test('a loaded linked worktree has live terminals under its own id', () => {
+  const p = fixture()
+  p.repositories[0].worktrees.push({
+    id: 'w-x',
+    name: 'x',
+    path: '/r/one-x',
+    branch: 'x',
+    isMain: false,
+    loaded: true,
+    sessions: [session('x1', { ptyId: 'px', status: 'done' }), session('x2', { queue: ['q'] })]
+  })
+  const { slice, ids } = projectV2(p)
+  assert.deepEqual(slice.terminalOrder['w-x'], ['x1', 'x2'])
+  assert.equal(slice.loadedWorktrees['w-x'], true)
+  assert.equal(slice.terminals.x1.worktreeId, 'w-x')
+  assert.equal(slice.terminals.x1.status, 'done')
+  assert.deepEqual(slice.terminalQueues.x2, ['q'])
+  assert.deepEqual(ids.sessions.x1, { sessionId: 'x1', repoId: 'r1', worktreeId: 'w-x', ptyId: 'px' })
+  assert.deepEqual(ids.sessions.x2, { sessionId: 'x2', repoId: 'r1', worktreeId: 'w-x', ptyId: null })
+  const instance = slice.project.repositories[0].worktrees.find((w) => w.id === 'w-x')
+  assert.deepEqual(instance, { id: 'w-x', name: 'x', path: '/r/one-x', branch: 'x' })
+})
+
+test('a loaded worktree with no sessions is loaded with an empty tab order', () => {
+  const p = fixture()
+  p.repositories[1].worktrees[0].loaded = true
+  const projection = projectV2(p)
+  assert.equal(projection.slice.loadedWorktrees['__primary__:r2'], true)
+  assert.deepEqual(projection.slice.terminalOrder['__primary__:r2'], [])
+  assert.equal(projection.slice.project.repositories[1].primaryTerminals, undefined)
+  const view = reconcileView({ activeWorktreeId: null, selected: null, activeTerminal: {} }, projection)
+  assert.equal('__primary__:r2' in view.activeTerminal, false)
+})
+
+test('a main checkout whose path differs from the repository path', () => {
+  const p = fixture()
+  p.repositories[1].worktrees[0].path = '/srv/two'
+  const { slice, ids } = projectV2(p)
+  assert.equal(ids.worktreeByPath['/r/two'], '__primary__:r2')
+  assert.equal(ids.worktreeByPath['/srv/two'], '__primary__:r2')
+  assert.deepEqual(slice.hostWorktrees['r2 local'], [{ path: '/srv/two', repoId: 'r2', isMain: true }])
+  assert.equal(slice.project.repositories[1].path, '/r/two')
+})
+
+test('an exited session that still lists a pty, and a complete one with none, are both exited', () => {
+  const p = fixture()
+  p.repositories[0].worktrees[0].sessions = [
+    session('e1', { status: 'exited', exitCode: 0, ptyId: 'pe' }),
+    session('c1', { status: 'complete' })
+  ]
+  const { slice, ids } = projectV2(p)
+  assert.equal(slice.terminals.e1.status, 'exited')
+  assert.equal(slice.terminals.c1.status, 'exited')
+  assert.equal(ids.sessions.e1.ptyId, 'pe')
+  assert.equal(ids.sessions.c1.ptyId, null)
+})
+
+test('reconcileView with no selection picks the first main checkout', () => {
+  const view = reconcileView({ activeWorktreeId: null, selected: null, activeTerminal: {} }, projectV2(fixture()))
+  assert.deepEqual(view.selected, { path: '/r/one', repoId: 'r1' })
+  assert.equal(view.activeWorktreeId, '__primary__:r1')
+  const empty = fixture()
+  empty.repositories = []
+  empty.globalSessions = []
+  assert.deepEqual(
+    reconcileView({ activeWorktreeId: 'x', selected: null, activeTerminal: {} }, projectV2(empty)),
+    { activeWorktreeId: null, selected: null, activeTerminal: {} }
+  )
+})
+
+test('reconcileView keeps the active-tab map object when nothing in it changed', () => {
+  const activeTerminal = { '__primary__:r1': 's2', __global__: 'g1' }
+  const first = reconcileView({ activeWorktreeId: null, selected: null, activeTerminal }, projectV2(fixture()))
+  assert.equal(first.activeTerminal, activeTerminal)
+  const again = reconcileView(first, projectV2(fixture()))
+  assert.equal(again.activeTerminal, activeTerminal)
+  assert.equal(again.selected, first.selected)
+  // A gone tab makes a new map.
+  const moved = reconcileView({ ...first, activeTerminal: { ...activeTerminal, __global__: 'closed' } }, projectV2(fixture()))
+  assert.notEqual(moved.activeTerminal, activeTerminal)
+  assert.deepEqual(moved.activeTerminal, { '__primary__:r1': 's2', __global__: 'g2' })
 })

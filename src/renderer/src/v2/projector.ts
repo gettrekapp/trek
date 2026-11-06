@@ -65,6 +65,8 @@ export interface V2IdMap {
   worktreeByPath: Record<string, string>
   /** Legacy terminal id → v2 session. They are the same id: Session.id is stable. */
   sessions: Record<string, V2SessionRef>
+  /** v2 worktree id → legacy worktree instance id (differs only for a main checkout, `__primary__:<repoId>`) */
+  legacyByWorktree: Record<string, string>
 }
 
 /** The part of the legacy store a v2 project replaces. */
@@ -182,7 +184,7 @@ function branchMaps(repo: V2Repository): BranchMaps {
 }
 
 export function projectV2(project: Project): V2Projection {
-  const ids: V2IdMap = { worktrees: {}, worktreeByPath: {}, sessions: {} }
+  const ids: V2IdMap = { worktrees: {}, worktreeByPath: {}, sessions: {}, legacyByWorktree: {} }
   const hostWorktrees: Record<string, GitWorktreeInfo[]> = {}
   const terminals: Record<string, TerminalMeta> = {}
   const terminalOrder: Record<string, string[]> = {}
@@ -212,6 +214,7 @@ export function projectV2(project: Project): V2Projection {
     for (const worktree of repo.worktrees) {
       const legacyId = legacyWorktreeId(repo.id, worktree)
       ids.worktrees[legacyId] = { repoId: repo.id, worktreeId: worktree.id }
+      ids.legacyByWorktree[worktree.id] = legacyId
       ids.worktreeByPath[worktree.path] = legacyId
       rows.push(gitRow(repo.id, worktree))
       // Legacy: a loaded worktree's live terminals are the truth; an unloaded one keeps a saved list.
@@ -252,7 +255,16 @@ export function projectV2(project: Project): V2Projection {
     llm: s.llm
   }))
 
-  const { worktreeOrder, ...settings } = project.settings
+  // `servers` and `serverPaths` are legacy remote-host fields: a stray one in the
+  // settings would switch on the legacy remote paths (Decision 6), so drop them.
+  const {
+    worktreeOrder,
+    servers: _servers,
+    serverPaths: _serverPaths,
+    ...settings
+  } = project.settings as Project['settings'] & { servers?: unknown; serverPaths?: unknown }
+  void _servers
+  void _serverPaths
   const order = worktreeOrder?.flatMap((key) => legacyOrderKey(key) ?? [])
   const file: ProjectFile = {
     ...settings,
@@ -280,17 +292,19 @@ export interface ViewState {
 /**
  * Keeps the selection and each worktree's active tab where they still exist.
  * A gone selection falls back to the first repository's main checkout, a gone
- * tab to the worktree's last one (as removeTerminal does). The selection keeps
- * its object when nothing about it changed, so selectors do not re-render.
+ * tab to the worktree's last one (as removeTerminal does). The selection and
+ * the active-tab map keep their objects when nothing about them changed, so
+ * selectors do not re-render on every patch.
  */
 export function reconcileView(prev: ViewState, projection: V2Projection): ViewState {
   const { slice, ids } = projection
-  const activeTerminal: Record<string, string> = {}
+  let activeTerminal: Record<string, string> = {}
   for (const [worktreeId, order] of Object.entries(slice.terminalOrder)) {
     if (order.length === 0) continue
     const kept = prev.activeTerminal[worktreeId]
     activeTerminal[worktreeId] = kept !== undefined && order.includes(kept) ? kept : order[order.length - 1]
   }
+  if (shallowEqual(prev.activeTerminal, activeTerminal)) activeTerminal = prev.activeTerminal
   const selectedId = prev.selected ? ids.worktreeByPath[prev.selected.path] : undefined
   if (prev.selected && selectedId !== undefined) {
     const repoId = ids.worktrees[selectedId]?.repoId ?? prev.selected.repoId
@@ -308,4 +322,10 @@ export function reconcileView(prev: ViewState, projection: V2Projection): ViewSt
     selected: { path: first.path, repoId: first.id },
     activeTerminal
   }
+}
+
+function shallowEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a)
+  if (keys.length !== Object.keys(b).length) return false
+  return keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
 }
