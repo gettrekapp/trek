@@ -177,8 +177,14 @@ try {
   // Two-step delete on the orphaned note.
   const goneDelete = win.locator('.note-card', { hasText: 'gone-branch' }).locator('.note-card-btn.danger')
   await goneDelete.click()
-  await win.waitForTimeout(150)
+  await goneDelete.filter({ hasText: 'Really delete?' }).waitFor({ timeout: 2000 }).catch(() => undefined)
   const confirmLabel = (await goneDelete.innerText()).trim()
+  // A stray pointer event in the visible window fires mouseleave, which disarms the
+  // confirm. If that happened, re-arm before confirming so the delete itself is tested.
+  if ((await goneDelete.innerText()).trim() !== 'Really delete?') {
+    await goneDelete.click()
+    await goneDelete.filter({ hasText: 'Really delete?' }).waitFor({ timeout: 2000 }).catch(() => undefined)
+  }
   await goneDelete.click()
   await win.waitForTimeout(200)
   const noteCardsAfter = await win.locator('.note-card').count()
