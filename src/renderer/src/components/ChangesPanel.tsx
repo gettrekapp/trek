@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { initiallyExpanded, lineClass, missingPatchNote, patchBody } from '../../../shared/changes'
+import { getBackend } from '../backend'
 import type { ChangedFile, WorktreeChanges } from '../../../shared/types'
 
 const CHANGES_POLL_MS = 5000
@@ -82,7 +83,7 @@ export function useWorktreeChanges(
       try {
         let changes: WorktreeChanges
         try {
-          changes = await window.api.worktreeChanges(serverId ?? null, path)
+          changes = await getBackend().git.changes({ serverId, path })
         } catch (err) {
           if (cancelled) return
           lastSummary = null
@@ -113,7 +114,7 @@ export function useWorktreeChanges(
         if (open && diffFailedFor !== summary) {
           if (diffsFor !== summary) update({ diffLoading: true })
           try {
-            const diffs = await window.api.worktreeDiff(serverId ?? null, path)
+            const diffs = await getBackend().git.diff({ serverId, path })
             if (cancelled) return
             const json = JSON.stringify(diffs)
             const same = json === diffsJson

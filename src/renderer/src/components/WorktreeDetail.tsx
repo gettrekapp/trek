@@ -28,7 +28,8 @@ import {
   unloadWorktree
 } from '../terminals'
 import { scheduleAutoSave } from '../persistence'
-import { deleteWorktree, promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
+import { getBackend } from '../backend'
+import { promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
 import { branchLabel, gitStatusLabel, splitBranch } from './Sidebar'
 import { StatusBadge } from './StatusBadge'
 import { DecisionIcon } from './DecisionIcon'
@@ -245,11 +246,9 @@ export function WorktreeDetail({
     if (!info.branch || syncBusy) return
     setSyncBusy(kind)
     try {
-      if (kind === 'pull') {
-        await window.api.pullBranch(info.serverId ?? null, info.path, info.branch)
-      } else {
-        await window.api.pushBranch(info.serverId ?? null, info.path, info.branch)
-      }
+      const loc = { serverId: info.serverId, path: info.path }
+      if (kind === 'pull') await getBackend().git.pull(loc, info.branch)
+      else await getBackend().git.push(loc, info.branch)
     } catch (err) {
       void window.api.showError(kind === 'pull' ? 'Git pull failed' : 'Git push failed', String(err))
     } finally {
@@ -644,7 +643,7 @@ export function WorktreeDetail({
                   <div
                     className={`detail-menu-item danger ${busy || hostDown ? 'disabled' : ''}`}
                     onClick={() => {
-                      if (!hostDown) void runAction(() => deleteWorktree(info, instance))
+                      if (!hostDown) void runAction(() => getBackend().worktrees.remove(info, instance))
                     }}
                   >
                     <div className="detail-menu-name">Delete worktree…</div>

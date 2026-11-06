@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { hostRepoPath, repoById, useAppStore } from '../store'
 import { createTerminal } from '../terminals'
-import {
-  createBranchWorktree,
-  linkProjectDirs,
-  tagNewBranch,
-  worktreePathFor
-} from '../worktreeActions'
 import { scheduleAutoSave } from '../persistence'
+import { getBackend } from '../backend'
 import { worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, WorktreeInstance } from '../../../shared/types'
 
@@ -76,8 +71,8 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     setLoading(true)
     setError(null)
     Promise.all([
-      window.api.listWorktrees(serverId ?? null, repoPath),
-      window.api.listBranches(serverId ?? null, repoPath)
+      getBackend().git.listWorktrees(repoId, serverId),
+      getBackend().git.listBranches(repoId, serverId)
     ])
       .then(([worktrees, branchList]) => {
         if (cancelled) return
@@ -93,7 +88,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     return () => {
       cancelled = true
     }
-  }, [serverId, repoPath])
+  }, [repoId, serverId, repoPath])
 
   const addInstance = async (info: { path: string; branch?: string; name?: string }) => {
     const worktree: WorktreeInstance = {
@@ -114,8 +109,13 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     setCreating(true)
     setError(null)
     try {
-      const worktreePath = await createBranchWorktree(repoId, serverId, repoPath, branch, !baseExisting)
-      await addInstance({ path: worktreePath, branch })
+      const { path } = await getBackend().worktrees.create({
+        repoId,
+        serverId,
+        branch,
+        createBranch: !baseExisting
+      })
+      await addInstance({ path, branch })
     } catch (err) {
       setError(String(err))
       setCreating(false)
@@ -141,20 +141,15 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
         else await addInstance({ path: checkedOut.path, branch })
         return
       }
-      try {
-        await window.api.fetchPullRequestHead(serverId ?? null, repoPath, pr.number, branch)
-      } catch (err) {
-        // A local branch that can't fast-forward to the PR head is still
-        // checkout-able — the user reconciles inside the worktree. A branch
-        // we don't have at all is a real failure.
-        if (!branches.includes(branch)) throw err
-      }
-      const worktreePath = worktreePathFor(repoPath, branch)
-      await window.api.addWorktreeAt(serverId ?? null, repoPath, worktreePath, branch)
-      await linkProjectDirs(repoId, serverId ?? null, repoPath, worktreePath)
-      tagNewBranch(repoId, branch)
+      const { path } = await getBackend().worktrees.create({
+        repoId,
+        serverId,
+        branch,
+        createBranch: false,
+        fromPr: pr.number
+      })
       linkPr()
-      await addInstance({ path: worktreePath, branch })
+      await addInstance({ path, branch })
     } catch (err) {
       setError(String(err))
       setAddingPr(false)
