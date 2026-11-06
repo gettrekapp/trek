@@ -84,3 +84,12 @@ test('ids that are not string, number or null are invalid requests', async () =>
   assert.deepEqual(await handleMcpBody(body({ jsonrpc: '2.0', id: null, method: 'ping' }), ctx), { status: 202 })
   assert.equal((await handleMcpBody(body({ jsonrpc: '2.0', id: 'a', method: 'ping' }), ctx)).json.id, 'a')
 })
+
+test('tools/call passes the request signal to the tool', async () => {
+  const seen = []
+  const signal = new AbortController().signal
+  const withSignal = { ...ctx, call: async (_name, _args, s) => { seen.push(s); return {} } }
+  await handleMcpBody(body({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'echo', arguments: {} } }), withSignal, signal)
+  await handleMcpBody(body([{ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'echo', arguments: {} } }]), withSignal, signal)
+  assert.deepEqual(seen, [signal, signal])
+})

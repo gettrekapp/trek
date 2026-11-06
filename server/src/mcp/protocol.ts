@@ -16,8 +16,8 @@ export interface McpContext {
   serverVersion: string
   instructions: string
   tools: readonly ToolDefinition[]
-  /** Runs a listed tool; a throw becomes an isError result with the message */
-  call: (name: string, args: Record<string, unknown>) => Promise<unknown>
+  /** Runs a listed tool; a throw becomes an isError result with the message. `signal` aborts when the client goes away. */
+  call: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>
 }
 
 export type McpReply = { status: 202 } | { status: 200 | 400; json: unknown }
@@ -32,7 +32,7 @@ interface Message {
 const reply = (id: Message['id'], result: unknown) => ({ jsonrpc: '2.0', id, result })
 const failure = (id: Message['id'], code: number, message: string) => ({ jsonrpc: '2.0', id: id ?? null, error: { code, message } })
 
-async function handleMessage(msg: Message, ctx: McpContext): Promise<unknown | null> {
+async function handleMessage(msg: Message, ctx: McpContext, signal?: AbortSignal): Promise<unknown | null> {
   if (msg === null || typeof msg !== 'object' || Array.isArray(msg)) return failure(null, -32600, 'Invalid request')
   if (msg.id !== undefined && msg.id !== null && typeof msg.id !== 'string' && typeof msg.id !== 'number') return failure(null, -32600, 'Invalid request')
   if (msg.id === undefined || msg.id === null) return null
@@ -58,7 +58,7 @@ async function handleMessage(msg: Message, ctx: McpContext): Promise<unknown | n
         ? (params.arguments as Record<string, unknown>)
         : {}
       try {
-        const result = await ctx.call(name, args)
+        const result = await ctx.call(name, args, signal)
         return reply(msg.id, { content: [{ type: 'text', text: JSON.stringify(result ?? null, null, 2) }], isError: false })
       } catch (err) {
         return reply(msg.id, { content: [{ type: 'text', text: err instanceof Error ? err.message : String(err) }], isError: true })
@@ -69,8 +69,8 @@ async function handleMessage(msg: Message, ctx: McpContext): Promise<unknown | n
   }
 }
 
-/** Handles one HTTP body (a message or a batch). */
-export async function handleMcpBody(body: string, ctx: McpContext): Promise<McpReply> {
+/** Handles one HTTP body (a message or a batch). `signal` aborts when the client disconnects. */
+export async function handleMcpBody(body: string, ctx: McpContext, signal?: AbortSignal): Promise<McpReply> {
   let parsed: unknown
   try {
     parsed = JSON.parse(body)
@@ -80,9 +80,9 @@ export async function handleMcpBody(body: string, ctx: McpContext): Promise<McpR
   if (Array.isArray(parsed)) {
     if (parsed.length === 0) return { status: 200, json: failure(null, -32600, 'Invalid request') }
     if (parsed.length > MAX_BATCH) return { status: 200, json: failure(null, -32600, `Batch too large (max ${MAX_BATCH})`) }
-    const replies = (await Promise.all(parsed.map((m) => handleMessage(m as Message, ctx)))).filter((r) => r !== null)
+    const replies = (await Promise.all(parsed.map((m) => handleMessage(m as Message, ctx, signal)))).filter((r) => r !== null)
     return replies.length === 0 ? { status: 202 } : { status: 200, json: replies }
   }
-  const one = await handleMessage(parsed as Message, ctx)
+  const one = await handleMessage(parsed as Message, ctx, signal)
   return one === null ? { status: 202 } : { status: 200, json: one }
 }

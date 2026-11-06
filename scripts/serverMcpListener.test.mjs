@@ -109,3 +109,46 @@ test('a stalled body is cut off by the request timeout', async (t) => {
   })
   assert.notEqual(outcome, 'hung')
 })
+
+test('a client that disconnects mid-call aborts the tool call', async (t) => {
+  let started
+  const running = new Promise((resolve) => { started = resolve })
+  let aborted
+  const sawAbort = new Promise((resolve) => { aborted = resolve })
+  const s = await setup(t, {
+    contextFor: () => ({
+      instructions: 'x',
+      tools: [{ name: 'slow', description: '', inputSchema: { type: 'object' } }],
+      call: (_name, _args, signal) => new Promise((_resolve, reject) => {
+        started(signal)
+        signal?.addEventListener('abort', () => { aborted(true); reject(new Error('the client disconnected')) })
+      })
+    })
+  })
+  const req = request({ host: '127.0.0.1', port: s.listener.port, path: '/mcp', method: 'POST', agent: false, headers: { host: `127.0.0.1:${s.listener.port}`, authorization: `Bearer ${s.token}`, 'content-type': 'application/json' } })
+  req.on('error', () => {})
+  req.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'slow', arguments: {} } }))
+  const signal = await running
+  assert.ok(signal instanceof AbortSignal)
+  assert.equal(signal.aborted, false)
+  req.destroy()
+  const guard = setTimeout(() => aborted('hung'), 2000)
+  assert.equal(await sawAbort, true)
+  clearTimeout(guard)
+})
+
+test('a completed call does not abort its signal', async (t) => {
+  let seen
+  const s = await setup(t, {
+    contextFor: () => ({
+      instructions: 'x',
+      tools: [{ name: 'quick', description: '', inputSchema: { type: 'object' } }],
+      call: async (_name, _args, signal) => { seen = signal; return {} }
+    })
+  })
+  const res = await s.post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'quick', arguments: {} } }))
+  assert.equal(res.status, 200)
+  await res.text()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(seen.aborted, false)
+})

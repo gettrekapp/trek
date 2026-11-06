@@ -108,6 +108,8 @@ export class SessionManager {
   private readonly blocked = new Map<string, number>()
   /** sessionId → live activity (marker scan) and its quiet timer */
   private readonly activity = new Map<string, { activity: Activity; quiet?: ScheduledJob }>()
+  /** Sessions whose current pty run has printed live output */
+  private readonly outputSeen = new Set<string>()
   /** sessionId → when it entered attention or done */
   private readonly since = new Map<string, number>()
   private stopped = false
@@ -334,7 +336,7 @@ export class SessionManager {
 
   /** True once the session's current run has produced live output (cleared when its pty ends). */
   hasOutput(sessionId: string): boolean {
-    return this.activity.has(sessionId)
+    return this.outputSeen.has(sessionId)
   }
 
   loadWorktree(p: any): null {
@@ -437,6 +439,7 @@ export class SessionManager {
     this.pending.clear()
     for (const entry of this.activity.values()) entry.quiet?.cancel()
     this.activity.clear()
+    this.outputSeen.clear()
     this.since.clear()
     this.terminals.disposeAll()
   }
@@ -621,6 +624,7 @@ export class SessionManager {
     const owner = this.owners.get(ptyId)
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
+    this.outputSeen.add(owner.sessionId)
     const markers = getProvider(session.llm.provider).statusMarkers
     const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
     const r = onOutput(session.status, entry.activity, data, markers)
@@ -708,10 +712,11 @@ export class SessionManager {
     }
   }
 
-  /** The session's pty ended or was dropped: forget its activity, quiet timer and `since`. */
+  /** The session's pty ended or was dropped: forget its activity, output flag, quiet timer and `since`. */
   private dropActivity(sessionId: string): void {
     this.activity.get(sessionId)?.quiet?.cancel()
     this.activity.delete(sessionId)
+    this.outputSeen.delete(sessionId)
     this.since.delete(sessionId)
   }
 

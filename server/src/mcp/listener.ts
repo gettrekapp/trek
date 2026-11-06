@@ -69,6 +69,11 @@ export function startMcpListener(deps: McpListenerDeps): Promise<McpListener> {
     // Node only checks timeouts on an interval (default 30 s); check often enough to honour a short one.
     { requestTimeout: timeout, headersTimeout: timeout, connectionsCheckingInterval: Math.max(50, Math.min(1000, timeout)) },
     (req, res) => {
+      // The client going away before its answer stops the tool's waits and anything it would still send.
+      const request = new AbortController()
+      res.on('close', () => {
+        if (!res.writableFinished) request.abort()
+      })
       void (async () => {
         try {
           // A browser on this machine can be pointed at 127.0.0.1 through a hostile DNS name; only our own host names pass.
@@ -92,7 +97,7 @@ export function startMcpListener(deps: McpListenerDeps): Promise<McpListener> {
             res.once('close', () => clearTimeout(kill))
             return
           }
-          const reply = await handleMcpBody(body, { serverVersion: deps.serverVersion, ...deps.contextFor(projectId) })
+          const reply = await handleMcpBody(body, { serverVersion: deps.serverVersion, ...deps.contextFor(projectId) }, request.signal)
           if (reply.status === 202) return send(res, 202)
           send(res, reply.status, reply.json)
         } catch (err) {

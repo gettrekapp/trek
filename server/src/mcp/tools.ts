@@ -290,16 +290,43 @@ export interface ToolDeps {
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
   graceMs?: number
-  /** send_prompt's waits for a session's first output and then for it to settle */
+  /** send_prompt's and start_session's waits for a session's first output and then for it to settle */
   readyTimeouts?: { firstOutputMs?: number; settleMs?: number }
   now?: () => number
-  sleep?: (ms: number) => Promise<void>
+  /** Resolves after `ms`, or early once `signal` aborts (default: an unref'd timer) */
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
 }
 
-export type ToolCall = (name: string, args: Record<string, unknown>) => Promise<unknown>
+/** `signal` aborts when the client that made the call goes away. */
+export type ToolCall = (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>
+
+/** wait_for_sessions takes at most this many (distinct) sessions. */
+export const MAX_WAIT_IDS = 50
+/** Tool waits (wait_for_sessions, and send_prompt's and start_session's readiness waits) running at once in one project. */
+export const MAX_WAITS_PER_PROJECT = 16
+
+/** Resolves after `ms`, or as soon as `signal` aborts; its timer never holds the process open. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve()
+      return
+    }
+    const done = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    timer.unref()
+    signal?.addEventListener('abort', done, { once: true })
+  })
+}
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 const notFound = (message: string): Error => codedError('NOT_FOUND', message)
+const disconnected = (): Error => new Error('the client disconnected')
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
 
 /** A string argument, trimmed; absent or null reads as ''. Any other type is refused rather than read as empty. */
@@ -399,6 +426,9 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     terminal: { send() {}, bufferedAmount: () => 0 }
   }
 
+  /** projectId → tool waits in progress */
+  const waits = new Map<string, number>()
+
   return (projectId) => {
     /** Runs a v2 command on this project; a refusal throws with its code and message. */
     const v2 = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> => {
@@ -433,12 +463,33 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     const firstOutputMs = deps.readyTimeouts?.firstOutputMs ?? 60_000
     const settleMs = deps.readyTimeouts?.settleMs ?? 30_000
     const now = deps.now ?? Date.now
-    const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+    const sleep = deps.sleep ?? abortableSleep
 
-    /** The session `terminalId` names, in the current project snapshot; NOT_FOUND reads "No session …". */
-    const sessionIn = (terminalId: unknown): FoundSession => {
+    /** The session `terminalId` names, in `project` (default: the current snapshot); NOT_FOUND reads "No session …". */
+    const sessionIn = (terminalId: unknown, project: Project = deps.projects.require(projectId)): FoundSession => {
       if (typeof terminalId !== 'string' || !terminalId) throw bad('terminalId is required')
-      return findSession(deps.projects.require(projectId), terminalId)
+      return findSession(project, terminalId)
+    }
+
+    /** As sessionIn, for a worktree session: as on the desktop, tools leave the Global session alone. */
+    const targetIn = (terminalId: unknown, project?: Project): FoundSession => {
+      const found = sessionIn(terminalId, project)
+      if (!found.worktree) throw bad("the Global session can't be targeted by tools")
+      return found
+    }
+
+    /** Runs `fn` holding one of the project's wait slots; CAPACITY when they are all taken. */
+    const withWait = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const held = waits.get(projectId) ?? 0
+      if (held >= MAX_WAITS_PER_PROJECT) throw codedError('CAPACITY', 'too many waits in progress')
+      waits.set(projectId, held + 1)
+      try {
+        return await fn()
+      } finally {
+        const left = (waits.get(projectId) ?? 1) - 1
+        if (left > 0) waits.set(projectId, left)
+        else waits.delete(projectId)
+      }
     }
 
     /** The session's record now, or undefined once it (or the project) is gone. */
@@ -450,31 +501,38 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       }
     }
 
-    /** Not working, and past its first output; exited, complete and attention always are. */
+    /**
+     * Exited, or not working and past its first output. A session that has printed
+     * nothing yet (just started or restarted) is still booting, whatever its status.
+     */
     const settled = (session: Session): boolean =>
-      session.status === 'exited' || session.status === 'complete' || session.status === 'attention' ||
-      (session.status !== 'working' && deps.sessions.hasOutput(session.id))
+      session.status === 'exited' || (session.status !== 'working' && deps.sessions.hasOutput(session.id))
 
-    /** Polls every pollMs; true once `predicate` holds, false if `timeoutMs` passes first. */
-    const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+    /**
+     * Polls every pollMs; true once `predicate` holds, false if `timeoutMs` passes first.
+     * Throws "the client disconnected" once `signal` aborts.
+     */
+    const waitFor = async (predicate: () => boolean, timeoutMs: number, signal?: AbortSignal): Promise<boolean> => {
       const deadline = now() + timeoutMs
       for (;;) {
+        if (signal?.aborted) throw disconnected()
         if (predicate()) return true
         const left = deadline - now()
         if (left <= 0) return false
-        await sleep(Math.min(pollMs, left))
+        await sleep(Math.min(pollMs, left), signal)
       }
     }
 
     /**
      * A session that has not printed anything yet is still booting (the desktop's
-     * `starting`): wait for its first output, then for it to settle. Neither wait throws.
+     * `starting`): wait for its first output, then for it to settle. Neither timeout
+     * throws; an aborted `signal` does. The caller holds a wait slot.
      */
-    const waitUntilReady = async (terminalId: string): Promise<void> => {
+    const waitUntilReady = async (terminalId: string, signal?: AbortSignal): Promise<void> => {
       if (deps.sessions.hasOutput(terminalId)) return
       const gone = (s: Session | undefined) => !s || s.status === 'exited'
-      await waitFor(() => { const s = current(terminalId); return gone(s) || deps.sessions.hasOutput(terminalId) }, firstOutputMs)
-      await waitFor(() => { const s = current(terminalId); return gone(s) || s!.status !== 'working' }, settleMs)
+      await waitFor(() => { const s = current(terminalId); return gone(s) || deps.sessions.hasOutput(terminalId) }, firstOutputMs, signal)
+      await waitFor(() => { const s = current(terminalId); return gone(s) || s!.status !== 'working' }, settleMs, signal)
     }
 
     /** The session's live pty; BAD_REQUEST when it is not running. */
@@ -496,7 +554,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       }
     }
 
-    const handlers: Record<string, (args: Record<string, unknown>, project: Project) => unknown> = {
+    const handlers: Record<string, (args: Record<string, unknown>, project: Project, signal?: AbortSignal) => unknown> = {
       list_worktrees: (_args, project) =>
         project.repositories.flatMap((repo) => repo.worktrees.map((w) => describeWorktree(project, repo, w))),
 
@@ -651,7 +709,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       get_current_session: (args) => describeSession(sessionIn(args.terminalId)),
 
-      start_session: async (args, project) => {
+      start_session: async (args, project, signal) => {
         const { worktree } = resolveWorktree(project, args.worktree)
         let sessionTypeId: string | undefined
         if (args.sessionType !== undefined && args.sessionType !== '') {
@@ -665,37 +723,65 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           sessionTypeId = type.id
         }
         const llm = llmArg(args)
-        const { sessionId } = (await v2('session.start', {
-          worktreeId: worktree.id,
-          ...(sessionTypeId ? { sessionTypeId } : {}),
-          ...(llm ? { llm } : {}),
-          cols: 120,
-          rows: 32
-        })) as { sessionId: string }
-        if (typeof args.prompt === 'string' && args.prompt.trim()) {
-          await waitUntilReady(sessionId)
-          await v2('session.sendPrompt', { sessionId, text: args.prompt })
+        const raw = rawArg(args.prompt, 'prompt')
+        const prompt = raw?.trim() ? raw : undefined
+        // Checked before the start: once the session exists, its id must reach the caller.
+        if (prompt && prompt.length > MAX_PTY_WRITE) throw bad(`prompt must be at most ${MAX_PTY_WRITE} characters`)
+        const start = async (): Promise<string> => {
+          const { sessionId } = (await v2('session.start', {
+            worktreeId: worktree.id,
+            ...(sessionTypeId ? { sessionTypeId } : {}),
+            ...(llm ? { llm } : {}),
+            cols: 120,
+            rows: 32
+          })) as { sessionId: string }
+          return sessionId
         }
-        return { terminalId: sessionId, status: current(sessionId)?.status ?? 'closed' }
+        const statusOf = (sessionId: string) => current(sessionId)?.status ?? 'closed'
+        if (!prompt) {
+          const sessionId = await start()
+          return { terminalId: sessionId, status: statusOf(sessionId) }
+        }
+        // The slot is taken before the start, so a CAPACITY refusal leaves no session behind.
+        return withWait(async () => {
+          const sessionId = await start()
+          const unsent = (reason: string) => ({ terminalId: sessionId, status: statusOf(sessionId), promptSent: false, reason })
+          try {
+            await waitUntilReady(sessionId, signal)
+          } catch (err) {
+            return unsent(messageOf(err))
+          }
+          if (signal?.aborted) return unsent(messageOf(disconnected()))
+          const session = current(sessionId)
+          if (!session) return unsent('the session was closed before it was ready')
+          if (session.status === 'exited') return unsent('the session exited before it was ready')
+          try {
+            await v2('session.sendPrompt', { sessionId, text: prompt })
+          } catch (err) {
+            return unsent(messageOf(err))
+          }
+          return { terminalId: sessionId, status: statusOf(sessionId), promptSent: true }
+        })
       },
 
       close_session: async (args) => {
-        const { session } = sessionIn(args.terminalId)
+        const { session } = targetIn(args.terminalId)
         await v2('session.close', { sessionId: session.id })
         return { closed: true }
       },
 
-      send_prompt: async (args) => {
-        const { session } = sessionIn(args.terminalId)
+      send_prompt: async (args, _project, signal) => {
+        const { session } = targetIn(args.terminalId)
         if (typeof args.text !== 'string' || !args.text.trim()) throw bad('text is required')
         if (session.status === 'exited') throw bad('That session has exited')
-        await waitUntilReady(session.id)
+        if (!deps.sessions.hasOutput(session.id)) await withWait(() => waitUntilReady(session.id, signal))
+        if (signal?.aborted) throw disconnected()
         await v2('session.sendPrompt', { sessionId: session.id, text: args.text })
         return { sent: true }
       },
 
       enqueue_prompt: async (args) => {
-        const { session } = sessionIn(args.terminalId)
+        const { session } = targetIn(args.terminalId)
         const prompt = text(args.text)
         if (!prompt) throw bad('text is required')
         await v2('session.enqueue', { sessionId: session.id, text: prompt })
@@ -703,10 +789,11 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       remove_queued_prompt: async (args) => {
-        const { session } = sessionIn(args.terminalId)
+        const { session } = targetIn(args.terminalId)
         const queue = session.queue
-        const index = Number(args.index)
-        if (!Number.isInteger(index) || index < 0 || index >= queue.length) {
+        const index = args.index
+        if (typeof index !== 'number' || !Number.isInteger(index)) throw bad('index must be an integer')
+        if (index < 0 || index >= queue.length) {
           throw bad(
             queue.length
               ? `index must be 0–${queue.length - 1}; the queue has ${queue.length} prompt(s)`
@@ -718,7 +805,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       send_keys: (args) => {
-        const { session } = sessionIn(args.terminalId)
+        const { session } = targetIn(args.terminalId)
         const keys = Array.isArray(args.keys) ? args.keys.map(String) : []
         if (keys.length === 0) throw bad('keys is required')
         const sequences = keys.map(keySequence)
@@ -733,41 +820,65 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       read_terminal: async (args) => {
-        const { session } = sessionIn(args.terminalId)
+        const { session } = targetIn(args.terminalId)
         const lines = Math.min(Math.max(Math.floor(Number(args.lines)) || 80, 1), 2000)
         const ptyId = runningPty(session)
         await deps.sessions.terminals.settled(ptyId)
+        // The pty may have ended while its output settled.
+        if (!deps.sessions.terminals.has(ptyId)) throw bad('the session is not running')
         const output = deps.sessions.terminals.screen(ptyId, lines).join('\n')
         return { status: current(session.id)?.status ?? 'closed', output }
       },
 
-      wait_for_sessions: async (args) => {
-        const ids = Array.isArray(args.terminalIds) ? args.terminalIds : []
+      wait_for_sessions: async (args, project, signal) => {
+        const ids: unknown[] = Array.isArray(args.terminalIds) ? args.terminalIds : []
         if (ids.length === 0) throw bad('terminalIds is required')
-        for (const id of ids) sessionIn(id)
-        const terminalIds = ids as string[]
+        if (!ids.every((id) => typeof id === 'string')) throw bad('terminalIds must be strings')
+        const terminalIds = [...new Set(ids as string[])]
+        if (terminalIds.length > MAX_WAIT_IDS) throw bad(`terminalIds holds at most ${MAX_WAIT_IDS} sessions`)
+        for (const id of terminalIds) targetIn(id, project)
         const any = args.until === 'any'
         const seconds = Math.min(Number(args.timeoutSeconds) || 300, 600)
-        const done = (id: string): boolean => {
-          const s = current(id)
-          return !s || settled(s)
+        /** Each session's record in one project snapshot; undefined once it (or the project) is gone. */
+        const snapshot = (): (Session | undefined)[] => {
+          let fresh: Project
+          try {
+            fresh = deps.projects.require(projectId)
+          } catch {
+            return terminalIds.map(() => undefined)
+          }
+          return terminalIds.map((id) => {
+            try {
+              return findSession(fresh, id).session
+            } catch {
+              return undefined
+            }
+          })
         }
-        const holds = (): boolean => (any ? terminalIds.some(done) : terminalIds.every(done))
-        // A prompt sent a moment ago may not have produced output yet: don't report
-        // its still-idle status as finished.
-        if (holds()) await sleep(graceMs)
-        const completed = await waitFor(holds, seconds * 1000)
-        return {
-          timedOut: !completed,
-          sessions: terminalIds.map((id) => ({ terminalId: id, status: current(id)?.status ?? 'closed' }))
+        const done = (s: Session | undefined): boolean => !s || settled(s)
+        const holds = (): boolean => {
+          const sessions = snapshot()
+          return any ? sessions.some(done) : sessions.every(done)
         }
+        return withWait(async () => {
+          // A prompt sent a moment ago may not have produced output yet: don't report
+          // its still-idle status as finished.
+          if (holds()) await sleep(graceMs, signal)
+          const completed = await waitFor(holds, seconds * 1000, signal)
+          const sessions = snapshot()
+          return {
+            timedOut: !completed,
+            sessions: terminalIds.map((id, i) => ({ terminalId: id, status: sessions[i]?.status ?? 'closed' }))
+          }
+        })
       }
     }
 
-    return async (name, args) => {
+    return async (name, args, signal) => {
       const handler = Object.hasOwn(handlers, name) ? handlers[name] : undefined
       if (!handler) throw bad(`Unknown tool: ${name}`)
-      return handler(args ?? {}, deps.projects.require(projectId))
+      if (signal?.aborted) throw disconnected()
+      return handler(args ?? {}, deps.projects.require(projectId), signal)
     }
   }
 }

@@ -70,7 +70,7 @@ function fakeSpawner() {
 }
 
 /** A project on a real git repo, a fake pty spawner, and a tool caller for it. */
-async function toolSetup(t) {
+async function toolSetup(t, opts = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-mcp-tools-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
@@ -88,9 +88,12 @@ async function toolSetup(t) {
   const schedule = (fn, ms) => { const job = { fn, ms, cancelled: false, fired: false }; jobs.push(job); return { cancel: () => { job.cancelled = true } } }
   const sessions = new SessionManager({ projects, store, hub, spawner, schedule, discover: async () => undefined })
   t.after(() => { sessions.stopAll(); poller.stop(); store.close() })
+  // The tools' poll timers are unref'd (as in the server, where the listener holds the loop): hold it for the test.
+  const keepAlive = setInterval(() => {}, 1000)
+  t.after(() => clearInterval(keepAlive))
   const projectId = projects.create('P', [{ registered, name: undefined }])
   await poller.refresh(a)
-  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 } })
+  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
     const job = jobs.find((j) => j.ms === 2500 && !j.cancelled && !j.fired)
@@ -169,21 +172,103 @@ test('start_session, get_current_session and close_session', async (t) => {
   await assert.rejects(s.call('get_current_session', { terminalId }), /No session/)
 })
 
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+// Long readiness timeouts: only the session's own output and quiet timer can make it ready.
+const SLOW_READY = { readyTimeouts: { firstOutputMs: 10_000, settleMs: 10_000 } }
+
 test('send_prompt waits for the agent to be ready, then pastes', async (t) => {
-  const s = await toolSetup(t)
+  const s = await toolSetup(t, SLOW_READY)
   const { terminalId } = await s.call('start_session', { worktree: 'main' })
   const proc = s.spawned.at(-1)
-  setTimeout(() => proc.emit('ready'), 20)
-  assert.deepEqual(await s.call('send_prompt', { terminalId, text: 'hello' }), { sent: true })
+  const pending = s.call('send_prompt', { terminalId, text: 'hello' })
+  await delay(20)
+  assert.deepEqual(proc.written, [], 'nothing is sent before the first output')
+  proc.emit('ready')
+  await delay(20)
+  assert.deepEqual(proc.written, [], 'nothing is sent while the agent is still working')
+  s.fireQuiet()
+  assert.deepEqual(await pending, { sent: true })
   assert.equal(proc.written[0], 'hello')
 })
 
 test('start_session with a prompt sends it once the agent is ready', async (t) => {
-  const s = await toolSetup(t)
+  const s = await toolSetup(t, SLOW_READY)
   const pending = s.call('start_session', { worktree: 'main', prompt: 'do it' })
-  setTimeout(() => s.spawned.at(-1).emit('ready'), 20)
-  await pending
-  assert.equal(s.spawned.at(-1).written[0], 'do it')
+  await delay(20)
+  const proc = s.spawned.at(-1)
+  assert.deepEqual(proc.written, [], 'nothing is sent before the first output')
+  proc.emit('ready')
+  await delay(20)
+  assert.deepEqual(proc.written, [], 'nothing is sent while the agent is still working')
+  s.fireQuiet()
+  const r = await pending
+  assert.equal(r.promptSent, true)
+  assert.equal(proc.written[0], 'do it')
+})
+
+test('start_session: no promptSent without a prompt; an oversized prompt starts nothing', async (t) => {
+  const s = await toolSetup(t)
+  const plain = await s.call('start_session', { worktree: 'main' })
+  assert.equal('promptSent' in plain, false)
+  const before = s.spawned.length
+  assert.equal(await codeOf(s.call('start_session', { worktree: 'main', prompt: 'x'.repeat(1024 * 1024 + 1) })), 'BAD_REQUEST')
+  assert.equal(s.spawned.length, before)
+})
+
+test('start_session returns the session id when its prompt cannot be sent', async (t) => {
+  const s = await toolSetup(t, SLOW_READY)
+  // The session exits before it is ready.
+  let pending = s.call('start_session', { worktree: 'main', prompt: 'p' })
+  await delay(20)
+  s.spawned.at(-1).exit(1)
+  let r = await pending
+  assert.equal(typeof r.terminalId, 'string')
+  assert.equal(r.status, 'exited')
+  assert.equal(r.promptSent, false)
+  assert.match(r.reason, /exited/)
+  // The session is closed before it is ready.
+  pending = s.call('start_session', { worktree: 'main', prompt: 'p' })
+  await delay(20)
+  const id = s.projects.require(s.projectId).repositories[0].worktrees[0].sessions.at(-1).id
+  await s.call('close_session', { terminalId: id })
+  r = await pending
+  assert.deepEqual({ ...r, reason: undefined }, { terminalId: id, status: 'closed', promptSent: false, reason: undefined })
+  assert.match(r.reason, /closed/)
+  // The client goes away before it is ready.
+  const ac = new AbortController()
+  pending = s.call('start_session', { worktree: 'main', prompt: 'p' }, ac.signal)
+  await delay(20)
+  ac.abort()
+  r = await pending
+  assert.equal(r.promptSent, false)
+  assert.match(r.reason, /client disconnected/)
+  assert.deepEqual(s.spawned.at(-1).written, [])
+})
+
+test('a client that disconnects stops the tool: nothing is sent', async (t) => {
+  const s = await toolSetup(t, SLOW_READY)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const proc = s.spawned.at(-1)
+  const gone = new AbortController()
+  gone.abort()
+  await assert.rejects(s.call('send_prompt', { terminalId, text: 'x' }, gone.signal), /client disconnected/)
+  await assert.rejects(s.call('start_session', { worktree: 'main', prompt: 'x' }, gone.signal), /client disconnected/)
+  const ac = new AbortController()
+  const pending = s.call('send_prompt', { terminalId, text: 'x' }, ac.signal)
+  await delay(20)
+  ac.abort()
+  await assert.rejects(pending, /client disconnected/)
+  proc.emit('ready')
+  s.fireQuiet()
+  await delay(20)
+  assert.deepEqual(proc.written, [])
+  // wait_for_sessions stops too.
+  const wac = new AbortController()
+  const waiting = s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 600 }, wac.signal)
+  proc.emit('more')
+  await delay(20)
+  wac.abort()
+  await assert.rejects(waiting, /client disconnected/)
 })
 
 test('enqueue_prompt and remove_queued_prompt', async (t) => {
@@ -231,8 +316,10 @@ test('wait_for_sessions: any, all with a timeout, and closed sessions', async (t
   // A session that disappears during the wait counts as settled and reports closed.
   s.spawned[0].emit('y') // a is working again: nothing holds yet
   const waiting = s.call('wait_for_sessions', { terminalIds: [b, a], until: 'any', timeoutSeconds: 1 })
-  setTimeout(() => { s.call('close_session', { terminalId: a }) }, 20)
+  let closing
+  setTimeout(() => { closing = s.call('close_session', { terminalId: a }) }, 20)
   const closed = await waiting
+  assert.deepEqual(await closing, { closed: true })
   assert.equal(closed.timedOut, false)
   assert.deepEqual(closed.sessions, [{ terminalId: b, status: 'working' }, { terminalId: a, status: 'closed' }])
   // An id that is already gone when the wait starts is an error, as on the desktop.
@@ -371,4 +458,147 @@ test('delete_session_type: unknown type is NOT_FOUND, and malformed saved entrie
   s.projects.apply(s.projectId, (d) => { d.settings.sessionTypes = [{ id: 'z' }, { id: 'k', name: 'Keep', systemPrompt: '' }] })
   assert.equal(await codeOf(s.call('delete_session_type', { sessionType: 'nope' })), 'NOT_FOUND')
   assert.deepEqual(await s.call('list_session_types', {}), [{ id: 'z' }, { id: 'k', name: 'Keep', systemPrompt: '' }])
+})
+
+test('Global sessions: only get_current_session reaches them', async (t) => {
+  const s = await toolSetup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, cols: 80, rows: 24 })
+  const me = await s.call('get_current_session', { terminalId: sessionId })
+  assert.equal(me.terminalId, sessionId)
+  assert.equal(me.worktree, null)
+  const calls = [
+    ['send_prompt', { terminalId: sessionId, text: 'x' }],
+    ['enqueue_prompt', { terminalId: sessionId, text: 'x' }],
+    ['remove_queued_prompt', { terminalId: sessionId, index: 0 }],
+    ['send_keys', { terminalId: sessionId, keys: ['y'] }],
+    ['read_terminal', { terminalId: sessionId }],
+    ['close_session', { terminalId: sessionId }],
+    ['wait_for_sessions', { terminalIds: [sessionId], timeoutSeconds: 0.01 }]
+  ]
+  for (const [name, args] of calls) {
+    await assert.rejects(s.call(name, args), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message), name)
+  }
+  assert.deepEqual(s.spawned.at(-1).written, [])
+  assert.equal(s.projects.require(s.projectId).globalSessions.length, 1)
+})
+
+test('wait_for_sessions: dedupes ids, caps their number, refuses non-strings', async (t) => {
+  const s = await toolSetup(t)
+  const a = (await s.call('start_session', { worktree: 'main' })).terminalId
+  s.spawned.at(-1).emit('x')
+  s.fireQuiet()
+  const r = await s.call('wait_for_sessions', { terminalIds: [a, a], timeoutSeconds: 1 })
+  assert.deepEqual(r.sessions, [{ terminalId: a, status: 'idle' }])
+  const many = Array.from({ length: 51 }, (_, i) => `id${i}`)
+  await assert.rejects(s.call('wait_for_sessions', { terminalIds: many }), (e) => e.code === 'BAD_REQUEST' && /50/.test(e.message))
+  await assert.rejects(s.call('wait_for_sessions', { terminalIds: [a, 5] }), (e) => e.code === 'BAD_REQUEST' && e.message === 'terminalIds must be strings')
+})
+
+test('wait_for_sessions: until all succeeds once every session settles', async (t) => {
+  const s = await toolSetup(t)
+  const a = (await s.call('start_session', { worktree: 'main' })).terminalId
+  const b = (await s.call('start_session', { worktree: 'main' })).terminalId
+  s.spawned[0].emit('x')
+  s.spawned[1].emit('x')
+  const waiting = s.call('wait_for_sessions', { terminalIds: [a, b], timeoutSeconds: 5 })
+  await delay(20)
+  s.fireQuiet()
+  s.fireQuiet()
+  const r = await waiting
+  assert.equal(r.timedOut, false)
+  assert.deepEqual(r.sessions.map((x) => x.status), ['idle', 'idle'])
+})
+
+test('wait_for_sessions reads one project snapshot per poll', async (t) => {
+  let sleeps = 0
+  const sleep = (ms) => { sleeps++; return new Promise((resolve) => setTimeout(resolve, ms)) }
+  const s = await toolSetup(t, { sleep })
+  const ids = []
+  for (let i = 0; i < 5; i++) {
+    ids.push((await s.call('start_session', { worktree: 'main' })).terminalId)
+    s.spawned.at(-1).emit('x') // working
+  }
+  const require = s.projects.require.bind(s.projects)
+  let reads = 0
+  s.projects.require = (id) => { reads++; return require(id) }
+  sleeps = 0
+  const r = await s.call('wait_for_sessions', { terminalIds: ids, timeoutSeconds: 0.1 })
+  s.projects.require = require
+  assert.equal(r.timedOut, true)
+  assert.ok(sleeps > 3, `polled ${sleeps} times`)
+  assert.ok(reads <= sleeps + 4, `${reads} snapshots for ${sleeps} polls`)
+})
+
+test('at most 16 tool waits run at once per project', async (t) => {
+  const s = await toolSetup(t, SLOW_READY)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' }) // no output yet: send_prompt waits
+  const ac = new AbortController()
+  const waits = Array.from({ length: 16 }, () => s.call('send_prompt', { terminalId, text: 'x' }, ac.signal))
+  await assert.rejects(s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 1 }), (e) => e.code === 'CAPACITY' && /too many waits in progress/.test(e.message))
+  await assert.rejects(s.call('send_prompt', { terminalId, text: 'x' }), (e) => e.code === 'CAPACITY')
+  await assert.rejects(s.call('start_session', { worktree: 'main', prompt: 'x' }), (e) => e.code === 'CAPACITY')
+  ac.abort()
+  for (const w of waits) await assert.rejects(w, /client disconnected/)
+  // The slots are free again.
+  const r = await s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 0.02 })
+  assert.equal(r.timedOut, true)
+  assert.deepEqual(s.spawned[0].written, [])
+})
+
+test('a restarted complete session is not settled until its first output', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  s.spawned.at(-1).emit('x')
+  s.sessions.markComplete({ projectId: s.projectId, sessionId: terminalId, complete: true })
+  await s.call('unload_worktree', { worktree: 'main' })
+  await s.call('load_worktree', { worktree: 'main' }) // restarts its pty
+  assert.equal(s.spawned.length, 2)
+  assert.equal((await s.call('get_current_session', { terminalId })).status, 'complete')
+  assert.equal(s.sessions.hasOutput(terminalId), false)
+  const quiet = await s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 0.05 })
+  assert.equal(quiet.timedOut, true)
+  const waiting = s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 1 })
+  await delay(20)
+  s.spawned.at(-1).emit('hello')
+  const r = await waiting
+  assert.equal(r.timedOut, false)
+  assert.deepEqual(r.sessions, [{ terminalId, status: 'complete' }])
+})
+
+test('send_prompt, send_keys and read_terminal on stopped sessions; bad arguments', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  assert.equal(await codeOf(s.call('send_prompt', { terminalId, text: '' })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('send_prompt', { terminalId, text: '   ' })), 'BAD_REQUEST')
+  await s.call('enqueue_prompt', { terminalId, text: 'a' })
+  for (const index of [true, '0', 0.5, null]) {
+    assert.equal(await codeOf(s.call('remove_queued_prompt', { terminalId, index })), 'BAD_REQUEST', String(index))
+  }
+  s.spawned.at(-1).exit(0)
+  assert.equal((await s.call('get_current_session', { terminalId })).status, 'exited')
+  await assert.rejects(s.call('send_prompt', { terminalId, text: 'x' }), (e) => e.code === 'BAD_REQUEST' && /exited/.test(e.message))
+  assert.equal(await codeOf(s.call('send_keys', { terminalId, keys: ['y'] })), 'BAD_REQUEST')
+  assert.equal(await codeOf(s.call('read_terminal', { terminalId })), 'BAD_REQUEST')
+})
+
+test('read_terminal: a session that stops while the screen settles is not running', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const proc = s.spawned.at(-1)
+  const terminals = s.sessions.terminals
+  const settled = terminals.settled
+  terminals.settled = async () => { proc.exit(0) }
+  t.after(() => { terminals.settled = settled })
+  await assert.rejects(s.call('read_terminal', { terminalId }), (e) => e.code === 'BAD_REQUEST' && e.message === 'the session is not running')
+})
+
+test('read_terminal clamps lines', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  s.spawned.at(-1).emit('one\r\ntwo\r\nthree\r\n')
+  const read = async (lines) => (await s.call('read_terminal', { terminalId, lines })).output
+  assert.equal(await read(0), 'one\ntwo\nthree') // 0 is the default, 80
+  assert.equal(await read(-1), 'three')
+  assert.equal(await read(2.5), 'two\nthree')
+  assert.equal(await read(1e9), 'one\ntwo\nthree')
 })
