@@ -1,7 +1,7 @@
 import { app } from 'electron'
 import { access, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { addRecentEntry, keepRecents, parseRecents, serializeRecents, type RecentEntry } from './recentsRules'
+import { addRecentEntry, keepRecents, parseRecents, removeRecentEntry, serializeRecents, type RecentEntry } from './recentsRules'
 
 function recentsFile(): string {
   return join(app.getPath('userData'), 'recent-projects.json')
@@ -47,4 +47,8 @@ export async function addRecent(filePath: string): Promise<void> {
 
 export async function addRecentServer(entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> {
   await writeRecents(addRecentEntry(await readRecents(), entry))
+}
+
+export async function removeRecent(entry: RecentEntry): Promise<void> {
+  await writeRecents(removeRecentEntry(await readRecents(), entry))
 }

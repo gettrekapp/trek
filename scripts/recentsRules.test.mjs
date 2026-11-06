@@ -1,7 +1,7 @@
 // scripts/recentsRules.test.mjs — recents of both kinds: parsing and adding.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addRecentEntry, keepRecents, parseRecents, serializeRecents, MAX_RECENTS } from '../src/main/recentsRules.ts'
+import { addRecentEntry, keepRecents, parseRecentRef, parseRecents, removeRecentEntry, serializeRecents, MAX_RECENTS } from '../src/main/recentsRules.ts'
 
 const server = (projectId, name = 'P') => ({ kind: 'server', serverEntryId: 's', projectId, name, serverName: 'box' })
 
@@ -37,4 +37,27 @@ test('keepRecents drops missing files only, and serializeRecents keeps files as 
   assert.deepEqual(keepRecents(list, new Set(['/gone'])), [server('p1'), { kind: 'file', path: '/here' }])
   assert.deepEqual(serializeRecents(list), ['/gone', server('p1'), '/here'])
   assert.deepEqual(parseRecents(serializeRecents(list)), list)
+})
+
+test('removeRecentEntry drops the matching entry of either kind only', () => {
+  const list = [{ kind: 'file', path: '/a.trekproj' }, server('p1'), server('p2'), { kind: 'file', path: '/b.trekproj' }]
+  assert.deepEqual(removeRecentEntry(list, { kind: 'file', path: '/a.trekproj' }), list.slice(1))
+  // Labels don't matter, the ids do.
+  assert.deepEqual(removeRecentEntry(list, { ...server('p1'), name: 'other', serverName: '' }), [list[0], list[2], list[3]])
+  assert.deepEqual(removeRecentEntry(list, { ...server('p1'), serverEntryId: 'other' }), list)
+  assert.deepEqual(removeRecentEntry(list, { kind: 'file', path: '/missing' }), list)
+})
+
+test('parseRecentRef validates an entry named over IPC', () => {
+  assert.deepEqual(parseRecentRef({ kind: 'file', path: '/a' }), { kind: 'file', path: '/a' })
+  assert.deepEqual(parseRecentRef({ kind: 'server', serverEntryId: 's', projectId: 'p' }), {
+    kind: 'server',
+    serverEntryId: 's',
+    projectId: 'p',
+    name: '',
+    serverName: ''
+  })
+  for (const bad of [null, '/a', { kind: 'file', path: '' }, { kind: 'file' }, { kind: 'server', serverEntryId: 's' }, { kind: 'server', serverEntryId: 5, projectId: 'p' }, { kind: 'x' }]) {
+    assert.equal(parseRecentRef(bad), null, JSON.stringify(bad))
+  }
 })

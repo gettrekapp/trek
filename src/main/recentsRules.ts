@@ -42,3 +42,20 @@ export function serializeRecents(list: readonly RecentEntry[]): unknown[] {
 export function keepRecents(list: readonly RecentEntry[], missingFiles: ReadonlySet<string>): RecentEntry[] {
   return list.filter((e) => e.kind !== 'file' || !missingFiles.has(e.path))
 }
+
+export function removeRecentEntry(list: readonly RecentEntry[], entry: RecentEntry): RecentEntry[] {
+  return list.filter((e) => !sameEntry(e, entry))
+}
+
+/** An entry named over IPC, for removal: only the identifying fields matter, and they are validated. */
+export function parseRecentRef(raw: unknown): RecentEntry | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (r.kind === 'file') return typeof r.path === 'string' && r.path ? { kind: 'file', path: r.path } : null
+  if (r.kind === 'server') {
+    const { serverEntryId, projectId } = r
+    if (typeof serverEntryId !== 'string' || !serverEntryId || typeof projectId !== 'string' || !projectId) return null
+    return { kind: 'server', serverEntryId, projectId, name: '', serverName: '' }
+  }
+  return null
+}

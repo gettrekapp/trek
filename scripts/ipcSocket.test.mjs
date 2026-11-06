@@ -2,6 +2,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ipcSocketFactory } from '../src/renderer/src/v2/ipcSocket.ts'
+import { cleanIpcMessage, errorCode, errorText } from '../src/renderer/src/v2/errors.ts'
+import { ClientError, ServerConnection } from '../src/shared/client/connection.ts'
+import { fakeTimers } from './clientFakes.mjs'
 
 function fakeApi() {
   const sent = []
@@ -51,10 +54,36 @@ test('send before open throws, like a WebSocket; a failed open closes with 1006'
   assert.throws(() => sock.send('x'))
   const closes = []
   sock.addEventListener('close', (e) => closes.push([e.code, e.reason]))
-  f.rejectOpen(new Error('Server removed'))
+  const errors = []
+  sock.addEventListener('error', () => errors.push('error'))
+  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
   await flush()
   assert.equal(sock.readyState, 3)
   assert.deepEqual(closes, [[1006, 'Server removed']])
+  assert.deepEqual(errors, [], 'no error event: the SDK would replace the reason with "connection failed"')
+})
+
+test('a connection over a refused open reports the reason as its status message', async () => {
+  const f = fakeApi()
+  const conn = new ServerConnection({ url: 'gone', token: '', createSocket: ipcSocketFactory(f.api), timers: fakeTimers().timers })
+  const seen = []
+  conn.on('status', (s) => seen.push([s.status, s.message]))
+  conn.connect()
+  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
+  await flush()
+  assert.deepEqual(seen.at(-1), ['disconnected', 'Server removed'])
+  conn.close()
+})
+
+test('errorText and cleanIpcMessage give one readable line', () => {
+  assert.equal(cleanIpcMessage("Error invoking remote method 'appServers:save': Error: URL is not valid"), 'URL is not valid')
+  assert.equal(cleanIpcMessage('plain'), 'plain')
+  assert.equal(errorText(new ClientError('PATH_DENIED', '/x is not a registered repo')), '/x is not a registered repo')
+  assert.equal(errorText(new ClientError('NOT_CONNECTED', '')), 'Not connected to the server')
+  assert.equal(errorText(new Error("Error invoking remote method 'x': Error: nope")), 'nope')
+  assert.equal(errorText('str'), 'str')
+  assert.equal(errorCode(new ClientError('NOT_A_REPO', 'm')), 'NOT_A_REPO')
+  assert.equal(errorCode(new Error('m')), null)
 })
 
 test('close before the relay answers closes the socket once it exists', async () => {

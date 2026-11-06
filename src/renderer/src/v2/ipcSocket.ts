@@ -1,6 +1,7 @@
 // A SocketLike over the main-process relay (src/main/v2relay.ts): the "url" the
 // SDK passes is the app-server entry id. Pure: the relay API is injected.
 import type { SocketFactory, SocketLike } from '../../../shared/client/socket.ts'
+import { cleanIpcMessage } from './errors.ts'
 
 export interface RelayEvent {
   socketId: string
@@ -95,8 +96,9 @@ export function ipcSocketFactory(api: RelayApi): SocketFactory {
         for (const e of buffered) if (e.socketId === id) handle(e)
       },
       (err: unknown) => {
-        dispatch('error', {})
-        finish(1006, err instanceof Error ? err.message : String(err))
+        // A close only, no 'error' first: the SDK treats a pre-open 'error' as
+        // "connection failed" and would drop this reason (say, "Server removed").
+        finish(1006, cleanIpcMessage(err instanceof Error ? err.message : String(err)))
       }
     )
     return sock

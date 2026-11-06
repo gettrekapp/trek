@@ -2565,6 +2565,180 @@ button:disabled {
   color: var(--text-muted);
 }
 
+/* Recents: remove (×) on each entry */
+.recent-projects li {
+  position: relative;
+}
+
+.recent-projects li button.recent-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.recent-projects li:hover button.recent-remove,
+.recent-projects li button.recent-remove:focus-visible {
+  opacity: 1;
+}
+
+.recent-projects li button.recent-remove:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.recent-projects li button:not(.recent-remove) {
+  padding-right: 34px;
+}
+
+.recent-server-chip {
+  margin-left: 8px;
+  background: rgba(10, 141, 255, 0.14);
+  color: #5dabef;
+  vertical-align: 1px;
+}
+
+/* Start screen: Connect to server */
+.connect-server {
+  width: 680px;
+  max-width: calc(100% - 32px);
+  max-height: 70vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.connect-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.connect-header h2 {
+  flex: 1;
+  font-size: 15px;
+  text-align: center;
+}
+
+.connect-server-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+
+.connect-server-item.selected {
+  border-color: var(--border-strong);
+  padding-bottom: 8px;
+}
+
+.connect-server-item .server-row {
+  flex-wrap: wrap;
+}
+
+.connect-server-name {
+  font-weight: 600;
+}
+
+.connect-server-item .server-row-url {
+  flex: 1;
+  min-width: 0;
+}
+
+.connect-server-status {
+  flex: 1 0 100%;
+  order: 10;
+  color: var(--text-muted);
+  font-size: 11px;
+  padding-left: 15px;
+}
+
+.connect-server-status.warn {
+  color: var(--attention);
+}
+
+.connect-server-item .server-row-actions .btn {
+  height: 26px;
+  padding: 0 9px;
+}
+
+.connect-server-item > .server-form-row,
+.connect-server-item > .server-test-result,
+.connect-server-item > .error,
+.connect-server-item > .server-form,
+.connect-projects {
+  margin: 0 10px;
+}
+
+.connect-warning {
+  font-size: 11px;
+  margin: -2px 0 0 150px;
+}
+
+.connect-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.connect-projects-status {
+  font-size: 12px;
+}
+
+.connect-project-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connect-project-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-darker);
+}
+
+.connect-project-list .btn {
+  height: 26px;
+}
+
+.new-server-project-repo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.modal button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.new-server-project-footer {
+  gap: 8px;
+}
+
 /* ─── Modal ────────────────────────────────────────────────────────────── */
 
 .modal-backdrop {

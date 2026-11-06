@@ -7,7 +7,8 @@ import { app } from 'electron'
 import type { GitWorktreeInfo, OpenedProject, ProjectFile, RecentEntry, WorktreeChanges, WorktreeStatus } from '../shared/types'
 import { getHost } from './hosts/registry'
 import type { RawProjectFile } from '../shared/migration'
-import { addRecent, getRecents } from './recents'
+import { addRecent, getRecents, removeRecent } from './recents'
+import { parseRecentRef } from './recentsRules'
 import { decideOpen } from './windowRules'
 import {
   claimProject,
@@ -66,6 +67,14 @@ export function registerProjectHandlers(): void {
   ipcMain.handle('project:openPath', (event, filePath: string) => openForSender(event.sender, filePath))
 
   ipcMain.handle('recents:get', async (): Promise<RecentEntry[]> => {
+    return getRecents()
+  })
+
+  // Removes one recent (either kind) and returns the list as `recents:get` would.
+  ipcMain.handle('recents:remove', async (_event, raw: unknown): Promise<RecentEntry[]> => {
+    const entry = parseRecentRef(raw)
+    if (!entry) throw new Error('not a recent entry')
+    await removeRecent(entry)
     return getRecents()
   })
 

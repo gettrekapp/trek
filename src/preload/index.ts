@@ -53,6 +53,7 @@ const api = {
   openProjectPath: (filePath: string): Promise<OpenedProject | null> =>
     ipcRenderer.invoke('project:openPath', filePath),
   getRecentProjects: (): Promise<RecentEntry[]> => ipcRenderer.invoke('recents:get'),
+  removeRecentProject: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recents:remove', entry),
   openServerProject: (
     serverEntryId: string,
     projectId: string,

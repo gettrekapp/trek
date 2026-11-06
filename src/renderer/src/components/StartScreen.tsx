@@ -1,29 +1,48 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { baseName, useAppStore } from '../store'
 import { syncWindowProject } from '../windowLifecycle'
+import { errorText } from '../v2/errors'
+import { ConnectServer } from './ConnectServer'
 import type { OpenedProject, ProjectFile, RecentEntry } from '../../../shared/types'
 
 export function StartScreen(): React.JSX.Element {
   const setProject = useAppStore((s) => s.setProject)
+  const setServerWindow = useAppStore((s) => s.setServerWindow)
+  const [view, setView] = useState<'home' | 'connect'>('home')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recents, setRecents] = useState<RecentEntry[]>([])
   /** Ids of the app-wide servers; null until loaded, so nothing shows "Server removed" early. */
   const [serverIds, setServerIds] = useState<Set<string> | null>(null)
 
+  const loadServers = useCallback((): void => {
+    window.api.appServers
+      .list()
+      .then((list) => setServerIds(new Set(list.map((s) => s.id))))
+      .catch(() => setServerIds(null))
+  }, [])
+
   useEffect(() => {
-    window.api.getRecentProjects().then(setRecents).catch(() => setRecents([]))
     // Servers can be added or removed from another window, so re-read on focus too.
-    const loadServers = (): void => {
-      window.api.appServers
-        .list()
-        .then((list) => setServerIds(new Set(list.map((s) => s.id))))
-        .catch(() => setServerIds(null))
-    }
     loadServers()
     window.addEventListener('focus', loadServers)
     return () => window.removeEventListener('focus', loadServers)
-  }, [])
+  }, [loadServers])
+
+  // Again on coming back from Connect, which may have opened (and so recorded) a server project.
+  useEffect(() => {
+    if (view !== 'home') return
+    window.api.getRecentProjects().then(setRecents).catch(() => setRecents([]))
+  }, [view])
+
+  const removeRecent = async (entry: RecentEntry): Promise<void> => {
+    setError(null)
+    try {
+      setRecents(await window.api.removeRecentProject(entry))
+    } catch (err) {
+      setError(`Could not remove the recent project: ${errorText(err)}`)
+    }
+  }
 
   // Worktrees open unloaded: the sidebar loads each one's saved Claude
   // sessions on demand instead of spawning all of them at once.
@@ -84,14 +103,15 @@ export function StartScreen(): React.JSX.Element {
     }
   }
 
-  // Task 8 boots the window into the server view when `opened` is true.
+  // `opened` = this window took the target: it switches to the server view (Task 8 renders it).
   const openServerRecent = async (entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> => {
     setBusy(true)
     setError(null)
     try {
-      await window.api.openServerProject(entry.serverEntryId, entry.projectId, entry.name, entry.serverName)
+      const { opened } = await window.api.openServerProject(entry.serverEntryId, entry.projectId, entry.name, entry.serverName)
+      if (opened) setServerWindow({ serverEntryId: entry.serverEntryId, projectId: entry.projectId })
     } catch (err) {
-      setError(`Could not open project: ${String(err)}`)
+      setError(`Could not open project: ${errorText(err)}`)
     } finally {
       setBusy(false)
     }
@@ -102,45 +122,64 @@ export function StartScreen(): React.JSX.Element {
       <h1>Trek Dev</h1>
       <p className="muted">Run coding agents across git worktrees, side by side.</p>
       {error && <div className="error">{error}</div>}
-      <div className="start-actions">
-        <button className="primary" disabled={busy} onClick={() => void newProject()}>
-          New Project…
-        </button>
-        <button disabled={busy} onClick={() => void openProject()}>
-          Open Project…
-        </button>
-      </div>
-      {recents.length > 0 && (
-        <div className="recent-projects">
-          <h3>Recent projects</h3>
-          <ul>
-            {recents.map((entry) =>
-              entry.kind === 'file' ? (
-                <li key={`file:${entry.path}`}>
-                  <button disabled={busy} onClick={() => void openRecent(entry.path)}>
-                    <span className="recent-name">{baseName(entry.path).replace(/\.trekproj$/, '')}</span>
-                    <span className="recent-path">{entry.path}</span>
-                  </button>
-                </li>
-              ) : (
-                <li key={`server:${entry.serverEntryId}:${entry.projectId}`}>
-                  <button disabled={busy} onClick={() => void openServerRecent(entry)}>
-                    <span className="recent-name">
-                      {entry.name || entry.projectId} — {entry.serverName || 'server'}
-                    </span>
-                    {serverIds && !serverIds.has(entry.serverEntryId) && (
-                      <span className="recent-path">Server removed</span>
-                    )}
-                  </button>
-                </li>
-              )
-            )}
-          </ul>
-        </div>
+      {view === 'connect' && <ConnectServer onBack={() => setView('home')} onServersChanged={loadServers} />}
+      {view === 'home' && (
+        <>
+          <div className="start-actions">
+            <button className="primary" disabled={busy} onClick={() => void newProject()}>
+              New Project…
+            </button>
+            <button disabled={busy} onClick={() => void openProject()}>
+              Open Project…
+            </button>
+            <button disabled={busy} onClick={() => setView('connect')}>
+              Connect to server…
+            </button>
+          </div>
+          {recents.length > 0 && (
+            <div className="recent-projects">
+              <h3>Recent projects</h3>
+              <ul>
+                {recents.map((entry) =>
+                  entry.kind === 'file' ? (
+                    <li key={`file:${entry.path}`}>
+                      <button disabled={busy} onClick={() => void openRecent(entry.path)}>
+                        <span className="recent-name">{baseName(entry.path).replace(/\.trekproj$/, '')}</span>
+                        <span className="recent-path">{entry.path}</span>
+                      </button>
+                      <RemoveRecent disabled={busy} onClick={() => void removeRecent(entry)} />
+                    </li>
+                  ) : (
+                    <li key={`server:${entry.serverEntryId}:${entry.projectId}`}>
+                      <button disabled={busy} onClick={() => void openServerRecent(entry)}>
+                        <span className="recent-name">
+                          {entry.name || entry.projectId}
+                          <span className="mini-chip recent-server-chip">server</span>
+                        </span>
+                        <span className="recent-path">
+                          {serverIds && !serverIds.has(entry.serverEntryId) ? 'Server removed' : entry.serverName || 'server'}
+                        </span>
+                      </button>
+                      <RemoveRecent disabled={busy} onClick={() => void removeRecent(entry)} />
+                    </li>
+                  )
+                )}
+              </ul>
+            </div>
+          )}
+          <p className="muted hint">
+            A project targets one repository; each git worktree gets its own tab of agent terminals.
+          </p>
+        </>
       )}
-      <p className="muted hint">
-        A project targets one repository; each git worktree gets its own tab of agent terminals.
-      </p>
     </div>
+  )
+}
+
+function RemoveRecent({ disabled, onClick }: { disabled: boolean; onClick: () => void }): React.JSX.Element {
+  return (
+    <button className="recent-remove" title="Remove from recent projects" aria-label="Remove from recent projects" disabled={disabled} onClick={onClick}>
+      ×
+    </button>
   )
 }

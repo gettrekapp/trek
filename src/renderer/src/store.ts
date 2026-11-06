@@ -198,6 +198,9 @@ export interface PendingDecision {
 
 interface AppState {
   filePath: string | null
+  /** A v2 server project shown in this window (Task 8 renders it); separate from the legacy `project`. */
+  serverWindow: { serverEntryId: string; projectId: string } | null
+  setServerWindow: (target: { serverEntryId: string; projectId: string } | null) => void
   project: ProjectFile | null
   dirty: boolean
   activeWorktreeId: string | null
@@ -352,6 +355,8 @@ export function migrateProject(raw: RawProjectFile): ProjectFile {
 
 export const useAppStore = create<AppState>((set) => ({
   filePath: null,
+  serverWindow: null,
+  setServerWindow: (serverWindow) => set({ serverWindow }),
   project: null,
   dirty: false,
   activeWorktreeId: null,
