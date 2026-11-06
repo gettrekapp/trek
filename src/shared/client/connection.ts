@@ -67,6 +67,14 @@ const PING_TIMEOUT_MS = 10_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 /** Our own close code for a socket we give up on (failed ping or hello); any non-auth, non-version code reconnects. */
 const CLOSE_ABANDONED = 4000
+/**
+ * Client-local close code (never sent by a server): the socket factory knows the
+ * server entry is gone for good (the desktop relay's "Server removed"). Terminal:
+ * status 'error', no retry.
+ */
+export const CLOSE_SERVER_REMOVED = 4404
+/** The status message that goes with CLOSE_SERVER_REMOVED (and the relay's refusal text). */
+export const SERVER_REMOVED_MESSAGE = 'Server removed'
 
 type Listener<T> = (value: T) => void
 
@@ -313,6 +321,10 @@ export class ServerConnection {
           ? 'This server needs a newer Trek: update Trek'
           : 'This server is too old for this Trek: upgrade the server'
       )
+      return
+    }
+    if (code === CLOSE_SERVER_REMOVED) {
+      this.setStatus('error', SERVER_REMOVED_MESSAGE)
       return
     }
     // Arm the retry first so a status listener sees settled state and may reconnect().

@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ipcSocketFactory } from '../src/renderer/src/v2/ipcSocket.ts'
 import { cleanIpcMessage, errorCode, errorText } from '../src/renderer/src/v2/errors.ts'
-import { ClientError, ServerConnection } from '../src/shared/client/connection.ts'
+import { CLOSE_SERVER_REMOVED, ClientError, ServerConnection } from '../src/shared/client/connection.ts'
 import { fakeTimers } from './clientFakes.mjs'
 
 function fakeApi() {
@@ -59,7 +59,8 @@ test('send before open throws, like a WebSocket; a failed open closes with 1006'
   f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
   await flush()
   assert.equal(sock.readyState, 3)
-  assert.deepEqual(closes, [[1006, 'Server removed']])
+  assert.deepEqual(closes, [[CLOSE_SERVER_REMOVED, 'Server removed']])
+  assert.equal(CLOSE_SERVER_REMOVED, 4404)
   assert.deepEqual(errors, [], 'no error event: the SDK would replace the reason with "connection failed"')
 })
 
@@ -71,7 +72,35 @@ test('a connection over a refused open reports the reason as its status message'
   conn.connect()
   f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
   await flush()
-  assert.deepEqual(seen.at(-1), ['disconnected', 'Server removed'])
+  assert.deepEqual(seen.at(-1), ['error', 'Server removed'])
+  conn.close()
+})
+
+test('"Server removed" is terminal: no retry, however long we wait', async () => {
+  const f = fakeApi()
+  const clock = fakeTimers()
+  const conn = new ServerConnection({ url: 'gone', token: '', createSocket: ipcSocketFactory(f.api), timers: clock.timers })
+  conn.connect()
+  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server removed"))
+  await flush()
+  clock.advance(120_000)
+  assert.deepEqual(f.sent.filter((s) => s[0] === 'open').length, 1)
+  assert.equal(conn.status, 'error')
+  conn.close()
+})
+
+test('any other refused open (say "Server changed") closes with 1006 and is retried', async () => {
+  const f = fakeApi()
+  const clock = fakeTimers()
+  const conn = new ServerConnection({ url: 'moved', token: '', createSocket: ipcSocketFactory(f.api), timers: clock.timers })
+  const seen = []
+  conn.on('status', (s) => seen.push([s.status, s.message]))
+  conn.connect()
+  f.rejectOpen(new Error("Error invoking remote method 'v2socket:open': Error: Server changed"))
+  await flush()
+  assert.deepEqual(seen.at(-1), ['disconnected', 'Server changed'])
+  clock.advance(2000)
+  assert.equal(f.sent.filter((s) => s[0] === 'open').length, 2)
   conn.close()
 })
 

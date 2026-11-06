@@ -1,6 +1,7 @@
 // A SocketLike over the main-process relay (src/main/v2relay.ts): the "url" the
 // SDK passes is the app-server entry id. Pure: the relay API is injected.
 import type { SocketFactory, SocketLike } from '../../../shared/client/socket.ts'
+import { CLOSE_SERVER_REMOVED, SERVER_REMOVED_MESSAGE } from '../../../shared/client/connection.ts'
 import { cleanIpcMessage } from './errors.ts'
 
 export interface RelayEvent {
@@ -98,7 +99,10 @@ export function ipcSocketFactory(api: RelayApi): SocketFactory {
       (err: unknown) => {
         // A close only, no 'error' first: the SDK treats a pre-open 'error' as
         // "connection failed" and would drop this reason (say, "Server removed").
-        finish(1006, cleanIpcMessage(err instanceof Error ? err.message : String(err)))
+        const reason = cleanIpcMessage(err instanceof Error ? err.message : String(err))
+        // The entry is gone for good: a client-local code the SDK treats as terminal.
+        // Anything else (say, "Server changed" mid-open) is transient and retried.
+        finish(reason === SERVER_REMOVED_MESSAGE ? CLOSE_SERVER_REMOVED : 1006, reason)
       }
     )
     return sock

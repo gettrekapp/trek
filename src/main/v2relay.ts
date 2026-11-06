@@ -69,7 +69,10 @@ export function registerV2Relay(): void {
     const token = (await getAppServerToken(serverEntryId)) ?? ''
     // While the token was read the entry may have been removed or re-pointed, or
     // the window closed, reloaded or crashed: then this token goes nowhere.
-    if (getAppServer(serverEntryId)?.url !== server.url) throw new Error('Server removed')
+    // Removed meanwhile: final. Re-pointed meanwhile: transient, the next open reads the new URL and token.
+    const now = getAppServer(serverEntryId)
+    if (!now) throw new Error('Server removed')
+    if (now.url !== server.url) throw new Error('Server changed')
     if (owner.isDestroyed()) throw new Error('Window closed')
     if (sockets.generation(owner) !== generation) throw new Error('Window reloaded')
     if (sockets.atCapacity(owner)) throw new Error('Too many sockets for this window')
