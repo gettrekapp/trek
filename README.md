@@ -120,8 +120,44 @@ local models, across multiple git worktrees of a repository, side by side.
   resume them. A never-saved
   project asks first. On launch, the windows open at last quit come back with their
   sessions unloaded (`open-windows.json` in the user-data directory).
-- **Recent projects**: the start screen lists the last 8 project files you opened
-  or saved (stored in the app's user-data directory; missing files are dropped).
+- **Recent projects**: the start screen lists the last 8 projects you opened or saved,
+  project files and server projects mixed (stored in the app's user-data directory).
+  Missing files are dropped; a server project stays until you remove it with its **×**.
+
+## Servers and server projects
+
+Trek can also open projects that live on a [trek-server](server/README.md), which
+keeps their worktrees and sessions running on that machine. Server windows are
+**read-only for now**: they show a live tree but you can't yet work in them.
+
+- **Server list**: **Connect to server…** on the start screen opens the app-wide
+  list of servers. **Add server** takes a name, a `ws://` or `wss://` URL and a token;
+  each server then has **Set token**, **Test**, **Edit** and **Remove**, and a dot
+  for its connection status. Plain `ws://` to anything but this machine is allowed
+  (Tailscale, LAN) but shows an "Unencrypted" warning. Create tokens on the server
+  with `trek-server token add <device>` (see [the server README](server/README.md#projects)).
+- **Tokens** are encrypted with the OS keychain (Electron safeStorage) in
+  `app-server-tokens.json` in the user-data directory, owner-only. They never reach
+  the window: main opens the WebSocket, relays it, and puts the token into the
+  `hello` itself. Changing a server's URL to another origin (scheme, host or port)
+  clears its token, so you enter it again.
+- **Projects**: pick a server to list its projects and **Open** one, or
+  **New Project…** to create one from a name and the server's registered repos.
+  **Add repo by path…** registers another repo there; if the server refuses the
+  path (`PATH_DENIED`) or it isn't a git repo (`NOT_A_REPO`), the hint is to run
+  `trek-server add <path>` on the server.
+- **Server windows**: one per server project, focused if it's already open. It
+  lists the repositories, their worktrees (branch, missing, dirty/ahead/behind,
+  loaded) and each worktree's sessions, plus Global sessions, updating live. If the
+  connection drops, a banner says so and the last tree stays. A project the server
+  doesn't know shows "Project not found" with **Pick another project**; a server
+  you removed from the list shows "Server removed". Closing the window asks
+  nothing, since the sessions keep running on the server. Server windows appear in
+  recents and come back on launch like file windows.
+- **Still to come**: a working server window with terminals and sessions (phase 3c),
+  then attention badges and notifications for server sessions (phase 3d). Until
+  then, the per-project servers under ⚙ Settings → Servers remain the way to run
+  remote sessions from a project file.
 
 ## Attention indicators
 
