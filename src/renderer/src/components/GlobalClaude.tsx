@@ -1,13 +1,10 @@
 import { useEffect, useState } from 'react'
 import { BOT_DECISION_ID, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import {
-  closeGlobalTerminal,
   cycleTab,
   focusInGlobalPanel,
   focusTerminal,
-  openGlobalTerminals,
   saveGlobalSessions,
-  startGlobalTerminal,
   tabCycleStep
 } from '../terminals'
 import { globalSessionLlm } from '../llm'
@@ -71,7 +68,7 @@ export function GlobalClaude(): React.JSX.Element {
   useEffect(() => {
     if (!open || hasTabs || view === 'bot') return
     setError(null)
-    openGlobalTerminals().catch((err) => setError(String(err)))
+    getBackend().sessions.openGlobal().catch((err) => setError(String(err)))
   }, [open, hasTabs, view])
 
   useEffect(() => {
@@ -94,7 +91,7 @@ export function GlobalClaude(): React.JSX.Element {
     useAppStore.getState().setGlobalView('sessions')
     if (!hasTabs && viewChanged) return // the effect above opens the first session on this change of view
     setError(null)
-    startGlobalTerminal().catch((err) => setError(String(err)))
+    getBackend().sessions.startGlobal().catch((err) => setError(String(err)))
   }
 
   const selectTab = (id: string): void => {
@@ -161,7 +158,7 @@ export function GlobalClaude(): React.JSX.Element {
                   if (e.button === 1) e.preventDefault()
                 }}
                 onAuxClick={(e) => {
-                  if (e.button === 1) closeGlobalTerminal(id)
+                  if (e.button === 1) void getBackend().sessions.close(id)
                 }}
                 title="Double-click to rename"
               >
@@ -195,7 +192,7 @@ export function GlobalClaude(): React.JSX.Element {
                   title="Close tab"
                   onClick={(e) => {
                     e.stopPropagation()
-                    closeGlobalTerminal(id)
+                    void getBackend().sessions.close(id)
                   }}
                 >
                   ×

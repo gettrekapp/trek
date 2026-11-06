@@ -16,17 +16,7 @@ import {
   ticketUrl,
   useAppStore
 } from '../store'
-import {
-  createTerminal,
-  cycleTab,
-  disposeTerminal,
-  focusInGlobalPanel,
-  focusTerminal,
-  loadWorktree,
-  startClaudeSession,
-  tabCycleStep,
-  unloadWorktree
-} from '../terminals'
+import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
 import { promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
@@ -686,7 +676,7 @@ export function WorktreeDetail({
                   if (e.button === 1) e.preventDefault()
                 }}
                 onAuxClick={(e) => {
-                  if (e.button === 1) disposeTerminal(id)
+                  if (e.button === 1) void getBackend().sessions.close(id)
                 }}
               >
                 <StatusBadge
@@ -741,7 +731,7 @@ export function WorktreeDetail({
                   title="Close session"
                   onClick={(e) => {
                     e.stopPropagation()
-                    disposeTerminal(id)
+                    void getBackend().sessions.close(id)
                   }}
                 >
                   ×
@@ -755,7 +745,7 @@ export function WorktreeDetail({
           serverId={info.serverId}
           onStart={(sessionType, llm) => {
             setPanel('sessions')
-            void startClaudeSession({ serverId: info.serverId, path: info.path }, sessionType, llm)
+            void getBackend().sessions.start({ serverId: info.serverId, path: info.path }, sessionType, llm)
           }}
         />
         <div className="session-row-spacer" />
@@ -763,7 +753,7 @@ export function WorktreeDetail({
           <button
             className="panel-btn"
             title="End this worktree's sessions to free CPU — they stay saved and resume when you load it again"
-            onClick={() => unloadWorktree(instance.id)}
+            onClick={() => void getBackend().worktrees.unload(instance.id)}
           >
             ⏏ Unload
           </button>
@@ -862,7 +852,7 @@ export function WorktreeDetail({
                 <button
                   className="btn btn-accent"
                   disabled={hostDown}
-                  onClick={() => void loadWorktree(instance.id)}
+                  onClick={() => void getBackend().worktrees.load(instance.id)}
                 >
                   Load session{dormant.length === 1 ? '' : 's'}
                 </button>
@@ -877,9 +867,9 @@ export function WorktreeDetail({
                   className="btn btn-accent"
                   disabled={hostDown}
                   onClick={() =>
-                    instance
-                      ? void createTerminal(instance.id, instance.path)
-                      : void startClaudeSession({ serverId: info.serverId, path: info.path })
+                    void getBackend().sessions.start(
+                      instance ? { worktreeId: instance.id } : { serverId: info.serverId, path: info.path }
+                    )
                   }
                 >
                   Start session

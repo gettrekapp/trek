@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAppStore } from '../store'
-import { pasteToTerminal } from '../terminals'
+import { getBackend } from '../backend'
 import { scheduleAutoSave } from '../persistence'
 
 interface Props {
@@ -46,7 +46,7 @@ export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Ele
     const text = queue[index]
     removeAt(terminalId, index)
     scheduleAutoSave()
-    pasteToTerminal(terminalId, text)
+    void getBackend().sessions.sendPrompt(terminalId, text)
   }
 
   const remove = (index: number): void => {

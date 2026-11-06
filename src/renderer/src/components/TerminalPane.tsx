@@ -1,13 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '../store'
-import {
-  agentLabel,
-  attachTerminal,
-  fitTerminal,
-  focusTerminal,
-  pasteToTerminal,
-  restartTerminal
-} from '../terminals'
+import { agentLabel, attachTerminal, fitTerminal, focusTerminal } from '../terminals'
+import { getBackend } from '../backend'
 import { QueuePanel } from './QueuePanel'
 
 interface Props {
@@ -58,7 +52,7 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
                 key={btn.id}
                 className="quick-btn"
                 title={btn.text}
-                onClick={() => pasteToTerminal(terminalId, btn.text)}
+                onClick={() => void getBackend().sessions.sendPrompt(terminalId, btn.text)}
               >
                 {btn.label.trim() || btn.text}
               </button>
@@ -70,7 +64,9 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
       {status === 'exited' && (
         <div className="exited-overlay">
           <span>Process exited</span>
-          <button onClick={() => void restartTerminal(terminalId)}>Restart {agentLabel(terminalId)}</button>
+          <button onClick={() => void getBackend().sessions.restart(terminalId)}>
+            Restart {agentLabel(terminalId)}
+          </button>
           {llm && llm.provider !== 'claude' && (
             <span className="exited-hint">
               If {agentLabel(terminalId)} isn&apos;t installed, set its command in ⚙ Settings → Agents.

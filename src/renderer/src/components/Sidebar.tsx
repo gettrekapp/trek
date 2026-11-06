@@ -16,10 +16,9 @@ import {
   useAppStore,
   worktreeStatus
 } from '../store'
-import { loadWorktree, unloadAllWorktrees, unloadWorktree } from '../terminals'
 import { NotificationsMenu } from './NotificationsMenu'
 import { VoiceToggle } from './VoiceToggle'
-import { addRepository, removalBlock, removeRepository } from '../repositoryActions'
+import { removalBlock } from '../repositoryActions'
 import { getBackend } from '../backend'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, HostStatus, Repository, TerminalStatus } from '../../../shared/types'
@@ -342,7 +341,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
               title="Unload — end this worktree's sessions (they stay saved)"
               onClick={(e) => {
                 e.stopPropagation()
-                unloadWorktree(instance.id)
+                void getBackend().worktrees.unload(instance.id)
               }}
             >
               ⏏
@@ -355,7 +354,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
               disabled={hostDown}
               onClick={(e) => {
                 e.stopPropagation()
-                void loadWorktree(instance.id)
+                void getBackend().worktrees.load(instance.id)
               }}
             >
               ▸{dormant.length}
@@ -427,7 +426,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                   title={block ?? undefined}
                   onClick={() => {
                     setRepoMenuId(null)
-                    if (!block) void removeRepository(repo)
+                    if (!block) void getBackend().repos.remove(repo)
                   }}
                 >
                   Remove from project
@@ -537,7 +536,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       </div>
       <div className="sidebar-footer">
         <div className="sidebar-footer-row">
-          <button className="footer-btn" onClick={() => void addRepository()}>
+          <button className="footer-btn" onClick={() => void getBackend().repos.add()}>
             Add repository…
           </button>
         </div>
@@ -548,7 +547,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             <button
               className="footer-btn"
               title="Unload every worktree — sessions stay saved and resume when you load them"
-              onClick={unloadAllWorktrees}
+              onClick={() => void getBackend().worktrees.unloadAll()}
             >
               Unload all
             </button>

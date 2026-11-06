@@ -2,13 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { GLOBAL_WORKTREE_ID, migrateProject, useAppStore } from './store'
 import { saveProject } from './persistence'
 import { handleWindowCloseRequest, syncWindowProject, watchWindowProject } from './windowLifecycle'
-import {
-  closeGlobalTerminal,
-  disposeAllTerminals,
-  disposeTerminal,
-  focusInGlobalPanel,
-  startClaudeSession
-} from './terminals'
+import { disposeAllTerminals, focusInGlobalPanel } from './terminals'
+import { getBackend } from './backend'
 import { StartScreen } from './components/StartScreen'
 import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { Workspace } from './components/Workspace'
@@ -60,17 +55,17 @@ export default function App(): React.JSX.Element {
       window.api.onMenu('open-project', () => void openProject()),
       window.api.onMenu('new-terminal', () => {
         const state = useAppStore.getState()
-        if (state.project && state.selected) void startClaudeSession(state.selected)
+        if (state.project && state.selected) void getBackend().sessions.start(state.selected)
       }),
       window.api.onMenu('close-tab', () => {
         const state = useAppStore.getState()
         if (focusInGlobalPanel()) {
           // On the Bot tab the active session is hidden, so there is no tab here to close.
           const id = state.globalView === 'sessions' ? state.activeTerminal[GLOBAL_WORKTREE_ID] : undefined
-          if (id) closeGlobalTerminal(id)
+          if (id) void getBackend().sessions.close(id)
         } else if (state.activeWorktreeId) {
           const id = state.activeTerminal[state.activeWorktreeId]
-          if (id) disposeTerminal(id)
+          if (id) void getBackend().sessions.close(id)
         }
       }),
       window.api.onMenu('toggle-global-claude', () => {
