@@ -36,7 +36,7 @@ export function publishServerState(
 ): { refresh: () => void; stop: () => void } {
   const refresh = (): void => hub.publish('server', serverTopic(store.config, version, sources.projects(), sources.health()))
   refresh()
-  // Phase 2d computes attention from sessions.
+  // The SessionManager owns the attention topic after startup; this is the empty initial state.
   const attention: AttentionTopic = { entries: [] }
   hub.publish('attention', attention)
   store.on('change', refresh)

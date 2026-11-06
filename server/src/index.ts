@@ -373,6 +373,9 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     const failed = projectFiles.files.close()
     if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
     // Give the daemon.shutdown frames and close handshakes a moment to flush.
-    setTimeout(() => process.exit(0), SHUTDOWN_FLUSH_MS)
+    setTimeout(() => {
+      server.sessions.terminals.forceKillAll()
+      process.exit(0)
+    }, SHUTDOWN_FLUSH_MS)
   })
 }

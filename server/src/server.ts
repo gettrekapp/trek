@@ -31,6 +31,8 @@ const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
 const HEARTBEAT_INTERVAL_MS = 15_000
 const REVOKE_TERMINATE_MS = 1000
+/** Largest accepted WebSocket frame. */
+const MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 export interface TrekServer {
   httpServer: Server
@@ -65,7 +67,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     registry: () => store.config.repos,
     onHealth: () => refreshServerTopic()
   })
-  const sessions = new SessionManager({ projects, store })
+  const sessions = new SessionManager({ projects, store, hub })
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -101,7 +103,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     res.writeHead(426, { 'content-type': 'text/plain' })
     res.end('trek-server: WebSocket only\n')
   })
-  const wss = new WebSocketServer({ server: httpServer })
+  const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_FRAME_BYTES })
 
   wss.on('connection', (ws, req) => {
     /** Set once hello is accepted. */

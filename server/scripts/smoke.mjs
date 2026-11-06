@@ -27,8 +27,12 @@ const configPath = join(work, 'config.json')
 // A fake agent: prints its args, lingers briefly, exits 7.
 const fakeAgent = join(work, 'fake-agent.sh')
 writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nsleep 1\nexit 7\n', { mode: 0o755 })
+// A second fake agent for the status section (the local provider's command): prints the
+// done marker, goes quiet for 4 s, rings the bell, then lingers.
+const statusAgent = join(work, 'status-agent.sh')
+writeFileSync(statusAgent, '#!/bin/sh\nprintf "working (esc to interrupt)\\n"\nsleep 4\nprintf "\\a"\nsleep 30\n', { mode: 0o755 })
 writeFileSync(configPath, JSON.stringify({
-  llm: { providers: { claude: { command: fakeAgent } } },
+  llm: { providers: { claude: { command: fakeAgent }, local: { command: statusAgent } } },
   tokenHash,
   repos: [{ id: 'smoke', name: 'Smoke', path: repo }]
 }))
@@ -397,9 +401,9 @@ else ok('branch.setNote: patched into the project topic')
 // --- worktrees ---
 // The poller also patches the project topic, so apply patches until `cond` holds (bounded).
 const projWorktrees = () => proj.snapshot.repositories[0].worktrees
-const patchUntil = async (cond, max = 15) => {
+const patchUntil = async (cond, max = 15, patchMs = 2000) => {
   for (let i = 0; i < max && !cond(); i++) {
-    try { proj = await nextPatch(pc, `project:${projectId}`, proj, 2000) } catch { break }
+    try { proj = await nextPatch(pc, `project:${projectId}`, proj, patchMs) } catch { break }
   }
   return cond()
 }
@@ -481,6 +485,62 @@ else ok('worktree.remove: removed from disk and the project topic')
     await patchUntil(() => !sessionOf(sessionId))
     if (sessionOf(sessionId)) fail('closed session still in the topic')
     else ok('session.close: removed from the topic')
+  }
+}
+
+// --- session status (second fake agent via the local provider) ---
+{
+  const mainWt = () => projWorktrees().find((w) => w.isMain)
+  const mainId = mainRow?.id
+  const sessionOf = (sid) => mainWt()?.sessions.find((s) => s.id === sid)
+
+  let att = (await pc.req('sub.subscribe', { topic: 'attention' })).result
+  const attEntry = (sid) => att.snapshot.entries.find((e) => e.sessionId === sid)
+  /** Applies attention patches until `cond` holds (bounded). */
+  const attUntil = async (cond, max = 8) => {
+    for (let i = 0; i < max && !cond(); i++) {
+      try { att = await nextPatch(pc, 'attention', att, 2500) } catch { break }
+    }
+    return cond()
+  }
+
+  const started = await pc.req('session.start', { projectId, worktreeId: mainId, cols: 80, rows: 24, llm: { provider: 'local' } })
+  if (!started.ok) fail(`status session.start: ${JSON.stringify(started)}`)
+  else {
+    const { sessionId, ptyId: statusPty } = started.result
+    await patchUntil(() => sessionOf(sessionId)?.status === 'working')
+    if (sessionOf(sessionId)?.status !== 'working') fail(`status: not working: ${JSON.stringify(sessionOf(sessionId))}`)
+    else ok('status: session is working while the agent prints')
+
+    // Quiet for 2.5 s after the marker line, before the bell at 4 s: done.
+    await patchUntil(() => sessionOf(sessionId)?.status === 'done', 15, 4000)
+    if (sessionOf(sessionId)?.status !== 'done') fail(`status: not done: ${JSON.stringify(sessionOf(sessionId))}`)
+    else ok('status: done after quiet with the marker seen')
+    await attUntil(() => attEntry(sessionId)?.status === 'done')
+    if (attEntry(sessionId)?.status !== 'done') fail(`attention topic lacks done: ${JSON.stringify(att.snapshot)}`)
+    else ok('attention topic: lists the session as done')
+
+    await patchUntil(() => sessionOf(sessionId)?.status === 'attention', 15, 4000)
+    if (sessionOf(sessionId)?.status !== 'attention') fail(`status: no attention after the bell: ${JSON.stringify(sessionOf(sessionId))}`)
+    else ok('status: attention after the bell')
+    await attUntil(() => attEntry(sessionId)?.status === 'attention')
+    if (attEntry(sessionId)?.status !== 'attention') fail(`attention topic lacks attention: ${JSON.stringify(att.snapshot)}`)
+    else ok('attention topic: lists the session as attention')
+
+    const attached = await pc.req('pty.attach', { ptyId: statusPty })
+    if (!attached.ok) fail(`status pty.attach: ${JSON.stringify(attached)}`)
+    const wrote = await pc.req('pty.write', { ptyId: statusPty, data: 'y' })
+    if (!wrote.ok) fail(`status pty.write: ${JSON.stringify(wrote)}`)
+    await patchUntil(() => sessionOf(sessionId)?.status === 'working')
+    if (sessionOf(sessionId)?.status !== 'working') fail(`status: input did not clear attention: ${JSON.stringify(sessionOf(sessionId))}`)
+    else ok('status: user input clears attention (working again)')
+
+    const closedS = await pc.req('session.close', { projectId, sessionId })
+    if (!closedS.ok) fail(`status session.close: ${JSON.stringify(closedS)}`)
+    await patchUntil(() => !sessionOf(sessionId))
+    await attUntil(() => !attEntry(sessionId), 4)
+    if (sessionOf(sessionId) || attEntry(sessionId)) fail(`closed status session still present: ${JSON.stringify(att.snapshot)}`)
+    else ok('session.close: gone from the topic and the attention topic')
   }
 }
 
