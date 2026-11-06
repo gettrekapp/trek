@@ -334,11 +334,17 @@ try {
 } catch (err) {
   fail(`Cannot read projects from ${projectsDir(args.dataDir ?? store.config.dataDir ?? defaultDataDir())}: ${(err as Error).message}`)
 }
-const server = startServer(store, serverVersion(), {
-  create: (hub, onSummariesChange) =>
-    new ProjectState({ hub, store: projectFiles.files, onSummariesChange }, projectFiles.loaded),
-  store: projectFiles.files
-})
+const server = startServer(
+  store,
+  serverVersion(),
+  {
+    create: (hub, onSummariesChange) =>
+      new ProjectState({ hub, store: projectFiles.files, onSummariesChange }, projectFiles.loaded),
+    store: projectFiles.files
+  },
+  // Absolute: agents read the config file from their own worktree's directory.
+  { mcpDir: resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir(), 'mcp') }
+)
 store.watch()
 server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {

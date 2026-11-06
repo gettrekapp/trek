@@ -2,6 +2,7 @@
 // git.listWorktrees, pty spawn/echo/kill, the projects flow (create, branch
 // note, persist, delete) and an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
+import { request as httpRequest } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -544,6 +545,76 @@ else ok('worktree.remove: removed from disk and the project topic')
   }
 }
 
+// --- trek-dev MCP (the session's --mcp-config) ---
+const mcpConfigPath = join(work, 'data', 'mcp', `${projectId}.json`)
+{
+  const mainId = projWorktrees().find((w) => w.isMain)?.id
+  const ptyText = (id) => pc.frames
+    .filter((f) => f.type === 'event' && f.event === 'pty.data' && f.payload.ptyId === id)
+    .map((f) => f.payload.data).join('')
+  const started = await pc.req('session.start', { projectId, worktreeId: mainId, cols: 400, rows: 24 })
+  if (!started.ok) fail(`mcp session.start: ${JSON.stringify(started)}`)
+  else {
+    const { sessionId, ptyId: mcpPty } = started.result
+    await pc.req('pty.attach', { ptyId: mcpPty })
+    const launched = await waitFor(() => ptyText(mcpPty).includes('--mcp-config') && ptyText(mcpPty).includes(mcpConfigPath), 4000)
+    if (!launched) fail(`agent not launched with --mcp-config ${mcpConfigPath}: ${JSON.stringify(ptyText(mcpPty))}`)
+    else ok('session.start: agent launched with --mcp-config <data dir>/mcp/<projectId>.json')
+    await waitFor(() => pc.frames.some((f) => f.type === 'event' && f.event === 'pty.exit' && f.payload.ptyId === mcpPty), 6000)
+    const closedS = await pc.req('session.close', { projectId, sessionId })
+    if (!closedS.ok) fail(`mcp session.close: ${JSON.stringify(closedS)}`)
+  }
+
+  let server
+  try {
+    server = JSON.parse(readFileSync(mcpConfigPath, 'utf8')).mcpServers?.['trek-dev']
+  } catch (err) {
+    fail(`mcp config file: ${err.message}`)
+  }
+  if (server?.type !== 'http' || !/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(server.url ?? '') || !server.headers?.Authorization) {
+    fail(`mcp config entry: ${JSON.stringify(server)}`)
+  } else {
+    ok(`mcp config file: trek-dev at ${server.url}`)
+    let rpcId = 1
+    const rpc = async (method, params, headers = server.headers) => {
+      const res = await fetch(server.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params })
+      })
+      return { status: res.status, body: res.status === 200 ? await res.json() : undefined }
+    }
+    const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'smoke', version: '0' } })
+    if (init.body?.result?.serverInfo?.name !== 'trek-dev') fail(`mcp initialize: ${JSON.stringify(init)}`)
+    else ok(`mcp initialize: serverInfo ${init.body.result.serverInfo.name} ${init.body.result.serverInfo.version}`)
+    const listed = await rpc('tools/list', {})
+    const names = listed.body?.result?.tools?.map((t) => t.name) ?? []
+    if (!names.includes('list_worktrees')) fail(`mcp tools/list: ${JSON.stringify(listed)}`)
+    else ok(`mcp tools/list: ${names.length} tools including list_worktrees`)
+    const called = await rpc('tools/call', { name: 'list_worktrees', arguments: {} })
+    let worktrees
+    try { worktrees = JSON.parse(called.body?.result?.content?.[0]?.text) } catch { /* reported below */ }
+    if (called.body?.result?.isError !== false || !Array.isArray(worktrees) || worktrees.length !== 1) {
+      fail(`mcp tools/call list_worktrees: ${JSON.stringify(called)}`)
+    } else ok(`mcp tools/call list_worktrees: one worktree (${worktrees[0].branch})`)
+    const wrong = await rpc('ping', {}, { Authorization: `Bearer ${'0'.repeat(64)}` })
+    if (wrong.status !== 401) fail(`mcp wrong token: ${wrong.status}`)
+    else ok('mcp wrong token: 401')
+    // fetch cannot set Host, so this one goes through node:http.
+    const hostStatus = await new Promise((resolve, reject) => {
+      const u = new URL(server.url)
+      const r = httpRequest({
+        host: u.hostname, port: u.port, path: u.pathname, method: 'POST',
+        headers: { ...server.headers, host: `evil.example:${u.port}`, 'content-type': 'application/json' }
+      }, (res) => { res.resume(); resolve(res.statusCode) })
+      r.on('error', reject)
+      r.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }))
+    })
+    if (hostStatus !== 403) fail(`mcp bad Host header: ${hostStatus}`)
+    else ok('mcp bad Host header: 403')
+  }
+}
+
 const inUse = await pc.req('server.removeRepo', { repoId: 'smoke' })
 if (inUse.ok || inUse.error.code !== 'IN_USE') fail(`removeRepo while used: ${JSON.stringify(inUse)}`)
 else ok('server.removeRepo: IN_USE while a project uses it')
@@ -557,6 +628,8 @@ else ok('project persisted to the data dir')
 const deleted = await pc.req('project.delete', { projectId })
 if (!deleted.ok || existsSync(stored)) fail(`project.delete: ${JSON.stringify(deleted)}`)
 else ok('project.delete: removed from disk')
+if (existsSync(mcpConfigPath)) fail(`project.delete left its MCP config file: ${mcpConfigPath}`)
+else ok('project.delete: MCP config file removed')
 srv = await nextPatch(pc, 'server', srv)
 if (srv.snapshot.projects.some((p) => p.id === projectId)) fail('server topic still lists the deleted project')
 else ok('project.delete: gone from the server topic')

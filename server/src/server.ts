@@ -26,6 +26,9 @@ import { dispatchV2 } from './v2'
 import { GitPoller } from './git/poller'
 import { SessionManager } from './sessions/manager'
 import type { TerminalSink } from './sessions/terminalHost'
+import { McpAccessStore } from './mcp/access'
+import { startMcpListener, type McpListener } from './mcp/listener'
+import { createToolCaller, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -41,7 +44,14 @@ export interface TrekServer {
   projects: ProjectState
   poller: GitPoller
   sessions: SessionManager
+  /** The trek-dev MCP endpoint, once it is listening (undefined if it is off or failed to start) */
+  mcp?: McpListener
   shutdown(reason: string): void
+}
+
+export interface ServerOptions {
+  /** Where the MCP config files go (`<dataDir>/mcp`); without it, sessions get no MCP access */
+  mcpDir?: string
 }
 
 export interface ProjectsSetup {
@@ -51,7 +61,12 @@ export interface ProjectsSetup {
   store: ProjectStore
 }
 
-export function startServer(store: ConfigStore, daemonVersion: string, projectsSetup: ProjectsSetup): TrekServer {
+export function startServer(
+  store: ConfigStore,
+  daemonVersion: string,
+  projectsSetup: ProjectsSetup,
+  options: ServerOptions = {}
+): TrekServer {
   const ptys = new PtyRegistry({
     send(ws, event, payload) {
       sendFrame(ws, { type: 'event', event, payload })
@@ -67,7 +82,21 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     registry: () => store.config.repos,
     onHealth: () => refreshServerTopic()
   })
-  const sessions = new SessionManager({ projects, store, hub })
+  let mcpAccess: McpAccessStore | undefined
+  if (options.mcpDir !== undefined) {
+    try {
+      mcpAccess = new McpAccessStore(options.mcpDir)
+    } catch (err) {
+      console.warn(`[mcp] disabled: ${(err as Error).message}`)
+    }
+  }
+  const access = mcpAccess
+  const sessions = new SessionManager({
+    projects,
+    store,
+    hub,
+    mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined
+  })
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -231,7 +260,16 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
       }
       const id = frame.id
       if (protocolVersion === PROTOCOL_VERSION_V2) {
-        const outcome = dispatchV2(frame.method, frame.params, { store, hub, subscriber, projects, poller, sessions, terminal })
+        const outcome = dispatchV2(frame.method, frame.params, {
+          store,
+          hub,
+          subscriber,
+          projects,
+          poller,
+          sessions,
+          terminal,
+          mcpAccess: access
+        })
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
         if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
@@ -265,7 +303,31 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     })
   })
 
+  let stopped = false
+  const trek: TrekServer = { httpServer, ptys, hub, projects, poller, sessions, shutdown: (reason) => shutdown(reason) }
+  if (access) {
+    const caller = createToolCaller({ store, hub, projects, poller, sessions })
+    startMcpListener({
+      access,
+      serverVersion: daemonVersion,
+      contextFor: (projectId) => ({ instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: caller(projectId) })
+    }).then(
+      (listener) => {
+        if (stopped) {
+          void listener.close()
+          return
+        }
+        trek.mcp = listener
+        console.log(`[mcp] trek-dev MCP listening on http://127.0.0.1:${listener.port}/mcp`)
+      },
+      (err: unknown) => console.warn(`[mcp] disabled: the listener did not start: ${(err as Error).message}`)
+    )
+  }
+
   const shutdown = (reason: string): void => {
+    stopped = true
+    void trek.mcp?.close()
+    trek.mcp = undefined
     poller.stop()
     sessions.stopAll()
     store.off('change', onConfigChange)
@@ -280,7 +342,7 @@ export function startServer(store: ConfigStore, daemonVersion: string, projectsS
     httpServer.close()
   }
 
-  return { httpServer, ptys, hub, projects, poller, sessions, shutdown }
+  return trek
 }
 
 function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {

@@ -42,6 +42,8 @@ export interface V2Context {
   sessions: SessionManager
   /** This connection, as a receiver of pty events */
   terminal: TerminalSink
+  /** The projects' MCP tokens and config files; a deleted project's are revoked */
+  mcpAccess?: { revoke(projectId: string): void }
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -123,6 +125,12 @@ const handlers: Record<string, Handler> = {
     // Only once the project is gone: a delete that fails leaves its sessions running.
     // The manager tracks its ptys itself, so the records are not needed for this.
     ctx.sessions.forgetProject(id)
+    try {
+      ctx.mcpAccess?.revoke(id)
+    } catch (err) {
+      // The project is already gone; a leftover config file is cleared on the next start.
+      console.warn(`[mcp] could not revoke access for deleted project ${id}: ${(err as Error).message}`)
+    }
     return null
   },
 
