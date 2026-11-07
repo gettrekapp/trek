@@ -157,9 +157,13 @@ test('the back-off doubles per failure in a row, capped; a new pty starts again'
   assert.equal(shouldRetry(failed, 'p9', 0), true)
 })
 
-test('attachResize: an opened terminal sends its size; one not opened takes the pty\'s', () => {
-  assert.deepEqual(attachResize(true, { cols: 120, rows: 40 }, { cols: 100, rows: 30 }), { resizePty: { cols: 120, rows: 40 } })
-  assert.deepEqual(attachResize(true, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), { resizePty: { cols: 100, rows: 30 } })
-  assert.deepEqual(attachResize(false, { cols: 80, rows: 24 }, { cols: 100, rows: 30 }), { resizeLocal: { cols: 100, rows: 30 } })
-  assert.deepEqual(attachResize(false, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), {})
+test('attachResize: a shown terminal sends its size once; a hidden one takes the pty\'s', () => {
+  // Shown: the fit left xterm's size alone, so nothing has sent it yet.
+  assert.deepEqual(attachResize(true, false, { cols: 120, rows: 40 }, { cols: 100, rows: 30 }), { resizePty: { cols: 120, rows: 40 } })
+  assert.deepEqual(attachResize(true, false, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), { resizePty: { cols: 100, rows: 30 } })
+  // Shown, and the fit changed the size: xterm's onResize sent it already.
+  assert.deepEqual(attachResize(true, true, { cols: 120, rows: 40 }, { cols: 100, rows: 30 }), {})
+  // Hidden (never opened, or opened under display:none): never resizes the pty.
+  assert.deepEqual(attachResize(false, false, { cols: 80, rows: 24 }, { cols: 100, rows: 30 }), { resizeLocal: { cols: 100, rows: 30 } })
+  assert.deepEqual(attachResize(false, false, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), {})
 })

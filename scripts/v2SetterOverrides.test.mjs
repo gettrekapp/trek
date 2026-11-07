@@ -81,12 +81,13 @@ test('complete toggles against the status; seen only for attention or done', asy
   ])
 })
 
-test('the status is the server\'s: local status setters do nothing', async () => {
+test('the status is the server\'s: local status setters do nothing, nor does adding a worktree locally', async () => {
   const { backend, calls } = fakeBackend()
   const o = v2SetterOverrides(backend, () => slice, () => {})
   o.setTerminalStatus('busy', 'idle')
   o.setTerminalSession('busy', 'other')
   o.setGlobalSessions([])
+  o.addWorktreeInstance('r1', { id: 'w', name: 'w', path: '/w' })
   await tick()
   assert.deepEqual(calls, [])
 })
@@ -103,4 +104,27 @@ test('a failed request is reported with a title', async () => {
     ['Could not save the note', 'CONFLICT'],
     ['Could not rename the session', 'CONFLICT']
   ])
+})
+
+test('seen is sent once while it is in flight, and again after it settled', async () => {
+  const release = {}
+  const calls = []
+  const backend = {
+    sessions: {
+      seen: (id) => {
+        calls.push(id)
+        return new Promise((r) => (release[id] = r))
+      }
+    }
+  }
+  const o = v2SetterOverrides(backend, () => slice, () => {})
+  o.clearTerminalAttention('bell')
+  o.clearTerminalAttention('bell')
+  o.clearTerminalAttention('done')
+  assert.deepEqual(calls, ['bell', 'done'])
+  release.bell()
+  await tick()
+  o.clearTerminalAttention('bell')
+  o.clearTerminalAttention('done')
+  assert.deepEqual(calls, ['bell', 'done', 'bell'])
 })

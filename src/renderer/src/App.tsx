@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { GLOBAL_WORKTREE_ID, migrateProject, useAppStore } from './store'
+import { GLOBAL_WORKTREE_ID, mergedWorktrees, migrateProject, selectedWorktreeInfo, useAppStore } from './store'
 import { saveProject } from './persistence'
 import { handleWindowCloseRequest, syncWindowProject, watchWindowProject } from './windowLifecycle'
 import { disposeAllTerminals, focusInGlobalPanel } from './terminals'
@@ -55,8 +55,13 @@ export default function App(): React.JSX.Element {
       window.api.onMenu('open-project', () => void openProject()),
       window.api.onMenu('new-terminal', () => {
         const state = useAppStore.getState()
-        // A server window offline: its commands wait for the connection.
-        if (state.project && state.selected && !state.serverOffline) void getBackend().sessions.start(state.selected)
+        // A server window offline: its commands wait for the connection. A missing worktree runs nothing.
+        if (!state.project || !state.selected || state.serverOffline) return
+        if (state.serverWindow) {
+          const worktrees = mergedWorktrees(state.project, state.hostWorktrees)
+          if (selectedWorktreeInfo(state.project, worktrees, state.selected, state.activeWorktreeId)?.prunable) return
+        }
+        void getBackend().sessions.start(state.selected)
       }),
       window.api.onMenu('close-tab', () => {
         const state = useAppStore.getState()

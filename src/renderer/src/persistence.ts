@@ -32,11 +32,12 @@ let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
  * Saves the project, snapshotting live terminal sessions so reopening the
  * project resumes them. Prompts for a location when the project has never
  * been saved (manual ⌘S path). False means nothing was written, because the
- * user cancelled that prompt or the path was refused.
+ * user cancelled that prompt or the path was refused, or because this is a
+ * server window: its project lives on the server, never in a local file.
  */
 export async function saveProject(): Promise<boolean> {
   const state = useAppStore.getState()
-  if (!state.project) return false
+  if (!state.project || state.serverWindow) return false
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = null
   // An unloaded worktree has no live terminals — its sessions already sit on
@@ -63,10 +64,12 @@ export async function saveProject(): Promise<boolean> {
 
 /**
  * Debounced background save after structural changes (new/closed tabs).
- * Does nothing for never-saved projects — auto-save must not pop a dialog.
+ * Does nothing for never-saved projects — auto-save must not pop a dialog —
+ * nor for a server window, whose project is the server's.
  */
 export function scheduleAutoSave(): void {
-  if (!useAppStore.getState().filePath) return
+  const state = useAppStore.getState()
+  if (!state.filePath || state.serverWindow) return
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(() => {
     autoSaveTimer = null

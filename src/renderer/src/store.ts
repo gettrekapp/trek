@@ -7,6 +7,7 @@ import { migrateToV3, type RawProjectFile } from '../../shared/migration'
 import { sanitizeAppearance } from '../../shared/appearance'
 import { sanitizeProjectLlm } from '../../shared/providers/selection'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
+import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   EnvCheckResult,
@@ -203,7 +204,10 @@ export interface AppState {
   setServerWindow: (target: { serverEntryId: string; projectId: string } | null) => void
   /** A server window whose connection is down: it shows the last state, and its commands are disabled. */
   serverOffline: boolean
-  setServerOffline: (offline: boolean) => void
+  /** The server window's connection status, null before it is known (and in a project file window). */
+  serverLink: ConnectionStatus | null
+  /** Sets `serverLink`, and `serverOffline` to whether it is anything but connected. */
+  setServerLink: (status: ConnectionStatus) => void
   /** The start screen opens on Connect with this server picked (once), after Pick another project. */
   connectServerId: string | null
   setConnectServerId: (id: string | null) => void
@@ -364,7 +368,12 @@ export const useAppStore = create<AppState>((set) => ({
   serverWindow: null,
   setServerWindow: (serverWindow) => set({ serverWindow }),
   serverOffline: false,
-  setServerOffline: (serverOffline) => set((state) => (state.serverOffline === serverOffline ? state : { serverOffline })),
+  serverLink: null,
+  setServerLink: (serverLink) =>
+    set((state) => {
+      const serverOffline = serverLink !== 'connected'
+      return state.serverLink === serverLink && state.serverOffline === serverOffline ? state : { serverLink, serverOffline }
+    }),
   connectServerId: null,
   setConnectServerId: (connectServerId) => set({ connectServerId }),
   project: null,

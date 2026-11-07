@@ -150,6 +150,18 @@ export function WorktreeDetail({
   }, [path])
 
   useEffect(() => {
+    // A server window lost its link: what is open could only fail now, and an edit
+    // in progress would be lost silently, so it all closes.
+    if (!offline) return
+    setMenuOpen(false)
+    setTagMenuOpen(false)
+    setCustomTagMenuOpen(false)
+    setShowTicket(false)
+    setShowPR(false)
+    setEditingId(null)
+  }, [offline])
+
+  useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       const step = tabCycleStep(e)
       const worktreeId = useAppStore.getState().activeWorktreeId

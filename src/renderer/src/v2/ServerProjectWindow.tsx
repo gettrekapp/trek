@@ -119,28 +119,36 @@ function ServerProjectTree({
 
   useEffect(() => {
     const { connection, mirror } = registered
+    // The window may already have left this project (leave() runs inside setServerWindow,
+    // before React unmounts this): a late status or snapshot must not reach the next store.
+    const isCurrent = (): boolean => {
+      const target = useAppStore.getState().serverWindow
+      return target?.serverEntryId === entry.id && target.projectId === projectId
+    }
     let previous = connection.status
     const onStatus = (change: StatusChange): void => {
       if (previous === 'connected' && change.status !== 'connected') setDroppedAt(Date.now())
       previous = change.status
       setStatus(change)
-      useAppStore.getState().setServerOffline(change.status !== 'connected')
+      if (!isCurrent()) return
+      useAppStore.getState().setServerLink(change.status)
       // The welcome's capabilities may have changed the backend's features.
       backendChanged()
       // Attaches that failed while the link was down go again now, not after their back-off.
       if (change.status === 'connected') retryV2Terminals()
     }
     setStatus(currentStatus(connection))
-    useAppStore.getState().setServerOffline(connection.status !== 'connected')
+    if (isCurrent()) useAppStore.getState().setServerLink(connection.status)
     backendChanged()
     const offStatus = connection.on('status', onStatus)
     const offTopic = mirror.subscribe(`project:${projectId}`, (update) => {
       if ('error' in update) {
         if (errorCode(update.error) === 'NOT_FOUND') setView({ notFound: true })
-        // Keep showing the last state on a transient error; the banner says what is wrong.
-        else setView((v) => (v && 'name' in v ? v : { error: errorText(update.error) }))
+        // Keep showing the last state (a "not found" too) on a transient error; the banner says what is wrong.
+        else setView((v) => (v && ('name' in v || 'notFound' in v) ? v : { error: errorText(update.error) }))
         return
       }
+      if (!isCurrent()) return
       // Terminals first, then the store: the panes it renders attach to the entries.
       applyV2Project(update.snapshot, registered.ptys)
       setView({ name: update.snapshot.name })
@@ -161,7 +169,7 @@ function ServerProjectTree({
       // The slice and the overrides go with serverWindow (windowKind.ts); the streams go now.
       disposeV2Terminals()
     }
-  }, [registered, projectId])
+  }, [registered, entry.id, projectId])
 
   // Structural (the relay's open result), never the message text.
   const removed = status.removed === true

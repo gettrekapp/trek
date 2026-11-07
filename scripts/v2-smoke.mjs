@@ -48,11 +48,27 @@ const DAEMON_READY_MS = 15_000
 const APP_CLOSE_MS = 10_000
 
 const checks = []
+/** The names of the failed checks, repeated on the last line so `| tail -1` shows a flake. */
+const failedChecks = []
 const check = (name, actual, expected) => {
   const ok = JSON.stringify(actual) === JSON.stringify(expected)
   checks.push(ok)
+  if (!ok) failedChecks.push(name)
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${JSON.stringify(actual)}`)
 }
+/** A check a real (trusted) focus event made inconclusive: logged, neither passed nor failed. */
+const inconclusive = (name, why) => console.log(`skip ${name}: inconclusive, ${why}`)
+/** Counts the window's trusted focus events from now on (the OS focusing it, not a dispatched event). */
+const countTrustedFocus = (page) =>
+  page.evaluate(() => {
+    window.__trustedFocus = 0
+    if (window.__trustedFocusHooked) return
+    window.__trustedFocusHooked = true
+    window.addEventListener('focus', (e) => {
+      if (e.isTrusted) window.__trustedFocus++
+    })
+  })
+const trustedFocus = (page) => page.evaluate(() => window.__trustedFocus ?? 0)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 /** Polls `fn` until it returns `expected` (JSON-equal) or the deadline passes; returns the last value. */
 const until = async (fn, expected, ms = 10_000) => {
@@ -293,7 +309,8 @@ const finish = async (reason) => {
   await stopDaemon()
   rmSync(work, { recursive: true, force: true })
   rmSync(outside, { recursive: true, force: true })
-  console.log(exitCode === 0 ? `V2 SMOKE PASS (${checks.length} checks)` : `V2 SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''})`)
+  const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
+  console.log(exitCode === 0 ? `V2 SMOKE PASS (${checks.length} checks)` : `V2 SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''}${failedNames})`)
   process.exit(exitCode)
 }
 // Interrupted: no time for a graceful close, but leave no server process or temp dirs behind.
@@ -615,9 +632,13 @@ try {
   const stuck = await w5.evaluate((url) => window.api.appServers.save({ name: 'Stuck', url, token: 'wrong-token' }), `ws://127.0.0.1:${port}`)
   await w5.evaluate((id) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId: 'whatever' }), stuck.id)
   await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).waitFor({ timeout: 10_000 })
+  // A real focus (another window closing, the OS) re-reads the list too: then this proves nothing.
+  await countTrustedFocus(w5)
   await w5.evaluate((id) => window.api.appServers.remove(id), stuck.id)
   await sleep(500)
-  check('a stuck window does not notice the removal by itself', await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).count(), 1)
+  const stuckBanner = await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).count()
+  if (stuckBanner !== 1 && (await trustedFocus(w5)) > 0) inconclusive('a stuck window does not notice the removal by itself', 'the window was focused meanwhile')
+  else check('a stuck window does not notice the removal by itself', stuckBanner, 1)
   await w5.evaluate(() => window.dispatchEvent(new Event('focus')))
   await w5.locator('.server-window-message h2', { hasText: 'Server removed' }).waitFor({ timeout: 5000 })
   check('on focus it re-reads the list and shows Server removed', await w5.locator('.server-window-message h2').textContent(), 'Server removed')
@@ -642,6 +663,8 @@ try {
     return true
   })
   const opens = () => app.evaluate(() => globalThis.__v2Opens)
+  // A real focus re-reads the server list, and may see the removal before any relay open.
+  await countTrustedFocus(w5)
 
   // Server removed (as from another window): the relay's removed result is terminal, no retries.
   await w5.evaluate((id) => window.api.appServers.remove(id), entryId)
@@ -650,7 +673,8 @@ try {
   check('both titles say Server removed', [await w5.locator('.title-text').textContent(), await until(() => titleOf('w5'), 'Server removed', 5000)], ['Server removed', 'Server removed'])
   if (hooked) {
     const before = await opens()
-    check('the hook saw the refused retry', before >= 1, true)
+    if (before >= 1 || (await trustedFocus(w5)) === 0) check('the hook saw the refused retry', before >= 1, true)
+    else inconclusive('the hook saw the refused retry', 'a focus re-read the server list first')
     await sleep(3000)
     check('no further relay opens over 3 s', (await opens()) - before, 0)
   } else {

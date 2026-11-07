@@ -4,6 +4,17 @@ import { agentLabel, attachTerminal, fitTerminal, focusTerminal, sendV2Size } fr
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { QueuePanel } from './QueuePanel'
+import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
+import type { ConnectionStatus } from '../../../shared/client/connection.ts'
+
+/**
+ * The overlay's title: "Reconnecting" only for the statuses the SDK retries
+ * out of by itself; otherwise what the status is (the banner has the details).
+ */
+function offlineTitle(link: ConnectionStatus | null): string {
+  if (link === 'connecting' || link === 'disconnected') return 'Reconnecting to the server…'
+  return link && link !== 'connected' ? STATUS_LABELS[link] : 'Disconnected from the server'
+}
 
 interface Props {
   terminalId: string
@@ -22,6 +33,7 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
   )
   // A server window whose link is down: input would be dropped, so the pane is covered.
   const offline = useAppStore((s) => s.serverOffline)
+  const link = useAppStore((s) => s.serverLink)
   // The agent's command is a setting of this machine, which a server window does not edit.
   const agentHint = useFeatures().settingsEdit
 
@@ -36,17 +48,20 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
   useEffect(() => {
     if (visible) {
       requestAnimationFrame(() => {
-        fitTerminal(terminalId)
-        // A server window's pty keeps the last resizer's size: claim it on every show.
-        sendV2Size(terminalId)
+        // A server window's pty keeps the last resizer's size: claim it on every show (it fits too).
+        if (!sendV2Size(terminalId)) fitTerminal(terminalId)
         focusTerminal(terminalId)
       })
     }
   }, [visible, terminalId])
 
   // Back online: the stream has re-attached (or is about to); a shown pane claims its size again.
+  // Only on the way from offline to online: the show above covers a pane that becomes visible.
+  const wasOffline = useRef(offline)
   useEffect(() => {
-    if (visible && !offline) requestAnimationFrame(() => sendV2Size(terminalId))
+    const back = wasOffline.current && !offline
+    wasOffline.current = offline
+    if (back && visible) requestAnimationFrame(() => sendV2Size(terminalId))
   }, [visible, offline, terminalId])
 
   return (
@@ -75,7 +90,7 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
       {status !== 'exited' && <QueuePanel terminalId={terminalId} global={global} />}
       {offline && (
         <div className="reconnecting-overlay" role="status">
-          <span className="reconnecting-title">Reconnecting to the server…</span>
+          <span className="reconnecting-title">{offlineTitle(link)}</span>
           <span className="exited-hint">The session keeps running there. Typing is paused until the connection is back.</span>
         </div>
       )}

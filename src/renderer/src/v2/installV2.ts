@@ -10,7 +10,7 @@ import { createV2Backend, type V2Request } from './backendV2'
 import { OVERRIDDEN_SETTERS, v2SetterOverrides, type SetterOverrides } from './setterOverrides'
 import { clearV2Projection, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
-import { requestRepoPath } from './repoPathPrompt'
+import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { errorCode, errorText } from './errors'
 import { ClientError } from '../../../shared/client/index.ts'
 import type { WindowBackend } from '../backend'
@@ -41,17 +41,21 @@ const EMPTY: Partial<AppState> = {
   hostWorktrees: {},
   terminalQueues: {},
   decisions: {},
-  serverOffline: false
+  serverOffline: false,
+  serverLink: null
 }
 
 export function installV2Window(entryId: string, projectId: string): V2Window {
+  /** Set by `leave()`: whatever starts afterwards (a chained second request, a new wait) stops at once. */
+  let left = false
   /**
-   * The waits still open; `leave()` ends them with undefined, so a create or a
-   * start in flight never checks the next window's store (another project, or
-   * a legacy one) for its result.
+   * The waits still open; `leave()` ends them, so a create or a start in
+   * flight never checks the next window's store (another project, or a legacy
+   * one) for its result.
    */
   const waits = new Set<() => void>()
   function whenProjected<T>(check: () => T | undefined): Promise<T | undefined> {
+    if (left) return Promise.resolve(undefined)
     const now = check()
     if (now !== undefined) return Promise.resolve(now)
     return new Promise((resolve) => {
@@ -74,14 +78,14 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // Never connects: ServerProjectWindow does, once it knows the entry still exists.
   const registered = () => registeredServerEntry(entryId)
   const request: V2Request = (method, params) => {
-    const server = registered()
+    const server = left ? undefined : registered()
     if (!server) return Promise.reject(new ClientError('NOT_CONNECTED', 'not connected to the server'))
     return server.connection.request(method, params)
   }
 
   /** The path the server registered, from its `server` topic (the mirror already follows it). */
   const registeredRepoPath = (repoId: string): Promise<string | null> => {
-    const server = registered()
+    const server = left ? undefined : registered()
     if (!server) return Promise.resolve(null)
     return new Promise((resolve) => {
       let settled = false
@@ -91,9 +95,13 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
         settled = true
         clearTimeout(timer)
         off?.()
+        waits.delete(cancel)
         resolve(path)
       }
-      const timer = setTimeout(() => done(null), PROJECTION_WAIT_MS)
+      // `leave()` ends it like the projection waits.
+      const cancel = (): void => done(null)
+      waits.add(cancel)
+      const timer = setTimeout(cancel, PROJECTION_WAIT_MS)
       off = server.mirror.subscribe('server', (update) => {
         if ('error' in update) return
         const repo = update.snapshot.repos.find((r) => r.id === repoId)
@@ -105,8 +113,11 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
 
   // While the link is down every request fails NOT_CONNECTED, and the commands are disabled: no dialog for that.
   // The backend's fire-and-forget methods and the setter overrides share it.
+  // Once the window left the project, nothing this backend still has in flight shows a dialog.
+  const showError = (title: string, message: string): Promise<void> =>
+    left ? Promise.resolve() : window.api.showError(title, message)
   const report = (title: string, err: unknown): void => {
-    if (errorCode(err) !== 'NOT_CONNECTED') void window.api.showError(title, errorText(err))
+    if (errorCode(err) !== 'NOT_CONNECTED') void showError(title, errorText(err))
   }
 
   const backend = createV2Backend({
@@ -119,23 +130,27 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     termSize: terminalSize,
     focus: focusTerminal,
     setActiveTerminal: (worktreeId, terminalId) => useAppStore.getState().setActiveTerminal(worktreeId, terminalId),
-    confirm: (prompt) => window.api.confirm(prompt),
-    showError: (title, message) => window.api.showError(title, message),
+    confirm: (prompt) => (left ? Promise.resolve(false) : window.api.confirm(prompt)),
+    showError,
     promptRepoPath: requestRepoPath,
     registeredRepoPath,
     removalBlock,
     report
   })
 
-  const state = useAppStore.getState()
-  const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, state[name]])) as SetterOverrides
-  useAppStore.setState(v2SetterOverrides(backend, () => useAppStore.getState(), report))
+  // The store's own setters (zustand 5's initial state), never a live value that may already be an override.
+  const initial = useAppStore.getInitialState()
+  const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
+  // Offline until ServerProjectWindow reports the real status: the commands start disabled.
+  useAppStore.setState({ ...v2SetterOverrides(backend, () => useAppStore.getState(), report), serverOffline: true, serverLink: null })
 
   return {
     entryId,
     projectId,
     backend,
     leave: () => {
+      left = true
+      cancelRepoPath()
       for (const cancel of [...waits]) cancel()
       disposeV2Terminals()
       clearV2Projection()

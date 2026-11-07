@@ -349,8 +349,9 @@ export async function loadWorktree(worktreeId: string): Promise<void> {
  */
 export function unloadWorktree(worktreeId: string): void {
   const state = useAppStore.getState()
-  const order = state.terminalOrder[worktreeId] ?? []
   // A server window's worktree unloads on its server (worktree.unload), never here.
+  if (state.serverWindow) return
+  const order = state.terminalOrder[worktreeId] ?? []
   if (order.some((id) => entries.get(id)?.v2)) return
   const project = state.project
   const instance = project ? allWorktrees(project).find((w) => w.id === worktreeId) : undefined
@@ -1059,6 +1060,8 @@ function unloadTerminal(id: string): void {
  */
 export function disposePendingTerminals(): void {
   const state = useAppStore.getState()
+  // A server window's sessions run on its server; closing the window detaches them.
+  if (state.serverWindow) return
   for (const id of Object.keys(state.terminals)) {
     // A server window's pending session runs on its server; closing the window detaches it.
     if (!state.terminals[id].sessionPending || entries.get(id)?.v2) continue
@@ -1137,10 +1140,10 @@ function createV2Entry(id: string, ptys: PtyStream): Entry {
   term.onData((data) => {
     if (link.ptyId) void link.ptys.write(link.ptyId, data).catch(() => {})
   })
-  // Only an opened terminal drives the pty's size: one not in the DOM still
-  // has xterm's default, or the pty's own size (attachResize).
+  // Only a shown terminal drives the pty's size: a hidden one (not opened, or
+  // under display:none) has xterm's default, or the pty's own size (attachResize).
   term.onResize(({ cols, rows }) => {
-    if (link.ptyId && term.element) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
+    if (link.ptyId && isShown(term)) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
   })
   return entry
 }
@@ -1160,16 +1163,29 @@ function attachFailed(entry: Entry, link: V2Link, ptyId: string, err: unknown): 
   scheduleV2Sync(Math.max(0, link.failed.retryAt - Date.now()))
 }
 
+/** Laid out with a size: opened, and not under display:none (a background tab, a hidden pane). */
+function isShown(term: Terminal): boolean {
+  if (!term.element) return false
+  const { width, height } = term.element.getBoundingClientRect()
+  return width > 0 && height > 0
+}
+
+/** Fits a shown terminal; true when that changed xterm's size (its onResize then sent it). */
+function fitResized(entry: Entry): boolean {
+  const { cols, rows } = entry.term
+  entry.fit.fit()
+  return entry.term.cols !== cols || entry.term.rows !== rows
+}
+
 /**
  * The sizes once an attach (or a re-attach after a reconnect) resolved: the pty
- * keeps the size of whoever resized it last, for every client. Opened, send
- * ours so the TUI repaints for it; not opened yet, take the pty's size instead
- * of sending xterm's default 80x24.
+ * keeps the size of whoever resized it last, for every client. Shown, send
+ * ours (once) so the TUI repaints for it; hidden, whether opened or not, take
+ * the pty's size instead of sending xterm's default 80x24 or a stale size.
  */
-function applyAttachSize(id: string, entry: Entry, ptys: PtyStream, ptyId: string, info: PtyInfo): void {
-  const opened = entry.term.element !== undefined
-  if (opened) fitTerminal(id)
-  const step = attachResize(opened, entry.term, info)
+function applyAttachSize(entry: Entry, ptys: PtyStream, ptyId: string, info: PtyInfo): void {
+  const shown = isShown(entry.term)
+  const step = attachResize(shown, shown && fitResized(entry), entry.term, info)
   if (step.resizePty) void ptys.resize(ptyId, step.resizePty.cols, step.resizePty.rows).catch(() => {})
   if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
 }
@@ -1220,7 +1236,7 @@ function attachV2(id: string, ptyId: string): void {
       onReset: () => entry.term.reset(),
       // Re-attached after a reconnect: another client may have resized the pty meanwhile.
       onReattach: (info) => {
-        if (current()) applyAttachSize(id, entry, ptys, ptyId, info)
+        if (current()) applyAttachSize(entry, ptys, ptyId, info)
       },
       // The re-attach after a reconnect failed, or a handler threw: the pty may be alive.
       onError: (err) => {
@@ -1235,7 +1251,7 @@ function attachV2(id: string, ptyId: string): void {
         if (!current()) return
         link.failed = null
         link.announced = null
-        applyAttachSize(id, entry, ptys, ptyId, info)
+        applyAttachSize(entry, ptys, ptyId, info)
       },
       (err: unknown) => {
         if (!current()) return
@@ -1257,19 +1273,17 @@ function attachV2(id: string, ptyId: string): void {
 }
 
 /**
- * A server window's terminal was shown: fit it and send its size, even when
- * xterm's size did not change (fit then sends nothing), because the pty keeps
- * the size of whoever resized it last. A legacy entry, or one with no pty, is
- * left alone.
+ * A server window's terminal was shown: fit it and send its size once, also
+ * when xterm's size did not change (fit then sends nothing), because the pty
+ * keeps the size of whoever resized it last. False when it did nothing (a
+ * legacy entry, one with no pty, or one not shown), so the caller fits as usual.
  */
-export function sendV2Size(id: string): void {
+export function sendV2Size(id: string): boolean {
   const entry = entries.get(id)
   const link = entry?.v2
-  if (!entry || !link?.ptyId || !entry.term.element) return
-  const { width, height } = entry.term.element.getBoundingClientRect()
-  if (width === 0 || height === 0) return
-  entry.fit.fit()
-  void link.ptys.resize(link.ptyId, entry.term.cols, entry.term.rows).catch(() => {})
+  if (!entry || !link?.ptyId || !isShown(entry.term)) return false
+  if (!fitResized(entry)) void link.ptys.resize(link.ptyId, entry.term.cols, entry.term.rows).catch(() => {})
+  return true
 }
 
 function detachV2(entry: Entry): void {

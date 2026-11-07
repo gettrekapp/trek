@@ -110,19 +110,22 @@ export interface TermSize {
 }
 
 /**
- * The sizes to send once an attach resolves. The pty keeps the size of whoever
- * resized it last, and other clients see it. An opened terminal (in the DOM,
- * fitted) sends its size so the TUI repaints for it. One not opened yet (a
- * background tab, an unselected worktree) still has xterm's default size: it
- * must not resize the pty, and takes the pty's size instead so the replay
- * lays out as it was written.
+ * The sizes once an attach (or a re-attach after a reconnect) resolves. The
+ * pty keeps the size of whoever resized it last, and other clients see it.
+ * A shown terminal (laid out with a non-zero size) has just been fitted: it
+ * sends its size so the TUI repaints for it, unless the fit changed xterm's
+ * size, in which case xterm's onResize has sent it already (`fitResized`). A
+ * hidden one, whether never opened (an unselected worktree) or opened under
+ * display:none (a background tab), must not resize the pty: it takes the
+ * pty's size instead, so the replay lays out as it was written.
  */
 export function attachResize(
-  opened: boolean,
+  shown: boolean,
+  fitResized: boolean,
   local: TermSize,
   pty: TermSize
 ): { resizePty?: TermSize; resizeLocal?: TermSize } {
-  if (opened) return { resizePty: { cols: local.cols, rows: local.rows } }
+  if (shown) return fitResized ? {} : { resizePty: { cols: local.cols, rows: local.rows } }
   if (local.cols === pty.cols && local.rows === pty.rows) return {}
   return { resizeLocal: { cols: pty.cols, rows: pty.rows } }
 }

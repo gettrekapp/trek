@@ -848,8 +848,9 @@ welcome starts a new one. When the connection is closed (`close()`, which is als
 gets `onClosed('closed')` (without an `onClosed`, `onExit(-1)`) and the stream is
 emptied; an `attach()` still in flight just rejects with `NOT_CONNECTED`.
 `onExit` itself only ever carries the process's own exit code when the handlers
-have an `onClosed`, so a process that exits with -1 is not mistaken for a closed
-stream.
+have both an `onClosed` and an `onError` (without `onError`, a failed re-attach
+still ends with `onExit(-1)`), so a process that exits with -1 is not mistaken
+for a closed stream.
 
 **Registry.** `ServerRegistry` holds one connection, mirror and pty stream per
 server. An entry's `id` is the client's own name for it (any string, chosen when

@@ -7,6 +7,8 @@
 // The status is the server's alone (it computes it from the pty), so the
 // setters that would move it locally (setTerminalStatus, Codex discovery's
 // setTerminalSession, saveGlobalSessions' setGlobalSessions) do nothing here.
+// So does addWorktreeInstance: every worktree of a server project comes from
+// the mirror (AddWorktreeModal's v2 path never calls it).
 //
 // Pure: windowKind.ts installs the result with useAppStore.setState and puts
 // the originals back when the window leaves the server project.
@@ -29,7 +31,8 @@ export const OVERRIDDEN_SETTERS = [
   'setWorktreeOrder',
   'setTerminalStatus',
   'setTerminalSession',
-  'setGlobalSessions'
+  'setGlobalSessions',
+  'addWorktreeInstance'
 ] as const
 
 export type OverriddenSetter = (typeof OVERRIDDEN_SETTERS)[number]
@@ -50,6 +53,8 @@ export function v2SetterOverrides(
     request.catch((err: unknown) => report(title, err))
   }
   const noop = (): void => {}
+  // `session.seen` already sent and not answered yet: a focus repeated meanwhile sends nothing.
+  const seenInFlight = new Set<string>()
   return {
     renameTerminal: (id, title) => send('Could not rename the session', backend.sessions.rename(id, title)),
     toggleTerminalComplete: (id) => {
@@ -60,8 +65,12 @@ export function v2SetterOverrides(
     // Only what `seen` clears: focusTerminal calls this on every click and show.
     clearTerminalAttention: (id) => {
       const status = state().terminals[id]?.status
-      if (status !== 'attention' && status !== 'done') return
-      send('Could not update the session', backend.sessions.seen(id))
+      if ((status !== 'attention' && status !== 'done') || seenInFlight.has(id)) return
+      seenInFlight.add(id)
+      send(
+        'Could not update the session',
+        backend.sessions.seen(id).finally(() => seenInFlight.delete(id))
+      )
     },
     setTerminalQueue: (id, texts) => send('Could not update the queue', backend.sessions.setQueue(id, texts)),
     enqueueTerminalText: (id, text) => send('Could not queue the prompt', backend.sessions.enqueue(id, text)),
@@ -83,6 +92,7 @@ export function v2SetterOverrides(
     setWorktreeOrder: (keys) => send('Could not save the worktree order', backend.worktrees.setOrder(keys)),
     setTerminalStatus: noop,
     setTerminalSession: noop,
-    setGlobalSessions: noop
+    setGlobalSessions: noop,
+    addWorktreeInstance: noop
   }
 }

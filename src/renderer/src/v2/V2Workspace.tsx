@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { mergedWorktrees, selectedWorktreeInfo, useAppStore } from '../store'
 import { useFeatures } from '../useFeatures'
 import { Sidebar } from '../components/Sidebar'
 import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
 import { GlobalClaude } from '../components/GlobalClaude'
-import { answerRepoPath, useRepoPathRequest } from './repoPathPrompt'
+import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 
 /**
  * A server project's workspace: the legacy Sidebar, WorktreeDetail and Global
@@ -20,6 +20,12 @@ export function V2Workspace(): React.JSX.Element {
   const hostWorktrees = useAppStore((s) => s.hostWorktrees)
   const features = useFeatures()
   const [addRepoId, setAddRepoId] = useState<string | null>(null)
+  const offline = useAppStore((s) => s.serverOffline)
+
+  // The link dropped: a focused field or button must not take Enter or typing meanwhile.
+  useEffect(() => {
+    if (offline && document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  }, [offline])
 
   if (!project) return <p className="muted server-window-loading">Loading…</p>
   const worktrees = mergedWorktrees(project, hostWorktrees)
@@ -42,6 +48,8 @@ export function V2Workspace(): React.JSX.Element {
 function RepoPathPrompt(): React.JSX.Element | null {
   const open = useRepoPathRequest()
   const [path, setPath] = useState('')
+  // Gone with the workspace (Pick another project, Server removed): the request ends with null.
+  useEffect(() => cancelRepoPath, [])
   if (!open) return null
   const answer = (value: string | null): void => {
     setPath('')

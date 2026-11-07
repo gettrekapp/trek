@@ -20,7 +20,8 @@ export interface PtyHandlers {
    * The stream ended the pty, not the process: 'closed' when the connection
    * closed for good, 'gone' when a re-attach after a reconnect found no such
    * pty (it ended while the link was down). Without this, both end with
-   * onExit(-1), which a process's own exit code of -1 looks the same as.
+   * onExit(-1), which a process's own exit code of -1 looks the same as. With
+   * this and onError, onExit carries only the process's own exit code.
    */
   onClosed?(reason: 'closed' | 'gone'): void
   /** A re-attach after a reconnect succeeded, after its replay: the pty as it is now (size included). */

@@ -381,3 +381,51 @@ test('onReattach follows the replay of a successful re-attach, with the pty info
   await tick()
   assert.deepEqual(a.log, [['reset'], ['data', 'again', true], ['reattached', 132, 40]])
 })
+
+test('onReattach runs once after a CONGESTED retry succeeds', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = closingHandlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1'], { handlers: { p1: a } }))
+  next.fail(attachReqs(next, 'p1')[0], 'CONGESTED', CONGESTED_MSG)
+  await tick()
+  clock.advance(250)
+  await tick()
+  next.reply(attachReqs(next, 'p1')[1], { ...info('p1'), cols: 100, rows: 30 })
+  await tick()
+  assert.deepEqual(a.log, [['reset'], ['reattached', 100, 30]])
+})
+
+test('no onReattach when the pty exits during the re-attach', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = closingHandlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1'], { handlers: { p1: a } }))
+  next.event('pty.exit', { ptyId: 'p1', exitCode: 2 })
+  next.reply(attachReq(next, 'p1'), info('p1'))
+  await tick()
+  assert.deepEqual(a.log, [['reset'], ['exit', 2]])
+  assert.equal(ptys.isAttached('p1'), false)
+})
+
+test('an onReattach that throws goes to onError', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = closingHandlers()
+  a.onReattach = () => {
+    throw new Error('boom')
+  }
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1'], { handlers: { p1: a } }))
+  next.reply(attachReq(next, 'p1'), info('p1'))
+  await tick()
+  assert.deepEqual(a.log, [['reset'], ['error', 'boom']])
+})
+
+test('with onClosed, close() during an in-flight re-attach reports closed exactly once', async () => {
+  const { server, clock, conn, ptys, sock } = setup()
+  const a = closingHandlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1'], { handlers: { p1: a } }))
+  assert.ok(attachReq(next, 'p1'), 'the re-attach is in flight')
+  conn.close()
+  await tick()
+  await tick()
+  assert.deepEqual(a.log, [['reset'], ['closed', 'closed']])
+  assert.equal(ptys.isAttached('p1'), false)
+})

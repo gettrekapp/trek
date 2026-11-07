@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   branchCustomTags,
   branchTag,
@@ -108,6 +108,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   // Collapsed repository sections. Runtime only, so a reopened project starts expanded.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [repoMenuId, setRepoMenuId] = useState<string | null>(null)
+  // A server window lost its link: a repository's menu could only fail now.
+  useEffect(() => {
+    if (offline) setRepoMenuId(null)
+  }, [offline])
   // Rows only reorder within their own repository's section.
   const [dragRepoId, setDragRepoId] = useState<string | undefined>(undefined)
 
@@ -166,7 +170,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   }
 
   const dropOn = (targetKey: string, after: boolean): void => {
-    if (!dragKey || dragKey === targetKey) return endDrag()
+    // A drag that started before the link dropped ends without a reorder.
+    if (!dragKey || dragKey === targetKey || offline) return endDrag()
     const keys = ordered.map(worktreeKey).filter((k) => k !== dragKey)
     const at = keys.indexOf(targetKey) + (after ? 1 : 0)
     keys.splice(at, 0, dragKey)
