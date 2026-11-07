@@ -62,8 +62,8 @@ Out of scope here, as the brief says: everything in the 3c-3 row. Desktop-UI MCP
 5. **Sizes.** `session.start` sends `V2_START_SIZE` (120×32): no pane has measured the new session yet, and the pane's first show sends its real size (Decision 9). `session.restart` sends the entry's current xterm size (`terminalSize`), falling back to the same default.
 6. **A new session's tab becomes active** once the mirror shows it (`whenProjected` on `terminals[sessionId]`, then `setActiveTerminal`), as legacy's `createTerminal` does. `reconcileView` alone would keep the previous tab.
 7. **`openGlobal` starts a session only when the projected `globalSessions` is empty and no start is in flight** (one shared promise for `startGlobal`). GlobalClaude's effect runs again on every render with no tabs and while the new session's patch is on its way; with the shared promise it cannot start two. The effect also skips while offline.
-8. **`worktrees.remove` reads "dirty" from the mirror row (`info.dirty`, the server's status poll), not from `worktree.changes`.** Notes for 3c-2 #1 suggested `worktree.changes`, but it compares against the default branch with committed work included and its files carry no committed/uncommitted mark, so a clean worktree with commits would read as dirty and be force-removed without the right prompt. A stale "clean" is caught by git: the server's `GIT_ERROR` with "modified or untracked" asks again ("Delete Uncommitted Changes") and retries with `force: true`, as legacy does. The order is legacy's: confirm, then `worktree.unload` if loaded (the server refuses a loaded worktree with `IN_USE`), then `worktree.remove{force: dirty}`. Any other failure goes to a dialog and the method resolves (the 3c-1 error contract). The stack and environment teardown of legacy is not there: `features.stacks` and `features.env` are off in v2.
-9. **Errors.** `worktrees.create` rejects for AddWorktreeModal to show; `worktrees.remove` and `repos.*` show their own dialogs and resolve. The store-setter overrides are fire-and-forget: a failed request shows a dialog with a title per action, except `NOT_CONNECTED`, which is expected while offline (the commands are disabled then anyway).
+8. **`worktrees.remove` reads "dirty" from the mirror row (`info.dirty`, the server's status poll), not from `worktree.changes`.** Notes for 3c-2 #1 suggested `worktree.changes`, but it compares against the default branch with committed work included and its files carry no committed/uncommitted mark, so a clean worktree with commits would read as dirty and be force-removed without the right prompt. A stale "clean" is caught by git: the server's `GIT_ERROR` with "modified or untracked" asks again ("Delete Uncommitted Changes") and retries with `force: true`, as legacy does. The order is legacy's: confirm, then `worktree.unload` if loaded (the server refuses a loaded worktree with `IN_USE`), then `worktree.remove{force: dirty}`. Any other failure goes to a dialog and the method resolves (the 3c-1 error contract). A worktree it unloaded is loaded again (best effort) whenever the removal doesn't go through: the re-ask declined, `IN_USE`, a lock, a failed forced retry. The first confirm says a loaded worktree's running sessions will be stopped. An id no longer in the project shows "This worktree is no longer in the project." The stack and environment teardown of legacy is not there: `features.stacks` and `features.env` are off in v2.
+9. **Errors.** `worktrees.create` rejects for AddWorktreeModal to show; `worktrees.remove` and `repos.*` show their own dialogs and resolve. The backend methods every caller fires and forgets (`sessions.start`, `restart`, `close`, `worktrees.load`, `unload`, `unloadAll`) report a refusal through the backend's `report` dep (the same `report` as the setter overrides, built once in Task 5) and resolve, `start` with null: CAPACITY, IN_USE, an unknown session type or "load the worktree first" would otherwise be unhandled rejections. `unloadAll` unloads each worktree on its own (`Promise.allSettled`) and reports the first refusal. `openGlobal` and `startGlobal` still reject: GlobalClaude shows the error inline. The store-setter overrides are fire-and-forget: a failed request shows a dialog with a title per action, except `NOT_CONNECTED`, which is expected while offline (the commands are disabled then anyway).
 10. **`repos.add` asks for a path in a modal** (`RepoPathPrompt` in V2Workspace, driven by `v2/repoPathPrompt.ts`): Electron has no `window.prompt`, and a folder picker would browse this machine. It sends `server.addRepo{path}`, then `repo.add` with the path the server registered (read from its `server` topic, which the mirror already follows), so a path inside a checkout still adds the repository root. `repos.remove` keeps legacy's confirm and `removalBlock`, then sends `repo.remove`.
 
 **The window**
@@ -907,7 +907,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(cl
 
 ### Task 3: The v2 backend (pure)
 
-Every `WindowBackend` method as the v2 request in 3c-1's table (Decision 3 there), with this plan's Decisions 4–10. It takes its world as `V2BackendDeps`, so the test drives it with fakes; Task 5 builds the real deps.
+Every `WindowBackend` method as the v2 request in 3c-1's table (Decision 3 there), with this plan's Decisions 4–10. It takes its world as `V2BackendDeps`, so the test drives it with fakes; Task 5 builds the real deps (`report` among them, shared with Task 4's overrides).
 
 **Files:**
 - Create: `src/renderer/src/v2/backendV2.ts`
@@ -942,11 +942,12 @@ class CodedError extends Error {
 /**
  * A backend over fakes: `calls` records each request, `replies` answers by
  * method (a value, a function of the params, or an Error to reject with), and
- * `ui` records what the dialogs were asked.
+ * `ui` records what the dialogs were asked; `reports` what went to `report`.
  */
 function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [] } = {}) {
   const calls = []
   const ui = []
+  const reports = []
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
@@ -966,7 +967,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
       return value ?? null
     },
     // null stands for "no welcome yet" (undefined would take the default)
-    capabilities: () => capabilities ?? undefined,
+    capabilities: typeof capabilities === 'function' ? capabilities : () => capabilities ?? undefined,
     ids: () => idMap,
     state: () => st,
     // Each projectedAfter entry is applied to the state and ids before the check, like a patch arriving.
@@ -987,9 +988,10 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
       return answers.shift() ?? null
     },
     registeredRepoPath: async (repoId) => (repoId === 'srv-b' ? '/b' : null),
-    removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null)
+    removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null),
+    report: (title, err) => reports.push([title, err.code])
   })
-  return { backend, calls, ui, st }
+  return { backend, calls, ui, st, reports }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -999,6 +1001,18 @@ test('features follow the welcome capabilities, with a stable object', () => {
   assert.equal(backend.features, backend.features)
   assert.equal(setup({ capabilities: [] }).backend.features.globalPanel, false)
   assert.equal(setup({ capabilities: null }).backend.features.globalPanel, false)
+})
+
+test('features before the welcome, then when the capabilities change', () => {
+  let caps
+  const { backend } = setup({ capabilities: () => caps })
+  const before = backend.features
+  assert.equal(before.globalPanel, false)
+  caps = ['mcp']
+  assert.equal(backend.features.globalPanel, true)
+  assert.notEqual(backend.features, before)
+  caps = []
+  assert.equal(backend.features.globalPanel, false)
 })
 
 test('start by instance id or by path sends session.start with the v2 worktree, a size, the type and agent', async () => {
@@ -1020,6 +1034,33 @@ test('start for an unknown target resolves null and sends nothing', async () => 
   assert.deepEqual(calls, [])
 })
 
+test('start: the id comes back even when its tab never shows up, and nothing is made active', async () => {
+  const { backend, ui } = setup({ replies: { 'session.start': { sessionId: 's9', ptyId: 'p9' } } })
+  assert.equal(await backend.sessions.start({ worktreeId: 'w2' }), 's9')
+  assert.deepEqual(ui, [])
+})
+
+test('start, restart and close report a refusal and resolve; NOT_CONNECTED is not reported', async () => {
+  const replies = {
+    'session.start': new CodedError('CAPACITY', 'too many sessions'),
+    'session.restart': new CodedError('NOT_CONNECTED', ''),
+    'session.close': new CodedError('NOT_FOUND', 'no session')
+  }
+  const { backend, reports, ui } = setup({ replies })
+  assert.equal(await backend.sessions.start({ worktreeId: 'w2' }), null)
+  assert.equal(await backend.sessions.restart('s1'), undefined)
+  assert.equal(await backend.sessions.close('s1'), undefined)
+  assert.deepEqual(reports, [
+    ['Could not start the session', 'CAPACITY'],
+    ['Could not close the session', 'NOT_FOUND']
+  ])
+  // No focus after a failed restart.
+  assert.deepEqual(ui, [])
+  const offline = setup({ replies: { 'session.start': new CodedError('NOT_CONNECTED', '') } })
+  assert.equal(await offline.backend.sessions.start({ worktreeId: 'w2' }), null)
+  assert.deepEqual(offline.reports, [])
+})
+
 test('openGlobal starts one session only when there are none, and never twice at once', async () => {
   const { backend, calls, st } = setup({ replies: { 'session.start': { sessionId: 'g1', ptyId: 'pg' } } })
   await Promise.all([backend.sessions.openGlobal(), backend.sessions.openGlobal()])
@@ -1030,6 +1071,19 @@ test('openGlobal starts one session only when there are none, and never twice at
   // A new tab (+) always starts one.
   await backend.sessions.startGlobal()
   assert.equal(calls.length, 2)
+})
+
+test('a failed global start rejects and clears the shared promise', async () => {
+  let n = 0
+  const replies = { 'session.start': () => (n++ === 0 ? new CodedError('CAPACITY', 'full') : { sessionId: 'g1', ptyId: 'pg' }) }
+  const { backend, calls } = setup({ replies })
+  await assert.rejects(backend.sessions.openGlobal(), { code: 'CAPACITY' })
+  await backend.sessions.openGlobal()
+  assert.equal(calls.length, 2)
+  n = 0
+  await assert.rejects(backend.sessions.startGlobal(), { code: 'CAPACITY' })
+  await backend.sessions.startGlobal()
+  assert.equal(calls.length, 4)
 })
 
 test('restart sends the terminal size (or the default), then focuses', async () => {
@@ -1077,7 +1131,29 @@ test('load, unload and unload-all address the v2 worktrees', async () => {
     ['worktree.unload', { projectId: 'p1', worktreeId: 'wm' }],
     ['worktree.unload', { projectId: 'p1', worktreeId: 'w2' }]
   ])
-  await assert.rejects(backend.worktrees.load('nope'), { code: 'NOT_FOUND' })
+  // Fire and forget: an unknown id is reported, not rejected.
+  await backend.worktrees.load('nope')
+})
+
+test('load and unload report a refusal and resolve', async () => {
+  const replies = { 'worktree.load': new CodedError('BAD_REQUEST', 'load the worktree first'), 'worktree.unload': new CodedError('IN_USE', 'busy') }
+  const { backend, reports } = setup({ replies })
+  assert.equal(await backend.worktrees.load('w2'), undefined)
+  assert.equal(await backend.worktrees.unload('w2'), undefined)
+  await backend.worktrees.load('nope')
+  assert.deepEqual(reports, [
+    ['Could not load the worktree', 'BAD_REQUEST'],
+    ['Could not unload the worktree', 'IN_USE'],
+    ['Could not load the worktree', 'NOT_FOUND']
+  ])
+})
+
+test('unloadAll skips stale ids, and one refusal does not stop the rest', async () => {
+  const replies = { 'worktree.unload': (p) => (p.worktreeId === 'wm' ? new CodedError('IN_USE', 'busy') : null) }
+  const { backend, calls, reports } = setup({ replies, state: { loadedWorktrees: { gone: true, [PRIMARY]: true, w2: true } } })
+  await backend.worktrees.unloadAll()
+  assert.deepEqual(calls.map(([, p]) => p.worktreeId), ['wm', 'w2'])
+  assert.deepEqual(reports, [['Could not unload every worktree', 'IN_USE']])
 })
 
 test('create sends worktree.create and resolves the path once the mirror shows the worktree', async () => {
@@ -1109,6 +1185,15 @@ test('remove: declined sends nothing', async () => {
   assert.deepEqual(calls, [])
 })
 
+test('remove: an id no longer in the project is shown, and nothing is sent', async () => {
+  const { backend, calls, ui } = setup()
+  await backend.worktrees.remove({ ...feat, path: '/gone' }, undefined)
+  await backend.worktrees.remove(feat, { id: 'stale', name: 'x', path: '/r-feat' })
+  const shown = ['error', 'Could not delete worktree', 'This worktree is no longer in the project.']
+  assert.deepEqual(ui, [shown, shown])
+  assert.deepEqual(calls, [])
+})
+
 test('remove: a loaded worktree is unloaded first; a dirty one is forced', async () => {
   const { backend, calls, ui } = setup({ confirms: [true], state: { loadedWorktrees: { w2: true } } })
   await backend.worktrees.remove({ ...feat, dirty: true }, undefined)
@@ -1131,10 +1216,69 @@ test('remove: changes that appeared since the poll ask again, then force', async
   assert.deepEqual(calls.map(([m, p]) => [m, p.force]), [['worktree.remove', false], ['worktree.remove', true]])
 })
 
-test('remove: any other failure is shown in a dialog and resolves', async () => {
-  const { backend, ui } = setup({ confirms: [true], replies: { 'worktree.remove': new CodedError('IN_USE', 'loaded in Other') } })
+const UNCOMMITTED_ERR = () => new CodedError('GIT_ERROR', "fatal: '/r-feat' contains modified or untracked files, use --force")
+const LOADED = { loadedWorktrees: { w2: true } }
+
+test('remove: the re-ask declined sends one remove, shows nothing, and loads the worktree again', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true, false], state: LOADED, replies: { 'worktree.remove': UNCOMMITTED_ERR() } })
   await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload', 'worktree.remove', 'worktree.load'])
+  assert.ok(!ui.some(([kind]) => kind === 'error'))
+})
+
+test('remove: a failed forced retry shows its own error, and loads the worktree again', async () => {
+  const replies = { 'worktree.remove': (p) => (p.force ? new CodedError('GIT_ERROR', 'permission denied') : UNCOMMITTED_ERR()) }
+  const { backend, calls, ui } = setup({ confirms: [true, true], state: LOADED, replies })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m, p]) => [m, p.force]), [
+    ['worktree.unload', undefined],
+    ['worktree.remove', false],
+    ['worktree.remove', true],
+    ['worktree.load', undefined]
+  ])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'permission denied'])
+})
+
+test('remove: an already forced removal that git still refuses is shown, with no re-ask', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true, true], replies: { 'worktree.remove': UNCOMMITTED_ERR() } })
+  await backend.worktrees.remove({ ...feat, dirty: true }, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.remove'])
+  assert.deepEqual(ui.map(([kind, title]) => [kind, title]), [['confirm', 'Delete Worktree'], ['error', 'Could not delete worktree']])
+})
+
+test('remove: another GIT_ERROR (locked) is shown, with no re-ask; the worktree is loaded again', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true, true], state: LOADED, replies: { 'worktree.remove': new CodedError('GIT_ERROR', "fatal: '/r-feat' is locked") } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload', 'worktree.remove', 'worktree.load'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', "fatal: '/r-feat' is locked"])
+  assert.equal(ui.filter(([kind]) => kind === 'confirm').length, 1)
+})
+
+test('remove: any other failure is shown in a dialog, the worktree is loaded again, and it resolves', async () => {
+  // A failed reload is ignored: the removal's error is the one shown.
+  const replies = { 'worktree.remove': new CodedError('IN_USE', 'loaded in Other'), 'worktree.load': new CodedError('GIT_ERROR', 'x') }
+  const { backend, calls, ui } = setup({ confirms: [true], state: LOADED, replies })
+  await backend.worktrees.remove(feat, undefined)
+  assert.equal(calls.at(-1)[0], 'worktree.load')
   assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'loaded in Other'])
+})
+
+test('remove: a failed unload is shown, and nothing is loaded again', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true], state: LOADED, replies: { 'worktree.unload': new CodedError('IN_USE', 'busy') } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
+})
+
+test('remove and repos show the NOT_CONNECTED hint and resolve', async () => {
+  const offline = new CodedError('NOT_CONNECTED', '')
+  const replies = { 'worktree.remove': offline, 'server.addRepo': offline, 'repo.remove': offline }
+  const { backend, ui } = setup({ confirms: [true, '/x', true], replies })
+  await backend.worktrees.remove(feat, undefined)
+  await backend.repos.add()
+  await backend.repos.remove(repo())
+  const errors = ui.filter(([kind]) => kind === 'error').map(([, , message]) => message)
+  assert.deepEqual(errors, ['Not connected to the server', 'Not connected to the server', 'Not connected to the server'])
 })
 
 test('setOrder converts legacy keys and sends the one settings write', async () => {
@@ -1143,6 +1287,9 @@ test('setOrder converts legacy keys and sends the one settings write', async () 
   assert.deepEqual(calls, [['project.updateSettings', { projectId: 'p1', settings: { worktreeOrder: ['r1 /r-feat', 'r1 /r'] } }]])
   await backend.worktrees.setOrder([])
   assert.deepEqual(calls[1][1].settings, { worktreeOrder: null })
+  // Keys none of which map send nothing (rather than clearing the order).
+  await backend.worktrees.setOrder(['srv /x'])
+  assert.equal(calls.length, 2)
 })
 
 test('git: rows come from the mirror; the rest address the worktree by path', async () => {
@@ -1161,6 +1308,8 @@ test('git: rows come from the mirror; the rest address the worktree by path', as
     ['worktree.push', { projectId: 'p1', worktreeId: 'w2', setUpstream: true }]
   ])
   await assert.rejects(backend.git.changes({ path: '/gone' }), { code: 'NOT_FOUND' })
+  await assert.rejects(backend.git.pull({ path: '/gone' }, 'x'), { code: 'NOT_FOUND' })
+  await assert.rejects(backend.git.push({ path: '/gone' }, 'x'), { code: 'NOT_FOUND' })
 })
 
 test('branch data: custom tags send the whole list; a note carries what it started from; empty clears', async () => {
@@ -1208,6 +1357,20 @@ test('repos.add: cancelled sends nothing; a refusal is shown', async () => {
   assert.deepEqual(denied.ui.at(-1), ['error', 'Could not add the repository', '/x is outside the allowed roots'])
 })
 
+test('repos.add: a registration not visible yet is shown, and repo.add is not sent', async () => {
+  const { backend, calls, ui } = setup({ confirms: ['/c'], replies: { 'server.addRepo': { repoId: 'srv-c' } } })
+  await backend.repos.add()
+  assert.deepEqual(calls.map(([m]) => m), ['server.addRepo'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not add the repository', "Registered on the server but it isn't visible here yet — try again."])
+})
+
+test('repos.add: a refused repo.add after the registration is shown', async () => {
+  const replies = { 'server.addRepo': { repoId: 'srv-b' }, 'repo.add': new CodedError('CONFLICT', 'already in the project') }
+  const { backend, ui } = setup({ confirms: ['/b'], replies })
+  await backend.repos.add()
+  assert.deepEqual(ui.at(-1), ['error', 'Could not add the repository', 'already in the project'])
+})
+
 test('repos.remove: a block is shown; confirmed sends repo.remove', async () => {
   const blocked = setup()
   await blocked.backend.repos.remove({ id: 'blocked', name: 'b', path: '/b', worktrees: [] })
@@ -1216,6 +1379,12 @@ test('repos.remove: a block is shown; confirmed sends repo.remove', async () => 
   const { backend, calls } = setup({ confirms: [true] })
   await backend.repos.remove(repo())
   assert.deepEqual(calls, [['repo.remove', { projectId: 'p1', repoId: 'r1' }]])
+})
+
+test('repos.remove: a refusal is shown and resolves', async () => {
+  const { backend, ui } = setup({ confirms: [true], replies: { 'repo.remove': new CodedError('IN_USE', 'sessions are running') } })
+  await backend.repos.remove(repo())
+  assert.deepEqual(ui.at(-1), ['error', "Can't remove r", 'sessions are running'])
 })
 ```
 
@@ -1237,6 +1406,11 @@ Create `src/renderer/src/v2/backendV2.ts`:
 // 3c-1): the mirror patch is the answer, and a method that must hand back
 // something the patch brings (a new worktree's path, a new session's tab)
 // waits for it with `whenProjected`.
+//
+// The methods its callers fire and forget (start, restart, close, load, unload,
+// unloadAll) never reject: a refusal goes to `report` (a dialog) and they
+// resolve, `start` with null. NOT_CONNECTED is not reported: the window shows
+// it is offline, and its commands are disabled.
 //
 // Pure: the store, the connection, the dialogs and the terminals come in as
 // `V2BackendDeps` (built by installV2.ts), so `node --test` covers it.
@@ -1293,6 +1467,8 @@ export interface V2BackendDeps {
   registeredRepoPath(repoId: string): Promise<string | null>
   /** Why the repository can't be removed now, or null */
   removalBlock(repo: Repository): string | null
+  /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
+  report(title: string, err: unknown): void
 }
 
 /**
@@ -1301,12 +1477,18 @@ export interface V2BackendDeps {
  */
 export const V2_START_SIZE = { cols: 120, rows: 32 }
 
-/** git's refusal to remove a worktree with uncommitted work, inside the server's GIT_ERROR. */
+/**
+ * git's refusal to remove a worktree with uncommitted work, inside the server's
+ * GIT_ERROR. English text: a git in another locale words it differently (Notes for 3c-3).
+ */
 const UNCOMMITTED = /modified or untracked/i
 
 class TargetError extends Error {
   readonly code = 'NOT_FOUND'
 }
+
+const REMOVE_FAILED = 'Could not delete worktree'
+const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
 export function createV2Backend(deps: V2BackendDeps): WindowBackend {
   const { projectId, request } = deps
@@ -1325,6 +1507,19 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     return worktreeOf(legacyId)
   }
   const session = (terminalId: string): { projectId: string; sessionId: string } => ({ projectId, sessionId: terminalId })
+
+  const report = (title: string, err: unknown): void => {
+    if (errorCode(err) !== 'NOT_CONNECTED') deps.report(title, err)
+  }
+  /** Runs a fire-and-forget method: a failure is reported, and it resolves with `fallback`. */
+  const reported = async <T>(title: string, fallback: T, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } catch (err) {
+      report(title, err)
+      return fallback
+    }
+  }
 
   /** Waits for the new session's tab, then makes it the worktree's active one, as legacy does. */
   const showStarted = async (sessionId: string): Promise<string> => {
@@ -1373,19 +1568,20 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       return features.value
     },
     sessions: {
-      start: async (target: SessionTarget, sessionType, llm) => {
-        const legacyId = 'worktreeId' in target ? target.worktreeId : legacyIdAt(target.path)
-        const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
-        if (!ref) return null
-        const { sessionId } = await request('session.start', {
-          projectId,
-          worktreeId: ref.worktreeId,
-          ...(sessionType ? { sessionTypeId: sessionType.id } : {}),
-          ...(llm ? { llm } : {}),
-          ...V2_START_SIZE
-        })
-        return showStarted(sessionId)
-      },
+      start: (target: SessionTarget, sessionType, llm) =>
+        reported('Could not start the session', null, async () => {
+          const legacyId = 'worktreeId' in target ? target.worktreeId : legacyIdAt(target.path)
+          const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
+          if (!ref) return null
+          const { sessionId } = await request('session.start', {
+            projectId,
+            worktreeId: ref.worktreeId,
+            ...(sessionType ? { sessionTypeId: sessionType.id } : {}),
+            ...(llm ? { llm } : {}),
+            ...V2_START_SIZE
+          })
+          return showStarted(sessionId)
+        }),
       startGlobal,
       // Only when there are none, and never twice: the panel asks again on every
       // render with no tabs, and the new session's patch is still on its way.
@@ -1397,14 +1593,17 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if ((deps.state().project?.globalSessions?.length ?? 0) > 0) return
         await startGlobal()
       },
-      restart: async (terminalId) => {
-        const size = deps.termSize(terminalId) ?? V2_START_SIZE
-        await request('session.restart', { ...session(terminalId), cols: size.cols, rows: size.rows })
-        deps.focus(terminalId)
-      },
-      close: async (terminalId) => {
-        await request('session.close', session(terminalId))
-      },
+      restart: (terminalId) =>
+        reported('Could not restart the session', undefined, async () => {
+          const size = deps.termSize(terminalId) ?? V2_START_SIZE
+          await request('session.restart', { ...session(terminalId), cols: size.cols, rows: size.rows })
+          deps.focus(terminalId)
+        }),
+      close: (terminalId) =>
+        reported('Could not close the session', undefined, async () => {
+          await request('session.close', session(terminalId))
+        }),
+      // session.rename takes an `expected` title too; not sent (Notes for 3c-3).
       rename: async (terminalId, title) => {
         const trimmed = title.trim()
         if (!trimmed || trimmed === deps.state().terminals[terminalId]?.title) return
@@ -1428,15 +1627,23 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       }
     },
     worktrees: {
-      load: async (legacyId) => {
-        await request('worktree.load', { projectId, worktreeId: worktreeOf(legacyId) })
-      },
-      unload: async (legacyId) => {
-        await request('worktree.unload', { projectId, worktreeId: worktreeOf(legacyId) })
-      },
+      load: (legacyId) =>
+        reported('Could not load the worktree', undefined, async () => {
+          await request('worktree.load', { projectId, worktreeId: worktreeOf(legacyId) })
+        }),
+      unload: (legacyId) =>
+        reported('Could not unload the worktree', undefined, async () => {
+          await request('worktree.unload', { projectId, worktreeId: worktreeOf(legacyId) })
+        }),
+      // Each one on its own: one refusal doesn't keep the rest loaded. The first is reported.
       unloadAll: async () => {
-        const loaded = Object.keys(deps.state().loadedWorktrees)
-        await Promise.all(loaded.map((legacyId) => request('worktree.unload', { projectId, worktreeId: worktreeOf(legacyId) })))
+        const map = ids().worktrees
+        const targets = Object.keys(deps.state().loadedWorktrees).flatMap((legacyId) =>
+          map[legacyId] ? [map[legacyId].worktreeId] : []
+        )
+        const results = await Promise.allSettled(targets.map((worktreeId) => request('worktree.unload', { projectId, worktreeId })))
+        const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+        if (failed) report('Could not unload every worktree', failed.reason)
       },
       // The server links the dirs and tags the branch itself.
       create: async ({ repoId, branch, createBranch, fromPr }) => {
@@ -1456,13 +1663,19 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return { path, worktreeId }
       },
       // Legacy's dialogs and order (worktreeActions.deleteWorktree), with the
-      // server's rules: a loaded worktree is IN_USE, so it is unloaded first.
+      // server's rules: a loaded worktree is IN_USE, so it is unloaded first,
+      // and loaded again when the removal doesn't go through.
       remove: async (info, instance) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
-        if (!ref || legacyId === undefined) return
+        if (!ref || legacyId === undefined) {
+          await deps.showError(REMOVE_FAILED, 'This worktree is no longer in the project.')
+          return
+        }
+        const { worktreeId } = ref
         // The server's status poll; a stale "clean" is caught by git below.
         const dirty = info.dirty ?? false
+        const loaded = deps.state().loadedWorktrees[legacyId] === true
         const name = info.branch ?? info.path
         const confirmed = await deps.confirm({
           title: 'Delete Worktree',
@@ -1470,44 +1683,58 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           detail:
             `This runs "git worktree remove" on ${info.path} and deletes the directory. ` +
             `The branch itself is kept. ` +
+            (loaded ? 'Its running sessions will be stopped. ' : '') +
             (dirty
               ? 'This worktree has uncommitted changes — they will be permanently deleted.'
               : 'Uncommitted changes will block the deletion.'),
           confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
         })
         if (!confirmed) return
+        let wasLoaded = false
+        // Best effort: the removal's own error is the one to show.
+        const reload = async (): Promise<void> => {
+          if (wasLoaded) await request('worktree.load', { projectId, worktreeId }).catch(() => {})
+        }
+        const fail = async (err: unknown): Promise<void> => {
+          await reload()
+          await deps.showError(REMOVE_FAILED, errorText(err))
+        }
         try {
-          if (deps.state().loadedWorktrees[legacyId]) {
-            await request('worktree.unload', { projectId, worktreeId: ref.worktreeId })
+          if (loaded) {
+            await request('worktree.unload', { projectId, worktreeId })
+            wasLoaded = true
           }
-          await removeWorktree(ref.worktreeId, dirty)
+          await removeWorktree(worktreeId, dirty)
+          return
         } catch (err) {
           // Changes can appear between the poll and the removal.
           if (dirty || errorCode(err) !== 'GIT_ERROR' || !UNCOMMITTED.test(errorText(err))) {
-            await deps.showError('Could not delete worktree', errorText(err))
+            await fail(err)
             return
           }
-          const discard = await deps.confirm({
-            title: 'Delete Uncommitted Changes',
-            message: `“${name}” has uncommitted changes.`,
-            detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
-            confirmLabel: 'Delete Changes & Worktree'
-          })
-          if (!discard) return
-          try {
-            await removeWorktree(ref.worktreeId, true)
-          } catch (forceErr) {
-            await deps.showError('Could not delete worktree', errorText(forceErr))
-          }
+        }
+        const discard = await deps.confirm({
+          title: 'Delete Uncommitted Changes',
+          message: `“${name}” has uncommitted changes.`,
+          detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
+          confirmLabel: 'Delete Changes & Worktree'
+        })
+        if (!discard) {
+          await reload()
+          return
+        }
+        try {
+          await removeWorktree(worktreeId, true)
+        } catch (forceErr) {
+          await fail(forceErr)
         }
       },
       // The one settings write a server window makes (settings are read-only in v2).
+      // No keys clears the order; keys none of which map (a stale drag) send nothing.
       setOrder: async (keys) => {
-        const order = v2WorktreeOrder(keys, ids())
-        await request('project.updateSettings', {
-          projectId,
-          settings: { worktreeOrder: order.length > 0 ? order : null }
-        })
+        const order = keys.length === 0 ? null : v2WorktreeOrder(keys, ids())
+        if (order !== null && order.length === 0) return
+        await request('project.updateSettings', { projectId, settings: { worktreeOrder: order } })
       }
     },
     git: {
@@ -1558,7 +1785,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if (!path) return
         try {
           const { repoId } = await request('server.addRepo', { path })
-          const registered = (await deps.registeredRepoPath(repoId)) ?? path
+          const registered = await deps.registeredRepoPath(repoId)
+          if (registered === null) {
+            await deps.showError('Could not add the repository', NOT_REGISTERED)
+            return
+          }
           await request('repo.add', { projectId, path: registered })
         } catch (err) {
           await deps.showError('Could not add the repository', errorText(err))
@@ -1595,13 +1826,13 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
 
 Run: `node --test scripts/v2Backend.test.mjs 2>&1 | grep -E '^not ok|^# (pass|fail)'`
 
-Expected: `# pass 19`, `# fail 0`.
+Expected: `# pass 35`, `# fail 0`.
 
 - [ ] **Step 5: Verify**
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: clean; `# pass 1115`, `# fail 0`. Nothing imports the backend yet.
+Expected: clean; `# pass 1131`, `# fail 0`. Nothing imports the backend yet.
 
 - [ ] **Step 6: Commit**
 
@@ -2043,24 +2274,33 @@ const EMPTY: Partial<AppState> = {
   serverOffline: false
 }
 
-function whenProjected<T>(check: () => T | undefined): Promise<T | undefined> {
-  const now = check()
-  if (now !== undefined) return Promise.resolve(now)
-  return new Promise((resolve) => {
-    const done = (value: T | undefined): void => {
-      clearTimeout(timer)
-      unsubscribe()
-      resolve(value)
-    }
-    const unsubscribe = useAppStore.subscribe(() => {
-      const value = check()
-      if (value !== undefined) done(value)
-    })
-    const timer = setTimeout(() => done(undefined), PROJECTION_WAIT_MS)
-  })
-}
-
 export function installV2Window(entryId: string, projectId: string): V2Window {
+  /**
+   * The waits still open; `leave()` ends them with undefined, so a create or a
+   * start in flight never checks the next window's store (another project, or
+   * a legacy one) for its result.
+   */
+  const waits = new Set<() => void>()
+  function whenProjected<T>(check: () => T | undefined): Promise<T | undefined> {
+    const now = check()
+    if (now !== undefined) return Promise.resolve(now)
+    return new Promise((resolve) => {
+      const done = (value: T | undefined): void => {
+        clearTimeout(timer)
+        unsubscribe()
+        waits.delete(cancel)
+        resolve(value)
+      }
+      const cancel = (): void => done(undefined)
+      waits.add(cancel)
+      const unsubscribe = useAppStore.subscribe(() => {
+        const value = check()
+        if (value !== undefined) done(value)
+      })
+      const timer = setTimeout(cancel, PROJECTION_WAIT_MS)
+    })
+  }
+
   // Never connects: ServerProjectWindow does, once it knows the entry still exists.
   const registered = () => registeredServerEntry(entryId)
   const request: V2Request = (method, params) => {
@@ -2093,6 +2333,12 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     })
   }
 
+  // While the link is down every request fails NOT_CONNECTED, and the commands are disabled: no dialog for that.
+  // The backend's fire-and-forget methods and the setter overrides share it.
+  const report = (title: string, err: unknown): void => {
+    if (errorCode(err) !== 'NOT_CONNECTED') void window.api.showError(title, errorText(err))
+  }
+
   const backend = createV2Backend({
     projectId,
     request,
@@ -2107,15 +2353,12 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     showError: (title, message) => window.api.showError(title, message),
     promptRepoPath: requestRepoPath,
     registeredRepoPath,
-    removalBlock
+    removalBlock,
+    report
   })
 
   const state = useAppStore.getState()
   const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, state[name]])) as SetterOverrides
-  // While the link is down every request fails NOT_CONNECTED, and the commands are disabled: no dialog for that.
-  const report = (title: string, err: unknown): void => {
-    if (errorCode(err) !== 'NOT_CONNECTED') void window.api.showError(title, errorText(err))
-  }
   useAppStore.setState(v2SetterOverrides(backend, () => useAppStore.getState(), report))
 
   return {
@@ -2123,6 +2366,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     projectId,
     backend,
     leave: () => {
+      for (const cancel of [...waits]) cancel()
       disposeV2Terminals()
       clearV2Projection()
       useAppStore.setState({ ...originals, ...EMPTY })
@@ -2178,7 +2422,7 @@ export function followWindowKind(): () => void {
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: clean; `# pass 1120`, `# fail 0`.
+Expected: clean; `# pass 1136`, `# fail 0`.
 
 Run each and read its last line:
 
@@ -3040,7 +3284,7 @@ Append to `src/renderer/src/styles.css`:
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: clean; `# pass 1120`, `# fail 0`.
+Expected: clean; `# pass 1136`, `# fail 0`.
 
 Run each and read its last line:
 
@@ -3358,7 +3602,7 @@ export function NotesPanel({ visible, repoId, noteKey }: Props): React.JSX.Eleme
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: clean; `# pass 1123`, `# fail 0`.
+Expected: clean; `# pass 1139`, `# fail 0`.
 
 Run each and read its last line:
 
@@ -3379,7 +3623,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ap
 
 ### Task 9: The New session menu and the Global panel in a server window
 
-Decisions 7 and 15; Notes for 3c-2 #2. The Global panel is gated on `features.globalPanel` (the `mcp` capability) by V2Workspace (Task 6), starts through the backend (Task 3's `openGlobal`), and has no bot tab (`features.bot` is off). This task makes its effect skip while offline, disables its commands offline, and names the server's agent on its bar.
+Decisions 7 and 15; Notes for 3c-2 #2. The Global panel is gated on `features.globalPanel` (the `mcp` capability) by V2Workspace (Task 6), starts through the backend (Task 3's `openGlobal`), and has no bot tab (`features.bot` is off). This task makes its effect skip while offline, disables its commands offline, names the server's agent on its bar, and shows a failed Global start with `errorText` (a `ClientError`'s message, not `String(err)`'s "Error: …").
 
 **Files:**
 - Create: `src/renderer/src/v2/sessionChoices.ts`
@@ -3552,15 +3796,16 @@ The bar's text stays `Global · <agent>` in a project file window.
 ```diff
 --- a/src/renderer/src/components/GlobalClaude.tsx
 +++ b/src/renderer/src/components/GlobalClaude.tsx
-@@ -11,6 +11,7 @@ import { globalSessionLlm } from '../llm'
+@@ -11,6 +11,8 @@ import { globalSessionLlm } from '../llm'
  import { getBackend } from '../backend'
  import { useFeatures } from '../useFeatures'
  import { getProvider } from '../../../shared/providers/registry'
 +import { v2GlobalLabel } from '../v2/sessionChoices'
++import { errorText } from '../v2/errors'
  import { describeLlm } from '../../../shared/providers/selection'
  import { BotPanel } from './BotPanel'
  import { StatusBadge } from './StatusBadge'
-@@ -54,9 +55,12 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -54,9 +56,12 @@ export function GlobalClaude(): React.JSX.Element {
    const decisionCount = order.filter((id) => decisions[id]).length + (decisions[BOT_DECISION_ID] ? 1 : 0)
    const botView = useAppStore((s) => s.botView)
    // Subscribed so the bar label follows the configured Global agent.
@@ -3575,20 +3820,21 @@ The bar's text stays `Global · <agent>` in a project file window.
    const [height, setHeight] = useState(storedHeight)
    const [error, setError] = useState<string | null>(null)
    const [editingId, setEditingId] = useState<string | null>(null)
-@@ -67,10 +71,10 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -67,10 +72,10 @@ export function GlobalClaude(): React.JSX.Element {
    const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
  
    useEffect(() => {
 -    if (!open || hasTabs || view === 'bot') return
 +    if (!open || hasTabs || view === 'bot' || offline) return
      setError(null)
-     getBackend().sessions.openGlobal().catch((err) => setError(String(err)))
+-    getBackend().sessions.openGlobal().catch((err) => setError(String(err)))
 -  }, [open, hasTabs, view])
++    getBackend().sessions.openGlobal().catch((err) => setError(errorText(err)))
 +  }, [open, hasTabs, view, offline])
  
    useEffect(() => {
      const onKeyDown = (e: KeyboardEvent): void => {
-@@ -88,6 +92,7 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -88,9 +93,10 @@ export function GlobalClaude(): React.JSX.Element {
    const toggle = (): void => useAppStore.getState().setGlobalPanelOpen(!open)
  
    const newTab = (): void => {
@@ -3596,7 +3842,11 @@ The bar's text stays `Global · <agent>` in a project file window.
      const viewChanged = view !== 'sessions'
      useAppStore.getState().setGlobalView('sessions')
      if (!hasTabs && viewChanged) return // the effect above opens the first session on this change of view
-@@ -102,6 +107,7 @@ export function GlobalClaude(): React.JSX.Element {
+     setError(null)
+-    getBackend().sessions.startGlobal().catch((err) => setError(String(err)))
++    getBackend().sessions.startGlobal().catch((err) => setError(errorText(err)))
+   }
+@@ -102,6 +108,7 @@ export function GlobalClaude(): React.JSX.Element {
    }
  
    const startRename = (id: string): void => {
@@ -3604,7 +3854,7 @@ The bar's text stays `Global · <agent>` in a project file window.
      setEditingId(id)
      setDraft(terminals[id]?.title ?? '')
    }
-@@ -159,7 +165,7 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -159,7 +166,7 @@ export function GlobalClaude(): React.JSX.Element {
                    if (e.button === 1) e.preventDefault()
                  }}
                  onAuxClick={(e) => {
@@ -3613,7 +3863,7 @@ The bar's text stays `Global · <agent>` in a project file window.
                  }}
                  title="Double-click to rename"
                >
-@@ -189,11 +195,11 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -189,11 +196,11 @@ export function GlobalClaude(): React.JSX.Element {
                    </>
                  )}
                  <span
@@ -3628,7 +3878,7 @@ The bar's text stays `Global · <agent>` in a project file window.
                    }}
                  >
                    ×
-@@ -212,7 +218,12 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -212,7 +219,12 @@ export function GlobalClaude(): React.JSX.Element {
                <span className="global-tab-title">Bot</span>
              </div>
            )}
@@ -3642,7 +3892,7 @@ The bar's text stays `Global · <agent>` in a project file window.
              +
            </button>
          </div>
-@@ -230,7 +241,10 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -230,7 +242,10 @@ export function GlobalClaude(): React.JSX.Element {
          title={open ? 'Hide the Global panel (⌘J)' : 'Show the Global panel (⌘J)'}
        >
          <span className="global-chevron">{open ? '▾' : '▴'}</span>
@@ -3660,7 +3910,7 @@ The bar's text stays `Global · <agent>` in a project file window.
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: clean; `# pass 1126`, `# fail 0`.
+Expected: clean; `# pass 1142`, `# fail 0`.
 
 Run each and read its last line:
 
@@ -4000,7 +4250,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(ap
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1126`, `# fail 0`: the baseline 1092 at `ea4e212`, plus 2 in `backendFeatures.test.mjs`, 3 in `clientPtyStream.test.mjs`, 19 in `v2Backend.test.mjs`, 5 in `v2SetterOverrides.test.mjs`, 3 in `v2NoteDraft.test.mjs` and 3 in `v2SessionChoices.test.mjs`, minus the `exitKind` test.
+Expected: `# pass 1142`, `# fail 0`: the baseline 1092 at `ea4e212`, plus 2 in `backendFeatures.test.mjs`, 3 in `clientPtyStream.test.mjs`, 35 in `v2Backend.test.mjs`, 5 in `v2SetterOverrides.test.mjs`, 3 in `v2NoteDraft.test.mjs` and 3 in `v2SessionChoices.test.mjs`, minus the `exitKind` test.
 
 - [ ] **Step 2: Typecheck and build**
 
@@ -4049,12 +4299,14 @@ Found while prototyping this plan.
 5. **Dead 3b styles.** `.server-window-tree`, `.server-window-sessions`, `.server-window-session-title`, `.server-window-empty` and `.server-window-missing` in `styles.css` have no element left; remove them with the next styles change.
 6. **One connection per server in main** (3d): `installV2.ts`'s `request` and `registeredRepoPath` are the only places that read the renderer's registry for the backend; they move to the shared connection unchanged.
 7. **The Global panel without `mcp`.** A project whose server lost its MCP listener hides the panel, and its Global sessions keep running unseen. If that happens in practice, show them read-only instead of hiding the panel.
-8. **`whenProjected`'s 10 s.** A server under load can answer `worktree.create` and then take longer than 10 s to send the patch; the dialog then says the worktree "has not shown up here yet" although it exists. A per-topic "rev at least N" wait (the response carrying the rev) would make this exact.
+8. **`whenProjected`'s 10 s.** A server under load can answer `worktree.create` and then take longer than 10 s to send the patch; the dialog then says the worktree "has not shown up here yet" although it exists. A per-topic "rev at least N" wait (the response carrying the rev) would make this exact. `leave()` ends the open waits early (Task 5), so a wait never reads the next window's store.
+9. **The uncommitted-changes match is English text.** `worktrees.remove` recognises git's refusal by `/modified or untracked/` in the GIT_ERROR message, so a server whose git speaks another locale gets the plain error dialog instead of the "Delete Uncommitted Changes" re-ask. Carry over: a server-side detail code on that GIT_ERROR (e.g. `details.reason: 'dirty'`), or the server running git with `LC_ALL=C`.
+10. **`session.rename` takes `expected`, and the backend doesn't send it.** Two clients renaming the same tab at once: last write wins. Send the title the user started editing from once a conflict dialog is worth having.
 
 ## Risks
 
 1. **Response before patch.** The server answers `worktree.create` and `session.start` before or after the patch that shows the result; `whenProjected` covers both orders, with the 10 s limit in Notes for 3c-3 #8. A new session's tab is activated only once its patch arrives; it becomes the active tab of its own worktree without changing the selection, so switching worktrees meanwhile is not undone.
-2. **Offline gating is UI-only.** A command the gates miss still fails with `NOT_CONNECTED`: silently for a store-setter override (Decision 9), with a dialog for the backend's own dialogs (`remove`, `repos.*`) or the Add Worktree error line. The smoke checks a sample of the gates, not every one.
+2. **Offline gating is UI-only.** A command the gates miss still fails with `NOT_CONNECTED`: silently for a store-setter override or a fire-and-forget backend method (Decision 9), with a dialog for the backend's own dialogs (`remove`, `repos.*`) or the Add Worktree error line. The smoke checks a sample of the gates, not every one.
 3. **The start size.** A session starts at 120×32 and runs at that size until a pane shows it. A session started from AddWorktreeModal or ⌘T is shown at once; one started by another client in a worktree this window does not show keeps its own size (the smoke checks it is not shrunk).
 4. **A server restart ends every pty.** The re-attach after the reconnect finds them gone (`onClosed('gone')`: `[process ended while disconnected]`, spent), and the snapshot shows the sessions exited, with Restart. The smoke only checks that the overlay goes and the commands come back after a restart, not the terminals' contents.
 5. **The smoke's MCP capability is computed per hello.** The server adds `mcp` to the welcome only once its MCP listener is up; a client that connects first sees no Global panel until it reconnects. The smoke connects seconds after the server's listen line, which has been enough in every run; a flake there shows as a timeout waiting for `.global-bar`.
