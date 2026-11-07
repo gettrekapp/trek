@@ -194,3 +194,43 @@ test('close ends every connection and every broadcast', async () => {
   await links.sync()
   assert.equal(changes.length, before)
 })
+
+test('retryStuck: a call that finds nothing stuck does not start the throttle', async () => {
+  const { links, server, sockFor } = setup({ entries: [box], stored: { box: SECRET } })
+  await links.sync()
+  sockFor('ws://box:8800').open()
+  sockFor('ws://box:8800').welcome()
+  links.retryStuck()
+  assert.equal(server.sockets.length, 1, 'connected: nothing to retry')
+  sockFor('ws://box:8800').serverClose(4003, 'unauthorized')
+  // No time has passed, yet the first call reconnected nothing, so this one runs.
+  links.retryStuck()
+  assert.equal(server.sockets.length, 2)
+  server.last().open()
+  server.last().serverClose(4003, 'unauthorized')
+  links.retryStuck()
+  assert.equal(server.sockets.length, 2, 'that one did reconnect: now throttled')
+})
+
+test('retry(id) reconnects that entry only, if stuck, with no throttle', async () => {
+  const { links, server, sockFor } = setup({ entries: [box, lab], stored: { box: SECRET, lab: SECRET } })
+  await links.sync()
+  sockFor('ws://box:8800').open()
+  sockFor('ws://box:8800').serverClose(4003, 'unauthorized')
+  sockFor('ws://lab:8800').open()
+  sockFor('ws://lab:8800').serverClose(4003, 'unauthorized')
+  links.retryStuck()
+  assert.equal(server.sockets.length, 4)
+  for (const s of server.sockets.slice(2)) {
+    s.open()
+    s.serverClose(4003, 'unauthorized')
+  }
+  // Within the throttle window: retry still reconnects, and only the entry asked for.
+  links.retry('box')
+  assert.deepEqual(server.sockets.slice(4).map((s) => s.url), ['ws://box:8800'])
+  server.last().open()
+  server.last().welcome()
+  links.retry('box')
+  links.retry('missing')
+  assert.equal(server.sockets.length, 5, 'connected, or unknown: nothing')
+})

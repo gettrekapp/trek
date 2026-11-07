@@ -5,7 +5,7 @@
 import { ipcMain, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { withToken } from './appServersRules'
-import { getAppServer, getAppServerToken } from './appServers'
+import { getAppServer, getAppServerToken, isAppServerRemoving } from './appServers'
 import { RelayTable, clampCloseCode, clampCloseReason, type RelayEntry } from './v2relayRules'
 import { SERVER_REMOVED_MESSAGE } from '../shared/client/index.ts'
 import type { V2SocketOpenResult } from '../shared/types'
@@ -66,8 +66,11 @@ export function registerV2Relay(): void {
     if (typeof serverEntryId !== 'string' || !serverEntryId) throw new Error('serverEntryId is required')
     const owner = event.sender
     const refuse = (reason: string, removed = false): V2SocketOpenResult => ({ ok: false, removed, reason })
+    // A remove still writing the list may yet fail and put the entry back: not final until it is written.
+    const gone = (): V2SocketOpenResult =>
+      isAppServerRemoving(serverEntryId) ? refuse('Server being removed') : refuse(SERVER_REMOVED_MESSAGE, true)
     const server = getAppServer(serverEntryId)
-    if (!server) return refuse(SERVER_REMOVED_MESSAGE, true)
+    if (!server) return gone()
     watchOwner(owner)
     const generation = sockets.generation(owner)
     if (sockets.atCapacity(owner)) return refuse('Too many sockets for this window')
@@ -79,7 +82,7 @@ export function registerV2Relay(): void {
     // the secret store runs this get after queued sets: so a read of the new URL never pairs
     // with the old token, and an old URL whose token read saw the new token fails this check.
     const now = getAppServer(serverEntryId)
-    if (!now) return refuse(SERVER_REMOVED_MESSAGE, true)
+    if (!now) return gone()
     if (now.url !== server.url) return refuse('Server changed')
     if (owner.isDestroyed()) return refuse('Window closed')
     if (sockets.generation(owner) !== generation) return refuse('Window reloaded')

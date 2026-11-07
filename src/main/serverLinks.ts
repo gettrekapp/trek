@@ -43,9 +43,15 @@ export interface ServerLinks {
   /**
    * Reconnects every connection in a status the SDK does not retry out of
    * (needs-auth, incompatible): a token added on the server, or the server
-   * upgraded, has no event here. At most once per RETRY_STUCK_MS.
+   * upgraded, has no event here. At most once per RETRY_STUCK_MS: a call that
+   * finds none stuck does not count.
    */
   retryStuck(): void
+  /**
+   * Reconnects the entry's connection if it is stuck (needs-auth, incompatible),
+   * at once: a Test of the entry just succeeded, so the server takes it now.
+   */
+  retry(id: string): void
   /** The connection for an entry (3d subscribes to `attention` on it) */
   get(id: string): RegisteredServer | undefined
   /** Closes every connection for good (quit) */
@@ -97,7 +103,13 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     return out
   }
 
+  // Built from the list as it is now, under the last broadcast's seq: while a sync is still
+  // queued (a change made a moment ago) it may run ahead of the connections, with hasToken or
+  // a status not yet in step. Harmless: that sync's broadcast follows with a higher seq, and a
+  // window keeps the snapshot with the highest seq, so it corrects this one.
   const snapshot = (): AppServersChanged => ({ seq, servers: deps.entries().map(link) })
+  const stuck = (connection: RegisteredServer['connection']): boolean =>
+    connection.status === 'needs-auth' || connection.status === 'incompatible'
 
   const emit = (): void => {
     if (closed) return
@@ -166,10 +178,14 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     snapshot,
     retryStuck: () => {
       if (closed || now() - lastRetry < RETRY_STUCK_MS) return
+      const toRetry = registry.list().filter(({ connection }) => stuck(connection))
+      if (toRetry.length === 0) return
       lastRetry = now()
-      for (const { connection } of registry.list()) {
-        if (connection.status === 'needs-auth' || connection.status === 'incompatible') connection.reconnect()
-      }
+      for (const { connection } of toRetry) connection.reconnect()
+    },
+    retry: (id) => {
+      const connection = registry.get(id)?.connection
+      if (!closed && connection && stuck(connection)) connection.reconnect()
     },
     get: (id) => registry.get(id),
     close: () => {

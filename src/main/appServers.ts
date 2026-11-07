@@ -20,12 +20,24 @@ const FILE_NAME = 'app-servers.json'
 const tokens = createSecretStore('app-server-tokens.json')
 
 let servers: AppServer[] | null = null
+/**
+ * Entries a remove has taken out of the list but not yet off the disk. Until
+ * then they are not "removed" to a window: main's snapshots still list them
+ * and the relay refuses them only for now, so a remove whose write fails (and
+ * puts the entry back) never leaves a window on "Server removed" for good.
+ */
+const removing = new Map<string, { entry: AppServer; index: number }>()
 /** Main's own connections, from registerAppServerHandlers on */
 let links: ServerLinks | null = null
 
+/** To every window; one closing meanwhile (or failing the send) never stops the rest. */
 function broadcast(snapshot: AppServersChanged): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('appServers:changed', snapshot)
+    try {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('appServers:changed', snapshot)
+    } catch (err) {
+      console.warn('trek: could not send appServers:changed to a window', err)
+    }
   }
 }
 
@@ -77,6 +89,18 @@ function persist(): Promise<void> {
 export function getAppServer(id: string): AppServer | undefined {
   const found = loaded().find((s) => s.id === id)
   return found ? { ...found } : undefined
+}
+
+/** A remove of the entry is in progress (see `removing`). */
+export function isAppServerRemoving(id: string): boolean {
+  return removing.has(id)
+}
+
+/** The list as main's connections and their snapshots see it: with the entries a remove has not yet written. */
+function linkEntries(): AppServer[] {
+  const out = loaded().map((s) => ({ ...s }))
+  for (const { entry, index } of removing.values()) out.splice(Math.min(index, out.length), 0, { ...entry })
+  return out
 }
 
 /** Main-only: never return this over IPC. */
@@ -134,34 +158,39 @@ async function save(input: unknown): Promise<AppServerInfo> {
     }
   }
 
-  // A stored token never follows the URL to another origin (unless this call brings its own).
+  // Whatever happens from here (a rolled-back change included), main's connections follow
+  // the list as it ends up.
   try {
-    if (tokenGiven) await tokens.set(entryId, token as string)
-    else if (before && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null)
-  } catch (err) {
-    // The token write failed, so the old token (if any) is still the stored one: back to the old URL.
-    rollback()
-    throw err
-  }
+    // A stored token never follows the URL to another origin (unless this call brings its own).
+    try {
+      if (tokenGiven) await tokens.set(entryId, token as string)
+      else if (before && shouldClearToken(before.url, valid.url, false)) await tokens.set(entryId, null)
+    } catch (err) {
+      // The token write failed, so the old token (if any) is still the stored one: back to the old URL.
+      rollback()
+      throw err
+    }
 
-  // Removed while the token was written: it stays removed, and so does its token.
-  if (before && !list.includes(entry)) {
-    await tokens.set(entryId, null)
-    throw new Error(SERVER_REMOVED_MESSAGE)
+    // Removed while the token was written: it stays removed, and so does its token.
+    if (before && !list.includes(entry)) {
+      await tokens.set(entryId, null)
+      throw new Error(SERVER_REMOVED_MESSAGE)
+    }
+    try {
+      await persist()
+    } catch (err) {
+      // Roll back the in-memory change, and never leave a new token on the old URL
+      // (the clear is queued in the same step as the URL goes back).
+      const clear = tokenGiven && (!before || shouldClearToken(before.url, valid.url, false))
+      rollback()
+      if (clear) await tokens.set(entryId, null).catch(() => undefined)
+      throw err
+    }
+    // Open relay sockets still point at the old URL; the SDK reconnects to the new one.
+    if (urlChanged) closeForServer(entryId, 'server address changed')
+  } finally {
+    await linksFollow()
   }
-  try {
-    await persist()
-  } catch (err) {
-    // Roll back the in-memory change, and never leave a new token on the old URL
-    // (the clear is queued in the same step as the URL goes back).
-    const clear = tokenGiven && (!before || shouldClearToken(before.url, valid.url, false))
-    rollback()
-    if (clear) await tokens.set(entryId, null).catch(() => undefined)
-    throw err
-  }
-  // Open relay sockets still point at the old URL; the SDK reconnects to the new one.
-  if (urlChanged) closeForServer(entryId, 'server address changed')
-  await linksFollow()
   return info(entry)
 }
 
@@ -177,6 +206,8 @@ async function remove(id: unknown): Promise<void> {
   const list = loaded()
   const index = list.findIndex((s) => s.id === key)
   const [gone] = index >= 0 ? list.splice(index, 1) : []
+  // Until it is off the disk, the broadcasts (a status change meanwhile included) still list it.
+  if (gone) removing.set(key, { entry: gone, index })
   closeForServer(key, 'server removed')
   try {
     await tokens.set(key, null)
@@ -189,6 +220,8 @@ async function remove(id: unknown): Promise<void> {
       throw err
     }
   } finally {
+    // Back in the list, or gone for good: in the same step, so no snapshot misses or doubles it.
+    if (gone) removing.delete(key)
     await linksFollow()
   }
 }
@@ -199,7 +232,11 @@ async function test(id: unknown): Promise<AppServerTest> {
   const token = await tokens.get(server.id)
   if (!token) return { status: 'needs-auth', message: 'No token set' }
 
-  return probeServer({ url: server.url, token, createSocket: globalSocketFactory, clientVersion: app.getVersion() })
+  const result = await probeServer({ url: server.url, token, createSocket: globalSocketFactory, clientVersion: app.getVersion() })
+  // The server takes this token now (added there, or the server upgraded): main's own
+  // connection, if stuck in needs-auth or incompatible, reconnects at once, unthrottled.
+  if (result.status === 'connected') links?.retry(server.id)
+  return result
 }
 
 /** Quit: main's connections close for good. */
@@ -209,7 +246,7 @@ export function closeServerLinks(): void {
 
 export function registerAppServerHandlers(): void {
   links = createServerLinks({
-    entries: () => loaded().map((s) => ({ ...s })),
+    entries: linkEntries,
     token: (id) => tokens.get(id),
     createSocket: globalSocketFactory,
     clientVersion: app.getVersion(),

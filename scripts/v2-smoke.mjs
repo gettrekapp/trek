@@ -886,6 +886,8 @@ try {
   const holdable = await app.evaluate(({ webContents }, id) => {
     const wc = webContents.fromId(id)
     if (!wc || typeof wc.send !== 'function') return false
+    const ownSend = Object.prototype.hasOwnProperty.call(wc, 'send')
+    const originalSend = wc.send
     const send = wc.send.bind(wc)
     globalThis.__held = null
     wc.send = (channel, ...args) => {
@@ -900,6 +902,9 @@ try {
       const held = globalThis.__held ?? []
       globalThis.__held = null
       for (const args of held) send(...args)
+      // The window's own send again, for the rest of the run.
+      if (ownSend) wc.send = originalSend
+      else delete wc.send
     }
     globalThis.__answer = (message) => (message.includes('was changed on the server') ? 0 : 1)
     return true
@@ -989,6 +994,12 @@ try {
 
   const w5 = await newWindow()
   await tag(w5, 'w5')
+  // Every broadcast w5 hears from here to the end (the Live, Fixable and Stuck flows, a setToken
+  // among them) is scanned for the token at the end.
+  await w5.evaluate(() => {
+    window.__changes5 = []
+    window.api.appServers.onChanged((snapshot) => window.__changes5.push(snapshot))
+  })
   check('a New Window beside it', await until(windowCount, 2), 2)
   const dialogsBefore = (await dialogs()).length
   await closeTagged('w1')
@@ -1110,6 +1121,9 @@ try {
   }
   await w5.locator('.recent-projects').waitFor({ state: 'detached', timeout: 5000 })
   check('× removes the recents', await w5.evaluate(() => window.api.getRecentProjects()), [])
+
+  const changes5 = await w5.evaluate(() => window.__changes5)
+  check('every broadcast w5 heard, the setToken flow included, carried no token', [changes5.length > 0, JSON.stringify(changes5).includes(token)], [true, false])
 
   // ---- 9. No console errors in any window -------------------------------------------
   check('no console or page errors in any window', pageErrors, [])
