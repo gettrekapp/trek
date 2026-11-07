@@ -20,6 +20,7 @@ import { NotificationsMenu } from './NotificationsMenu'
 import { VoiceToggle } from './VoiceToggle'
 import { removalBlock } from '../repositoryActions'
 import { getBackend } from '../backend'
+import { useFeatures } from '../useFeatures'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, HostStatus, Repository, TerminalStatus } from '../../../shared/types'
 
@@ -93,6 +94,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const serverStatus = useAppStore((s) => s.serverStatus)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
+  const features = useFeatures()
   const [filter, setFilter] = useState('')
   // Tag ids (or 'untagged'); a worktree matching any of them is shown. Empty = all.
   const [tagFilterValue, setTagFilter] = useState<string[]>([])
@@ -202,7 +204,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       ? repo.branchPullRequests?.[info.branch]
       : undefined
     const env =
-      info.serverId || !getBackend().features.env
+      info.serverId || !features.env
         ? undefined
         : environmentFor(environments, repo.path, info.branch)
     const envIsBusy = env ? !!envBusy[env.profile] : false
@@ -455,7 +457,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           placeholder="Filter worktrees…"
           spellCheck={false}
         />
-        {getBackend().features.voice && <VoiceToggle />}
+        {features.voice && <VoiceToggle />}
         <NotificationsMenu />
       </div>
       <div className="sidebar-heading">

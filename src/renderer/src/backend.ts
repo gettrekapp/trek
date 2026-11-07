@@ -244,6 +244,7 @@ export const legacyBackend: WindowBackend = {
 }
 
 let current: WindowBackend = legacyBackend
+const listeners = new Set<() => void>()
 
 /**
  * The backend for the window's current kind. A window can change kind (a
@@ -257,11 +258,25 @@ export function getBackend(): WindowBackend {
 /**
  * Installs the backend for the window's kind. `followWindowKind`
  * (windowKind.ts) calls it inside every `setServerWindow`, in the same tick, so
- * the render that shows the new kind already sees its backend. Components read
- * `getBackend().features` while rendering; that holds only because the kind
- * change re-renders them. A backend installed later (3c-2, once connected) needs
- * a reactive read, such as a `useFeatures()` hook.
+ * the render that shows the new kind already sees its backend. Components that
+ * read `features` while rendering use `useFeatures()`, which re-renders them
+ * here and on `backendChanged()`.
  */
 export function setBackend(backend: WindowBackend): void {
+  if (backend === current) return
   current = backend
+  backendChanged()
+}
+
+/** The current backend's `features` changed (a v2 backend's welcome capabilities arrived). */
+export function backendChanged(): void {
+  for (const listener of [...listeners]) listener()
+}
+
+/** Called after every `setBackend` and `backendChanged`; returns the unsubscribe. */
+export function subscribeBackend(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }

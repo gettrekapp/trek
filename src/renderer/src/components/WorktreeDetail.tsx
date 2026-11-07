@@ -19,6 +19,7 @@ import {
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
+import { useFeatures } from '../useFeatures'
 import { promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
 import { branchLabel, gitStatusLabel, splitBranch } from './Sidebar'
 import { StatusBadge } from './StatusBadge'
@@ -130,7 +131,7 @@ export function WorktreeDetail({
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
 
-  const features = getBackend().features
+  const features = useFeatures()
   const path = info?.path
   // A server window's paths are on the server: nothing here may poll them locally.
   const [stack, refreshStack] = useStackStatus(path, !!info?.serverId || !features.stacks)

@@ -14,6 +14,7 @@ export type FeatureName =
   | 'openInEditor'
   | 'promote'
   | 'settingsEdit'
+  | 'globalPanel'
 
 export type BackendFeatures = Readonly<Record<FeatureName, boolean>>
 
@@ -29,7 +30,8 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'reveal',
   'openInEditor',
   'promote',
-  'settingsEdit'
+  'settingsEdit',
+  'globalPanel'
 ]
 
 /** A project file window runs everything on this machine: every feature. */
@@ -45,7 +47,8 @@ export const LEGACY_FEATURES: BackendFeatures = {
   reveal: true,
   openInEditor: true,
   promote: true,
-  settingsEdit: true
+  settingsEdit: true,
+  globalPanel: true
 }
 
 /**
@@ -53,8 +56,9 @@ export const LEGACY_FEATURES: BackendFeatures = {
  * machine against the project's paths (the paths are on the server), the bot
  * and voice (local MCP tools), and the git flows protocol v2 has no command for.
  * Settings are read-only in v2, and Linear is hidden until phase 5 (the spec).
+ * The Global panel is on, if the server has the capability it needs.
  * A ceiling: the v2 backend's features are these AND the server's welcome
- * capabilities.
+ * capabilities (`v2Features`).
  */
 export const V2_FEATURES: BackendFeatures = {
   docker: false,
@@ -68,5 +72,38 @@ export const V2_FEATURES: BackendFeatures = {
   reveal: false,
   openInEditor: false,
   promote: false,
-  settingsEdit: false
+  settingsEdit: false,
+  globalPanel: true
+}
+
+/**
+ * The welcome capability a v2 feature needs, if any. Global sessions drive the
+ * worktree sessions through the server's MCP tools, so without `mcp` they
+ * could not do their job.
+ */
+const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
+  globalPanel: 'mcp'
+}
+
+const v2ByCapabilities = new Map<string, BackendFeatures>()
+
+/**
+ * A server window's features: `V2_FEATURES` AND the welcome's capabilities
+ * (none before the first welcome). The same capabilities give the same object,
+ * so `useFeatures` can hand it to React as a stable snapshot.
+ */
+export function v2Features(capabilities: readonly string[] | undefined): BackendFeatures {
+  const caps = [...new Set(capabilities ?? [])].sort()
+  const key = caps.join('\n')
+  let features = v2ByCapabilities.get(key)
+  if (!features) {
+    const out = {} as Record<FeatureName, boolean>
+    for (const name of FEATURE_NAMES) {
+      const needs = CAPABILITY_FOR[name]
+      out[name] = V2_FEATURES[name] && (needs === undefined || caps.includes(needs))
+    }
+    features = out
+    v2ByCapabilities.set(key, features)
+  }
+  return features
 }

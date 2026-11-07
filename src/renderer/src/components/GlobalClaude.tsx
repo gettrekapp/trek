@@ -9,6 +9,7 @@ import {
 } from '../terminals'
 import { globalSessionLlm } from '../llm'
 import { getBackend } from '../backend'
+import { useFeatures } from '../useFeatures'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
 import { BotPanel } from './BotPanel'
@@ -61,7 +62,7 @@ export function GlobalClaude(): React.JSX.Element {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const hasTabs = order.length > 0
-  const hasBot = getBackend().features.bot
+  const hasBot = useFeatures().bot
   const attention = order.some((id) => terminals[id]?.status === 'attention')
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
 
