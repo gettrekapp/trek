@@ -21,4 +21,5 @@ export function checks(mirror: TopicMirror): void {
   assertType<Equal<ReturnType<typeof mirror.get<'server'>>, TopicState<ServerTopic> | undefined>>()
   const s = mirror.get('server')
   if (s) assertType<Equal<typeof s.snapshot.repos, ServerTopic['repos']>>()
+  assertType<Equal<ReturnType<typeof mirror.whenRev<'project:p1'>>, Promise<TopicState<ProjectTopic>>>>()
 }

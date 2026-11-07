@@ -829,7 +829,9 @@ then stale, so no ping starts and no welcome listener runs for it.
 when the socket closes. The default timeout is 60 s (`requestTimeoutMs`, or
 `timeoutMs` per call); a timeout fails with `TIMEOUT`. Error replies reject with a
 `ClientError` carrying the server's `code`, and its `details` when the reply has
-an object there (anything else is dropped).
+an object there (anything else is dropped). `requestWithRev(method, params)`
+resolves with `{result, rev?}`: the response's `rev` (see "Revs in responses"),
+left out when the server sent none or a malformed one.
 
 **Mirror.** `TopicMirror.subscribe(topic, listener)` reference-counts per topic:
 the first listener sends `sub.subscribe`, later ones get the current state at
@@ -853,6 +855,20 @@ retry (a reconnect resubscribes at once and resets the back-off). When the
 connection is closed, every listener gets `{error}` with code `CLOSED` ("the
 connection was closed") and the topics are dropped; a `subscribe` after that
 gets the same error at once.
+
+**Waiting for a rev.** `TopicMirror.whenRev(topic, rev, {timeoutMs?})` resolves
+with the topic's state once the mirror holds `rev` or later, at once if it
+already does. A snapshot from a subscribe sent after the call also resolves it,
+whatever its rev: that is the newest state the server has (after a server
+restart revs start again at 0, so "at least `rev`" might never come). It needs
+a current subscription and rejects with `NOT_SUBSCRIBED` without one. It
+rejects with the topic's `NOT_FOUND`, with `CLOSED` when the connection closes,
+with `UNSUBSCRIBED` when the topic's last listener leaves, and with `TIMEOUT`
+after `timeoutMs` (on the connection's timers; without it there is no limit).
+A transient subscribe failure keeps it waiting for the retry. The usual use:
+`const {result, rev} = await conn.requestWithRev(...)`, then
+`if (rev) await mirror.whenRev(rev.topic, rev.rev)` before reading what the
+command made.
 
 **PtyStream.** `attach(ptyId, handlers)` registers the handlers before the request
 (the replay arrives first, as `onData(data, true)`) and resolves with the

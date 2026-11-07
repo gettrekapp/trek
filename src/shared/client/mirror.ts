@@ -13,6 +13,21 @@ export type MirrorListener<T extends Topic = Topic> = (update: MirrorUpdate<T>) 
 /** Internally, one entry holds listeners of one topic; the snapshot's type follows from that topic. */
 type Listener = (update: TopicState<unknown> | { error: ClientError }) => void
 
+export interface WhenRevOptions {
+  /** Reject with TIMEOUT after this long, on the connection's timers. Without it the wait has no limit. */
+  timeoutMs?: number
+}
+
+/** A `whenRev` call still waiting. */
+interface Waiter {
+  rev: number
+  /** The entry's `attempt` when the wait began: a snapshot from any later subscribe settles it */
+  attempt: number
+  resolve(state: TopicState<unknown>): void
+  reject(err: ClientError): void
+  timer: unknown
+}
+
 interface Entry {
   listeners: Set<Listener>
   state?: TopicState<unknown>
@@ -25,6 +40,8 @@ interface Entry {
   retryTimer: unknown
   /** The next retry's delay */
   retryDelay: number
+  /** `whenRev` calls waiting on this topic */
+  waiters: Set<Waiter>
 }
 
 /** A subscribe that fails transiently (not NOT_FOUND or NOT_CONNECTED) is retried after 1 s, doubling to 30 s. */
@@ -65,7 +82,7 @@ export class TopicMirror {
     }
     let entry = this.topics.get(topic)
     if (!entry) {
-      entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS }
+      entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS, waiters: new Set() }
       this.topics.set(topic, entry)
       entry.listeners.add(listener)
       if (this.conn.status === 'connected') this.resubscribe(topic)
@@ -84,8 +101,43 @@ export class TopicMirror {
       if (current.listeners.size > 0) return
       this.topics.delete(topic)
       this.cancelRetry(current)
+      this.failWaiters(current, new ClientError('UNSUBSCRIBED', `${topic} was unsubscribed`))
       this.conn.request('sub.unsubscribe', { topic }).catch(() => {})
     }
+  }
+
+  /**
+   * Resolves with the topic's state once the mirror holds `rev` or later (a
+   * response's `rev`, see `ServerConnection.requestWithRev`), or a snapshot from a
+   * subscribe sent after this call, whatever its rev: that is the newest state the
+   * server has, and after a server restart revs start again at 0. Needs a current
+   * subscription (`NOT_SUBSCRIBED` otherwise). Rejects with the topic's error on
+   * `NOT_FOUND` and when the connection closes (`CLOSED`), with `UNSUBSCRIBED` when
+   * its last listener leaves, and with `TIMEOUT` after `timeoutMs`. Transient
+   * subscribe failures keep it waiting.
+   */
+  whenRev<T extends Topic>(topic: T, rev: number, options: WhenRevOptions = {}): Promise<TopicState<TopicSnapshot<T>>> {
+    const entry = this.topics.get(topic)
+    if (!entry) return Promise.reject(new ClientError('NOT_SUBSCRIBED', `${topic} is not subscribed`))
+    if (entry.state && entry.state.rev >= rev) return Promise.resolve(entry.state as TopicState<TopicSnapshot<T>>)
+    if (entry.error?.code === 'NOT_FOUND') return Promise.reject(entry.error)
+    return new Promise((resolve, reject) => {
+      const waiter: Waiter = {
+        rev,
+        attempt: entry.attempt,
+        resolve: (state) => resolve(state as TopicState<TopicSnapshot<T>>),
+        reject,
+        timer: null
+      }
+      if (options.timeoutMs !== undefined) {
+        waiter.timer = this.conn.timers.setTimeout(() => {
+          waiter.timer = null
+          if (!entry.waiters.delete(waiter)) return
+          reject(new ClientError('TIMEOUT', `${topic} did not reach rev ${rev}`))
+        }, options.timeoutMs)
+      }
+      entry.waiters.add(waiter)
+    })
   }
 
   /** The current state, if a snapshot has arrived. Shared and read-only, as for listeners. */
@@ -107,6 +159,7 @@ export class TopicMirror {
         entry.error = undefined
         entry.retryDelay = RETRY_MIN_MS
         this.notify(entry, entry.state)
+        this.settle(entry, attempt)
       },
       (err: ClientError) => {
         if (this.topics.get(topic) !== entry || entry.attempt !== attempt) return
@@ -116,6 +169,7 @@ export class TopicMirror {
         if (err.code === 'NOT_FOUND') entry.state = undefined
         entry.error = err
         this.notify(entry, { error: err })
+        if (err.code === 'NOT_FOUND') this.failWaiters(entry, err)
         // Anything else (TIMEOUT, INTERNAL, ...) may pass: try again with back-off.
         if (err.code !== 'NOT_FOUND' && this.topics.get(topic) === entry) this.scheduleRetry(topic, entry)
       }
@@ -133,7 +187,32 @@ export class TopicMirror {
       this.cancelRetry(entry)
       entry.attempt++
       this.notify(entry, { error: closedError() })
+      this.failWaiters(entry, closedError())
     }
+  }
+
+  /** Resolves the waiters the current state satisfies; `attempt` names the subscribe that just brought it. */
+  private settle(entry: Entry, attempt?: number): void {
+    const state = entry.state
+    if (!state) return
+    for (const waiter of [...entry.waiters]) {
+      if (state.rev < waiter.rev && (attempt === undefined || attempt <= waiter.attempt)) continue
+      this.dropWaiter(entry, waiter)
+      waiter.resolve(state)
+    }
+  }
+
+  private failWaiters(entry: Entry, err: ClientError): void {
+    for (const waiter of [...entry.waiters]) {
+      this.dropWaiter(entry, waiter)
+      waiter.reject(err)
+    }
+  }
+
+  private dropWaiter(entry: Entry, waiter: Waiter): void {
+    entry.waiters.delete(waiter)
+    if (waiter.timer !== null) this.conn.timers.clearTimeout(waiter.timer)
+    waiter.timer = null
   }
 
   private scheduleRetry(topic: Topic, entry: Entry): void {
@@ -159,6 +238,7 @@ export class TopicMirror {
     if (outcome.kind === 'applied') {
       entry.state = outcome.state
       this.notify(entry, entry.state)
+      this.settle(entry)
     } else if (outcome.kind === 'resync') {
       this.resubscribe(patch.topic)
     }

@@ -310,3 +310,114 @@ test('close() gives every listener a CLOSED error and drops the topics', async (
   mirror.subscribe('server', (s) => late.push(s))
   assert.equal(late.at(-1).error.code, 'CLOSED', 'a subscribe after close hears CLOSED at once')
 })
+
+// ---- whenRev ----
+
+/** Settles `promise` into a plain record, so a test can check it without awaiting forever. */
+function track(promise) {
+  const out = { state: undefined, error: undefined, settled: false }
+  promise.then((s) => { out.state = s; out.settled = true }, (e) => { out.error = e; out.settled = true })
+  return out
+}
+
+test('whenRev resolves at once when the mirror holds the rev, else with the patch that reaches it', async () => {
+  const { mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 4 })
+  await tick()
+  assert.deepEqual(await mirror.whenRev('project:p', 3), { snapshot: { n: 1 }, rev: 4 })
+  assert.deepEqual(await mirror.whenRev('project:p', 4), { snapshot: { n: 1 }, rev: 4 })
+  const later = track(mirror.whenRev('project:p', 6))
+  sock.event('state.patch', { topic: 'project:p', rev: 5, ops: [{ op: 'replace', path: '/n', value: 2 }] })
+  await tick()
+  assert.equal(later.settled, false, 'rev 5 is not 6 yet')
+  sock.event('state.patch', { topic: 'project:p', rev: 6, ops: [{ op: 'replace', path: '/n', value: 3 }] })
+  await tick()
+  assert.deepEqual(later.state, { snapshot: { n: 3 }, rev: 6 })
+})
+
+test('whenRev before the first snapshot, and across a gap resubscribe', async () => {
+  const { mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  const early = track(mirror.whenRev('project:p', 2))
+  // This subscribe was in flight when the wait began: only its rev can settle it.
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 1 })
+  await tick()
+  assert.equal(early.settled, false)
+  sock.event('state.patch', { topic: 'project:p', rev: 3, ops: [] })
+  // The gap resubscribes; its snapshot is past the rev.
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 9 }, rev: 3 })
+  await tick()
+  assert.deepEqual(early.state, { snapshot: { n: 9 }, rev: 3 })
+})
+
+test('whenRev settles on a snapshot subscribed after the call whatever its rev: a restarted server starts at 0', async () => {
+  const { server, clock, mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 40 })
+  await tick()
+  const wait = track(mirror.whenRev('project:p', 41))
+  sock.serverClose(1006, '')
+  clock.advance(1000)
+  const next = server.last()
+  next.open()
+  next.welcome()
+  next.reply(next.lastReq('sub.subscribe'), { snapshot: { n: 2 }, rev: 0 })
+  await tick()
+  assert.deepEqual(wait.state, { snapshot: { n: 2 }, rev: 0 })
+})
+
+test('whenRev rejects: not subscribed, NOT_FOUND, the last unsubscribe, close, and its timeout', async () => {
+  const { clock, conn, mirror, sock } = setup()
+  await assert.rejects(mirror.whenRev('project:x', 1), (e) => e.code === 'NOT_SUBSCRIBED')
+
+  mirror.subscribe('project:gone', () => {})
+  const gone = track(mirror.whenRev('project:gone', 1))
+  sock.fail(subReqs(sock).at(-1), 'NOT_FOUND', 'No such topic')
+  await tick()
+  assert.equal(gone.error.code, 'NOT_FOUND')
+  await assert.rejects(mirror.whenRev('project:gone', 1), (e) => e.code === 'NOT_FOUND', 'at once while the topic is not found')
+
+  const stop = mirror.subscribe('project:a', () => {})
+  sock.reply(subReqs(sock).at(-1), { snapshot: {}, rev: 0 })
+  await tick()
+  const left = track(mirror.whenRev('project:a', 5))
+  stop()
+  await tick()
+  assert.equal(left.error.code, 'UNSUBSCRIBED')
+
+  mirror.subscribe('project:b', () => {})
+  sock.reply(subReqs(sock).at(-1), { snapshot: {}, rev: 0 })
+  await tick()
+  const slow = track(mirror.whenRev('project:b', 5, { timeoutMs: 2000 }))
+  clock.advance(1999)
+  await tick()
+  assert.equal(slow.settled, false)
+  clock.advance(1)
+  await tick()
+  assert.equal(slow.error.code, 'TIMEOUT')
+  const fast = track(mirror.whenRev('project:b', 1, { timeoutMs: 2000 }))
+  sock.event('state.patch', { topic: 'project:b', rev: 1, ops: [] })
+  await tick()
+  assert.equal(fast.state.rev, 1)
+  const pendingTimers = clock.pending()
+  const closing = track(mirror.whenRev('project:b', 9, { timeoutMs: 5000 }))
+  assert.equal(clock.pending(), pendingTimers + 1)
+  conn.close()
+  await tick()
+  assert.equal(closing.error.code, 'CLOSED')
+  assert.equal(clock.pending(), 0, 'no timer outlives its wait')
+})
+
+test('a transient subscribe failure keeps whenRev waiting; the retry settles it', async () => {
+  const { clock, mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  const wait = track(mirror.whenRev('project:p', 2))
+  sock.fail(subReqs(sock).at(-1), 'INTERNAL', 'boom')
+  await tick()
+  assert.equal(wait.settled, false)
+  clock.advance(1000)
+  sock.reply(subReqs(sock).at(-1), { snapshot: { n: 1 }, rev: 0 })
+  await tick()
+  assert.deepEqual(wait.state, { snapshot: { n: 1 }, rev: 0 }, 'the retry was sent after the call')
+})
