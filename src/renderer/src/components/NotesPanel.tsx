@@ -55,8 +55,9 @@ export function NotesPanel({ visible, repoId, noteKey }: Props): React.JSX.Eleme
     const savedNow = (): string =>
       useAppStore.getState().project?.repositories.find((r) => r.id === repo)?.branchNotes?.[key] ?? ''
     inFlight.current = true
-    getBackend()
-      .branch.setNote(repo, key, text, expected)
+    const backend = getBackend()
+    backend.branch
+      .setNote(repo, key, text, expected)
       .then(
         () => {
           if (!stillShown()) return
@@ -66,7 +67,7 @@ export function NotesPanel({ visible, repoId, noteKey }: Props): React.JSX.Eleme
         (err: unknown) => {
           const failure = noteSaveFailed(errorCode(err), errorText(err), text, savedNow())
           if (!failure.keep && stillShown()) updateDraft(() => null)
-          if (failure.dialog) void window.api.showError(failure.dialog.title, failure.dialog.message)
+          if (failure.dialog) backend.errors.show(failure.dialog.title, failure.dialog.message)
         }
       )
       .finally(() => {

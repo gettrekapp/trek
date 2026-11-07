@@ -79,7 +79,12 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
                 key={btn.id}
                 className="quick-btn"
                 title={btn.text}
-                onClick={() => void getBackend().sessions.sendPrompt(terminalId, btn.text)}
+                onClick={() => {
+                  const backend = getBackend()
+                  backend.sessions
+                    .sendPrompt(terminalId, btn.text)
+                    .catch((err) => backend.errors.report('Could not send the prompt', err))
+                }}
               >
                 {btn.label.trim() || btn.text}
               </button>

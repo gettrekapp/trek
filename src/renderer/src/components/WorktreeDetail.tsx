@@ -19,7 +19,6 @@ import {
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
-import { errorText } from '../v2/errors'
 import { useFeatures } from '../useFeatures'
 import { promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
 import { branchLabel, gitStatusLabel, splitBranch } from './Sidebar'
@@ -257,14 +256,14 @@ export function WorktreeDetail({
   const runGitSync = async (kind: 'pull' | 'push'): Promise<void> => {
     if (!info.branch || syncBusy) return
     setSyncBusy(kind)
+    // The backend the call went to shows its failure (a server window's, as one line).
+    const backend = getBackend()
     try {
       const loc = { serverId: info.serverId, path: info.path }
-      if (kind === 'pull') await getBackend().git.pull(loc, info.branch)
-      else await getBackend().git.push(loc, info.branch)
+      if (kind === 'pull') await backend.git.pull(loc, info.branch)
+      else await backend.git.push(loc, info.branch)
     } catch (err) {
-      // A server window's errors are ClientErrors (code + message), shown as one line.
-      const message = serverWindow ? errorText(err) : String(err)
-      void window.api.showError(kind === 'pull' ? 'Git pull failed' : 'Git push failed', message)
+      backend.errors.report(kind === 'pull' ? 'Git pull failed' : 'Git push failed', err)
     } finally {
       setSyncBusy(null)
       onWorktreesChanged() // refresh ahead/behind counts

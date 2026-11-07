@@ -68,6 +68,8 @@ export interface V2BackendDeps {
   removalBlock(repo: Repository): string | null
   /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
   report(title: string, err: unknown): void
+  /** Whether the window has left this project: nothing it still has in flight shows */
+  left(): boolean
 }
 
 /**
@@ -416,6 +418,12 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           await deps.showError(`Can't remove ${repo.name}`, errorText(err))
         }
       }
+    },
+    // deps.showError and deps.report already show nothing once the window left.
+    errors: {
+      show: (title, message) => void deps.showError(title, message),
+      report,
+      inline: (err) => (deps.left() || errorCode(err) === 'NOT_CONNECTED' ? null : errorText(err))
     }
   }
 }

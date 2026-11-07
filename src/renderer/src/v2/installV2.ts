@@ -13,6 +13,7 @@ import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { errorCode, errorText } from './errors'
 import { ClientError } from '../../../shared/client/index.ts'
+import { OFF_VIEW } from '../../../shared/bot'
 import type { WindowBackend } from '../backend'
 import type { AppState } from '../store'
 
@@ -43,6 +44,25 @@ const EMPTY: Partial<AppState> = {
   decisions: {},
   serverOffline: false,
   serverLink: null
+}
+
+/**
+ * View state a window keeps from what it showed before (a file window's open
+ * Global panel or bot tab, its bot, Colima environments, Linear chips, voice
+ * queue): a server window starts from none of it and leaves none behind.
+ * The queue panels' open state is an app-wide preference and stays.
+ */
+const VIEW_RESET: Partial<AppState> = {
+  globalPanelOpen: false,
+  globalView: 'sessions',
+  botView: OFF_VIEW,
+  botEvents: [],
+  serverStatus: {},
+  environments: {},
+  envBusy: {},
+  linearIssues: {},
+  voicePlaying: null,
+  voiceQueued: 0
 }
 
 export function installV2Window(entryId: string, projectId: string): V2Window {
@@ -135,19 +155,19 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     promptRepoPath: requestRepoPath,
     registeredRepoPath,
     removalBlock,
-    report
+    report,
+    left: () => left
   })
 
   // The store's own setters (zustand 5's initial state), never a live value that may already be an override.
   const initial = useAppStore.getInitialState()
   const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
-  // A server window has no bot tab, so a 'bot' view left from a file window would open the Global panel empty.
   useAppStore.setState({
     ...v2SetterOverrides(backend, () => useAppStore.getState(), report),
+    ...VIEW_RESET,
     serverOffline: true,
-    serverLink: null,
-    globalView: 'sessions'
+    serverLink: null
   })
 
   return {
@@ -160,7 +180,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       for (const cancel of [...waits]) cancel()
       disposeV2Terminals()
       clearV2Projection()
-      useAppStore.setState({ ...originals, ...EMPTY })
+      useAppStore.setState({ ...originals, ...EMPTY, ...VIEW_RESET })
     }
   }
 }

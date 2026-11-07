@@ -41,6 +41,7 @@ import {
 } from './worktreeActions'
 import { addRepository, removeRepository } from './repositoryActions'
 import { LEGACY_FEATURES, type BackendFeatures } from './backendFeatures'
+import { errorText } from './v2/errors'
 import type { LlmSelection } from '../../shared/providers/types'
 import type {
   GitWorktreeInfo,
@@ -137,6 +138,21 @@ export interface WindowBackend {
     /** Asks the user which repository to add */
     add(): Promise<void>
     remove(repo: Repository): Promise<void>
+  }
+  /**
+   * Failures a component caught itself (a pull, a note's save, a Global tab
+   * that did not start). A v2 backend's show nothing once the window has left
+   * its project, and skip NOT_CONNECTED, which the offline window already
+   * shows. Take the backend before the call (`const backend = getBackend()`):
+   * the window may change kind while it runs.
+   */
+  readonly errors: {
+    /** A dialog */
+    show(title: string, message: string): void
+    /** A dialog with the error as one line */
+    report(title: string, err: unknown): void
+    /** The error as one line for an inline message, or null when nothing should show */
+    inline(err: unknown): string | null
   }
 }
 
@@ -244,6 +260,12 @@ export const legacyBackend: WindowBackend = {
   repos: {
     add: () => addRepository(),
     remove: (repo) => removeRepository(repo)
+  },
+  // The text each caller showed before the seam.
+  errors: {
+    show: (title, message) => void window.api.showError(title, message),
+    report: (title, err) => void window.api.showError(title, String(err)),
+    inline: (err) => errorText(err)
   }
 }
 

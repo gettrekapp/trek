@@ -24,7 +24,7 @@ class CodedError extends Error {
  * method (a value, a function of the params, or an Error to reject with), and
  * `ui` records what the dialogs were asked; `reports` what went to `report`.
  */
-function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [] } = {}) {
+function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [], left = () => false } = {}) {
   const calls = []
   const ui = []
   const reports = []
@@ -69,7 +69,8 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     },
     registeredRepoPath: async (repoId) => (repoId === 'srv-b' ? '/b' : null),
     removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null),
-    report: (title, err) => reports.push([title, err.code])
+    report: (title, err) => reports.push([title, err.code]),
+    left
   })
   return { backend, calls, ui, st, reports }
 }
@@ -465,4 +466,18 @@ test('repos.remove: a refusal is shown and resolves', async () => {
   const { backend, ui } = setup({ confirms: [true], replies: { 'repo.remove': new CodedError('IN_USE', 'sessions are running') } })
   await backend.repos.remove(repo())
   assert.deepEqual(ui.at(-1), ['error', "Can't remove r", 'sessions are running'])
+})
+
+test('errors: show and report reach the dialogs; NOT_CONNECTED and anything after leave stay quiet', () => {
+  const flags = { left: false }
+  const { backend, ui, reports } = setup({ left: () => flags.left })
+  backend.errors.show('Could not save the note', 'details')
+  backend.errors.report('Git pull failed', new CodedError('GIT_ERROR', 'no upstream'))
+  backend.errors.report('Git pull failed', new CodedError('NOT_CONNECTED', ''))
+  assert.deepEqual(ui, [['error', 'Could not save the note', 'details']])
+  assert.deepEqual(reports, [['Git pull failed', 'GIT_ERROR']])
+  assert.equal(backend.errors.inline(new CodedError('CAPACITY', 'too many sessions')), 'too many sessions')
+  assert.equal(backend.errors.inline(new CodedError('NOT_CONNECTED', '')), null)
+  flags.left = true
+  assert.equal(backend.errors.inline(new CodedError('CAPACITY', 'too many sessions')), null)
 })

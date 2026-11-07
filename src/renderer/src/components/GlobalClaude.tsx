@@ -12,7 +12,6 @@ import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { getProvider } from '../../../shared/providers/registry'
 import { v2GlobalLabel } from '../v2/sessionChoices'
-import { errorText } from '../v2/errors'
 import { describeLlm } from '../../../shared/providers/selection'
 import { BotPanel } from './BotPanel'
 import { StatusBadge } from './StatusBadge'
@@ -74,7 +73,8 @@ export function GlobalClaude(): React.JSX.Element {
   useEffect(() => {
     if (!open || hasTabs || view === 'bot' || offline) return
     setError(null)
-    getBackend().sessions.openGlobal().catch((err) => setError(errorText(err)))
+    const backend = getBackend()
+    backend.sessions.openGlobal().catch((err) => setError(backend.errors.inline(err)))
   }, [open, hasTabs, view, offline])
 
   useEffect(() => {
@@ -98,7 +98,8 @@ export function GlobalClaude(): React.JSX.Element {
     useAppStore.getState().setGlobalView('sessions')
     if (!hasTabs && viewChanged) return // the effect above opens the first session on this change of view
     setError(null)
-    getBackend().sessions.startGlobal().catch((err) => setError(errorText(err)))
+    const backend = getBackend()
+    backend.sessions.startGlobal().catch((err) => setError(backend.errors.inline(err)))
   }
 
   const selectTab = (id: string): void => {

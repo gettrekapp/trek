@@ -33,6 +33,9 @@ export function checks(backend: WindowBackend): void {
   assertType<Returns<typeof branch.setTicket, Promise<void>>>()
   assertType<Returns<typeof branch.setPullRequest, Promise<void>>>()
   assertType<Returns<typeof branch.setEnvVars, Promise<void>>>()
+  // A component's own failures go through its backend: a dialog, or an inline line (null: show none).
+  assertType<Returns<typeof backend.errors.report, void>>()
+  assertType<Returns<typeof backend.errors.inline, string | null>>()
   // A note edit may carry the text it started from, for a compare-and-set.
   assertType<Equal<Parameters<typeof branch.setNote>[3], string | null | undefined>>()
   void branch.setNote('r1', 'feat', 'new', 'old')
