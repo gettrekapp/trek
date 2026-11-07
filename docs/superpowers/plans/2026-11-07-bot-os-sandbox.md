@@ -2560,6 +2560,12 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+## Final review findings (accepted, follow-up)
+
+A final security review of the finished branch (same threat model: a prompt-injected bot with a shell, as the same OS user) found that the sandbox does what it was built for, hiding userData from the bot's own process tree, but does not yet stop a determined, prompt-injected bot from getting code run outside the sandbox. The ways: files outside userData that unsandboxed programs run later (git config, fsmonitor and hooks, which Trek's own `git status` runs; shell rc files; `~/.claude` settings hooks; the project file; `stack.sh`; LaunchAgents), disk-image mounts over a parent of userData on macOS, unsandboxed local services (Docker, verified to read hidden files with `docker run`; D-Bus or `systemd-run`; tmux or screen; local dev servers), `environments.json` values in `docker compose`'s environment (readable through `KERN_PROCARGS2`), a local trek-server's data folder with plaintext session MCP tokens, and `bwrap` found through PATH. The full list is in the core design doc ("Known gaps in the sandbox").
+
+The user accepted these and merges the branch as it is. The follow-up branch adds a write allow-list (the bot's folder, its repos minus `.git/config`, `.git/hooks`, `.claude/settings*` and `stack.sh`, temp, the Claude CLI's state), denies disk mounts, denies Unix-socket connections except an allow-list, runs Trek's git calls with `-c core.fsmonitor=false -c core.hooksPath=/dev/null`, uses an absolute, root-owned `bwrap` path, passes compose env vars by file, and hides a local trek-server's data folder.
+
 ## Follow-ups (out of scope, user decision 9)
 
 1. **Network.** The outer profile allows all network: the bot can still send repository contents anywhere. Claude Code's proxy allowlist can't be used under the outer sandbox (they don't nest), so this needs SBPL `network-outbound` rules (loopback for the hook and MCP, the Anthropic API, git remotes) or an outer proxy.

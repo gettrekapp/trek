@@ -29,6 +29,15 @@ environment. Seatbelt doesn't gate `sysctl(KERN_PROCARGS2)`; `(deny process-info
 sandbox, being setuid). So no Trek token is in any process's environment or argv, Codex's included,
 and the bot's token is per turn. On Linux the PID namespace hides other processes' `/proc` entries.
 
+**Outcome (final review).** The shipped sandbox hides userData from the bot's own process tree,
+and Trek's MCP server enforces the bot's policy on every tool call. A final security review found
+that it does not yet stop a determined, prompt-injected bot from getting code run outside the
+sandbox: through files that unsandboxed programs run later (git hooks and config, shell rc files,
+`~/.claude` settings, the project file, `stack.sh`, LaunchAgents), disk mounts, unsandboxed local
+services such as Docker, and delegation. The user accepted this and merges the branch as it is; a
+write allow-list and related hardening are the follow-up. The full gap list is in
+`docs/superpowers/specs/2026-11-02-project-bot-core-design.md`.
+
 Environment for every prototype: macOS 26.2 (25C56), Apple silicon, Claude Code `2.1.319`
 (logged in with claude.ai auth), `--model haiku`. Every prototype used a dummy "secret" directory
 under the session scratchpad. In the outputs below `$S` stands for that directory.

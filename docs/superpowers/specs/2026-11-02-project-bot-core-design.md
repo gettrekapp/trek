@@ -226,6 +226,13 @@ into approval.
 
 ### Known limits
 
+- **What the sandbox does.** It hides Trek's userData directory from the bot's own
+  processes (the CLI and everything it starts). Trek's MCP server enforces the bot's
+  policy on every tool call, and the eight always-ask tools above need the user's
+  approval every time.
+- **What it does not do yet.** It does not stop a determined, prompt-injected bot from
+  getting code run outside the sandbox. The gaps below are the known ways. The write
+  allow-list (Planned follow-up) closes most of them.
 - **Delegated sessions are not bound by the tiers or the sandbox.** A session the bot
   starts runs under the project's normal permissions, so it could `git push` itself.
   That is why starting, prompting and sending keys to sessions are always-ask: the user
@@ -237,25 +244,51 @@ into approval.
 
 ### Known gaps in the sandbox
 
-- **macOS: other processes' environment and argv are readable.** Seatbelt can't gate
-  `sysctl(KERN_PROCARGS2)`, so the bot can read the environment and arguments of any
-  non-system process the same user runs, including credentials exported in a shell
-  profile. Trek keeps its own tokens out of every environment and argument list.
-  `botSandboxMac.test.mjs` asserts the gap still exists. Linux's PID namespace hides
-  other processes entirely.
-- **Codex older than 0.148** ignores `http_headers_helper`, reaches Trek's MCP server
-  without a token and gets 401: no Trek tools until it is updated. There is no
-  fallback to the environment.
-- **The bot's own per-turn token is in its environment** during a turn, so any process
-  of the user can read it then. It is gated by the same policy and revoked when the
-  turn ends.
-- **The network is not restricted.** The sandbox only keeps Trek's data unreadable.
-- **Apple Events (`osascript`) are not blocked.** macOS's Automation consent prompt is
-  the only gate against the bot driving another app outside the sandbox.
-- **Hard links and backups** of userData files that exist under other paths before the
-  sandbox starts (a hard link, a Time Machine snapshot, a mounted backup) stay readable.
-  Secret stores are encrypted, so such copies are ciphertext; plaintext files are not.
-- **Windows is unsupported.** The bot refuses to start there.
+1. **macOS process info.** Seatbelt can't gate `sysctl(KERN_PROCARGS2)`, so the bot can
+   read the environment and argv of any of the user's non-system processes. Trek keeps
+   its own tokens out, but `environments.json` values passed to `docker compose` are in
+   its environment. `botSandboxMac.test.mjs` asserts the gap still exists. Linux's PID
+   namespace hides other processes.
+2. **Files that run later, outside the sandbox.** The bot can write files outside
+   userData that unsandboxed programs run later:
+   - git config, fsmonitor and hooks (Trek's own `git status` runs them);
+   - shell rc files (Trek's startup PATH fix and terminals);
+   - `~/.claude` settings hooks;
+   - the project file (session types, commands);
+   - `stack.sh`;
+   - LaunchAgents.
+3. **Disk mounts.** On macOS the bot can mount a disk image over a parent folder of
+   userData, which redirects where Trek writes afterwards.
+4. **Local services and network.** The bot can drive unsandboxed local services: Docker
+   (verified: `docker run` reads files the sandbox hides), D-Bus or `systemd-run` on
+   Linux, tmux or screen, local dev servers. The network isn't restricted.
+5. **Apple Events / `osascript`.** Only macOS's Automation consent stands in the way of
+   the bot driving another app outside the sandbox.
+6. **Delegation.** `enqueue_prompt` is free and reaches unsandboxed sessions (a user
+   decision). Approved `start_session`, `send_prompt` and `send_keys` run unsandboxed
+   sessions.
+7. **The bot's own token.** Its per-turn token is in its environment during a turn. It
+   is gated by the same policy and revoked when the turn ends.
+8. **A local trek-server's data folder** holds plaintext session MCP tokens and isn't
+   hidden.
+9. **Existing copies.** Hard links, backups and snapshots of data files made earlier
+   stay readable, as do other mounts of the same filesystem on Linux. Secret stores are
+   encrypted there; plaintext files are not.
+10. **Codex older than 0.148** ignores `http_headers_helper`, gets 401 and so has no
+    Trek tools until it is updated. There is no fallback to the environment.
+11. **Windows** is unsupported. The bot refuses to start there.
+12. **The probe and bwrap.** The canary probe runs only at bot start, and on Linux
+    `bwrap` is found through PATH.
+
+### Planned follow-up
+
+A write allow-list: the bot may write only to its own folder, its repos minus files
+that run when used (`.git/config`, `.git/hooks`, `.claude/settings*`, `stack.sh`),
+temp, and the Claude CLI's state. The same branch denies disk mounts, denies Unix-socket
+connections except an allow-list, hardens Trek's git calls
+(`-c core.fsmonitor=false -c core.hooksPath=/dev/null`), uses an absolute, root-owned
+`bwrap` path, passes compose env vars by file, and hides a local trek-server's data
+folder.
 
 ## Panel
 
