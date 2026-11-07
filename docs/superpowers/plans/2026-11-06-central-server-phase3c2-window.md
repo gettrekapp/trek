@@ -2137,6 +2137,8 @@ Apply to `src/renderer/src/store.ts`:
    project: null,
 ```
 
+> Superseded: `setServerOffline` became `setServerLink(status)` (which sets `serverLink` and `serverOffline` together) in `20be90a`.
+
 - [ ] **Step 2: Guard the legacy helpers; export the entry size**
 
 Apply to `src/renderer/src/terminals.ts`:
@@ -2821,6 +2823,8 @@ Apply to `src/renderer/src/v2/ServerProjectWindow.tsx` (the read-only `ProjectTr
    return (
      <div className="server-window server-window-message">
 ```
+
+> Superseded: these calls are `setServerLink(change.status)` and `setServerLink(connection.status)` since `20be90a`.
 
 Append to `src/renderer/src/styles.css`:
 
@@ -4267,7 +4271,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(ap
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1152`, `# fail 0`: the baseline 1092 at `ea4e212`, plus 2 in `backendFeatures.test.mjs`, 7 in `clientPtyStream.test.mjs`, 35 in `v2Backend.test.mjs`, 6 in `v2SetterOverrides.test.mjs`, 3 in `v2NoteDraft.test.mjs`, 5 in `v2RepoPathPrompt.test.mjs` and 3 in `v2SessionChoices.test.mjs`, minus the `exitKind` test.
+Expected: `# pass 1157`, `# fail 0`: the baseline 1092 at `ea4e212`, plus 2 in `backendFeatures.test.mjs`, 7 in `clientPtyStream.test.mjs`, 35 in `v2Backend.test.mjs`, 6 in `v2SetterOverrides.test.mjs`, 8 in `v2NoteDraft.test.mjs` (3, and 5 from the final review fixes), 5 in `v2RepoPathPrompt.test.mjs` and 3 in `v2SessionChoices.test.mjs`, minus the `exitKind` test.
 
 - [ ] **Step 2: Typecheck and build**
 
@@ -4284,7 +4288,7 @@ npm run smoke 2>&1 | tail -1          # SMOKE PASS
 npm run smoke:windows 2>&1 | tail -1  # 40/40 checks passed
 npm run smoke:changes 2>&1 | tail -1  # 12/12 checks passed
 npm run smoke:multi 2>&1 | tail -1    # SMOKE PASS
-npm run smoke:v2 2>&1 | tail -1       # V2 SMOKE PASS (106 checks)
+npm run smoke:v2 2>&1 | tail -1       # V2 SMOKE PASS (110 checks)
 npm run smoke:client 2>&1 | tail -1   # CLIENT CONTRACT PASS
 ```
 
@@ -4294,7 +4298,7 @@ Check each of these and confirm the expected result.
 
 1. **Every flag is on for legacy:** `node --test scripts/backendFeatures.test.mjs 2>&1 | grep -E '^# (pass|fail)'` gives `# pass 5`, `# fail 0` (it asserts every `LEGACY_FEATURES` flag, `globalPanel` included, is true).
 2. **The legacy Workspace and its pollers are untouched:** `git diff ea4e212 --stat -- src/renderer/src/components/Workspace.tsx src/renderer/src/backend.typecheck.ts src/renderer/src/mcpTools.ts src/renderer/src/worktreeActions.ts src/renderer/src/repositoryActions.ts` prints nothing.
-3. **Each component change keys off the window kind:** `git diff ea4e212 -- src/renderer/src/components | grep -E '^\+' | grep -cE 'serverOffline|serverWindow'` prints `22`. Read `git diff ea4e212 -- src/renderer/src/components`: every changed branch reads `offline`, `serverWindow`, `v2`, `missing` or `useFeatures()`, all of which are false, null or every-feature-on in a project file window. The two intended exceptions: GlobalClaude's bar text is now built as `Global ·{' '}{label}` (the same text), and AddWorktreeModal starts its first session through `getBackend().sessions.start` (the same call, Task 8).
+3. **Each component change keys off the window kind:** `git diff ea4e212 -- src/renderer/src/components | grep -E '^\+' | grep -cE 'serverOffline|serverWindow'` prints `26` (22, and 4 from the final review fixes: NotesPanel's offline plan and reconnect save, WorktreeDetail's pull/push message). Read `git diff ea4e212 -- src/renderer/src/components`: every changed branch reads `offline`, `serverWindow`, `v2`, `missing` or `useFeatures()`, all of which are false, null or every-feature-on in a project file window. The three intended exceptions: GlobalClaude's bar text is now built as `Global ·{' '}{label}` (the same text); AddWorktreeModal starts its first session through `getBackend().sessions.start` (the same call, Task 8); and GlobalClaude shows a failed `openGlobal`/`startGlobal` with `errorText(err)` instead of `String(err)` (Electron's "Error invoking remote method …" prefix is dropped: cleaner text, harmless in a file window). NewSessionMenu also closes itself when `disabled` turns true, which a file window never does while it is open.
 4. **No direct feature reads remain:** `grep -rn "getBackend().features" src/renderer/src` prints only `src/renderer/src/useFeatures.ts`.
 
 - [ ] **Step 5: Nothing left to commit**
@@ -4305,6 +4309,24 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+## Final review fixes (done)
+
+A final review of the branch at `f0a7bab` found four important issues, all in the server window's notes draft, and some minor ones. Legacy (file) windows are unchanged except as listed in Task 11 Step 4.
+
+- **I1. The draft stuck after the first save and hid remote edits.** The server publishes the patch before it answers, so `note` already equalled the saved text when `.then` moved the base, and `note` never changed again to settle the draft. The success handler now settles against the live store (`settleNote(noteSaved(d, text), now)`), and `settleNote` drops a draft whenever the mirror shows its text, even with a stale base (a save that landed though its answer was lost with the link).
+- **I2. Text typed as the link dropped was lost.** Every failure dropped the draft and showed a dialog, NOT_CONNECTED included. Now `save()` does nothing while `serverOffline` and keeps the draft; NOT_CONNECTED keeps it with no dialog; another error keeps it and shows `errorText`; only CONFLICT drops it (quietly when the note already is the user's text). An effect saves once the link is back.
+- **I3. The panel could conflict with its own save.** A save asked for while one is in flight now waits (`inFlight` and `again` refs) and runs in `.finally` with the base the first one moved to. `draftRef` is updated with every draft change, not at render, so the chained save sees that base. A save that ends after a branch switch leaves the next branch's draft alone. The decisions are pure helpers in `noteDraft.ts`: `planNoteSave` (none / offline / busy / send, using `noteUnsaved`, M2) and `noteSaveFailed`; `v2NoteDraft.test.mjs` has 5 more tests.
+- **I4. smoke:v2** checks that a `branch.setNote` from the second SDK connection shows in the open notes panel after the window's own save, and that a note typed just before `stopDaemon()` is kept while offline, reaches the server after the reconnect, and shows no "Could not save the note" dialog. With the old NotesPanel the last three fail.
+- **M3.** GlobalClaude's `errorText` change is a third accepted legacy change (Task 11 Step 4).
+- **M4.** `installV2Window` sets `globalView: 'sessions'`, so a `'bot'` view left from a file window no longer opens the Global panel empty.
+- **M5.** NewSessionMenu closes when `disabled` turns true (offline).
+- **M6.** WorktreeDetail shows a server window's Pull/Push errors with `errorText`.
+- **M7.** `src/renderer/src/v2/terminals.typecheck.ts` is deleted (redundant now); `backend.typecheck.ts` and the `_sameGlobalId` guard stay.
+- **M8.** The dead 3b styles (`.server-window-tree`, `.server-window-sessions`, `.server-window-session-title`, `.server-window-empty`, `.server-window-missing`) are gone; `.server-window-loading` stays. `legacyWorktreeId` is no longer exported from `projector.ts`.
+- **M9.** smoke:v2's "it took the pty's size" waits with `until()`; "the shown pane sized the pty to itself" reads the pane's size inside its `until`.
+
+Counts after these fixes: `npm test` 1157 (1152 + 5), smoke:v2 110 checks (106 + 4).
+
 ## Notes for 3c-3
 
 Found while prototyping this plan.
@@ -4313,7 +4335,7 @@ Found while prototyping this plan.
 2. **Decisions.** `decisions` stays local and empty in a server window: `requestTerminalDecision` and the MCP `request_decision` are legacy-only. The projector should map the server's `Session.decision` into `decisions`, and the clear-on-input rule replaces `clearDecision` in `createEntry`'s `onKey` (v2 entries have no `onKey` handler at all).
 3. **Settings editing.** When `settingsEdit` turns on, `setWorktreeOrder` is no longer the only settings write: the settings setters (`setSessionTypes`, `setTerminalButtons`, …) need overrides like Task 4's, sent as `project.updateSettings` with `expected`. `OVERRIDDEN_SETTERS` and `SetterOverrides` are typed against `AppState`, so a new override is checked against the store's signature.
 4. **A deleted project** is still detected through the `server` topic dropping it (3b). With a topic-end event, ServerProjectTree's `offServer` subscription can go.
-5. **Dead 3b styles.** `.server-window-tree`, `.server-window-sessions`, `.server-window-session-title`, `.server-window-empty` and `.server-window-missing` in `styles.css` have no element left; remove them with the next styles change.
+5. **Dead 3b styles.** Removed in the final review fixes (M8).
 6. **One connection per server in main** (3d): `installV2.ts`'s `request` and `registeredRepoPath` are the only places that read the renderer's registry for the backend; they move to the shared connection unchanged.
 7. **The Global panel without `mcp`.** A project whose server lost its MCP listener hides the panel, and its Global sessions keep running unseen. If that happens in practice, show them read-only instead of hiding the panel.
 8. **`whenProjected`'s 10 s.** A server under load can answer `worktree.create` and then take longer than 10 s to send the patch; the dialog then says the worktree "has not shown up here yet" although it exists. A per-topic "rev at least N" wait (the response carrying the rev) would make this exact. `leave()` ends the open waits early (Task 5), so a wait never reads the next window's store.
@@ -4322,7 +4344,12 @@ Found while prototyping this plan.
 
 11. **Whole-list `session.setQueue`.** `removeQueuedText` sends the queue it sees minus one item, so an edit another client made meanwhile (an enqueue, a send) can be lost. Accepted for now; a `session.dequeue{index, expected}` would make it exact.
 12. **Rename and complete show the old value for one round trip.** There is no optimistic UI (Decision 3): the tab keeps its old title, or its old complete state, until the mirror patch arrives. By design.
-13. **`NOT_CONNECTED` mid-flight is silent.** A request the link drops under fails without a dialog (the overlay and the banner say the link is down), so an edit sent just as the link drops is lost without a word. A retry queue, or a dialog for edits (not reads), would close the gap.
+13. **`NOT_CONNECTED` mid-flight is silent.** A request the link drops under fails without a dialog (the overlay and the banner say the link is down), so an edit sent just as the link drops is lost without a word. A retry queue, or a dialog for edits (not reads), would close the gap. The notes draft is the exception since the final review fixes: it is kept and sent again once the link is back.
+14. **A notes draft that could not be saved on unmount or leave.** Switching branches, closing the panel's worktree or leaving the project saves the draft once and drops it; if that save fails (or one was in flight, so it was queued behind it), the text is gone. Show it (as the CONFLICT dialog does), or keep drafts per branch until they are saved.
+15. **Responses carrying the rev.** With the project rev a mutation produced in its response, the notes draft could settle exactly (rather than comparing the text with the mirror's), and `whenProjected` could wait for "rev at least N" (#8).
+16. **Structural sharing in `applyV2Project`.** Each patch rebuilds the whole slice, so every subscriber whose selector returns an object or array re-renders on every patch (Risk 7). Reuse unchanged repositories, worktrees and sessions from the previous slice.
+17. **Reset per-window UI state in `installV2Window`.** Only `globalView` is reset today (a `'bot'` left from a file window would open the Global panel empty). Panels, open menus, `globalPanelOpen` and similar view state carried over from a file window should be reset in one place too.
+18. **One error helper for component-level `showError` in server windows.** NotesPanel, WorktreeDetail's pull/push and GlobalClaude call `window.api.showError` (or `setError`) directly, which bypasses `installV2`'s NOT_CONNECTED filter and its `left` guard. One helper, from the window's install, that suppresses errors after leave and handles NOT_CONNECTED the same way everywhere.
 
 ## Risks
 
@@ -4334,4 +4361,4 @@ Found while prototyping this plan.
 6. **The smoke's dialog stub answers every message box with button 1.** The remove flow's second confirm ("Delete Uncommitted Changes", when the untracked `smoke.txt` is caught by git rather than by the status poll) is accepted too; the smoke checks only the first prompt's text.
 7. **Re-render cost** (3c-1 Risk 6) grows with this plan: each patch rebuilds the slice, and the whole Sidebar and WorktreeDetail now render from it. Status patches are the frequent ones.
 8. **The legacy Add Worktree dialog has no smoke.** Its one change is 1:1 by reading (Task 8), but nothing runs it end to end.
-9. **Notes conflicts drop the draft.** On `CONFLICT` the user's text is shown in the error dialog and the panel shows the other edit; there is no merge.
+9. **Notes conflicts drop the draft.** On `CONFLICT` the user's text is shown in the error dialog and the panel shows the other edit; there is no merge. Other failures keep the draft (Final review fixes, I2).
