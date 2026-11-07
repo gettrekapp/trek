@@ -4315,11 +4315,11 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1285`, `# fail 0`: the baseline 1244 at `471307b`, plus 7 (Task 0), 13 (Task 1), 4 (Task 2), 1 (Task 3: the section map; two tests changed), 1 (Task 4), 10 (Task 5) and 5 (Task 7).
+Expected: `# pass 1296`, `# fail 0`: the baseline 1244 at `471307b`, plus 7 (Task 0), 13 (Task 1), 4 (Task 2), 1 (Task 3: the section map; two tests changed), 1 (Task 4), 10 (Task 5), 5 (Task 7) and 11 (the review fixes: 8 in `v2SettingsWriter.test.mjs`, which ends at 21; 2 in `mainServerLinks.test.mjs`, which ends at 12; 1 in `llmSelection.test.mjs`).
 
 - [ ] **Step 2: Types and build**
 
-Run: `npm run typecheck` → no output. Run: `npm run build && npm --prefix server run build` → both succeed.
+Run: `npm run typecheck && npm --prefix server run typecheck` → no output. Run: `npm run build && npm --prefix server run build` → both succeed.
 
 - [ ] **Step 3: The smokes, one at a time**
 
@@ -4327,7 +4327,7 @@ Run each after the previous has exited:
 
 | Command | Expected |
 |---|---|
-| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (141 checks)` |
+| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (142 checks)` (141 from Task 8, plus the w5 token scan from the review fixes) |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
@@ -4342,6 +4342,30 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+## Review fixes (done)
+
+From the review of Tasks 0–4 and the final review; all in, with the verification of Task 9 rerun after them.
+
+**Settings**
+
+1. **A remote change made while typing is no longer overwritten.** `SettingText` records the value at focus (`base`); on blur, `textCommit(base, value, draft)` (settingsWriter.ts, pure) says `none` (the draft is the value now, or was never changed from the base: the newer value stands), `write`, or `stale` (the value changed meanwhile under a changed draft). A stale draft is committed through `commitStale`, which the writer's `write` reads (or `{ stale: true }`): nothing is sent, the same Reload / Keep Mine dialog asks. Reload drops the draft; Keep Mine sends it over the newer value (queued behind an edit of the field still in flight).
+2. **Keep Mine never overwrites a newer edit, finished or not.** A per-field write count, bumped by every `write`, is captured when the conflict is raised; Keep Mine does nothing if it moved. The test "an edit made while the conflict dialog is open wins over Keep Mine" now settles that newer send before answering.
+3. **A Settings draft commits at leave.** `leave()` first blurs the focused element if it is inside `.settings-panel`, while requests still go out (React runs the blur handler synchronously); the answer is ignored once the window left.
+4. **The Global panel override starts from an agent the server has.** `serverGlobalStart` (selection.ts, pure): the server's default if it can use MCP and is listed, else the first MCP-capable listed agent, else Claude.
+5. **`whenRev` resolving without the rev** (timeout, close, leave) has a comment in installV2.ts: the request succeeded, so at most the field shows the mirror's older value until the mirror catches up; nothing is lost and no dialog follows.
+6. **`dialog:confirm`** coerces `title`, `message` and `confirmLabel` to strings (and drops a non-string `detail`).
+7. **Writer tests added:** a CONFLICT on the queued second send (which carried the first value as `expected`); `write` with no project; `textCommit`; stale Reload, Keep Mine, already-equal, behind an in-flight edit, and skipped after a newer write.
+
+**Main and the links**
+
+8. **A failed save is followed by a sync**: save's body after the in-memory change is `try { … } finally { await linksFollow() }`, as `remove()`.
+9. **Test unsticks main's link**: `ServerLinks.retry(id)` reconnects that entry's link if it is `needs-auth` or `incompatible`, unthrottled; `test()` calls it when the probe connects. Tested.
+10. **`retryStuck`'s throttle** starts only when a call reconnected at least one link. Tested.
+11. **`broadcast`** checks `win.webContents.isDestroyed()` too, and wraps each send in try/catch.
+12. **`snapshot()` vs `seq`**: a comment in serverLinks.ts; a reply built while a sync is queued is corrected by that sync's broadcast (higher seq).
+13. **A failed remove no longer leaves a window on "Server removed" for good.** Until the remove's write succeeds, the entry is in `removing`: main's snapshots still list it (`linkEntries`, so a status broadcast meanwhile does not drop it), and the relay refuses it only transiently (`Server being removed`, not the terminal `removed`). Back in the list or gone for good happens in one step with leaving `removing`, then the sync broadcasts.
+14. **Smoke:** w5 records every `appServers:changed` from its start (the setToken flow included) and the end checks none carried a token; the conflict check restores the window's own `webContents.send` after `__releaseHeld`.
+
 ## Notes for 3d: attention on main's connections
 
 Design only; nothing here is built in 3c-3b-2.
@@ -4351,7 +4375,8 @@ Design only; nothing here is built in 3c-3b-2.
 3. **Entries.** Keyed `(serverEntryId, projectId, sessionId)`, in any status (3c-3a Note 9), labelled by the decision's question first. An entry is new when its key was absent or its `since`/decision `at` moved; only new entries raise the OS notification and the alert sound (the project's `audioAlerts`, which the aggregator reads from the `attention` payload or a `project:` topic it does not otherwise need, to be settled in 3d), once, in main. Windows stop raising them for server sessions.
 4. **The broadcast.** `attention:changed` to every window (legacy file windows included), built field by field like `AppServerLink` (Decision 21): server entry id, project id and name, session id and title, status, question, times. No token, no URL. A window reads it once and follows it with a `seq`, the same feed shape as `createLinksFeed`.
 5. **Clicking an entry.** The window sends `(serverEntryId, projectId, sessionId)` to main, which focuses the window holding that target or opens one (`window:openServerProject`'s path), then tells that window to select the session once its projection has it.
-6. **Limits that carry over.** No attention for an entry without a token, one stuck in `needs-auth` or `incompatible`, or one beyond the 32-connection cap; the server list already shows why. Main's links stay open with every window closed (macOS) and close only at quit, which is what notifications need.
+6. **From the final review.** `createServerLinks` is ready for this: `get(id).mirror`, the welcome's capabilities on `get(id).connection`, and a new `RegisteredServer` when the URL changes. Put the `linked` / `unlinked` hooks next to `registry.add`, in the `update(url)` branch, and in `drop()`. Links that are capped, have no token, or are stuck get no attention. Main identifies itself as `trek-desktop-main`, and the server's presence counts include it.
+7. **Limits that carry over.** No attention for an entry without a token, one stuck in `needs-auth` or `incompatible`, or one beyond the 32-connection cap; the server list already shows why. Main's links stay open with every window closed (macOS) and close only at quit, which is what notifications need.
 
 ## Risks
 
@@ -4360,7 +4385,7 @@ Design only; nothing here is built in 3c-3b-2.
 3. **Keep Mine replaces the whole key.** Settings are compared and replaced per key, so two clients editing different session types (or quick buttons) at once conflict on the whole list, and Keep Mine writes the user's whole list over the other client's.
 4. **An older server does not cascade a tag deletion** (Decision 12): it keeps the deleted id on its branches, which shows as no tag. The cascade also keeps only the ids in the new list, as a file window does, so a branch tag id that was already unknown (left by an older server, or set directly with `branch.setTag`) is cleared by the next tag edit.
 5. **A remote rename while typing the project name** remounts the name field (it is keyed by the name, as in a file window) and drops the typing.
-6. **A token added on the server** is noticed only on the next focus of any window at least 10 s after the last retry (or by Test); until then main's link and the window stay in `needs-auth`.
+6. **A token added on the server** is noticed on the next focus of any window (throttled: at most one retry per 10 s, and only a focus that found a stuck link and reconnected it starts that window), or at once by a successful Test of that entry, which reconnects main's link if it is stuck (`retry(id)`, unthrottled). A window stuck in `needs-auth` reconnects when main's link connects. Until one of these, main's link and the window stay in `needs-auth`.
 7. **Main keeps a socket per server with a token for the app's life**, with no window open too (pings every 15 s). Up to 32.
 8. **The smoke's conflict check shadows `webContents.send`** on the window's WebContents to hold its patches; an Electron change to how the relay's `owner.send` resolves would break it (it throws with a message rather than passing).
 9. **The broadcast reaches every window**, file windows included; only their start screens read it.
