@@ -21,9 +21,11 @@ interface Props {
   visible: boolean
   /** Shows the global Claude quick buttons instead of the worktree ones */
   global?: boolean
+  /** Why the pane restarts nothing (the read-only Global panel); unset, it may */
+  readOnly?: string
 }
 
-export function TerminalPane({ terminalId, visible, global = false }: Props): React.JSX.Element {
+export function TerminalPane({ terminalId, visible, global = false, readOnly }: Props): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const status = useAppStore((s) => s.terminals[terminalId]?.status)
   // Subscribed so the restart label follows the session's agent.
@@ -83,7 +85,7 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
                   const backend = getBackend()
                   backend.sessions
                     .sendPrompt(terminalId, btn.text)
-                    .catch((err) => backend.errors.promptFailed('Could not send the prompt', err))
+                    .catch((err) => backend.errors.promptFailed('Could not send the prompt', err, btn.text))
                 }}
               >
                 {btn.label.trim() || btn.text}
@@ -102,7 +104,13 @@ export function TerminalPane({ terminalId, visible, global = false }: Props): Re
       {!offline && status === 'exited' && (
         <div className="exited-overlay">
           <span>Process exited</span>
-          <button onClick={() => void getBackend().sessions.restart(terminalId)}>
+          <button
+            disabled={readOnly !== undefined}
+            title={readOnly}
+            onClick={() => {
+              if (readOnly === undefined) void getBackend().sessions.restart(terminalId)
+            }}
+          >
             Restart {agentLabel(terminalId)}
           </button>
           {agentHint && llm && llm.provider !== 'claude' && (

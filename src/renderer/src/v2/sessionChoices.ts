@@ -94,3 +94,35 @@ export function agentsFetchKey(state: AgentsFetchState): string | null {
   if (state.link !== 'connected' || !state.hasProject || !state.capabilities?.includes(CAPABILITY.agents)) return null
   return state.claudeCommand?.trim() ?? ''
 }
+
+/**
+ * Whether the window's `server.agents` answer is stale and must go: the link
+ * is up with a server that has no `agents` (one that lost it across a
+ * restart), so the menu falls back to what the window knows.
+ */
+export function agentsStale(state: Pick<AgentsFetchState, 'link' | 'capabilities'>): boolean {
+  return state.link === 'connected' && !state.capabilities?.includes(CAPABILITY.agents)
+}
+
+/** The waits before asking `server.agents` again after a failure: two retries, then none until the key changes. */
+export const AGENTS_RETRY_MS = [2_000, 10_000] as const
+
+/** How long to wait before retry `attempt` (1-based) of a failed `server.agents`, or null to stop. */
+export function agentsRetryDelay(attempt: number): number | null {
+  return AGENTS_RETRY_MS[attempt - 1] ?? null
+}
+
+/**
+ * Where a server window's "Choose…" starts: the last pick there, while the
+ * current server lists its agent (another server, or this one after an
+ * upgrade, may not), else the project's default, else the server's.
+ */
+export function serverFirstPick(
+  lastPick: LlmSelection | undefined,
+  providers: readonly string[],
+  defaults: LlmSelection | undefined,
+  fallback: LlmSelection
+): LlmSelection {
+  if (lastPick && providers.includes(lastPick.provider)) return lastPick
+  return defaults ?? fallback
+}

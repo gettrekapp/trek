@@ -109,6 +109,21 @@ test('a refusal keeps the draft and says so; a conflict drops it and shows the t
   assert.deepEqual(shown.map(([title]) => title), ['Could not save the note', 'The note was changed elsewhere'])
 })
 
+test('a NOT_FOUND refusal drops the draft and shows its text once: a reconnect sends nothing again', async () => {
+  const { drafts, sent, shown, flags } = setup({ answers: [coded('NOT_FOUND', 'no such branch')] })
+  drafts.edit('r', 'gone', 'mine')
+  drafts.save('r', 'gone')
+  await tick()
+  assert.equal(drafts.get('r', 'gone'), null)
+  assert.deepEqual(shown, [['Could not save the note', 'no such branch\n\nYour text was:\n\nmine']])
+  flags.offline = true
+  flags.offline = false
+  drafts.saveAll()
+  await tick()
+  assert.equal(sent.length, 1)
+  assert.equal(shown.length, 1)
+})
+
 test('leave: an unsaved draft is sent at once; one that fails shows its text even after the window left', async () => {
   const { drafts, sent, shown, always } = setup({ answers: [coded('NOT_CONNECTED')] })
   drafts.edit('r', 'feat', 'last words')

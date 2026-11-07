@@ -1,7 +1,7 @@
 // scripts/v2Errors.test.mjs — a server window's error text, and the dialog for an edit the link dropped under.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { ALSO_NOT_CONFIRMED, EDIT_NOT_CONFIRMED, PROMPT_NOT_CONFIRMED, editReporter } from '../src/renderer/src/v2/errors.ts'
+import { ALSO_NOT_CONFIRMED, EDIT_NOT_CONFIRMED, PROMPT_NOT_CONFIRMED, editReporter, withPromptText } from '../src/renderer/src/v2/errors.ts'
 
 const coded = (code, message = '') => Object.assign(new Error(message), { code })
 
@@ -61,4 +61,9 @@ test('a dialog that fails to open frees the reporter, with no unhandled rejectio
   await new Promise((r) => setImmediate(r))
   reportEdit('Could not save the note', coded('NOT_CONNECTED'))
   assert.deepEqual(shown, ['Could not set the tag', 'Could not save the note'])
+})
+
+test("a failed prompt's dialog ends with the prompt; the burst follow-up covers prompts too", () => {
+  assert.equal(withPromptText('Not sent', 'do it'), 'Not sent\n\nThe prompt was:\n\ndo it')
+  assert.match(ALSO_NOT_CONFIRMED, /changes or prompts/)
 })

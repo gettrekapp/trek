@@ -47,7 +47,9 @@ export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Ele
     removeAt(terminalId, index)
     scheduleAutoSave()
     const backend = getBackend()
-    backend.sessions.sendPrompt(terminalId, text).catch((err) => backend.errors.promptFailed('Could not send the prompt', err))
+    backend.sessions
+      .sendPrompt(terminalId, text)
+      .catch((err) => backend.errors.promptFailed('Could not send the prompt', err, text))
   }
 
   const remove = (index: number): void => {

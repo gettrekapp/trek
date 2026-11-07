@@ -62,11 +62,19 @@ export interface NoteSaveFailure {
 /**
  * A save of `text` failed with `code` (`detail` is the error as one line;
  * `saved` the note the mirror shows now). The link dropping keeps the draft
- * quietly; another error keeps it and says so; only a conflict drops it, with
- * the user's text in the dialog, unless the note already is that text.
+ * quietly; another error keeps it and says so. A conflict drops it, with the
+ * user's text in the dialog, unless the note already is that text; so does
+ * NOT_FOUND (the branch or repository is gone): kept, it would be sent again
+ * and refused again on every reconnect.
  */
 export function noteSaveFailed(code: string | null, detail: string, text: string, saved: string): NoteSaveFailure {
   if (code === 'NOT_CONNECTED') return { keep: true, dialog: null }
+  if (code === 'NOT_FOUND') {
+    return {
+      keep: false,
+      dialog: { title: 'Could not save the note', message: `${detail}\n\nYour text was:\n\n${text}` }
+    }
+  }
   if (code !== 'CONFLICT') return { keep: true, dialog: { title: 'Could not save the note', message: detail } }
   if (saved === text) return { keep: false, dialog: null }
   return {

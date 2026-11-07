@@ -77,3 +77,10 @@ test('a failed save keeps the draft unless it conflicted', () => {
   // The note already is the text (its own save landed before the link dropped): drop it quietly.
   assert.deepEqual(noteSaveFailed('CONFLICT', 'expected mismatch', 'mine', 'mine'), { keep: false, dialog: null })
 })
+
+test('a NOT_FOUND refusal (the branch is gone) drops the draft and shows its text', () => {
+  assert.deepEqual(noteSaveFailed('NOT_FOUND', 'no such branch', 'mine', ''), {
+    keep: false,
+    dialog: { title: 'Could not save the note', message: 'no such branch\n\nYour text was:\n\nmine' }
+  })
+})

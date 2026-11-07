@@ -57,6 +57,16 @@ export interface SetterReports {
   reportEdit(title: string, err: unknown): void
 }
 
+/**
+ * Where `text`, last seen at `index`, is in `queue` now: still at `index` if it
+ * is there, else its first occurrence; -1 once it is gone.
+ */
+export function refindQueued(queue: readonly string[] | undefined, index: number, text: string): number {
+  if (!queue) return -1
+  if (queue[index] === text) return index
+  return queue.indexOf(text)
+}
+
 export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, reports: SetterReports): SetterOverrides {
   const send = (title: string, request: Promise<void>): void => {
     request.catch((err: unknown) => reports.reportEdit(title, err))
@@ -86,12 +96,24 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
     },
     setTerminalQueue: (id, texts) => send('Could not update the queue', backend.sessions.setQueue(id, texts)),
     enqueueTerminalText: (id, text) => send('Could not queue the prompt', backend.sessions.enqueue(id, text)),
-    // Sent with the prompt the user saw there; a CONFLICT needs no dialog, the queue shown is about to change anyway.
+    // Sent with the prompt the user saw there. On a CONFLICT another client
+    // changed the queue first, and the store already holds its newer queue:
+    // the prompt is looked up there again and, if it is still queued, removed
+    // once more from where it now is (QueuePanel has typed it already, so it
+    // must not stay queued). A second CONFLICT needs no dialog, the queue
+    // shown is about to change anyway.
     removeQueuedText: (id, index) => {
       const queue = state().terminalQueues[id]
       if (!queue || index < 0 || index >= queue.length) return
-      backend.sessions.dequeue(id, index, queue[index]).catch((err: unknown) => {
+      const expected = queue[index]
+      const failed = (err: unknown): void => {
         if (errorCode(err) !== 'CONFLICT') reports.reportEdit('Could not update the queue', err)
+      }
+      backend.sessions.dequeue(id, index, expected).catch((err: unknown) => {
+        if (errorCode(err) !== 'CONFLICT') return failed(err)
+        const again = refindQueued(state().terminalQueues[id], index, expected)
+        if (again < 0) return
+        backend.sessions.dequeue(id, again, expected).catch(failed)
       })
     },
     setBranchTag: (repoId, branch, tagId) => send('Could not set the tag', backend.branch.setTag(repoId, branch, tagId)),

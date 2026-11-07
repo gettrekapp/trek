@@ -4,7 +4,7 @@ import { useAppStore } from '../store'
 import { defaultSessionLlm } from '../llm'
 import { LlmPicker } from './LlmPicker'
 import { describeLlm } from '../../../shared/providers/selection'
-import { v2ServerAgents, v2SessionChoices } from '../v2/sessionChoices'
+import { serverFirstPick, v2ServerAgents, v2SessionChoices } from '../v2/sessionChoices'
 import type { LlmSelection } from '../../../shared/providers/types'
 import type { SessionType } from '../../../shared/types'
 
@@ -48,7 +48,9 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
   const fallbackLabel = listed ? listed.defaultLabel : v2 ? v2.defaultLabel : describeLlm(fallback)
   /** What "Choose…" starts from: the last pick, else the default the session would get. */
   const firstPick = (): LlmSelection =>
-    listed ? (lastServerPick ?? llmDefault ?? serverAgents?.llmDefault ?? fallback) : (lastPick ?? fallback)
+    listed
+      ? serverFirstPick(lastServerPick, listed.providers, llmDefault ?? serverAgents?.llmDefault, fallback)
+      : (lastPick ?? fallback)
   const installed = listed ? Object.fromEntries(listed.agents.map((a) => [a.llm.provider, a.installed])) : null
 
   // Disabled while open (a server window going offline): close it, its picks would do nothing.

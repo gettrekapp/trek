@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createV2Backend, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
-import { PROMPT_NOT_CONFIRMED } from '../src/renderer/src/v2/errors.ts'
+import { PROMPT_NOT_CONFIRMED, withPromptText } from '../src/renderer/src/v2/errors.ts'
 
 const PRIMARY = '__primary__:r1'
 const ids = () => ({
@@ -496,15 +496,19 @@ test('errors: show and report reach the dialogs; NOT_CONNECTED and anything afte
   assert.equal(backend.errors.inline(new CodedError('CAPACITY', 'too many sessions')), null)
   backend.errors.show('Could not save the note', 'details')
   backend.errors.report('Git pull failed', new CodedError('GIT_ERROR', 'no upstream'))
-  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_CONNECTED', ''))
+  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_CONNECTED', ''), 'fix it')
   assert.equal(ui.length, 1)
   assert.equal(reports.length, 1)
 })
 
-test('errors.promptFailed goes through the edit reporter with the prompt wording', () => {
-  const { backend, reports } = setup()
-  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_CONNECTED', ''))
-  assert.deepEqual(reports, [['Could not send the prompt', 'NOT_CONNECTED', PROMPT_NOT_CONFIRMED]])
+test('errors.promptFailed goes through the edit reporter with the prompt wording, and shows the prompt', () => {
+  const { backend, reports, ui } = setup()
+  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_CONNECTED', ''), 'fix it')
+  assert.deepEqual(reports, [
+    ['Could not send the prompt', 'NOT_CONNECTED', withPromptText(PROMPT_NOT_CONFIRMED, 'fix it')]
+  ])
+  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_FOUND', 'no such session'), 'fix it')
+  assert.deepEqual(ui.at(-1), ['error', 'Could not send the prompt', 'no such session\n\nThe prompt was:\n\nfix it'])
 })
 
 test('start, a Global start and create wait for the rev their response reports', async () => {

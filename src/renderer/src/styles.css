@@ -1765,7 +1765,7 @@ button:disabled {
 
 /* An agent the server reports as not installed: still offered (the check is a hint), greyed out. */
 .skill-menu-item.not-installed {
-  opacity: 0.5;
+  opacity: 0.65;
 }
 
 .docker-menu-trigger {

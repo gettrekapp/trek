@@ -4,6 +4,9 @@ import assert from 'node:assert/strict'
 import {
   SERVER_DEFAULT_LABEL,
   agentsFetchKey,
+  agentsRetryDelay,
+  agentsStale,
+  serverFirstPick,
   v2GlobalLabel,
   v2ServerAgents,
   v2SessionChoices
@@ -70,4 +73,28 @@ test('server.agents is asked once the link is up, with the capability, and again
   assert.equal(agentsFetchKey({ ...up, hasProject: false }), null)
   assert.equal(agentsFetchKey({ ...up, capabilities: ['mcp'] }), null)
   assert.equal(agentsFetchKey({ ...up, capabilities: undefined }), null)
+})
+
+test("server.agents goes stale once the link is up with a server that has no agents", () => {
+  assert.equal(agentsStale({ link: 'connected', capabilities: ['mcp'] }), true)
+  assert.equal(agentsStale({ link: 'connected', capabilities: undefined }), true)
+  assert.equal(agentsStale({ link: 'connected', capabilities: ['agents'] }), false)
+  // While the link is down the last answer stays: the next welcome decides.
+  assert.equal(agentsStale({ link: 'disconnected', capabilities: ['mcp'] }), false)
+  assert.equal(agentsStale({ link: null, capabilities: undefined }), false)
+})
+
+test('a failed server.agents is retried twice with a growing wait, then not until the key changes', () => {
+  assert.equal(agentsRetryDelay(1), 2000)
+  assert.equal(agentsRetryDelay(2), 10000)
+  assert.equal(agentsRetryDelay(3), null)
+})
+
+test("Choose… starts from the last server pick only while the current server lists its agent", () => {
+  const fallback = { provider: 'claude' }
+  const last = { provider: 'grok', model: 'grok-4' }
+  assert.deepEqual(serverFirstPick(last, ['claude', 'grok'], { provider: 'codex' }, fallback), last)
+  assert.deepEqual(serverFirstPick(last, ['claude', 'codex'], { provider: 'codex' }, fallback), { provider: 'codex' })
+  assert.deepEqual(serverFirstPick(last, ['claude'], undefined, fallback), fallback)
+  assert.deepEqual(serverFirstPick(undefined, ['claude'], { provider: 'gemini' }, fallback), { provider: 'gemini' })
 })

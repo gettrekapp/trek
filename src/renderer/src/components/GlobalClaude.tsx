@@ -86,7 +86,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
     setError(null)
     const backend = getBackend()
     backend.sessions.openGlobal().catch((err) => setError(backend.errors.inline(err)))
-  }, [open, hasTabs, view, offline])
+  }, [open, hasTabs, view, offline, readOnly])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -243,7 +243,13 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
         </div>
         <div className="global-terminal" style={{ display: view === 'sessions' ? undefined : 'none' }}>
           {order.map((id) => (
-            <TerminalPane key={id} terminalId={id} visible={open && view === 'sessions' && id === activeId} global />
+            <TerminalPane
+              key={id}
+              terminalId={id}
+              visible={open && view === 'sessions' && id === activeId}
+              global
+              readOnly={readOnly ? NO_MCP : undefined}
+            />
           ))}
           {error && <div className="global-error">Couldn't start the session: {error}</div>}
         </div>

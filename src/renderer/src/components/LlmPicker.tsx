@@ -133,7 +133,13 @@ export function LlmPicker({ value, onChange, filter, serverId = null, remote }: 
         {!isLocal && <option value="">Default model</option>}
         {isLocal && !value.model && (
           <option value="" disabled>
-            {loading ? 'Loading models…' : models.length === 0 ? 'No models found' : 'Choose a model'}
+            {loading
+              ? 'Loading models…'
+              : models.length > 0
+                ? 'Choose a model'
+                : remote
+                  ? 'Type a model id' // the server's models are not fetched from here
+                  : 'No models found'}
           </option>
         )}
         {isLocal && loading && value.model && <option value={value.model}>Loading models…</option>}

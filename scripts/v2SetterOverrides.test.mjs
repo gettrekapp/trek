@@ -1,7 +1,7 @@
 // scripts/v2SetterOverrides.test.mjs — the store setters a server window sends to its server instead.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { OVERRIDDEN_SETTERS, v2SetterOverrides } from '../src/renderer/src/v2/setterOverrides.ts'
+import { OVERRIDDEN_SETTERS, refindQueued, v2SetterOverrides } from '../src/renderer/src/v2/setterOverrides.ts'
 
 /** A backend whose every method records its call and resolves (or rejects with `fail`). */
 function fakeBackend(fail) {
@@ -149,6 +149,58 @@ test('a dequeue CONFLICT shows nothing; any other failure is reported as an edit
   v2SetterOverrides(failing('NOT_FOUND'), () => slice, errors).removeQueuedText('busy', 0)
   await tick()
   assert.deepEqual(reports, [['Could not update the queue', 'NOT_FOUND']])
+})
+
+test('refindQueued: the same index while the prompt is still there, else its first occurrence, else -1', () => {
+  assert.equal(refindQueued(['a', 'b', 'b'], 2, 'b'), 2)
+  assert.equal(refindQueued(['x', 'a', 'b'], 1, 'b'), 2)
+  assert.equal(refindQueued(['b'], 3, 'b'), 0)
+  assert.equal(refindQueued(['a', 'c'], 1, 'b'), -1)
+  assert.equal(refindQueued(undefined, 0, 'b'), -1)
+})
+
+test('a dequeue CONFLICT is retried once where the store now has the prompt; a second CONFLICT shows nothing', async () => {
+  const calls = []
+  const reports = []
+  let current = { ...slice, terminalQueues: { busy: ['a', 'b', 'c'] } }
+  const conflict = () => Object.assign(new Error('x'), { code: 'CONFLICT' })
+  const backend = {
+    sessions: {
+      dequeue: async (id, index, expected) => {
+        calls.push([id, index, expected])
+        // The other client's change lands in the store before the refusal.
+        current = { ...current, terminalQueues: { busy: ['new', 'a', 'b', 'c'] } }
+        throw conflict()
+      }
+    }
+  }
+  const errors = { report: () => {}, reportEdit: (title, e) => reports.push([title, e.code]) }
+  v2SetterOverrides(backend, () => current, errors).removeQueuedText('busy', 1)
+  await tick()
+  await tick()
+  assert.deepEqual(calls, [
+    ['busy', 1, 'b'],
+    ['busy', 2, 'b']
+  ])
+  assert.deepEqual(reports, [])
+
+  // Gone from the newer queue: no retry.
+  calls.length = 0
+  current = { ...slice, terminalQueues: { busy: ['a', 'b'] } }
+  const gone = {
+    sessions: {
+      dequeue: async (id, index, expected) => {
+        calls.push([id, index, expected])
+        current = { ...current, terminalQueues: { busy: ['a'] } }
+        throw conflict()
+      }
+    }
+  }
+  v2SetterOverrides(gone, () => current, errors).removeQueuedText('busy', 1)
+  await tick()
+  await tick()
+  assert.deepEqual(calls, [['busy', 1, 'b']])
+  assert.deepEqual(reports, [])
 })
 
 test('dismissing a decision asks the server, once while it is in flight; none open sends nothing', async () => {

@@ -41,8 +41,19 @@ export const EDIT_NOT_CONFIRMED =
 export const PROMPT_NOT_CONFIRMED =
   'The server was not connected, so this prompt may not have been sent. Check the session once the window is back online.'
 
-/** The follow-up for the edits whose NOT_CONNECTED came while that dialog was open. */
-export const ALSO_NOT_CONFIRMED = 'Other changes made meanwhile may also not have been saved.'
+/**
+ * The follow-up for the edits, or prompts, whose NOT_CONNECTED came while that
+ * dialog was open.
+ */
+export const ALSO_NOT_CONFIRMED = 'Other changes or prompts made meanwhile may also not have been saved or sent.'
+
+/**
+ * A failed prompt's dialog text: `message`, then the prompt itself, so one
+ * taken off the queue is not lost (as the notes dialogs show the user's text).
+ */
+export function withPromptText(message: string, text: string): string {
+  return `${message}\n\nThe prompt was:\n\n${text}`
+}
 
 /**
  * Reports a failed edit (a setter override, or a prompt sent). NOT_CONNECTED

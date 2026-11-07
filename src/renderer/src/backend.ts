@@ -145,14 +145,14 @@ export interface WindowBackend {
     remove(repo: Repository): Promise<void>
   }
   /**
-   * Failures a component caught itself (a pull, a note's save, a Global tab
-   * that did not start). A v2 backend's show nothing once the window has left
-   * its project, and skip NOT_CONNECTED, which the offline window already
-   * shows. Take the backend before the call (`const backend = getBackend()`):
-   * the window may change kind while it runs.
+   * Failures a component caught itself (a pull, a Global tab that did not
+   * start, a prompt that was not sent). A v2 backend's show nothing once the
+   * window has left its project, and skip NOT_CONNECTED, which the offline
+   * window already shows. Take the backend before the call
+   * (`const backend = getBackend()`): the window may change kind while it runs.
    */
   readonly errors: {
-    /** A dialog */
+    /** A dialog. No component calls it now; it is kept for the seam, beside `report` */
     show(title: string, message: string): void
     /** A dialog with the error as one line */
     report(title: string, err: unknown): void
@@ -160,8 +160,10 @@ export interface WindowBackend {
      * A prompt sent to a session that failed: as `report`, except that a
      * server window's NOT_CONNECTED says the prompt may not have been sent
      * (one dialog at a time, with the edits'), since the link dropped under it.
+     * A server window's dialog ends with the prompt's `text`: one taken off
+     * the queue is nowhere else.
      */
-    promptFailed(title: string, err: unknown): void
+    promptFailed(title: string, err: unknown, text: string): void
     /** The error as one line for an inline message, or null when nothing should show */
     inline(err: unknown): string | null
   }
@@ -212,6 +214,8 @@ export const legacyBackend: WindowBackend = {
       useAppStore.getState().setTerminalQueue(terminalId, queue)
       scheduleAutoSave()
     },
+    // dequeue and dismissDecision: no legacy caller (components use the store setters, which a
+    // server window overrides to call its backend's); kept so both backends fill the same seam.
     dequeue: async (terminalId, index) => {
       useAppStore.getState().removeQueuedText(terminalId, index)
       scheduleAutoSave()

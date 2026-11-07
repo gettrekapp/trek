@@ -459,3 +459,14 @@ test('an open decision becomes the session\'s pending decision, live sessions on
   })
   assert.deepEqual(projectV2(fixture()).slice.decisions, {})
 })
+
+test('shareSlice: only plain objects are compared by keys; a changed Date is the new one', () => {
+  const prev = { project: { at: new Date(1), plain: { a: 1 } } }
+  const next = { project: { at: new Date(2), plain: { a: 1 } } }
+  const out = shareSlice(prev, next)
+  assert.equal(out.project.at, next.project.at)
+  assert.equal(out.project.plain, prev.project.plain)
+  // A null-prototype object is plain too.
+  const bare = Object.assign(Object.create(null), { a: 1 })
+  assert.equal(shareSlice({ project: bare }, { project: Object.assign(Object.create(null), { a: 1 }) }).project, bare)
+})

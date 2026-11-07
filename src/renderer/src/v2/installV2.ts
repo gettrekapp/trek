@@ -12,7 +12,7 @@ import { clearV2Projection, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
-import { agentsFetchKey } from './sessionChoices'
+import { agentsFetchKey, agentsRetryDelay, agentsStale } from './sessionChoices'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { ClientError } from '../../../shared/client/index.ts'
 import { createProjectionWaits, PROJECTION_WAIT_MS } from './projectionWaits'
@@ -121,24 +121,43 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // server.agents, for the New session menu and the Global bar: slow the first time (a login
   // shell per program on the server), so asked when the link comes up rather than when a menu
   // opens, and again on each reconnect and claudeCommand edit (agentsFetchKey). The last answer
-  // stays meanwhile; a failed one is not retried until the key changes.
+  // stays meanwhile, unless the server came back without `agents` (agentsStale). A failed one is
+  // asked again after a short back-off (agentsRetryDelay), then not until the key changes.
   let agentsKey: string | null = null
-  const followAgents = (state: AppState): void => {
-    const key = agentsFetchKey({
-      link: state.serverLink,
-      hasProject: state.project !== null,
-      capabilities: registered()?.connection.welcome?.capabilities,
-      claudeCommand: state.project?.claudeCommand
-    })
-    if (key === agentsKey) return
-    agentsKey = key
-    if (key === null) return
+  let agentsRetry: ReturnType<typeof setTimeout> | null = null
+  const fetchAgents = (key: string, attempt: number): void => {
     request('server.agents', { projectId }).then(
       (agents) => {
         if (!left && agentsKey === key) useAppStore.setState({ serverAgents: agents })
       },
-      () => {}
+      () => {
+        const delay = agentsRetryDelay(attempt + 1)
+        if (left || agentsKey !== key || delay === null) return
+        agentsRetry = setTimeout(() => {
+          agentsRetry = null
+          if (!left && agentsKey === key) fetchAgents(key, attempt + 1)
+        }, delay)
+      }
     )
+  }
+  const followAgents = (state: AppState): void => {
+    const capabilities = registered()?.connection.welcome?.capabilities
+    // Checked against the store first: setState notifies every time, so this must not loop.
+    if (state.serverAgents !== null && agentsStale({ link: state.serverLink, capabilities })) {
+      useAppStore.setState({ serverAgents: null })
+    }
+    const key = agentsFetchKey({
+      link: state.serverLink,
+      hasProject: state.project !== null,
+      capabilities,
+      claudeCommand: state.project?.claudeCommand
+    })
+    if (key === agentsKey) return
+    agentsKey = key
+    if (agentsRetry !== null) clearTimeout(agentsRetry)
+    agentsRetry = null
+    if (key === null) return
+    fetchAgents(key, 0)
   }
   const offAgents = useAppStore.subscribe(followAgents)
 
@@ -176,6 +195,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       offDrafts()
       left = true
       offAgents()
+      if (agentsRetry !== null) clearTimeout(agentsRetry)
       cancelRepoPath()
       cancelAll()
       disposeV2Terminals()
