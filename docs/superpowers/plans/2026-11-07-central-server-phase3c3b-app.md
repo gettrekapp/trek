@@ -58,15 +58,15 @@ Out of scope here: the 3c-3b-2, 3d and phase 4 rows. Desktop-UI MCP tools stay d
 
 **Window hygiene (Tasks 1, 2)**
 
-2. **The per-window view reset is one `VIEW_RESET` in `installV2.ts`**, applied on install and on leave: `globalPanelOpen: false`, `globalView: 'sessions'`, `botView: OFF_VIEW`, `botEvents: []`, `serverStatus`, `environments`, `envBusy` and `linearIssues` emptied, `voicePlaying: null`, `voiceQueued: 0`. It replaces 3c-2's lone `globalView` reset. `queuePanelOpen` and `globalQueuePanelOpen` are app-wide preferences (the store says so) and stay. Panels and menus are component state and go with their components.
+2. **The per-window view reset is one `VIEW_RESET` in `installV2.ts`**, applied on install and on leave: `globalPanelOpen: false`, `globalView: 'sessions'`, `botView: OFF_VIEW`, `botEvents: []`, `serverStatus`, `environments`, `envBusy` and `linearIssues` emptied; the voice queue is stopped with `voice.ts`'s `stopAllSummaries()` rather than zeroed in the store, which would hide audio still playing (found in review). It replaces 3c-2's lone `globalView` reset. `queuePanelOpen` and `globalQueuePanelOpen` are app-wide preferences (the store says so) and stay. Panels and menus are component state and go with their components.
 3. **The error helper is `WindowBackend.errors`**: `show(title, message)`, `report(title, err)` and `inline(err) → string | null`. A component takes the backend before its call (`const backend = getBackend()`) and reports through that one, so a failure that lands after the window moved on goes to the backend that made the call, which shows nothing once it left. The v2 one also skips NOT_CONNECTED (the window shows it is offline); legacy keeps each call site's text (`String(err)` for pull and push, `errorText` for GlobalClaude's line). NotesPanel, WorktreeDetail's pull and push, GlobalClaude's start line, and the two `sendPrompt` calls (QueuePanel, TerminalPane's quick buttons, which were `void` and could surface as an unhandled rejection) go through it.
 4. **NOT_CONNECTED policy: a dialog for edits, no retry queue.** An edit (a setter override: rename, complete, queue, tags, notes, ticket, PR, env, worktree order) whose request fails NOT_CONNECTED shows "The server was not connected, so this change may not have been saved. Check it once the window is back online." under the edit's own title, one dialog at a time (`editReporter`), so a burst of edits as the link drops shows one. The window cannot tell a request refused before it left from one whose answer was lost, so the text says "may". Acknowledgements (`seen`, a decision's dismiss) and the lifecycle calls (start, restart, close, load, unload) stay silent: the next show sends `seen` again, a dismiss that did not land leaves the flag visible, and the lifecycle state is on screen. A retry queue was rejected: an edit replayed after a reconnect could land on a state the user no longer sees (a renamed tab, a queue another client sent), and the commands are disabled while offline, so the gap is only requests in flight as the link drops. The notes draft keeps its own policy (kept and re-sent, Task 9).
 
 **Revs (Task 3)**
 
-5. **`whenProjected(check, rev?)`**: with the response's rev and the window's mirror, it awaits `mirror.whenRev(rev.topic, rev.rev, {timeoutMs: 30 s})` and then reads `check()`; without a rev (a 3c-2 server) it is today's store-subscription wait with its 10 s limit. The mirror settles a waiter before it notifies its listeners, and ServerProjectTree's listener applies the patch to the store synchronously, so by the time the awaiting code resumes the store holds the rev. `untilRev` never rejects: a timeout, `NOT_SUBSCRIBED`, `TOPIC_ENDED`, `UNSUBSCRIBED` or `CLOSED` all end the wait, and `check()` decides. `leave()` ends rev waits as it ends the others.
+5. **`whenProjected(check, rev?)`**: with the response's rev and the window's mirror, it awaits `mirror.whenRev(rev.topic, rev.rev, {timeoutMs: 30 s})` and then reads `check()` (even when `check()` already holds, Decision 7); without a rev (a 3c-2 server) it is today's store-subscription wait with its 10 s limit. The mirror settles a waiter before it notifies its listeners, and ServerProjectTree's listener applies the patch to the store synchronously, so by the time the awaiting code resumes the store holds the rev. `untilRev` never rejects: a timeout, `NOT_SUBSCRIBED`, `TOPIC_ENDED`, `UNSUBSCRIBED` or `CLOSED` all end the wait, and `check()` decides. `leave()` ends rev waits as it ends the others.
 6. **30 s for the rev, not 10.** The patch is normally applied before the response arrives (3c-3a Decision 14), so the bound only matters across a reconnect, whose resubscribe settles the wait with the newest state (a restart resets revs). A longer bound costs nothing in the common case and avoids the false "has not shown up here yet".
-7. **Which calls wait**: `session.start` (worktree and Global) and `worktree.create`, as before, plus `branch.setNote`: it resolves once the mirror holds its rev, so NotesPanel's `settleNote(noteSaved(…), savedNow())` compares against exactly the state after the save (3c-2 Note 15). A read's rev is never waited on (3c-3a Note 14).
+7. **Which calls wait**: `session.start` (worktree and Global) and `worktree.create`, as before, plus `branch.setNote`: it resolves once the mirror holds its rev, so NotesPanel's `settleNote(noteSaved(…), savedNow())` compares against exactly the state after the save (3c-2 Note 15). `setNote` passes `() => true` as its check, so `whenProjected` waits on the rev **before** it reads `check()`: checking first would return at once and never wait (found in review). `whenRev` resolves at once for a rev the mirror already holds, so start and create lose nothing by it. A read's rev is never waited on (3c-3a Note 14).
 
 **Exact edits (Task 4)**
 
@@ -205,7 +205,10 @@ Out of scope here: the 3c-3b-2, 3d and phase 4 rows. Desktop-UI MCP tools stay d
 | `src/renderer/src/backend.typecheck.ts` | modify | 1, 4 | type checks for the new members |
 | `src/renderer/src/v2/backendV2.ts` | modify | 1, 3, 4, 7 | `errors`, `left`; `requestWithRev` and rev waits; `refusedAsDirty`, rename `expected`, `dequeue`; `dismissDecision` |
 | `src/renderer/src/v2/installV2.ts` | modify | 1, 2, 3, 8, 9 | `VIEW_RESET`; `reportEdit`; `requestWithRev`, `untilRev`; the `server.agents` fetch; the notes drafts |
-| `src/renderer/src/v2/errors.ts` | modify | 2 | `EDIT_NOT_CONFIRMED`, `editReporter` |
+| `src/renderer/src/v2/errors.ts` | modify | 2, review | `EDIT_NOT_CONFIRMED`, `editReporter`; `PROMPT_NOT_CONFIRMED`, `ALSO_NOT_CONFIRMED` |
+| `src/renderer/src/v2/projectionWaits.ts` | create | review | `createProjectionWaits` (`whenProjected`, `untilRev`), out of `installV2.ts` |
+| `src/renderer/src/v2/windowState.ts` | create | review | `EMPTY`, `VIEW_RESET`, `installPatch`, `leavePatch`, out of `installV2.ts` |
+| `src/renderer/src/voice.ts` | modify | review | exports `stopAllSummaries` |
 | `src/renderer/src/v2/setterOverrides.ts` | modify | 2, 4, 7 | `SetterReports`; rename `expected`, `removeQueuedText` via `dequeue`; `clearDecision`, `requestDecision` |
 | `src/renderer/src/v2/projectWatch.ts` | create | 5 | `projectGone`, `watchesServerTopic` |
 | `src/renderer/src/v2/ServerProjectWindow.tsx` | modify | 5 | `TOPIC_ENDED`; the `server` watch only without `topicEnd` |
@@ -225,6 +228,7 @@ Out of scope here: the 3c-3b-2, 3d and phase 4 rows. Desktop-UI MCP tools stay d
 | `src/renderer/src/styles.css` | modify | 8 | `.skill-menu-item.not-installed` |
 | `scripts/v2Backend.test.mjs`, `v2SetterOverrides.test.mjs`, `v2Projector.test.mjs`, `v2SessionChoices.test.mjs`, `backendFeatures.test.mjs` | modify | 1–8, 10 | tests |
 | `scripts/v2Errors.test.mjs`, `v2ProjectWatch.test.mjs`, `v2NoteDrafts.test.mjs` | create | 2, 5, 9 | tests |
+| `scripts/v2ProjectionWaits.test.mjs` | create | review | tests |
 | `scripts/v2-smoke.mjs` | modify | 11 | the 3c-3b-1 checks |
 
 No file under `server/`, `src/main`, `src/preload` or `src/shared` changes.
@@ -1181,10 +1185,10 @@ index 9a79ff1..8246de5 100644
 -  function whenProjected<T>(check: () => T | undefined): Promise<T | undefined> {
 +  function whenProjected<T>(check: () => T | undefined, rev?: TopicRev): Promise<T | undefined> {
      if (left) return Promise.resolve(undefined)
-     const now = check()
-     if (now !== undefined) return Promise.resolve(now)
 +    const mirror = registered()?.mirror
 +    if (rev && mirror) return untilRev(mirror, rev).then(() => (left ? undefined : check()))
+     const now = check()
+     if (now !== undefined) return Promise.resolve(now)
      return new Promise((resolve) => {
        const done = (value: T | undefined): void => {
          clearTimeout(timer)
@@ -3852,6 +3856,20 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 ---
 
+### Review fixes (Tasks 1–3, done)
+
+Applied after Task 11, from the review of Tasks 1–3. `smoke:v2` still passes with 129 checks; `npm test` goes from 1227 to 1235.
+
+1. **`setNote` now waits for its rev.** `whenProjected` read `check()` before the rev, so `setNote`'s `() => true` returned at once and never reached `untilRev`. The rev wait now comes first (Decisions 5 and 7, and Task 3's diff); `whenRev` resolves at once for a rev already held.
+2. **The waits are a pure helper**, `v2/projectionWaits.ts` (`createProjectionWaits({mirror, left, subscribe, setTimeout, clearTimeout})` → `{whenProjected, waits, cancelAll}`, with `PROJECTION_WAIT_MS` and `REV_WAIT_MS`). `installV2.ts` supplies the mirror, the store's `subscribe` and the timers; its repo-path wait shares the `waits` set. `EMPTY`, `VIEW_RESET`, `installPatch(overrides)` and `leavePatch(originals)` moved to `v2/windowState.ts`, so the reset on install and on leave is tested without the store. New `scripts/v2ProjectionWaits.test.mjs` (6 tests): a rev wait runs even when `check()` already holds; `whenRev` rejecting TIMEOUT, NOT_SUBSCRIBED or CLOSED still resolves to `check()`; `leave` ends a rev wait without reading the store; without a rev there is no mirror wait and the 10 s store wait applies; a rev without a mirror falls back to it; both patches carry `VIEW_RESET`.
+3. **The voice queue is stopped, not hidden.** `VIEW_RESET` no longer zeroes `voicePlaying`/`voiceQueued`; `voice.ts` exports `stopAllSummaries()`, which `installV2Window` calls on install and on leave (it publishes the empty state itself).
+4. **`editReporter` has no unhandled rejection**: `show(…).then(closed, closed)` instead of `.finally`, so a dialog that fails to open frees the reporter.
+5. **A burst says so.** An edit dropped while the dialog is open is remembered (the first title); when the dialog closes, one follow-up shows "Other changes made meanwhile may also not have been saved." (`ALSO_NOT_CONFIRMED`) under that title. The open dialog itself cannot change.
+6. **Prompts lost as the link drops are reported.** `WindowBackend.errors.promptFailed(title, err)`: legacy is `report`'s dialog; v2 goes through the edit reporter (`deps.reportEdit`) with `PROMPT_NOT_CONFIRMED` ("…so this prompt may not have been sent…"), sharing the one-dialog-at-a-time rule with the edits. QueuePanel's send and TerminalPane's quick buttons use it. `seen` and a decision's dismiss stay silent acknowledgements. `editReporter`'s function takes an optional third argument, the NOT_CONNECTED text.
+7. **Test gaps closed.** `v2Backend.test.mjs`'s fake `showError`/`report` respect `left` as installV2's do, and the errors test shows `show`, `report` and `promptFailed` stay quiet after leave; a new test checks `promptFailed`'s wording. `v2Errors.test.mjs` shows a non-NOT_CONNECTED error is still reported while the dialog is open, the follow-up after a burst, and a failing `show` freeing the reporter.
+
+---
+
 ### Task 12: Final verification
 
 **Files:** none changed; this task only verifies.
@@ -3860,7 +3878,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1227`, `# fail 0`: the baseline 1195 at `8c50401`, plus 1 (Task 1), 2 (Task 2), 2 (Task 3), 4 (Task 4), 2 (Task 5), 4 (Task 6), 4 (Task 7), 3 (Task 8), 9 (Task 9) and 1 (Task 10).
+Expected: `# pass 1235`, `# fail 0`: the baseline 1195 at `8c50401`, plus 1 (Task 1), 2 (Task 2), 2 (Task 3), 4 (Task 4), 2 (Task 5), 4 (Task 6), 4 (Task 7), 3 (Task 8), 9 (Task 9), 1 (Task 10) and 8 (the review fixes: 6 in `v2ProjectionWaits.test.mjs`, 1 in `v2Errors.test.mjs`, 1 in `v2Backend.test.mjs`).
 
 - [ ] **Step 2: Typecheck and build**
 
@@ -3883,7 +3901,7 @@ npm run smoke:client 2>&1 | tail -1   # CLIENT CONTRACT PASS
 
 1. **Every legacy flag is on:** `node --test scripts/backendFeatures.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 6`, `# fail 0` (it asserts every `LEGACY_FEATURES` flag is true, and `globalPanelMode(LEGACY_FEATURES, 0)` is `full`).
 2. **The legacy paths these tasks did not touch are untouched:** `git diff 8c50401 --stat -- src/renderer/src/components/Workspace.tsx src/renderer/src/terminals.ts src/renderer/src/mcpTools.ts src/renderer/src/worktreeActions.ts src/renderer/src/repositoryActions.ts src/renderer/src/components/DecisionIcon.tsx src/renderer/src/components/NotificationsMenu.tsx src/main src/preload src/shared server` prints nothing.
-3. **Each legacy backend member is the call its UI made before:** read `git diff 8c50401 -- src/renderer/src/backend.ts`: `errors.show`/`report` are `window.api.showError` with the message (`String(err)` for report, as pull and push did), `errors.inline` is `errorText` (GlobalClaude's text), `dequeue` is `removeQueuedText` and `scheduleAutoSave` (QueuePanel's remove), `dismissDecision` is the store's `clearDecision`, and `rename` ignores `expected`.
+3. **Each legacy backend member is the call its UI made before:** read `git diff 8c50401 -- src/renderer/src/backend.ts`: `errors.show`/`report` are `window.api.showError` with the message (`String(err)` for report, as pull and push did), `errors.promptFailed` is the same dialog as `report`, `errors.inline` is `errorText` (GlobalClaude's text), `dequeue` is `removeQueuedText` and `scheduleAutoSave` (QueuePanel's remove), `dismissDecision` is the store's `clearDecision`, and `rename` ignores `expected`.
 4. **Each component change keys off the window kind or a v2-only value:** read `git diff 8c50401 -- src/renderer/src/components`. The branches read `serverWindow`, `serverAgents` (null in a file window), `drafts` (`v2NoteDrafts()` is null outside a server window), `listed`/`v2`, `remote` or `readOnly` (false unless a v2 window passes it). The intended exceptions in a file window: pull and push, the notes dialog and GlobalClaude's line go through `getBackend().errors` (the same text); the two `sendPrompt` calls gain a `.catch` (legacy `pasteToTerminal` does not reject, so nothing shows); the renames pass a third argument the legacy store ignores; NotesPanel's legacy branch is `if (!drafts)` instead of `if (!serverWindow)` (the same in a file window); LlmPicker's effects list `!remote` in their dependencies (constant `true` in a file window).
 5. **The store's legacy setters are unchanged:** `git diff 8c50401 -- src/renderer/src/store.ts` shows only `renameTerminal`'s optional `expected` in the type (not the implementation) and the new `serverAgents` field.
 

@@ -156,6 +156,12 @@ export interface WindowBackend {
     show(title: string, message: string): void
     /** A dialog with the error as one line */
     report(title: string, err: unknown): void
+    /**
+     * A prompt sent to a session that failed: as `report`, except that a
+     * server window's NOT_CONNECTED says the prompt may not have been sent
+     * (one dialog at a time, with the edits'), since the link dropped under it.
+     */
+    promptFailed(title: string, err: unknown): void
     /** The error as one line for an inline message, or null when nothing should show */
     inline(err: unknown): string | null
   }
@@ -275,6 +281,7 @@ export const legacyBackend: WindowBackend = {
   errors: {
     show: (title, message) => void window.api.showError(title, message),
     report: (title, err) => void window.api.showError(title, String(err)),
+    promptFailed: (title, err) => void window.api.showError(title, String(err)),
     inline: (err) => errorText(err)
   }
 }

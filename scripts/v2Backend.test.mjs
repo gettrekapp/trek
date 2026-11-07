@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createV2Backend, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
+import { PROMPT_NOT_CONFIRMED } from '../src/renderer/src/v2/errors.ts'
 
 const PRIMARY = '__primary__:r1'
 const ids = () => ({
@@ -73,14 +74,16 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
       ui.push(['confirm', prompt.title, prompt.confirmLabel])
       return answers.shift() ?? false
     },
-    showError: async (title, message) => ui.push(['error', title, message]),
+    // As installV2's: nothing shows once the window left.
+    showError: async (title, message) => void (left() || ui.push(['error', title, message])),
     promptRepoPath: async () => {
       ui.push(['prompt'])
       return answers.shift() ?? null
     },
     registeredRepoPath: async (repoId) => (repoId === 'srv-b' ? '/b' : null),
     removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null),
-    report: (title, err) => reports.push([title, err.code]),
+    report: (title, err) => void (left() || reports.push([title, err.code])),
+    reportEdit: (title, err, notConfirmed) => void (left() || reports.push([title, err.code, notConfirmed ?? 'edit'])),
     left
   })
   return { backend, calls, ui, st, reports, waits }
@@ -491,6 +494,17 @@ test('errors: show and report reach the dialogs; NOT_CONNECTED and anything afte
   assert.equal(backend.errors.inline(new CodedError('NOT_CONNECTED', '')), null)
   flags.left = true
   assert.equal(backend.errors.inline(new CodedError('CAPACITY', 'too many sessions')), null)
+  backend.errors.show('Could not save the note', 'details')
+  backend.errors.report('Git pull failed', new CodedError('GIT_ERROR', 'no upstream'))
+  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_CONNECTED', ''))
+  assert.equal(ui.length, 1)
+  assert.equal(reports.length, 1)
+})
+
+test('errors.promptFailed goes through the edit reporter with the prompt wording', () => {
+  const { backend, reports } = setup()
+  backend.errors.promptFailed('Could not send the prompt', new CodedError('NOT_CONNECTED', ''))
+  assert.deepEqual(reports, [['Could not send the prompt', 'NOT_CONNECTED', PROMPT_NOT_CONFIRMED]])
 })
 
 test('start, a Global start and create wait for the rev their response reports', async () => {

@@ -48,7 +48,8 @@ export function stopSummary(): void {
   playNext()
 }
 
-function stopAllSummaries(): void {
+/** Stops the summary playing and drops the queued ones (a server window takes over, or leaves). */
+export function stopAllSummaries(): void {
   queue.splice(0).forEach((c) => URL.revokeObjectURL(c.url))
   stopSummary()
   publish()

@@ -16,7 +16,7 @@
 // `V2BackendDeps` (built by installV2.ts), so `node --test` covers it.
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
 import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
-import { errorCode, errorText } from './errors.ts'
+import { errorCode, errorText, PROMPT_NOT_CONFIRMED } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
 import { ClientError } from '../../../shared/client/connection.ts'
 import { primaryWorktreeId } from '../../../shared/repositories.ts'
@@ -77,6 +77,8 @@ export interface V2BackendDeps {
   removalBlock(repo: Repository): string | null
   /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
   report(title: string, err: unknown): void
+  /** Shows a failed edit or prompt send; NOT_CONNECTED says it may not have gone through (`editReporter`) */
+  reportEdit(title: string, err: unknown, notConfirmed?: string): void
   /** Whether the window has left this project: nothing it still has in flight shows */
   left(): boolean
 }
@@ -464,6 +466,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     errors: {
       show: (title, message) => void deps.showError(title, message),
       report,
+      promptFailed: (title, err) => deps.reportEdit(title, err, PROMPT_NOT_CONFIRMED),
       inline: (err) => (deps.left() || errorCode(err) === 'NOT_CONNECTED' ? null : errorText(err))
     }
   }
