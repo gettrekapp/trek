@@ -813,6 +813,23 @@ test('status changes are not saved; seen and rename update the attention topic',
   assert.deepEqual(attention(s), [])
 })
 
+test('project.rename and project.updateSettings republish the attention topic with the name and audioAlerts', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('esc to interrupt')
+  fireQuiet(s)
+  const before = attention(s)[0]
+  assert.equal(before.audioAlerts, undefined)
+  assert.equal((await call('project.rename', { projectId: s.projectId, name: 'Renamed project' })).ok, true)
+  assert.equal(attention(s)[0].projectName, 'Renamed project')
+  assert.equal((await call('project.updateSettings', { projectId: s.projectId, settings: { audioAlerts: true } })).ok, true)
+  assert.equal(attention(s)[0].audioAlerts, true)
+  assert.equal((await call('project.updateSettings', { projectId: s.projectId, settings: { audioAlerts: null } })).ok, true)
+  assert.equal(Object.hasOwn(attention(s)[0], 'audioAlerts'), false)
+  assert.equal(attention(s)[0].since, before.since, 'a relabel keeps since')
+})
+
 test('exit, close and unload cancel the quiet timer and drop attention entries', async (t) => {
   const s = setup(t)
   const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })

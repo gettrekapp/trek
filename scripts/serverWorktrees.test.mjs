@@ -37,7 +37,7 @@ async function setup(t) {
   t.after(() => { poller.stop(); store.close() })
   const subscriber = { send: () => {} }
   const blocked = []
-  const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } } }
+  const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } }, refreshAttention: () => {} }
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions })
   const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
   const projectId = created.result.projectId

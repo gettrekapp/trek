@@ -215,7 +215,7 @@ The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 | Topic | Snapshot |
 |---|---|
 | `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) and `REPO_UNAVAILABLE` (see Worktrees below) |
-| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since, decision?}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done`, and every session with an open decision whatever its status, across all projects, oldest `since` first (epoch ms; see Statuses and Decisions) |
+| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since, decision?, projectName, audioAlerts?}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done`, and every session with an open decision whatever its status, across all projects, oldest `since` first (epoch ms; see Statuses and Decisions). `projectName` is the project's name and `audioAlerts: true` is present while the project's `audioAlerts` setting is on, so a client can label an entry and decide on its alert sound without the project topic |
 | `project:<id>` | the whole `Project` tree |
 
 - `ops` are RFC 6902 JSON Patch, limited to `add`, `remove` and `replace`.
@@ -556,8 +556,8 @@ the desktop's rules, applied to live output only; replay never changes a status.
   `session.markComplete`.
 - **The `attention` topic** is republished whenever any entry field can change: a
   status change, `session.rename`, `session.close`, `worktree.unload`, `session.seen`,
-  `session.markComplete`, a decision asked, answered or dismissed, and removal of a
-  worktree, repository or project.
+  `session.markComplete`, a decision asked, answered or dismissed, removal of a
+  worktree, repository or project, `project.rename` and `project.updateSettings`.
 
 **Decisions.** An agent that stops to ask the user something calls the MCP tool
 `request_decision {terminalId, question}`. The session then carries

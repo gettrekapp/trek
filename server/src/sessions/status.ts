@@ -90,9 +90,11 @@ export function attentionEntries(
         sessionId: s.id,
         title: s.title,
         status: s.status,
-        since: flagged ? since.get(s.id) ?? fallback : s.decision!.at
+        since: flagged ? since.get(s.id) ?? fallback : s.decision!.at,
+        projectName: project.name
       }
       if (s.decision) entry.decision = s.decision
+      if (project.settings.audioAlerts === true) entry.audioAlerts = true
       entries.push(entry)
     }
     for (const s of project.globalSessions) add(null, s)

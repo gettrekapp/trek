@@ -155,4 +155,8 @@ export interface AttentionEntry {
   since: number
   /** The session's open decision */
   decision?: SessionDecision
+  /** The project's name, so a client can label the entry without the project topic */
+  projectName: string
+  /** The project's `audioAlerts` setting, when on: the client plays its alert sound */
+  audioAlerts?: true
 }

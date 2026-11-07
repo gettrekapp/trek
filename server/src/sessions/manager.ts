@@ -798,6 +798,14 @@ export class SessionManager {
     this.since.delete(sessionId)
   }
 
+  /**
+   * A project's name or settings changed (project.rename, project.updateSettings):
+   * the `attention` topic labels its entries with both, so it is republished.
+   */
+  refreshAttention(): void {
+    this.publishAttention()
+  }
+
   /** Republishes the `attention` topic (a no-op when nothing changed). */
   private publishAttention(): void {
     if (!this.deps.hub) return

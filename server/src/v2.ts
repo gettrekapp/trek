@@ -117,6 +117,8 @@ const handlers: Record<string, Handler> = {
       checkExpected('name', d.name, p.expected)
       d.name = name
     })
+    // The attention topic carries the project's name.
+    ctx.sessions.refreshAttention()
     return null
   },
 
@@ -148,6 +150,8 @@ const handlers: Record<string, Handler> = {
       // A deleted tag comes off every branch in the same change (one patch, one rev).
       d.repositories = pruneDeletedTags(d.repositories, d.settings, patch)
     })
+    // The attention topic carries the project's audioAlerts.
+    ctx.sessions.refreshAttention()
     return null
   },
 

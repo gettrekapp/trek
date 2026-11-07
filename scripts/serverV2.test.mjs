@@ -45,13 +45,16 @@ function setup(t) {
   }
   /** Records what the handlers ask of the session manager */
   const forgotten = []
+  /** project.rename and project.updateSettings ask for the attention topic again */
+  const refreshed = []
   const sessions = {
     forgetProject: (projectId) => forgotten.push(['project', projectId, holder.projects.list().some((x) => x.id === projectId)]),
     forgetRepo: (projectId, repoId) => forgotten.push(['repo', projectId, repoId]),
-    forgetGlobal: (projectId) => forgotten.push(['global', projectId])
+    forgetGlobal: (projectId) => forgotten.push(['global', projectId]),
+    refreshAttention: () => refreshed.push('attention')
   }
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects, sessions })
-  return { dir, a, store, hub, sent, call, forgotten, projects: holder.projects }
+  return { dir, a, store, hub, sent, call, forgotten, refreshed, projects: holder.projects }
 }
 
 test('subscribing to server returns identity, repos and no projects', async (t) => {
@@ -188,11 +191,20 @@ test('project.create errors', async (t) => {
 })
 
 test('project.rename with expected; CONFLICT on a stale guard', async (t) => {
-  const { a, call } = setup(t)
+  const { a, call, refreshed } = setup(t)
   const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
   assert.equal((await call('project.rename', { projectId, name: 'Q', expected: 'P' })).ok, true)
   assert.equal((await call('project.rename', { projectId, name: 'R', expected: 'P' })).error.code, 'CONFLICT')
   assert.deepEqual((await call('project.list', {})).result.map((p) => p.name), ['Q'])
+  assert.deepEqual(refreshed, ['attention'], 'the rename republished attention; the refused one did not')
+})
+
+test('project.updateSettings republishes attention, a refused one does not', async (t) => {
+  const { a, call, refreshed } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  await call('project.updateSettings', { projectId, settings: { audioAlerts: true } })
+  await call('project.updateSettings', { projectId, settings: { audioAlerts: null }, expected: { audioAlerts: false } })
+  assert.deepEqual(refreshed, ['attention'])
 })
 
 test('project.updateSettings merges, null removes, expected is per key', async (t) => {

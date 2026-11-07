@@ -68,8 +68,8 @@ test('attentionEntries lists attention and done sessions, oldest first, with Glo
   }]
   const since = new Map([['a', 200], ['g', 100]])
   assert.deepEqual(attentionEntries(projects, since, () => 999), [
-    { projectId: 'p', worktreeId: null, sessionId: 'g', title: 'g', status: 'done', since: 100 },
-    { projectId: 'p', worktreeId: 'w', sessionId: 'a', title: 'Fix', status: 'attention', since: 200 }
+    { projectId: 'p', worktreeId: null, sessionId: 'g', title: 'g', status: 'done', since: 100, projectName: 'P' },
+    { projectId: 'p', worktreeId: 'w', sessionId: 'a', title: 'Fix', status: 'attention', since: 200, projectName: 'P' }
   ])
   assert.equal(attentionEntries(projects, new Map(), () => 999)[0].since, 999)
 })
@@ -87,7 +87,20 @@ test('attentionEntries also lists a session with an open decision, in any status
     ] }]
   }]
   assert.deepEqual(attentionEntries(projects, new Map([['b', 100]]), () => 999), [
-    { projectId: 'p', worktreeId: 'w', sessionId: 'b', title: 'b', status: 'attention', since: 100, decision: { question: 'Merge?', at: 500 } },
-    { projectId: 'p', worktreeId: 'w', sessionId: 'a', title: 'a', status: 'working', since: 300, decision: { question: 'Which DB?', at: 300 } }
+    { projectId: 'p', worktreeId: 'w', sessionId: 'b', title: 'b', status: 'attention', since: 100, projectName: 'P', decision: { question: 'Merge?', at: 500 } },
+    { projectId: 'p', worktreeId: 'w', sessionId: 'a', title: 'a', status: 'working', since: 300, projectName: 'P', decision: { question: 'Which DB?', at: 300 } }
   ])
+})
+
+test("attentionEntries carries each project's name, and audioAlerts only when it is on", () => {
+  const s = (id) => ({ id, title: id, llm: { provider: 'claude' }, queue: [], status: 'attention' })
+  const project = (id, name, settings) => ({ id, name, settings, globalSessions: [s(`${id}-g`)], repositories: [] })
+  const projects = [project('p', 'Loud', { audioAlerts: true }), project('q', 'Quiet', { audioAlerts: false }), project('r', 'Unset', {})]
+  const since = new Map([['p-g', 1], ['q-g', 2], ['r-g', 3]])
+  assert.deepEqual(attentionEntries(projects, since, () => 9).map((e) => [e.projectName, e.audioAlerts]), [
+    ['Loud', true],
+    ['Quiet', undefined],
+    ['Unset', undefined]
+  ])
+  assert.equal(Object.hasOwn(attentionEntries(projects, since, () => 9)[1], 'audioAlerts'), false)
 })
