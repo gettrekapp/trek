@@ -74,7 +74,7 @@
 **Tests (all tasks)**
 
 20. **The smoke runs the fake CLI under the real sandbox.** `smoke:bot` never runs a real `claude`; it runs `scripts/fixtures/fake-claude.mjs` as the project's `claudeCommand`, so after Task 7 Trek spawns it through `sandbox-exec` like the real CLI. A `CANARY` turn reads `userData/bot-consent.json` three ways (`fs.readFileSync`, `sh -c cat`, a child `node -e`) and runs `/usr/bin/true`; the smoke asserts `canary:denied true:ran`. The fake reads the inline config and expands `${VAR}` from its environment as the CLI does, and writes `TREK_BOT_TOKEN` to a file outside userData so the smoke can make direct calls with it.
-21. **The macOS integration test is a unit test file** (`scripts/botSandboxMac.test.mjs`, skipped elsewhere), so `npm test` proves the profile on every run on a Mac (about 5 s). Its LaunchServices case writes a background `.app` from inside the sandbox and opens it (refused, nothing runs), then opens the same app from outside as a control (it runs and reads the fake secret), so the check can't pass vacuously.
+21. **The macOS integration test is a unit test file** (`scripts/botSandboxMac.test.mjs`, skipped elsewhere), so `npm test` proves the profile on every run on a Mac (well under a second). Its LaunchServices case writes a background `.app` from inside the sandbox and opens it (refused, nothing runs), then opens the same app from outside as a control (it runs and reads the fake secret), so the check can't pass vacuously. That case really launches an app, so it is opt-in (user decision): it is skipped unless `TREK_SANDBOX_APP_TEST=1`, which `npm run test:bot-sandbox-mac` sets (it runs the whole file, about 5 s). Plain `npm test` reports it as skipped.
 22. **The Linux check is a separate script**, `npm run test:bot-sandbox-linux` (`scripts/bot-sandbox-linux.mjs`), because it needs Docker. It builds a `node:22-bookworm-slim` image with `bubblewrap`, `python3` and `procps`, mounts the repo read-only, and runs `scripts/fixtures/bwrap-check.mjs` as an unprivileged user. It needs no `--privileged`: `seccomp=unconfined`, `apparmor=unconfined` and `systempaths=unconfined` are enough for user namespaces and a fresh `/proc`. With no Docker it prints `SKIP: …` and exits 0.
 23. **How the bot runs on Linux today.** `package.json`'s `build` has only a `mac` target (dmg, arm64), so there is no Linux package; Trek runs on Linux from source (`npm run dev` / `npm start`). Nothing else in the bot's path is mac-only: `turnProcess.ts` uses POSIX process groups, `policy.ts` folds case only on darwin/win32, and `/bin/sh` and `/usr/bin/true` exist on both. The Linux code path is the same `sandboxFor` → `runTurn` path as macOS, and its sandbox is tested in Docker, not by a Linux smoke.
 
@@ -85,11 +85,12 @@
 - **Unit tests:** `scripts/*.test.mjs`, run with `npm test` (`node --test scripts/*.test.mjs`).
   - Modules a test imports must be erasable TS (no enums, parameter properties or namespaces) with `.ts` on every runtime import. `src/host/bot/sandbox.ts` and `turnProcess.ts` import nothing from Electron.
   - `import type` lines are erased, so they may be extensionless.
-- **Baseline:** 1321 tests pass at `4671b50`. Each task states the count it ends at; the plan ends at 1344.
+- **Baseline:** 1321 tests pass at `4671b50`. Each task states the count it ends at; the plan ends at 1343 passing and 1 skipped (the opt-in LaunchServices check, Decision 21).
 - **Checks:**
   - `npm run typecheck`
   - `npm run build`
   - `node scripts/bot-smoke.mjs` after a build (`npm run smoke:bot` builds first)
+  - `npm run test:bot-sandbox-mac` (macOS: the whole integration file, the opt-in app launch included)
   - `npm run test:bot-sandbox-linux` (Docker)
   - `npm run smoke`, `npm run smoke:windows`, `npm run smoke:v2`, `npm run smoke:remote` (final task)
   - **Run Electron smokes strictly one at a time.** Overlapping windows cause focus flakes.
@@ -117,7 +118,7 @@
 | `src/host/bot/sandbox.ts` | create | 4, 5 | `sandboxFor`, `macProfile`, `ancestorsOf`, `insideUserData`; `probeSandbox` |
 | `src/host/bot/runner.ts` | modify | 7 | `'sandbox'` pauses and is not counted |
 | `src/main/botSecretFiles.ts` | modify | 9 | header: the OS sandbox is the primary layer |
-| `package.json` | modify | 6 | `test:bot-sandbox-linux` |
+| `package.json` | modify | 5, 6 | `test:bot-sandbox-mac`; `test:bot-sandbox-linux` |
 | `scripts/botPolicy.test.mjs`, `botTurn.test.mjs`, `botRunner.test.mjs` | modify | 1, 3, 7, 8 | tests |
 | `scripts/botSandbox.test.mjs` | create | 4 | the profile, the argv, refusals (pure) |
 | `scripts/botSandboxMac.test.mjs` | create | 5 | `sandbox-exec` for real against a fake userData (macOS only) |
@@ -1083,7 +1084,8 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(bo
 
 **Files:**
 - Modify: `src/host/bot/sandbox.ts` (`probeSandbox`)
-- Test: `scripts/botSandboxMac.test.mjs` (8 tests)
+- Modify: `package.json` (`test:bot-sandbox-mac`)
+- Test: `scripts/botSandboxMac.test.mjs` (8 tests; the LaunchServices one is opt-in, `TREK_SANDBOX_APP_TEST=1`)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1093,7 +1095,7 @@ new file mode 100644
 index 0000000..608dab6
 --- /dev/null
 +++ b/scripts/botSandboxMac.test.mjs
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,143 @@
 +// scripts/botSandboxMac.test.mjs — the macOS sandbox for real: sandbox-exec with Trek's profile
 +// around plain shells, python and node, against a fake userData. No Claude CLI. macOS only.
 +import test from 'node:test'
@@ -1105,6 +1107,9 @@ index 0000000..608dab6
 +import { probeSandbox, sandboxFor, SANDBOX_EXEC } from '../src/host/bot/sandbox.ts'
 +
 +const skip = process.platform !== 'darwin' && 'macOS only'
++// The LaunchServices check writes an app and opens it for real (the control launches it outside the
++// sandbox), so it is opt-in: `npm run test:bot-sandbox-mac` sets this.
++const skipApp = skip || (process.env.TREK_SANDBOX_APP_TEST !== '1' && 'opt-in: npm run test:bot-sandbox-mac')
 +const SECRET = 'TOPSECRET-123'
 +const root = skip ? '' : realpathSync(mkdtempSync(join(tmpdir(), 'bot-sandbox-')))
 +const ancestor = join(root, 'Application Support')
@@ -1185,7 +1190,7 @@ index 0000000..608dab6
 +  assert.equal(sh(`touch "${ancestor}/other" && mv "${ancestor}/other" "${ancestor}/other2" && rm "${ancestor}/other2"`).status, 0)
 +})
 +
-+test('an app the bot writes cannot be opened through LaunchServices', { skip }, () => {
++test('an app the bot writes cannot be opened through LaunchServices', { skip: skipApp }, () => {
 +  const app = join(work, 'Esc.app')
 +  const escaped = join(work, 'escaped.txt')
 +  const id = `com.trek.sandbox-test.${process.pid}`
@@ -1323,23 +1328,42 @@ index 2715baa..6255a9e 100644
 +}
 ````
 
+The opt-in script for the whole file:
+
+````diff
+diff --git a/package.json b/package.json
+index cf737a5..6f4aaa3 100644
+--- a/package.json
++++ b/package.json
+@@ -11,6 +11,7 @@
+     "start": "electron-vite preview",
+     "typecheck": "tsc --noEmit",
+     "test": "node --test scripts/*.test.mjs",
++    "test:bot-sandbox-mac": "TREK_SANDBOX_APP_TEST=1 node --test scripts/botSandboxMac.test.mjs",
+     "smoke:windows": "npm run build && node scripts/windows-smoke.mjs",
+     "smoke:multi": "npm run build && node scripts/multi-repo-smoke.mjs",
+     "smoke": "npm run build && node scripts/smoke.mjs",
+````
+
 - [ ] **Step 4: Verify**
 
-Run: `node --test scripts/botSandboxMac.test.mjs 2>&1 | grep -E '^not ok|^# (pass|fail)'` → `# pass 8`, `# fail 0`, in about 5 s. It shows, on macOS 26.2:
+Run: `node --test scripts/botSandboxMac.test.mjs 2>&1 | grep -E '^not ok|^# (pass|fail|skipped)'` → `# pass 7`, `# fail 0`, `# skipped 1` (the LaunchServices check, opt-in).
+
+Run: `npm run test:bot-sandbox-mac 2>&1 | grep -E '^not ok|^# (pass|fail|skipped)'` → `# pass 8`, `# fail 0`, `# skipped 0`, in about 5 s. It shows, on macOS 26.2:
 - `cat`, `$(…)`, a variable, a symlink, an upper-case spelling, `./x/../x`, `ls`, `grep -R`, `cp -R`, `tar`, `node -e` and `python3 -I -c` all get `Operation not permitted` / `PermissionError` / `EPERM` and never print the secret;
 - writing, removing, moving and hard-linking inside userData are denied, and the file is unchanged;
 - renaming the parent (`Application Support`) or the temp root is denied, while making, renaming and removing other files in the parent still works;
-- a `.app` written inside the sandbox can't be opened (`open` fails, nothing runs), while the same app opened outside runs and reads the secret;
+- a `.app` written inside the sandbox can't be opened (`open` fails, nothing runs), while the same app opened outside runs and reads the secret (only under `test:bot-sandbox-mac`);
 - `/usr/bin/true`, `git --version`, writes in the working directory, `node -e`, `ls ~` and `ls /` work;
 - the probe passes for the real sandbox, and reports a profile that hides nothing, a `/var/…` spelling of a `/private/var/…` userData (fails open), a missing `sandbox-exec` and a profile that doesn't compile.
 
-Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1340`, `# fail 0`.
+Run: `npm test 2>&1 | grep -E '^# (pass|fail|skipped)'` → `# pass 1339`, `# fail 0`, `# skipped 1`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add scripts/botSandboxMac.test.mjs
-git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(bot): sandbox canary probe; macOS sandbox-exec integration test" -m "Co-Authored-By: <model trailer>" -- src/host/bot/sandbox.ts scripts/botSandboxMac.test.mjs
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(bot): sandbox canary probe; macOS sandbox-exec integration test" -m "Co-Authored-By: <model trailer>" -- package.json src/host/bot/sandbox.ts scripts/botSandboxMac.test.mjs
 ```
 
 ---
@@ -1502,13 +1526,13 @@ index 0000000..fe2b158
 
 ````diff
 diff --git a/package.json b/package.json
-index cf737a5..5f13b51 100644
+index 6f4aaa3..e0f1c2d 100644
 --- a/package.json
 +++ b/package.json
-@@ -11,6 +11,7 @@
-     "start": "electron-vite preview",
+@@ -12,6 +12,7 @@
      "typecheck": "tsc --noEmit",
      "test": "node --test scripts/*.test.mjs",
+     "test:bot-sandbox-mac": "TREK_SANDBOX_APP_TEST=1 node --test scripts/botSandboxMac.test.mjs",
 +    "test:bot-sandbox-linux": "node scripts/bot-sandbox-linux.mjs",
      "smoke:windows": "npm run build && node scripts/windows-smoke.mjs",
      "smoke:multi": "npm run build && node scripts/multi-repo-smoke.mjs",
@@ -2010,7 +2034,7 @@ index dfd6340..47aeedc 100644
 
 Run: `npm run typecheck` → no errors.
 Run: `node --test scripts/botTurn.test.mjs scripts/botRunner.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 132`, `# fail 0`. The existing kill, timeout, descendant and `killAllTurnsNow` tests now run through `sandbox-exec` too and still pass: it execs the CLI in place, so the group kill and the SIGKILL grace reach it unchanged.
-Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1343`, `# fail 0`.
+Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1342`, `# fail 0`, `# skipped 1`.
 Run: `npm run build && node scripts/bot-smoke.mjs 2>&1 | grep -E 'OS sandbox|checks? (passed|failed)'` →
 
 ```
@@ -2323,7 +2347,7 @@ index 47aeedc..b259d15 100644
 - [ ] **Step 5: Verify**
 
 Run: `npm run typecheck` → no errors. Run: `node --test scripts/botTurn.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 39`, `# fail 0`.
-Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1344`, `# fail 0`.
+Run: `npm test 2>&1 | grep -E '^# (pass|fail|skipped)'` → `# pass 1343`, `# fail 0`, `# skipped 1`.
 Run: `npm run build && node scripts/bot-smoke.mjs 2>&1 | grep -E 'userData|sandbox|inside|checks? (passed|failed)'` → includes
 
 ```
@@ -2468,9 +2492,13 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "docs(bo
 
 - [ ] **Step 1: Every suite**
 
-Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
+Run: `npm test 2>&1 | grep -E '^# (pass|fail|skipped)'`
 
-Expected: `# pass 1344`, `# fail 0`: the baseline 1321, plus 2 (Task 1), 1 (Task 3), 8 (Task 4), 8 (Task 5), 3 (Task 7: 2 in `botTurn.test.mjs`, 1 in `botRunner.test.mjs`) and 1 (Task 8). Per file: `botPolicy.test.mjs` 67, `botTurn.test.mjs` 39, `botRunner.test.mjs` 94, `botSandbox.test.mjs` 8, `botSandboxMac.test.mjs` 8.
+Expected: `# pass 1343`, `# fail 0`, `# skipped 1`: the baseline 1321, plus 2 (Task 1), 1 (Task 3), 8 (Task 4), 7 (Task 5, with its LaunchServices check skipped as opt-in), 3 (Task 7: 2 in `botTurn.test.mjs`, 1 in `botRunner.test.mjs`) and 1 (Task 8). Per file: `botPolicy.test.mjs` 67, `botTurn.test.mjs` 39, `botRunner.test.mjs` 94, `botSandbox.test.mjs` 8, `botSandboxMac.test.mjs` 7 passed and 1 skipped.
+
+Run: `npm run test:bot-sandbox-mac 2>&1 | grep -E '^not ok|^# (pass|fail|skipped)'`
+
+Expected: `# pass 8`, `# fail 0`, `# skipped 0`: the opt-in LaunchServices check (an app written in the sandbox can't be opened; the same app opened outside runs) passes along with the rest.
 
 - [ ] **Step 2: Types, build, Linux**
 

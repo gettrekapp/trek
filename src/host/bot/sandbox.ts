@@ -1,5 +1,7 @@
 // The OS sandbox around each bot turn: nothing in the turn's process tree (the CLI, its tools,
-// hooks, MCP servers and every shell) can read or change Trek's userData. Pure.
+// hooks, MCP servers and every shell) can read or change Trek's userData. Pure, apart from
+// probeSandbox, which runs the canary.
+import { spawn } from 'node:child_process'
 import { dirname, isAbsolute, normalize, relative, sep } from 'node:path'
 
 export interface Sandbox {
@@ -91,4 +93,57 @@ export function insideUserData(platform: NodeJS.Platform, userData: string, path
       return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
     }) ?? null
   )
+}
+
+const PROBE_TIMEOUT_MS = 10_000
+
+interface ProbeRun {
+  code: number | null
+  output: string
+  error?: NodeJS.ErrnoException
+}
+
+function runSandboxed(sandbox: Sandbox, argv: string[]): Promise<ProbeRun> {
+  return new Promise((resolve) => {
+    let output = ''
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(sandbox.command, [...sandbox.args, ...argv], { stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (err) {
+      resolve({ code: null, output, error: err as NodeJS.ErrnoException })
+      return
+    }
+    const timer = setTimeout(() => child.kill('SIGKILL'), PROBE_TIMEOUT_MS)
+    child.stdout?.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')))
+    child.stderr?.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')))
+    child.on('error', (error: NodeJS.ErrnoException) => {
+      clearTimeout(timer)
+      resolve({ code: null, output, error })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve({ code, output })
+    })
+  })
+}
+
+const PROBE_FAILED = "The bot's OS sandbox isn't working, so the bot won't run"
+
+/**
+ * Checks that `sandbox` works before any turn uses it: `/usr/bin/true` must run in it, and
+ * `canary` (a file in userData holding `text`) must not be readable from it. Returns why not, or null.
+ */
+export async function probeSandbox(sandbox: Sandbox, canary: { path: string; text: string }): Promise<string | null> {
+  const ran = await runSandboxed(sandbox, ['/usr/bin/true'])
+  if (ran.error) {
+    const missing = ran.error.code === 'ENOENT'
+    return `${PROBE_FAILED}: ${missing ? `${sandbox.command} was not found` : ran.error.message}`
+  }
+  if (ran.code !== 0) return `${PROBE_FAILED}: a test command failed (${ran.output.trim() || `exit ${ran.code}`})`
+  const read = await runSandboxed(sandbox, ['/bin/sh', '-c', 'cat -- "$1"', 'sh', canary.path])
+  if (read.error || read.code === null) return `${PROBE_FAILED}: the test read did not finish`
+  if (read.code === 0 || read.output.includes(canary.text)) {
+    return `${PROBE_FAILED}: a test read of Trek's data folder succeeded (${canary.path})`
+  }
+  return null
 }
