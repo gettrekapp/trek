@@ -446,11 +446,15 @@ test('spawn and resize cap sizes at 500 columns and 200 rows', (t) => {
   host.resize('p1', 500, 200)
 })
 
-test('toWireError carries the details of a passed-through code, and only an object', () => {
+test('toWireError carries the details of a passed-through code: only an object, only a string reason', () => {
   assert.deepEqual(toWireError('worktree.remove', codedError('GIT_ERROR', 'dirty', { reason: 'dirty' })), { code: 'GIT_ERROR', message: 'dirty', details: { reason: 'dirty' } })
   assert.deepEqual(toWireError('worktree.remove', codedError('GIT_ERROR', 'locked')), { code: 'GIT_ERROR', message: 'locked' })
   const internal = Object.assign(new Error('boom'), { details: { reason: 'x' } })
   assert.deepEqual(toWireError('session.start', internal), { code: 'INTERNAL', message: 'boom' })
   const odd = Object.assign(codedError('GIT_ERROR', 'x'), { details: ['dirty'] })
   assert.deepEqual(toWireError('worktree.remove', odd), { code: 'GIT_ERROR', message: 'x' })
+  const numeric = Object.assign(codedError('GIT_ERROR', 'x'), { details: { reason: 5 } })
+  assert.deepEqual(toWireError('worktree.remove', numeric), { code: 'GIT_ERROR', message: 'x' }, 'a reason that is not a string is dropped')
+  const extra = Object.assign(codedError('GIT_ERROR', 'x'), { details: { reason: 'dirty', secret: 'y' } })
+  assert.deepEqual(toWireError('worktree.remove', extra), { code: 'GIT_ERROR', message: 'x', details: { reason: 'dirty' } }, 'only the named fields')
 })

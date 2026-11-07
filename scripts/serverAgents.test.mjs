@@ -1,7 +1,7 @@
 // scripts/serverAgents.test.mjs — server.agents: each provider's command, its program, and the cached installed check.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { agentCommands, commandBinary, CommandProbe, PROBE_TTL_MS } from '../server/src/sessions/agents.ts'
+import { agentCommands, commandBinary, CommandProbe, MAX_PROBES_IN_FLIGHT, PROBE_TTL_MS } from '../server/src/sessions/agents.ts'
 import { DEFAULT_LLM_SETTINGS } from '../src/shared/providers/types.ts'
 
 test('commandBinary skips leading env assignments and blanks', () => {
@@ -54,4 +54,25 @@ test('CommandProbe starts over past 64 programs', async () => {
   await probe.installed('p64')
   await probe.installed('p0')
   assert.equal(asked.length, 66, 'the cache was cleared for the 65th')
+})
+
+test('CommandProbe runs at most 8 checks at once; the excess reads as not installed and is checked again later', async () => {
+  assert.equal(MAX_PROBES_IN_FLIGHT, 8)
+  const asked = []
+  const release = []
+  const probe = new CommandProbe((binary) => {
+    asked.push(binary)
+    return new Promise((resolve) => release.push(() => resolve(true)))
+  }, () => 0)
+  const pending = Array.from({ length: 8 }, (_, i) => probe.installed(`p${i}`))
+  assert.equal(await probe.installed('extra'), false, 'over the cap')
+  assert.equal(asked.length, 8, 'the excess spawned no check')
+  const shared = probe.installed('p0')
+  assert.equal(asked.length, 8, 'a program already in flight still shares its check')
+  for (const r of release) r()
+  assert.deepEqual(await Promise.all([...pending, shared]), Array(9).fill(true))
+  const later = probe.installed('extra')
+  assert.deepEqual(asked.slice(8), ['extra'], 'not cached: checked once there is room')
+  release[8]()
+  assert.equal(await later, true)
 })

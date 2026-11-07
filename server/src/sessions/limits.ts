@@ -39,10 +39,16 @@ export function checkQueue(queue: unknown, field: string): string[] {
   return [...queue] as string[]
 }
 
-/** A decision's question: a non-empty string, trimmed, at most MAX_QUESTION_LENGTH characters. */
+/**
+ * A decision's question, shown on one line: each run of whitespace (newlines and
+ * tabs included) becomes one space, then it is trimmed. It must then be non-empty,
+ * at most MAX_QUESTION_LENGTH characters, and free of any other control character
+ * (BAD_REQUEST), so a client can display it as-is.
+ */
 export function checkQuestion(value: unknown, field: string): string {
-  const question = typeof value === 'string' ? value.trim() : ''
+  const question = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
   if (!question) throw bad(`${field} is required`)
   if (question.length > MAX_QUESTION_LENGTH) throw bad(`${field} must be at most ${MAX_QUESTION_LENGTH} characters`)
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(question)) throw bad(`${field} must not contain control characters`)
   return question
 }

@@ -70,7 +70,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
         terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
         question: {
           type: 'string',
-          description: 'One-line summary of the decision needed, shown in the notification (at most 1000 characters)'
+          description: 'One-line summary of the decision needed, shown in the notification. Line breaks and tabs become spaces; other control characters are refused. At most 1000 characters'
         }
       },
       required: ['terminalId', 'question']

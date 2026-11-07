@@ -122,6 +122,8 @@ else ok('v1 unknown prototype-named method is NOT_FOUND')
 const denied = await req('git.listWorktrees', { repoPath: tmpdir() })
 if (denied.ok || denied.error.code !== 'PATH_DENIED') fail(`path guard: ${JSON.stringify(denied)}`)
 else ok('path guard: PATH_DENIED for out-of-root path')
+if ('rev' in wt || 'rev' in denied) fail(`a v1 res carries a rev: ${JSON.stringify([wt, denied])}`)
+else ok('response rev: v1 res frames carry none')
 
 // pty spawn → echo → kill
 const ptyId = '00000000-0000-4000-8000-000000000001'
@@ -427,6 +429,8 @@ const patchUntil = async (cond, max = 15, patchMs = 2000) => {
 const wtCreated = await pc.req('worktree.create', { projectId, repoId, branch: 'smoke-wt', createBranch: true })
 if (!wtCreated.ok) fail(`worktree.create: ${JSON.stringify(wtCreated)}`)
 const wtId = wtCreated.result?.worktreeId
+if (wtCreated.rev?.topic !== `project:${projectId}` || !Number.isInteger(wtCreated.rev?.rev)) fail(`worktree.create rev: ${JSON.stringify(wtCreated.rev)}`)
+else ok(`response rev: the async worktree.create answered rev ${wtCreated.rev.rev}`)
 await patchUntil(() => projWorktrees().some((w) => w.id === wtId))
 const wtRow = projWorktrees().find((w) => w.id === wtId)
 if (!wtRow || wtRow.branch !== 'smoke-wt' || !existsSync(wtRow.path)) fail(`worktree.create row: ${JSON.stringify(wtRow)}`)
@@ -446,6 +450,8 @@ writeFileSync(join(wtRow.path, 'scratch.txt'), 'x')
 const wtDirty = await pc.req('worktree.remove', { projectId, worktreeId: wtId })
 if (wtDirty.ok || wtDirty.error.code !== 'GIT_ERROR' || wtDirty.error.details?.reason !== 'dirty') fail(`worktree.remove dirty: ${JSON.stringify(wtDirty)}`)
 else ok('worktree.remove: a dirty worktree is GIT_ERROR with details.reason "dirty"')
+if ('rev' in wtDirty) fail(`an error res carries a rev: ${JSON.stringify(wtDirty)}`)
+else ok('response rev: an error res carries none')
 rmSync(join(wtRow.path, 'scratch.txt'))
 const wtRemoved = await pc.req('worktree.remove', { projectId, worktreeId: wtId })
 if (!wtRemoved.ok || existsSync(wtRow?.path ?? '')) fail(`worktree.remove: ${JSON.stringify(wtRemoved)}`)

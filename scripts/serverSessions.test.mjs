@@ -1049,7 +1049,7 @@ test('sendPrompt and tool keys answer a decision; seen does not; dismissDecision
   assert.doesNotThrow(() => s.sessions.dismissDecision({ projectId: s.projectId, sessionId }), 'dismissing nothing is fine')
 })
 
-test('decisions: exit keeps one, unload and a Global restart clear them; bad questions and ids are refused', async (t) => {
+test('decisions: exit and session.restart keep one, unload and forgetGlobal clear them; bad questions and ids are refused', async (t) => {
   const s = setup(t)
   const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   const global = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
@@ -1057,6 +1057,8 @@ test('decisions: exit keeps one, unload and a Global restart clear them; bad que
   s.sessions.requestDecision({ projectId: s.projectId, sessionId: global.sessionId, question: 'q2' })
   s.spawned[0].exit(0)
   assert.equal(decisionOf(s)?.question, 'q1', 'the question is still open after the agent exits')
+  s.sessions.restart({ projectId: s.projectId, sessionId: one.sessionId, ...size })
+  assert.equal(decisionOf(s)?.question, 'q1', 'and after session.restart')
   s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
   assert.equal(decisionOf(s), undefined)
   s.sessions.forgetGlobal(s.projectId)
@@ -1067,6 +1069,10 @@ test('decisions: exit keeps one, unload and a Global restart clear them; bad que
   bad({ question: 5 })
   bad({})
   bad({ question: 'x'.repeat(1001) })
+  bad({ question: 'red \x1b[31mtext' })
+  bad({ question: 'nul\u0000' })
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId: global.sessionId, question: '\n Pick:\n\t a  or\r\nb \n' })
+  assert.equal(s.project().globalSessions[0].decision?.question, 'Pick: a or b', 'whitespace collapses to one line')
   assert.doesNotThrow(() => s.sessions.requestDecision({ projectId: s.projectId, sessionId: global.sessionId, question: 'x'.repeat(1000) }))
   assert.throws(() => s.sessions.requestDecision({ projectId: s.projectId, sessionId: 'nope', question: 'q' }), (e) => e.code === 'NOT_FOUND')
   assert.throws(() => s.sessions.dismissDecision({ projectId: s.projectId, sessionId: 'nope' }), (e) => e.code === 'NOT_FOUND')

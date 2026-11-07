@@ -37,8 +37,17 @@ async function removeUnforced(repoPath: string, worktreePath: string): Promise<v
   try {
     await gitService.removeWorktree(repoPath, worktreePath)
   } catch (err) {
-    const [status] = await gitService.worktreeStatuses([worktreePath])
-    throw codedError('GIT_ERROR', (err as Error).message, status?.dirty ? { reason: 'dirty' } : undefined)
+    throw codedError('GIT_ERROR', (err as Error).message, (await hasChanges(worktreePath)) ? { reason: 'dirty' } : undefined)
+  }
+}
+
+/** Whether `git status --porcelain` lists anything; false when the status cannot be read, so no reason is claimed. */
+async function hasChanges(worktreePath: string): Promise<boolean> {
+  try {
+    const out = await gitService.git(worktreePath, ['--no-optional-locks', 'status', '--porcelain'])
+    return out.trim().length > 0
+  } catch {
+    return false
   }
 }
 

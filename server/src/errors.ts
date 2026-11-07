@@ -28,9 +28,9 @@ export function toWireError(method: string, err: unknown): WireError {
   const code = (err as { code?: unknown } | null)?.code
   if (typeof code === 'string' && PASSTHROUGH.has(code)) {
     const details = (err as { details?: unknown }).details
-    if (details && typeof details === 'object' && !Array.isArray(details)) {
-      return { code: code as WireErrorCode, message, details: details as WireErrorDetails }
-    }
+    // Only the fields WireErrorDetails names, with the right types, reach the wire.
+    const reason = details && typeof details === 'object' ? (details as { reason?: unknown }).reason : undefined
+    if (typeof reason === 'string') return { code: code as WireErrorCode, message, details: { reason } }
     return { code: code as WireErrorCode, message }
   }
   return { code: method.startsWith('git.') ? 'GIT_ERROR' : 'INTERNAL', message }

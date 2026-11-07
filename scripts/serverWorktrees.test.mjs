@@ -219,6 +219,19 @@ test('worktree.remove refuses a dirty worktree unless forced', async (t) => {
   assert.equal(existsSync(wt.path), false)
 })
 
+test('worktree.remove reads a modified tracked file as dirty', async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'tracked')
+  writeFileSync(join(wt.path, 'kept.txt'), 'one')
+  git(wt.path, 'add', 'kept.txt')
+  git(wt.path, 'commit', '-q', '-m', 'add kept')
+  writeFileSync(join(wt.path, 'kept.txt'), 'two')
+  const refused = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.equal(refused.error.code, 'GIT_ERROR')
+  assert.deepEqual(refused.error.details, { reason: 'dirty' })
+  assert.ok(existsSync(wt.path))
+})
+
 test('worktree.remove: a refusal that is not about changes carries no reason', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'locked')
