@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { serverColorClass, useAppStore } from '../store'
 import { scheduleAutoSave } from '../persistence'
-import type { HostStatus, ServerConfig, ServerTestResult } from '../../../shared/types'
+import type { HostStatus, ServerConfig, ServerTestResult, ServerTokenCheck } from '../../../shared/types'
 import { originOf } from '../../../shared/appServerRules.ts'
 
 /**
@@ -43,7 +43,9 @@ export function ServersPanel(): React.JSX.Element {
   const [form, setForm] = useState<FormState | null>(null)
   const [testResult, setTestResult] = useState<ServerTestResult | null>(null)
   const [testing, setTesting] = useState(false)
-  const [hasStoredToken, setHasStoredToken] = useState(false)
+  /** Whether the saved URL's stored token would be sent, and if not, why; null while unknown or adding. */
+  const [storedToken, setStoredToken] = useState<ServerTokenCheck | null>(null)
+  const hasStoredToken = storedToken?.ok === true
 
   const saved = form ? servers.find((s) => s.id === form.id) : undefined
   const editing = !!saved
@@ -54,9 +56,12 @@ export function ServersPanel(): React.JSX.Element {
   useEffect(() => {
     setTestResult(null)
     if (form && saved) {
-      window.api.hasServerToken(form.id, saved.url).then(setHasStoredToken).catch(() => setHasStoredToken(false))
+      window.api
+        .hasServerToken(form.id, saved.url)
+        .then(setStoredToken)
+        .catch((err) => setStoredToken({ ok: false, reason: 'none', error: String(err) }))
     } else {
-      setHasStoredToken(false)
+      setStoredToken(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form?.id])
@@ -74,7 +79,9 @@ export function ServersPanel(): React.JSX.Element {
     })
 
   const filledPaths = form ? Object.values(form.repoPaths).map((p) => p.trim()).filter(Boolean) : []
-  const canSave = !!form && !!form.name.trim() && !!form.url.trim() && filledPaths.length > 0
+  /** A changed address needs its token typed again: Save would otherwise leave the server unable to connect. */
+  const needsToken = addressChanged && !form?.token.trim()
+  const canSave = !!form && !!form.name.trim() && !!form.url.trim() && filledPaths.length > 0 && !needsToken
 
   const save = async (): Promise<void> => {
     if (!form || !canSave) return
@@ -234,11 +241,13 @@ export function ServersPanel(): React.JSX.Element {
               onChange={(e) => setForm({ ...form, token: e.target.value })}
             />
           </label>
-          {editing && !form.token.trim() && (addressChanged || !hasStoredToken) && (
+          {editing && !form.token.trim() && (addressChanged || (storedToken !== null && !storedToken.ok)) && (
             <p className="server-row-warn">
               {addressChanged
-                ? 'The address changed — enter the token again: a saved token is only sent to the address it was entered for.'
-                : 'Enter the access token: none is saved for this address.'}
+                ? 'The address changed — enter the token again to save: a saved token is only sent to the address it was entered for.'
+                : storedToken && !storedToken.ok && storedToken.reason !== 'none'
+                  ? storedToken.error
+                  : 'Enter the access token: none is saved for this address.'}
             </p>
           )}
           {repositories.map((repo) => (
@@ -281,7 +290,12 @@ export function ServersPanel(): React.JSX.Element {
             <button className="btn btn-ghost" onClick={() => setForm(null)}>
               Cancel
             </button>
-            <button className="btn btn-accent" disabled={!canSave} onClick={() => void save()}>
+            <button
+              className="btn btn-accent"
+              disabled={!canSave}
+              title={needsToken ? 'Enter the token again: the address changed' : undefined}
+              onClick={() => void save()}
+            >
               Save
             </button>
           </div>

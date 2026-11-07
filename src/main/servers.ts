@@ -1,11 +1,11 @@
 import { ipcMain } from 'electron'
 import { createSecretStore } from './secrets'
-import type { ServerConfig, ServerStatusEvent, ServerTestResult } from '../shared/types'
+import type { ServerConfig, ServerStatusEvent, ServerTestResult, ServerTokenCheck } from '../shared/types'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol'
 import { broadcast } from './hosts/LocalHost'
 import { RemoteHost } from './hosts/RemoteHost'
 import { allRemoteHosts, deleteRemoteHost, getRemoteHost, setRemoteHost } from './hosts/registry'
-import { decodeTokenRecord, encodeTokenRecord, tokenToSend, type StoredServerToken } from './serverTokenRules'
+import { checkSetToken, decodeTokenRecord, encodeTokenRecord, tokenCheck, tokenToSend, type StoredServerToken } from './serverTokenRules'
 
 /**
  * Access tokens are encrypted, keyed by server id, each with the origin it was
@@ -22,9 +22,9 @@ async function getStored(serverId: string): Promise<StoredServerToken | null> {
 /** Stores `token` bound to `url`'s origin; null clears the token and its origin. */
 async function setToken(serverId: string, token: string | null, url?: string): Promise<void> {
   if (token === null) return tokens.set(serverId, null)
-  if (typeof token !== 'string' || !token) throw new Error('token must be a non-empty string')
-  if (typeof url !== 'string') throw new Error('Server URL is required')
-  await tokens.set(serverId, encodeTokenRecord(token, url))
+  const problem = checkSetToken(token, url)
+  if (problem) throw new Error(problem)
+  await tokens.set(serverId, encodeTokenRecord(token, url as string))
 }
 
 function emitStatus(event: ServerStatusEvent): void {
@@ -42,8 +42,12 @@ async function connectServer(config: ServerConfig): Promise<void> {
   }
   const token = decision.token
   if (existing) {
+    const moved = existing.getConfig().url !== config.url
+    const live = existing.getStatus() === 'connected' || existing.getStatus() === 'connecting'
+    // A live socket to the old address is closed first, so an edited URL takes effect now.
+    if (live && moved) existing.disconnect()
     existing.updateConfig(config, token)
-    if (existing.getStatus() === 'connected' || existing.getStatus() === 'connecting') return
+    if (live && !moved) return
     existing.connect()
     return
   }
@@ -166,9 +170,9 @@ export function registerServerHandlers(): void {
     }
   )
 
-  /** Whether a token is stored that may be sent to `url` (one bound to another origin, or to none, is not). */
-  ipcMain.handle('server:hasToken', async (_event, serverId: string, url: string): Promise<boolean> => {
-    return tokenToSend(url, await getStored(serverId)).ok
+  /** Whether a token is stored that may be sent to `url` (one bound to another origin, or to none, is not), and if not, why. */
+  ipcMain.handle('server:hasToken', async (_event, serverId: string, url: string): Promise<ServerTokenCheck> => {
+    return tokenCheck(url, await getStored(serverId))
   })
 
   ipcMain.handle(

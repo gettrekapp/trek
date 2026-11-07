@@ -85,6 +85,10 @@ export class RemoteHost implements HostService {
     return this.status
   }
 
+  getConfig(): ServerConfig {
+    return this.config
+  }
+
   updateConfig(config: ServerConfig, token: string): void {
     this.config = config
     this.token = token

@@ -111,6 +111,11 @@ export interface ServerStatusEvent {
   error?: string
 }
 
+/** Whether main would send a v1 server's stored token to a URL, and if not, why (see serverTokenRules). Never the token. */
+export type ServerTokenCheck =
+  | { ok: true }
+  | { ok: false; reason: 'none' | 'changed' | 'unbound' | 'invalid'; error: string }
+
 export interface ServerTestResult {
   ok: boolean
   error?: string

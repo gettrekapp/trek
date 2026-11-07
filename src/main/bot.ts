@@ -12,6 +12,7 @@ import {
 import { BotRunner } from '../host/bot/runner.ts'
 import { killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
 import { isConsented, recordConsent } from './botConsent'
+import { BOT_SECRET_FILES } from './botSecretFiles'
 import { botMcpAccess, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
 
 interface BoundBot {
@@ -36,9 +37,7 @@ const windowQueues = new Map<number, Promise<void>>()
 const requested = new Map<number, BotAttach>()
 let quitting = false
 
-// The consent list is here because a bot that could write to it could approve other bots.
-const secretPaths = (): string[] =>
-  ['elevenlabs.json', 'linear.json', 'server-tokens.json', 'bot-consent.json'].map((n) => join(app.getPath('userData'), n))
+const secretPaths = (): string[] => BOT_SECRET_FILES.map((n) => join(app.getPath('userData'), n))
 
 function sendView(contents: WebContents, view: BotView): void {
   if (!contents.isDestroyed()) contents.send('bot:view', view)

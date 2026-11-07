@@ -1,5 +1,6 @@
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'node:path'
 
 /**
  * Best-effort reading of a shell command for the bot's policy. It tokenises like
@@ -275,9 +276,32 @@ function scan(s: string, depth: number): ScanItem[] {
   return items
 }
 
-/** Expands a leading `~` and resolves against cwd. */
+const PARENT_STEP = /(?:^|[/\\])\.\.(?:$|[/\\])/
+
+/**
+ * Expands a leading `~` and resolves against cwd. A `..` is taken as the filesystem takes it:
+ * after a symlink, it is the parent of the link's target, not of the link.
+ */
 export function expandPath(path: string, cwd: string): string {
-  return resolve(cwd, path.replace(/^~(?=$|[/\\])/, homedir()))
+  const expanded = path.replace(/^~(?=$|[/\\])/, homedir())
+  if (!PARENT_STEP.test(expanded)) return resolve(cwd, expanded)
+  const full = isAbsolute(expanded) ? expanded : `${resolve(cwd)}${sep}${expanded}`
+  const { root } = parse(full)
+  let current = root
+  for (const part of full.slice(root.length).split(sep === '/' ? '/' : /[/\\]/)) {
+    if (part === '' || part === '.') continue
+    if (part === '..') {
+      try {
+        current = realpathSync.native(current)
+      } catch {
+        // not there (or a wildcard): taken as written
+      }
+      current = dirname(current)
+    } else {
+      current = join(current, part)
+    }
+  }
+  return current
 }
 
 const SHELL_VAR = /^\$(?:(HOME|PWD)|\{(HOME|PWD)\})(?=$|[/\\])/

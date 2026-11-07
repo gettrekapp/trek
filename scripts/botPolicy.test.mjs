@@ -541,3 +541,69 @@ test('commands too deep or too large fail closed', () => {
   assert.equal(decide(bash(`${'eval '.repeat(5)}git push`), ctx()).decision, 'ask')
   assert.equal(quickly(() => decide(bash(`cat ${'['.repeat(30000)}`), ctx()).decision), 'allow')
 })
+
+// Real files, so symlinks resolve: a userData stand-in, a link to it, and a link to one secret.
+test('secret checks see through symlinks, .., case and copies of the files', async () => {
+  const { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { BOT_SECRET_FILES } = await import('../src/main/botSecretFiles.ts')
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-policy-')))
+  try {
+    const data = join(root, 'Application Support', 'Trek')
+    mkdirSync(join(data, 'sub'), { recursive: true })
+    for (const name of ['app-server-tokens.json', 'server-tokens.json', 'mcp-7.json', 'notes.json']) writeFileSync(join(data, name), '{}')
+    const repo = join(root, 'repo')
+    mkdirSync(repo)
+    symlinkSync(data, join(repo, 'data-link'))
+    symlinkSync(join(data, 'app-server-tokens.json'), join(repo, 'tokens-link.json'))
+    symlinkSync(join(data, 'sub'), join(repo, 'sub-link'))
+    const s = { secretPaths: BOT_SECRET_FILES.map((n) => join(data, n)), cwd: repo }
+    const denied = [
+      join(data, 'app-server-tokens.json'),
+      join(data, 'app-servers.json'),
+      join(data, 'bot-consent.json'),
+      join(data, 'mcp-7.json'),
+      join(data, 'mcp-bot-12.json'),
+      join(data, 'mcp-gemini-3.json'),
+      join(data, 'server-tokens.json.4821.tmp'),
+      join(data, 'app-server-tokens.json.4821.tmp'),
+      join(data, 'app-servers.json.corrupt-1730000000000'),
+      `${data}/sub/../app-server-tokens.json`,
+      join(repo, 'data-link', 'app-server-tokens.json'),
+      join(repo, 'tokens-link.json'),
+      // `..` after a symlink is the link target's parent, as the filesystem takes it
+      `${repo}/sub-link/../server-tokens.json`,
+      'sub-link/../server-tokens.json',
+      'data-link/server-tokens.json.99.tmp'
+    ]
+    for (const path of denied) {
+      assert.equal(tool('Read', { file_path: path }, s), 'deny', path)
+      assert.equal(tool('Write', { file_path: path }, s), 'deny', path)
+    }
+    if (FOLDS_CASE) assert.equal(tool('Read', { file_path: join(data, 'APP-Server-Tokens.JSON') }, s), 'deny')
+    for (const path of [join(data, 'notes.json'), join(data, 'server-tokens.jsonx'), join(data, 'mcp-7.txt'), join(repo, 'server-tokens.json')]) {
+      assert.equal(tool('Read', { file_path: path }, s), 'allow', path)
+    }
+    assert.equal(tool('Grep', { pattern: '.', path: 'data-link' }, s), 'deny')
+    assert.equal(tool('Grep', { pattern: '.', path: 'tokens-link.json' }, s), 'deny')
+    assert.equal(tool('Grep', { pattern: '.', path: 'sub-link' }, s), 'allow')
+    expectAll('deny', [
+      'cat data-link/app-server-tokens.json', 'cat tokens-link.json', 'cat data-link/*.tmp', 'cat data-link/server-tokens.json.*',
+      'cat data-link/mcp-*.json', `cat "${data}/app-servers.json"`, 'ls data-link', 'cat sub-link/../server-tokens.json'
+    ], s)
+    expectAll('allow', ['cat data-link/notes.json', 'ls sub-link', 'cat data-link/*.png'], s)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the bot deny-list names every secret store and the v2 server list', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs')
+  const { BOT_SECRET_FILES } = await import('../src/main/botSecretFiles.ts')
+  const stores = readdirSync('src/main')
+    .filter((n) => n.endsWith('.ts'))
+    .flatMap((n) => [...readFileSync(`src/main/${n}`, 'utf8').matchAll(/createSecretStore\('([^']+)'\)/g)].map((m) => m[1]))
+  assert.ok(stores.includes('app-server-tokens.json') && stores.includes('server-tokens.json'), stores.join())
+  for (const name of [...stores, 'app-servers.json', 'bot-consent.json', 'mcp-*.json']) assert.ok(BOT_SECRET_FILES.includes(name), name)
+})

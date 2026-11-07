@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
+import { once } from 'node:events'
 
 const projectDir = process.cwd()
 const PORT = 17346
@@ -68,8 +69,13 @@ await new Promise((resolve, reject) => {
   daemon.on('exit', (code) => reject(new Error(`daemon exited early: ${code}`)))
 })
 
-const cleanup = () => {
-  daemon.kill()
+const cleanup = async () => {
+  // Wait for the daemon to go, so it never writes to a pipe this process has closed (EPIPE).
+  if (daemon.exitCode === null && daemon.signalCode === null) {
+    const exited = once(daemon, 'exit')
+    daemon.kill()
+    await Promise.race([exited, new Promise((done) => setTimeout(done, 5000))])
+  }
   rmSync(work, { recursive: true, force: true })
 }
 
@@ -197,8 +203,9 @@ try {
   const trap = createServer((sock) => { trapHits.push(1); sock.destroy() })
   await new Promise((resolve) => trap.listen(TRAP_PORT, '127.0.0.1', resolve))
   const trapUrl = `ws://127.0.0.1:${TRAP_PORT}`
-  check('hasServerToken for its own address', await win.evaluate((u) => window.api.hasServerToken('srv1', u), `ws://127.0.0.1:${PORT}`), true)
-  check('hasServerToken for another address', await win.evaluate((u) => window.api.hasServerToken('srv1', u), trapUrl), false)
+  check('hasServerToken for its own address', (await win.evaluate((u) => window.api.hasServerToken('srv1', u), `ws://127.0.0.1:${PORT}`)).ok, true)
+  const otherCheck = await win.evaluate((u) => window.api.hasServerToken('srv1', u), trapUrl)
+  check('hasServerToken for another address says why', `${otherCheck.ok}:${otherCheck.reason}`, 'false:changed')
   const movedTest = await win.evaluate(
     ({ u, serverRepo }) => window.api.testServer({ url: u, serverId: 'srv1', repoPath: serverRepo }),
     { u: trapUrl, serverRepo }
@@ -228,7 +235,7 @@ try {
 
   await app.close()
 } finally {
-  cleanup()
+  await cleanup()
 }
 
 console.log(failures.length === 0 ? 'REMOTE SMOKE PASS' : `REMOTE SMOKE FAIL: ${failures.join(', ')}`)
