@@ -16,16 +16,23 @@
 //   - Focus instead of reopening: Open on the same project from a second window focuses the
 //     first and adds no window.
 //   - Recents: a fresh empty window lists the project with a `server` chip and the server name.
-//   - Not found, through the real path: a project opened from Connect → Projects is deleted on
-//     the server; the open window says "Project not found on <server>" by itself (from the
-//     `server` topic), and again after a reload (NOT_FOUND); Pick another project goes back to
-//     the server's project list, releases the window title and leaves nothing projected.
+//   - Not found, through the real path: a project opened from Connect → Projects (in a window
+//     whose Global panel and view were left open) starts with that view reset, and is deleted on
+//     the server; the open window says "Project not found on <server>" by itself (from
+//     `topic.ended`: it never subscribes to the `server` topic), and again after a reload
+//     (NOT_FOUND); Pick another project goes back to the server's project list, releases the
+//     window title and leaves nothing projected.
 //   - Restore: quit, relaunch with the same user data; the server window comes back with its tree.
 //   - The working window (3c-2): Add Worktree creates one on the server and starts a session;
 //     typing is echoed by the fake agent; the shown pane sizes the pty while a tab that was never
 //     shown leaves another client's 150x50 alone; quit and Restart; queue a prompt and send it;
 //     set a tag and a note, and a note set by another client shows in the open panel; the Changes tab and a diff; the Global panel (the server has MCP)
 //     starts exactly one session and has no bot tab; Delete worktree removes it on the server.
+//   - 3c-3b: a tab rename sends the title it started from; removing a queued prompt sends
+//     session.dequeue; a decision asked through the server's MCP shows on the tab and in the bell,
+//     a dismiss clears it on the server, and so does typing an answer; the New session menu lists
+//     the server's agents (server.agents, asked by the window), greys out the ones not installed,
+//     and "Choose…" offers them; the Global bar names the agent the server would start.
 //   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
 //     with the reconnecting overlay and disables the commands; restarting clears all three. A note
 //     typed as the link drops is kept with no dialog and saved once it is back.
@@ -43,7 +50,7 @@
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -210,12 +217,26 @@ const launch = async () => {
       return 1
     }
   })
+  // Records each request a window sends through the relay: its window, method and params. Hello
+  // frames are not requests (and main adds the token only on the way out), so no token is kept.
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.__v2Sent = []
+    ipcMain.on('v2socket:send', (event, _socketId, text) => {
+      try {
+        const frame = JSON.parse(text)
+        if (frame.type === 'req') globalThis.__v2Sent.push({ wc: event.sender.id, method: frame.method, params: frame.params })
+      } catch {}
+    })
+  })
   const first = await app.firstWindow()
   watch(first)
   await first.waitForLoadState('domcontentloaded')
   return first
 }
 const dialogs = () => app.evaluate(() => [...globalThis.__dialogs])
+/** How many requests the windows have sent so far, and the ones since such a count. */
+const sentCount = () => app.evaluate(() => globalThis.__v2Sent.length)
+const sentSince = (n) => app.evaluate((_electron, n) => globalThis.__v2Sent.slice(n), n)
 const windowCount = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
 
 // Pages and BrowserWindows are matched through a tag the test sets on the page.
@@ -236,6 +257,15 @@ const inWindowTagged = (name, action) =>
     [name, action]
   )
 const titleOf = (name) => inWindowTagged(name, 'title')
+const webContentsIdOf = (name) =>
+  app.evaluate(async ({ BrowserWindow }, name) => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.isDestroyed()) continue
+      const t = await w.webContents.executeJavaScript('window.__smokeTag ?? null').catch(() => null)
+      if (t === name) return w.webContents.id
+    }
+    return null
+  }, name)
 const closeTagged = (name) => inWindowTagged(name, 'close')
 const focusedTag = () =>
   app.evaluate(async ({ BrowserWindow }) => {
@@ -544,17 +574,34 @@ try {
   const w3Item = await connectProjects(w3, 'Local box')
   const w3Doomed = w3Item.locator('.connect-project-list li', { hasText: 'Doomed' })
   await w3Doomed.waitFor({ timeout: 10_000 })
+  // View state left from before (as a file window leaves its Global panel open on the bot tab).
+  await w3.evaluate(() => {
+    const s = window.__store.getState()
+    s.setGlobalPanelOpen(true)
+    s.setGlobalView('bot')
+  })
+  const w3Id = await webContentsIdOf('w3')
+  const sentAtOpen = await sentCount()
   await w3Doomed.locator('button', { hasText: 'Open' }).click()
   const w3Tree = w3.locator('.server-window .sidebar')
   await w3Tree.waitFor({ timeout: 10_000 })
   check('Open from Connect makes the empty window the server window', await w3.evaluate(() => window.__store.getState().serverWindow?.projectId), doomedId)
+  check('which starts with the view it had reset', await w3.evaluate(() => {
+    const s = window.__store.getState()
+    return [s.globalPanelOpen, s.globalView]
+  }), [false, 'sessions'])
   check('and titles it', await until(() => titleOf('w3'), 'Doomed', 5000), 'Doomed')
   check('it adds no window', await windowCount(), 3)
   await sdk.request('project.delete', { projectId: doomedId })
-  // The server drops the project topic silently and announces the delete on the `server`
-  // topic, which the open window watches: it says so without a reload.
+  // The server sends topic.ended to the project's subscribers before it drops the topic: the open
+  // window says so without a reload, and without watching the `server` topic (the Connect list
+  // it was opened from let go of it).
   await w3.locator('.server-window-message h2', { hasText: 'Project not found' }).waitFor({ timeout: 10_000 })
   check('a project deleted on the server says so, live', await w3.locator('.server-window-message h2').textContent(), 'Project not found on Local box')
+  const serverTopicFrames = (await sentSince(sentAtOpen))
+    .filter((f) => f.wc === w3Id && f.method.startsWith('sub.') && f.params.topic === 'server')
+    .map((f) => f.method)
+  check('from topic.ended: the window does not follow the server topic', serverTopicFrames, ['sub.unsubscribe'])
   // A reload (as Cmd+R, or a relaunch) subscribes again and gets NOT_FOUND.
   await w3.reload()
   await w3.waitForLoadState('domcontentloaded')
@@ -685,6 +732,81 @@ try {
   await detail.locator('.terminal-pane:visible .queue-item', { hasText: 'queued one' }).click()
   check('sending it types it into the session', await until(async () => (await term(s1)).includes('GOT:queued one'), true), true)
   check('and takes it off the queue', await until(async () => worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].queue, []), [])
+  const w1Id = await webContentsIdOf('w1')
+  const sentBy = async (since, method) => (await sentSince(since)).filter((f) => f.wc === w1Id && f.method === method).map((f) => f.params)
+
+  // Removing a queued prompt sends the one the user saw there (session.dequeue, compare-and-set).
+  for (const text of ['first', 'second']) {
+    await detail.locator('.terminal-pane:visible .queue-input').fill(text)
+    await detail.locator('.terminal-pane:visible .queue-add').click()
+    await detail.locator('.terminal-pane:visible .queue-item', { hasText: text }).waitFor({ timeout: 5000 })
+  }
+  const sentAtDequeue = await sentCount()
+  await detail.locator('.terminal-pane:visible .queue-item', { hasText: 'first' }).locator('.queue-item-remove').click()
+  check('removing a queued prompt keeps the rest', await until(async () => worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].queue, ['second']), ['second'])
+  check('through session.dequeue with the prompt it saw', (await sentBy(sentAtDequeue, 'session.dequeue')).map((p) => [p.index, p.expected]), [[0, 'first']])
+  await detail.locator('.terminal-pane:visible .queue-item', { hasText: 'second' }).locator('.queue-item-remove').click()
+  await detail.locator('.terminal-pane:visible .queue-item').first().waitFor({ state: 'detached', timeout: 5000 })
+  await detail.locator('.terminal-pane:visible .queue-close').click()
+
+  // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
+  const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
+  const sentAtRename = await sentCount()
+  await detail.locator('.session-tab.active .session-tab-title').click()
+  await detail.locator('.session-tab.active .tab-title-input').fill('Renamed')
+  await detail.locator('.session-tab.active .tab-title-input').press('Enter')
+  check('a tab rename reaches the server', await until(async () => worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].title, 'Renamed'), 'Renamed')
+  check('with the title it started from', (await sentBy(sentAtRename, 'session.rename')).map((p) => [p.title, p.expected]), [['Renamed', oldTitle]])
+
+  // A decision asked through the server's MCP (the session's own trek-dev tools).
+  const mcp = JSON.parse(readFileSync(join(work, 'data', 'mcp', `${target.projectId}.json`), 'utf8')).mcpServers['trek-dev']
+  let rpcId = 1
+  const mcpRpc = async (method, params) => {
+    const res = await fetch(mcp.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...mcp.headers },
+      body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params })
+    })
+    return res.json()
+  }
+  await mcpRpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'v2-smoke', version: '0' } })
+  const askDecision = (question) => mcpRpc('tools/call', { name: 'request_decision', arguments: { terminalId: s1, question } })
+  const decisionNow = async () => worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].decision?.question ?? null
+  check('request_decision through the server MCP', (await askDecision('Ship it?')).result?.isError, false)
+  const flag = detail.locator('.session-tab.active .decision-icon')
+  await flag.waitFor({ timeout: 10_000 })
+  check('the decision shows on the session tab', await flag.getAttribute('title'), 'Needs a decision: Ship it?\nClick to dismiss')
+  check('and in the bell', await w1.locator('.notif-bell .notif-count').textContent(), '1')
+  const sentAtDismiss = await sentCount()
+  await flag.click()
+  await flag.waitFor({ state: 'detached', timeout: 10_000 })
+  check('dismissing it asks the server', (await sentBy(sentAtDismiss, 'session.dismissDecision')).map((p) => p.sessionId), [s1])
+  check('which clears it there', await decisionNow(), null)
+  // Input the server counts answers it too: the window clears nothing itself.
+  await askDecision('Really?')
+  await flag.waitFor({ timeout: 10_000 })
+  await detail.locator('.terminal-pane:visible .terminal-host').click()
+  await w1.keyboard.type('yes')
+  await w1.keyboard.press('Enter')
+  await flag.waitFor({ state: 'detached', timeout: 10_000 })
+  check('typing an answer clears it on the server', await decisionNow(), null)
+  check('and in the bell', await w1.locator('.notif-bell .notif-count').count(), 0)
+
+  // The New session menu lists the server's agents, asked by the window itself.
+  const agents = await live.request('server.agents', { projectId: target.projectId })
+  check('the window asked the server for its agents', (await sentBy(0, 'server.agents')).length > 0, true)
+  await detail.locator('.session-add-more').click()
+  const menu = w1.locator('.skill-menu')
+  await menu.waitFor({ timeout: 5000 })
+  check("Default names the server's default agent", [agents.llmDefault.provider, await menu.locator('.skill-menu-item').first().locator('.skill-menu-desc').textContent()], ['claude', 'Claude'])
+  check('the menu lists every agent the server knows, greyed out where not installed', await menu.locator('.server-agent-item').evaluateAll((items) =>
+    items.map((i) => [i.querySelector('.skill-menu-name').textContent, i.classList.contains('not-installed')])
+  ), agents.agents.map((a) => [a.label, !a.installed]))
+  check('the fake agent counts as installed', agents.agents.find((a) => a.provider === 'claude')?.installed, true)
+  await menu.locator('.skill-menu-item', { hasText: 'Choose…' }).click()
+  check("Choose… offers the server's agents", await menu.locator('.new-session-choose select').first().locator('option').allTextContents(), agents.agents.map((a) => a.label))
+  await w1.keyboard.press('Escape')
+  await menu.waitFor({ state: 'detached', timeout: 5000 })
 
   // A tag, from the chip's menu, and a note, saved as a draft with what it started from.
   await detail.locator('.chip.chip-tag').first().click()
@@ -760,6 +882,7 @@ try {
   const globals = (await projectNow()).globalSessions
   check('opening the Global panel starts one session on the server', [await globalTabs.count(), globals.length], [1, 1])
   check('a server window has no bot tab', await w1.locator('.server-window .bot-tab').count(), 0)
+  check('the Global bar names the agent the server starts there', await w1.locator('.server-window .global-title').textContent(), 'Global · Claude')
   check("the Global session runs with the server's MCP tools", await until(async () => (await term(globals[0].id)).includes('--mcp-config'), true), true)
   await w1.locator('.server-window .global-bar').click()
 
