@@ -4315,7 +4315,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1296`, `# fail 0`: the baseline 1244 at `471307b`, plus 7 (Task 0), 13 (Task 1), 4 (Task 2), 1 (Task 3: the section map; two tests changed), 1 (Task 4), 10 (Task 5), 5 (Task 7) and 11 (the review fixes: 8 in `v2SettingsWriter.test.mjs`, which ends at 21; 2 in `mainServerLinks.test.mjs`, which ends at 12; 1 in `llmSelection.test.mjs`).
+Expected: `# pass 1307`, `# fail 0`: the baseline 1244 at `471307b`, plus 7 (Task 0), 13 (Task 1), 4 (Task 2), 1 (Task 3: the section map; two tests changed), 1 (Task 4), 10 (Task 5), 5 (Task 7), 11 (the first review fixes: 8 in `v2SettingsWriter.test.mjs`; 2 in `mainServerLinks.test.mjs`; 1 in `llmSelection.test.mjs`) and 11 (the last review fixes, 15–20: 3 in `v2SettingsWriter.test.mjs`, which ends at 24; 2 in `mainServerLinks.test.mjs`, which ends at 14; 4 in `appServersRules.test.mjs`, which ends at 11; 2 in `v2relayRules.test.mjs`, which ends at 10).
 
 - [ ] **Step 2: Types and build**
 
@@ -4365,6 +4365,15 @@ From the review of Tasks 0–4 and the final review; all in, with the verificati
 12. **`snapshot()` vs `seq`**: a comment in serverLinks.ts; a reply built while a sync is queued is corrected by that sync's broadcast (higher seq).
 13. **A failed remove no longer leaves a window on "Server removed" for good.** Until the remove's write succeeds, the entry is in `removing`: main's snapshots still list it (`linkEntries`, so a status broadcast meanwhile does not drop it), and the relay refuses it only transiently (`Server being removed`, not the terminal `removed`). Back in the list or gone for good happens in one step with leaving `removing`, then the sync broadcasts.
 14. **Smoke:** w5 records every `appServers:changed` from its start (the setToken flow included) and the end checks none carried a token; the conflict check restores the window's own `webContents.send` after `__releaseHeld`.
+
+**The last review fixes**
+
+15. **Test never sends a token to another origin.** `test()` snapshots `{id, url}` before its token read; after it, `testTokenRefusal(url, getAppServer(id))` (appServersRules.ts, pure) refuses with `{status: 'error', message: 'Server changed'}` if the entry was re-pointed or removed meanwhile; the probe goes to the snapshotted URL; `shouldRetryAfterTest(result, url, now, removing)` calls `links.retry(id)` only for a `connected` result while the entry still has that URL and no remove has started. Tested, with a URL changed during the token read and a remove started during the probe. The other token-then-URL reads were checked: the relay (`v2socket:open`) and `serverLinks.apply` already compare the URL after the read; `appServerProbe` takes both as given, with no await between; `setToken` and `info` never pair a token with a URL. The v1 `servers.ts` (`server:test`, `server:connect`) takes the URL from the renderer with a token stored by id: a v1 limit, not a race, and left for the v1 removal.
+16. **A failed token clear in `remove()` puts the entry back.** The token clear and the write share one `try`; either failing re-inserts the entry (`reinsertAt`, pure: an index past the end goes at the end) before the `finally` leaves `removing` and syncs. An unknown id still has a stray token cleared and writes nothing.
+17. **The main-process decisions are pure and tested**: `withRemoving(list, removing)` (`linkEntries`), `reinsertAt`, `testTokenRefusal` and `shouldRetryAfterTest` (appServersRules.ts); the relay's `goneRefusal(removing)` (final `removed` only once written) and `relayRefusal(before, now, removing)` (re-pointed: temporary) in v2relayRules.ts, which `v2socket:open` now uses. `commitStale` is tested to lower its flag when its commit throws.
+18. **`commitStale` warns of an async `onCommit`**: it counts the writes made inside it; one that made none while a writer is live (so never in a local window) warns once. A commit that throws does not warn.
+19. **Comments**: `leave()` says a stale draft is dropped at leave, not asked about (its dialog would come after `left`, where `askConflict` answers Reload); the `whenRev` comment says a field focused during the post-timeout flash can show the conflict dialog. The writer re-checks at dialog time: a conflict queued behind another dialog asks nothing if the field holds the wanted value by then (tested). This supersedes the "no dialog follows" of item 5.
+20. **A remove drops main's link at once.** `ServerLinks.drop(id)` closes the entry's connection (no reconnect with the cached token while the remove runs) and bumps a per-entry drop count; a sync whose token reads straddle a drop leaves the entry to the next sync. `remove()` calls it first; a rolled-back remove's `finally` sync brings the link back. Tested, both.
 
 ## Notes for 3d: attention on main's connections
 

@@ -94,17 +94,30 @@ export function textCommit(base: string, value: string, draft: string): 'none' |
 }
 
 let staleCommit = false
+/** Writes made inside the current `commitStale` */
+let staleWrites = 0
+/** Writers created and not yet cleared: with none (a local window), a commit never reaches one */
+let liveWriters = 0
+let warnedNoStaleWrite = false
 
 /**
  * Runs `commit` (a text field's onCommit, which reaches `write` synchronously
  * through the store's setter) as a stale write: see `WriteOptions.stale`.
+ * One that reaches no write while a writer is live is warned of, once: an
+ * async onCommit would write after the flag is down, sending the stale draft
+ * as an ordinary edit.
  */
 export function commitStale(commit: () => void): void {
   staleCommit = true
+  staleWrites = 0
   try {
     commit()
   } finally {
     staleCommit = false
+  }
+  if (staleWrites === 0 && liveWriters > 0 && !warnedNoStaleWrite) {
+    warnedNoStaleWrite = true
+    console.warn('trek: a stale settings draft reached no write synchronously; is its onCommit async?')
   }
 }
 
@@ -114,6 +127,8 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
   const writes = new Map<string, number>()
   let asking: Promise<unknown> = Promise.resolve()
   const writeCount = (key: string): number => writes.get(key) ?? 0
+  let live = true
+  liveWriters++
 
   const send = (p: Pending, value: unknown, expected: unknown): void => {
     p.sent = value
@@ -156,8 +171,13 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
     if (!now || sameSetting(field.current(now), wanted)) return
     const count = writeCount(field.key)
     asking = asking
-      .then(() => deps.askConflict(field.label))
+      .then(() => {
+        // Queued behind another dialog: the field may hold the wanted value by now.
+        const at = deps.project()
+        return at && !sameSetting(field.current(at), wanted) ? deps.askConflict(field.label) : null
+      })
       .then((choice) => {
+        if (choice === null) return
         if (choice === 'reload') return deps.reload()
         const latest = deps.project()
         // An edit made since was built on the newer value, or is newer still: it wins.
@@ -175,6 +195,7 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
   return {
     write: (field, value, options) => {
       writes.set(field.key, writeCount(field.key) + 1)
+      if (staleCommit) staleWrites++
       if (options?.stale ?? staleCommit) return conflict(field, value)
       const p = pending.get(field.key)
       if (p) {
@@ -190,6 +211,10 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
       for (const p of pending.values()) out = p.field.apply(out, p.next ? p.next.value : p.sent)
       return out
     },
-    clear: () => pending.clear()
+    clear: () => {
+      pending.clear()
+      if (live) liveWriters--
+      live = false
+    }
   }
 }

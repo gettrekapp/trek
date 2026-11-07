@@ -344,3 +344,57 @@ test('a stale draft: Keep Mine is skipped when the field was written again, even
   await tick()
   assert.deepEqual(sends.map(({ value, expected }) => [value, expected]), [[4, 1]])
 })
+
+test('commitStale lowers its flag even when the commit throws', () => {
+  const { writer, field, sends } = setup({ settings: { sessionSystemPrompt: 'theirs' } })
+  assert.throws(() => commitStale(() => {
+    throw new Error('boom')
+  }), /boom/)
+  // The next write is an ordinary one, not a stale one.
+  writer.write(field('sessionSystemPrompt'), 'later')
+  assert.deepEqual([sends[0].value, sends[0].expected], ['later', 'theirs'])
+})
+
+test('commitStale warns once when its commit reaches no write while a writer is live (an async onCommit)', async (t) => {
+  const warn = t.mock.method(console, 'warn', () => undefined)
+  const { writer, field, sends, log } = setup({ settings: { sessionSystemPrompt: 'theirs' } })
+  commitStale(() => writer.write(field('sessionSystemPrompt'), 'theirs'))
+  assert.equal(warn.mock.callCount(), 0, 'a write happened')
+  let later
+  commitStale(() => {
+    later = Promise.resolve().then(() => writer.write(field('sessionSystemPrompt'), 'mine'))
+  })
+  commitStale(() => undefined)
+  assert.equal(warn.mock.callCount(), 1, 'warned once')
+  assert.match(String(warn.mock.calls[0].arguments[0]), /async/)
+  await later
+  // This is the bug the warning flags: the draft went as an ordinary edit.
+  assert.deepEqual([sends.length, log.filter((l) => l.startsWith('ask'))], [1, []])
+})
+
+test('a conflict queued behind another dialog asks nothing if the field holds the wanted value by then', async () => {
+  const ctx = setup({ settings: { a: 'theirs', b: 'theirs' } })
+  const { field, log } = ctx
+  let answer
+  const firstAsk = new Promise((r) => (answer = r))
+  const asked = []
+  const held = createSettingsWriter({
+    project: () => ctx.mirror.project,
+    changed: () => undefined,
+    askConflict: (label) => {
+      asked.push(label)
+      return label === 'a' ? firstAsk : Promise.resolve('reload')
+    },
+    reload: () => log.push('reload'),
+    reportEdit: () => undefined
+  })
+  held.write(field('a'), 'mine-a', { stale: true })
+  held.write(field('b'), 'mine-b', { stale: true })
+  await tick()
+  assert.deepEqual(asked, ['a'])
+  // While a's dialog is up, the server comes to hold b's draft.
+  ctx.mirror.project.settings.b = 'mine-b'
+  answer('reload')
+  await tick()
+  assert.deepEqual(asked, ['a'], "b's dialog never shows")
+})
