@@ -1,5 +1,6 @@
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
+import type { ConnectionStatus } from './client/connection'
 
 /** A workflow tag assignable to a branch's worktree, configured per project. */
 export interface WorktreeTag {
@@ -127,6 +128,30 @@ export interface AppServerInfo {
   name: string
   url: string
   hasToken: boolean
+}
+
+/**
+ * One entry of main's `appServers:changed` broadcast: the entry as the list
+ * has it, and main's own connection to it. `status` is null without a token
+ * (main does not connect). Never a token: only `hasToken`.
+ */
+export interface AppServerLink {
+  id: string
+  name: string
+  url: string
+  hasToken: boolean
+  /** main's connection's status, or null with no connection */
+  status: ConnectionStatus | null
+  message: string
+  /** From the connection's last welcome */
+  serverName?: string
+  capabilities?: string[]
+}
+
+/** `appServers:changed`, and `appServers:links`' answer. `seq` grows with each one: a window keeps the highest. */
+export interface AppServersChanged {
+  seq: number
+  servers: AppServerLink[]
 }
 
 /**
