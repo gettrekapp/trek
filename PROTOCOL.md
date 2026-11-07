@@ -836,14 +836,20 @@ replay, so the terminal can clear. A re-attach refused with `CONGESTED` is
 retried for that pty, on the connection's timers, after 250 ms, doubling to a cap
 of 5 s, up to 10 times (`onReset` does not run again: nothing was replayed); the
 next pty waits. If it is still `CONGESTED` after that, it is handled like any
-other error. If a re-attach fails with `PTY_NOT_FOUND`, the pty is dropped and
-`onExit(-1)` runs; any other error drops it and calls `onError` (without an
-`onError`, it is logged and `onExit(-1)` runs). A drop mid-pass
+other error. A re-attach that succeeds calls `onReattach(info)` after its replay,
+with the pty's current `PtyInfo` (another client may have resized it meanwhile).
+If a re-attach fails with `PTY_NOT_FOUND`, the pty is dropped and
+`onClosed('gone')` runs (without an `onClosed`, `onExit(-1)`); any other error
+drops it and calls `onError` (without an `onError`, it is logged and
+`onExit(-1)` runs). A drop mid-pass
 (`NOT_CONNECTED`), or a new welcome while a retry waits, ends the pass: the next
 welcome starts a new one. When the connection is closed (`close()`, which is also what
 `registry.update` with a new URL and `registry.remove` do), every attached pty
-gets `onExit(-1)` and the stream is emptied; an `attach()` still in flight just
-rejects with `NOT_CONNECTED`.
+gets `onClosed('closed')` (without an `onClosed`, `onExit(-1)`) and the stream is
+emptied; an `attach()` still in flight just rejects with `NOT_CONNECTED`.
+`onExit` itself only ever carries the process's own exit code when the handlers
+have an `onClosed`, so a process that exits with -1 is not mistaken for a closed
+stream.
 
 **Registry.** `ServerRegistry` holds one connection, mirror and pty stream per
 server. An entry's `id` is the client's own name for it (any string, chosen when
@@ -857,7 +863,7 @@ construct the `TopicMirror` before the `PtyStream`.
 `update(id, {url?, token?})` throws for an unknown id; a new token reconnects the
 same `RegisteredServer`, but a new URL cannot (a connection's URL is fixed), so it
 removes the entry and adds a fresh one: `get(id)` returns a new `RegisteredServer`
-and anything holding the old one is stale: its ptys get `onExit(-1)` and its
+and anything holding the old one is stale: its ptys get `onClosed('closed')` (or `onExit(-1)`) and its
 mirror listeners a `CLOSED` error, so nothing on the old object goes silent.
 `remove(id)` closes the connection the same way; its status events, including
 the final `closed`, no longer reach registry listeners.

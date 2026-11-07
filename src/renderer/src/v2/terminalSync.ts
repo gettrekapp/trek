@@ -126,16 +126,3 @@ export function attachResize(
   if (local.cols === pty.cols && local.rows === pty.rows) return {}
   return { resizeLocal: { cols: pty.cols, rows: pty.rows } }
 }
-
-/**
- * The code `PtyStream` passes to `onExit` when the stream ended the pty, not
- * the process: the connection closed for good, or a re-attach after a
- * reconnect found no such pty. The server's `pty.exit` carries the process's
- * own code.
- */
-export const STREAM_ENDED_EXIT_CODE = -1
-
-/** How an `onExit` reads: a real exit (the pty is spent), or the stream ending (it may live on). */
-export function exitKind(exitCode: number): 'exited' | 'stream-ended' {
-  return exitCode === STREAM_ENDED_EXIT_CODE ? 'stream-ended' : 'exited'
-}

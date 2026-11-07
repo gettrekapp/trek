@@ -339,3 +339,45 @@ test('close() while a CONGESTED retry waits ends the pty and leaves no timer', a
   assert.deepEqual(a.log, [['reset'], ['exit', -1]])
   assert.equal(clock.pending(), 0)
 })
+
+/** handlers() plus the stream-ended and re-attached callbacks. */
+function closingHandlers() {
+  const h = handlers()
+  return { ...h, onClosed: (reason) => h.log.push(['closed', reason]), onReattach: (i) => h.log.push(['reattached', i.cols, i.rows]) }
+}
+
+test('with onClosed, close() reports closed instead of onExit(-1)', async () => {
+  const { conn, ptys, sock } = setup()
+  const a = closingHandlers()
+  ptys.attach('p1', a)
+  sock.reply(attachReq(sock, 'p1'), info('p1'))
+  await tick()
+  conn.close()
+  assert.deepEqual(a.log, [['closed', 'closed']])
+  assert.equal(ptys.isAttached('p1'), false)
+})
+
+test('with onClosed, a re-attach that finds no such pty reports gone; a real exit keeps its code', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = closingHandlers()
+  const b = closingHandlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1', 'p2'], { handlers: { p1: a, p2: b } }))
+  next.fail(attachReq(next, 'p1'), 'PTY_NOT_FOUND', 'No such pty')
+  await tick()
+  assert.deepEqual(a.log, [['reset'], ['closed', 'gone']])
+  next.reply(attachReq(next, 'p2'), info('p2'))
+  await tick()
+  // A process whose own exit code is -1 is still an exit.
+  next.event('pty.exit', { ptyId: 'p2', exitCode: -1 })
+  assert.deepEqual(b.log, [['reset'], ['reattached', 80, 24], ['exit', -1]])
+})
+
+test('onReattach follows the replay of a successful re-attach, with the pty info', async () => {
+  const { server, clock, ptys, sock } = setup()
+  const a = closingHandlers()
+  const next = await reconnected(ptys, server, clock, sock, Object.assign(['p1'], { handlers: { p1: a } }))
+  next.event('pty.data', { ptyId: 'p1', seq: 0, data: 'again', replay: true })
+  next.reply(attachReq(next, 'p1'), { ...info('p1'), cols: 132, rows: 40 })
+  await tick()
+  assert.deepEqual(a.log, [['reset'], ['data', 'again', true], ['reattached', 132, 40]])
+})

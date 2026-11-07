@@ -16,6 +16,15 @@ export interface PtyHandlers {
    * onExit(-1).
    */
   onError?(err: Error): void
+  /**
+   * The stream ended the pty, not the process: 'closed' when the connection
+   * closed for good, 'gone' when a re-attach after a reconnect found no such
+   * pty (it ended while the link was down). Without this, both end with
+   * onExit(-1), which a process's own exit code of -1 looks the same as.
+   */
+  onClosed?(reason: 'closed' | 'gone'): void
+  /** A re-attach after a reconnect succeeded, after its replay: the pty as it is now (size included). */
+  onReattach?(info: PtyInfo): void
 }
 
 interface PtyEventPayload {
@@ -130,7 +139,8 @@ export class PtyStream {
       for (;;) {
         let err: unknown
         try {
-          await this.conn.request('pty.attach', { ptyId })
+          const info = await this.conn.request('pty.attach', { ptyId })
+          if (this.attached.get(ptyId) === h && h.onReattach) this.call(h, () => h.onReattach?.(info))
           break
         } catch (e) {
           err = e
@@ -149,7 +159,7 @@ export class PtyStream {
         }
         this.attached.delete(ptyId)
         if (err instanceof ClientError && err.code === 'PTY_NOT_FOUND') {
-          this.call(h, () => h.onExit(-1))
+          this.call(h, () => (h.onClosed ? h.onClosed('gone') : h.onExit(-1)))
         } else {
           const error = err instanceof Error ? err : new Error(String(err))
           if (h.onError) this.call(h, () => h.onError?.(error))
@@ -171,7 +181,7 @@ export class PtyStream {
     this.cancelRetryWait()
     const ended = [...this.attached].filter(([, h]) => !this.attaching.has(h))
     this.attached.clear()
-    for (const [, h] of ended) this.call(h, () => h.onExit(-1))
+    for (const [, h] of ended) this.call(h, () => (h.onClosed ? h.onClosed('closed') : h.onExit(-1)))
   }
 
   /** Resolves after `ms` on the connection's timers, or at once when cancelled. */

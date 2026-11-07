@@ -6,11 +6,9 @@ import {
   ATTACH_RETRY_MIN_MS,
   attachResize,
   attachRetryDelay,
-  exitKind,
   planTerminalSync,
   recordAttachFailure,
   shouldRetry,
-  STREAM_ENDED_EXIT_CODE,
   terminalTargets
 } from '../src/renderer/src/v2/terminalSync.ts'
 
@@ -164,12 +162,4 @@ test('attachResize: an opened terminal sends its size; one not opened takes the 
   assert.deepEqual(attachResize(true, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), { resizePty: { cols: 100, rows: 30 } })
   assert.deepEqual(attachResize(false, { cols: 80, rows: 24 }, { cols: 100, rows: 30 }), { resizeLocal: { cols: 100, rows: 30 } })
   assert.deepEqual(attachResize(false, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), {})
-})
-
-test('exitKind: -1 is the stream ending the pty; any other code is the process\'s exit', () => {
-  assert.equal(STREAM_ENDED_EXIT_CODE, -1)
-  assert.equal(exitKind(-1), 'stream-ended')
-  assert.equal(exitKind(0), 'exited')
-  assert.equal(exitKind(1), 'exited')
-  assert.equal(exitKind(137), 'exited')
 })

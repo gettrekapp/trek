@@ -36,10 +36,10 @@ import type {
   WorktreeLocator
 } from '../../shared/types'
 import type { PtyStream } from '../../shared/client/index.ts'
+import type { PtyInfo } from '../../shared/protocol'
 import type { Project } from '../../shared/model/types'
 import {
   attachResize,
-  exitKind,
   planTerminalSync,
   recordAttachFailure,
   terminalTargets,
@@ -1150,6 +1150,20 @@ function attachFailed(entry: Entry, link: V2Link, ptyId: string, err: unknown): 
   scheduleV2Sync(Math.max(0, link.failed.retryAt - Date.now()))
 }
 
+/**
+ * The sizes once an attach (or a re-attach after a reconnect) resolved: the pty
+ * keeps the size of whoever resized it last, for every client. Opened, send
+ * ours so the TUI repaints for it; not opened yet, take the pty's size instead
+ * of sending xterm's default 80x24.
+ */
+function applyAttachSize(id: string, entry: Entry, ptys: PtyStream, ptyId: string, info: PtyInfo): void {
+  const opened = entry.term.element !== undefined
+  if (opened) fitTerminal(id)
+  const step = attachResize(opened, entry.term, info)
+  if (step.resizePty) void ptys.resize(ptyId, step.resizePty.cols, step.resizePty.rows).catch(() => {})
+  if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
+}
+
 function attachV2(id: string, ptyId: string): void {
   const entry = entries.get(id)
   const link = entry?.v2
@@ -1171,23 +1185,33 @@ function attachV2(id: string, ptyId: string): void {
         }
         entry.term.write(data)
       },
-      // The process exited, or (code -1) the stream ended it: the connection
-      // closed for good, or a re-attach after a reconnect found no such pty.
+      // The process exited, with its own code (-1 included).
       onExit: (exitCode) => {
         if (!current()) return
         link.ptyId = null
-        if (exitKind(exitCode) === 'stream-ended') {
-          // Not spent: the pty may live on, and the next snapshot (or a new
-          // stream after a url change) attaches it again. Gone for real, that
-          // attach is refused with PTY_NOT_FOUND and the entry is spent then.
-          entry.term.write(dim('[connection closed]'))
-          return
-        }
         link.spent = ptyId
         entry.term.write(dim(`[process exited with code ${exitCode}]`))
       },
+      // The stream ended the pty, not the process.
+      onClosed: (reason) => {
+        if (!current()) return
+        link.ptyId = null
+        if (reason === 'gone') {
+          // It ended while the link was down; the next snapshot says how.
+          link.spent = ptyId
+          entry.term.write(dim('[process ended while disconnected]'))
+          return
+        }
+        // The connection closed for good. Not spent: the pty may live on, and
+        // a new stream (after a url change) attaches it again.
+        entry.term.write(dim('[connection closed]'))
+      },
       // A reconnect replays the scrollback again: start from a clean screen.
       onReset: () => entry.term.reset(),
+      // Re-attached after a reconnect: another client may have resized the pty meanwhile.
+      onReattach: (info) => {
+        if (current()) applyAttachSize(id, entry, ptys, ptyId, info)
+      },
       // The re-attach after a reconnect failed, or a handler threw: the pty may be alive.
       onError: (err) => {
         if (!current()) return
@@ -1201,14 +1225,7 @@ function attachV2(id: string, ptyId: string): void {
         if (!current()) return
         link.failed = null
         link.announced = null
-        // The pty keeps the size of whoever resized it last, for every client.
-        // Opened, send ours so the TUI repaints for it; not opened yet, take
-        // the pty's size instead of sending xterm's default 80x24.
-        const opened = entry.term.element !== undefined
-        if (opened) fitTerminal(id)
-        const step = attachResize(opened, entry.term, info)
-        if (step.resizePty) void ptys.resize(ptyId, step.resizePty.cols, step.resizePty.rows).catch(() => {})
-        if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
+        applyAttachSize(id, entry, ptys, ptyId, info)
       },
       (err: unknown) => {
         if (!current()) return
@@ -1227,6 +1244,22 @@ function attachV2(id: string, ptyId: string): void {
         attachFailed(entry, link, ptyId, err)
       }
     )
+}
+
+/**
+ * A server window's terminal was shown: fit it and send its size, even when
+ * xterm's size did not change (fit then sends nothing), because the pty keeps
+ * the size of whoever resized it last. A legacy entry, or one with no pty, is
+ * left alone.
+ */
+export function sendV2Size(id: string): void {
+  const entry = entries.get(id)
+  const link = entry?.v2
+  if (!entry || !link?.ptyId || !entry.term.element) return
+  const { width, height } = entry.term.element.getBoundingClientRect()
+  if (width === 0 || height === 0) return
+  entry.fit.fit()
+  void link.ptys.resize(link.ptyId, entry.term.cols, entry.term.rows).catch(() => {})
 }
 
 function detachV2(entry: Entry): void {
