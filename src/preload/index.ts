@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type {
   AppServerInfo,
+  AppServersChanged,
   V2SocketOpenResult,
   AppServerTest,
   ContainerAction,
@@ -208,7 +209,11 @@ const api = {
       ipcRenderer.invoke('appServers:save', input),
     setToken: (id: string, token: string): Promise<void> => ipcRenderer.invoke('appServers:setToken', id, token),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('appServers:remove', id),
-    test: (id: string): Promise<AppServerTest> => ipcRenderer.invoke('appServers:test', id)
+    test: (id: string): Promise<AppServerTest> => ipcRenderer.invoke('appServers:test', id),
+    /** The list with main's connection statuses (never a token); `onChanged` hears every change after it. */
+    links: (): Promise<AppServersChanged> => ipcRenderer.invoke('appServers:links'),
+    onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>
+      subscribe('appServers:changed', callback)
   },
   // v2 WebSockets relayed through main, by server entry id; main injects the token into hello.
   v2Socket: {

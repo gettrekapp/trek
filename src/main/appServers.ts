@@ -1,7 +1,9 @@
 // The app-wide trek-server (protocol v2) list: entries in userData/app-servers.json,
 // tokens in safeStorage. The renderer can set a token and ask whether one is set;
-// no IPC call ever returns one. Main reads tokens for the relay and for Test only.
-import { app, ipcMain } from 'electron'
+// no IPC call ever returns one. Main reads tokens for the relay, for Test and for
+// its own connections (serverLinks.ts), whose statuses every window hears through
+// `appServers:changed` (a snapshot with `hasToken`, never a token).
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
@@ -10,13 +12,30 @@ import { parseAppServers, shouldClearToken, validateServerInput, type AppServer 
 import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
-import type { AppServerInfo, AppServerTest } from '../shared/types'
+import { createServerLinks, type ServerLinks } from './serverLinks'
+import type { AppServerInfo, AppServersChanged, AppServerTest } from '../shared/types'
 
 const FILE_NAME = 'app-servers.json'
 
 const tokens = createSecretStore('app-server-tokens.json')
 
 let servers: AppServer[] | null = null
+/** Main's own connections, from registerAppServerHandlers on */
+let links: ServerLinks | null = null
+
+function broadcast(snapshot: AppServersChanged): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('appServers:changed', snapshot)
+  }
+}
+
+/**
+ * After every change to the list or a token: main's connections follow, and
+ * every window hears of it, before the change's own IPC reply.
+ */
+function linksFollow(): Promise<void> {
+  return links?.sync() ?? Promise.resolve()
+}
 
 function filePath(): string {
   return join(app.getPath('userData'), FILE_NAME)
@@ -142,6 +161,7 @@ async function save(input: unknown): Promise<AppServerInfo> {
   }
   // Open relay sockets still point at the old URL; the SDK reconnects to the new one.
   if (urlChanged) closeForServer(entryId, 'server address changed')
+  await linksFollow()
   return info(entry)
 }
 
@@ -149,6 +169,7 @@ async function setToken(id: unknown, token: unknown): Promise<void> {
   const server = requireKnown(id)
   if (token !== null && token !== undefined && typeof token !== 'string') throw new Error('token must be a string')
   await tokens.set(server.id, token ? token : null)
+  await linksFollow()
 }
 
 async function remove(id: unknown): Promise<void> {
@@ -157,14 +178,18 @@ async function remove(id: unknown): Promise<void> {
   const index = list.findIndex((s) => s.id === key)
   const [gone] = index >= 0 ? list.splice(index, 1) : []
   closeForServer(key, 'server removed')
-  await tokens.set(key, null)
-  if (!gone) return
   try {
-    await persist()
-  } catch (err) {
-    // Still on disk, so back in the list (without its token).
-    list.splice(Math.min(index, list.length), 0, gone)
-    throw err
+    await tokens.set(key, null)
+    if (!gone) return
+    try {
+      await persist()
+    } catch (err) {
+      // Still on disk, so back in the list (without its token).
+      list.splice(Math.min(index, list.length), 0, gone)
+      throw err
+    }
+  } finally {
+    await linksFollow()
   }
 }
 
@@ -177,7 +202,27 @@ async function test(id: unknown): Promise<AppServerTest> {
   return probeServer({ url: server.url, token, createSocket: globalSocketFactory, clientVersion: app.getVersion() })
 }
 
+/** Quit: main's connections close for good. */
+export function closeServerLinks(): void {
+  links?.close()
+}
+
 export function registerAppServerHandlers(): void {
+  links = createServerLinks({
+    entries: () => loaded().map((s) => ({ ...s })),
+    token: (id) => tokens.get(id),
+    createSocket: globalSocketFactory,
+    clientVersion: app.getVersion(),
+    changed: broadcast
+  })
+  const ready = links.sync()
+  // A token added on the server, or the server upgraded, has no event here: a window coming
+  // to the front retries the connections stuck in needs-auth or incompatible (throttled).
+  app.on('browser-window-focus', () => links?.retryStuck())
+  ipcMain.handle('appServers:links', async () => {
+    await ready
+    return links!.snapshot()
+  })
   ipcMain.handle('appServers:list', async () => Promise.all(loaded().map(info)))
   ipcMain.handle('appServers:save', (_event, input: unknown) => save(input))
   ipcMain.handle('appServers:setToken', (_event, id: unknown, token: unknown) => setToken(id, token))

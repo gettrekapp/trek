@@ -17,7 +17,7 @@ import { registerEnvironmentHandlers } from './environments'
 import { registerStackHandlers } from './stacks'
 import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
-import { registerAppServerHandlers } from './appServers'
+import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { registerV2Relay } from './v2relay'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
@@ -155,6 +155,9 @@ app.on('window-all-closed', () => {
 })
 
 let quitConfirmed = false
+
+// Main's own server connections live as long as the app (3d's notifications need them with no window open).
+app.on('will-quit', closeServerLinks)
 
 app.on('before-quit', (event) => {
   if (quitConfirmed) return
