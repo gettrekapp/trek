@@ -10,7 +10,7 @@ import {
   createBotFolder, defaultBotFolder, isDirectory, looksLikeBotFolder, readConfig, readEvents
 } from '../host/bot/memory.ts'
 import { BotRunner } from '../host/bot/runner.ts'
-import { killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
+import { botMcpConfig, killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
 import { isConsented, recordConsent } from './botConsent'
 import { BOT_SECRET_FILES } from './botSecretFiles'
 import { botMcpAccess, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
@@ -185,7 +185,7 @@ function bind(
             systemPrompt: turn.systemPrompt,
             sessionId: turn.sessionId,
             resume: turn.resume,
-            mcpConfig: access.configPath,
+            mcpConfig: botMcpConfig(access.port),
             settings: hookSettings(access.port),
             addDirs: bound.attach.repoPaths.filter((p) => existsSync(p)),
             env: { TREK_BOT_TOKEN: access.token },

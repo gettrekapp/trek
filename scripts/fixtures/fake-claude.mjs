@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Stands in for the Claude CLI in tests. The wake text picks the behaviour, or the whole prompt if it has no wake tags.
 import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const arg = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined)
@@ -25,7 +25,15 @@ if (arg('--resume') === 'bad') {
 
 emit({ type: 'system', subtype: 'init', session_id: sessionId })
 
-const mcp = () => Object.values(JSON.parse(readFileSync(arg('--mcp-config'), 'utf8')).mcpServers)[0]
+if (process.env.FAKE_CLAUDE_TOKEN_FILE) writeFileSync(process.env.FAKE_CLAUDE_TOKEN_FILE, process.env.TREK_BOT_TOKEN ?? '')
+
+/** The inline --mcp-config's one server, with ${VAR} filled in from the environment as the CLI does. */
+const mcp = () => {
+  const server = Object.values(JSON.parse(arg('--mcp-config')).mcpServers)[0]
+  const expand = (text) => text.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] ?? '')
+  const headers = Object.fromEntries(Object.entries(server.headers ?? {}).map(([key, value]) => [key, expand(value)]))
+  return { ...server, url: expand(server.url), headers }
+}
 const askPolicy = async (command) => {
   const server = mcp()
   const res = await fetch(server.url.replace('/mcp', '/bot/policy'), {

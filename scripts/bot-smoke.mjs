@@ -25,6 +25,7 @@ const log = join(root, 'args.log')
 const pidFile = join(root, 'hang.pid')
 const gate = join(root, 'gate')
 const descendantPids = join(root, 'descendants.pids')
+const tokenFile = join(root, 'bot.token')
 const project = {
   version: 3,
   name: 'Smoke',
@@ -45,7 +46,8 @@ const startElectron = async ({ restore = false, dataDir = userData, argLog = log
     FAKE_CLAUDE_LOG: argLog,
     FAKE_CLAUDE_PID_FILE: pidFile,
     FAKE_CLAUDE_PIDS: descendantPids,
-    FAKE_CLAUDE_GATE: gate
+    FAKE_CLAUDE_GATE: gate,
+    FAKE_CLAUDE_TOKEN_FILE: tokenFile
   }
   if (restore) delete env.TREK_NO_WINDOW_RESTORE
   else env.TREK_NO_WINDOW_RESTORE = '1'
@@ -191,9 +193,12 @@ try {
 
     // --- The policy route
     const session = serverIn(await win.evaluate(() => window.api.getMcpConfigPath()))
-    const botConfig = readdirSync(userData).filter((n) => /^mcp-bot-\d+\.json$/.test(n))
-    check('one bot config', botConfig.length, 1)
-    const bot = serverIn(join(userData, botConfig[0]))
+    const botServer = JSON.parse(argv[argv.indexOf('--mcp-config') + 1]).mcpServers['trek-dev']
+    check('the bot MCP config is inline, its token left to the environment', botServer.headers.Authorization, 'Bearer ${TREK_BOT_TOKEN}')
+    check('no bot MCP config file in userData', readdirSync(userData).filter((n) => n.startsWith('mcp-bot-')), [])
+    const bot = { url: botServer.url, token: readFileSync(tokenFile, 'utf8') }
+    check('the CLI got the bot token in its environment', /^[0-9a-f]{64}$/.test(bot.token), true)
+    check('the token is not in argv', argv.some((a) => a.includes(bot.token)), false)
     const call = JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(folder, 'BOT.md') } })
     check('an unknown token is refused', (await post(session, 'nonsense', call)).status, 401)
     check('a session token is refused', (await post(session, session.token, call)).status, 403)
@@ -297,6 +302,8 @@ try {
 
   // --- Second run: restart recovery, a held folder, a missing folder, closing mid-turn
   {
+    // Left by an older version, which wrote the bot's MCP config to a file.
+    writeFileSync(join(userData, 'mcp-bot-7.json'), '{}')
     const { win, errors } = await launch()
     const { say, seen, queuedOne, action } = helpers(win)
     await win.evaluate(
@@ -306,6 +313,7 @@ try {
     )
     await showBot(win)
     check('still paused after a restart', await shown(win.locator('.bot-phase', { hasText: 'Paused' })), true)
+    check("an older version's bot MCP config is removed", existsSync(join(userData, 'mcp-bot-7.json')), false)
     check('queued message survives a restart', await queuedOne(), true)
     check('earlier activity is reloaded', await seen('echo:hello'), true)
     await action('Resume').click()

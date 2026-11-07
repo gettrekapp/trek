@@ -420,15 +420,22 @@ interface McpClient {
   windowId: number
   contents: WebContents
   token: string
+  bot: boolean
+}
+
+/** A window's sessions, which read their token from a config file in userData. */
+interface SessionClient extends McpClient {
   configPath: string
   written: Promise<void>
   /** The Gemini settings file, written on first non-Claude access */
   geminiWritten?: Promise<string>
-  bot: boolean
 }
 
-const clients = new Map<number, McpClient>()
-/** Bot turns get their own token, so bot-only routes and tools stay out of other sessions' reach. */
+const clients = new Map<number, SessionClient>()
+/**
+ * Bot turns get their own token, so bot-only routes and tools stay out of other sessions' reach.
+ * No file holds it: the bot's config is inline, and the CLI reads the token from its environment.
+ */
 const botClients = new Map<number, McpClient>()
 
 function callRenderer(
@@ -582,7 +589,10 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
 let portPromise: Promise<number> | null = null
 
-/** Per-window config files don't outlive a launch; a crash can leave them behind. */
+/**
+ * Per-window config files don't outlive a launch; a crash can leave them behind. `mcp-bot-<id>.json`
+ * is no longer written (the bot's config is inline), but older versions left them.
+ */
 async function removeStaleConfigs(): Promise<void> {
   const dir = app.getPath('userData')
   const names = await readdir(dir)
@@ -686,12 +696,11 @@ async function accessFor(contents: WebContents): Promise<McpAccess> {
 }
 
 export interface BotMcpAccess {
-  configPath: string
   token: string
   port: number
 }
 
-/** Writes the bot's own --mcp-config for this window, once. */
+/** The bot's own token for this window, made once. Nothing is written: see botMcpConfig. */
 export async function botMcpAccess(contents: WebContents): Promise<BotMcpAccess> {
   portPromise ??= startMcpServer().catch((err) => {
     portPromise = null
@@ -701,30 +710,10 @@ export async function botMcpAccess(contents: WebContents): Promise<BotMcpAccess>
   // A window closed by now has been released, and nothing would release a new token.
   if (contents.isDestroyed()) throw new Error('The app window is not open')
   const existing = botClients.get(contents.id)
-  if (existing) {
-    await existing.written
-    return { configPath: existing.configPath, token: existing.token, port }
-  }
+  if (existing) return { token: existing.token, port }
   const token = randomBytes(32).toString('hex')
-  const configPath = join(app.getPath('userData'), `mcp-bot-${contents.id}.json`)
-  const config = {
-    mcpServers: {
-      [MCP_SERVER_NAME]: {
-        type: 'http',
-        url: `http://127.0.0.1:${port}/mcp`,
-        headers: { Authorization: `Bearer ${token}` }
-      }
-    }
-  }
-  const written = writeFile(configPath, JSON.stringify(config, null, 2), { mode: 0o600 })
-  botClients.set(contents.id, { windowId: contents.id, contents, token, configPath, written, bot: true })
-  try {
-    await written
-  } catch (err) {
-    botClients.delete(contents.id)
-    throw err
-  }
-  return { configPath, token, port }
+  botClients.set(contents.id, { windowId: contents.id, contents, token, bot: true })
+  return { token, port }
 }
 
 /** Reads the renderer's session state for the bot's change check. Not an MCP tool. */
@@ -745,12 +734,12 @@ export function releaseMcpWindow(windowId: number): void {
     clearTimeout(entry.timer)
     entry.resolve({ ok: false, error: 'The app window was closed' })
   }
-  for (const map of [clients, botClients]) {
-    const client = map.get(windowId)
-    if (!client) continue
-    map.delete(windowId)
-    void rm(client.configPath, { force: true }).catch((err) => console.error(err))
+  const session = clients.get(windowId)
+  if (session) {
+    clients.delete(windowId)
+    void rm(session.configPath, { force: true }).catch((err) => console.error(err))
   }
+  botClients.delete(windowId)
   void rm(join(app.getPath('userData'), `mcp-gemini-${windowId}.json`), { force: true }).catch(
     (err) => console.error(err)
   )

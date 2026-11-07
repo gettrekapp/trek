@@ -44,6 +44,25 @@ const MAX_LINE = 64 * 1024 * 1024
 const MAX_TIMEOUT_MS = 2_147_483_647
 const DEFAULT_TIMEOUT_MS = 15 * 60_000
 
+/** The name Trek's MCP server has in the bot's config: its tools are `mcp__trek-dev__<name>`. */
+export const BOT_MCP_SERVER = 'trek-dev'
+
+/**
+ * The bot's `--mcp-config`, inline. The CLI expands `${TREK_BOT_TOKEN}` from its environment, so
+ * the token is in no file and not in argv (`ps` shows the placeholder).
+ */
+export function botMcpConfig(port: number): string {
+  return JSON.stringify({
+    mcpServers: {
+      [BOT_MCP_SERVER]: {
+        type: 'http',
+        url: `http://127.0.0.1:${port}/mcp`,
+        headers: { Authorization: 'Bearer ${TREK_BOT_TOKEN}' }
+      }
+    }
+  })
+}
+
 export function claudeArgs(options: TurnOptions): string[] {
   return [
     '-p',

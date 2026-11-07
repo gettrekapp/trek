@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
+import { botMcpConfig, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
 import { startHeartbeat } from '../src/host/bot/heartbeat.ts'
 
 const FAKE = resolve('scripts/fixtures/fake-claude.mjs')
@@ -45,6 +45,15 @@ test('passes the expected flags', async () => {
   }
   assert.equal(argv[argv.indexOf('--output-format') + 1], 'stream-json')
   assert.deepEqual(argv.filter((a, i) => argv[i - 1] === '--add-dir'), ['/a', '/b'])
+})
+
+test('the MCP config is inline and leaves the token to the environment', () => {
+  const config = botMcpConfig(4711)
+  assert.deepEqual(JSON.parse(config), {
+    mcpServers: {
+      'trek-dev': { type: 'http', url: 'http://127.0.0.1:4711/mcp', headers: { Authorization: 'Bearer ${TREK_BOT_TOKEN}' } }
+    }
+  })
 })
 
 test('resume uses --resume', async () => {
