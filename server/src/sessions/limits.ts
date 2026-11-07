@@ -17,6 +17,8 @@ export const MAX_COLS = 500
 export const MAX_ROWS = 200
 /** The most session records one project holds, running or not. */
 export const MAX_SESSIONS_PER_PROJECT = 500
+/** The longest question a decision request carries. */
+export const MAX_QUESTION_LENGTH = 1000
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
@@ -35,4 +37,12 @@ export function checkQueue(queue: unknown, field: string): string[] {
   if (queue.length > MAX_QUEUE_LENGTH) throw bad(`${field} must hold at most ${MAX_QUEUE_LENGTH} prompts`)
   if (queue.some((q: string) => q.length > MAX_QUEUE_ENTRY)) throw bad(`each prompt in ${field} must be at most ${MAX_QUEUE_ENTRY} characters`)
   return [...queue] as string[]
+}
+
+/** A decision's question: a non-empty string, trimmed, at most MAX_QUESTION_LENGTH characters. */
+export function checkQuestion(value: unknown, field: string): string {
+  const question = typeof value === 'string' ? value.trim() : ''
+  if (!question) throw bad(`${field} is required`)
+  if (question.length > MAX_QUESTION_LENGTH) throw bad(`${field} must be at most ${MAX_QUESTION_LENGTH} characters`)
+  return question
 }

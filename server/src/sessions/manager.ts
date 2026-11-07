@@ -23,7 +23,7 @@ import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import type { McpAccess } from '../../../src/shared/providers/types'
 import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
-import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQueue, checkTitle } from './limits.ts'
+import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQuestion, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import {
   IDLE_MS,
@@ -321,6 +321,24 @@ export class SessionManager {
     return null
   }
 
+  /**
+   * The session's agent asks the user to decide something (MCP request_decision).
+   * A newer request replaces an open one. Runtime only, like the status.
+   */
+  requestDecision(p: any): null {
+    const question = checkQuestion(p.question, 'question')
+    this.mutate(p.projectId, p.sessionId, (s) => { s.decision = { question, at: this.now() } }, false)
+    this.publishAttention()
+    return null
+  }
+
+  /** A client dismissed the session's decision without answering it in the terminal. */
+  dismissDecision(p: any): null {
+    this.mutate(p.projectId, p.sessionId, (s) => { delete s.decision }, false)
+    this.publishAttention()
+    return null
+  }
+
   /** A client typed into the pty (pty.write). Terminal auto-replies are not input. */
   noteInput(ptyId: string, data: string): void {
     if (isTerminalReply(data)) return
@@ -382,6 +400,8 @@ export class SessionManager {
         for (const s of target.sessions) {
           delete s.ptyId
           delete s.exitCode
+          // The agent that asked is gone; its question would outlive it.
+          delete s.decision
           if (s.status !== 'complete') s.status = 'idle'
         }
       },
@@ -420,6 +440,7 @@ export class SessionManager {
           for (const s of d.globalSessions) {
             delete s.ptyId
             delete s.exitCode
+            delete s.decision
             if (s.status !== 'complete') s.status = 'idle'
           }
         },
@@ -641,8 +662,9 @@ export class SessionManager {
   }
 
   /**
-   * The user typed or sent a prompt. Leaving attention or complete for working arms
-   * the quiet timer as output does, so an agent that prints nothing still settles.
+   * The user typed or sent a prompt: it answers an open decision. Leaving attention or
+   * complete for working arms the quiet timer as output does, so an agent that prints
+   * nothing still settles.
    */
   private onUserInput(ptyId: string): void {
     if (this.stopped) return
@@ -650,13 +672,14 @@ export class SessionManager {
     const session = owner && this.sessionOf(owner)
     if (!owner || !session) return
     const status = onInput(session.status)
-    if (status === session.status) return
-    if (status === 'working') {
+    const answered = session.decision !== undefined
+    if (status === session.status && !answered) return
+    if (status !== session.status && status === 'working') {
       const entry = this.activity.get(owner.sessionId) ?? { activity: newActivity() }
       this.activity.set(owner.sessionId, entry)
       this.armQuiet(ptyId, entry)
     }
-    this.setStatus(owner, status)
+    this.setStatus(owner, status, answered)
   }
 
   private onQuietTimer(ptyId: string, entry: { activity: Activity; quiet?: ScheduledJob }): void {
@@ -690,15 +713,31 @@ export class SessionManager {
     }
   }
 
-  /** A runtime-only status change (never saved), then the attention topic. */
-  private setStatus(owner: Owner, status: SessionStatus): void {
+  /**
+   * A runtime-only status change (never saved), and with `clearDecision` the
+   * session's decision cleared in the same patch, then the attention topic.
+   * `since` moves only when the status does.
+   */
+  private setStatus(owner: Owner, status: SessionStatus, clearDecision = false): void {
+    let changed = false
     try {
-      this.deps.projects.apply(owner.projectId, (d) => { findSession(d, owner.sessionId).session.status = status }, { persist: false })
+      this.deps.projects.apply(
+        owner.projectId,
+        (d) => {
+          const s = findSession(d, owner.sessionId).session
+          changed = s.status !== status
+          s.status = status
+          if (clearDecision) delete s.decision
+        },
+        { persist: false }
+      )
     } catch {
       return
     }
-    if (status === 'attention' || status === 'done') this.since.set(owner.sessionId, this.now())
-    else this.since.delete(owner.sessionId)
+    if (changed) {
+      if (status === 'attention' || status === 'done') this.since.set(owner.sessionId, this.now())
+      else this.since.delete(owner.sessionId)
+    }
     this.publishAttention()
   }
 

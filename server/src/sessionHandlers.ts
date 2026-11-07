@@ -30,6 +30,7 @@ export const sessionHandlers: Record<string, Handler> = {
   'session.setQueue': (p, ctx) => ctx.sessions.setQueue(p),
   'session.markComplete': (p, ctx) => ctx.sessions.markComplete(p),
   'session.seen': (p, ctx) => ctx.sessions.seen(p),
+  'session.dismissDecision': (p, ctx) => ctx.sessions.dismissDecision(p),
 
   'worktree.load': (p, ctx) => ctx.sessions.loadWorktree(p),
   'worktree.unload': (p, ctx) => ctx.sessions.unloadWorktree(p),

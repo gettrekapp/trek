@@ -72,7 +72,7 @@ export function isTerminalReply(data: string): boolean {
   return true
 }
 
-/** The `attention` topic's entries: sessions in attention or done, oldest first. */
+/** The `attention` topic's entries: sessions in attention or done, or with an open decision, oldest first. */
 export function attentionEntries(
   projects: Iterable<Project>,
   since: ReadonlyMap<string, number>,
@@ -82,8 +82,18 @@ export function attentionEntries(
   const fallback = now()
   for (const project of projects) {
     const add = (worktreeId: string | null, s: Project['globalSessions'][number]): void => {
-      if (s.status !== 'attention' && s.status !== 'done') return
-      entries.push({ projectId: project.id, worktreeId, sessionId: s.id, title: s.title, status: s.status, since: since.get(s.id) ?? fallback })
+      const flagged = s.status === 'attention' || s.status === 'done'
+      if (!flagged && !s.decision) return
+      const entry: AttentionEntry = {
+        projectId: project.id,
+        worktreeId,
+        sessionId: s.id,
+        title: s.title,
+        status: s.status,
+        since: flagged ? since.get(s.id) ?? fallback : s.decision!.at
+      }
+      if (s.decision) entry.decision = s.decision
+      entries.push(entry)
     }
     for (const s of project.globalSessions) add(null, s)
     for (const r of project.repositories) for (const w of r.worktrees) for (const s of w.sessions) add(w.id, s)

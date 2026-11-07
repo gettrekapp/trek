@@ -962,6 +962,104 @@ test('attention entries are oldest first with their since; markComplete drops on
   assert.deepEqual(attention(s).map((e) => e.sessionId), [second.sessionId])
 })
 
+// ---- decisions ----
+
+const decisionOf = (s) => s.wx().sessions[0].decision
+
+test('requestDecision flags the session and lists it, unsaved; real input clears it, a terminal reply does not', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const saves = s.saves.length
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: '  Ship it?  ' })
+  assert.deepEqual(decisionOf(s), { question: 'Ship it?', at: s.clock.t })
+  assert.equal(s.saves.length, saves, 'decisions are runtime-only')
+  assert.deepEqual(attention(s).map((e) => [e.sessionId, e.status, e.since, e.decision]), [[sessionId, 'idle', s.clock.t, { question: 'Ship it?', at: s.clock.t }]])
+  s.sessions.noteInput(ptyId, '\x1b[12;1R')
+  s.sessions.noteInput(ptyId, '\x1b[I')
+  assert.equal(decisionOf(s)?.question, 'Ship it?', 'terminal replies and focus reports do not answer it')
+  s.sessions.noteInput(ptyId, 'y')
+  assert.equal(decisionOf(s), undefined)
+  assert.equal(statusOf(s), 'idle', 'input to an idle session leaves its status alone')
+  assert.deepEqual(attention(s), [])
+})
+
+test('a decision on a done session: input clears it in one patch and keeps done and its since', async (t) => {
+  const s = setup(t)
+  const { ptyId, sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('esc to interrupt')
+  fireQuiet(s)
+  const doneSince = attention(s)[0].since
+  s.clock.t += 7000
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'Which one?' })
+  assert.deepEqual(attention(s).map((e) => [e.status, e.since, e.decision.question]), [['done', doneSince, 'Which one?']])
+  const publish = t.mock.method(s.projects, 'apply')
+  s.sessions.noteInput(ptyId, '1')
+  assert.equal(publish.mock.callCount(), 1, 'one change for the decision and the status')
+  assert.equal(decisionOf(s), undefined)
+  assert.equal(statusOf(s), 'done')
+  assert.deepEqual(attention(s).map((e) => [e.status, e.since, e.decision]), [['done', doneSince, undefined]])
+})
+
+test('sendPrompt and tool keys answer a decision; seen does not; dismissDecision does; a new request replaces it', async (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const ask = (question) => s.sessions.requestDecision({ projectId: s.projectId, sessionId, question })
+  ask('one')
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'go' })
+  assert.equal(decisionOf(s), undefined, 'a prompt is the user acting')
+  ask('two')
+  s.sessions.noteUserInput(sessionId)
+  assert.equal(decisionOf(s), undefined, 'so are send_keys')
+  ask('three')
+  s.sessions.seen({ projectId: s.projectId, sessionId })
+  assert.equal(decisionOf(s)?.question, 'three', 'showing the session does not answer it')
+  s.clock.t += 10
+  ask('four')
+  assert.deepEqual(decisionOf(s), { question: 'four', at: s.clock.t })
+  s.sessions.dismissDecision({ projectId: s.projectId, sessionId })
+  assert.equal(decisionOf(s), undefined)
+  assert.deepEqual(attention(s), [])
+  assert.doesNotThrow(() => s.sessions.dismissDecision({ projectId: s.projectId, sessionId }), 'dismissing nothing is fine')
+})
+
+test('decisions: exit keeps one, unload and a Global restart clear them; bad questions and ids are refused', async (t) => {
+  const s = setup(t)
+  const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const global = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId: one.sessionId, question: 'q1' })
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId: global.sessionId, question: 'q2' })
+  s.spawned[0].exit(0)
+  assert.equal(decisionOf(s)?.question, 'q1', 'the question is still open after the agent exits')
+  s.sessions.unloadWorktree({ projectId: s.projectId, worktreeId: 'wx' })
+  assert.equal(decisionOf(s), undefined)
+  s.sessions.forgetGlobal(s.projectId)
+  assert.equal(s.project().globalSessions[0].decision, undefined)
+  assert.deepEqual(attention(s), [])
+  const bad = (p) => assert.throws(() => s.sessions.requestDecision({ projectId: s.projectId, sessionId: global.sessionId, ...p }), (e) => e.code === 'BAD_REQUEST')
+  bad({ question: '   ' })
+  bad({ question: 5 })
+  bad({})
+  bad({ question: 'x'.repeat(1001) })
+  assert.doesNotThrow(() => s.sessions.requestDecision({ projectId: s.projectId, sessionId: global.sessionId, question: 'x'.repeat(1000) }))
+  assert.throws(() => s.sessions.requestDecision({ projectId: s.projectId, sessionId: 'nope', question: 'q' }), (e) => e.code === 'NOT_FOUND')
+  assert.throws(() => s.sessions.dismissDecision({ projectId: s.projectId, sessionId: 'nope' }), (e) => e.code === 'NOT_FOUND')
+})
+
+test('v2: session.dismissDecision is wired; pty.write answers a decision', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const { ptyId, sessionId } = (await call('session.start', { projectId: s.projectId, worktreeId: 'wx', ...size })).result
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'q' })
+  assert.deepEqual(await call('session.dismissDecision', { projectId: s.projectId, sessionId }), { ok: true, result: null })
+  assert.equal(decisionOf(s), undefined)
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'q' })
+  await call('pty.attach', { ptyId })
+  await call('pty.write', { ptyId, data: '\x1b[1;1R' })
+  assert.equal(decisionOf(s)?.question, 'q')
+  await call('pty.write', { ptyId, data: 'n' })
+  assert.equal(decisionOf(s), undefined)
+})
+
 test('maxSessions refusals use CAPACITY', (t) => {
   const s = setup(t, { maxSessions: 1 })
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })

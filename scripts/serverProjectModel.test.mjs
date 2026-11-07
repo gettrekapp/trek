@@ -56,7 +56,7 @@ test('newProject assembles repositories, empty settings and no global sessions',
 })
 
 test('resetRuntime clears running state everywhere', () => {
-  const session = { id: 's', title: 't', llm: { provider: 'claude' }, queue: [], status: 'working', ptyId: 'p', exitCode: 1 }
+  const session = { id: 's', title: 't', llm: { provider: 'claude' }, queue: [], status: 'working', ptyId: 'p', exitCode: 1, decision: { question: 'q', at: 1 } }
   const p = {
     id: 'p', name: 'P', settings: {}, globalSessions: [{ ...session }],
     repositories: [{ id: 'r', name: 'R', path: '/r', branchData: {}, worktrees: [

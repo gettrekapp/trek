@@ -73,3 +73,21 @@ test('attentionEntries lists attention and done sessions, oldest first, with Glo
   ])
   assert.equal(attentionEntries(projects, new Map(), () => 999)[0].since, 999)
 })
+
+test('attentionEntries also lists a session with an open decision, in any status, since it was asked', () => {
+  const s = (id, status, decision) => ({ id, title: id, llm: { provider: 'claude' }, queue: [], status, ...(decision ? { decision } : {}) })
+  const projects = [{
+    id: 'p', name: 'P', settings: {}, globalSessions: [],
+    repositories: [{ id: 'r', name: 'R', path: '/r', branchData: {}, worktrees: [
+      { id: 'w', name: 'w', path: '/r', isMain: true, loaded: true, sessions: [
+        s('a', 'working', { question: 'Which DB?', at: 300 }),
+        s('b', 'attention', { question: 'Merge?', at: 500 }),
+        s('c', 'idle')
+      ] }
+    ] }]
+  }]
+  assert.deepEqual(attentionEntries(projects, new Map([['b', 100]]), () => 999), [
+    { projectId: 'p', worktreeId: 'w', sessionId: 'b', title: 'b', status: 'attention', since: 100, decision: { question: 'Merge?', at: 500 } },
+    { projectId: 'p', worktreeId: 'w', sessionId: 'a', title: 'a', status: 'working', since: 300, decision: { question: 'Which DB?', at: 300 } }
+  ])
+})

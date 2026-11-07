@@ -36,7 +36,9 @@ export const CAPABILITY = {
   /** The server's MCP listener is up, so sessions get the trek-dev tools (the Global panel needs them) */
   mcp: 'mcp',
   /** The server sends `topic.ended` before a topic stops (a deleted project) */
-  topicEnd: 'topicEnd'
+  topicEnd: 'topicEnd',
+  /** Sessions carry `decision` (MCP request_decision), and `session.dismissDecision` clears it */
+  decisions: 'decisions'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -163,6 +165,8 @@ export interface MethodParamsV2 {
   'session.markComplete': SessionRef & { complete: boolean }
   /** A client showed the session to the user; clears attention/done for everyone */
   'session.seen': SessionRef
+  /** Clears the session's open decision (the user dismissed it) for everyone */
+  'session.dismissDecision': SessionRef
   // Terminal stream (same shapes as v1)
   'pty.attach': { ptyId: string }
   'pty.detach': { ptyId: string }
@@ -221,6 +225,7 @@ export interface MethodResultsV2 {
   'session.setQueue': null
   'session.markComplete': null
   'session.seen': null
+  'session.dismissDecision': null
   'pty.attach': PtyInfo
   'pty.detach': null
   'pty.write': null

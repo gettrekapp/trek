@@ -33,6 +33,18 @@ export interface Session {
   ptyId?: string
   /** Set once the session's process has exited */
   exitCode?: number
+  /**
+   * The agent asked the user to decide something (MCP `request_decision`).
+   * Runtime only; cleared by input to the session or `session.dismissDecision`.
+   */
+  decision?: SessionDecision
+}
+
+export interface SessionDecision {
+  /** One-line summary of the decision needed */
+  question: string
+  /** Epoch ms when it was asked */
+  at: number
 }
 
 /** Data a project keeps per branch, so it survives the worktree being deleted and re-created. */
@@ -128,14 +140,19 @@ export interface ProjectSummary {
   name: string
 }
 
-/** A session that needs the user, as listed by the `attention` topic. */
+/**
+ * A session that needs the user, as listed by the `attention` topic: one in
+ * `attention` or `done`, or one with an open decision (in any status).
+ */
 export interface AttentionEntry {
   projectId: string
   /** null = a Global panel session */
   worktreeId: string | null
   sessionId: string
   title: string
-  status: Extract<SessionStatus, 'attention' | 'done'>
-  /** Epoch ms when the session entered this status */
+  status: SessionStatus
+  /** Epoch ms when the session entered `attention` or `done`; otherwise when its decision was asked */
   since: number
+  /** The session's open decision */
+  decision?: SessionDecision
 }

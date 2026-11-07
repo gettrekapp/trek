@@ -196,6 +196,7 @@ new optional field needs no capability: its absence says enough.
 |---|---|
 | `mcp` | The server's MCP listener is up, so its sessions get the trek-dev tools (see [MCP](#mcp-trek-dev-on-the-server)). Listed per connection, only while the listener is up |
 | `topicEnd` | The server sends `topic.ended` before a topic stops (see Subscriptions) |
+| `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 
@@ -212,7 +213,7 @@ The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 | Topic | Snapshot |
 |---|---|
 | `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) and `REPO_UNAVAILABLE` (see Worktrees below) |
-| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done` across all projects, oldest `since` first (epoch ms; see Statuses) |
+| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since, decision?}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done`, and every session with an open decision whatever its status, across all projects, oldest `since` first (epoch ms; see Statuses and Decisions) |
 | `project:<id>` | the whole `Project` tree |
 
 - `ops` are RFC 6902 JSON Patch, limited to `add`, `remove` and `replace`.
@@ -259,7 +260,7 @@ server restarts. A server without this field simply leaves it out.
 | Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
-| Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen` |
+| Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
@@ -368,7 +369,7 @@ rejects the import with `BAD_REQUEST` if any repository, worktree or session id
 is empty, contains a space, or already exists on that server, and with
 `PATH_DENIED` if any repository path is not registered or any worktree path is outside its allowlist. It also requires exactly one `isMain` worktree per repository (its path becomes the registry path), no repository listed twice, no worktree path listed twice in one repository, no non-main worktree path that is another registered repository or contains one, no worktree `branch` that starts with `-` or contains whitespace or control characters, no own `__proto__` key anywhere in the payload (settings values included), and sessions within the session limits: a `title` of at most 200 characters with no control characters, and a `queue` of at most 100 non-empty prompts of at most 100,000 characters each (the rules of `session.rename` and `session.setQueue`); otherwise `BAD_REQUEST`. It resets runtime
 fields: `status` to idle, `loaded` to false, and drops `ptyId`, `exitCode`,
-`dirty`, `ahead`, `behind`, `head` and `missing`.
+`decision`, `dirty`, `ahead`, `behind`, `head` and `missing`.
 
 Projects use registered repositories only. `project.create`, `repo.add` and
 `project.import` fail with `PATH_DENIED` for a repository path that is not in
@@ -515,7 +516,29 @@ the desktop's rules, applied to live output only; replay never changes a status.
   `session.markComplete`.
 - **The `attention` topic** is republished whenever any entry field can change: a
   status change, `session.rename`, `session.close`, `worktree.unload`, `session.seen`,
-  `session.markComplete`, and removal of a worktree, repository or project.
+  `session.markComplete`, a decision asked, answered or dismissed, and removal of a
+  worktree, repository or project.
+
+**Decisions.** An agent that stops to ask the user something calls the MCP tool
+`request_decision {terminalId, question}`. The session then carries
+`decision: {question, at}` (`at` in epoch ms), a newer request replacing an open
+one, and the `attention` topic lists it with its `decision`, whatever its status;
+an entry listed only for its decision has `since` = `at`. The decision clears for
+every client:
+
+- on input to the session, exactly what turns `attention` into `working` (a
+  `pty.write` that is not only terminal replies, `session.sendPrompt`, and the
+  MCP `send_keys`), in the same patch as that status change. Input to a session
+  in another status clears the decision and leaves the status alone;
+- with `session.dismissDecision {projectId, sessionId}` (the user dismissed it
+  without typing an answer; a session with no decision is fine);
+- when `worktree.unload` (or a repository removal, for Global sessions) ends the
+  agent that asked, and with the session on `session.close`.
+
+`session.seen` does not clear it, and an agent that exits keeps it until one of
+the above. Decisions are runtime only, like statuses: never saved on their own,
+and dropped when a project loads or is imported. `question` is trimmed and must
+be 1 to 1000 characters, else `BAD_REQUEST`.
 
 Known gaps, the same as on the desktop unless noted:
 

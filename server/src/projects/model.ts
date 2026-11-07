@@ -40,7 +40,7 @@ export function newProject(
 }
 
 function resetSession(s: Session): Session {
-  const { ptyId: _p, exitCode: _e, ...rest } = s
+  const { ptyId: _p, exitCode: _e, decision: _d, ...rest } = s
   // `complete` is the user marking a session finished, not something that was running.
   return { ...rest, status: s.status === 'complete' ? 'complete' : 'idle' }
 }
