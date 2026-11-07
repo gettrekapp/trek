@@ -213,6 +213,7 @@ try {
     check('a session token cannot request approval', await callRefused(session, 'request_approval', approvalArgs), true)
     check('a session token cannot call bot_snapshot', await callRefused(session, 'bot_snapshot', {}), true)
     check('the bot token cannot call bot_snapshot', await callRefused(bot, 'bot_snapshot', {}), true)
+    check('with no turn running, a direct call with the bot token is refused', await callRefused(bot, 'list_worktrees', {}), true)
 
     // --- The real hook command, as the CLI would run it, during a real turn
     const settings = JSON.parse(argv[argv.indexOf('--settings') + 1])
@@ -235,6 +236,11 @@ try {
     check('the hook allows a free call', runHook(bot.token, 'Read', readCall), [0, 'allow'])
     check('the hook denies an ask-tier call', runHook(bot.token, 'Bash', { command: 'git push origin smoke' }), [0, 'deny'])
     check('the hook exits 2 on a bad token', runHook('nonsense', 'Read', readCall)[0], 2)
+    check('the hook leaves Trek tools to the MCP server', runHook(bot.token, 'mcp__trek-dev__close_session', { terminalId: 'x' }), [0, 'allow'])
+    check('a free Trek tool called directly runs', await callRefused(bot, 'list_worktrees', {}), false)
+    const direct = await rpc(bot, 'tools/call', { name: 'close_session', arguments: { terminalId: 'x' } })
+    check('an ask-tier Trek tool called directly is refused', [direct.result?.isError, /Needs approval/.test(direct.result?.content?.[0]?.text)], [true, true])
+    check('send_prompt called directly is refused', await callRefused(bot, 'send_prompt', { terminalId: 'x', prompt: 'cat secrets' }), true)
     writeFileSync(gate, '')
     check('the gated turn ends', await seen('ungated'), true)
     await win.locator('.bot-phase', { hasText: 'Idle' }).waitFor({ timeout: 15000 })
@@ -262,6 +268,15 @@ try {
       await win.evaluate(() => !!window.__store.getState().decisions.__bot__),
       false
     )
+
+    // A Trek tool the policy asks about, called straight on the server, before and after approval.
+    writeFileSync(join(folder, 'POLICY.json'), JSON.stringify({ ask: ['list_session_types'] }))
+    await say('ASKTOOL')
+    check('an ask-tier call made directly is refused', await seen('tool:refused'), true)
+    await win.locator('.bot-approval button', { hasText: 'Approve' }).click()
+    check('once approved, the direct call runs', await seen('approved-tool:ran'), true)
+    check('and its approval is spent', await seen('approved-again:refused'), true)
+    rmSync(join(folder, 'POLICY.json'))
 
     await action('Pause').click()
     await action('Resume').waitFor({ timeout: 15000 })

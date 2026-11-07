@@ -36,6 +36,17 @@ const askPolicy = async (command) => {
   return (await res.json()).hookSpecificOutput.permissionDecision
 }
 
+/** Calls a Trek tool straight on the MCP server, as a shell in the bot could, and says whether it ran. */
+const callTool = async (name, args) => {
+  const server = mcp()
+  const res = await fetch(server.url, {
+    method: 'POST',
+    headers: { ...server.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })
+  })
+  return (await res.json()).result?.isError === false ? 'ran' : 'refused'
+}
+
 /** Starts a descendant holding this process's stdout, and records its pid for the test to clean up. */
 const descendant = (code, detached) => {
   const child = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'inherit', 'inherit'], detached })
@@ -80,6 +91,15 @@ if (wake.includes('HANG')) {
       }
     })
   })
+  finish()
+} else if (wake.includes('ASKTOOL')) {
+  // POLICY.json puts list_session_types in the ask tier for this.
+  say(`tool:${await callTool('list_session_types', {})}`)
+  await callTool('request_approval', { tool: 'mcp__trek-dev__list_session_types', input: {}, reason: 'smoke test' })
+  finish()
+} else if (wake.startsWith('An approval request has an answer. The user approved this exact call') && wake.includes('list_session_types')) {
+  say(`approved-tool:${await callTool('list_session_types', {})}`)
+  say(`approved-again:${await callTool('list_session_types', {})}`)
   finish()
 } else if (wake.startsWith('An approval request has an answer. The user approved this exact call')) {
   // Worded by BotRunner.wakeForTurn and wakePrompt in src/host/bot.

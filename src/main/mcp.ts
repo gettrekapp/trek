@@ -390,6 +390,8 @@ const BOT_TOOLS = [
 
 export interface BotMcpHandlers {
   policy: (windowId: number, hookInput: Record<string, unknown>) => object
+  /** The bot's policy for a call that has reached this server. Anything but `allowed` is refused. */
+  toolCall: (windowId: number, name: string, args: Record<string, unknown>) => { allowed: boolean; reason: string }
   requestApproval: (windowId: number, args: Record<string, unknown>) => string
 }
 
@@ -480,6 +482,19 @@ async function handleMessage(msg: JsonRpcMessage, client: McpClient): Promise<ob
     case 'tools/call': {
       const name = msg.params?.name
       const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
+      const known = typeof name === 'string' && [...TOOLS, ...(client.bot ? BOT_TOOLS : [])].some((t) => t.name === name)
+      if (!known) return fail(-32602, `Unknown tool: ${String(name)}`)
+      // The bot's token is in its environment, so its shell can call this server directly. The
+      // policy runs here, on every call, so that skipping the CLI's hook gains nothing.
+      if (client.bot) {
+        let gate: { allowed: boolean; reason: string }
+        try {
+          gate = botHandlers!.toolCall(client.windowId, name, args)
+        } catch (err) {
+          gate = { allowed: false, reason: String(err) }
+        }
+        if (!gate.allowed) return reply({ content: [{ type: 'text', text: gate.reason }], isError: true })
+      }
       if (client.bot && BOT_TOOLS.some((t) => t.name === name)) {
         try {
           // The runner words this: end the turn, or run the call now if it is already approved.
@@ -488,9 +503,6 @@ async function handleMessage(msg: JsonRpcMessage, client: McpClient): Promise<ob
         } catch (err) {
           return reply({ content: [{ type: 'text', text: String(err) }], isError: true })
         }
-      }
-      if (typeof name !== 'string' || !TOOLS.some((t) => t.name === name)) {
-        return fail(-32602, `Unknown tool: ${String(name)}`)
       }
       const response = await callRenderer(client, name, args)
       const text = response.ok

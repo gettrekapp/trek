@@ -294,27 +294,38 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
   }
 }
 
+const TREK_TOOL_PREFIX = 'mcp__trek-dev__'
+
+const hookAnswer = (allow: boolean, reason: string): object => ({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: allow ? 'allow' : 'deny',
+    permissionDecisionReason: reason
+  }
+})
+
 export function registerBotHandlers(): void {
   setBotMcpHandlers({
     // A throw reaches the 500 in startMcpServer, which blocks the tool, as does anything but allow here.
     policy: (windowId, hook) => {
+      const tool = String(hook.tool_name ?? '')
+      // Trek's own tools are checked once, by toolCall, when the call reaches the MCP server.
+      // Checking here as well would spend an approval before the call it was for.
+      if (tool.startsWith(TREK_TOOL_PREFIX)) return hookAnswer(true, 'Trek checks this call when it runs.')
       const bot = bots.get(windowId)
       const decision = bot
         ? bot.runner.checkTool(
-            {
-              tool: String(hook.tool_name ?? ''),
-              input: (hook.tool_input ?? {}) as Record<string, unknown>
-            },
+            { tool, input: (hook.tool_input ?? {}) as Record<string, unknown> },
             typeof hook.cwd === 'string' ? hook.cwd : undefined
           )
         : { decision: 'deny', reason: 'The bot is not running' }
-      return {
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: decision.decision === 'allow' ? 'allow' : 'deny',
-          permissionDecisionReason: decision.reason
-        }
-      }
+      return hookAnswer(decision.decision === 'allow', decision.reason)
+    },
+    toolCall: (windowId, name, args) => {
+      const bot = bots.get(windowId)
+      if (!bot) return { allowed: false, reason: 'The bot is not running' }
+      const decision = bot.runner.checkTool({ tool: `${TREK_TOOL_PREFIX}${name}`, input: args })
+      return { allowed: decision.decision === 'allow', reason: decision.reason }
     },
     requestApproval: (windowId, args) => {
       const bot = bots.get(windowId)
