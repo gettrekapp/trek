@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test scripts/*.test.mjs",
     "test:bot-sandbox-mac": "TREK_SANDBOX_APP_TEST=1 node --test scripts/botSandboxMac.test.mjs",
+    "test:bot-sandbox-linux": "node scripts/bot-sandbox-linux.mjs",
     "smoke:windows": "npm run build && node scripts/windows-smoke.mjs",
     "smoke:multi": "npm run build && node scripts/multi-repo-smoke.mjs",
     "smoke": "npm run build && node scripts/smoke.mjs",
