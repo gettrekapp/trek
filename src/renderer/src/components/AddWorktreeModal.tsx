@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { hostRepoPath, repoById, useAppStore } from '../store'
-import { createTerminal } from '../terminals'
 import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
+import { errorText } from '../v2/errors'
 import { worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, WorktreeInstance } from '../../../shared/types'
 
@@ -36,6 +36,10 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
   const project = useAppStore((s) => s.project)!
   const addWorktreeInstance = useAppStore((s) => s.addWorktreeInstance)
   const serverStatus = useAppStore((s) => s.serverStatus)
+  // A server project lists every worktree already: there are no "existing" ones to add.
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  // A server's ClientError reads "code: message" through String(); a project file keeps its text as it was.
+  const shown = (err: unknown): string => (serverWindow ? errorText(err) : String(err))
 
   // undefined = the local machine
   const [serverId, setServerId] = useState<string | undefined>(undefined)
@@ -82,7 +86,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       })
       .catch((err) => {
         if (cancelled) return
-        setError(String(err))
+        setError(shown(err))
         setLoading(false)
       })
     return () => {
@@ -90,7 +94,18 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     }
   }, [repoId, serverId, repoPath])
 
+  /**
+   * Opens the worktree with a first session. A project file gets a new
+   * instance first; a server window's mirror already lists the worktree
+   * (`create` waited for it), so it is selected and started by path.
+   */
   const addInstance = async (info: { path: string; branch?: string; name?: string }) => {
+    if (serverWindow) {
+      useAppStore.getState().selectWorktree({ path: info.path })
+      await getBackend().sessions.start({ path: info.path })
+      onClose()
+      return
+    }
     const worktree: WorktreeInstance = {
       id: crypto.randomUUID(),
       name: info.name ?? info.branch ?? baseName(info.path),
@@ -99,7 +114,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       branch: info.branch
     }
     addWorktreeInstance(repoId, worktree)
-    await createTerminal(worktree.id, worktree.path)
+    await getBackend().sessions.start({ worktreeId: worktree.id })
     onClose()
   }
 
@@ -117,7 +132,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       })
       await addInstance({ path, branch })
     } catch (err) {
-      setError(String(err))
+      setError(shown(err))
       setCreating(false)
     }
   }
@@ -151,7 +166,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       linkPr()
       await addInstance({ path, branch })
     } catch (err) {
-      setError(String(err))
+      setError(shown(err))
       setAddingPr(false)
     }
   }
@@ -188,8 +203,8 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
           <p className="muted">Loading worktrees…</p>
         ) : (
           <>
-            <h3>Existing worktrees</h3>
-            {available.length === 0 && <p className="muted">All existing worktrees are already open.</p>}
+            {!serverWindow && <h3>Existing worktrees</h3>}
+            {!serverWindow && available.length === 0 && <p className="muted">All existing worktrees are already open.</p>}
             <ul className="worktree-list">
               {available.map((w) => (
                 <li key={worktreeKey(w)}>
