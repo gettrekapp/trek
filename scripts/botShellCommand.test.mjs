@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { analyzeShell, couldMatch, expandPath, parseShell } from '../src/host/bot/shellCommand.ts'
+import { resolve } from 'node:path'
 
 const words = (command) => parseShell(command, '/c').map((s) => s.words.map((w) => w.text))
 
@@ -38,7 +39,9 @@ test('skips heredoc bodies and comments', () => {
 
 test('tracks cd through segments and subshells', () => {
   const cwds = (c, from = '/c') => parseShell(c, from).map((s) => s.cwd)
-  assert.deepEqual(cwds('cd a && b; cd ../d; e'), ['/c', '/c/a', '/c/a', '/c/d'])
+  // A `..` is kept as written, for the policy to resolve lexically and physically
+  assert.deepEqual(cwds('cd a && b; cd ../d; e'), ['/c', '/c/a', '/c/a', '/c/a/../d'])
+  assert.deepEqual(cwds('cd a && b; cd ../d; e').map((p) => resolve(p)), ['/c', '/c/a', '/c/a', '/c/d'])
   assert.deepEqual(cwds('(cd a; b); c'), ['/c', '/c/a', '/c'])
   assert.deepEqual(cwds('cd -P a; b'), ['/c', '/c/a'])
   assert.equal(parseShell('cd; a', '/c')[1].cwd, expandPath('~', '/c'))
@@ -77,7 +80,7 @@ test('analysis reports what would be destroyed as a whole', () => {
   const destroys = (c) => analyzeShell(c, '/c').destroys
   assert.deepEqual(destroys('rm -rf a b'), ['/c/a', '/c/b'])
   assert.deepEqual(destroys('mv a b c'), ['/c/a', '/c/b'])
-  assert.deepEqual(destroys('cd d && rmdir ..'), ['/c'])
+  assert.deepEqual(destroys('cd d && rmdir ..'), ['/c/d/..'])
   assert.deepEqual(destroys('chmod -R 7 a'), ['/c/7', '/c/a'])
   assert.deepEqual(destroys('chmod 7 a'), [])
   assert.deepEqual(destroys('find a -delete'), ['/c/a'])

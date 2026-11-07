@@ -23,7 +23,7 @@ export interface Word {
 export interface Segment {
   words: Word[]
   redirects: Word[]
-  /** The directory this segment runs in. */
+  /** The directory this segment runs in, absolute, any `..` kept as written. */
   cwd: string
 }
 
@@ -31,7 +31,10 @@ export interface ShellAnalysis {
   forcePush: boolean
   /** Ask-tier override keys, without the `bash:` prefix. */
   ask: string[]
-  /** Absolute paths really written. They can hold wildcards: compare with couldMatch. */
+  /**
+   * Absolute paths really written. They can hold wildcards: compare with couldMatch. A `..` is
+   * kept as written (here and below, and in a segment's cwd): resolve each with pathForms.
+   */
   writes: string[]
   /** Absolute paths removed, moved away or recursively changed as a whole. */
   destroys: string[]
@@ -277,18 +280,33 @@ function scan(s: string, depth: number): ScanItem[] {
 }
 
 const PARENT_STEP = /(?:^|[/\\])\.\.(?:$|[/\\])/
+const SEPARATORS = sep === '/' ? '/' : /[/\\]/
+
+const expandHome = (path: string): string => path.replace(/^~(?=$|[/\\])/, homedir())
+
+/** Expands a leading `~` and resolves against cwd, lexically, as the shell's `cd` and `$PWD` do: `a/link/..` is `a`. */
+export function expandPath(path: string, cwd: string): string {
+  return resolve(cwd, expandHome(path))
+}
 
 /**
- * Expands a leading `~` and resolves against cwd. A `..` is taken as the filesystem takes it:
- * after a symlink, it is the parent of the link's target, not of the link.
+ * Expands a leading `~` and makes the path absolute against cwd, keeping each `..` as written:
+ * the shell takes `link/..` lexically and open() physically, so the policy resolves it both ways
+ * (see pathForms). Without a `..` it is expandPath.
  */
-export function expandPath(path: string, cwd: string): string {
-  const expanded = path.replace(/^~(?=$|[/\\])/, homedir())
-  if (!PARENT_STEP.test(expanded)) return resolve(cwd, expanded)
-  const full = isAbsolute(expanded) ? expanded : `${resolve(cwd)}${sep}${expanded}`
+export function absolutePath(path: string, cwd: string): string {
+  const expanded = expandHome(path)
+  const full = isAbsolute(expanded) ? expanded : `${cwd}${sep}${expanded}`
+  if (!PARENT_STEP.test(full)) return resolve(full)
+  const { root } = parse(full)
+  return root + full.slice(root.length).split(SEPARATORS).filter((part) => part !== '' && part !== '.').join(sep)
+}
+
+/** `full` with each `..` taken as open() takes it: after a symlink, the parent of the link's target. */
+function physicalSteps(full: string): string {
   const { root } = parse(full)
   let current = root
-  for (const part of full.slice(root.length).split(sep === '/' ? '/' : /[/\\]/)) {
+  for (const part of full.slice(root.length).split(SEPARATORS)) {
     if (part === '' || part === '.') continue
     if (part === '..') {
       try {
@@ -304,10 +322,35 @@ export function expandPath(path: string, cwd: string): string {
   return current
 }
 
+/** Symlinks followed as far as the (absolute, `..`-free) path exists; the rest as written. */
+function realPrefix(path: string): string {
+  const tail: string[] = []
+  for (let head = path; ; head = dirname(head)) {
+    try {
+      return join(realpathSync.native(head), ...tail)
+    } catch {
+      if (dirname(head) === head) return path
+      tail.unshift(basename(head))
+    }
+  }
+}
+
+/**
+ * Every place `path` could name: lexical (expandPath), that with symlinks followed, and with each
+ * `..` taken physically and symlinks followed. A check that any form matches any form of a
+ * protected place is stronger than either way alone. Case not folded.
+ */
+export function pathForms(path: string, cwd: string): string[] {
+  const full = absolutePath(path, cwd)
+  const lexical = resolve(full)
+  return [...new Set([lexical, realPrefix(lexical), realPrefix(physicalSteps(full))])]
+}
+
 const SHELL_VAR = /^\$(?:(HOME|PWD)|\{(HOME|PWD)\})(?=$|[/\\])/
 
+/** The path a word names, absolute, with any `..` kept for pathForms. */
 function refOf(path: string, cwd: string): string {
-  return expandPath(path.replace(SHELL_VAR, (_m, a, b) => ((a ?? b) === 'HOME' ? homedir() : cwd)), cwd)
+  return absolutePath(path.replace(SHELL_VAR, (_m, a, b) => ((a ?? b) === 'HOME' ? homedir() : cwd)), cwd)
 }
 
 /** Whether a path from this module, which can hold wildcards, could be `path`. */

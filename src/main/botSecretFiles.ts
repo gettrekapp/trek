@@ -12,6 +12,9 @@ export const BOT_SECRET_FILES = [
   'app-servers.json',
   // A bot that could write the consent list could approve other bots.
   'bot-consent.json',
+  // Docker environments: each one's env vars (database passwords, API keys) for compose. The bot
+  // runs environments through Trek's tools, never this file.
+  'environments.json',
   // MCP configs: each holds a bearer token for the app's MCP server (mcp-<id>, mcp-bot-<id>, mcp-gemini-<id>).
   'mcp-*.json',
   'global-claude-mcp.json'

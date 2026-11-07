@@ -294,7 +294,7 @@ test('secret paths are denied to Read, Grep and writes', () => {
   assert.equal(tool('Read', { file_path: `${SECRET_DIR}/LINEAR.JSON` }, s), FOLDS_CASE ? 'deny' : 'allow')
 })
 
-test('Grep cannot search a directory holding secrets, Glob can list it', () => {
+test('Grep, Glob and LS cannot search or list a directory holding secrets', () => {
   const s = { secretPaths: SECRETS }
   for (const path of [SECRET_DIR, `${SECRET_DIR}/`, '/Users/me', '/', '/Users/me/Library/../Library']) {
     assert.equal(tool('Grep', { pattern: '.', path }, s), 'deny', path)
@@ -306,7 +306,10 @@ test('Grep cannot search a directory holding secrets, Glob can list it', () => {
   assert.equal(tool('Grep', { pattern: '.', path: '/repo' }, s), 'allow')
   assert.equal(tool('Grep', { pattern: '.', path: `${SECRET_DIR}/sub` }, s), 'allow')
   assert.equal(tool('Grep', { pattern: '.', path: `${SECRET_DIR}-old` }, s), 'allow')
-  assert.equal(tool('Glob', { pattern: '*.json', path: SECRET_DIR }, s), 'allow')
+  assert.equal(tool('Glob', { pattern: '*.json', path: SECRET_DIR }, s), 'deny')
+  assert.equal(tool('LS', { path: SECRET_DIR }, s), 'deny')
+  assert.equal(tool('Glob', { pattern: '*.json', path: '/repo' }, s), 'allow')
+  assert.equal(tool('LS', { path: '/repo' }, s), 'allow')
 })
 
 test('shell secret checks match resolved paths, not basenames', () => {
@@ -601,9 +604,95 @@ test('secret checks see through symlinks, .., case and copies of the files', asy
 test('the bot deny-list names every secret store and the v2 server list', async () => {
   const { readFileSync, readdirSync } = await import('node:fs')
   const { BOT_SECRET_FILES } = await import('../src/main/botSecretFiles.ts')
-  const stores = readdirSync('src/main')
-    .filter((n) => n.endsWith('.ts'))
-    .flatMap((n) => [...readFileSync(`src/main/${n}`, 'utf8').matchAll(/createSecretStore\('([^']+)'\)/g)].map((m) => m[1]))
+  const sources = readdirSync('src', { recursive: true })
+    .filter((n) => /\.(ts|tsx|mts|cts|js|mjs)$/.test(n))
+    .map((n) => [n, readFileSync(`src/${n}`, 'utf8')])
+  const stores = []
+  for (const [name, text] of sources) {
+    // Every call names its file as a literal, so this list can't miss one.
+    const calls = [...text.matchAll(/(?<!function )createSecretStore\(/g)].length
+    const literal = [...text.matchAll(/(?<!function )createSecretStore\(\s*[`'"]([^`'"]+)/g)].map((m) => m[1])
+    assert.equal(literal.length, calls, `${name}: a createSecretStore( call without a literal file name`)
+    stores.push(...literal)
+  }
   assert.ok(stores.includes('app-server-tokens.json') && stores.includes('server-tokens.json'), stores.join())
-  for (const name of [...stores, 'app-servers.json', 'bot-consent.json', 'mcp-*.json']) assert.ok(BOT_SECRET_FILES.includes(name), name)
+  for (const name of [...stores, 'app-servers.json', 'bot-consent.json', 'mcp-*.json', 'environments.json']) {
+    assert.ok(BOT_SECRET_FILES.includes(name), name)
+  }
+})
+
+// Nothing here is realpath'd: the bot folder and userData sit under a symlinked parent, as /tmp
+// is on macOS. A `..` is taken lexically by the shell's cd and physically by open(), so each
+// check must hold both ways.
+test('protected and secret checks hold for paths under a symlinked parent, both ways', async () => {
+  const { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { BOT_SECRET_FILES } = await import('../src/main/botSecretFiles.ts')
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-policy-link-')))
+  try {
+    const real = join(root, 'real')
+    mkdirSync(join(real, 'ws', 'b.trekbot', 'knowledge'), { recursive: true })
+    mkdirSync(join(real, 'ws', 'src'), { recursive: true })
+    mkdirSync(join(real, 'data'), { recursive: true })
+    mkdirSync(join(root, 'far', 'deep'), { recursive: true })
+    writeFileSync(join(real, 'ws', 'src', 'a.txt'), 'a')
+    for (const name of ['server-tokens.json', 'mcp-bot-3.json', 'mcp-gemini-4.json', 'notes.json']) writeFileSync(join(real, 'data', name), '{}')
+    symlinkSync(real, join(root, 'link'))
+    // `hop/..` is `link` as the shell reads it, but `far` as open() does.
+    symlinkSync(join(root, 'far', 'deep'), join(real, 'hop'))
+    const ws = join(root, 'link', 'ws')
+    const folder = join(ws, 'b.trekbot')
+    const data = join(root, 'link', 'data')
+    const viaHop = `${root}/link/hop/../data`
+    const secretPaths = BOT_SECRET_FILES.map((n) => join(data, n))
+    const inWs = { folder, cwd: ws, secretPaths }
+    const inBot = { folder, secretPaths }
+
+    // The bot can't change its own files through a `..` under the link.
+    assert.equal(tool('Write', { file_path: 'knowledge/../POLICY.json', content: '' }, inBot), 'deny')
+    assert.equal(tool('Write', { file_path: 'b.trekbot/knowledge/../BOT.md', content: '' }, inWs), 'deny')
+    assert.equal(tool('Edit', { file_path: `${folder}/knowledge/../config.json` }, inBot), 'deny')
+    expectAll('deny', ['echo x > knowledge/../POLICY.json', `echo x > ${folder}/knowledge/../POLICY.json`, 'cp /dev/null knowledge/../BOT.md', 'cd knowledge && echo x > ../state/a'], inBot)
+    expectAll('deny', ['echo x > b.trekbot/knowledge/../POLICY.json', 'cd b.trekbot/knowledge/.. && rm BOT.md'], inWs)
+
+    // Nor reach a secret through `<link>/..`, lexically.
+    for (const file of [`${viaHop}/server-tokens.json`, `${viaHop}/mcp-bot-3.json`]) {
+      assert.equal(tool('Read', { file_path: file }, inWs), 'deny', file)
+      assert.equal(tool('Write', { file_path: file }, inWs), 'deny', file)
+    }
+    for (const name of ['Grep', 'Glob', 'LS']) assert.equal(tool(name, { pattern: '*', path: viaHop }, inWs), 'deny', name)
+    expectAll('deny', [
+      `cat ${viaHop}/server-tokens.json`, `cd ${viaHop} && cat server-tokens.json`, `cd ${root}/link/hop/.. && cat data/server-tokens.json`,
+      `cd ${root}/link/hop && cat ../data/server-tokens.json`, `ls ${viaHop}`
+    ], inWs)
+    // Nor through the data dir's own path, written either way.
+    for (const dir of [data, join(real, 'data')]) {
+      assert.equal(tool('Read', { file_path: join(dir, 'server-tokens.json') }, inWs), 'deny', dir)
+      expectAll('deny', [`cat ${dir}/server-tokens.json`], inWs)
+    }
+
+    // Globs are tested against the files that are there, and samples of those that aren't yet.
+    expectAll('deny', [`cat ${data}/mcp-b*`, `cat ${data}/mcp-g*`, `cat ${data}/mcp-gemini-*`, `cat ${data}/mcp-?ot-*`, `cat ${data}/server-tokens.json.4*.tmp`], inWs)
+    rmSync(join(real, 'data', 'mcp-bot-3.json'))
+    expectAll('deny', [`cat ${data}/mcp-b*`], inWs)
+    expectAll('allow', [`cat ${data}/notes*`, `cat ${data}/*.txt`], inWs)
+
+    // A hard link to a secret is the secret.
+    linkSync(join(real, 'data', 'server-tokens.json'), join(real, 'ws', 'innocent.json'))
+    assert.equal(tool('Read', { file_path: 'innocent.json' }, inWs), 'deny')
+    assert.equal(tool('Grep', { pattern: '.', path: 'innocent.json' }, inWs), 'deny')
+    expectAll('deny', ['cat innocent.json'], inWs)
+
+    // A `..` that stays inside the workspace is still fine.
+    assert.equal(tool('Read', { file_path: 'src/../src/a.txt' }, inWs), 'allow')
+    assert.equal(tool('Read', { file_path: `${ws}/b.trekbot/../src/a.txt` }, inWs), 'allow')
+    assert.equal(tool('Grep', { pattern: '.', path: 'src/..' }, inWs), 'allow')
+    assert.equal(tool('Write', { file_path: 'knowledge/../MEMORY.md', content: '' }, inBot), 'allow')
+    assert.equal(tool('Write', { file_path: 'journal/../knowledge/x.md', content: '' }, inBot), 'allow')
+    assert.equal(tool('Write', { file_path: '../src/../b.trekbot/HEARTBEAT.md', content: '' }, inBot), 'allow')
+    expectAll('allow', ['cat src/../src/a.txt', 'cd src/.. && cat src/a.txt', 'echo x > b.trekbot/knowledge/../MEMORY.md', 'cat b.trekbot/knowledge/../POLICY.json'], inWs)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
