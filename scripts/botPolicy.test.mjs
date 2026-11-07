@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
-import { decide, approvalMatches } from '../src/host/bot/policy.ts'
+import { ALWAYS_ASK_TOOLS, decide, approvalMatches } from '../src/host/bot/policy.ts'
 
 const ctx = (extra = {}) => ({
   folder: '/p/My.trekbot',
@@ -15,7 +15,7 @@ const trek = (name) => `mcp__trek-dev__${name}`
 const bash = (command) => ({ tool: 'Bash', input: { command } })
 
 test('free Trek tools are allowed', () => {
-  for (const name of ['list_worktrees', 'enqueue_prompt', 'create_worktree', 'start_stack', 'set_worktree_note', 'request_approval']) {
+  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval']) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'allow', name)
   }
 })
@@ -74,15 +74,17 @@ test('reads outside secrets are allowed', () => {
 })
 
 test('overrides move items between free and ask', () => {
-  const overrides = { free: ['close_session', 'bash:git push'], ask: ['start_stack'] }
+  const overrides = { free: ['close_session', 'bash:git push'], ask: ['stop_stack'] }
   assert.equal(decide({ tool: trek('close_session'), input: {} }, ctx({ overrides })).decision, 'allow')
-  assert.equal(decide({ tool: trek('start_stack'), input: {} }, ctx({ overrides })).decision, 'ask')
+  assert.equal(decide({ tool: trek('stop_stack'), input: {} }, ctx({ overrides })).decision, 'ask')
   assert.equal(decide(bash('git push origin x'), ctx({ overrides })).decision, 'allow')
 })
 
-test('delegating to a worktree session always needs approval, whatever the overrides say', () => {
-  const overrides = { free: ['start_session', 'send_prompt', 'send_keys'] }
-  for (const name of ['start_session', 'send_prompt', 'send_keys']) {
+test('anything that runs outside the sandbox always needs approval, whatever the overrides say', () => {
+  const names = ['start_session', 'send_prompt', 'send_keys', 'start_stack', 'create_worktree', 'load_worktree', 'save_session_type', 'delete_session_type']
+  assert.deepEqual([...ALWAYS_ASK_TOOLS].sort(), [...names].sort())
+  const overrides = { free: names }
+  for (const name of names) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'ask', name)
     assert.equal(decide({ tool: trek(name), input: {} }, ctx({ overrides })).decision, 'ask', `${name} with a free override`)
   }
@@ -349,8 +351,8 @@ test('shell secret checks deny the path, its directory and globs that reach it',
 test('malformed overrides are ignored', () => {
   const write = { tool: 'Write', input: { file_path: '/repo/a' } }
   const close = { tool: trek('close_session'), input: {} }
-  const start = { tool: trek('start_stack'), input: {} }
-  for (const overrides of [{ free: 'Write' }, { free: 'Write Edit' }, { free: 5 }, { free: true }, { free: {} }, { free: null }, { free: [1, null] }, { ask: 5 }, { ask: {} }, { ask: null }, { ask: 'start_stack' }, [], 'x', 5, null, undefined]) {
+  const start = { tool: trek('stop_stack'), input: {} }
+  for (const overrides of [{ free: 'Write' }, { free: 'Write Edit' }, { free: 5 }, { free: true }, { free: {} }, { free: null }, { free: [1, null] }, { ask: 5 }, { ask: {} }, { ask: null }, { ask: 'stop_stack' }, [], 'x', 5, null, undefined]) {
     const label = JSON.stringify(overrides)
     const c = ctx({ overrides })
     assert.equal(decide(write, c).decision, 'ask', label)
@@ -533,7 +535,8 @@ const quickly = (fn) => {
   } catch (error) {
     result = error
   }
-  assert.ok(performance.now() - started < 2000, 'took over 2 seconds')
+  // A loose backstop only: the work bound is checked in botShellCommand.test.mjs, by steps.
+  assert.ok(performance.now() - started < 10_000, 'took over 10 seconds')
   return result
 }
 
@@ -554,6 +557,7 @@ test('commands too deep or too large fail closed', () => {
   rejected(`${'"$('.repeat(20000)}`)
   rejected('['.repeat(100000))
   rejected('cd a;'.repeat(5000))
+  rejected('cd a;'.repeat(1999))
   rejected(`echo ${'a'.repeat(65 * 1024)}`)
   rejected('a;'.repeat(2001))
   assert.equal(decide(bash('a;'.repeat(1000)), ctx()).decision, 'allow')
@@ -690,6 +694,8 @@ test('protected and secret checks hold for paths under a symlinked parent, both 
 
     // Globs are tested against the files that are there, and samples of those that aren't yet.
     expectAll('deny', [`cat ${data}/mcp-b*`, `cat ${data}/mcp-g*`, `cat ${data}/mcp-gemini-*`, `cat ${data}/mcp-?ot-*`, `cat ${data}/server-tokens.json.4*.tmp`], inWs)
+    // No Codex headers file is there yet: only the samples catch these.
+    expectAll('deny', [`cat ${data}/mcp-c*`, `cat ${data}/mcp-codex-*`, `cat ${data}/mcp-co?ex-1.json`], inWs)
     rmSync(join(real, 'data', 'mcp-bot-3.json'))
     expectAll('deny', [`cat ${data}/mcp-b*`], inWs)
     expectAll('allow', [`cat ${data}/notes*`, `cat ${data}/*.txt`], inWs)

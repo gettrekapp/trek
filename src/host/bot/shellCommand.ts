@@ -48,9 +48,45 @@ type ScanItem = RawSegment | '(' | ')'
 const MAX_NESTING = 8
 const MAX_COMMAND_LENGTH = 64 * 1024
 const MAX_SEGMENTS = 2000
+/** A `cd` deeper than this (characters, or path components) is refused rather than tracked. */
+const MAX_CWD_LENGTH = 4096
+const MAX_CWD_DEPTH = 64
+/** No path the policy resolves may be deeper: resolving one costs more than its depth. */
+const MAX_PATH_DEPTH = 256
+/**
+ * The work one analysis may do, in steps: a character scanned, a segment, a path component of
+ * every path it returns (the policy resolves each of those against the filesystem, at a cost that
+ * grows with its depth). Ordinary commands take a few thousand.
+ */
+export const SHELL_STEP_LIMIT = 50_000
+
+const NESTED = 'Shell command is too deeply nested to analyse.'
+const TOO_COMPLEX = 'Shell command is too complex to analyse.'
+
+/** Work done so far by one analysis: see SHELL_STEP_LIMIT. Pass one in to read `steps` afterwards. */
+export interface ShellBudget {
+  steps: number
+  segments: number
+  limit: number
+}
+
+export const shellBudget = (limit = SHELL_STEP_LIMIT): ShellBudget => ({ steps: 0, segments: 0, limit })
+
+/** Refuses work that would take the analysis past its limit, so `steps` never exceeds it. */
+function spend(budget: ShellBudget, steps: number): void {
+  if (budget.steps + steps > budget.limit) throw new Error(TOO_COMPLEX)
+  budget.steps += steps
+}
+
+/** Path components, roughly: what resolving a path costs. */
+const componentsOf = (path: string): number => {
+  let n = 1
+  for (let i = 0; i < path.length; i++) if (path[i] === '/' || path[i] === '\\') n++
+  return n
+}
 
 function checkNesting(depth: number): void {
-  if (depth > MAX_NESTING) throw new Error('Shell command is too deeply nested to analyse.')
+  if (depth > MAX_NESTING) throw new Error(NESTED)
 }
 
 /** Skips a heredoc body. `i` is the newline before it; returns the newline after its tag. */
@@ -147,8 +183,9 @@ function substitutionEnd(s: string, start: number, depth: number): number {
 
 const BRACKET = /\[[^\s\]]{1,256}\]/y
 
-function scan(s: string, depth: number): ScanItem[] {
+function scan(s: string, depth: number, budget: ShellBudget): ScanItem[] {
   checkNesting(depth)
+  spend(budget, s.length)
   const items: ScanItem[] = []
   const substitutions: ScanItem[] = []
   let seg: RawSegment = { words: [], redirects: [] }
@@ -180,7 +217,7 @@ function scan(s: string, depth: number): ScanItem[] {
   /** Queues a nested command to run before this segment, and stands in for its output. */
   const substitute = (body: string): void => {
     substitutions.push('(')
-    for (const item of scan(body, depth + 1)) substitutions.push(item)
+    for (const item of scan(body, depth + 1, budget)) substitutions.push(item)
     substitutions.push(')')
     add('$()')
   }
@@ -348,9 +385,22 @@ export function pathForms(path: string, cwd: string): string[] {
 
 const SHELL_VAR = /^\$(?:(HOME|PWD)|\{(HOME|PWD)\})(?=$|[/\\])/
 
-/** The path a word names, absolute, with any `..` kept for pathForms. */
-function refOf(path: string, cwd: string): string {
-  return absolutePath(path.replace(SHELL_VAR, (_m, a, b) => ((a ?? b) === 'HOME' ? homedir() : cwd)), cwd)
+/** The path a word names, absolute, with any `..` kept for pathForms. Charged to `budget` when given. */
+function refOf(path: string, cwd: string, budget?: ShellBudget): string {
+  const ref = absolutePath(path.replace(SHELL_VAR, (_m, a, b) => ((a ?? b) === 'HOME' ? homedir() : cwd)), cwd)
+  if (budget) {
+    const depth = componentsOf(ref)
+    if (depth > MAX_PATH_DEPTH) throw new Error(NESTED)
+    spend(budget, depth)
+  }
+  return ref
+}
+
+/** The directory a `cd` moves to. Too deep a one is refused: every later path would carry it. */
+function cdTarget(path: string, cwd: string, budget: ShellBudget): string {
+  const next = refOf(path, cwd, budget)
+  if (next.length > MAX_CWD_LENGTH || componentsOf(next) > MAX_CWD_DEPTH) throw new Error(NESTED)
+  return next
 }
 
 /** Whether a path from this module, which can hold wildcards, could be `path`. */
@@ -406,20 +456,26 @@ function innerScript(name: string, args: Word[]): string | null {
   return flag < 0 ? null : (args[flag + 1]?.text ?? null)
 }
 
-export function parseShell(command: string, cwd: string, depth = 0): Segment[] {
+/**
+ * The command's segments, with the inner scripts of `sh -c` and `eval`. Segments are counted
+ * across that recursion, and the whole parse is charged to `budget`: past either limit it throws.
+ */
+export function parseShell(command: string, cwd: string, depth = 0, budget: ShellBudget = shellBudget()): Segment[] {
   const out: Segment[] = []
   const subshells: string[] = []
-  for (const item of scan(command, depth)) {
+  for (const item of scan(command, depth, budget)) {
     if (item === '(') {
       subshells.push(cwd)
     } else if (item === ')') {
       cwd = subshells.pop() ?? cwd
     } else {
+      if (++budget.segments > MAX_SEGMENTS) throw new Error('Shell command has too many parts to analyse.')
+      spend(budget, 1)
       out.push({ ...item, cwd })
       const { name, args } = commandOf(item.words)
       const script = innerScript(name, args)
-      if (script !== null) out.push(...parseShell(script, cwd, depth + 1))
-      if (name === 'cd') cwd = refOf(positional(args)[0]?.text ?? '~', cwd)
+      if (script !== null) out.push(...parseShell(script, cwd, depth + 1, budget))
+      if (name === 'cd') cwd = cdTarget(positional(args)[0]?.text ?? '~', cwd, budget)
     }
   }
   return out
@@ -436,10 +492,10 @@ function positional(args: Word[]): Word[] {
 const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env'])
 
 /** The git subcommand and arguments past its global options. `-C` moves the directory. */
-function gitCall(args: Word[], cwd: string): { sub: string; args: Word[]; cwd: string } {
+function gitCall(args: Word[], cwd: string, budget: ShellBudget): { sub: string; args: Word[]; cwd: string } {
   let i = 0
   while (args[i]?.text.startsWith('-')) {
-    if (args[i].text === '-C' && args[i + 1]) cwd = refOf(args[i + 1].text, cwd)
+    if (args[i].text === '-C' && args[i + 1]) cwd = cdTarget(args[i + 1].text, cwd, budget)
     i += GIT_VALUE_OPTIONS.has(args[i].text) ? 2 : 1
   }
   return { sub: args[i]?.text ?? '', args: args.slice(i + 1), cwd }
@@ -561,37 +617,40 @@ function isFindDelete(args: Word[]): boolean {
   )
 }
 
-function findRoots(args: Word[], cwd: string): string[] {
+function findRoots(args: Word[], cwd: string, budget: ShellBudget): string[] {
   const first = args.findIndex((a) => /^[-(!]/.test(a.text))
-  const roots = (first < 0 ? args : args.slice(0, first)).map((a) => refOf(a.glob, cwd))
+  const roots = (first < 0 ? args : args.slice(0, first)).map((a) => refOf(a.glob, cwd, budget))
   return roots.length ? roots : [cwd]
 }
 
-export function analyzeShell(command: string, cwd: string): ShellAnalysis {
+/**
+ * What the policy needs to know about a command. Throws (and the policy denies) for a command too
+ * long, too deep or too much work to analyse: see SHELL_STEP_LIMIT. `budget.steps` is the work done.
+ */
+export function analyzeShell(command: string, cwd: string, budget: ShellBudget = shellBudget()): ShellAnalysis {
   if (command.length > MAX_COMMAND_LENGTH) throw new Error('Shell command is too long to analyse.')
-  const segments = parseShell(command, cwd)
-  if (segments.length > MAX_SEGMENTS) throw new Error('Shell command has too many parts to analyse.')
+  const segments = parseShell(command, cwd, 0, budget)
   const result: ShellAnalysis = { forcePush: false, ask: [], writes: [], destroys: [], paths: [] }
   for (const seg of segments) {
     const { name, args } = commandOf(seg.words)
-    const refs = (words: Word[], from = seg.cwd): string[] => words.map((w) => refOf(w.glob, from))
+    const refs = (words: Word[], from = seg.cwd): string[] => words.map((w) => refOf(w.glob, from, budget))
     result.writes.push(...refs(seg.redirects), ...refs(writtenWords(name, args)))
     result.destroys.push(...refs(destroyedWords(name, args)))
     for (const word of [...seg.words, ...seg.redirects]) {
       if (!word.text) continue
-      result.paths.push(refOf(word.glob, seg.cwd))
+      result.paths.push(refOf(word.glob, seg.cwd, budget))
       const value = word.glob.replace(/^[^=]*=|^@/, '')
-      if (value && value !== word.glob) result.paths.push(refOf(value, seg.cwd))
+      if (value && value !== word.glob) result.paths.push(refOf(value, seg.cwd, budget))
     }
     if (name === 'git') {
-      const git = gitCall(args, seg.cwd)
+      const git = gitCall(args, seg.cwd, budget)
       if (git.sub === 'push' && isForcePush(git.args)) result.forcePush = true
       if (GIT_WRITES.has(git.sub)) result.writes.push(...refs(positional(git.args), git.cwd))
       result.ask.push(...gitAskKeys(git.sub, git.args))
     } else if (name === 'gh') {
       result.ask.push(...ghAskKeys(args))
     } else if (name === 'find' && isFindDelete(args)) {
-      const roots = findRoots(args, seg.cwd)
+      const roots = findRoots(args, seg.cwd, budget)
       result.writes.push(...roots)
       result.destroys.push(...roots)
     }

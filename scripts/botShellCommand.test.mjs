@@ -1,7 +1,7 @@
 // scripts/botShellCommand.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { analyzeShell, couldMatch, expandPath, parseShell } from '../src/host/bot/shellCommand.ts'
+import { analyzeShell, couldMatch, expandPath, parseShell, shellBudget, SHELL_STEP_LIMIT } from '../src/host/bot/shellCommand.ts'
 import { resolve } from 'node:path'
 
 const words = (command) => parseShell(command, '/c').map((s) => s.words.map((w) => w.text))
@@ -110,7 +110,9 @@ test('a run of wildcards collapses', () => {
 })
 
 test('nesting is limited', () => {
-  assert.throws(() => parseShell(`${'eval '.repeat(20000)}ls`, '/c'), /nested/)
+  // 100 KB of evals is past the step budget before it is past the nesting limit.
+  assert.throws(() => parseShell(`${'eval '.repeat(20000)}ls`, '/c'), /nested|too complex/)
+  assert.throws(() => parseShell(`${'eval '.repeat(20)}ls`, '/c'), /nested/)
   assert.throws(() => parseShell(`${'$('.repeat(20)}ls`, '/c'), /nested/)
   assert.equal(parseShell(`${'eval '.repeat(5)}ls`, '/c').length, 6)
 })
@@ -119,4 +121,60 @@ test('analysis rejects oversized commands', () => {
   assert.throws(() => analyzeShell('a'.repeat(64 * 1024 + 1), '/c'), /too long/)
   assert.throws(() => analyzeShell('a;'.repeat(2001), '/c'), /too many/)
   assert.doesNotThrow(() => analyzeShell('a;'.repeat(2000), '/c'))
+})
+
+/** Analyses `command` and returns [the error message or 'ok', the steps it took]. */
+const work = (command, cwd = '/c') => {
+  const budget = shellBudget()
+  try {
+    analyzeShell(command, cwd, budget)
+    return ['ok', budget.steps]
+  } catch (err) {
+    return [err.message, budget.steps]
+  }
+}
+
+test('analysis is bounded by work, not time: each rejection stops within the step limit', () => {
+  const rejected = [
+    // Each cd deepened cwd, and every later path cost its depth: 73 s on the main thread before.
+    ['cd a;'.repeat(1999), /too deeply nested/],
+    ['cd a;'.repeat(5000), /too deeply nested/],
+    [`cd ${'a/'.repeat(70)}`, /too deeply nested/],
+    [`cd ${'a'.repeat(5000)}`, /too deeply nested/],
+    [`git -C ${'a/'.repeat(70)} status`, /too deeply nested/],
+    [`cat ${'/a'.repeat(300)}`, /too deeply nested/],
+    // Segments are counted across sh -c and eval, during the parse.
+    [`sh -c '${'a;'.repeat(1500)}'; ${'b;'.repeat(600)}`, /too many parts/],
+    [`eval '${'a;'.repeat(2001)}'`, /too many parts/],
+    // Many deep paths: within every other limit, but too much to resolve.
+    [`cd ${'a/'.repeat(58)}; ${'x '.repeat(30000)}`, /too complex/],
+    [`cat ${`${'/a'.repeat(250)} `.repeat(120)}`, /too complex/]
+  ]
+  for (const [command, message] of rejected) {
+    const [result, steps] = work(command)
+    assert.match(result, message, command.slice(0, 40))
+    assert.ok(steps <= SHELL_STEP_LIMIT, `${command.slice(0, 40)}: ${steps} steps`)
+  }
+})
+
+test('ordinary commands take a small part of the budget', () => {
+  for (const command of [
+    'git status',
+    'cd /Users/me/proj && git status && npm test 2>&1 | tail -5; for f in src/*.ts; do grep -n foo "$f"; done',
+    'a;'.repeat(1000),
+    `cd ${'a/'.repeat(50)} && ls`
+  ]) {
+    const [result, steps] = work(command)
+    assert.equal(result, 'ok', command.slice(0, 40))
+    assert.ok(steps < SHELL_STEP_LIMIT / 5, `${command.slice(0, 40)}: ${steps} steps`)
+  }
+})
+
+test('a smaller budget is honoured, and steps are what was spent', () => {
+  const budget = shellBudget(10)
+  assert.throws(() => analyzeShell('echo a b c d e f g h', '/c', budget), /too complex/)
+  assert.ok(budget.steps <= 10)
+  const roomy = shellBudget()
+  analyzeShell('ls', '/c', roomy)
+  assert.ok(roomy.steps > 0 && roomy.steps < 20, String(roomy.steps))
 })

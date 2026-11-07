@@ -34,17 +34,21 @@ const FREE_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList',
   'list_worktrees', 'get_selected_worktree', 'list_session_types',
   'enqueue_prompt', 'remove_queued_prompt',
-  'read_terminal', 'wait_for_sessions', 'create_worktree', 'load_worktree',
-  'get_stack', 'start_stack', 'stop_stack', 'read_stack_log',
+  'read_terminal', 'wait_for_sessions',
+  'get_stack', 'stop_stack', 'read_stack_log',
   'set_worktree_tag', 'set_worktree_custom_tag', 'set_worktree_note',
   'set_worktree_ticket', 'set_worktree_pull_request', 'request_approval'
 ])
 
 /**
- * Trek tools that hand work to a worktree session, which runs outside the bot's OS sandbox. They
- * always need the user's approval: POLICY.json can't make them free.
+ * Trek tools that run something outside the bot's OS sandbox: a worktree session (start, prompt,
+ * keys), a stack's scripts, a worktree's setup, or a session type that later sessions run. They
+ * always need the user's approval: POLICY.json can't make them free. `enqueue_prompt` stays free.
  */
-const ALWAYS_ASK_TOOLS = new Set(['start_session', 'send_prompt', 'send_keys'])
+export const ALWAYS_ASK_TOOLS: ReadonlySet<string> = new Set([
+  'start_session', 'send_prompt', 'send_keys',
+  'start_stack', 'create_worktree', 'load_worktree', 'save_session_type', 'delete_session_type'
+])
 
 const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'REPL'])
@@ -80,9 +84,9 @@ const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/
 const COPY_SUFFIXES = ['', `.${process.pid}.tmp`, '.12345.tmp', `.corrupt-${Date.now()}`]
 /**
  * What `*` in a secret's name stands for in samples: window ids, short and long, and the named
- * kinds (mcp-bot-<id>, mcp-gemini-<id>). Files that exist are matched by their real names too.
+ * kinds (mcp-bot-<id>, mcp-gemini-<id>, mcp-codex-<id>). Files that exist are matched by their real names too.
  */
-const STAR_SAMPLES = ['1', '12', '123', '1234', '12345', 'bot-1', 'gemini-1']
+const STAR_SAMPLES = ['1', '12', '123', '1234', '12345', 'bot-1', 'gemini-1', 'codex-1']
 
 function secretFiles(path: string, cwd: string): SecretFile[] {
   return formsOf(path, cwd).map((full) => {
