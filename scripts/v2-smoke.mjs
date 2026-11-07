@@ -11,7 +11,7 @@
 //     a wrong token (Token rejected, grey dot), Set token, Edit (another origin needs the
 //     token again), a bad-token spare server (needs-auth) and Remove.
 //   - New Project…: PATH_DENIED and NOT_A_REPO hints, adding a repo by path, Create; the
-//     window becomes the server window (titles, tree, Global section) and is a recent.
+//     window becomes the server window (titles, sidebar, Global panel) and is a recent.
 //   - Live updates: a worktree created over a separate SDK connection appears without a reload.
 //   - Focus instead of reopening: Open on the same project from a second window focuses the
 //     first and adds no window.
@@ -19,9 +19,15 @@
 //   - Not found, through the real path: a project opened from Connect → Projects is deleted on
 //     the server; the open window says "Project not found on <server>" by itself (from the
 //     `server` topic), and again after a reload (NOT_FOUND); Pick another project goes back to
-//     the server's project list and releases the window title.
+//     the server's project list, releases the window title and leaves nothing projected.
 //   - Restore: quit, relaunch with the same user data; the server window comes back with its tree.
-//   - Disconnect: stopping the server shows the banner and keeps the tree; restarting clears it.
+//   - The working window (3c-2): Add Worktree creates one on the server and starts a session;
+//     typing is echoed by the fake agent; the shown pane sizes the pty while a tab that was never
+//     shown leaves another client's 150x50 alone; quit and Restart; queue a prompt and send it;
+//     set a tag and a note; the Changes tab and a diff; the Global panel (the server has MCP)
+//     starts exactly one session and has no bot tab; Delete worktree removes it on the server.
+//   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
+//     with the reconnecting overlay and disables the commands; restarting clears all three.
 //   - Closing a server window shows no prompt; its recent reopens it in an empty window.
 //   - A needs-auth window reconnects on focus once its token is set in another window.
 //   - A needs-auth window notices its entry removed on focus; a removed server is terminal
@@ -43,7 +49,7 @@ import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 
-const WATCHDOG_MS = 240_000
+const WATCHDOG_MS = 360_000
 const DAEMON_READY_MS = 15_000
 const APP_CLOSE_MS = 10_000
 
@@ -99,8 +105,9 @@ const notRepo = join(repos, 'plain')
 gitRepo(repoA)
 gitRepo(repoB)
 mkdirSync(notRepo)
+// A fake agent: prints its args, then echoes each line typed into it as GOT:<line>; "quit" exits 3.
 const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, '#!/bin/sh\nsleep 30\n', { mode: 0o755 })
+writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nwhile IFS= read -r line; do\n  [ "$line" = quit ] && exit 3\n  echo "GOT:$line"\ndone\n', { mode: 0o755 })
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ llm: { providers: { claude: { command: fakeAgent } } }, tokenHash, repos: [{ id: 'alpha', name: 'Alpha', path: repoA }] }))
 
@@ -559,6 +566,10 @@ try {
   check("Pick another project lists that server's projects", await w3Projects.allTextContents(), ['Demo'])
   check('and releases the window title', await until(() => titleOf('w3'), 'Trek Dev', 5000), 'Trek Dev')
   check('the window is empty again', await w3.evaluate(() => window.__store.getState().serverWindow), null)
+  check('with no projected project, terminals or setter overrides left', await w3.evaluate(() => {
+    const s = window.__store.getState()
+    return [s.project, Object.keys(s.terminals).length, s.serverOffline]
+  }), [null, 0, false])
 
   // Only the server window is left open for the restore.
   await closeTagged('w2')
@@ -581,6 +592,116 @@ try {
   await w1.locator('.title-text', { hasText: 'Demo' }).waitFor({ timeout: 5000 })
   check('with its title', [await w1.locator('.title-text').textContent(), await titleOf('w1')], ['Demo', 'Demo'])
 
+  // ---- 6b. The working window: worktrees, sessions, queue, notes, tags, changes -----------
+
+  const live = new ServerConnection({ url: `ws://127.0.0.1:${port}`, token, createSocket: globalSocketFactory, client: 'v2-smoke' })
+  live.connect()
+  check('a second SDK connection', await until(() => live.status, 'connected'), 'connected')
+  const topic = `project:${target.projectId}`
+  // A fresh snapshot each time (a subscribe returns the current tree).
+  const projectNow = async () => {
+    const { snapshot } = await live.request('sub.subscribe', { topic })
+    await live.request('sub.unsubscribe', { topic })
+    return snapshot
+  }
+  const worktreeNamed = (snap, branch) => snap.repositories.flatMap((r) => r.worktrees).find((w) => w.branch === branch)
+  const sidebar = w1.locator('.server-window .sidebar')
+  const detail = w1.locator('.server-window .detail')
+  const term = (id, lines = 40) => w1.evaluate(([id, lines]) => window.__terminals.readTerminal(id, lines) ?? '', [id, lines])
+  const activeTab = () => w1.evaluate(() => {
+    const s = window.__store.getState()
+    return s.activeWorktreeId ? (s.activeTerminal[s.activeWorktreeId] ?? null) : null
+  })
+
+  // Add Worktree: the v2 path creates it on the server and starts a first session in it.
+  await sidebar.locator('.repo-section', { hasText: 'Alpha' }).locator('.repo-action[title^="New worktree"]').click()
+  const addModal = w1.locator('.modal', { hasText: 'Add Worktree' })
+  await addModal.waitFor({ timeout: 5000 })
+  check('a server window offers no "existing worktrees" to add', await addModal.locator('h3', { hasText: 'Existing worktrees' }).count(), 0)
+  await addModal.locator('input[placeholder="branch name"]').fill('smoke-wt')
+  await addModal.locator('button', { hasText: 'Create' }).click()
+  await addModal.waitFor({ state: 'detached', timeout: 20_000 })
+  await sidebar.locator('.wt-row.selected .wt-name', { hasText: 'smoke-wt' }).waitFor({ timeout: 10_000 })
+  const created = worktreeNamed(await projectNow(), 'smoke-wt')
+  check('Create made the worktree on the server, loaded, with one session', [!!created, created?.loaded, created?.sessions.length], [true, true, 1])
+  const s1 = created.sessions[0].id
+  check('the new session is the active tab', await until(activeTab, s1), s1)
+  check('its terminal shows the agent', (await until(async () => (await term(s1)).includes('FAKE_AGENT'), true)), true)
+
+  // Typing goes to the server's pty, and its output comes back.
+  await detail.locator('.terminal-pane:visible .terminal-host').click()
+  await w1.keyboard.type('hello')
+  await w1.keyboard.press('Enter')
+  check('typed input is echoed by the agent', await until(async () => (await term(s1)).includes('GOT:hello'), true), true)
+
+  // The pty size: the shown pane claims it; a tab that was never shown leaves it alone.
+  const ptySize = async (sessionId) => {
+    const snap = await projectNow()
+    const ptyId = snap.repositories.flatMap((r) => r.worktrees).flatMap((w) => w.sessions).find((s) => s.id === sessionId)?.ptyId
+    if (!ptyId) return null
+    const info = await live.request('pty.attach', { ptyId })
+    await live.request('pty.detach', { ptyId })
+    return [info.cols, info.rows]
+  }
+  const localSize = async (id) => {
+    const size = await w1.evaluate((id) => window.__terminals.terminalSize(id), id)
+    return size ? [size.cols, size.rows] : null
+  }
+  check('the shown pane sized the pty to itself', await until(() => ptySize(s1), await localSize(s1), 5000), await localSize(s1))
+  // Another client starts a 150x50 session in a loaded worktree this window is not showing.
+  const featureX = worktreeNamed(await projectNow(), 'feature-x')
+  const other = await live.request('session.start', { projectId: target.projectId, worktreeId: featureX.id, cols: 150, rows: 50 })
+  await until(() => w1.evaluate((id) => !!window.__store.getState().terminals[id], other.sessionId), true)
+  await sleep(1000)
+  check('an off-screen tab does not shrink the pty', await ptySize(other.sessionId), [150, 50])
+  check('it took the pty\'s size instead of 80x24', await localSize(other.sessionId), [150, 50])
+
+  // Restart: the agent exits, the pane offers Restart, and the new pty is marked off.
+  await w1.keyboard.type('quit')
+  await w1.keyboard.press('Enter')
+  const exitedOverlay = detail.locator('.terminal-pane:visible .exited-overlay')
+  await exitedOverlay.waitFor({ timeout: 10_000 })
+  check('the exit shows in the terminal', (await term(s1)).includes('[process exited with code 3]'), true)
+  await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
+  await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })
+  check('Restart runs the session again on the server', await until(async () => {
+    const text = await term(s1, 80)
+    return text.includes('[restarted]') && text.split('FAKE_AGENT').length === 3
+  }, true), true)
+
+  // Queue a prompt, then send it: both go through the server.
+  await detail.locator('.terminal-pane:visible .queue-toggle').click()
+  await detail.locator('.terminal-pane:visible .queue-input').fill('queued one')
+  await detail.locator('.terminal-pane:visible .queue-add').click()
+  await detail.locator('.terminal-pane:visible .queue-item', { hasText: 'queued one' }).waitFor({ timeout: 5000 })
+  check('the queue is kept on the server', worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].queue, ['queued one'])
+  await detail.locator('.terminal-pane:visible .queue-item', { hasText: 'queued one' }).click()
+  check('sending it types it into the session', await until(async () => (await term(s1)).includes('GOT:queued one'), true), true)
+  check('and takes it off the queue', await until(async () => worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].queue, []), [])
+
+  // A tag, from the chip's menu, and a note, saved as a draft with what it started from.
+  await detail.locator('.chip.chip-tag').first().click()
+  await detail.locator('.tag-menu .tag-menu-item', { hasText: 'In Review' }).click()
+  const branchData = async () => (await projectNow()).repositories.find((r) => r.name === 'Alpha').branchData['smoke-wt'] ?? {}
+  check('the tag is set on the server', await until(async () => (await branchData()).tag, 'In Review'), 'In Review')
+  await w1.locator('.detail-chips .chip-tag', { hasText: 'In Review' }).waitFor({ timeout: 5000 })
+  await detail.locator('.panel-btn', { hasText: 'Notes' }).click()
+  await detail.locator('.notes-textarea').fill('a note from the smoke')
+  check('the note is saved on the server', await until(async () => (await branchData()).note, 'a note from the smoke'), 'a note from the smoke')
+
+  // Changes and a diff, read from the server.
+  writeFileSync(join(created.path, 'smoke.txt'), 'hello from the smoke\n')
+  await detail.locator('.panel-btn', { hasText: 'Notes' }).click()
+  await detail.locator('.panel-btn', { hasText: /^(Changes|1 file)/ }).click()
+  const changedRow = detail.locator('.changes-file-row', { hasText: 'smoke.txt' })
+  await changedRow.waitFor({ timeout: 15_000 })
+  check('the Changes tab lists the new file', await detail.locator('.panel-btn', { hasText: /file/ }).textContent(), '1 file +1 −0')
+  // A small diff opens by itself once the patches arrive.
+  await detail.locator('.changes-diff .changes-line', { hasText: 'hello from the smoke' }).waitFor({ timeout: 15_000 })
+  check('and its diff', (await detail.locator('.changes-diff .changes-line').allTextContents()).some((l) => l.includes('+hello from the smoke')), true)
+  await detail.locator('.panel-btn', { hasText: /file/ }).click()
+  await detail.locator('.terminal-pane:visible').waitFor({ timeout: 5000 })
+
   // ---- 7. Disconnect: the banner shows, the tree stays; back again once the server is.
 
   await stopDaemon()
@@ -588,10 +709,47 @@ try {
   const banner = await w1.locator('.server-window-banner').textContent()
   check('the disconnect banner shows the status and last seen', [banner.startsWith('Disconnected'), banner.includes('last seen')], [true, true])
   check('the tree stays visible', (await restoredTree.locator('.wt-name').allTextContents()).includes('feature-x'), true)
+  // Typing would be dropped, so the pane is covered; the commands wait for the connection.
+  await detail.locator('.terminal-pane:visible .reconnecting-overlay').waitFor({ timeout: 5000 })
+  check('the terminal is covered while reconnecting', await detail.locator('.terminal-pane:visible .reconnecting-overlay .reconnecting-title').textContent(), 'Reconnecting to the server…')
+  check('the commands are disabled', [
+    await detail.locator('.session-add').first().isDisabled(),
+    await detail.locator('.btn-icon[title="Server disconnected"]').isDisabled(),
+    await sidebar.locator('.footer-btn', { hasText: 'Add repository…' }).isDisabled(),
+    await sidebar.locator('.repo-action').first().isDisabled()
+  ], [true, true, true, true])
   if (process.env.SHOT_DIR) await w1.screenshot({ path: join(process.env.SHOT_DIR, 'server-window-down.png') })
   await startDaemon()
   await w1.locator('.server-window-banner').waitFor({ state: 'detached', timeout: 20_000 })
   check('the banner goes once reconnected', await w1.locator('.server-window-banner').count(), 0)
+  check('the overlay goes and the commands come back', [
+    await detail.locator('.reconnecting-overlay').count(),
+    await detail.locator('.session-add').first().isDisabled(),
+    await sidebar.locator('.footer-btn', { hasText: 'Add repository…' }).isDisabled()
+  ], [0, false, false])
+
+  // ---- 7b. The Global panel: the server has MCP, so it is offered; opening it starts one session.
+  check('the SDK connection is back too', await until(() => live.status, 'connected', 20_000), 'connected')
+  await w1.locator('.server-window .global-bar').click()
+  const globalTabs = w1.locator('.server-window .global-tab')
+  await globalTabs.first().waitFor({ timeout: 10_000 })
+  // The panel asks again on every render with no tabs: it must not start a second one.
+  await sleep(1500)
+  const globals = (await projectNow()).globalSessions
+  check('opening the Global panel starts one session on the server', [await globalTabs.count(), globals.length], [1, 1])
+  check('a server window has no bot tab', await w1.locator('.server-window .bot-tab').count(), 0)
+  check("the Global session runs with the server's MCP tools", await until(async () => (await term(globals[0].id)).includes('--mcp-config'), true), true)
+  await w1.locator('.server-window .global-bar').click()
+
+  // ---- 7c. Delete the worktree: confirmed, unloaded, removed on the server.
+  await sidebar.locator('.wt-row', { hasText: 'smoke-wt' }).click()
+  const dialogsAtDelete = (await dialogs()).length
+  await detail.locator('.btn-icon[title="Worktree actions"]').click()
+  await detail.locator('.detail-menu-item', { hasText: 'Delete worktree…' }).click()
+  await sidebar.locator('.wt-name', { hasText: 'smoke-wt' }).waitFor({ state: 'detached', timeout: 20_000 })
+  check('Delete asked first', (await dialogs()).slice(dialogsAtDelete)[0], 'Delete worktree “smoke-wt”?')
+  check('and the server removed it', worktreeNamed(await projectNow(), 'smoke-wt'), undefined)
+  live.close()
 
   // ---- Closing a server window shows no prompt; its recent reopens it -------------------
 
