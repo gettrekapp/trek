@@ -52,8 +52,9 @@ Out of scope here, as the brief says: everything in the 3c-3 row. Desktop-UI MCP
 2. **`windowKind.ts` is the one place a window enters or leaves server mode.** `backendFor` keeps the current `V2Window` when the target is the same entry and project (a re-set of an equal target must not wipe the slice), and otherwise calls `leave()` on the old one. `leave()`:
    - `disposeV2Terminals()` (detaches every stream, drops the xterms);
    - `clearV2Projection()` (forgets the id map);
-   - `setState({...originalSetters, ...EMPTY})`, where `EMPTY` clears `project`, `filePath`, `dirty`, the selection, `terminals`, `terminalOrder`, `activeTerminal`, `loadedWorktrees`, `hostWorktrees`, `terminalQueues`, `decisions` and `serverOffline`.
-   Because zustand runs listeners inside `set`, App never renders the legacy `Workspace` over a stale projected project after "Pick another project". ServerProjectTree's own unmount also calls `disposeV2Terminals()`, for the states that unmount it while `serverWindow` stays (Server removed).
+   - `setState({...originalSetters, ...EMPTY})`, where `EMPTY` clears `project`, `filePath`, `dirty`, the selection, `terminals`, `terminalOrder`, `activeTerminal`, `loadedWorktrees`, `hostWorktrees`, `terminalQueues`, `decisions`, `serverOffline` and `serverLink`.
+   The original setters are read from `useAppStore.getInitialState()` (zustand 5), never from the live state, which may already hold an override. Before any of that, `leave()` sets a `left` flag and calls `cancelRepoPath()`: a pending "Add repository" prompt resolves `null`, `whenProjected` and `registeredRepoPath` (both registered in the same `waits`) end at once, `request` rejects `NOT_CONNECTED` so a chained second request stops, and the backend's `confirm` (false), `showError` and `report` show nothing. `installV2Window` itself starts the window with `serverOffline: true`, so the commands are disabled until ServerProjectWindow reports the real status (it does so as it mounts).
+   Because zustand runs listeners inside `set`, App never renders the legacy `Workspace` over a stale projected project after "Pick another project". `leave()` runs before React unmounts ServerProjectTree, so its status and `project:<id>` listeners check that `serverWindow` still names this entry and project before they touch the store: a late snapshot never repopulates it. ServerProjectTree's own unmount also calls `disposeV2Terminals()`, for the states that unmount it while `serverWindow` stays (Server removed).
 3. **Features.** A new `FeatureName`, `globalPanel` (true for legacy; `V2_FEATURES.globalPanel = true` as a ceiling). `v2Features(capabilities)` ANDs the ceiling with the welcome's capabilities through a `CAPABILITY_FOR` map (`globalPanel: 'mcp'`), memoised per capability set so it is a stable `useSyncExternalStore` snapshot. The v2 backend's `features` is a getter over `connection.welcome?.capabilities`; ServerProjectTree calls `backendChanged()` on every status change (a welcome sets the capabilities just before status becomes `connected`). Every render-time read of `features` (WorktreeDetail, Sidebar, GlobalClaude, TerminalPane, `useLinearSync`) goes through `useFeatures()`.
 
 **The backend**
@@ -64,18 +65,18 @@ Out of scope here, as the brief says: everything in the 3c-3 row. Desktop-UI MCP
 7. **`openGlobal` starts a session only when the projected `globalSessions` is empty and no start is in flight** (one shared promise for `startGlobal`). GlobalClaude's effect runs again on every render with no tabs and while the new session's patch is on its way; with the shared promise it cannot start two. The effect also skips while offline.
 8. **`worktrees.remove` reads "dirty" from the mirror row (`info.dirty`, the server's status poll), not from `worktree.changes`.** Notes for 3c-2 #1 suggested `worktree.changes`, but it compares against the default branch with committed work included and its files carry no committed/uncommitted mark, so a clean worktree with commits would read as dirty and be force-removed without the right prompt. A stale "clean" is caught by git: the server's `GIT_ERROR` with "modified or untracked" asks again ("Delete Uncommitted Changes") and retries with `force: true`, as legacy does. The order is legacy's: confirm, then `worktree.unload` if loaded (the server refuses a loaded worktree with `IN_USE`), then `worktree.remove{force: dirty}`. Any other failure goes to a dialog and the method resolves (the 3c-1 error contract). A worktree it unloaded is loaded again (best effort) whenever the removal doesn't go through: the re-ask declined, `IN_USE`, a lock, a failed forced retry. The first confirm says a loaded worktree's running sessions will be stopped. An id no longer in the project shows "This worktree is no longer in the project." The stack and environment teardown of legacy is not there: `features.stacks` and `features.env` are off in v2.
 9. **Errors.** `worktrees.create` rejects for AddWorktreeModal to show; `worktrees.remove` and `repos.*` show their own dialogs and resolve. The backend methods every caller fires and forgets (`sessions.start`, `restart`, `close`, `worktrees.load`, `unload`, `unloadAll`) report a refusal through the backend's `report` dep (the same `report` as the setter overrides, built once in Task 5) and resolve, `start` with null: CAPACITY, IN_USE, an unknown session type or "load the worktree first" would otherwise be unhandled rejections. `unloadAll` unloads each worktree on its own (`Promise.allSettled`) and reports the first refusal. `openGlobal` and `startGlobal` still reject: GlobalClaude shows the error inline. The store-setter overrides are fire-and-forget: a failed request shows a dialog with a title per action, except `NOT_CONNECTED`, which is expected while offline (the commands are disabled then anyway).
-10. **`repos.add` asks for a path in a modal** (`RepoPathPrompt` in V2Workspace, driven by `v2/repoPathPrompt.ts`): Electron has no `window.prompt`, and a folder picker would browse this machine. It sends `server.addRepo{path}`, then `repo.add` with the path the server registered (read from its `server` topic, which the mirror already follows), so a path inside a checkout still adds the repository root. `repos.remove` keeps legacy's confirm and `removalBlock`, then sends `repo.remove`.
+10. **`repos.add` asks for a path in a modal** (`RepoPathPrompt` in V2Workspace, driven by `v2/repoPathPrompt.ts`): Electron has no `window.prompt`, and a folder picker would browse this machine. It sends `server.addRepo{path}`, then `repo.add` with the path the server registered (read from its `server` topic, which the mirror already follows), so a path inside a checkout still adds the repository root. A second request resolves the first with `null`, a blank answer is a cancel, and `cancelRepoPath()` (from `leave()`, and when RepoPathPrompt unmounts) ends a pending one with `null`. `repos.remove` keeps legacy's confirm and `removalBlock`, then sends `repo.remove`.
 
 **The window**
 
 11. **The notes draft** (`v2/noteDraft.ts`). NotesPanel in a server window keeps `{text, base}`; `base` is the server's note the draft started from. It saves 600 ms after the last keystroke and on blur, with `expected: base`; after a save the base becomes the saved text, and the draft is dropped once the mirror shows it. A `CONFLICT` (edited elsewhere meanwhile) drops the draft and shows the user's text in the error dialog so nothing is lost silently. A project file window keeps writing the store on every keystroke, as before.
-12. **Disconnected mode.** ServerProjectTree sets a store flag, `serverOffline`, from the connection status (true for anything but `connected`). It disables: New session (+ and ▾), Start session, Load, Unload, Unload all, the worktree actions menu (…), Pull/Push, tab close and rename, the complete toggle, the tag chips' menus, the repository + and ⋯, Add repository…, the Global +, and the ⌘T / close-tab menu items; the notes textarea goes read-only and the Changes poll pauses. TerminalPane shows a `.reconnecting-overlay` over the whole pane (terminal, quick buttons, queue), because input is dropped while detached (Notes for 3c-2 #15). The 3b banner with "last seen" stays above the workspace. WorktreeDetail's legacy host-down banner now shows only for a legacy remote row (`isRemote`).
-13. **Pty sizes** (Notes for 3c-2 #12). `sendV2Size(id)` fits a shown v2 terminal and always sends `ptys.resize`, because `fit()` sends nothing when xterm's size did not change while the pty kept another client's size. TerminalPane calls it on every show and when the connection comes back. After a reconnect the SDK's new `onReattach(info)` re-runs `attachResize` with the pty's current size, so an opened terminal claims it and one never shown takes it.
-14. **`PtyHandlers.onClosed(reason)`** (Notes for 3c-2 #14). The stream now reports `'closed'` (connection closed for good) and `'gone'` (a re-attach after a reconnect found no such pty) through `onClosed` when the handlers have it, and `onExit` carries only a process's own exit code. Without `onClosed` the old `onExit(-1)` stays, so other SDK users are unaffected. The v2 entry writes `[connection closed]` (not spent) or `[process ended while disconnected]` (spent). `exitKind` and `STREAM_ENDED_EXIT_CODE` are deleted with their test.
+12. **Disconnected mode.** ServerProjectTree sets the store's `serverLink` (the connection status) and with it `serverOffline` (true for anything but `connected`) through `setServerLink`. It disables: New session (+ and ▾), Start session, Load, Unload, Unload all, the worktree actions menu (…), Pull/Push, tab close and rename, the complete toggle, the tag chips' menus, the repository + and ⋯, Add repository…, the Global +, and the ⌘T / close-tab menu items; the notes textarea goes read-only and the Changes poll pauses. TerminalPane shows a `.reconnecting-overlay` over the whole pane (terminal, quick buttons, queue), because input is dropped while detached (Notes for 3c-2 #15). Its title is "Reconnecting to the server…" only for the statuses the SDK retries (`connecting`, `disconnected`); otherwise it is the status's `STATUS_LABELS` text ("Token rejected", …), or "Disconnected from the server" before the status is known. What is already open when the link drops closes: WorktreeDetail's actions and tag menus, the ticket and PR modals and a tab rename, the Sidebar's repository menu; a drag that started before ends without a reorder, and V2Workspace blurs the focused element. ⌘S does nothing in a server window (`saveProject` returns false and `scheduleAutoSave` returns early), and ⌘T skips a missing worktree. The 3b banner with "last seen" stays above the workspace. WorktreeDetail's legacy host-down banner now shows only for a legacy remote row (`isRemote`).
+13. **Pty sizes** (Notes for 3c-2 #12). "Shown" means laid out with a size: `term.element` set and a non-zero `getBoundingClientRect()`. An opened tab under `display:none` is not shown. Only a shown terminal fits and sends `ptys.resize`; xterm's `onResize` sends too, but only while shown. `sendV2Size(id)` fits a shown v2 terminal and sends its size exactly once: when the fit changed xterm's size, `onResize` already sent it; when it did not (`fit()` sends nothing then, while the pty may keep another client's size), it sends it itself. It returns false when it did nothing (a legacy entry, no pty, not shown), and TerminalPane then fits as usual. TerminalPane calls it on every show, and again only when the connection goes from offline to online (the previous value is kept in a ref). After an attach, and after a reconnect through the SDK's new `onReattach(info)`, `attachResize(shown, fitResized, local, pty)` decides: a shown terminal claims the pty, and a hidden one, opened or not, takes the pty's size locally.
+14. **`PtyHandlers.onClosed(reason)`** (Notes for 3c-2 #14). The stream now reports `'closed'` (connection closed for good) and `'gone'` (a re-attach after a reconnect found no such pty) through `onClosed` when the handlers have it, and with both `onClosed` and `onError` `onExit` carries only a process's own exit code (without `onError`, a failed re-attach still ends with `onExit(-1)`). Without `onClosed` the old `onExit(-1)` stays, so other SDK users are unaffected. The v2 entry writes `[connection closed]` (not spent) or `[process ended while disconnected]` (spent). `exitKind` and `STREAM_ENDED_EXIT_CODE` are deleted with their test.
 15. **The New session menu in a server window** (Notes for 3c-2 #2). Until the server reports what it can launch (3c-3), this machine's agents and llmSettings are no guide. The interim: **Default** sends no `llm` (the server resolves the project's `llmDefault`, else its own default) and is labelled with the project's `llmDefault` or "The server's default agent"; then one item per other agent the project's server-side settings already name (`globalLlm`, the session types' `llm`), once each; then the project's session types, which are the server's (`sessionTypeId` is always valid). "Choose…" (the local LlmPicker) is not offered. The Global bar names `globalLlm`, else `llmDefault`, else "server default".
 16. **A missing worktree** (Notes for 3c-2 #9) shows a red `missing` chip in the sidebar, offers no Load, and its New session, Start and Load buttons are disabled with a hint; Delete stays. It is gated on the window kind, so a legacy prunable row looks as before.
 17. **AddWorktreeModal in a server window** hides "Existing worktrees" (every v2 worktree is already in the project, 3c-1 Decision 7), creates through the backend, selects the new worktree by path and starts its first session through `sessions.start({path})`. Its legacy path now starts the session through `getBackend().sessions.start({worktreeId})`, which `legacyBackend` resolves to exactly the old `createTerminal(worktree.id, worktree.path)`. Errors show `errorText(err)` in a server window and `String(err)` in a project file window, as before.
-18. **Legacy helpers skip v2 entries** (Notes for 3c-2 #8): `disposePendingTerminals` and `disposeAllTerminals` skip entries with a `v2` link, and legacy `unloadWorktree` returns if any of the worktree's tabs is a v2 entry.
+18. **Legacy helpers skip v2 entries** (Notes for 3c-2 #8): `disposePendingTerminals` and legacy `unloadWorktree` return at the top in a server window (`serverWindow` set), and also skip v2 entries; `disposeAllTerminals` skips entries with a `v2` link. The store-setter overrides also make `addWorktreeInstance` a no-op (every worktree of a server project comes from the mirror; AddWorktreeModal's v2 path never calls it), and `clearTerminalAttention` keeps the session ids whose `session.seen` is in flight, so repeated focuses don't send it again.
 
 ### The 3c-1 "Notes for 3c-2", mapped
 
@@ -141,7 +142,8 @@ None is deferred.
 | `src/renderer/src/v2/setterOverrides.ts` | create | 4 | `v2SetterOverrides`, `OVERRIDDEN_SETTERS` (pure) |
 | `src/renderer/src/store.ts` | modify | 4, 5 | `AppState` exported; `serverOffline` |
 | `src/renderer/src/v2/installV2.ts` | create | 5 | `installV2Window`: deps, backend, overrides, `leave()` |
-| `src/renderer/src/v2/repoPathPrompt.ts` | create | 5 | the "Add repository" path request |
+| `src/renderer/src/v2/repoPathPrompt.ts` | create | 5 | the "Add repository" path request; `cancelRepoPath` (review fixes) |
+| `src/renderer/src/persistence.ts` | modify | review fixes | no save in a server window |
 | `src/renderer/src/windowKind.ts` | modify | 5 | `backendFor` installs and leaves the v2 window |
 | `src/renderer/src/v2/V2Workspace.tsx` | create | 6 | the server project's workspace, `RepoPathPrompt` |
 | `src/renderer/src/v2/ServerProjectWindow.tsx` | modify | 6 | `applyV2Project` from the mirror, status → offline, retry, `backendChanged`; renders `V2Workspace` |
@@ -157,6 +159,7 @@ None is deferred.
 | `scripts/v2-smoke.mjs` | modify | 6, 10 | selectors for the new UI; the working-window checks |
 | `scripts/backendFeatures.test.mjs`, `clientPtyStream.test.mjs`, `v2TerminalSync.test.mjs` | modify | 1, 2 | tests |
 | `scripts/v2Backend.test.mjs`, `v2SetterOverrides.test.mjs`, `v2NoteDraft.test.mjs`, `v2SessionChoices.test.mjs` | create | 3, 4, 8, 9 | tests |
+| `scripts/v2RepoPathPrompt.test.mjs` | create | review fixes | tests |
 
 ---
 
@@ -3621,6 +3624,18 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ap
 
 ---
 
+### Review fixes after Task 8 (done)
+
+A combined review of Tasks 1–8 was applied before Task 9; the decisions above already describe the result. In short:
+- **Pty size** (Decision 13): "shown" is a laid-out element, so a hidden but opened tab no longer claims the pty on a reattach or restart; each show sends one resize, and TerminalPane's reconnect effect runs only on the way from offline to online. `attachResize` takes `(shown, fitResized, local, pty)`.
+- **Lifecycle** (Decisions 2 and 10): `leave()` sets `left` and cancels a pending repo-path prompt; waits, `registeredRepoPath` and requests started afterwards stop at once; ServerProjectTree's listeners skip the store once the window has left; the original setters come from `getInitialState()`; the window starts offline; `addWorktreeInstance` is a no-op override and `session.seen` is not re-sent while in flight.
+- **Saving and legacy helpers** (Decisions 12 and 18): no save of any kind in a server window; `unloadWorktree` and `disposePendingTerminals` return at the top there.
+- **Offline gating** (Decision 12): open menus, modals and renames close, a drag ends without reordering, focus is blurred, ⌘T skips a missing worktree, and the overlay's title follows the status (`serverLink`).
+- **SDK**: PROTOCOL.md says when `onExit` carries only a process's own code; four more `clientPtyStream` tests (`onReattach` after a CONGESTED retry, none when the pty exits during the re-attach, a throwing `onReattach`, `close()` during a re-attach).
+- **smoke:v2**: the two checks a real window focus can spoil count trusted `focus` events and are logged as inconclusive (`skip …`) instead of failing when one arrived; a failed run's last line names the failed checks.
+
+The unit tests stand at 1149 after these fixes.
+
 ### Task 9: The New session menu and the Global panel in a server window
 
 Decisions 7 and 15; Notes for 3c-2 #2. The Global panel is gated on `features.globalPanel` (the `mcp` capability) by V2Workspace (Task 6), starts through the backend (Task 3's `openGlobal`), and has no bot tab (`features.bot` is off). This task makes its effect skip while offline, disables its commands offline, names the server's agent on its bar, and shows a failed Global start with `errorText` (a `ClientError`'s message, not `String(err)`'s "Error: …").
@@ -3834,7 +3849,7 @@ The bar's text stays `Global · <agent>` in a project file window.
  
    useEffect(() => {
      const onKeyDown = (e: KeyboardEvent): void => {
-@@ -88,9 +93,10 @@ export function GlobalClaude(): React.JSX.Element {
+@@ -88,11 +93,12 @@ export function GlobalClaude(): React.JSX.Element {
    const toggle = (): void => useAppStore.getState().setGlobalPanelOpen(!open)
  
    const newTab = (): void => {
@@ -3846,6 +3861,8 @@ The bar's text stays `Global · <agent>` in a project file window.
 -    getBackend().sessions.startGlobal().catch((err) => setError(String(err)))
 +    getBackend().sessions.startGlobal().catch((err) => setError(errorText(err)))
    }
+ 
+   const selectTab = (id: string): void => {
 @@ -102,6 +108,7 @@ export function GlobalClaude(): React.JSX.Element {
    }
  
@@ -3910,7 +3927,7 @@ The bar's text stays `Global · <agent>` in a project file window.
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: clean; `# pass 1142`, `# fail 0`.
+Expected: clean; `# pass 1152`, `# fail 0`.
 
 Run each and read its last line:
 
@@ -4017,7 +4034,7 @@ The run is longer, so the watchdog goes from 240 s to 360 s.
  const DAEMON_READY_MS = 15_000
  const APP_CLOSE_MS = 10_000
  
-@@ -83,8 +89,9 @@ const notRepo = join(repos, 'plain')
+@@ -99,8 +105,9 @@ const notRepo = join(repos, 'plain')
  gitRepo(repoA)
  gitRepo(repoB)
  mkdirSync(notRepo)
@@ -4028,7 +4045,7 @@ The run is longer, so the watchdog goes from 240 s to 360 s.
  const configPath = join(work, 'config.json')
  writeFileSync(configPath, JSON.stringify({ llm: { providers: { claude: { command: fakeAgent } } }, tokenHash, repos: [{ id: 'alpha', name: 'Alpha', path: repoA }] }))
  
-@@ -542,6 +549,10 @@ try {
+@@ -559,6 +566,10 @@ try {
    check("Pick another project lists that server's projects", await w3Projects.allTextContents(), ['Demo'])
    check('and releases the window title', await until(() => titleOf('w3'), 'Trek Dev', 5000), 'Trek Dev')
    check('the window is empty again', await w3.evaluate(() => window.__store.getState().serverWindow), null)
@@ -4039,7 +4056,7 @@ The run is longer, so the watchdog goes from 240 s to 360 s.
  
    // Only the server window is left open for the restore.
    await closeTagged('w2')
-@@ -564,6 +575,116 @@ try {
+@@ -581,6 +592,116 @@ try {
    await w1.locator('.title-text', { hasText: 'Demo' }).waitFor({ timeout: 5000 })
    check('with its title', [await w1.locator('.title-text').textContent(), await titleOf('w1')], ['Demo', 'Demo'])
  
@@ -4156,7 +4173,7 @@ The run is longer, so the watchdog goes from 240 s to 360 s.
    // ---- 7. Disconnect: the banner shows, the tree stays; back again once the server is.
  
    await stopDaemon()
-@@ -571,10 +692,47 @@ try {
+@@ -588,10 +709,47 @@ try {
    const banner = await w1.locator('.server-window-banner').textContent()
    check('the disconnect banner shows the status and last seen', [banner.startsWith('Disconnected'), banner.includes('last seen')], [true, true])
    check('the tree stays visible', (await restoredTree.locator('.wt-name').allTextContents()).includes('feature-x'), true)
@@ -4232,7 +4249,7 @@ ok   Delete asked first: "Delete worktree “smoke-wt”?"
 ok   no console or page errors in any window: []
 ```
 
-If a check fails, `SHOT_DIR=/tmp/shots npm run smoke:v2` saves screenshots of the server window, including while it is down.
+If a check fails, the last line names it (`V2 SMOKE FAIL (1 of 106 checks failed: <name>)`), and `SHOT_DIR=/tmp/shots npm run smoke:v2` saves screenshots of the server window, including while it is down. A run in which a real window focus made one of the two focus-sensitive checks inconclusive prints a `skip` line for it and passes with one check fewer (105).
 
 - [ ] **Step 4: Commit**
 
@@ -4250,7 +4267,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(ap
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1142`, `# fail 0`: the baseline 1092 at `ea4e212`, plus 2 in `backendFeatures.test.mjs`, 3 in `clientPtyStream.test.mjs`, 35 in `v2Backend.test.mjs`, 5 in `v2SetterOverrides.test.mjs`, 3 in `v2NoteDraft.test.mjs` and 3 in `v2SessionChoices.test.mjs`, minus the `exitKind` test.
+Expected: `# pass 1152`, `# fail 0`: the baseline 1092 at `ea4e212`, plus 2 in `backendFeatures.test.mjs`, 7 in `clientPtyStream.test.mjs`, 35 in `v2Backend.test.mjs`, 6 in `v2SetterOverrides.test.mjs`, 3 in `v2NoteDraft.test.mjs`, 5 in `v2RepoPathPrompt.test.mjs` and 3 in `v2SessionChoices.test.mjs`, minus the `exitKind` test.
 
 - [ ] **Step 2: Typecheck and build**
 
@@ -4302,6 +4319,10 @@ Found while prototyping this plan.
 8. **`whenProjected`'s 10 s.** A server under load can answer `worktree.create` and then take longer than 10 s to send the patch; the dialog then says the worktree "has not shown up here yet" although it exists. A per-topic "rev at least N" wait (the response carrying the rev) would make this exact. `leave()` ends the open waits early (Task 5), so a wait never reads the next window's store.
 9. **The uncommitted-changes match is English text.** `worktrees.remove` recognises git's refusal by `/modified or untracked/` in the GIT_ERROR message, so a server whose git speaks another locale gets the plain error dialog instead of the "Delete Uncommitted Changes" re-ask. Carry over: a server-side detail code on that GIT_ERROR (e.g. `details.reason: 'dirty'`), or the server running git with `LC_ALL=C`.
 10. **`session.rename` takes `expected`, and the backend doesn't send it.** Two clients renaming the same tab at once: last write wins. Send the title the user started editing from once a conflict dialog is worth having.
+
+11. **Whole-list `session.setQueue`.** `removeQueuedText` sends the queue it sees minus one item, so an edit another client made meanwhile (an enqueue, a send) can be lost. Accepted for now; a `session.dequeue{index, expected}` would make it exact.
+12. **Rename and complete show the old value for one round trip.** There is no optimistic UI (Decision 3): the tab keeps its old title, or its old complete state, until the mirror patch arrives. By design.
+13. **`NOT_CONNECTED` mid-flight is silent.** A request the link drops under fails without a dialog (the overlay and the banner say the link is down), so an edit sent just as the link drops is lost without a word. A retry queue, or a dialog for edits (not reads), would close the gap.
 
 ## Risks
 
