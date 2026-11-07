@@ -4,13 +4,25 @@
 // make a cycle in which those modules run before the store exists.
 import { useAppStore } from './store'
 import { legacyBackend, setBackend, type WindowBackend } from './backend'
+import { installV2Window, type V2Window } from './v2/installV2'
 
 type ServerWindowTarget = ReturnType<typeof useAppStore.getState>['serverWindow']
 
+/** The server project this window is in, if any. */
+let v2: V2Window | null = null
+
+/**
+ * A server target gets the v2 backend and the store-setter overrides; leaving
+ * it (no target, or another project) takes both away again, with the
+ * projected slice and the terminals.
+ */
 function backendFor(target: ServerWindowTarget): WindowBackend {
+  if (v2 && target && v2.entryId === target.serverEntryId && v2.projectId === target.projectId) return v2.backend
+  v2?.leave()
+  v2 = null
   if (!target) return legacyBackend
-  // 3c-2 installs the v2 backend here, and swaps the store-setter overrides at the same point.
-  return legacyBackend
+  v2 = installV2Window(target.serverEntryId, target.projectId)
+  return v2.backend
 }
 
 /**

@@ -350,6 +350,8 @@ export async function loadWorktree(worktreeId: string): Promise<void> {
 export function unloadWorktree(worktreeId: string): void {
   const state = useAppStore.getState()
   const order = state.terminalOrder[worktreeId] ?? []
+  // A server window's worktree unloads on its server (worktree.unload), never here.
+  if (order.some((id) => entries.get(id)?.v2)) return
   const project = state.project
   const instance = project ? allWorktrees(project).find((w) => w.id === worktreeId) : undefined
   const pending = order.filter((id) => state.terminals[id]?.sessionPending).length
@@ -1058,15 +1060,23 @@ function unloadTerminal(id: string): void {
 export function disposePendingTerminals(): void {
   const state = useAppStore.getState()
   for (const id of Object.keys(state.terminals)) {
-    if (!state.terminals[id].sessionPending) continue
+    // A server window's pending session runs on its server; closing the window detaches it.
+    if (!state.terminals[id].sessionPending || entries.get(id)?.v2) continue
     disposeEntry(id)
     window.api.disposePty(id)
     state.removeTerminal(id)
   }
 }
 
+/** Every legacy terminal. A server window's entries are left to disposeV2Terminals: they have no pty IPC. */
 export function disposeAllTerminals(): void {
-  for (const id of [...entries.keys()]) disposeTerminal(id)
+  for (const [id, entry] of [...entries]) if (!entry.v2) disposeTerminal(id)
+}
+
+/** A terminal entry's size (for a v2 restart), or null without an entry. */
+export function terminalSize(id: string): { cols: number; rows: number } | null {
+  const entry = entries.get(id)
+  return entry ? { cols: entry.term.cols, rows: entry.term.rows } : null
 }
 
 /**

@@ -201,6 +201,9 @@ export interface AppState {
   /** A v2 server project shown in this window; separate from the legacy `project`. A window is one or the other. */
   serverWindow: { serverEntryId: string; projectId: string } | null
   setServerWindow: (target: { serverEntryId: string; projectId: string } | null) => void
+  /** A server window whose connection is down: it shows the last state, and its commands are disabled. */
+  serverOffline: boolean
+  setServerOffline: (offline: boolean) => void
   /** The start screen opens on Connect with this server picked (once), after Pick another project. */
   connectServerId: string | null
   setConnectServerId: (id: string | null) => void
@@ -360,6 +363,8 @@ export const useAppStore = create<AppState>((set) => ({
   filePath: null,
   serverWindow: null,
   setServerWindow: (serverWindow) => set({ serverWindow }),
+  serverOffline: false,
+  setServerOffline: (serverOffline) => set((state) => (state.serverOffline === serverOffline ? state : { serverOffline })),
   connectServerId: null,
   setConnectServerId: (connectServerId) => set({ connectServerId }),
   project: null,
