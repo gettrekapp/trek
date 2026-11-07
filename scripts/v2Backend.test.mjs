@@ -23,11 +23,14 @@ class CodedError extends Error {
  * A backend over fakes: `calls` records each request, `replies` answers by
  * method (a value, a function of the params, or an Error to reject with), and
  * `ui` records what the dialogs were asked; `reports` what went to `report`.
+ * `revs` is the rev each method's response reports; `waits` records each
+ * whenProjected's rev (null without one).
  */
-function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [], left = () => false } = {}) {
+function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [], left = () => false, revs = {} } = {}) {
   const calls = []
   const ui = []
   const reports = []
+  const waits = []
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
@@ -37,21 +40,27 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   }
   const answers = [...confirms]
   const idMap = ids()
+  const request = async (method, params) => {
+    calls.push([method, params])
+    const reply = replies[method]
+    const value = typeof reply === 'function' ? reply(params) : reply
+    if (value instanceof Error) throw value
+    return value ?? null
+  }
   const backend = createV2Backend({
     projectId: 'p1',
-    request: async (method, params) => {
-      calls.push([method, params])
-      const reply = replies[method]
-      const value = typeof reply === 'function' ? reply(params) : reply
-      if (value instanceof Error) throw value
-      return value ?? null
+    request,
+    requestWithRev: async (method, params) => {
+      const result = await request(method, params)
+      return revs[method] ? { result, rev: revs[method] } : { result }
     },
     // null stands for "no welcome yet" (undefined would take the default)
     capabilities: typeof capabilities === 'function' ? capabilities : () => capabilities ?? undefined,
     ids: () => idMap,
     state: () => st,
     // Each projectedAfter entry is applied to the state and ids before the check, like a patch arriving.
-    whenProjected: async (check) => {
+    whenProjected: async (check, rev) => {
+      waits.push(rev ?? null)
       for (const patch of projectedAfter.splice(0)) patch(st, idMap)
       return check()
     },
@@ -72,7 +81,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     report: (title, err) => reports.push([title, err.code]),
     left
   })
-  return { backend, calls, ui, st, reports }
+  return { backend, calls, ui, st, reports, waits }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -480,4 +489,29 @@ test('errors: show and report reach the dialogs; NOT_CONNECTED and anything afte
   assert.equal(backend.errors.inline(new CodedError('NOT_CONNECTED', '')), null)
   flags.left = true
   assert.equal(backend.errors.inline(new CodedError('CAPACITY', 'too many sessions')), null)
+})
+
+test('start, a Global start and create wait for the rev their response reports', async () => {
+  const rev = { topic: 'project:p1', rev: 41 }
+  const replies = { 'session.start': { sessionId: 's9', ptyId: 'p9' }, 'worktree.create': { worktreeId: 'w2' } }
+  const revs = { 'session.start': rev, 'worktree.create': { ...rev, rev: 42 } }
+  const { backend, waits } = setup({ replies, revs })
+  await backend.sessions.start({ worktreeId: 'w2' })
+  await backend.sessions.startGlobal()
+  await backend.worktrees.create({ repoId: 'r1', branch: 'feat', createBranch: false })
+  assert.deepEqual(waits, [rev, rev, { ...rev, rev: 42 }])
+  // An older server reports none: the wait has no rev, as before.
+  const old = setup({ replies })
+  await old.backend.sessions.start({ worktreeId: 'w2' })
+  assert.deepEqual(old.waits, [null])
+})
+
+test('setNote resolves once the mirror holds the save; without a rev it waits for nothing', async () => {
+  const rev = { topic: 'project:p1', rev: 7 }
+  const { backend, waits } = setup({ revs: { 'branch.setNote': rev } })
+  await backend.branch.setNote('r1', 'feat', 'new', 'old')
+  assert.deepEqual(waits, [rev])
+  const old = setup()
+  await old.backend.branch.setNote('r1', 'feat', 'new', 'old')
+  assert.deepEqual(old.waits, [])
 })

@@ -3,8 +3,9 @@
 // the components that call it, and maps them to v2 with the projector's
 // V2IdMap. Nothing in the store changes ahead of the server (Decision 3 of
 // 3c-1): the mirror patch is the answer, and a method that must hand back
-// something the patch brings (a new worktree's path, a new session's tab)
-// waits for it with `whenProjected`.
+// something the patch brings (a new worktree's path, a new session's tab, a
+// saved note) waits for it with `whenProjected`, given the rev the response
+// reports (`requestWithRev`) when the server sends one.
 //
 // The methods its callers fire and forget (start, restart, close, load, unload,
 // unloadAll) never reject: a refusal goes to `report` (a dialog) and they
@@ -20,10 +21,13 @@ import { primaryWorktreeId } from '../../../shared/repositories.ts'
 import { hostKey } from '../../../shared/types.ts'
 import type { SessionTarget, WindowBackend } from '../backend'
 import type { TerminalMeta } from '../store'
-import type { MethodNameV2, MethodParamsV2, MethodResultsV2 } from '../../../shared/protocolV2'
+import type { MethodNameV2, MethodParamsV2, MethodResultsV2, TopicRev } from '../../../shared/protocolV2'
+import type { RevResult } from '../../../shared/client/connection'
 import type { GitWorktreeInfo, ProjectFile, Repository } from '../../../shared/types'
 
 export type V2Request = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M]) => Promise<MethodResultsV2[M]>
+/** As V2Request, with the rev the response reports (none from a server older than revs). */
+export type V2RequestWithRev = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M]) => Promise<RevResult<M>>
 
 /** The part of the store the backend reads: the projected slice. */
 export interface V2BackendState {
@@ -43,17 +47,19 @@ export interface ConfirmPrompt {
 export interface V2BackendDeps {
   projectId: string
   request: V2Request
+  requestWithRev: V2RequestWithRev
   /** The last welcome's capabilities; undefined before the first one */
   capabilities(): readonly string[] | undefined
   /** The id map of the projection in the store now */
   ids(): V2IdMap | null
   state(): V2BackendState
   /**
-   * Resolves with `check()`'s first value other than undefined, re-checked on
-   * every store change; with undefined if the projection has not caught up in
-   * time.
+   * Resolves with `check()`'s value once the mirror holds `rev` (the response's;
+   * exact), or, without one, its first value other than undefined, re-checked
+   * on every store change. Undefined if the projection has not caught up in
+   * time, or the window left.
    */
-  whenProjected<T>(check: () => T | undefined): Promise<T | undefined>
+  whenProjected<T>(check: () => T | undefined, rev?: TopicRev): Promise<T | undefined>
   /** A terminal entry's size, for a restart; null without an entry */
   termSize(terminalId: string): { cols: number; rows: number } | null
   focus(terminalId: string): void
@@ -92,7 +98,7 @@ const REMOVE_FAILED = 'Could not delete worktree'
 const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
 export function createV2Backend(deps: V2BackendDeps): WindowBackend {
-  const { projectId, request } = deps
+  const { projectId, request, requestWithRev } = deps
   const ids = (): V2IdMap => deps.ids() ?? { worktrees: {}, worktreeByPath: {}, sessions: {}, legacyByWorktree: {} }
 
   /** The v2 worktree of a legacy instance id (a primary id for a main checkout). */
@@ -123,16 +129,17 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
   }
 
   /** Waits for the new session's tab, then makes it the worktree's active one, as legacy does. */
-  const showStarted = async (sessionId: string): Promise<string> => {
-    const meta = await deps.whenProjected(() => deps.state().terminals[sessionId])
+  const showStarted = async ({ result, rev }: RevResult<'session.start'>): Promise<string> => {
+    const { sessionId } = result
+    const meta = await deps.whenProjected(() => deps.state().terminals[sessionId], rev)
     if (meta) deps.setActiveTerminal(meta.worktreeId, sessionId)
     return sessionId
   }
 
   let globalStart: Promise<string | null> | null = null
   const startGlobal = (): Promise<string | null> => {
-    globalStart ??= request('session.start', { projectId, worktreeId: null, ...V2_START_SIZE })
-      .then(({ sessionId }) => showStarted(sessionId))
+    globalStart ??= requestWithRev('session.start', { projectId, worktreeId: null, ...V2_START_SIZE })
+      .then(showStarted)
       .finally(() => {
         globalStart = null
       })
@@ -174,14 +181,14 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           const legacyId = 'worktreeId' in target ? target.worktreeId : legacyIdAt(target.path)
           const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
           if (!ref) return null
-          const { sessionId } = await request('session.start', {
+          const started = await requestWithRev('session.start', {
             projectId,
             worktreeId: ref.worktreeId,
             ...(sessionType ? { sessionTypeId: sessionType.id } : {}),
             ...(llm ? { llm } : {}),
             ...V2_START_SIZE
           })
-          return showStarted(sessionId)
+          return showStarted(started)
         }),
       startGlobal,
       // Only when there are none, and never twice: the panel asks again on every
@@ -248,18 +255,19 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       // The server links the dirs and tags the branch itself.
       create: async ({ repoId, branch, createBranch, fromPr }) => {
-        const { worktreeId } = await request('worktree.create', {
+        const { result, rev } = await requestWithRev('worktree.create', {
           projectId,
           repoId,
           branch,
           createBranch,
           ...(fromPr !== undefined ? { fromPr } : {})
         })
+        const { worktreeId } = result
         // The response can come before the patch that lists the worktree.
         const path = await deps.whenProjected(() => {
           const legacyId = ids().legacyByWorktree[worktreeId]
           return legacyId === undefined ? undefined : instancePath(legacyId)
-        })
+        }, rev)
         if (path === undefined) throw new Error(`The server created the worktree, but it has not shown up here yet.`)
         return { path, worktreeId }
       },
@@ -362,12 +370,14 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const next = enabled ? [...current.filter((t) => t !== tagId), tagId] : current.filter((t) => t !== tagId)
         await request('branch.setCustomTags', { ...branchRef(repoId, branch), customTags: next.length > 0 ? next : null })
       },
+      // Resolves once the mirror holds the save (its rev), so the notes draft settles on exactly that state.
       setNote: async (repoId, branch, text, expected) => {
-        await request('branch.setNote', {
+        const { rev } = await requestWithRev('branch.setNote', {
           ...branchRef(repoId, branch),
           note: text || null,
           ...(expected !== undefined ? { expected: expected || null } : {})
         })
+        if (rev) await deps.whenProjected(() => true, rev)
       },
       setTicket: async (repoId, branch, ticketId) => {
         await request('branch.setTicket', { ...branchRef(repoId, branch), ticket: ticketId })

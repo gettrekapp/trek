@@ -6,19 +6,26 @@
 import { useAppStore } from '../store'
 import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repositoryActions'
-import { createV2Backend, type V2Request } from './backendV2'
+import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
 import { OVERRIDDEN_SETTERS, v2SetterOverrides, type SetterOverrides } from './setterOverrides'
 import { clearV2Projection, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
-import { ClientError } from '../../../shared/client/index.ts'
+import { ClientError, type TopicMirror } from '../../../shared/client/index.ts'
+import type { TopicRev } from '../../../shared/protocolV2'
 import { OFF_VIEW } from '../../../shared/bot'
 import type { WindowBackend } from '../backend'
 import type { AppState } from '../store'
 
-/** How long an action waits for its result to show up in the mirror. */
+/** How long an action waits for its result to show up in the mirror, when the response carries no rev. */
 const PROJECTION_WAIT_MS = 10_000
+/**
+ * How long it waits for the response's rev. The patch is normally applied
+ * before the response arrives; the bound covers a reconnect, whose
+ * resubscribe brings it (or the newest state, after a server restart).
+ */
+const REV_WAIT_MS = 30_000
 
 export interface V2Window {
   entryId: string
@@ -74,10 +81,12 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
    * one) for its result.
    */
   const waits = new Set<() => void>()
-  function whenProjected<T>(check: () => T | undefined): Promise<T | undefined> {
+  function whenProjected<T>(check: () => T | undefined, rev?: TopicRev): Promise<T | undefined> {
     if (left) return Promise.resolve(undefined)
     const now = check()
     if (now !== undefined) return Promise.resolve(now)
+    const mirror = registered()?.mirror
+    if (rev && mirror) return untilRev(mirror, rev).then(() => (left ? undefined : check()))
     return new Promise((resolve) => {
       const done = (value: T | undefined): void => {
         clearTimeout(timer)
@@ -95,12 +104,33 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     })
   }
 
+  /**
+   * The mirror holds `rev` (its listener has applied it to the store by the
+   * time this resolves), or the wait ended: a timeout, the topic gone or
+   * unsubscribed, the connection closed, or `leave()`. Never rejects.
+   */
+  function untilRev(mirror: TopicMirror, rev: TopicRev): Promise<void> {
+    return new Promise((resolve) => {
+      const done = (): void => {
+        waits.delete(done)
+        resolve()
+      }
+      waits.add(done)
+      mirror.whenRev(rev.topic, rev.rev, { timeoutMs: REV_WAIT_MS }).then(done, done)
+    })
+  }
+
   // Never connects: ServerProjectWindow does, once it knows the entry still exists.
   const registered = () => registeredServerEntry(entryId)
   const request: V2Request = (method, params) => {
     const server = left ? undefined : registered()
     if (!server) return Promise.reject(new ClientError('NOT_CONNECTED', 'not connected to the server'))
     return server.connection.request(method, params)
+  }
+  const requestWithRev: V2RequestWithRev = (method, params) => {
+    const server = left ? undefined : registered()
+    if (!server) return Promise.reject(new ClientError('NOT_CONNECTED', 'not connected to the server'))
+    return server.connection.requestWithRev(method, params)
   }
 
   /** The path the server registered, from its `server` topic (the mirror already follows it). */
@@ -145,6 +175,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   const backend = createV2Backend({
     projectId,
     request,
+    requestWithRev,
     capabilities: () => registered()?.connection.welcome?.capabilities,
     ids: v2Ids,
     state: () => useAppStore.getState(),
