@@ -124,6 +124,34 @@ local models, across multiple git worktrees of a repository, side by side.
   project files and server projects mixed (stored in the app's user-data directory).
   Missing files are dropped; a server project stays until you remove it with its **×**.
 
+## Project bot sandbox
+
+Every project bot turn runs in an OS sandbox (`sandbox-exec` on macOS, `bwrap` on
+Linux) that hides Trek's user-data directory from the bot and everything it starts.
+Each bot start first proves the sandbox works by trying to read a canary file. If the
+read succeeds, or no sandbox is available, the bot won't run. A bot folder or
+repository inside the user-data directory is refused too.
+
+These Trek tools run something outside the sandbox, so they always ask for your
+approval, whatever `POLICY.json` says: `start_session`, `send_prompt`, `send_keys`,
+`start_stack`, `create_worktree`, `load_worktree`, `save_session_type`,
+`delete_session_type`. Trek's MCP server checks the bot's policy on every call.
+
+Known gaps:
+
+- **macOS:** the bot can read the environment and arguments of any non-system process
+  you run (Seatbelt can't block `KERN_PROCARGS2`). That includes credentials exported
+  in your shell profile. Trek keeps its own tokens out of every environment and argument
+  list. On Linux other processes are fully hidden.
+- **Codex older than 0.148** gets no Trek tools (401). Update Codex.
+- **The bot's own per-turn token** is in its environment while a turn runs.
+- **Network access** is not restricted.
+- **Apple Events / `osascript`** are not blocked. Only macOS's Automation consent
+  stands in the way.
+- **Hard links and backups** of Trek's files that existed before the sandbox started
+  stay readable.
+- **Windows** is unsupported: the bot doesn't run there.
+
 ## Servers and server projects
 
 Trek can also open projects that live on a [trek-server](server/README.md), which

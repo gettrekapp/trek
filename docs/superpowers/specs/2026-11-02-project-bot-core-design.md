@@ -173,9 +173,23 @@ The starter `BOT.md` tells the bot:
 
 - Runs locally with `.trekbot/` as the working directory and `--add-dir` for each
   local repository, the same pattern as Global Claude.
-- Uses its own MCP token and config for `trek-dev` tools, separate from the window's
-  sessions, so that the policy route and `request_approval` are out of their reach.
-  Remote worktrees are reached through those tools only.
+- Uses its own MCP token for `trek-dev` tools, separate from the window's sessions, so
+  that the policy route and `request_approval` are out of their reach. Each turn gets a
+  fresh token, revoked when the turn ends, so between turns no bot token works. The
+  config is passed inline and names `${TREK_BOT_TOKEN}`, which the CLI fills in from its
+  environment; no file holds it, and the policy hook hands it to curl on stdin, never in
+  argv. Remote worktrees are reached through those tools only.
+- No session's token is in any process's environment or argv: on macOS any process of
+  the user, the sandboxed bot's included, can read another's (`ps -E`, `KERN_PROCARGS2`),
+  and Seatbelt can't stop it. Claude, Local and Gemini read 0600 config files; Codex runs
+  an `http_headers_helper` that prints a 0600 headers file (Codex 0.148 or later).
+- Runs inside an OS sandbox that hides Trek's userData from the whole process tree:
+  `sandbox-exec` on macOS, `bwrap` on Linux. Windows has none, so the bot doesn't run
+  there. Each start proves the sandbox with a canary file first, and refuses to run
+  without it. The bot also refuses a folder or repository inside userData. The policy's
+  path checks and `Read`/`Edit` deny rules for userData are a second layer that gives the
+  model a clear reason. Claude Code's own sandbox is off, since it can't nest. See
+  `2026-11-07-bot-os-sandbox.md`.
 - Default timeout is 15 minutes. On timeout, the process tree is killed.
 - Default cap is 100 turns per local day. Once reached, heartbeats and reflection
   stop until the next day, while chat and approval decisions still run.
@@ -183,13 +197,16 @@ The starter `BOT.md` tells the bot:
 ## Autonomy tiers
 
 A `PreToolUse` hook sends each tool call to `Policy`, which allows or denies it.
-`POLICY.json` can move items between the free and ask tiers. The never tier is
-fixed.
+Trek's own tools are checked by Trek's MCP server instead, when the call arrives, so
+a bot that calls the server directly with its token meets the same policy.
+`POLICY.json` can move items between the free and ask tiers, except the always-ask
+tools below. The never tier is fixed.
 
 | Tier | Behaviour | Defaults |
 |---|---|---|
-| Free | Allowed | Read files; write `HEARTBEAT.md`, `MEMORY.md`, `knowledge/`, `journal/`; start and prompt sessions; create worktrees; run stacks; set notes and tags |
-| Ask | Denied until approved | `git push`, opening or merging PRs, closing sessions, unloading or deleting worktrees, promoting to primary, changing session types |
+| Free | Allowed | Read files; write `HEARTBEAT.md`, `MEMORY.md`, `knowledge/`, `journal/`; queue prompts; read terminals; stop stacks; set notes and tags |
+| Ask | Denied until approved | `git push`, opening or merging PRs, closing sessions, unloading or deleting worktrees, promoting to primary |
+| Always ask | Denied until approved, whatever `POLICY.json` says | `start_session`, `send_prompt`, `send_keys`, `start_stack`, `create_worktree`, `load_worktree`, `save_session_type`, `delete_session_type`: each runs something (a session, a stack, a worktree's setup) outside the bot's sandbox |
 | Never | Always denied | Writing `BOT.md`, `POLICY.json`, `config.json` or `state/`; destroying the bot folder or an ancestor of it; force-push; reading or overwriting Trek's secret stores |
 
 Trek tools match by exact name, so that enforcement is firm. Shell commands match
@@ -209,12 +226,36 @@ into approval.
 
 ### Known limits
 
-- **Delegated sessions are not bound by the tiers.** A session the bot starts runs
-  under the project's normal permissions, so it could `git push` itself. The ban on
-  delegating this work is only an instruction. Hard enforcement is a follow-up.
+- **Delegated sessions are not bound by the tiers or the sandbox.** A session the bot
+  starts runs under the project's normal permissions, so it could `git push` itself.
+  That is why starting, prompting and sending keys to sessions are always-ask: the user
+  approves each one. A prompt queued with `enqueue_prompt` (free) still reaches a
+  session, and the ban on delegating ask-tier work is only an instruction.
 - **Prompt injection is not fully prevented.** The bot acts unattended on content
   that could contain instructions. Its rules and the tiers reduce the risk and
   limit the damage.
+
+### Known gaps in the sandbox
+
+- **macOS: other processes' environment and argv are readable.** Seatbelt can't gate
+  `sysctl(KERN_PROCARGS2)`, so the bot can read the environment and arguments of any
+  non-system process the same user runs, including credentials exported in a shell
+  profile. Trek keeps its own tokens out of every environment and argument list.
+  `botSandboxMac.test.mjs` asserts the gap still exists. Linux's PID namespace hides
+  other processes entirely.
+- **Codex older than 0.148** ignores `http_headers_helper`, reaches Trek's MCP server
+  without a token and gets 401: no Trek tools until it is updated. There is no
+  fallback to the environment.
+- **The bot's own per-turn token is in its environment** during a turn, so any process
+  of the user can read it then. It is gated by the same policy and revoked when the
+  turn ends.
+- **The network is not restricted.** The sandbox only keeps Trek's data unreadable.
+- **Apple Events (`osascript`) are not blocked.** macOS's Automation consent prompt is
+  the only gate against the bot driving another app outside the sandbox.
+- **Hard links and backups** of userData files that exist under other paths before the
+  sandbox starts (a hard link, a Time Machine snapshot, a mounted backup) stay readable.
+  Secret stores are encrypted, so such copies are ciphertext; plaintext files are not.
+- **Windows is unsupported.** The bot refuses to start there.
 
 ## Panel
 

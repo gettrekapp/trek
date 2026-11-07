@@ -1,5 +1,8 @@
 // The userData files a bot may never read or write (see host/bot/policy). Pure.
 //
+// The OS sandbox (host/bot/sandbox) is the primary layer: it hides all of userData from the
+// bot's whole process tree. These path checks are the second layer, and give the bot a clear reason.
+//
 // Policy also denies each one's temp and set-aside copies (`<name>.<pid>.tmp`, `<name>.corrupt-<time>`),
 // and `*` stands for any run of characters in a name, for the per-window MCP configs.
 export const BOT_SECRET_FILES = [

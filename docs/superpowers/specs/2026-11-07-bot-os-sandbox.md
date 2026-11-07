@@ -13,6 +13,22 @@ around it with `$( )`, variables, `pushd`, `grep -r ~`, `find -exec cat`, `tar`,
 
 This is a spike. The prototypes were throwaway and have been deleted. Only this doc is committed.
 
+**Outcome.** The plan is `docs/superpowers/plans/2026-11-07-bot-os-sandbox.md`. It departs from
+this spike in two places, both checked by its prototype:
+
+- **Linux** adds `--unshare-pid --proc /proc`. Without a PID namespace, killing `bwrap` (or a
+  SIGTERM to the group) left a background process alive; with one, the kernel ends everything
+  when the namespace's first process exits. Trek's process-group kill still works.
+- **Tickets became server-side policy.** Trek's MCP server runs the bot's policy on every bot
+  `tools/call` itself, and the hook leaves `mcp__trek-dev__*` calls to it. There is no ticket to
+  match, so nothing depends on the CLI sending the exact input the hook saw.
+
+A security review then found what the sandbox can't hide on macOS: other processes' argv and
+environment. Seatbelt doesn't gate `sysctl(KERN_PROCARGS2)`; `(deny process-info* (target others))`,
+`(deny sysctl-read)` and `(deny default)` all leave it readable (`ps -E` itself can't run in the
+sandbox, being setuid). So no Trek token is in any process's environment or argv, Codex's included,
+and the bot's token is per turn. On Linux the PID namespace hides other processes' `/proc` entries.
+
 Environment for every prototype: macOS 26.2 (25C56), Apple silicon, Claude Code `2.1.319`
 (logged in with claude.ai auth), `--model haiku`. Every prototype used a dummy "secret" directory
 under the session scratchpad. In the outputs below `$S` stands for that directory.
