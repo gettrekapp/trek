@@ -12,6 +12,7 @@ import { clearV2Projection, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
+import { agentsFetchKey } from './sessionChoices'
 import { ClientError, type TopicMirror } from '../../../shared/client/index.ts'
 import type { TopicRev } from '../../../shared/protocolV2'
 import { OFF_VIEW } from '../../../shared/bot'
@@ -50,7 +51,8 @@ const EMPTY: Partial<AppState> = {
   terminalQueues: {},
   decisions: {},
   serverOffline: false,
-  serverLink: null
+  serverLink: null,
+  serverAgents: null
 }
 
 /**
@@ -192,6 +194,30 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     left: () => left
   })
 
+  // server.agents, for the New session menu and the Global bar: slow the first time (a login
+  // shell per program on the server), so asked when the link comes up rather than when a menu
+  // opens, and again on each reconnect and claudeCommand edit (agentsFetchKey). The last answer
+  // stays meanwhile; a failed one is not retried until the key changes.
+  let agentsKey: string | null = null
+  const followAgents = (state: AppState): void => {
+    const key = agentsFetchKey({
+      link: state.serverLink,
+      hasProject: state.project !== null,
+      capabilities: registered()?.connection.welcome?.capabilities,
+      claudeCommand: state.project?.claudeCommand
+    })
+    if (key === agentsKey) return
+    agentsKey = key
+    if (key === null) return
+    request('server.agents', { projectId }).then(
+      (agents) => {
+        if (!left && agentsKey === key) useAppStore.setState({ serverAgents: agents })
+      },
+      () => {}
+    )
+  }
+  const offAgents = useAppStore.subscribe(followAgents)
+
   // The store's own setters (zustand 5's initial state), never a live value that may already be an override.
   const initial = useAppStore.getInitialState()
   const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
@@ -209,6 +235,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     backend,
     leave: () => {
       left = true
+      offAgents()
       cancelRepoPath()
       for (const cancel of [...waits]) cancel()
       disposeV2Terminals()

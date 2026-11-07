@@ -1,14 +1,20 @@
-// What a server window's New session menu offers. Until the server says which
-// agents it can launch (3c-3), this machine's agents and llmSettings are no
-// guide: the server runs the session with its own. So the menu offers
+// What a server window's New session menu offers. This machine's agents and
+// llmSettings are no guide: the server runs the session with its own. A server
+// with `agents` lists them (`server.agents`, fetched by installV2), and the menu
+// offers Default (labelled with the project's llmDefault, else the server's),
+// every agent the server knows, greyed out where it is not installed, "Choose…"
+// over those, and the session types. Until that answer, and for an older
+// server, the 3c-2 interim:
 // - Default: no `llm`, the server resolves it (the project's llmDefault, else
 //   the server's own default);
 // - each other agent the project's settings on the server already name
 //   (llmDefault, globalLlm, the session types' agents), known to be wanted;
 // - the project's session types, which are the server's.
 // Pure.
-import { describeLlm } from '../../../shared/providers/selection.ts'
-import type { LlmSelection } from '../../../shared/providers/types'
+import { describeLlm, resolveGlobalLlm } from '../../../shared/providers/selection.ts'
+import { CAPABILITY, type ServerAgents } from '../../../shared/protocolV2.ts'
+import type { ConnectionStatus } from '../../../shared/client/connection'
+import type { LlmProviderId, LlmSelection } from '../../../shared/providers/types'
 import type { SessionType } from '../../../shared/types'
 
 export interface V2ProjectLlms {
@@ -40,8 +46,51 @@ export function v2SessionChoices(settings: V2ProjectLlms): V2SessionChoices {
   return { defaultLabel, picks }
 }
 
-/** The Global panel's agent, for its bar: the project's globalLlm, else its default, else the server's. */
-export function v2GlobalLabel(settings: V2ProjectLlms): string {
+export interface V2ServerAgentChoices {
+  /** The Default entry's description: the project's llmDefault, else the server's */
+  defaultLabel: string
+  /** Every agent the server knows, in its order: a one-off pick each, with its default model */
+  agents: { llm: LlmSelection; label: string; installed: boolean }[]
+  /** The providers "Choose…" offers */
+  providers: LlmProviderId[]
+}
+
+/** The menu over the server's list (`server.agents`). `installed` is a hint: an agent it misses may still start. */
+export function v2ServerAgents(settings: Pick<V2ProjectLlms, 'llmDefault'>, server: ServerAgents): V2ServerAgentChoices {
+  return {
+    defaultLabel: describeLlm(settings.llmDefault ?? server.llmDefault),
+    agents: server.agents.map((a) => ({ llm: { provider: a.provider }, label: a.label, installed: a.installed })),
+    providers: server.agents.map((a) => a.provider)
+  }
+}
+
+/**
+ * The Global panel's agent, for its bar. With the server's default
+ * (`server.agents`), as the server resolves it: the project's globalLlm, else
+ * its llmDefault, else the server's, past any without MCP tools. Without it:
+ * the project's globalLlm, else its default, else "server default".
+ */
+export function v2GlobalLabel(settings: V2ProjectLlms, serverDefault?: LlmSelection): string {
+  if (serverDefault) return describeLlm(resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault))
   const llm = settings.globalLlm ?? settings.llmDefault
   return llm ? describeLlm(llm) : 'server default'
+}
+
+export interface AgentsFetchState {
+  link: ConnectionStatus | null
+  hasProject: boolean
+  /** The welcome's; undefined before the first one */
+  capabilities: readonly string[] | undefined
+  claudeCommand?: string
+}
+
+/**
+ * What the window's `server.agents` answer depends on, or null while it cannot
+ * ask: the link is down, no project has arrived, or the server has no `agents`.
+ * A new key asks again: a reconnect, or an edit of the project's claudeCommand
+ * (Claude's command on the server, the one `installed` checks).
+ */
+export function agentsFetchKey(state: AgentsFetchState): string | null {
+  if (state.link !== 'connected' || !state.hasProject || !state.capabilities?.includes(CAPABILITY.agents)) return null
+  return state.claudeCommand?.trim() ?? ''
 }

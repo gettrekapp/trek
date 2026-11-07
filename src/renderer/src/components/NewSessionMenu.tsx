@@ -4,14 +4,15 @@ import { useAppStore } from '../store'
 import { defaultSessionLlm } from '../llm'
 import { LlmPicker } from './LlmPicker'
 import { describeLlm } from '../../../shared/providers/selection'
-import { v2SessionChoices } from '../v2/sessionChoices'
+import { v2ServerAgents, v2SessionChoices } from '../v2/sessionChoices'
 import type { LlmSelection } from '../../../shared/providers/types'
 import type { SessionType } from '../../../shared/types'
 
 const MENU_WIDTH = 300
 
-/** The last "Choose…" pick in this window, offered again next time. */
+/** The last "Choose…" pick in this window, offered again next time; a server window's apart (its agents are the server's). */
 let lastPick: LlmSelection | undefined
+let lastServerPick: LlmSelection | undefined
 
 interface Props {
   disabled: boolean
@@ -37,11 +38,18 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
   useAppStore((s) => s.llmSettings)
   const llmDefault = useAppStore((s) => s.project?.llmDefault)
   const globalLlm = useAppStore((s) => s.project?.globalLlm)
-  // A server window runs the session with the server's agents, not this machine's (3c-3 lists them).
+  // A server window runs the session with the server's agents, not this machine's: the ones it
+  // listed (server.agents), or the interim from the project's settings until it has.
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
-  const v2 = serverWindow ? v2SessionChoices({ llmDefault, globalLlm, sessionTypes }) : null
+  const serverAgents = useAppStore((s) => s.serverAgents)
+  const listed = serverWindow && serverAgents ? v2ServerAgents({ llmDefault }, serverAgents) : null
+  const v2 = serverWindow && !listed ? v2SessionChoices({ llmDefault, globalLlm, sessionTypes }) : null
   const fallback = defaultSessionLlm()
-  const fallbackLabel = v2 ? v2.defaultLabel : describeLlm(fallback)
+  const fallbackLabel = listed ? listed.defaultLabel : v2 ? v2.defaultLabel : describeLlm(fallback)
+  /** What "Choose…" starts from: the last pick, else the default the session would get. */
+  const firstPick = (): LlmSelection =>
+    listed ? (lastServerPick ?? llmDefault ?? serverAgents?.llmDefault ?? fallback) : (lastPick ?? fallback)
+  const installed = listed ? Object.fromEntries(listed.agents.map((a) => [a.llm.provider, a.installed])) : null
 
   // Disabled while open (a server window going offline): close it, its picks would do nothing.
   useEffect(() => {
@@ -91,7 +99,7 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
       x: Math.max(8, Math.min(rect.left, window.innerWidth - MENU_WIDTH - 8)),
       y: rect.bottom + 6
     })
-    setPick(lastPick ?? defaultSessionLlm())
+    setPick(firstPick())
     setChoosing(false)
     setOpen(true)
   }
@@ -123,7 +131,46 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
               <span className="skill-menu-name">Default</span>
               <span className="skill-menu-desc">{fallbackLabel}</span>
             </button>
-            {v2 ? (
+            {listed && installed ? (
+              choosing ? (
+                <div className="new-session-choose">
+                  <LlmPicker
+                    value={pick}
+                    onChange={setPick}
+                    filter={(p) => listed.providers.includes(p.id)}
+                    remote={{ installed }}
+                  />
+                  <button
+                    className="btn btn-accent"
+                    disabled={pick.provider === 'local' && !pick.model}
+                    onClick={() => {
+                      lastServerPick = pick
+                      start(undefined, pick)
+                    }}
+                  >
+                    Start
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {listed.agents.map((agent) => (
+                    <button
+                      key={agent.llm.provider}
+                      className={`skill-menu-item server-agent-item ${agent.installed ? '' : 'not-installed'}`}
+                      title={agent.installed ? undefined : "The server's login shell does not find its command; it may still start"}
+                      onClick={() => start(undefined, agent.llm)}
+                    >
+                      <span className="skill-menu-name">{agent.label}</span>
+                      <span className="skill-menu-desc">{agent.installed ? 'Its default model' : 'Not installed on the server'}</span>
+                    </button>
+                  ))}
+                  <button className="skill-menu-item" onClick={() => setChoosing(true)}>
+                    <span className="skill-menu-name">Choose…</span>
+                    <span className="skill-menu-desc">Pick an agent, model and effort for one session</span>
+                  </button>
+                </>
+              )
+            ) : v2 ? (
               v2.picks.map((llm) => (
                 <button key={describeLlm(llm)} className="skill-menu-item" onClick={() => start(undefined, llm)}>
                   <span className="skill-menu-name">{describeLlm(llm)}</span>

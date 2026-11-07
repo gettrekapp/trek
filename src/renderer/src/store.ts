@@ -8,6 +8,7 @@ import { sanitizeAppearance } from '../../shared/appearance'
 import { sanitizeProjectLlm } from '../../shared/providers/selection'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
+import type { ServerAgents } from '../../shared/protocolV2'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   EnvCheckResult,
@@ -208,6 +209,8 @@ export interface AppState {
   serverLink: ConnectionStatus | null
   /** Sets `serverLink`, and `serverOffline` to whether it is anything but connected. */
   setServerLink: (status: ConnectionStatus) => void
+  /** The agents the server window's server can launch (`server.agents`); null until it answered, or without `agents` */
+  serverAgents: ServerAgents | null
   /** The start screen opens on Connect with this server picked (once), after Pick another project. */
   connectServerId: string | null
   setConnectServerId: (id: string | null) => void
@@ -370,6 +373,7 @@ export const useAppStore = create<AppState>((set) => ({
   setServerWindow: (serverWindow) => set({ serverWindow }),
   serverOffline: false,
   serverLink: null,
+  serverAgents: null,
   setServerLink: (serverLink) =>
     set((state) => {
       const serverOffline = serverLink !== 'connected'

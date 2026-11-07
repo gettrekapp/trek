@@ -3,7 +3,7 @@ import { useAppStore } from '../store'
 import { getProvider, PROVIDER_LIST } from '../../../shared/providers/registry'
 import { effortsFor } from '../../../shared/providers/selection'
 import { DEFAULT_LLM_SETTINGS, DEFAULT_LOCAL_URLS } from '../../../shared/providers/types'
-import type { LlmProvider, LlmSelection, ModelInfo } from '../../../shared/providers/types'
+import type { LlmProvider, LlmProviderId, LlmSelection, ModelInfo } from '../../../shared/providers/types'
 
 const CUSTOM = '__custom__'
 
@@ -14,10 +14,16 @@ interface Props {
   filter?: (provider: LlmProvider) => boolean
   /** Host the agent will run on, for the "not installed" check; null = this machine */
   serverId?: string | null
+  /**
+   * The agent runs on a v2 server (a server window): `installed` is what the
+   * server reported (`server.agents`). Nothing is checked or listed on this
+   * machine, so Local's model is typed rather than fetched from this machine.
+   */
+  remote?: { installed: Partial<Record<LlmProviderId, boolean>> }
 }
 
 /** Provider → Model → Effort. Changing provider resets model and effort. */
-export function LlmPicker({ value, onChange, filter, serverId = null }: Props): React.JSX.Element {
+export function LlmPicker({ value, onChange, filter, serverId = null, remote }: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
   const project = useAppStore((s) => s.project)
   const providers = PROVIDER_LIST.filter((p) => !filter || filter(p))
@@ -59,12 +65,12 @@ export function LlmPicker({ value, onChange, filter, serverId = null }: Props): 
   }
 
   useEffect(() => {
-    if (isLocal) loadLocal()
+    if (isLocal && !remote) loadLocal()
     return () => {
       loadToken.current++
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLocal, backend, baseUrl])
+  }, [isLocal, backend, baseUrl, !remote])
 
   const command =
     (provider.id === 'claude' ? project?.claudeCommand?.trim() : undefined) ||
@@ -73,6 +79,7 @@ export function LlmPicker({ value, onChange, filter, serverId = null }: Props): 
   useEffect(() => {
     let cancelled = false
     setInstalled(null)
+    if (remote) return
     // Only the binary name is checked; a command with arguments is assumed present.
     const binary = command.split(/\s+/)[0]
     window.api
@@ -82,7 +89,7 @@ export function LlmPicker({ value, onChange, filter, serverId = null }: Props): 
     return () => {
       cancelled = true
     }
-  }, [command, serverId])
+  }, [command, serverId, !remote])
 
   const models = isLocal ? (localModels ?? []) : provider.models
   const known = models.some((m) => m.id === value.model)
@@ -166,6 +173,11 @@ export function LlmPicker({ value, onChange, filter, serverId = null }: Props): 
             </option>
           ))}
         </select>
+      )}
+      {remote && remote.installed[provider.id] === false && (
+        <span className="settings-desc settings-warn">
+          {provider.label} isn&apos;t installed on the server — its command is set in the server&apos;s config.
+        </span>
       )}
       {isLocal && localError && (
         <span className="settings-desc settings-warn">

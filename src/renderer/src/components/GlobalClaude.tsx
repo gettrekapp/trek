@@ -60,6 +60,7 @@ export function GlobalClaude(): React.JSX.Element {
   useAppStore((s) => s.llmSettings)
   // A server window: the server picks the agent, and while its link is down nothing can start or close.
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
   const offline = useAppStore((s) => s.serverOffline)
   const [height, setHeight] = useState(storedHeight)
   const [error, setError] = useState<string | null>(null)
@@ -248,7 +249,7 @@ export function GlobalClaude(): React.JSX.Element {
         <span className="global-chevron">{open ? '▾' : '▴'}</span>
         <span className="global-title">
           Global ·{' '}
-          {serverWindow ? v2GlobalLabel({ globalLlm, llmDefault }) : getProvider(globalSessionLlm().provider).label}
+          {serverWindow ? v2GlobalLabel({ globalLlm, llmDefault }, serverDefault) : getProvider(globalSessionLlm().provider).label}
         </span>
         <StatusBadge status={status ?? null} />
         {decisionCount > 0 && (

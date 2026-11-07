@@ -1763,6 +1763,11 @@ button:disabled {
   cursor: default;
 }
 
+/* An agent the server reports as not installed: still offered (the check is a hint), greyed out. */
+.skill-menu-item.not-installed {
+  opacity: 0.5;
+}
+
 .docker-menu-trigger {
   opacity: 0.6;
   padding: 0 3px;
