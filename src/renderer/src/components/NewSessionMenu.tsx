@@ -4,6 +4,7 @@ import { useAppStore } from '../store'
 import { defaultSessionLlm } from '../llm'
 import { LlmPicker } from './LlmPicker'
 import { describeLlm } from '../../../shared/providers/selection'
+import { v2SessionChoices } from '../v2/sessionChoices'
 import type { LlmSelection } from '../../../shared/providers/types'
 import type { SessionType } from '../../../shared/types'
 
@@ -34,8 +35,13 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
   const sessionTypes = useAppStore((s) => s.project?.sessionTypes) ?? []
   // Re-render when the defaults change so the Default entry stays accurate.
   useAppStore((s) => s.llmSettings)
-  useAppStore((s) => s.project?.llmDefault)
+  const llmDefault = useAppStore((s) => s.project?.llmDefault)
+  const globalLlm = useAppStore((s) => s.project?.globalLlm)
+  // A server window runs the session with the server's agents, not this machine's (3c-3 lists them).
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  const v2 = serverWindow ? v2SessionChoices({ llmDefault, globalLlm, sessionTypes }) : null
   const fallback = defaultSessionLlm()
+  const fallbackLabel = v2 ? v2.defaultLabel : describeLlm(fallback)
 
   useEffect(() => {
     if (!open) return
@@ -107,9 +113,16 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
           >
             <button className="skill-menu-item" onClick={() => start()}>
               <span className="skill-menu-name">Default</span>
-              <span className="skill-menu-desc">{describeLlm(fallback)}</span>
+              <span className="skill-menu-desc">{fallbackLabel}</span>
             </button>
-            {choosing ? (
+            {v2 ? (
+              v2.picks.map((llm) => (
+                <button key={describeLlm(llm)} className="skill-menu-item" onClick={() => start(undefined, llm)}>
+                  <span className="skill-menu-name">{describeLlm(llm)}</span>
+                  <span className="skill-menu-desc">An agent this project&apos;s settings use</span>
+                </button>
+              ))
+            ) : choosing ? (
               <div className="new-session-choose">
                 <LlmPicker value={pick} onChange={setPick} serverId={serverId} />
                 <button
@@ -141,7 +154,7 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
                 <span className="session-type-menu-text">
                   <span className="skill-menu-name">
                     {type.name.trim() || 'Untitled'}
-                    {type.llm && describeLlm(type.llm) !== describeLlm(fallback) && (
+                    {type.llm && describeLlm(type.llm) !== fallbackLabel && (
                       <span className="session-type-llm-chip">{describeLlm(type.llm)}</span>
                     )}
                   </span>

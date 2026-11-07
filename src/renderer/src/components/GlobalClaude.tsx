@@ -11,6 +11,8 @@ import { globalSessionLlm } from '../llm'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { getProvider } from '../../../shared/providers/registry'
+import { v2GlobalLabel } from '../v2/sessionChoices'
+import { errorText } from '../v2/errors'
 import { describeLlm } from '../../../shared/providers/selection'
 import { BotPanel } from './BotPanel'
 import { StatusBadge } from './StatusBadge'
@@ -54,9 +56,12 @@ export function GlobalClaude(): React.JSX.Element {
   const decisionCount = order.filter((id) => decisions[id]).length + (decisions[BOT_DECISION_ID] ? 1 : 0)
   const botView = useAppStore((s) => s.botView)
   // Subscribed so the bar label follows the configured Global agent.
-  useAppStore((s) => s.project?.globalLlm)
-  useAppStore((s) => s.project?.llmDefault)
+  const globalLlm = useAppStore((s) => s.project?.globalLlm)
+  const llmDefault = useAppStore((s) => s.project?.llmDefault)
   useAppStore((s) => s.llmSettings)
+  // A server window: the server picks the agent, and while its link is down nothing can start or close.
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  const offline = useAppStore((s) => s.serverOffline)
   const [height, setHeight] = useState(storedHeight)
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -67,10 +72,10 @@ export function GlobalClaude(): React.JSX.Element {
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
 
   useEffect(() => {
-    if (!open || hasTabs || view === 'bot') return
+    if (!open || hasTabs || view === 'bot' || offline) return
     setError(null)
-    getBackend().sessions.openGlobal().catch((err) => setError(String(err)))
-  }, [open, hasTabs, view])
+    getBackend().sessions.openGlobal().catch((err) => setError(errorText(err)))
+  }, [open, hasTabs, view, offline])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -88,11 +93,12 @@ export function GlobalClaude(): React.JSX.Element {
   const toggle = (): void => useAppStore.getState().setGlobalPanelOpen(!open)
 
   const newTab = (): void => {
+    if (offline) return
     const viewChanged = view !== 'sessions'
     useAppStore.getState().setGlobalView('sessions')
     if (!hasTabs && viewChanged) return // the effect above opens the first session on this change of view
     setError(null)
-    getBackend().sessions.startGlobal().catch((err) => setError(String(err)))
+    getBackend().sessions.startGlobal().catch((err) => setError(errorText(err)))
   }
 
   const selectTab = (id: string): void => {
@@ -102,6 +108,7 @@ export function GlobalClaude(): React.JSX.Element {
   }
 
   const startRename = (id: string): void => {
+    if (offline) return
     setEditingId(id)
     setDraft(terminals[id]?.title ?? '')
   }
@@ -159,7 +166,7 @@ export function GlobalClaude(): React.JSX.Element {
                   if (e.button === 1) e.preventDefault()
                 }}
                 onAuxClick={(e) => {
-                  if (e.button === 1) void getBackend().sessions.close(id)
+                  if (e.button === 1 && !offline) void getBackend().sessions.close(id)
                 }}
                 title="Double-click to rename"
               >
@@ -189,11 +196,11 @@ export function GlobalClaude(): React.JSX.Element {
                   </>
                 )}
                 <span
-                  className="session-tab-close"
-                  title="Close tab"
+                  className={`session-tab-close ${offline ? 'disabled' : ''}`}
+                  title={offline ? 'Server disconnected' : 'Close tab'}
                   onClick={(e) => {
                     e.stopPropagation()
-                    void getBackend().sessions.close(id)
+                    if (!offline) void getBackend().sessions.close(id)
                   }}
                 >
                   ×
@@ -212,7 +219,12 @@ export function GlobalClaude(): React.JSX.Element {
               <span className="global-tab-title">Bot</span>
             </div>
           )}
-          <button className="global-tab-add" onClick={newTab} title="New Global tab">
+          <button
+            className="global-tab-add"
+            onClick={newTab}
+            disabled={offline}
+            title={offline ? 'Server disconnected' : 'New Global tab'}
+          >
             +
           </button>
         </div>
@@ -230,7 +242,10 @@ export function GlobalClaude(): React.JSX.Element {
         title={open ? 'Hide the Global panel (⌘J)' : 'Show the Global panel (⌘J)'}
       >
         <span className="global-chevron">{open ? '▾' : '▴'}</span>
-        <span className="global-title">Global · {getProvider(globalSessionLlm().provider).label}</span>
+        <span className="global-title">
+          Global ·{' '}
+          {serverWindow ? v2GlobalLabel({ globalLlm, llmDefault }) : getProvider(globalSessionLlm().provider).label}
+        </span>
         <StatusBadge status={status ?? null} />
         {decisionCount > 0 && (
           <span className="decision-icon" title={`${decisionCount} global session(s) or the project bot need a decision`}>
