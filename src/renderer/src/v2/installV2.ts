@@ -13,6 +13,7 @@ import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
 import { agentsFetchKey } from './sessionChoices'
+import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { ClientError, type TopicMirror } from '../../../shared/client/index.ts'
 import type { TopicRev } from '../../../shared/protocolV2'
 import { OFF_VIEW } from '../../../shared/bot'
@@ -218,6 +219,22 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   }
   const offAgents = useAppStore.subscribe(followAgents)
 
+  const noteText = (repoId: string, branch: string): string =>
+    useAppStore.getState().project?.repositories.find((r) => r.id === repoId)?.branchNotes?.[branch] ?? ''
+  const drafts = createNoteDrafts({
+    setNote: (repoId, branch, text, expected) => backend.branch.setNote(repoId, branch, text, expected),
+    saved: noteText,
+    offline: () => useAppStore.getState().serverOffline,
+    show: (title, message) => void showError(title, message),
+    // The user's own unsaved text, at leave: shown even though the window has moved on.
+    showAlways: (title, message) => void window.api.showError(title, message)
+  })
+  setV2NoteDrafts(drafts)
+  // The link is back: send what was typed while it was down, on any branch.
+  const offDrafts = useAppStore.subscribe((state, previous) => {
+    if (previous.serverOffline && !state.serverOffline) drafts.saveAll()
+  })
+
   // The store's own setters (zustand 5's initial state), never a live value that may already be an override.
   const initial = useAppStore.getInitialState()
   const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
@@ -234,6 +251,10 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     projectId,
     backend,
     leave: () => {
+      // While requests still go out: each unsaved draft is sent once more, or its text shown.
+      drafts.leave()
+      setV2NoteDrafts(null)
+      offDrafts()
       left = true
       offAgents()
       cancelRepoPath()
