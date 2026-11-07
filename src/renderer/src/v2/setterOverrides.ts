@@ -8,7 +8,10 @@
 // setters that would move it locally (setTerminalStatus, Codex discovery's
 // setTerminalSession, saveGlobalSessions' setGlobalSessions) do nothing here.
 // So does addWorktreeInstance: every worktree of a server project comes from
-// the mirror (AddWorktreeModal's v2 path never calls it).
+// the mirror (AddWorktreeModal's v2 path never calls it). Decisions are the
+// server's too: only its MCP opens one (requestDecision does nothing), any
+// input the server counts closes it, and a dismiss (clearDecision, from
+// DecisionIcon and NotificationsMenu) asks the server; none is cleared here.
 //
 // Pure: windowKind.ts installs the result with useAppStore.setState and puts
 // the originals back when the window leaves the server project.
@@ -33,13 +36,15 @@ export const OVERRIDDEN_SETTERS = [
   'setTerminalStatus',
   'setTerminalSession',
   'setGlobalSessions',
-  'addWorktreeInstance'
+  'addWorktreeInstance',
+  'requestDecision',
+  'clearDecision'
 ] as const
 
 export type OverriddenSetter = (typeof OVERRIDDEN_SETTERS)[number]
 export type SetterOverrides = Pick<AppState, OverriddenSetter>
 
-type Slice = Pick<AppState, 'terminals' | 'terminalQueues'>
+type Slice = Pick<AppState, 'terminals' | 'terminalQueues' | 'decisions'>
 
 /**
  * Where a failed request goes, with a title for the dialog: a setter is
@@ -59,6 +64,8 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
   const noop = (): void => {}
   // `session.seen` already sent and not answered yet: a focus repeated meanwhile sends nothing.
   const seenInFlight = new Set<string>()
+  // Likewise a dismiss: the decision stays shown until the server's patch removes it.
+  const dismissInFlight = new Set<string>()
   return {
     renameTerminal: (id, title, expected) =>
       send('Could not rename the session', backend.sessions.rename(id, title, expected)),
@@ -101,6 +108,15 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
     setTerminalStatus: noop,
     setTerminalSession: noop,
     setGlobalSessions: noop,
-    addWorktreeInstance: noop
+    addWorktreeInstance: noop,
+    requestDecision: noop,
+    clearDecision: (id) => {
+      if (!state().decisions[id] || dismissInFlight.has(id)) return
+      dismissInFlight.add(id)
+      backend.sessions
+        .dismissDecision(id)
+        .catch((err: unknown) => reports.report('Could not dismiss the decision', err))
+        .finally(() => dismissInFlight.delete(id))
+    }
   }
 }

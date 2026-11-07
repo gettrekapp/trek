@@ -96,6 +96,8 @@ export interface WindowBackend {
     markComplete(terminalId: string, complete: boolean): Promise<void>
     /** The user has seen the session: clears attention and done */
     seen(terminalId: string): Promise<void>
+    /** The user dismissed the session's open decision */
+    dismissDecision(terminalId: string): Promise<void>
   }
   readonly worktrees: {
     load(worktreeId: string): Promise<void>
@@ -213,7 +215,8 @@ export const legacyBackend: WindowBackend = {
       const status = state.terminals[terminalId]?.status
       if (status && (status === 'complete') !== complete) state.toggleTerminalComplete(terminalId)
     },
-    seen: async (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId)
+    seen: async (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId),
+    dismissDecision: async (terminalId) => useAppStore.getState().clearDecision(terminalId)
   },
   worktrees: {
     load: (worktreeId) => loadWorktree(worktreeId),

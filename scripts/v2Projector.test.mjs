@@ -444,3 +444,18 @@ test('shareSlice: a key that went away, or an emptied list, is a new object', ()
   const fresh = projectV2(fixture()).slice
   assert.equal(shareSlice({}, fresh).project, fresh.project)
 })
+
+test('an open decision becomes the session\'s pending decision, live sessions only', () => {
+  const snapshot = fixture()
+  const main = snapshot.repositories[0].worktrees[0]
+  main.sessions[2].decision = { question: 'Ship it?', at: 1000 }
+  snapshot.globalSessions[0].decision = { question: 'Which repo?', at: 2000 }
+  // An unloaded worktree's sessions have no tab, so no decision either.
+  snapshot.repositories[0].worktrees[1].sessions[0].decision = { question: 'Unseen', at: 3000 }
+  const { slice } = projectV2(snapshot)
+  assert.deepEqual(slice.decisions, {
+    s3: { terminalId: 's3', question: 'Ship it?', requestedAt: 1000 },
+    g1: { terminalId: 'g1', question: 'Which repo?', requestedAt: 2000 }
+  })
+  assert.deepEqual(projectV2(fixture()).slice.decisions, {})
+})

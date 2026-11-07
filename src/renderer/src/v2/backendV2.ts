@@ -259,6 +259,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       seen: async (terminalId) => {
         await request('session.seen', session(terminalId))
+      },
+      // A server without `decisions` has none to dismiss.
+      dismissDecision: async (terminalId) => {
+        if (can(CAPABILITY.decisions)) await request('session.dismissDecision', session(terminalId))
       }
     },
     worktrees: {

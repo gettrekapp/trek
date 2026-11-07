@@ -14,7 +14,7 @@ function fakeBackend(fail) {
   return {
     calls,
     backend: {
-      sessions: group('sessions', ['rename', 'markComplete', 'seen', 'setQueue', 'enqueue', 'dequeue']),
+      sessions: group('sessions', ['rename', 'markComplete', 'seen', 'setQueue', 'enqueue', 'dequeue', 'dismissDecision']),
       branch: group('branch', ['setTag', 'setCustomTag', 'setNote', 'setTicket', 'setPullRequest', 'setEnvVars']),
       worktrees: group('worktrees', ['setOrder'])
     }
@@ -24,7 +24,8 @@ function fakeBackend(fail) {
 const meta = (status) => ({ id: 'x', worktreeId: 'w', title: 't', sessionId: 'x', status })
 const slice = {
   terminals: { busy: meta('working'), bell: meta('attention'), done: meta('done'), comp: meta('complete'), gone: meta('exited') },
-  terminalQueues: { busy: ['a', 'b', 'c'] }
+  terminalQueues: { busy: ['a', 'b', 'c'] },
+  decisions: { bell: { terminalId: 'bell', question: 'Ship it?', requestedAt: 1 } }
 }
 const tick = () => new Promise((r) => setImmediate(r))
 /** Reports nothing. */
@@ -89,6 +90,8 @@ test('the status is the server\'s: local status setters do nothing, nor does add
   o.setTerminalStatus('busy', 'idle')
   o.setTerminalSession('busy', 'other')
   o.setGlobalSessions([])
+  // Only the server's MCP opens a decision for a server session.
+  o.requestDecision('busy', 'local question')
   o.addWorktreeInstance('r1', { id: 'w', name: 'w', path: '/w' })
   await tick()
   assert.deepEqual(calls, [])
@@ -146,4 +149,38 @@ test('a dequeue CONFLICT shows nothing; any other failure is reported as an edit
   v2SetterOverrides(failing('NOT_FOUND'), () => slice, errors).removeQueuedText('busy', 0)
   await tick()
   assert.deepEqual(reports, [['Could not update the queue', 'NOT_FOUND']])
+})
+
+test('dismissing a decision asks the server, once while it is in flight; none open sends nothing', async () => {
+  const release = []
+  const calls = []
+  const backend = {
+    sessions: {
+      dismissDecision: (id) => {
+        calls.push(id)
+        return new Promise((r) => release.push(r))
+      }
+    }
+  }
+  const o = v2SetterOverrides(backend, () => slice, quiet)
+  o.clearDecision('bell')
+  o.clearDecision('bell')
+  o.clearDecision('busy')
+  assert.deepEqual(calls, ['bell'])
+  release[0]()
+  await tick()
+  o.clearDecision('bell')
+  assert.deepEqual(calls, ['bell', 'bell'])
+})
+
+test('a failed dismiss is reported as an acknowledgement', async () => {
+  const err = Object.assign(new Error('gone'), { code: 'NOT_FOUND' })
+  const reports = []
+  const o = v2SetterOverrides(fakeBackend(err).backend, () => slice, {
+    report: (title, e) => reports.push(['report', title, e.code]),
+    reportEdit: (title, e) => reports.push(['edit', title, e.code])
+  })
+  o.clearDecision('bell')
+  await tick()
+  assert.deepEqual(reports, [['report', 'Could not dismiss the decision', 'NOT_FOUND']])
 })

@@ -21,7 +21,7 @@ import type {
   TerminalStatus,
   WorktreeInstance
 } from '../../../shared/types'
-import type { SelectedWorktree, TerminalMeta } from '../store'
+import type { PendingDecision, SelectedWorktree, TerminalMeta } from '../store'
 
 /** store.ts's GLOBAL_WORKTREE_ID; applyProjection.ts fails to typecheck if they drift. */
 export const V2_GLOBAL_WORKTREE_ID = '__global__'
@@ -77,6 +77,8 @@ export interface LegacySlice {
   terminalOrder: Record<string, string[]>
   loadedWorktrees: Record<string, true>
   terminalQueues: Record<string, string[]>
+  /** The server's open decisions (`Session.decision`), by terminal id */
+  decisions: Record<string, PendingDecision>
 }
 
 export interface V2Projection {
@@ -190,8 +192,9 @@ export function projectV2(project: Project): V2Projection {
   const terminalOrder: Record<string, string[]> = {}
   const loadedWorktrees: Record<string, true> = {}
   const terminalQueues: Record<string, string[]> = {}
+  const decisions: Record<string, PendingDecision> = {}
 
-  /** Live sessions: a terminal each, in tab order, with their queues. */
+  /** Live sessions: a terminal each, in tab order, with their queues and open decisions. */
   const addLive = (
     sessions: Session[],
     legacyId: string,
@@ -202,6 +205,8 @@ export function projectV2(project: Project): V2Projection {
     for (const s of sessions) {
       terminals[s.id] = terminalMeta(s, legacyId)
       if (s.queue.length > 0) terminalQueues[s.id] = [...s.queue]
+      // Shown as the server has it: one line, already cleaned (3c-3a Decision 1).
+      if (s.decision) decisions[s.id] = { terminalId: s.id, question: s.decision.question, requestedAt: s.decision.at }
       ids.sessions[s.id] = { sessionId: s.id, repoId, worktreeId, ptyId: s.ptyId ?? null }
     }
   }
@@ -277,7 +282,7 @@ export function projectV2(project: Project): V2Projection {
   }
 
   return {
-    slice: { project: file, hostWorktrees, terminals, terminalOrder, loadedWorktrees, terminalQueues },
+    slice: { project: file, hostWorktrees, terminals, terminalOrder, loadedWorktrees, terminalQueues, decisions },
     ids
   }
 }

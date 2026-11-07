@@ -555,3 +555,12 @@ test('dequeue: session.dequeue where the server has it; otherwise the queue with
   await old.backend.sessions.dequeue('s1', 1, 'stale')
   assert.deepEqual(old.calls, [['session.setQueue', { projectId: 'p1', sessionId: 's1', queue: ['a', 'c'] }]])
 })
+
+test('dismissDecision sends session.dismissDecision where the server has decisions', async () => {
+  const { backend, calls } = setup({ capabilities: ['decisions'] })
+  await backend.sessions.dismissDecision('s1')
+  assert.deepEqual(calls, [['session.dismissDecision', { projectId: 'p1', sessionId: 's1' }]])
+  const old = setup({ capabilities: [] })
+  await old.backend.sessions.dismissDecision('s1')
+  assert.deepEqual(old.calls, [])
+})
