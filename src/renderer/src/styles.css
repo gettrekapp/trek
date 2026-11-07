@@ -4035,3 +4035,32 @@ body.resizing-row {
 .server-window.server-workspace {
   overflow: hidden;
 }
+
+/* Covers a server window's terminal while its link is down: typing would be dropped */
+.reconnecting-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(13, 13, 15, 0.82);
+  text-align: center;
+  padding: 0 24px;
+}
+
+.reconnecting-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.session-tab-close.disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.wt-missing {
+  color: var(--danger);
+}

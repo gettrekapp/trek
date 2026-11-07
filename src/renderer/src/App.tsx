@@ -55,10 +55,12 @@ export default function App(): React.JSX.Element {
       window.api.onMenu('open-project', () => void openProject()),
       window.api.onMenu('new-terminal', () => {
         const state = useAppStore.getState()
-        if (state.project && state.selected) void getBackend().sessions.start(state.selected)
+        // A server window offline: its commands wait for the connection.
+        if (state.project && state.selected && !state.serverOffline) void getBackend().sessions.start(state.selected)
       }),
       window.api.onMenu('close-tab', () => {
         const state = useAppStore.getState()
+        if (state.serverOffline) return
         if (focusInGlobalPanel()) {
           // On the Bot tab the active session is hidden, so there is no tab here to close.
           const id = state.globalView === 'sessions' ? state.activeTerminal[GLOBAL_WORKTREE_ID] : undefined

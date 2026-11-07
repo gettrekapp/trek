@@ -128,6 +128,9 @@ export function WorktreeDetail({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const serverStatus = useAppStore((s) => s.serverStatus)
+  // A server window whose connection is down: its commands are disabled until it is back.
+  const offline = useAppStore((s) => s.serverOffline)
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
 
@@ -135,7 +138,7 @@ export function WorktreeDetail({
   const path = info?.path
   // A server window's paths are on the server: nothing here may poll them locally.
   const [stack, refreshStack] = useStackStatus(path, !!info?.serverId || !features.stacks)
-  const changesPaused = !!info?.serverId && serverStatus[info.serverId] !== 'connected'
+  const changesPaused = (!!info?.serverId && serverStatus[info.serverId] !== 'connected') || offline
   const changesState = useWorktreeChanges(path, info?.serverId, changesPaused, panel === 'changes')
   useEffect(() => {
     // Selection changed: back to the sessions view, drop transient UI state.
@@ -177,7 +180,9 @@ export function WorktreeDetail({
   const instance = instanceForInfo(project, info)
   const isRemote = !!info.serverId
   const server = serverById(project, info.serverId)
-  const hostDown = isRemote && serverStatus[info.serverId!] !== 'connected'
+  const hostDown = (isRemote && serverStatus[info.serverId!] !== 'connected') || offline
+  // A server worktree git no longer lists (its directory is gone): nothing can run in it.
+  const missing = serverWindow && !!info.prunable
   const isLocalMain = info.isMain && !isRemote
   const order = (instance && terminalOrder[instance.id]) || []
   const activeId = instance ? activeTerminal[instance.id] : undefined
@@ -290,7 +295,7 @@ export function WorktreeDetail({
                   className={`chip chip-tag ${tag ? '' : 'untagged'}`}
                   style={tag ? tagStyle(tag) : undefined}
                   title="Set the workflow tag for this branch"
-                  onClick={() => setTagMenuOpen((v) => !v)}
+                  onClick={() => !offline && setTagMenuOpen((v) => !v)}
                 >
                   {tag?.name ?? 'No tag'} <span className="chip-caret">▾</span>
                 </span>
@@ -341,7 +346,7 @@ export function WorktreeDetail({
                     className="chip chip-tag"
                     style={tagStyle(t)}
                     title="Toggle custom tags for this branch"
-                    onClick={() => setCustomTagMenuOpen((v) => !v)}
+                    onClick={() => !offline && setCustomTagMenuOpen((v) => !v)}
                   >
                     {t.name}
                   </span>
@@ -349,7 +354,7 @@ export function WorktreeDetail({
                 <span
                   className="chip chip-tag untagged"
                   title="Toggle custom tags for this branch"
-                  onClick={() => setCustomTagMenuOpen((v) => !v)}
+                  onClick={() => !offline && setCustomTagMenuOpen((v) => !v)}
                 >
                   {enabledCustomTags.length ? '+' : '+ Tags'}
                 </span>
@@ -491,7 +496,8 @@ export function WorktreeDetail({
           )}
           <button
             className={`btn btn-ghost btn-icon ${menuOpen ? 'open' : ''}`}
-            title="Worktree actions"
+            title={offline ? 'Server disconnected' : 'Worktree actions'}
+            disabled={offline}
             onClick={() => setMenuOpen((v) => !v)}
           >
             …
@@ -677,12 +683,12 @@ export function WorktreeDetail({
                   if (e.button === 1) e.preventDefault()
                 }}
                 onAuxClick={(e) => {
-                  if (e.button === 1) void getBackend().sessions.close(id)
+                  if (e.button === 1 && !offline) void getBackend().sessions.close(id)
                 }}
               >
                 <StatusBadge
                   status={meta.status}
-                  onToggleComplete={() => toggleTerminalComplete(id)}
+                  onToggleComplete={offline ? undefined : () => toggleTerminalComplete(id)}
                 />
                 <DecisionIcon terminalId={id} />
                 {icon && <img className="session-tab-icon" src={icon} alt="" />}
@@ -709,7 +715,7 @@ export function WorktreeDetail({
                     className="session-tab-title"
                     title={isActive ? 'Click to rename' : meta.title}
                     onClick={(e) => {
-                      if (isActive) {
+                      if (isActive && !offline) {
                         e.stopPropagation()
                         setEditingId(id)
                         setDraft(meta.title)
@@ -717,6 +723,7 @@ export function WorktreeDetail({
                     }}
                     onDoubleClick={(e) => {
                       e.stopPropagation()
+                      if (offline) return
                       setEditingId(id)
                       setDraft(meta.title)
                     }}
@@ -728,11 +735,11 @@ export function WorktreeDetail({
                   <SkillMenu worktree={instance} terminalId={id} />
                 )}
                 <span
-                  className="session-tab-close"
-                  title="Close session"
+                  className={`session-tab-close ${offline ? 'disabled' : ''}`}
+                  title={offline ? 'Server disconnected' : 'Close session'}
                   onClick={(e) => {
                     e.stopPropagation()
-                    void getBackend().sessions.close(id)
+                    if (!offline) void getBackend().sessions.close(id)
                   }}
                 >
                   ×
@@ -741,8 +748,8 @@ export function WorktreeDetail({
             )
           })}
         <NewSessionMenu
-          title={hostDown ? 'Server disconnected' : 'New session (⌘T)'}
-          disabled={hostDown}
+          title={hostDown ? 'Server disconnected' : missing ? 'The worktree is missing on the server' : 'New session (⌘T)'}
+          disabled={hostDown || missing}
           serverId={info.serverId}
           onStart={(sessionType, llm) => {
             setPanel('sessions')
@@ -754,6 +761,7 @@ export function WorktreeDetail({
           <button
             className="panel-btn"
             title="End this worktree's sessions to free CPU — they stay saved and resume when you load it again"
+            disabled={offline}
             onClick={() => void getBackend().worktrees.unload(instance.id)}
           >
             ⏏ Unload
@@ -828,7 +836,7 @@ export function WorktreeDetail({
       </div>
 
       <div className="terminal-card">
-        {hostDown && panel === 'sessions' && (
+        {hostDown && isRemote && panel === 'sessions' && (
           <div className="host-down-banner">
             <span className="wt-dot exited" />
             {server?.name ?? 'Server'} is disconnected — sessions keep running on the server and
@@ -852,13 +860,15 @@ export function WorktreeDetail({
                 </span>
                 <button
                   className="btn btn-accent"
-                  disabled={hostDown}
+                  disabled={hostDown || missing}
                   onClick={() => void getBackend().worktrees.load(instance.id)}
                 >
                   Load session{dormant.length === 1 ? '' : 's'}
                 </button>
                 <span className="no-session-hint">
-                  Loading resumes each session where it left off.
+                  {missing
+                    ? 'Its directory is gone on the server: delete the worktree to drop it.'
+                    : 'Loading resumes each session where it left off.'}
                 </span>
               </>
             ) : (
@@ -866,7 +876,7 @@ export function WorktreeDetail({
                 <span>No session in this worktree yet.</span>
                 <button
                   className="btn btn-accent"
-                  disabled={hostDown}
+                  disabled={hostDown || missing}
                   onClick={() =>
                     void getBackend().sessions.start(
                       instance ? { worktreeId: instance.id } : { serverId: info.serverId, path: info.path }

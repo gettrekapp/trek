@@ -95,6 +95,9 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
   const features = useFeatures()
+  // A server window whose connection is down: its commands are disabled until it is back.
+  const offline = useAppStore((s) => s.serverOffline)
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
   const [filter, setFilter] = useState('')
   // Tag ids (or 'untagged'); a worktree matching any of them is shown. Empty = all.
   const [tagFilterValue, setTagFilter] = useState<string[]>([])
@@ -213,6 +216,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       (info.isMain && !info.serverId && selected?.path === repo.path && !selected.serverId)
     const server = serverById(project, info.serverId)
     const hostDown = !!info.serverId && serverStatus[info.serverId] !== 'connected'
+    // A server worktree git no longer lists: it can only be deleted (Notes for 3c-2 #9).
+    const missing = serverWindow && !!info.prunable
     const key = worktreeKey(info)
     const dropClass =
       dropTarget?.key === key && dragKey !== key
@@ -226,7 +231,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         className={`wt-row ${isSelected ? 'selected' : ''} ${hostDown ? 'host-down' : ''} ${
           dragKey === key ? 'dragging' : ''
         } ${dropClass}`}
-        draggable
+        draggable={!offline}
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = 'move'
           setDragKey(key)
@@ -275,9 +280,14 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             {info.isMain && info.serverId && <span className="primary-tag remote-main-tag">MAIN</span>}
           </div>
           {prefix && <div className="wt-prefix-line">{prefix}</div>}
-          {(tag || rowCustomTags.length > 0 || ticket || pullRequest || server || env || git) && (
+          {(tag || rowCustomTags.length > 0 || ticket || pullRequest || server || env || git || missing) && (
             <div className="wt-bottom">
               <div className="wt-chips">
+                {missing && (
+                  <span className="mini-chip wt-missing" title="Git no longer lists this worktree on the server; delete it to drop it">
+                    missing
+                  </span>
+                )}
                 {tag && (
                   <span className="mini-chip" style={tagStyle(tag)}>
                     {tag.name}
@@ -341,6 +351,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             <button
               className="wt-power loaded"
               title="Unload — end this worktree's sessions (they stay saved)"
+              disabled={offline}
               onClick={(e) => {
                 e.stopPropagation()
                 void getBackend().worktrees.unload(instance.id)
@@ -349,11 +360,11 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
               ⏏
             </button>
           )}
-          {instance && dormant.length > 0 && (
+          {instance && dormant.length > 0 && !missing && (
             <button
               className="wt-power dormant"
               title={`Load ${dormant.length} saved session${dormant.length === 1 ? '' : 's'}`}
-              disabled={hostDown}
+              disabled={hostDown || offline}
               onClick={(e) => {
                 e.stopPropagation()
                 void getBackend().worktrees.load(instance.id)
@@ -408,6 +419,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           <button
             className="repo-action"
             title={`New worktree in ${repo.name}`}
+            disabled={offline}
             onClick={() => onAdd(repo.id)}
           >
             +
@@ -415,6 +427,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           <button
             className="repo-action"
             title={`${repo.name} options`}
+            disabled={offline}
             onClick={() => setRepoMenuId(repoMenuId === repo.id ? null : repo.id)}
           >
             ⋯
@@ -538,7 +551,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       </div>
       <div className="sidebar-footer">
         <div className="sidebar-footer-row">
-          <button className="footer-btn" onClick={() => void getBackend().repos.add()}>
+          <button className="footer-btn" disabled={offline} onClick={() => void getBackend().repos.add()}>
             Add repository…
           </button>
         </div>
@@ -549,6 +562,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             <button
               className="footer-btn"
               title="Unload every worktree — sessions stay saved and resume when you load them"
+              disabled={offline}
               onClick={() => void getBackend().worktrees.unloadAll()}
             >
               Unload all
