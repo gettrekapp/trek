@@ -4,7 +4,8 @@ import { disposeV2Terminals, retryV2Terminals } from '../terminals'
 import { backendChanged } from '../backend'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from './serverClients'
 import { applyV2Project } from './applyProjection'
-import { errorCode, errorText } from './errors'
+import { errorText } from './errors'
+import { projectGone, watchesServerTopic } from './projectWatch'
 import { V2Workspace } from './V2Workspace'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
 import { SERVER_REMOVED_MESSAGE, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
@@ -125,11 +126,32 @@ function ServerProjectTree({
       const target = useAppStore.getState().serverWindow
       return target?.serverEntryId === entry.id && target.projectId === projectId
     }
+    // A server without `topicEnd` drops a deleted project's topic silently: the only signal is its
+    // `server` topic no longer listing the project. Watched for such a server only, decided at each
+    // connect (the welcome is in by then). Only once the project has been listed, so a server
+    // snapshot older than a project.create is no "not found".
+    let offServer: (() => void) | null = null
+    const watchServer = (): void => {
+      const want = watchesServerTopic(connection.welcome?.capabilities ?? [])
+      if (!want) {
+        offServer?.()
+        offServer = null
+        return
+      }
+      if (offServer) return
+      let seen = false
+      offServer = mirror.subscribe('server', (update) => {
+        if ('error' in update) return
+        if (update.snapshot.projects.some((p) => p.id === projectId)) seen = true
+        else if (seen) setView({ notFound: true })
+      })
+    }
     let previous = connection.status
     const onStatus = (change: StatusChange): void => {
       if (previous === 'connected' && change.status !== 'connected') setDroppedAt(Date.now())
       previous = change.status
       setStatus(change)
+      if (change.status === 'connected') watchServer()
       if (!isCurrent()) return
       useAppStore.getState().setServerLink(change.status)
       // The welcome's capabilities may have changed the backend's features.
@@ -143,7 +165,7 @@ function ServerProjectTree({
     const offStatus = connection.on('status', onStatus)
     const offTopic = mirror.subscribe(`project:${projectId}`, (update) => {
       if ('error' in update) {
-        if (errorCode(update.error) === 'NOT_FOUND') setView({ notFound: true })
+        if (projectGone(update.error)) setView({ notFound: true })
         // Keep showing the last state (a "not found" too) on a transient error; the banner says what is wrong.
         else setView((v) => (v && ('name' in v || 'notFound' in v) ? v : { error: errorText(update.error) }))
         return
@@ -154,18 +176,11 @@ function ServerProjectTree({
       setView({ name: update.snapshot.name })
       setLastPatchAt(Date.now())
     })
-    // A deleted project's topic just stops: the only signal is the server topic dropping it.
-    // Only once it has been listed, so a server snapshot older than a project.create is no "not found".
-    let seen = false
-    const offServer = mirror.subscribe('server', (update) => {
-      if ('error' in update) return
-      if (update.snapshot.projects.some((p) => p.id === projectId)) seen = true
-      else if (seen) setView({ notFound: true })
-    })
+    if (connection.status === 'connected') watchServer()
     return () => {
       offStatus()
       offTopic()
-      offServer()
+      offServer?.()
       // The slice and the overrides go with serverWindow (windowKind.ts); the streams go now.
       disposeV2Terminals()
     }
