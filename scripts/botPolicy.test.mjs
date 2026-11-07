@@ -15,7 +15,7 @@ const trek = (name) => `mcp__trek-dev__${name}`
 const bash = (command) => ({ tool: 'Bash', input: { command } })
 
 test('free Trek tools are allowed', () => {
-  for (const name of ['list_worktrees', 'start_session', 'send_prompt', 'create_worktree', 'start_stack', 'set_worktree_note', 'request_approval']) {
+  for (const name of ['list_worktrees', 'enqueue_prompt', 'create_worktree', 'start_stack', 'set_worktree_note', 'request_approval']) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'allow', name)
   }
 })
@@ -78,6 +78,22 @@ test('overrides move items between free and ask', () => {
   assert.equal(decide({ tool: trek('close_session'), input: {} }, ctx({ overrides })).decision, 'allow')
   assert.equal(decide({ tool: trek('start_stack'), input: {} }, ctx({ overrides })).decision, 'ask')
   assert.equal(decide(bash('git push origin x'), ctx({ overrides })).decision, 'allow')
+})
+
+test('delegating to a worktree session always needs approval, whatever the overrides say', () => {
+  const overrides = { free: ['start_session', 'send_prompt', 'send_keys'] }
+  for (const name of ['start_session', 'send_prompt', 'send_keys']) {
+    assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'ask', name)
+    assert.equal(decide({ tool: trek(name), input: {} }, ctx({ overrides })).decision, 'ask', `${name} with a free override`)
+  }
+})
+
+test('an approved delegation is allowed once its approval matches', () => {
+  const input = { terminalId: 't1', prompt: 'run the tests' }
+  const approvals = [{ id: 'a9', tool: trek('send_prompt'), input, reason: 'r', requestedAt: 1, status: 'approved' }]
+  const result = decide({ tool: trek('send_prompt'), input }, ctx({ approvals }))
+  assert.deepEqual([result.decision, result.approvalId], ['allow', 'a9'])
+  assert.equal(decide({ tool: trek('send_prompt'), input: { ...input, prompt: 'other' } }, ctx({ approvals })).decision, 'ask')
 })
 
 test('overrides cannot lift the never tier', () => {

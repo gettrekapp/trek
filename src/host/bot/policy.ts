@@ -33,12 +33,18 @@ const TREK_PREFIX = 'mcp__trek-dev__'
 const FREE_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList',
   'list_worktrees', 'get_selected_worktree', 'list_session_types',
-  'start_session', 'send_prompt', 'enqueue_prompt', 'remove_queued_prompt',
+  'enqueue_prompt', 'remove_queued_prompt',
   'read_terminal', 'wait_for_sessions', 'create_worktree', 'load_worktree',
   'get_stack', 'start_stack', 'stop_stack', 'read_stack_log',
   'set_worktree_tag', 'set_worktree_custom_tag', 'set_worktree_note',
   'set_worktree_ticket', 'set_worktree_pull_request', 'request_approval'
 ])
+
+/**
+ * Trek tools that hand work to a worktree session, which runs outside the bot's OS sandbox. They
+ * always need the user's approval: POLICY.json can't make them free.
+ */
+const ALWAYS_ASK_TOOLS = new Set(['start_session', 'send_prompt', 'send_keys'])
 
 const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell', 'REPL'])
@@ -251,6 +257,7 @@ const stringsOf = (value: unknown): string[] =>
 
 function tierOf(call: ToolCall, ctx: PolicyContext): 'allow' | 'ask' {
   const name = call.tool.startsWith(TREK_PREFIX) ? call.tool.slice(TREK_PREFIX.length) : call.tool
+  if (call.tool.startsWith(TREK_PREFIX) && ALWAYS_ASK_TOOLS.has(name)) return 'ask'
   const free = stringsOf(ctx.overrides?.free)
   const ask = stringsOf(ctx.overrides?.ask)
   if (call.tool === 'Bash') {
