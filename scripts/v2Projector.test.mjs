@@ -8,6 +8,7 @@ import {
   legacyStatus,
   projectV2,
   reconcileView,
+  shareSlice,
   v2WorktreeOrder
 } from '../src/renderer/src/v2/projector.ts'
 import { terminalTargets } from '../src/renderer/src/v2/terminalSync.ts'
@@ -393,4 +394,53 @@ test('reconcileView keeps the active-tab map object when nothing in it changed',
   const moved = reconcileView({ ...first, activeTerminal: { ...activeTerminal, __global__: 'closed' } }, projectV2(fixture()))
   assert.notEqual(moved.activeTerminal, activeTerminal)
   assert.deepEqual(moved.activeTerminal, { '__primary__:r1': 's2', __global__: 'g2' })
+})
+
+test('shareSlice: an unchanged snapshot keeps every object of the previous slice', () => {
+  const prev = projectV2(fixture()).slice
+  const next = shareSlice(prev, projectV2(fixture()).slice)
+  for (const key of Object.keys(next)) assert.equal(next[key], prev[key], key)
+})
+
+test('shareSlice: a status patch replaces only what it changed', () => {
+  const prev = projectV2(fixture()).slice
+  const snapshot = fixture()
+  snapshot.repositories[0].worktrees[0].sessions[0].status = 'attention'
+  const next = shareSlice(prev, projectV2(snapshot).slice)
+  assert.notEqual(next.terminals, prev.terminals)
+  assert.notEqual(next.terminals.s1, prev.terminals.s1)
+  assert.equal(next.terminals.s1.status, 'attention')
+  // The other sessions, and everything else, keep their objects.
+  assert.equal(next.terminals.s2, prev.terminals.s2)
+  assert.equal(next.terminals.g1, prev.terminals.g1)
+  for (const key of ['project', 'hostWorktrees', 'terminalOrder', 'loadedWorktrees', 'terminalQueues']) assert.equal(next[key], prev[key], key)
+})
+
+test('shareSlice: a new worktree keeps the unchanged repositories, rows and branch maps', () => {
+  const prev = projectV2(fixture()).slice
+  const snapshot = fixture()
+  snapshot.repositories[0].worktrees.push({ id: 'w-new', name: 'new', path: '/r/one-new', branch: 'new', isMain: false, loaded: false, sessions: [] })
+  const next = shareSlice(prev, projectV2(snapshot).slice)
+  assert.notEqual(next.project, prev.project)
+  assert.notEqual(next.project.repositories[0], prev.project.repositories[0])
+  assert.equal(next.project.repositories[0].worktrees.length, 3)
+  assert.equal(next.project.repositories[0].worktrees[0], prev.project.repositories[0].worktrees[0])
+  assert.equal(next.project.repositories[0].branchNotes, prev.project.repositories[0].branchNotes)
+  assert.equal(next.project.repositories[1], prev.project.repositories[1])
+  assert.equal(next.project.worktreeTags, prev.project.worktreeTags)
+  assert.equal(next.hostWorktrees['r2 local'], prev.hostWorktrees['r2 local'])
+  assert.notEqual(next.hostWorktrees['r1 local'], prev.hostWorktrees['r1 local'])
+  assert.equal(next.hostWorktrees['r1 local'][0], prev.hostWorktrees['r1 local'][0])
+})
+
+test('shareSlice: a key that went away, or an emptied list, is a new object', () => {
+  const prev = projectV2(fixture()).slice
+  const snapshot = fixture()
+  snapshot.repositories[0].worktrees[0].sessions[0].queue = []
+  const next = shareSlice(prev, projectV2(snapshot).slice)
+  assert.notEqual(next.terminalQueues, prev.terminalQueues)
+  assert.deepEqual(next.terminalQueues, {})
+  // Nothing to share with: the new slice as it is.
+  const fresh = projectV2(fixture()).slice
+  assert.equal(shareSlice({}, fresh).project, fresh.project)
 })

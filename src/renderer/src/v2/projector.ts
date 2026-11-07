@@ -282,6 +282,53 @@ export function projectV2(project: Project): V2Projection {
   }
 }
 
+/**
+ * `next` with every part that deep-equals `prev`'s reused from `prev`: an
+ * array or a plain object whose items all came back reused, with the same
+ * keys, is `prev` itself. Values are JSON data (the projector's output).
+ */
+function reuse<T>(prev: unknown, next: T): T {
+  if (prev === next) return next
+  if (Array.isArray(next)) {
+    if (!Array.isArray(prev)) return next
+    let same = prev.length === next.length
+    const out = next.map((item, i) => {
+      const shared = reuse(prev[i], item)
+      if (shared !== prev[i]) same = false
+      return shared
+    })
+    return (same ? prev : out) as T
+  }
+  if (isRecord(next)) {
+    if (!isRecord(prev)) return next
+    const keys = Object.keys(next)
+    let same = keys.length === Object.keys(prev).length
+    const out: Record<string, unknown> = {}
+    for (const key of keys) {
+      const shared = reuse(prev[key], next[key])
+      if (!Object.hasOwn(prev, key) || shared !== prev[key]) same = false
+      out[key] = shared
+    }
+    return (same ? prev : out) as T
+  }
+  return next
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * The new slice, sharing with the one in the store (`prev`) every object that
+ * did not change: a patch then re-renders only the subscribers whose part it
+ * touched (a status patch, the frequent one, replaces one terminal's meta).
+ */
+export function shareSlice(prev: Partial<Record<keyof LegacySlice, unknown>>, next: LegacySlice): LegacySlice {
+  const out = {} as Record<keyof LegacySlice, unknown>
+  for (const key of Object.keys(next) as (keyof LegacySlice)[]) out[key] = reuse(prev[key], next[key])
+  return out as unknown as LegacySlice
+}
+
 /** The view state a projection can invalidate. */
 export interface ViewState {
   activeWorktreeId: string | null

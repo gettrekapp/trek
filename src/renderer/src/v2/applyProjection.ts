@@ -4,7 +4,7 @@
 // runs is in projector.ts and terminalSync.ts, which the tests cover.
 import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import { syncV2Terminals } from '../terminals'
-import { projectV2, reconcileView, V2_GLOBAL_WORKTREE_ID, type V2IdMap } from './projector.ts'
+import { projectV2, reconcileView, shareSlice, V2_GLOBAL_WORKTREE_ID, type V2IdMap } from './projector.ts'
 import type { PtyStream } from '../../../shared/client/index.ts'
 import type { Project } from '../../../shared/model/types'
 
@@ -20,17 +20,19 @@ export function v2Ids(): V2IdMap | null {
 }
 
 export function applyV2Project(project: Project, ptys: PtyStream): void {
-  const projection = projectV2(project)
+  const { slice: fresh, ids } = projectV2(project)
   // Entries first: the store update renders TerminalPanes, which attach to them.
   syncV2Terminals(project, ptys)
   const state = useAppStore.getState()
+  // Whatever did not change keeps its object, so selectors over it do not re-render.
+  const slice = shareSlice(state, fresh)
   const view = reconcileView(
     { activeWorktreeId: state.activeWorktreeId, selected: state.selected, activeTerminal: state.activeTerminal },
-    projection
+    { slice, ids }
   )
-  currentIds = projection.ids
+  currentIds = ids
   // filePath stays null, so scheduleAutoSave never writes a server project to disk.
-  useAppStore.setState({ ...projection.slice, ...view, filePath: null, dirty: false })
+  useAppStore.setState({ ...slice, ...view, filePath: null, dirty: false })
 }
 
 /** The server window went away: forget the ids (the caller disposes the terminals). */
