@@ -8,18 +8,21 @@ import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repositoryActions'
 import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
 import { OVERRIDDEN_SETTERS, v2SetterOverrides, type SetterOverrides } from './setterOverrides'
-import { clearV2Projection, v2Ids } from './applyProjection'
+import { applyV2Project, clearV2Projection, setV2ProjectOverlay, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
 import { agentsFetchKey, agentsRetryDelay, agentsStale } from './sessionChoices'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
+import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
+import { SETTINGS_SETTERS, v2SettingsOverrides, type SettingsOverrides, type SettingsRequests } from './settingsOverrides'
 import { ClientError } from '../../../shared/client/index.ts'
 import { createProjectionWaits, PROJECTION_WAIT_MS } from './projectionWaits'
 import { installPatch, leavePatch } from './windowState'
 import { stopAllSummaries } from '../voice'
 import type { WindowBackend } from '../backend'
 import type { AppState } from '../store'
+import type { Project } from '../../../shared/model/types'
 
 export interface V2Window {
   entryId: string
@@ -118,6 +121,52 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     left: () => left
   })
 
+  // Settings edits: one compare-and-set per field, shown as pending (the overlay) until the
+  // mirror holds the server's answer; a CONFLICT asks Reload or Keep Mine (settingsWriter.ts).
+  const topic = `project:${projectId}` as const
+  const mirrorProject = (): Project | undefined => (left ? undefined : registered()?.mirror.get(topic)?.snapshot)
+  const settingsRequests: SettingsRequests = {
+    updateSettings: async (settings, expected) => {
+      const { rev } = await requestWithRev('project.updateSettings', { projectId, settings, expected })
+      if (rev) await whenProjected(() => true, rev)
+    },
+    rename: async (name, expected) => {
+      const { rev } = await requestWithRev('project.rename', { projectId, name, expected })
+      if (rev) await whenProjected(() => true, rev)
+    },
+    setLinkedDirs: async (repoId, linkedDirs, expected) => {
+      const { rev } = await requestWithRev('repo.update', { projectId, repoId, linkedDirs, expected: { linkedDirs: expected } })
+      if (rev) await whenProjected(() => true, rev)
+    }
+  }
+  const askConflict = async (label: string): Promise<ConflictChoice> => {
+    if (left) return 'reload'
+    const keep = await window.api.confirm({
+      title: 'Setting changed elsewhere',
+      message: `${label} was changed on the server while you were editing it.`,
+      detail: "Reload shows the server's version and drops your change. Keep Mine saves yours over it.",
+      confirmLabel: 'Keep Mine',
+      cancelLabel: 'Reload',
+      defaultCancel: true
+    })
+    return keep && !left ? 'keep' : 'reload'
+  }
+  const settingsWriter = createSettingsWriter({
+    project: mirrorProject,
+    // Projects the mirror again, so the pending edits show (or go) at once.
+    changed: () => {
+      const server = left ? undefined : registered()
+      const state = server?.mirror.get(topic)
+      if (server && state) applyV2Project(state.snapshot, server.ptys)
+    },
+    askConflict,
+    reload: () => {
+      if (!left) useAppStore.setState((s) => ({ settingsReload: s.settingsReload + 1 }))
+    },
+    reportEdit
+  })
+  setV2ProjectOverlay(settingsWriter.overlay)
+
   // server.agents, for the New session menu and the Global bar: slow the first time (a login
   // shell per program on the server), so asked when the link comes up rather than when a menu
   // opens, and again on each reconnect and claudeCommand edit (agentsFetchKey). The last answer
@@ -179,10 +228,17 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
 
   // The store's own setters (zustand 5's initial state), never a live value that may already be an override.
   const initial = useAppStore.getInitialState()
-  const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
+  const originals = Object.fromEntries(
+    [...OVERRIDDEN_SETTERS, ...SETTINGS_SETTERS].map((name) => [name, initial[name]])
+  ) as SetterOverrides & SettingsOverrides
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
   stopAllSummaries()
-  useAppStore.setState(installPatch(v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit })))
+  useAppStore.setState(
+    installPatch({
+      ...v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit }),
+      ...v2SettingsOverrides(settingsWriter, settingsRequests)
+    })
+  )
 
   return {
     entryId,
@@ -194,6 +250,8 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       setV2NoteDrafts(null)
       offDrafts()
       left = true
+      settingsWriter.clear()
+      setV2ProjectOverlay(null)
       offAgents()
       if (agentsRetry !== null) clearTimeout(agentsRetry)
       cancelRepoPath()

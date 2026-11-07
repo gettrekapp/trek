@@ -13,6 +13,12 @@ const _sameGlobalId: typeof GLOBAL_WORKTREE_ID = V2_GLOBAL_WORKTREE_ID
 void _sameGlobalId
 
 let currentIds: V2IdMap | null = null
+/** The window's pending settings edits (settingsWriter.ts), applied before the projector; null outside a server window. */
+let overlay: ((project: Project) => Project) | null = null
+
+export function setV2ProjectOverlay(next: ((project: Project) => Project) | null): void {
+  overlay = next
+}
 
 /** The id map of the projection now in the store, for a v2 backend to address the server. */
 export function v2Ids(): V2IdMap | null {
@@ -20,7 +26,7 @@ export function v2Ids(): V2IdMap | null {
 }
 
 export function applyV2Project(project: Project, ptys: PtyStream): void {
-  const { slice: fresh, ids } = projectV2(project)
+  const { slice: fresh, ids } = projectV2(overlay ? overlay(project) : project)
   // Entries first: the store update renders TerminalPanes, which attach to them.
   syncV2Terminals(project, ptys)
   const state = useAppStore.getState()

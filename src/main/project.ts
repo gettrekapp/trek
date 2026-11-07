@@ -126,7 +126,14 @@ export function registerProjectHandlers(): void {
     'dialog:confirm',
     async (
       event,
-      opts: { title: string; message: string; detail?: string; confirmLabel: string }
+      opts: {
+        title: string
+        message: string
+        detail?: string
+        confirmLabel: string
+        cancelLabel?: string
+        defaultCancel?: boolean
+      }
     ): Promise<boolean> => {
       const win = BrowserWindow.fromWebContents(event.sender)!
       const result = await dialog.showMessageBox(win, {
@@ -134,8 +141,8 @@ export function registerProjectHandlers(): void {
         title: opts.title,
         message: opts.message,
         detail: opts.detail,
-        buttons: ['Cancel', opts.confirmLabel],
-        defaultId: 1,
+        buttons: [typeof opts.cancelLabel === 'string' && opts.cancelLabel ? opts.cancelLabel : 'Cancel', opts.confirmLabel],
+        defaultId: opts.defaultCancel === true ? 0 : 1,
         cancelId: 0
       })
       return result.response === 1

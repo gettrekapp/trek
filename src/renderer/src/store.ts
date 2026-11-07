@@ -211,6 +211,8 @@ export interface AppState {
   setServerLink: (status: ConnectionStatus) => void
   /** The agents the server window's server can launch (`server.agents`); null until it answered, or without `agents` */
   serverAgents: ServerAgents | null
+  /** Bumped by a settings conflict's Reload: the Settings panel remounts, dropping its drafts */
+  settingsReload: number
   /** The start screen opens on Connect with this server picked (once), after Pick another project. */
   connectServerId: string | null
   setConnectServerId: (id: string | null) => void
@@ -374,6 +376,7 @@ export const useAppStore = create<AppState>((set) => ({
   serverOffline: false,
   serverLink: null,
   serverAgents: null,
+  settingsReload: 0,
   setServerLink: (serverLink) =>
     set((state) => {
       const serverOffline = serverLink !== 'connected'

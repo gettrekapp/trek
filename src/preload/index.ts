@@ -247,11 +247,14 @@ const api = {
     subscribe('server:status', callback),
 
   // Dialogs
+  /** Resolves true for the confirm button; `cancelLabel` renames Cancel, `defaultCancel` makes it the default. */
   confirm: (opts: {
     title: string
     message: string
     detail?: string
     confirmLabel: string
+    cancelLabel?: string
+    defaultCancel?: boolean
   }): Promise<boolean> => ipcRenderer.invoke('dialog:confirm', opts),
   confirmWithCheckbox: (opts: {
     title: string
