@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { scheduleAutoSave } from '../persistence'
 import { defaultSessionLlm, updateLlmSettings } from '../llm'
-import { LlmPicker } from './LlmPicker'
+import { LlmPicker, useServerPicker } from './LlmPicker'
 import { PROVIDER_LIST } from '../../../shared/providers/registry'
 import { DEFAULT_LLM_SETTINGS, DEFAULT_LOCAL_URLS } from '../../../shared/providers/types'
 import type {
+  LlmProvider,
   LlmProviderId,
   LlmSelection,
   LlmSettingsPatch,
@@ -62,10 +63,20 @@ function DraftInput({
   )
 }
 
-/** App-wide agent defaults, per-provider commands, and this project's overrides. */
-export function LlmSettings(): React.JSX.Element {
+/**
+ * App-wide agent defaults, per-provider commands, and this project's overrides.
+ * `projectOnly` (a server window): only the project's overrides, over the
+ * server's agents; the server's default and its commands are its config file's.
+ */
+export function LlmSettings({ projectOnly = false }: { projectOnly?: boolean }): React.JSX.Element {
   const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
   const project = useAppStore((s) => s.project)
+  const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
+  const picker = useServerPicker()
+  /** What an override starts from: this machine's default, or the server's. */
+  const startFrom = (): LlmSelection => (projectOnly ? (serverDefault ?? { provider: 'claude' }) : defaultSessionLlm())
+  /** The Global panel's agents need MCP tools, among the ones this window may pick. */
+  const mcpOnly = (p: LlmProvider): boolean => p.capabilities.mcp && (!picker.filter || picker.filter(p))
   const setProjectLlmDefault = useAppStore((s) => s.setProjectLlmDefault)
   const setGlobalLlm = useAppStore((s) => s.setGlobalLlm)
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -101,32 +112,43 @@ export function LlmSettings(): React.JSX.Element {
   return (
     <>
       <h3>Agents</h3>
-      <div className="settings-row">
-        <span className="settings-label">
-          <span className="settings-name">Default for new sessions</span>
-          <span className="settings-desc">
-            Used by ⌘T and + on every project, unless the project overrides it below. Applies to
-            new sessions; existing ones keep their agent.
+      {projectOnly ? (
+        <div className="settings-row">
+          <span className="settings-label">
+            <span className="settings-desc">
+              The server&apos;s default agent and each agent&apos;s command are set in the server&apos;s config
+              file. This project can override the default below.
+            </span>
           </span>
-        </span>
-        <LlmPicker value={settings.llmDefault} onChange={(llmDefault) => save({ llmDefault })} />
-      </div>
+        </div>
+      ) : (
+        <div className="settings-row">
+          <span className="settings-label">
+            <span className="settings-name">Default for new sessions</span>
+            <span className="settings-desc">
+              Used by ⌘T and + on every project, unless the project overrides it below. Applies to
+              new sessions; existing ones keep their agent.
+            </span>
+          </span>
+          <LlmPicker value={settings.llmDefault} onChange={(llmDefault) => save({ llmDefault })} />
+        </div>
+      )}
       {project && (
         <>
           <label className="settings-row">
             <input
               type="checkbox"
               checked={!!project.llmDefault}
-              onChange={(e) => setProjectDefault(e.target.checked ? defaultSessionLlm() : undefined)}
+              onChange={(e) => setProjectDefault(e.target.checked ? startFrom() : undefined)}
             />
             <span className="settings-label">
               <span className="settings-name">Override the default for this project</span>
-              <span className="settings-desc">Saved in the project file.</span>
+              <span className="settings-desc">{projectOnly ? 'Saved on the server.' : 'Saved in the project file.'}</span>
             </span>
           </label>
           {project.llmDefault && (
             <div className="settings-row">
-              <LlmPicker value={project.llmDefault} onChange={setProjectDefault} />
+              <LlmPicker value={project.llmDefault} onChange={setProjectDefault} {...picker} />
             </div>
           )}
           <div className="settings-row">
@@ -146,12 +168,12 @@ export function LlmSettings(): React.JSX.Element {
               Same as the session default
             </label>
             {project.globalLlm && (
-              <LlmPicker value={project.globalLlm} onChange={setGlobal} filter={(p) => p.capabilities.mcp} />
+              <LlmPicker value={project.globalLlm} onChange={setGlobal} {...picker} filter={mcpOnly} />
             )}
           </div>
         </>
       )}
-      {PROVIDER_LIST.map((provider) => {
+      {!projectOnly && PROVIDER_LIST.map((provider) => {
         const config = settings.providers[provider.id] ?? {}
         return (
           <div key={provider.id} className="settings-row llm-provider-card">

@@ -30,6 +30,7 @@ export function AppearanceSettings(): React.JSX.Element {
   const setTitleBarColor = useAppStore((s) => s.setTitleBarColor)
   const setLogoImage = useAppStore((s) => s.setLogoImage)
   const setBannerImage = useAppStore((s) => s.setBannerImage)
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
 
   return (
     <>
@@ -38,7 +39,9 @@ export function AppearanceSettings(): React.JSX.Element {
         <span className="settings-label">
           <span className="settings-name">Project name</span>
           <span className="settings-desc">
-            Shown in the title bar. The project file keeps its own name.
+            {serverWindow
+              ? 'Shown in the title bar. Renames the project on the server.'
+              : 'Shown in the title bar. The project file keeps its own name.'}
           </span>
         </span>
         <input

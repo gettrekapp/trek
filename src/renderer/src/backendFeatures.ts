@@ -55,8 +55,10 @@ export const LEGACY_FEATURES: BackendFeatures = {
  * A server window (3c-2). Off: anything that reads or runs things on this
  * machine against the project's paths (the paths are on the server), the bot
  * and voice (local MCP tools), and the git flows protocol v2 has no command for.
- * Settings are read-only in v2, and Linear is hidden until phase 5 (the spec).
- * The Global panel is on, if the server has the capability it needs.
+ * Settings are edited on the server (every v2 server has project.updateSettings,
+ * so no capability), without this machine's sections (`settingsSections`), and
+ * Linear is hidden until phase 5 (the spec). The Global panel is on, if the
+ * server has the capability it needs.
  * A ceiling: the v2 backend's features are these AND the server's welcome
  * capabilities (`v2Features`).
  */
@@ -72,7 +74,7 @@ export const V2_FEATURES: BackendFeatures = {
   reveal: false,
   openInEditor: false,
   promote: false,
-  settingsEdit: false,
+  settingsEdit: true,
   globalPanel: true
 }
 
@@ -117,4 +119,53 @@ export function v2Features(capabilities: readonly string[] | undefined): Backend
 export function globalPanelMode(features: BackendFeatures, globalTabs: number): 'full' | 'readOnly' | 'hidden' {
   if (features.globalPanel) return 'full'
   return globalTabs > 0 ? 'readOnly' : 'hidden'
+}
+
+/** The Settings panel's sections, in panel order. */
+export const SETTINGS_SECTIONS = [
+  'sessionMode',
+  'audioAlerts',
+  'linkedDirs',
+  'appearance',
+  'linear',
+  'voice',
+  'agents',
+  'worktreeTags',
+  'customTags',
+  'terminalButtons',
+  'sessionPrompt',
+  'globalPrompt',
+  'globalButtons',
+  'sessionTypes',
+  'environments',
+  'remoteHosts'
+] as const
+
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
+
+/**
+ * How a section shows: `edit` as in a file window; `project` only the
+ * project's part, with a hint that the rest is the server's config (the
+ * agents: the server's default and its provider commands are its `llm`
+ * section, which the protocol does not edit); `hidden`.
+ */
+export type SectionMode = 'edit' | 'project' | 'hidden'
+
+/**
+ * Which Settings sections a window shows. A server window edits the project's
+ * settings on the server and hides what belongs to this machine: the Linear
+ * and voice API keys, the Docker environments (they run on this machine), and
+ * the legacy remote hosts.
+ */
+export function settingsSections(kind: 'legacy' | 'v2'): Readonly<Record<SettingsSection, SectionMode>> {
+  const out = {} as Record<SettingsSection, SectionMode>
+  for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
+  if (kind === 'v2') {
+    out.linear = 'hidden'
+    out.voice = 'hidden'
+    out.environments = 'hidden'
+    out.remoteHosts = 'hidden'
+    out.agents = 'project'
+  }
+  return out
 }

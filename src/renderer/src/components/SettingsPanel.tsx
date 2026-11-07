@@ -11,8 +11,10 @@ import { VoiceSettings } from './VoiceSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
 import { AppearanceSettings } from './AppearanceSettings'
 import { LlmSettings } from './LlmSettings'
-import { LlmPicker } from './LlmPicker'
+import { LlmPicker, useServerPicker } from './LlmPicker'
+import { SettingText } from './SettingText'
 import { defaultSessionLlm } from '../llm'
+import { settingsSections } from '../backendFeatures'
 import type {
   SessionType,
   EnvironmentSettings,
@@ -25,6 +27,14 @@ interface Props {
 }
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
+  // A server window edits the project's settings on the server: text is committed on blur (each
+  // commit is a request), this machine's sections are hidden, and a conflict's Reload remounts it.
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  const sections = settingsSections(serverWindow ? 'v2' : 'legacy')
+  const live = !serverWindow
+  const reload = useAppStore((s) => s.settingsReload)
+  const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
+  const picker = useServerPicker()
   const audioAlerts = useAppStore((s) => s.project?.audioAlerts ?? false)
   const setAudioAlerts = useAppStore((s) => s.setAudioAlerts)
   // '' is "App default": the project leaves the mode to the app-wide Claude setting.
@@ -130,9 +140,15 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
     }
   }
 
+  const parseDirs = (text: string): string[] =>
+    text
+      .split(',')
+      .map((d) => d.trim())
+      .filter(Boolean)
+
   return (
     <div className="settings-panel" style={{ display: visible ? 'flex' : 'none' }}>
-      <div className="settings-content">
+      <div className="settings-content" key={reload}>
         <h3>Settings</h3>
         <div className="settings-row">
           <span className="settings-label">
@@ -155,7 +171,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               scheduleAutoSave()
             }}
           >
-            <option value="">App default ({appPermissionLabel})</option>
+            <option value="">{serverWindow ? 'Server default' : `App default (${appPermissionLabel})`}</option>
             {CLAUDE_PERMISSION_MODES.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}
@@ -189,31 +205,39 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               and secrets that aren&apos;t committed. Applies to worktrees created from now on.
             </span>
           </span>
-          <input
-            className="settings-select"
-            type="text"
-            key={settingsRepo?.id}
-            placeholder=".trek"
-            defaultValue={linkedDirs.join(', ')}
-            onBlur={(e) => {
-              const dirs = e.target.value
-                .split(',')
-                .map((d) => d.trim())
-                .filter(Boolean)
-              setLinkedDirs(settingsRepo.id, dirs)
-              scheduleAutoSave()
-            }}
-          />
+          {live ? (
+            <input
+              className="settings-select"
+              type="text"
+              key={settingsRepo?.id}
+              placeholder=".trek"
+              defaultValue={linkedDirs.join(', ')}
+              onBlur={(e) => {
+                setLinkedDirs(settingsRepo.id, parseDirs(e.target.value))
+                scheduleAutoSave()
+              }}
+            />
+          ) : (
+            <SettingText
+              key={settingsRepo?.id}
+              live={false}
+              className="settings-select"
+              placeholder=".trek"
+              value={linkedDirs.join(', ')}
+              onCommit={(text) => setLinkedDirs(settingsRepo.id, parseDirs(text))}
+            />
+          )}
         </div>
         <AppearanceSettings />
-        <LinearSettings />
-        <VoiceSettings />
-        <LlmSettings />
+        {sections.linear !== 'hidden' && <LinearSettings />}
+        {sections.voice !== 'hidden' && <VoiceSettings />}
+        <LlmSettings projectOnly={sections.agents === 'project'} />
         <h3>Worktree tags</h3>
         <WorktreeTagsEditor
           description="Workflow tags assignable to a worktree's branch, in menu order. New worktrees start with the first tag. Deleting a tag removes it from every branch using it."
           tags={worktreeTags}
           onChange={setWorktreeTags}
+          live={live}
           usesOf={(id) =>
             repositories.flatMap((r) => Object.values(r.branchTags ?? {})).filter((t) => t === id).length
           }
@@ -223,6 +247,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           description="Extra tags that can be toggled on and off individually per worktree's branch, alongside its workflow tag. Deleting a tag removes it from every branch using it."
           tags={customTags}
           onChange={setCustomTags}
+          live={live}
           usesOf={(id) =>
             repositories
               .flatMap((r) => Object.values(r.branchCustomTags ?? {}))
@@ -234,6 +259,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           description="Buttons shown under every worktree agent terminal. Clicking one fills the terminal's input with the text and submits it."
           buttons={terminalButtons}
           onChange={updateButtons}
+          live={live}
         />
         <h3>Session system prompt</h3>
         <div className="settings-row">
@@ -246,16 +272,27 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           </span>
         </div>
         <div className="settings-row">
-          <textarea
-            className="quick-btn-text-input"
-            rows={6}
-            placeholder="e.g. Run the unit tests before saying a change is done"
-            defaultValue={sessionSystemPrompt}
-            onBlur={(e) => {
-              setSessionSystemPrompt(e.target.value)
-              scheduleAutoSave()
-            }}
-          />
+          {live ? (
+            <textarea
+              className="quick-btn-text-input"
+              rows={6}
+              placeholder="e.g. Run the unit tests before saying a change is done"
+              defaultValue={sessionSystemPrompt}
+              onBlur={(e) => {
+                setSessionSystemPrompt(e.target.value)
+                scheduleAutoSave()
+              }}
+            />
+          ) : (
+            <SettingText
+              live={false}
+              rows={6}
+              className="quick-btn-text-input session-prompt-input"
+              placeholder="e.g. Run the unit tests before saying a change is done"
+              value={sessionSystemPrompt}
+              onCommit={setSessionSystemPrompt}
+            />
+          )}
         </div>
         <h3>Global system prompt</h3>
         <div className="settings-row">
@@ -268,22 +305,34 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           </span>
         </div>
         <div className="settings-row">
-          <textarea
-            className="quick-btn-text-input"
-            rows={6}
-            placeholder="e.g. Prefer starting Review sessions for finished worktrees"
-            defaultValue={globalSystemPrompt}
-            onBlur={(e) => {
-              setGlobalSystemPrompt(e.target.value)
-              scheduleAutoSave()
-            }}
-          />
+          {live ? (
+            <textarea
+              className="quick-btn-text-input"
+              rows={6}
+              placeholder="e.g. Prefer starting Review sessions for finished worktrees"
+              defaultValue={globalSystemPrompt}
+              onBlur={(e) => {
+                setGlobalSystemPrompt(e.target.value)
+                scheduleAutoSave()
+              }}
+            />
+          ) : (
+            <SettingText
+              live={false}
+              rows={6}
+              className="quick-btn-text-input"
+              placeholder="e.g. Prefer starting Review sessions for finished worktrees"
+              value={globalSystemPrompt}
+              onCommit={setGlobalSystemPrompt}
+            />
+          )}
         </div>
         <h3>Global quick buttons</h3>
         <QuickButtonsEditor
           description="Buttons shown under the global terminal at the bottom of the window."
           buttons={globalTerminalButtons}
           onChange={updateGlobalButtons}
+          live={live}
         />
         <h3>Session types</h3>
         <div className="settings-row">
@@ -303,40 +352,44 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               limits={SESSION_ICON_LIMITS}
               title="Choose a PNG icon"
             />
-            <input
+            <SettingText
+              live={live}
               className="quick-btn-label-input"
-              type="text"
               placeholder="Name, e.g. Review"
               value={type.name}
-              onChange={(e) => patchSessionType(type.id, { name: e.target.value })}
+              onCommit={(name) => patchSessionType(type.id, { name })}
             />
             <div className="session-type-fields">
-              <textarea
-                className="quick-btn-text-input"
+              <SettingText
+                live={live}
                 rows={6}
+                className="quick-btn-text-input"
                 placeholder="System prompt, e.g. how the agent should approach reviewing"
                 value={type.systemPrompt}
-                onChange={(e) => patchSessionType(type.id, { systemPrompt: e.target.value })}
+                onCommit={(systemPrompt) => patchSessionType(type.id, { systemPrompt })}
               />
-              <textarea
-                className="quick-btn-text-input"
+              <SettingText
+                live={live}
                 rows={2}
+                className="quick-btn-text-input"
                 placeholder="First message (optional), e.g. /trek-review"
                 value={type.initialMessage ?? ''}
-                onChange={(e) => patchSessionType(type.id, { initialMessage: e.target.value })}
+                onCommit={(initialMessage) => patchSessionType(type.id, { initialMessage })}
               />
               <label className="llm-inline-check">
                 <input
                   type="checkbox"
                   checked={!type.llm}
                   onChange={(e) =>
-                    patchSessionType(type.id, { llm: e.target.checked ? undefined : defaultSessionLlm() })
+                    patchSessionType(type.id, {
+                      llm: e.target.checked ? undefined : serverWindow ? (serverDefault ?? { provider: 'claude' }) : defaultSessionLlm()
+                    })
                   }
                 />
                 Use the default agent
               </label>
               {type.llm && (
-                <LlmPicker value={type.llm} onChange={(llm) => patchSessionType(type.id, { llm })} />
+                <LlmPicker value={type.llm} onChange={(llm) => patchSessionType(type.id, { llm })} {...picker} />
               )}
             </div>
             <button
@@ -361,135 +414,139 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             + Add session type
           </button>
         </div>
-        <h3>Environments</h3>
-        {repoSelector}
-        <label className="settings-row">
-          <input
-            type="checkbox"
-            checked={envSettings?.enabled ?? false}
-            onChange={(e) => updateEnv({ enabled: e.target.checked })}
-          />
-          <span className="settings-label">
-            <span className="settings-name">Per-worktree Docker environments</span>
-            <span className="settings-desc">
-              Run each worktree&apos;s docker-compose stack in its own Colima VM, so fixed host
-              ports never collide across worktrees. Requires colima and the docker CLI.
-            </span>
-            {envToolCheck && !envToolCheck.ok && (
-              <span className="settings-desc settings-warn">{envToolCheck.error}</span>
-            )}
-          </span>
-        </label>
-        {envSettings?.enabled && (
+        {sections.environments !== 'hidden' && (
           <>
-            <div className="settings-row">
-              <span className="settings-label">
-                <span className="settings-name">VM size</span>
-                <span className="settings-desc">
-                  Resources for each new VM (existing VMs keep their size)
-                </span>
-              </span>
-              <span className="env-size-inputs">
-                <label>
-                  CPUs
-                  <input
-                    type="number"
-                    min={1}
-                    value={envSettings.cpu ?? ENV_DEFAULTS.cpu}
-                    onChange={(e) => updateEnv({ cpu: Number(e.target.value) || ENV_DEFAULTS.cpu })}
-                  />
-                </label>
-                <label>
-                  Memory GiB
-                  <input
-                    type="number"
-                    min={1}
-                    value={envSettings.memory ?? ENV_DEFAULTS.memory}
-                    onChange={(e) =>
-                      updateEnv({ memory: Number(e.target.value) || ENV_DEFAULTS.memory })
-                    }
-                  />
-                </label>
-                <label>
-                  Disk GiB
-                  <input
-                    type="number"
-                    min={5}
-                    value={envSettings.disk ?? ENV_DEFAULTS.disk}
-                    onChange={(e) =>
-                      updateEnv({ disk: Number(e.target.value) || ENV_DEFAULTS.disk })
-                    }
-                  />
-                </label>
-              </span>
-            </div>
+            <h3>Environments</h3>
+            {repoSelector}
             <label className="settings-row">
               <input
                 type="checkbox"
-                checked={envSettings.rosetta ?? ENV_DEFAULTS.rosetta}
-                onChange={(e) => updateEnv({ rosetta: e.target.checked })}
+                checked={envSettings?.enabled ?? false}
+                onChange={(e) => updateEnv({ enabled: e.target.checked })}
               />
               <span className="settings-label">
-                <span className="settings-name">Rosetta (x86_64 emulation)</span>
+                <span className="settings-name">Per-worktree Docker environments</span>
                 <span className="settings-desc">
-                  Run amd64 images via Rosetta 2 using Apple&apos;s VZ runtime (Apple Silicon
-                  only). Applies to new VMs — destroy and recreate an environment to change it.
+                  Run each worktree&apos;s docker-compose stack in its own Colima VM, so fixed host
+                  ports never collide across worktrees. Requires colima and the docker CLI.
                 </span>
+                {envToolCheck && !envToolCheck.ok && (
+                  <span className="settings-desc settings-warn">{envToolCheck.error}</span>
+                )}
               </span>
             </label>
-            <label className="settings-row">
-              <input
-                type="checkbox"
-                checked={envSettings.networkAddress ?? ENV_DEFAULTS.networkAddress}
-                onChange={(e) => updateEnv({ networkAddress: e.target.checked })}
-              />
-              <span className="settings-label">
-                <span className="settings-name">Per-VM IP address</span>
-                <span className="settings-desc">
-                  Give each VM its own IP (needs Colima&apos;s one-time sudo network helper). When
-                  off, ports forward to localhost and can collide across running worktrees.
-                </span>
-              </span>
-            </label>
-            <div className="settings-row">
-              <span className="settings-label">
-                <span className="settings-name">Compose file</span>
-                <span className="settings-desc">Path relative to each worktree</span>
-              </span>
-              <input
-                className="settings-select"
-                type="text"
-                placeholder={ENV_DEFAULTS.composeFile}
-                value={envSettings.composeFile ?? ''}
-                onChange={(e) => updateEnv({ composeFile: e.target.value || undefined })}
-              />
-            </div>
-            {orphans.length > 0 && (
-              <div className="settings-row env-orphans">
-                <span className="settings-label">
-                  <span className="settings-name">Orphaned environments</span>
-                  <span className="settings-desc">
-                    VMs whose worktree no longer exists (e.g. after a crash)
-                  </span>
-                  {orphans.map((o) => (
-                    <span key={o.profile} className="env-orphan-row">
-                      <span className={`docker-dot ${o.vmState === 'running' ? 'running' : 'exited'}`} />
-                      {o.profile}
-                      {o.branch ? ` (${o.branch})` : ''}
-                      <button
-                        disabled={!!envBusy[o.profile]}
-                        onClick={() => void destroyOrphan(o.profile)}
-                      >
-                        {envBusy[o.profile] === 'destroy' ? 'Deleting…' : 'Delete'}
-                      </button>
+            {envSettings?.enabled && (
+              <>
+                <div className="settings-row">
+                  <span className="settings-label">
+                    <span className="settings-name">VM size</span>
+                    <span className="settings-desc">
+                      Resources for each new VM (existing VMs keep their size)
                     </span>
-                  ))}
-                </span>
-              </div>
+                  </span>
+                  <span className="env-size-inputs">
+                    <label>
+                      CPUs
+                      <input
+                        type="number"
+                        min={1}
+                        value={envSettings.cpu ?? ENV_DEFAULTS.cpu}
+                        onChange={(e) => updateEnv({ cpu: Number(e.target.value) || ENV_DEFAULTS.cpu })}
+                      />
+                    </label>
+                    <label>
+                      Memory GiB
+                      <input
+                        type="number"
+                        min={1}
+                        value={envSettings.memory ?? ENV_DEFAULTS.memory}
+                        onChange={(e) =>
+                          updateEnv({ memory: Number(e.target.value) || ENV_DEFAULTS.memory })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Disk GiB
+                      <input
+                        type="number"
+                        min={5}
+                        value={envSettings.disk ?? ENV_DEFAULTS.disk}
+                        onChange={(e) =>
+                          updateEnv({ disk: Number(e.target.value) || ENV_DEFAULTS.disk })
+                        }
+                      />
+                    </label>
+                  </span>
+                </div>
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={envSettings.rosetta ?? ENV_DEFAULTS.rosetta}
+                    onChange={(e) => updateEnv({ rosetta: e.target.checked })}
+                  />
+                  <span className="settings-label">
+                    <span className="settings-name">Rosetta (x86_64 emulation)</span>
+                    <span className="settings-desc">
+                      Run amd64 images via Rosetta 2 using Apple&apos;s VZ runtime (Apple Silicon
+                      only). Applies to new VMs — destroy and recreate an environment to change it.
+                    </span>
+                  </span>
+                </label>
+                <label className="settings-row">
+                  <input
+                    type="checkbox"
+                    checked={envSettings.networkAddress ?? ENV_DEFAULTS.networkAddress}
+                    onChange={(e) => updateEnv({ networkAddress: e.target.checked })}
+                  />
+                  <span className="settings-label">
+                    <span className="settings-name">Per-VM IP address</span>
+                    <span className="settings-desc">
+                      Give each VM its own IP (needs Colima&apos;s one-time sudo network helper). When
+                      off, ports forward to localhost and can collide across running worktrees.
+                    </span>
+                  </span>
+                </label>
+                <div className="settings-row">
+                  <span className="settings-label">
+                    <span className="settings-name">Compose file</span>
+                    <span className="settings-desc">Path relative to each worktree</span>
+                  </span>
+                  <input
+                    className="settings-select"
+                    type="text"
+                    placeholder={ENV_DEFAULTS.composeFile}
+                    value={envSettings.composeFile ?? ''}
+                    onChange={(e) => updateEnv({ composeFile: e.target.value || undefined })}
+                  />
+                </div>
+                {orphans.length > 0 && (
+                  <div className="settings-row env-orphans">
+                    <span className="settings-label">
+                      <span className="settings-name">Orphaned environments</span>
+                      <span className="settings-desc">
+                        VMs whose worktree no longer exists (e.g. after a crash)
+                      </span>
+                      {orphans.map((o) => (
+                        <span key={o.profile} className="env-orphan-row">
+                          <span className={`docker-dot ${o.vmState === 'running' ? 'running' : 'exited'}`} />
+                          {o.profile}
+                          {o.branch ? ` (${o.branch})` : ''}
+                          <button
+                            disabled={!!envBusy[o.profile]}
+                            onClick={() => void destroyOrphan(o.profile)}
+                          >
+                            {envBusy[o.profile] === 'destroy' ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
-        <ServersPanel />
+        {sections.remoteHosts !== 'hidden' && <ServersPanel />}
       </div>
     </div>
   )
@@ -499,12 +556,15 @@ interface QuickButtonsEditorProps {
   description: string
   buttons: TerminalQuickButton[]
   onChange: (buttons: TerminalQuickButton[]) => void
+  /** Text commits on every keystroke (a file window), else on blur */
+  live: boolean
 }
 
 function QuickButtonsEditor({
   description,
   buttons,
-  onChange
+  onChange,
+  live
 }: QuickButtonsEditorProps): React.JSX.Element {
   const patchButton = (id: string, patch: Partial<TerminalQuickButton>): void => {
     onChange(buttons.map((b) => (b.id === id ? { ...b, ...patch } : b)))
@@ -526,19 +586,20 @@ function QuickButtonsEditor({
       </div>
       {buttons.map((btn, i) => (
         <div key={btn.id} className="quick-btn-row">
-          <input
+          <SettingText
+            live={live}
             className="quick-btn-label-input"
-            type="text"
             placeholder="Label"
             value={btn.label}
-            onChange={(e) => patchButton(btn.id, { label: e.target.value })}
+            onCommit={(label) => patchButton(btn.id, { label })}
           />
-          <textarea
-            className="quick-btn-text-input"
+          <SettingText
+            live={live}
             rows={1}
+            className="quick-btn-text-input"
             placeholder="Text typed into the terminal and submitted"
             value={btn.text}
-            onChange={(e) => patchButton(btn.id, { text: e.target.value })}
+            onCommit={(text) => patchButton(btn.id, { text })}
           />
           <button
             className="quick-btn-remove"
@@ -583,11 +644,14 @@ function WorktreeTagsEditor({
   description,
   tags,
   onChange,
+  live,
   usesOf
 }: {
   description: string
   tags: WorktreeTag[]
   onChange: (tags: WorktreeTag[]) => void
+  /** Text commits on every keystroke (a file window), else on blur */
+  live: boolean
   /** How many branches carry the tag */
   usesOf: (id: string) => number
 }): React.JSX.Element {
@@ -637,12 +701,12 @@ function WorktreeTagsEditor({
             value={tag.color}
             onChange={(e) => patchTag(tag.id, { color: e.target.value })}
           />
-          <input
+          <SettingText
+            live={live}
             className="quick-btn-text-input"
-            type="text"
             placeholder="Tag name"
             value={tag.name}
-            onChange={(e) => patchTag(tag.id, { name: e.target.value })}
+            onCommit={(name) => patchTag(tag.id, { name })}
           />
           <button
             className="quick-btn-remove"

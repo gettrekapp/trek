@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { getProvider, PROVIDER_LIST } from '../../../shared/providers/registry'
 import { effortsFor } from '../../../shared/providers/selection'
@@ -20,6 +20,26 @@ interface Props {
    * machine, so Local's model is typed rather than fetched from this machine.
    */
   remote?: { installed: Partial<Record<LlmProviderId, boolean>> }
+}
+
+/**
+ * In a server window, what an LlmPicker needs to offer the server's agents:
+ * the providers `server.agents` listed and what it said is installed (until
+ * it answers, or without `agents`: every provider, with no check on this
+ * machine). Nothing in a file window.
+ */
+export function useServerPicker(): Pick<Props, 'filter' | 'remote'> {
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  const agents = useAppStore((s) => s.serverAgents)
+  return useMemo(() => {
+    if (!serverWindow) return {}
+    if (!agents) return { remote: { installed: {} } }
+    const listed = new Set(agents.agents.map((a) => a.provider))
+    return {
+      filter: (p: LlmProvider) => listed.has(p.id),
+      remote: { installed: Object.fromEntries(agents.agents.map((a) => [a.provider, a.installed])) }
+    }
+  }, [serverWindow, agents])
 }
 
 /** Provider → Model → Effort. Changing provider resets model and effort. */
