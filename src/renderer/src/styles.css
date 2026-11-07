@@ -4030,3 +4030,8 @@ body.resizing-row {
   gap: 8px;
   align-items: center;
 }
+
+/* A server project's workspace (3c-2): the legacy layout, with the banner above it */
+.server-window.server-workspace {
+  overflow: hidden;
+}

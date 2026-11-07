@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
+import { disposeV2Terminals, retryV2Terminals } from '../terminals'
+import { backendChanged } from '../backend'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from './serverClients'
+import { applyV2Project } from './applyProjection'
 import { errorCode, errorText } from './errors'
-import { gitStatusLabel } from '../components/Sidebar'
+import { V2Workspace } from './V2Workspace'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
 import { SERVER_REMOVED_MESSAGE, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
-import type { Project, Session, SessionStatus, Worktree } from '../../../shared/model/types'
 import type { AppServerInfo } from '../../../shared/types'
 
 /**
- * A v2 server project, read-only (3b): the live tree from the `project:<id>`
- * topic, a banner while the connection is down, and the "Server removed" and
- * "Project not found" states. 3c replaces it with the real Sidebar/Workspace.
+ * A v2 server project: the `project:<id>` topic projected into the store and
+ * shown by the reused Sidebar, WorktreeDetail and Global panel (V2Workspace),
+ * a banner while the connection is down, and the "Server removed" and
+ * "Project not found" states. The backend and the store-setter overrides
+ * come and go with `serverWindow` (windowKind.ts).
  */
 
 interface Props {
@@ -19,22 +23,6 @@ interface Props {
   projectId: string
   /** The project's name for the title bar, or null while there is none. */
   onTitle: (name: string | null) => void
-}
-
-/** The legacy sidebar's dot colours. */
-function sessionDot(status: SessionStatus): string {
-  switch (status) {
-    case 'working':
-      return 'running'
-    case 'attention':
-      return 'attention'
-    case 'done':
-      return 'done'
-    case 'exited':
-      return 'exited'
-    default:
-      return 'idle'
-  }
 }
 
 function currentStatus(connection: ServerConnection): StatusChange {
@@ -54,7 +42,8 @@ function formatLastSeen(t: number): string {
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString() : d.toLocaleString()
 }
 
-type View = { project: Project } | { notFound: true } | { error: string } | null
+/** The project's name once a snapshot arrived (the store holds the rest), or why there is none. */
+type View = { name: string } | { notFound: true } | { error: string } | null
 
 export function ServerProjectWindow({ serverEntryId, projectId, onTitle }: Props): React.JSX.Element {
   /** undefined while loading, null when the entry is gone (for good: it never comes back). */
@@ -135,17 +124,26 @@ function ServerProjectTree({
       if (previous === 'connected' && change.status !== 'connected') setDroppedAt(Date.now())
       previous = change.status
       setStatus(change)
+      useAppStore.getState().setServerOffline(change.status !== 'connected')
+      // The welcome's capabilities may have changed the backend's features.
+      backendChanged()
+      // Attaches that failed while the link was down go again now, not after their back-off.
+      if (change.status === 'connected') retryV2Terminals()
     }
     setStatus(currentStatus(connection))
+    useAppStore.getState().setServerOffline(connection.status !== 'connected')
+    backendChanged()
     const offStatus = connection.on('status', onStatus)
     const offTopic = mirror.subscribe(`project:${projectId}`, (update) => {
       if ('error' in update) {
         if (errorCode(update.error) === 'NOT_FOUND') setView({ notFound: true })
-        // Keep showing the last tree on a transient error; the banner says what is wrong.
-        else setView((v) => (v && 'project' in v ? v : { error: errorText(update.error) }))
+        // Keep showing the last state on a transient error; the banner says what is wrong.
+        else setView((v) => (v && 'name' in v ? v : { error: errorText(update.error) }))
         return
       }
-      setView({ project: update.snapshot })
+      // Terminals first, then the store: the panes it renders attach to the entries.
+      applyV2Project(update.snapshot, registered.ptys)
+      setView({ name: update.snapshot.name })
       setLastPatchAt(Date.now())
     })
     // A deleted project's topic just stops: the only signal is the server topic dropping it.
@@ -160,6 +158,8 @@ function ServerProjectTree({
       offStatus()
       offTopic()
       offServer()
+      // The slice and the overrides go with serverWindow (windowKind.ts); the streams go now.
+      disposeV2Terminals()
     }
   }, [registered, projectId])
 
@@ -169,7 +169,7 @@ function ServerProjectTree({
     if (removed) onRemoved()
   }, [removed, onRemoved])
 
-  const name = view && 'project' in view ? view.project.name : null
+  const name = view && 'name' in view ? view.name : null
   useEffect(() => {
     if (removed) return
     onTitle(name)
@@ -182,7 +182,7 @@ function ServerProjectTree({
   const connected = status.status === 'connected'
   const lastSeen = lastPatchAt === null && droppedAt === null ? null : Math.max(lastPatchAt ?? 0, droppedAt ?? 0)
   return (
-    <div className="server-window">
+    <div className="server-window server-workspace">
       {!connected && (
         <div className="server-window-banner" role="status">
           <strong>{STATUS_LABELS[status.status]}</strong>
@@ -191,81 +191,12 @@ function ServerProjectTree({
         </div>
       )}
       {view && 'error' in view && <div className="error">Could not load the project: {view.error}</div>}
-      {view && 'project' in view ? (
-        <ProjectTree project={view.project} />
+      {view && 'name' in view ? (
+        <V2Workspace />
       ) : (
         !view && connected && <p className="muted server-window-loading">Loading…</p>
       )}
     </div>
-  )
-}
-
-function ProjectTree({ project }: { project: Project }): React.JSX.Element {
-  return (
-    <div className="server-window-tree sidebar-list">
-      {project.repositories.map((repo) => (
-        <section className="repo-section" key={repo.id}>
-          <div className="repo-header" title={repo.path}>
-            <span className="repo-name">{repo.name}</span>
-          </div>
-          {repo.worktrees.map((wt) => (
-            <WorktreeRow key={wt.id} worktree={wt} />
-          ))}
-        </section>
-      ))}
-      <section className="repo-section server-window-global">
-        <div className="repo-header">
-          <span className="repo-name">Global</span>
-        </div>
-        {project.globalSessions.length === 0 ? (
-          <p className="muted server-window-empty">No global sessions</p>
-        ) : (
-          <SessionList sessions={project.globalSessions} />
-        )}
-      </section>
-    </div>
-  )
-}
-
-function WorktreeRow({ worktree: wt }: { worktree: Worktree }): React.JSX.Element {
-  const git = gitStatusLabel(wt)
-  return (
-    <div className="server-window-worktree">
-      <div className="wt-row" title={wt.path}>
-        <span className={`wt-dot ${wt.loaded ? 'done' : 'dormant'}`} title={wt.loaded ? 'Loaded' : 'Unloaded'} />
-        <div className="wt-main">
-          <div className="wt-branch">
-            <span className="wt-branch-label">
-              <span className="wt-name">{wt.branch ?? wt.name}</span>
-            </span>
-            {wt.isMain && <span className="primary-tag remote-main-tag">MAIN</span>}
-          </div>
-          {(wt.missing || wt.loaded || git) && (
-            <div className="wt-bottom">
-              <div className="wt-chips">
-                {wt.missing && <span className="mini-chip server-window-missing">missing</span>}
-                {wt.loaded && <span className="mini-chip">loaded</span>}
-              </div>
-              {git && <span className={`wt-git ${wt.dirty ? 'dirty' : ''}`}>{git}</span>}
-            </div>
-          )}
-        </div>
-      </div>
-      {wt.sessions.length > 0 && <SessionList sessions={wt.sessions} />}
-    </div>
-  )
-}
-
-function SessionList({ sessions }: { sessions: Session[] }): React.JSX.Element {
-  return (
-    <ul className="server-window-sessions">
-      {sessions.map((s) => (
-        <li key={s.id} title={s.status}>
-          <span className={`wt-dot ${sessionDot(s.status)}`} />
-          <span className="server-window-session-title">{s.title || 'Session'}</span>
-        </li>
-      ))}
-    </ul>
   )
 }
 
