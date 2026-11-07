@@ -16,7 +16,7 @@ import type {
   PtyInfo,
   WireError
 } from './protocol.ts'
-import type { LlmSelection } from './providers/types.ts'
+import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { EnvironmentSettings, WorktreeChanges } from './types.ts'
 
@@ -40,7 +40,9 @@ export const CAPABILITY = {
   /** Sessions carry `decision` (MCP request_decision), and `session.dismissDecision` clears it */
   decisions: 'decisions',
   /** `session.dequeue` removes one queued prompt, compare-and-set */
-  dequeue: 'dequeue'
+  dequeue: 'dequeue',
+  /** `server.agents` lists the agents the server can launch */
+  agents: 'agents'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -181,12 +183,32 @@ export interface MethodParamsV2 {
   'server.addRepo': { path: string; name?: string }
   /** Fails with IN_USE while a project uses the repo */
   'server.removeRepo': { repoId: string }
+  /** The agents the server can launch; with `projectId`, Claude's command is that project's `claudeCommand` when it has one */
+  'server.agents': { projectId?: string }
 
   // Subscriptions
   'sub.subscribe': { topic: Topic }
   'sub.unsubscribe': { topic: Topic }
   // Misc
   'sys.ping': { t: number }
+}
+
+/** One agent CLI the server can run (`server.agents`). */
+export interface AgentInfo {
+  provider: LlmProviderId
+  label: string
+  /**
+   * Whether the program of the command the server would run for it resolves in
+   * the server user's login shell (checked at most once a minute per program)
+   */
+  installed: boolean
+}
+
+export interface ServerAgents {
+  /** The server config's default agent, used when neither the session, its type nor the project picks one */
+  llmDefault: LlmSelection
+  /** Every provider the server knows, installed or not, in the server's order */
+  agents: AgentInfo[]
 }
 
 export interface SubscribeResult<S> {
@@ -238,6 +260,7 @@ export interface MethodResultsV2 {
   /** The id of the new repo, or of the existing one if the path was already registered */
   'server.addRepo': { repoId: string }
   'server.removeRepo': null
+  'server.agents': ServerAgents
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }

@@ -64,7 +64,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** The agent command a spawn ran (the shell's -c argument). */
 const cmd = (proc) => proc.opts.args.at(-1)
 
-function setup(t, { llm, maxSessions, mcpAccess } = {}) {
+function setup(t, { llm, maxSessions, mcpAccess, commandExists } = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
@@ -88,7 +88,7 @@ function setup(t, { llm, maxSessions, mcpAccess } = {}) {
   const scheduled = []
   const clock = { t: 1_000_000 }
   const sessions = new SessionManager({
-    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess,
+    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists,
     discover: async (cwd, ageMs, exclude) => {
       discoveries.push({ cwd, ageMs, exclude })
       const next = sessions.__nextDiscovery
@@ -1085,6 +1085,33 @@ test('v2: session.dismissDecision is wired; pty.write answers a decision', async
   assert.equal(decisionOf(s)?.question, 'q')
   await call('pty.write', { ptyId, data: 'n' })
   assert.equal(decisionOf(s), undefined)
+})
+
+test('v2: server.agents lists every provider, whether it is installed, and the server default', async (t) => {
+  const asked = []
+  const commandExists = async (binary) => { asked.push(binary); return binary === 'claude' || binary === 'my-claude' }
+  const s = setup(t, { llm: { llmDefault: { provider: 'codex', model: 'gpt-5' }, providers: { gemini: { command: 'KEY=secret gem' } } }, commandExists })
+  const { call } = v2(s)
+  const all = await call('server.agents', {})
+  assert.equal(all.ok, true, JSON.stringify(all))
+  assert.deepEqual(all.result, {
+    llmDefault: { provider: 'codex', model: 'gpt-5' },
+    agents: [
+      { provider: 'claude', label: 'Claude', installed: true },
+      { provider: 'codex', label: 'Codex', installed: false },
+      { provider: 'gemini', label: 'Gemini', installed: false },
+      { provider: 'grok', label: 'Grok', installed: false },
+      { provider: 'local', label: 'Local', installed: true }
+    ]
+  })
+  assert.equal(JSON.stringify(all.result).includes('secret'), false, 'command lines are not sent')
+  assert.deepEqual(asked.sort(), ['claude', 'codex', 'gem', 'grok'], 'local runs claude: one check')
+  s.projects.apply(s.projectId, (d) => { d.settings.claudeCommand = 'nope-claude --x' })
+  const scoped = await call('server.agents', { projectId: s.projectId })
+  assert.equal(scoped.result.agents[0].installed, false, "the project's claudeCommand")
+  assert.equal(scoped.result.agents[4].installed, true, 'local keeps the server command')
+  assert.equal((await call('server.agents', { projectId: 'nope' })).error.code, 'NOT_FOUND')
+  assert.equal((await call('server.agents', { projectId: 5 })).error.code, 'BAD_REQUEST')
 })
 
 test('maxSessions refusals use CAPACITY', (t) => {

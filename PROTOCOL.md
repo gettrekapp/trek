@@ -198,6 +198,7 @@ new optional field needs no capability: its absence says enough.
 | `topicEnd` | The server sends `topic.ended` before a topic stops (see Subscriptions) |
 | `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
 | `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
+| `agents` | `server.agents` lists the agents the server can launch (see Sessions) |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 
@@ -264,6 +265,7 @@ server restarts. A server without this field simply leaves it out.
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
+| Agents | `server.agents` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -432,6 +434,19 @@ the local provider, `backend` and `baseUrl`. The file reloads live. A project's
 settings override it: `llmDefault`, `globalLlm`, `claudePermissionMode`,
 `claudeCommand`, `claudeArgs`, `sessionTypes`, `sessionSystemPrompt` and
 `globalSystemPrompt`. No method edits the `llm` section; edit the file.
+
+**Which agents.** `server.agents {projectId?}` returns `{llmDefault, agents:
+[{provider, label, installed}]}`: the `llm` section's default (Claude when it
+names none), and every provider the server knows, in its order. `installed`
+says whether the program of the command the server would run for that provider
+(the project's `claudeCommand` for Claude when `projectId` names a project that
+has one, else the `llm` section's `command`, else the provider's default; the
+program is the first word after any `NAME=value` assignments) is found by
+`command -v` in the server user's login shell. Each program's answer is reused
+for a minute, so the first call can take a few seconds. The command lines
+themselves are not sent: they may carry secrets. An unknown `projectId` is
+`NOT_FOUND`. A provider that is installed can still fail to start (a local
+model's backend may be down, say); `session.start` reports that as usual.
 
 **Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
 initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`

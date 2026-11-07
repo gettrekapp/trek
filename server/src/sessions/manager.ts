@@ -37,6 +37,8 @@ import {
   type Activity
 } from './status.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
+import { agentCommands, commandBinary, CommandProbe } from './agents.ts'
+import type { ServerAgents } from '../../../src/shared/protocolV2'
 
 export const LOAD_COLS = 120
 export const LOAD_ROWS = 32
@@ -59,6 +61,8 @@ export interface SessionManagerDeps {
   now?: () => number
   /** The MCP access a project's sessions launch with; without it sessions launch without MCP */
   mcpAccess?: (projectId: string) => McpAccess | undefined
+  /** Whether a program resolves in the login shell (server.agents); default agentService.commandExists */
+  commandExists?: (binary: string) => Promise<boolean>
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
@@ -112,6 +116,7 @@ export class SessionManager {
   private readonly outputSeen = new Set<string>()
   /** sessionId → when it entered attention or done */
   private readonly since = new Map<string, number>()
+  private readonly probe: CommandProbe
   private stopped = false
 
   constructor(deps: SessionManagerDeps) {
@@ -119,6 +124,7 @@ export class SessionManager {
     this.newId = deps.newId ?? randomUUID
     this.now = deps.now ?? Date.now
     this.discover = deps.discover ?? discoverCodexSession
+    this.probe = new CommandProbe(deps.commandExists, this.now)
     this.schedule =
       deps.schedule ??
       ((fn, ms) => {
@@ -370,6 +376,19 @@ export class SessionManager {
     for (const [ptyId, owner] of this.owners) {
       if (owner.sessionId === sessionId) this.onUserInput(ptyId)
     }
+  }
+
+  /** The agents this server can launch, and its default (server.agents). */
+  async agents(p: any): Promise<ServerAgents> {
+    const settings = p.projectId === undefined ? undefined : this.deps.projects.require(p.projectId).settings
+    const llm = this.deps.store.llmSettings()
+    const agents = await Promise.all(
+      agentCommands(llm, settings).map(async ({ provider, label, command }) => {
+        const binary = commandBinary(command)
+        return { provider, label, installed: binary ? await this.probe.installed(binary) : false }
+      })
+    )
+    return { llmDefault: llm.llmDefault, agents }
   }
 
   /** True once the session's current run has produced live output (cleared when its pty ends). */

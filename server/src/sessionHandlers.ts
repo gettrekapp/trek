@@ -33,6 +33,8 @@ export const sessionHandlers: Record<string, Handler> = {
   'session.seen': (p, ctx) => ctx.sessions.seen(p),
   'session.dismissDecision': (p, ctx) => ctx.sessions.dismissDecision(p),
 
+  'server.agents': (p, ctx) => ctx.sessions.agents(p),
+
   'worktree.load': (p, ctx) => ctx.sessions.loadWorktree(p),
   'worktree.unload': (p, ctx) => ctx.sessions.unloadWorktree(p),
 
