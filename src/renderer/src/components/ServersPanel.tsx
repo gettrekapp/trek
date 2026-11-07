@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { serverColorClass, useAppStore } from '../store'
 import { scheduleAutoSave } from '../persistence'
 import type { HostStatus, ServerConfig, ServerTestResult } from '../../../shared/types'
+import { originOf } from '../../../shared/appServerRules.ts'
 
 /**
  * Remote server management: each entry is a machine running the companion
  * trek-server (see server/README.md). The access token is stored encrypted on this
- * machine only — never in the project file.
+ * machine only — never in the project file — and bound to the server's address:
+ * after the URL moves to another scheme, host or port, the token must be entered again.
  */
 
 interface FormState {
@@ -34,6 +36,7 @@ export function ServersPanel(): React.JSX.Element {
   const setServers = useAppStore((s) => s.setServers)
   const setServerRepoPaths = useAppStore((s) => s.setServerRepoPaths)
   const serverStatus = useAppStore((s) => s.serverStatus)
+  const serverErrors = useAppStore((s) => s.serverErrors)
 
   const servers = project.servers ?? []
   const repositories = project.repositories
@@ -42,12 +45,16 @@ export function ServersPanel(): React.JSX.Element {
   const [testing, setTesting] = useState(false)
   const [hasStoredToken, setHasStoredToken] = useState(false)
 
-  const editing = form && servers.some((s) => s.id === form.id)
+  const saved = form ? servers.find((s) => s.id === form.id) : undefined
+  const editing = !!saved
+  /** The stored token was entered for the saved URL; it is not sent once the URL points elsewhere. */
+  const addressChanged = !!saved && !!form && originOf(form.url) !== originOf(saved.url)
+  const tokenUsable = hasStoredToken && !addressChanged
 
   useEffect(() => {
     setTestResult(null)
-    if (form && editing) {
-      window.api.hasServerToken(form.id).then(setHasStoredToken).catch(() => setHasStoredToken(false))
+    if (form && saved) {
+      window.api.hasServerToken(form.id, saved.url).then(setHasStoredToken).catch(() => setHasStoredToken(false))
     } else {
       setHasStoredToken(false)
     }
@@ -77,7 +84,12 @@ export function ServersPanel(): React.JSX.Element {
       url: form.url.trim()
     }
     if (form.token.trim()) {
-      await window.api.setServerToken(config.id, form.token.trim())
+      try {
+        await window.api.setServerToken(config.id, form.token.trim(), config.url)
+      } catch (err) {
+        setTestResult({ ok: false, error: `Token not saved: ${err instanceof Error ? err.message : String(err)}` })
+        return
+      }
     }
     const next = editing
       ? servers.map((s) => (s.id === config.id ? config : s))
@@ -167,7 +179,15 @@ export function ServersPanel(): React.JSX.Element {
                 .flatMap((r) => r.serverPaths?.[server.id] ?? [])
                 .join(', ')}
             </span>
-            {status === 'needs-auth' && <span className="server-row-warn">Token required</span>}
+            {status === 'needs-auth' && (
+              <button
+                className="btn btn-ghost server-row-warn"
+                title={serverErrors[server.id] ?? 'Enter this server’s access token'}
+                onClick={() => startEdit(server)}
+              >
+                {serverErrors[server.id] ?? 'Token required'}
+              </button>
+            )}
             <span className="server-row-actions">
               <button className="btn btn-ghost" onClick={() => startEdit(server)}>
                 Edit
@@ -210,10 +230,17 @@ export function ServersPanel(): React.JSX.Element {
             <input
               type="password"
               value={form.token}
-              placeholder={hasStoredToken ? '•••• saved on this machine' : 'from `npm run token`'}
+              placeholder={tokenUsable ? '•••• saved on this machine' : 'from `npm run token`'}
               onChange={(e) => setForm({ ...form, token: e.target.value })}
             />
           </label>
+          {editing && !form.token.trim() && (addressChanged || !hasStoredToken) && (
+            <p className="server-row-warn">
+              {addressChanged
+                ? 'The address changed — enter the token again: a saved token is only sent to the address it was entered for.'
+                : 'Enter the access token: none is saved for this address.'}
+            </p>
+          )}
           {repositories.map((repo) => (
             <label className="server-form-row" key={repo.id}>
               <span>{repo.name} path on server</span>

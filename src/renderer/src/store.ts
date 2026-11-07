@@ -239,6 +239,8 @@ export interface AppState {
   /** Live git worktrees per repository and host (keyed by repoHostKey), repoId and serverId stamped. */
   hostWorktrees: Record<string, GitWorktreeInfo[]>
   serverStatus: Record<string, HostStatus>
+  /** The last status's error per server, when it carried one (e.g. a token refused for a changed address). */
+  serverErrors: Record<string, string>
   /** Live Colima environments, keyed by profile name (not persisted). */
   environments: Record<string, EnvironmentInfo>
   /** In-flight environment operation per profile — drives spinners/disabled buttons. */
@@ -293,7 +295,7 @@ export interface AppState {
   /** Merge a status sweep's dirty/ahead/behind into the host's cached rows, in every repository. */
   setWorktreeStatuses: (host: string, statuses: WorktreeStatus[]) => void
   setServerRepoPaths: (serverId: string, pathsByRepo: Record<string, string>) => void
-  setServerStatus: (serverId: string, status: HostStatus) => void
+  setServerStatus: (serverId: string, status: HostStatus, error?: string) => void
   setWorktreeLoaded: (worktreeId: string, loaded: boolean) => void
   /** Store a worktree's dormant session list (primary included) in the project. */
   setWorktreeSessions: (worktreeId: string, sessions: PersistedTerminal[]) => void
@@ -394,6 +396,7 @@ export const useAppStore = create<AppState>((set) => ({
   loadedWorktrees: {},
   hostWorktrees: {},
   serverStatus: {},
+  serverErrors: {},
   environments: {},
   envBusy: {},
   envToolCheck: null,
@@ -427,6 +430,7 @@ export const useAppStore = create<AppState>((set) => ({
       loadedWorktrees: {},
       hostWorktrees: {},
       serverStatus: {},
+      serverErrors: {},
       environments: {},
       envBusy: {},
       terminalQueues: {},
@@ -625,10 +629,13 @@ export const useAppStore = create<AppState>((set) => ({
       return changed ? { hostWorktrees } : state
     }),
 
-  setServerStatus: (serverId, status) =>
+  setServerStatus: (serverId, status, error) =>
     set((state) => {
-      if (state.serverStatus[serverId] === status) return state
-      return { serverStatus: { ...state.serverStatus, [serverId]: status } }
+      if (state.serverStatus[serverId] === status && state.serverErrors[serverId] === error) return state
+      const serverErrors = { ...state.serverErrors }
+      if (error) serverErrors[serverId] = error
+      else delete serverErrors[serverId]
+      return { serverStatus: { ...state.serverStatus, [serverId]: status }, serverErrors }
     }),
 
   setWorktreeLoaded: (worktreeId, loaded) =>

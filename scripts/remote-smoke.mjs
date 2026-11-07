@@ -7,11 +7,13 @@ import { _electron as electron } from 'playwright-core'
 import { execSync, spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 
 const projectDir = process.cwd()
 const PORT = 17346
+const TRAP_PORT = 17347
 const errors = []
 const failures = []
 const check = (label, actual, expected) => {
@@ -54,7 +56,7 @@ writeFileSync(
   })
 )
 const daemon = spawn('npx', ['tsx', 'src/index.ts', 'start', '--config', daemonConfig, '--port', String(PORT)], {
-  cwd: join(projectDir, 'daemon'),
+  cwd: join(projectDir, 'server'),
   stdio: ['ignore', 'pipe', 'inherit']
 })
 await new Promise((resolve, reject) => {
@@ -84,7 +86,7 @@ try {
   await win.waitForTimeout(500)
 
   // Store the token BEFORE the project loads so connectServer finds it.
-  await win.evaluate((t) => window.api.setServerToken('srv1', t), token)
+  await win.evaluate(({ t, port }) => window.api.setServerToken('srv1', t, `ws://127.0.0.1:${port}`), { t: token, port: PORT })
 
   await win.evaluate(
     ({ localRepo, serverRepo, port }) => {
@@ -188,6 +190,34 @@ try {
     movedPath
   )
   check('remote worktreeStatuses reports dirty', remoteStatus, true)
+
+  // The stored token is bound to ws://127.0.0.1:PORT: pointed elsewhere (another port, another
+  // host name) it is never sent; a trap listener counts any connection made to it.
+  const trapHits = []
+  const trap = createServer((sock) => { trapHits.push(1); sock.destroy() })
+  await new Promise((resolve) => trap.listen(TRAP_PORT, '127.0.0.1', resolve))
+  const trapUrl = `ws://127.0.0.1:${TRAP_PORT}`
+  check('hasServerToken for its own address', await win.evaluate((u) => window.api.hasServerToken('srv1', u), `ws://127.0.0.1:${PORT}`), true)
+  check('hasServerToken for another address', await win.evaluate((u) => window.api.hasServerToken('srv1', u), trapUrl), false)
+  const movedTest = await win.evaluate(
+    ({ u, serverRepo }) => window.api.testServer({ url: u, serverId: 'srv1', repoPath: serverRepo }),
+    { u: trapUrl, serverRepo }
+  )
+  check('test refuses the stored token for another port', movedTest.ok === false && /address changed/.test(movedTest.error), true)
+  const hostTest = await win.evaluate(
+    ({ u, serverRepo }) => window.api.testServer({ url: u, serverId: 'srv1', repoPath: serverRepo }),
+    { u: `ws://localhost:${PORT}`, serverRepo }
+  )
+  check('test refuses the stored token for another host name', hostTest.ok === false && /address changed/.test(hostTest.error), true)
+  await win.evaluate((u) => window.api.connectServer({ id: 'srv1', name: 'devbox', url: u }), trapUrl)
+  await win.waitForFunction(() => window.__store.getState().serverStatus['srv1'] === 'needs-auth', undefined, { timeout: 5000 })
+  check('connect to another address asks for the token', /address changed/.test(await win.evaluate(() => window.__store.getState().serverErrors['srv1'] ?? '')), true)
+  await win.waitForTimeout(500)
+  check('nothing reached the other address', trapHits.length, 0)
+  trap.close()
+  await win.evaluate((u) => window.api.connectServer({ id: 'srv1', name: 'devbox', url: u }), `ws://127.0.0.1:${PORT}`)
+  await win.waitForFunction(() => window.__store.getState().serverStatus['srv1'] === 'connected', undefined, { timeout: 15000 })
+  check('connect to its own address again', await win.evaluate(() => window.__store.getState().serverErrors['srv1'] ?? null), null)
 
   const filteredErrors = errors.filter(
     (e) => !e.includes('Autofill') && !e.includes('DevTools')

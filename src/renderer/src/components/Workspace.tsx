@@ -63,8 +63,8 @@ export function Workspace(): React.JSX.Element {
 
   // Server connection state feeds row styling and poll gating.
   useEffect(() => {
-    return window.api.onServerStatus(({ serverId, status }) => {
-      useAppStore.getState().setServerStatus(serverId, status)
+    return window.api.onServerStatus(({ serverId, status, error }) => {
+      useAppStore.getState().setServerStatus(serverId, status, error)
     })
   }, [])
 

@@ -238,10 +238,12 @@ const api = {
   disconnectServer: (serverId: string): Promise<void> =>
     ipcRenderer.invoke('server:disconnect', serverId),
   removeServer: (serverId: string): Promise<void> => ipcRenderer.invoke('server:remove', serverId),
-  setServerToken: (serverId: string, token: string): Promise<void> =>
-    ipcRenderer.invoke('server:setToken', serverId, token),
-  hasServerToken: (serverId: string): Promise<boolean> =>
-    ipcRenderer.invoke('server:hasToken', serverId),
+  /** Stores the token bound to `url`'s origin: main never sends it to another origin. */
+  setServerToken: (serverId: string, token: string, url: string): Promise<void> =>
+    ipcRenderer.invoke('server:setToken', serverId, token, url),
+  /** True when a token is stored that may be sent to `url`. */
+  hasServerToken: (serverId: string, url: string): Promise<boolean> =>
+    ipcRenderer.invoke('server:hasToken', serverId, url),
   testServer: (opts: {
     url: string
     token?: string

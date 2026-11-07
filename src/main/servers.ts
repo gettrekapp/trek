@@ -5,27 +5,42 @@ import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol'
 import { broadcast } from './hosts/LocalHost'
 import { RemoteHost } from './hosts/RemoteHost'
 import { allRemoteHosts, deleteRemoteHost, getRemoteHost, setRemoteHost } from './hosts/registry'
+import { decodeTokenRecord, encodeTokenRecord, tokenToSend, type StoredServerToken } from './serverTokenRules'
 
 /**
- * Access tokens are encrypted, keyed by server id. The renderer can store a
- * token and ask whether one exists; it can never read one back.
+ * Access tokens are encrypted, keyed by server id, each with the origin it was
+ * entered for (see serverTokenRules). The renderer can store a token and ask
+ * whether one exists; it can never read one back, nor send one to another origin.
  */
 const tokens = createSecretStore('server-tokens.json')
-const getToken = tokens.get
-const setToken = tokens.set
+
+async function getStored(serverId: string): Promise<StoredServerToken | null> {
+  const raw = await tokens.get(serverId)
+  return raw === null ? null : decodeTokenRecord(raw)
+}
+
+/** Stores `token` bound to `url`'s origin; null clears the token and its origin. */
+async function setToken(serverId: string, token: string | null, url?: string): Promise<void> {
+  if (token === null) return tokens.set(serverId, null)
+  if (typeof token !== 'string' || !token) throw new Error('token must be a non-empty string')
+  if (typeof url !== 'string') throw new Error('Server URL is required')
+  await tokens.set(serverId, encodeTokenRecord(token, url))
+}
 
 function emitStatus(event: ServerStatusEvent): void {
   broadcast('server:status', event)
 }
 
 async function connectServer(config: ServerConfig): Promise<void> {
-  const token = await getToken(config.id)
+  const decision = tokenToSend(config.url, await getStored(config.id))
   const existing = getRemoteHost(config.id)
-  if (!token) {
+  if (!decision.ok) {
+    // No token, or one stored for another origin: nothing is sent; the user enters it (again).
     existing?.disconnect()
-    emitStatus({ serverId: config.id, status: 'needs-auth' })
+    emitStatus({ serverId: config.id, status: 'needs-auth', error: decision.reason === 'none' ? undefined : decision.error })
     return
   }
+  const token = decision.token
   if (existing) {
     existing.updateConfig(config, token)
     if (existing.getStatus() === 'connected' || existing.getStatus() === 'connecting') return
@@ -49,8 +64,10 @@ async function testServer(opts: {
   serverId?: string
   repoPath: string
 }): Promise<ServerTestResult> {
-  const token = opts.token || (opts.serverId ? await getToken(opts.serverId) : null)
-  if (!token) return { ok: false, error: 'No token provided or stored' }
+  const stored = opts.serverId && !opts.token ? await getStored(opts.serverId) : null
+  const decision = tokenToSend(opts.url, stored, opts.token || undefined)
+  if (!decision.ok) return { ok: false, error: decision.error }
+  const token = decision.token
 
   return new Promise((resolve) => {
     let ws: WebSocket
@@ -144,13 +161,14 @@ export function registerServerHandlers(): void {
 
   ipcMain.handle(
     'server:setToken',
-    async (_event, serverId: string, token: string): Promise<void> => {
-      await setToken(serverId, token)
+    async (_event, serverId: string, token: string, url: string): Promise<void> => {
+      await setToken(serverId, token, url)
     }
   )
 
-  ipcMain.handle('server:hasToken', async (_event, serverId: string): Promise<boolean> => {
-    return (await getToken(serverId)) !== null
+  /** Whether a token is stored that may be sent to `url` (one bound to another origin, or to none, is not). */
+  ipcMain.handle('server:hasToken', async (_event, serverId: string, url: string): Promise<boolean> => {
+    return tokenToSend(url, await getStored(serverId)).ok
   })
 
   ipcMain.handle(
