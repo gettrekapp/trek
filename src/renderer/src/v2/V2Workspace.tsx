@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { mergedWorktrees, selectedWorktreeInfo, useAppStore } from '../store'
+import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore } from '../store'
+import { globalPanelMode } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
 import { Sidebar } from '../components/Sidebar'
 import { WorktreeDetail } from '../components/WorktreeDetail'
@@ -21,6 +22,8 @@ export function V2Workspace(): React.JSX.Element {
   const features = useFeatures()
   const [addRepoId, setAddRepoId] = useState<string | null>(null)
   const offline = useAppStore((s) => s.serverOffline)
+  const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
+  const globalMode = globalPanelMode(features, globalTabs)
 
   // The link dropped: a focused field or button must not take Enter or typing meanwhile.
   useEffect(() => {
@@ -39,7 +42,7 @@ export function V2Workspace(): React.JSX.Element {
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}
         <RepoPathPrompt />
       </div>
-      {features.globalPanel && <GlobalClaude />}
+      {globalMode !== 'hidden' && <GlobalClaude readOnly={globalMode === 'readOnly'} />}
     </>
   )
 }

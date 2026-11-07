@@ -1,7 +1,7 @@
 // scripts/backendFeatures.test.mjs — the feature sets a window backend reports.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { FEATURE_NAMES, LEGACY_FEATURES, V2_FEATURES, v2Features } from '../src/renderer/src/backendFeatures.ts'
+import { FEATURE_NAMES, LEGACY_FEATURES, V2_FEATURES, globalPanelMode, v2Features } from '../src/renderer/src/backendFeatures.ts'
 
 test('both sets name exactly the known features', () => {
   const names = [...FEATURE_NAMES].sort()
@@ -33,4 +33,11 @@ test('the same capabilities give the same object, so a React snapshot read is st
   assert.equal(v2Features(['mcp']), v2Features(['mcp']))
   assert.equal(v2Features([]), v2Features(undefined))
   assert.notEqual(v2Features(['mcp']), v2Features([]))
+})
+
+test('the Global panel without its capability shows the sessions it has, read-only, and hides when there are none', () => {
+  assert.equal(globalPanelMode(LEGACY_FEATURES, 0), 'full')
+  assert.equal(globalPanelMode(v2Features(['mcp']), 0), 'full')
+  assert.equal(globalPanelMode(v2Features([]), 2), 'readOnly')
+  assert.equal(globalPanelMode(v2Features([]), 0), 'hidden')
 })

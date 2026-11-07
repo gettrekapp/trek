@@ -39,13 +39,21 @@ function storedHeight(): number {
 
 const NO_TABS: string[] = []
 
+/** Why a read-only panel starts nothing (a server window whose server lost its MCP listener). */
+const NO_MCP = "The server's MCP tools are down: no new Global sessions until they are back"
+
+interface Props {
+  /** Show the sessions there are, but start none: they would lack the tools they need */
+  readOnly?: boolean
+}
+
 /**
  * Project-wide agent sessions, as tabs in a collapsible panel docked to the
  * bottom of the window. They run in the repository root with the app's MCP
  * server, so they can drive the worktree sessions. Started on first open,
  * then kept alive while collapsed. (Named from when every session was Claude.)
  */
-export function GlobalClaude(): React.JSX.Element {
+export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   const open = useAppStore((s) => s.globalPanelOpen)
   const view = useAppStore((s) => s.globalView)
   const order = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID] ?? NO_TABS)
@@ -74,7 +82,7 @@ export function GlobalClaude(): React.JSX.Element {
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
 
   useEffect(() => {
-    if (!open || hasTabs || view === 'bot' || offline) return
+    if (!open || hasTabs || view === 'bot' || offline || readOnly) return
     setError(null)
     const backend = getBackend()
     backend.sessions.openGlobal().catch((err) => setError(backend.errors.inline(err)))
@@ -96,7 +104,7 @@ export function GlobalClaude(): React.JSX.Element {
   const toggle = (): void => useAppStore.getState().setGlobalPanelOpen(!open)
 
   const newTab = (): void => {
-    if (offline) return
+    if (offline || readOnly) return
     const viewChanged = view !== 'sessions'
     useAppStore.getState().setGlobalView('sessions')
     if (!hasTabs && viewChanged) return // the effect above opens the first session on this change of view
@@ -227,8 +235,8 @@ export function GlobalClaude(): React.JSX.Element {
           <button
             className="global-tab-add"
             onClick={newTab}
-            disabled={offline}
-            title={offline ? 'Server disconnected' : 'New Global tab'}
+            disabled={offline || readOnly}
+            title={offline ? 'Server disconnected' : readOnly ? NO_MCP : 'New Global tab'}
           >
             +
           </button>
@@ -258,13 +266,15 @@ export function GlobalClaude(): React.JSX.Element {
           </span>
         )}
         <span className="global-hint">
-          {hasTabs
-            ? `project-wide ${order.length === 1 ? 'session' : `sessions (${order.length})`} · controls worktree sessions`
-            : botView.needsConsent
-              ? 'bot: waiting for your OK'
-              : botView.phase !== 'off'
-                ? `bot: ${botView.phase}`
-                : 'click to start a project-wide session'}
+          {readOnly
+            ? "the server's MCP tools are down · no new sessions"
+            : hasTabs
+              ? `project-wide ${order.length === 1 ? 'session' : `sessions (${order.length})`} · controls worktree sessions`
+              : botView.needsConsent
+                ? 'bot: waiting for your OK'
+                : botView.phase !== 'off'
+                  ? `bot: ${botView.phase}`
+                  : 'click to start a project-wide session'}
         </span>
       </div>
     </div>

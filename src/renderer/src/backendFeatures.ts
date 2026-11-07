@@ -107,3 +107,14 @@ export function v2Features(capabilities: readonly string[] | undefined): Backend
   }
   return features
 }
+
+/**
+ * How a window shows the Global panel. A server that lost its MCP listener
+ * cannot give new Global sessions the tools they need, but the ones it already
+ * runs keep going: they are shown, with no way to start another, rather than
+ * left running unseen (Notes for 3c-3 #7).
+ */
+export function globalPanelMode(features: BackendFeatures, globalTabs: number): 'full' | 'readOnly' | 'hidden' {
+  if (features.globalPanel) return 'full'
+  return globalTabs > 0 ? 'readOnly' : 'hidden'
+}
