@@ -16,6 +16,8 @@ function setup({ entries = [], stored = {} } = {}) {
   const server = fakeServer()
   const clock = fakeTimers()
   const changes = []
+  /** ['linked', id, registered] and ['unlinked', id], in order */
+  const hooks = []
   let held = null
   let time = 0
   const links = createServerLinks({
@@ -30,7 +32,9 @@ function setup({ entries = [], stored = {} } = {}) {
     timers: clock.timers,
     clientVersion: '9.9.9',
     changed: (snapshot) => changes.push(snapshot),
-    now: () => time
+    now: () => time,
+    linked: (id, registered) => hooks.push(['linked', id, registered]),
+    unlinked: (id) => hooks.push(['unlinked', id])
   })
   const hold = () => {
     let release
@@ -41,7 +45,7 @@ function setup({ entries = [], stored = {} } = {}) {
     }
   }
   const sockFor = (url) => server.sockets.filter((s) => s.url === url).at(-1)
-  return { links, list, secrets, server, clock, changes, hold, sockFor, last: () => changes.at(-1), advanceTime: (ms) => (time += ms) }
+  return { links, list, secrets, server, clock, changes, hooks, hold, sockFor, last: () => changes.at(-1), advanceTime: (ms) => (time += ms) }
 }
 
 const box = { id: 'box', name: 'Box', url: 'ws://box:8800' }
@@ -270,4 +274,43 @@ test('drop(id) during a sync\'s token reads: that sync leaves the entry to the n
   await second
   assert.equal(server.sockets.length, 1, 'the token read before the drop never reconnects')
   assert.equal(links.get('box'), undefined)
+})
+
+test('linked and unlinked follow the connections: add, a new URL, a cleared token, drop and close; not a new token', async () => {
+  const { links, list, secrets, hooks } = setup({ entries: [box], stored: { box: SECRET } })
+  const kinds = () => hooks.map(([kind, id]) => `${kind} ${id}`)
+  await links.sync()
+  assert.deepEqual(kinds(), ['linked box'])
+  assert.equal(hooks[0][2], links.get('box'))
+  secrets.set('box', 'tok-2')
+  await links.sync()
+  assert.deepEqual(kinds(), ['linked box'], 'a new token reconnects the same connection')
+  list[0].url = 'ws://box2:8800'
+  await links.sync()
+  assert.deepEqual(kinds().slice(1), ['unlinked box', 'linked box'])
+  assert.equal(hooks[2][2], links.get('box'))
+  assert.notEqual(hooks[2][2], hooks[0][2], 'a new URL is a new RegisteredServer')
+  secrets.delete('box')
+  await links.sync()
+  secrets.set('box', SECRET)
+  await links.sync()
+  links.drop('box')
+  await links.sync()
+  links.close()
+  assert.deepEqual(kinds().slice(3), ['unlinked box', 'linked box', 'unlinked box', 'linked box', 'unlinked box'])
+})
+
+test("the linked connection's mirror subscribes to attention once welcomed", async () => {
+  const { links, hooks, sockFor } = setup({ entries: [box], stored: { box: SECRET } })
+  const updates = []
+  await links.sync()
+  hooks[0][2].mirror.subscribe('attention', (u) => updates.push(u))
+  const sock = sockFor('ws://box:8800')
+  sock.open()
+  sock.welcome()
+  const req = sock.lastReq('sub.subscribe')
+  assert.deepEqual(req.params, { topic: 'attention' })
+  sock.reply(req, { snapshot: { entries: [] }, rev: 0 })
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(updates, [{ snapshot: { entries: [] }, rev: 0 }])
 })

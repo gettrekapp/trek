@@ -2,7 +2,8 @@
 // connection per entry (a ServerRegistry over the global WebSocket), whose
 // status every window hears through the `appServers:changed` broadcast. The
 // project windows keep their own relay connections; these are for the server
-// list's statuses and, in 3d, the attention topic.
+// list's statuses and the attention aggregator (attention.ts), which hears of
+// each connection made and gone through `linked` and `unlinked`.
 //
 // No Electron imports, so a test drives it with fake sockets. The token is
 // read from the secret store here and handed to the SDK, never kept anywhere
@@ -29,6 +30,14 @@ export interface ServerLinksDeps {
   /** Every change: the list, a token set or cleared, a connection's status */
   changed(snapshot: AppServersChanged): void
   now?: () => number
+  /**
+   * A new connection for the entry: a new entry with a token, or a new URL (a new
+   * `RegisteredServer`; the old one is closed, and `unlinked` came first). Not for a
+   * new token, which reconnects the same connection.
+   */
+  linked?(id: string, registered: RegisteredServer): void
+  /** The entry's connection was closed: removed, its token cleared, re-pointed, dropped, or quit */
+  unlinked?(id: string): void
 }
 
 export interface ServerLinks {
@@ -59,7 +68,7 @@ export interface ServerLinks {
    * still listed with a token (a remove that failed and put it back).
    */
   drop(id: string): void
-  /** The connection for an entry (3d subscribes to `attention` on it) */
+  /** The connection for an entry (the aggregator's dismiss and seen requests go on it) */
   get(id: string): RegisteredServer | undefined
   /** Closes every connection for good (quit) */
   close(): void
@@ -136,6 +145,7 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     registry.remove(id)
     linkTokens.delete(id)
     statuses.delete(id)
+    deps.unlinked?.(id)
   }
 
   const apply = async (): Promise<void> => {
@@ -166,11 +176,16 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
           continue
         }
         linkTokens.set(entry.id, token)
-        registry.add({ id: entry.id, url: entry.url, token })
+        // Added first: an optional call skips its arguments when there is no hook.
+        const registered = registry.add({ id: entry.id, url: entry.url, token })
+        deps.linked?.(entry.id, registered)
       } else if (current.entry.url !== entry.url) {
         linkTokens.set(entry.id, token)
         statuses.delete(entry.id)
+        // A new RegisteredServer: whatever held the old one's mirror must subscribe again.
         registry.update(entry.id, { url: entry.url, token })
+        deps.unlinked?.(entry.id)
+        deps.linked?.(entry.id, registry.get(entry.id)!)
       } else if (linkTokens.get(entry.id) !== token) {
         linkTokens.set(entry.id, token)
         registry.update(entry.id, { token })
