@@ -82,6 +82,23 @@ export function botPolicyHook(port: number): string {
   )
 }
 
+/**
+ * The bot's `--settings`:
+ * - the policy hook (botPolicyHook), which blocks the tool if Trek can't answer;
+ * - `Read`/`Edit` deny rules for each of `deniedDirs`, so the model gets a clear denial for
+ *   Trek's data folder (the OS sandbox is what enforces it);
+ * - Claude Code's own sandbox off, since it can't start inside Trek's, whatever the user's settings say.
+ */
+export function botSettings(port: number, deniedDirs: string[]): string {
+  // `//` starts an absolute path in a permission rule.
+  const deny = [...new Set(deniedDirs)].flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`])
+  return JSON.stringify({
+    permissions: { deny },
+    sandbox: { enabled: false },
+    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: botPolicyHook(port) }] }] }
+  })
+}
+
 export function claudeArgs(options: TurnOptions): string[] {
   return [
     '-p',

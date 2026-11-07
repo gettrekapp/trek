@@ -203,6 +203,10 @@ try {
     const argv = JSON.parse(readFileSync(log, 'utf8').trim().split('\n')[0])
     check('strict MCP config', argv.includes('--strict-mcp-config'), true)
     check('hook settings passed', argv[argv.indexOf('--settings') + 1].includes('/bot/policy'), true)
+    const turnSettings = JSON.parse(argv[argv.indexOf('--settings') + 1])
+    check('the settings deny Read and Edit in userData', turnSettings.permissions.deny, [`Read(/${userData}/**)`, `Edit(/${userData}/**)`])
+    check("the settings turn Claude Code's own sandbox off", turnSettings.sandbox, { enabled: false })
+    check('the sandbox was proved with a canary in userData', existsSync(join(userData, 'bot-sandbox-canary.txt')), true)
     check('repo added', argv[argv.indexOf('--add-dir') + 1], repo)
 
     // --- The policy route
@@ -508,6 +512,21 @@ try {
     check('a relative command is refused with a reason', await shown(bad), true)
     const refused = await botView(win)
     check('that is not a question or an alert', [refused.needsConsent, refused.bound, refused.decision], [false, false, null])
+    // A bot folder the sandbox would hide is refused.
+    const insideFolder = join(userData, 'Inside.trekbot')
+    mkdirSync(insideFolder)
+    const inside = { ...project, name: 'Inside', bot: { enabled: true, folder: insideFolder } }
+    const insideFile = join(sharedDir, 'Inside.trekproj')
+    writeFileSync(insideFile, JSON.stringify(inside))
+    // This window already has a project, so opening another would go to a new window.
+    await win.evaluate(([p, f]) => window.__store.getState().setProject(p, f), [inside, insideFile])
+    await allow(win)
+    check(
+      'a bot folder inside userData is refused',
+      await shown(win.locator('.bot-reason', { hasText: "can't be inside Trek's data folder" })),
+      true
+    )
+    check('and nothing ran in it', readdirSync(insideFolder), [])
     check('no page errors in the shared project', errors, [])
     await app.close()
     app = null

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { OFF_VIEW, type BotAttach, type BotEvent, type BotView, type TrekSnapshot } from '../shared/bot'
 import { commandProblem, consentEntry } from '../host/bot/consent.ts'
@@ -11,9 +12,9 @@ import {
 } from '../host/bot/memory.ts'
 import { botMcpHandlers } from '../host/bot/mcpHandlers.ts'
 import { BotRunner } from '../host/bot/runner.ts'
-import { sandboxFor, type Sandbox, type SandboxPlan } from '../host/bot/sandbox.ts'
+import { insideUserData, probeSandbox, sandboxFor, type Sandbox } from '../host/bot/sandbox.ts'
 import {
-  botMcpConfig, botPolicyHook, killAllTurnsNow, runTurn, type TurnHandle
+  botMcpConfig, botSettings, killAllTurnsNow, runTurn, type TurnHandle
 } from '../host/bot/turnProcess.ts'
 import { isConsented, recordConsent } from './botConsent'
 import { BOT_SECRET_FILES } from './botSecretFiles'
@@ -43,16 +44,33 @@ let quitting = false
 
 const secretPaths = (): string[] => BOT_SECRET_FILES.map((n) => join(app.getPath('userData'), n))
 
-/** The bot's OS sandbox on this machine, around the real path of userData. No sandbox, no bot. */
-function botSandbox(): SandboxPlan {
+/** The bot's OS sandbox on this machine, and the real path of the userData it hides. */
+interface BotSandbox {
+  sandbox: Sandbox
+  userData: string
+}
+
+/** No sandbox, no bot. */
+function botSandbox(): ({ ok: true } & BotSandbox) | { ok: false; reason: string } {
   let userData: string
   try {
     userData = realpathSync(app.getPath('userData'))
   } catch (err) {
     return { ok: false, reason: `Trek's data folder could not be found for the bot's sandbox: ${(err as Error).message}` }
   }
-  return sandboxFor(process.platform, userData)
+  const plan = sandboxFor(process.platform, userData)
+  return plan.ok ? { ok: true, sandbox: plan.sandbox, userData } : plan
 }
+
+/** Proves the sandbox before a bot starts: a fresh canary in userData must be unreadable from it. */
+async function sandboxProblem(box: BotSandbox): Promise<string | null> {
+  const canary = { path: join(box.userData, 'bot-sandbox-canary.txt'), text: `canary-${randomUUID()}` }
+  await writeFile(canary.path, canary.text)
+  return probeSandbox(box.sandbox, canary)
+}
+
+const outsideUserData = (box: BotSandbox, path: string): boolean =>
+  insideUserData(process.platform, box.userData, [folderIdOf(path)]) === null
 
 function sendView(contents: WebContents, view: BotView): void {
   if (!contents.isDestroyed()) contents.send('bot:view', view)
@@ -60,14 +78,6 @@ function sendView(contents: WebContents, view: BotView): void {
 
 function sendEvent(contents: WebContents, event: BotEvent): void {
   if (!contents.isDestroyed()) contents.send('bot:event', event)
-}
-
-/** Blocks the tool if the app can't answer: see botPolicyHook. */
-function hookSettings(port: number): string {
-  const command = botPolicyHook(port)
-  return JSON.stringify({
-    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }] }
-  })
 }
 
 function folderIdOf(folder: string): string {
@@ -180,9 +190,11 @@ function bind(
   request: BotAttach,
   place: { key: string; folder: string; folderId: string },
   access: BotMcpAccess,
-  sandbox: Sandbox,
+  box: BotSandbox,
   releaseLock: () => void
 ): void {
+  // Both spellings, should app.getPath's differ from the real path.
+  const settings = botSettings(access.port, [box.userData, app.getPath('userData')])
   const { folder } = place
   const bound: BoundBot = {
     ...place,
@@ -216,11 +228,12 @@ function bind(
             sessionId: turn.sessionId,
             resume: turn.resume,
             mcpConfig: botMcpConfig(access.port),
-            settings: hookSettings(access.port),
-            addDirs: bound.attach.repoPaths.filter((p) => existsSync(p)),
+            settings,
+            // A repository the sandbox hides would only confuse the CLI.
+            addDirs: bound.attach.repoPaths.filter((p) => existsSync(p) && outsideUserData(box, p)),
             env: { TREK_BOT_TOKEN: turnToken.token },
             timeoutMs: turn.timeoutMs,
-            sandbox
+            sandbox: box.sandbox
           },
           onEvent
         )
@@ -259,15 +272,24 @@ async function startBot(
   request: BotAttach,
   key: string,
   folder: string,
-  sandbox: Sandbox
+  box: BotSandbox
 ): Promise<void> {
   const access = await botMcpAccess(contents)
+  const failed = await sandboxProblem(box)
+  if (failed) {
+    sendView(contents, errorView(folder, failed))
+    return
+  }
   const folderId = folderIdOf(folder)
   for (let done = stopping.get(folderId); done; done = stopping.get(folderId)) await done
   // Nothing below awaits until the bot is in `bots`, so another window can't claim the folder meanwhile.
   if (contents.isDestroyed() || quitting) return
   if (!isDirectory(folder)) {
     sendView(contents, missingView(folder))
+    return
+  }
+  if (!outsideUserData(box, folder)) {
+    sendView(contents, errorView(folder, `The bot's folder can't be inside Trek's data folder, which its sandbox hides: ${folder}`))
     return
   }
   if ([...bots.values()].some((bot) => bot.folderId === folderId)) {
@@ -283,7 +305,7 @@ async function startBot(
     return
   }
   try {
-    bind(contents, windowId, request, { key, folder, folderId }, access, sandbox, lock.release)
+    bind(contents, windowId, request, { key, folder, folderId }, access, box, lock.release)
   } catch (err) {
     lock.release()
     throw err
@@ -328,7 +350,7 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
   }
   await teardown(windowId)
   try {
-    await startBot(contents, windowId, request, key, folder, plan.sandbox)
+    await startBot(contents, windowId, request, key, folder, plan)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     sendView(contents, errorView(folder, `The bot could not start: ${message}`))

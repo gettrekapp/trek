@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { botMcpConfig, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
+import { botMcpConfig, botPolicyHook, botSettings, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
 import { startHeartbeat } from '../src/host/bot/heartbeat.ts'
 import { sandboxFor } from '../src/host/bot/sandbox.ts'
 
@@ -63,6 +63,19 @@ test('the MCP config is inline and leaves the token to the environment', () => {
       'trek-dev': { type: 'http', url: 'http://127.0.0.1:4711/mcp', headers: { Authorization: 'Bearer ${TREK_BOT_TOKEN}' } }
     }
   })
+})
+
+test('the settings: the policy hook, deny rules for each spelling of the data folder, and no Claude Code sandbox', () => {
+  const ud = '/Users/me/Library/Application Support/Trek Dev'
+  const settings = JSON.parse(botSettings(4711, [ud, ud, '/link/Trek Dev']))
+  assert.deepEqual(settings.permissions, {
+    deny: [`Read(/${ud}/**)`, `Edit(/${ud}/**)`, 'Read(//link/Trek Dev/**)', 'Edit(//link/Trek Dev/**)']
+  })
+  assert.deepEqual(settings.sandbox, { enabled: false })
+  const [hook] = settings.hooks.PreToolUse
+  assert.equal(hook.matcher, '*')
+  // The hook itself (token on curl's stdin, never argv) is checked in botHook.test.mjs.
+  assert.equal(hook.hooks[0].command, botPolicyHook(4711))
 })
 
 test('resume uses --resume', async () => {
