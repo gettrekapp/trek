@@ -28,3 +28,36 @@ export function errorCode(err: unknown): string | null {
   const code = err && typeof err === 'object' ? (err as { code?: unknown }).code : undefined
   return typeof code === 'string' ? code : null
 }
+
+/**
+ * The dialog for an edit the link dropped under: a request refused before it
+ * left, or one whose answer was lost with the connection. Either way the
+ * window cannot tell whether the server applied it.
+ */
+export const EDIT_NOT_CONFIRMED =
+  'The server was not connected, so this change may not have been saved. Check it once the window is back online.'
+
+/**
+ * Reports a failed edit (a setter override). NOT_CONNECTED shows
+ * EDIT_NOT_CONFIRMED under the edit's title, one dialog at a time, so a burst of
+ * edits as the link drops shows one; any other error goes to `report`. No retry
+ * queue: an edit replayed after a reconnect could land on a state the user no
+ * longer sees.
+ */
+export function editReporter(
+  show: (title: string, message: string) => Promise<void>,
+  report: (title: string, err: unknown) => void
+): (title: string, err: unknown) => void {
+  let showing = false
+  return (title, err) => {
+    if (errorCode(err) !== 'NOT_CONNECTED') {
+      report(title, err)
+      return
+    }
+    if (showing) return
+    showing = true
+    void show(title, EDIT_NOT_CONFIRMED).finally(() => {
+      showing = false
+    })
+  }
+}

@@ -27,15 +27,17 @@ const slice = {
   terminalQueues: { busy: ['a', 'b', 'c'] }
 }
 const tick = () => new Promise((r) => setImmediate(r))
+/** Reports nothing. */
+const quiet = { report: () => {}, reportEdit: () => {} }
 
 test('overrides exactly the listed setters', () => {
   const { backend } = fakeBackend()
-  assert.deepEqual(Object.keys(v2SetterOverrides(backend, () => slice, () => {})).sort(), [...OVERRIDDEN_SETTERS].sort())
+  assert.deepEqual(Object.keys(v2SetterOverrides(backend, () => slice, quiet)).sort(), [...OVERRIDDEN_SETTERS].sort())
 })
 
 test('data edits go to the backend, with legacy ids', async () => {
   const { backend, calls } = fakeBackend()
-  const o = v2SetterOverrides(backend, () => slice, () => {})
+  const o = v2SetterOverrides(backend, () => slice, quiet)
   o.renameTerminal('busy', 'New')
   o.enqueueTerminalText('busy', 'later')
   o.setTerminalQueue('busy', ['z'])
@@ -66,7 +68,7 @@ test('data edits go to the backend, with legacy ids', async () => {
 
 test('complete toggles against the status; seen only for attention or done', async () => {
   const { backend, calls } = fakeBackend()
-  const o = v2SetterOverrides(backend, () => slice, () => {})
+  const o = v2SetterOverrides(backend, () => slice, quiet)
   o.toggleTerminalComplete('busy')
   o.toggleTerminalComplete('comp')
   o.toggleTerminalComplete('gone')
@@ -83,7 +85,7 @@ test('complete toggles against the status; seen only for attention or done', asy
 
 test('the status is the server\'s: local status setters do nothing, nor does adding a worktree locally', async () => {
   const { backend, calls } = fakeBackend()
-  const o = v2SetterOverrides(backend, () => slice, () => {})
+  const o = v2SetterOverrides(backend, () => slice, quiet)
   o.setTerminalStatus('busy', 'idle')
   o.setTerminalSession('busy', 'other')
   o.setGlobalSessions([])
@@ -92,17 +94,22 @@ test('the status is the server\'s: local status setters do nothing, nor does add
   assert.deepEqual(calls, [])
 })
 
-test('a failed request is reported with a title', async () => {
+test('a failed edit is reported as an edit, a failed seen as an acknowledgement', async () => {
   const err = Object.assign(new Error('nope'), { code: 'CONFLICT' })
   const { backend } = fakeBackend(err)
   const reports = []
-  const o = v2SetterOverrides(backend, () => slice, (title, e) => reports.push([title, e.code]))
+  const o = v2SetterOverrides(backend, () => slice, {
+    report: (title, e) => reports.push(['report', title, e.code]),
+    reportEdit: (title, e) => reports.push(['edit', title, e.code])
+  })
   o.setBranchNote('r1', 'feat', 'x')
   o.renameTerminal('busy', 'y')
+  o.clearTerminalAttention('bell')
   await tick()
   assert.deepEqual(reports, [
-    ['Could not save the note', 'CONFLICT'],
-    ['Could not rename the session', 'CONFLICT']
+    ['edit', 'Could not save the note', 'CONFLICT'],
+    ['edit', 'Could not rename the session', 'CONFLICT'],
+    ['report', 'Could not update the session', 'CONFLICT']
   ])
 })
 
@@ -117,7 +124,7 @@ test('seen is sent once while it is in flight, and again after it settled', asyn
       }
     }
   }
-  const o = v2SetterOverrides(backend, () => slice, () => {})
+  const o = v2SetterOverrides(backend, () => slice, quiet)
   o.clearTerminalAttention('bell')
   o.clearTerminalAttention('bell')
   o.clearTerminalAttention('done')

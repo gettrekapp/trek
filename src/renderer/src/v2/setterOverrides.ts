@@ -41,16 +41,19 @@ export type SetterOverrides = Pick<AppState, OverriddenSetter>
 type Slice = Pick<AppState, 'terminals' | 'terminalQueues'>
 
 /**
- * `report` gets each failed request with a title for the dialog; a setter is
+ * Where a failed request goes, with a title for the dialog: a setter is
  * fire-and-forget, so it has no caller to reject to.
  */
-export function v2SetterOverrides(
-  backend: WindowBackend,
-  state: () => Slice,
-  report: (title: string, err: unknown) => void
-): SetterOverrides {
+export interface SetterReports {
+  /** An acknowledgement (`seen`): skips NOT_CONNECTED, the next show sends it again */
+  report(title: string, err: unknown): void
+  /** An edit: NOT_CONNECTED says it may not have been saved (`editReporter`) */
+  reportEdit(title: string, err: unknown): void
+}
+
+export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, reports: SetterReports): SetterOverrides {
   const send = (title: string, request: Promise<void>): void => {
-    request.catch((err: unknown) => report(title, err))
+    request.catch((err: unknown) => reports.reportEdit(title, err))
   }
   const noop = (): void => {}
   // `session.seen` already sent and not answered yet: a focus repeated meanwhile sends nothing.
@@ -67,10 +70,10 @@ export function v2SetterOverrides(
       const status = state().terminals[id]?.status
       if ((status !== 'attention' && status !== 'done') || seenInFlight.has(id)) return
       seenInFlight.add(id)
-      send(
-        'Could not update the session',
-        backend.sessions.seen(id).finally(() => seenInFlight.delete(id))
-      )
+      backend.sessions
+        .seen(id)
+        .catch((err: unknown) => reports.report('Could not update the session', err))
+        .finally(() => seenInFlight.delete(id))
     },
     setTerminalQueue: (id, texts) => send('Could not update the queue', backend.sessions.setQueue(id, texts)),
     enqueueTerminalText: (id, text) => send('Could not queue the prompt', backend.sessions.enqueue(id, text)),

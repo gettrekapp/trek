@@ -11,7 +11,7 @@ import { OVERRIDDEN_SETTERS, v2SetterOverrides, type SetterOverrides } from './s
 import { clearV2Projection, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
-import { errorCode, errorText } from './errors'
+import { editReporter, errorCode, errorText } from './errors'
 import { ClientError } from '../../../shared/client/index.ts'
 import { OFF_VIEW } from '../../../shared/bot'
 import type { WindowBackend } from '../backend'
@@ -139,6 +139,8 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   const report = (title: string, err: unknown): void => {
     if (errorCode(err) !== 'NOT_CONNECTED') void showError(title, errorText(err))
   }
+  // An edit the link dropped under says so (Notes for 3c-3 #13); one dialog at a time.
+  const reportEdit = editReporter(showError, report)
 
   const backend = createV2Backend({
     projectId,
@@ -164,7 +166,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
   useAppStore.setState({
-    ...v2SetterOverrides(backend, () => useAppStore.getState(), report),
+    ...v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit }),
     ...VIEW_RESET,
     serverOffline: true,
     serverLink: null
