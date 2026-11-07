@@ -8,7 +8,7 @@
 3. The last "Choose…" agent pick is kept per server; `smoke:v2` covers a settings edit, a settings CONFLICT and its Reload, and a second window's server list updating live with no focus event.
 
 **Architecture:**
-- **No server or protocol change.** `project.updateSettings` already takes `expected` for any `ProjectSettings` key, several keys in one call (PROTOCOL.md: "only the keys listed in `expected` are compared"); every v2 server has it, so `settingsEdit` needs no capability. The server's `llm` section stays file-only.
+- **One server change: the tag cascade (Task 0).** Deleting a tag in `project.updateSettings` clears it from every branch in the same change, as a file window does. Nothing else changes on the server or in the protocol: `project.updateSettings` already takes `expected` for any `ProjectSettings` key, several keys in one call (PROTOCOL.md: "only the keys listed in `expected` are compared"); every v2 server has it, so `settingsEdit` needs no capability. The server's `llm` section stays file-only.
 - **Settings edits: one compare-and-set per field, shown pending.** A pure `v2/settingsWriter.ts` serializes the requests per field and keeps each field's pending value. `applyV2Project` applies those pending values to the mirror's project before the projector (an overlay, set by `installV2.ts`), so the panel shows an edit at once and the next edit builds on it; the server's patch replaces it. The setter overrides (`v2/settingsOverrides.ts`, typed against `AppState`) turn the store's values into the server's form.
 - **Main's connections: a pure `src/main/serverLinks.ts`** over the 3a `ServerRegistry`, with no Electron import; `appServers.ts` wires it to the list, the secret store, `globalSocketFactory` and the broadcast. A snapshot is built field by field, so no token can reach it. The renderer follows it through a pure feed (`v2/appServerLinks.ts`) that keeps the snapshot with the highest `seq`.
 - **The backend seam does not change.** File windows keep every setter, every section and every field as they were; the only change they see is the start screen's server list following the broadcast.
@@ -24,7 +24,7 @@
 | Sub-phase | Delivers | Visible change |
 |---|---|---|
 | **3c-3b-1 the server window** (done, merged at `471307b`) | decisions, `server.agents`, rev waits, `topic.ended`, dequeue and rename with `expected`, structural sharing, window hygiene | Decisions and the server's agents in server windows. |
-| **3c-3b-2 settings and main's connections** (this plan) | <ul><li>`settingsEdit` on for v2; eighteen setter overrides (`project.updateSettings`, `project.rename`, `repo.update`, each with `expected`)</li><li>the settings writer: one request per field, pending edits shown, CONFLICT re-found then Reload or Keep Mine</li><li>the Settings panel without this machine's sections; text committed on blur; the agents' hint for the server's config</li><li>the last "Choose…" pick per server</li><li>main: one connection per server with a token (`serverLinks.ts`), the `appServers:changed` broadcast and `appServers:links`; stuck links retried when a window comes to the front</li><li>StartScreen, ConnectServer and ServerProjectWindow follow the broadcast; no focus re-reads; a stuck window reconnects when main's link connects; ConnectServer drops its connections on unmount</li><li>`smoke:v2`: a settings edit, a CONFLICT and its Reload, the live server list, reconnect and removal with no focus event</li></ul> | Settings work in server windows; server lists update live. |
+| **3c-3b-2 settings and main's connections** (this plan) | <ul><li>the server clears a deleted tag from every branch, in the same `project.updateSettings` change (Task 0)</li><li>`settingsEdit` on for v2; eighteen setter overrides (`project.updateSettings`, `project.rename`, `repo.update`, each with `expected`)</li><li>the settings writer: one request per field, pending edits shown, CONFLICT re-found then Reload or Keep Mine</li><li>the Settings panel without this machine's sections; text committed on blur; the agents' hint for the server's config</li><li>the last "Choose…" pick per server</li><li>main: one connection per server with a token (`serverLinks.ts`), the `appServers:changed` broadcast and `appServers:links`; stuck links retried when a window comes to the front</li><li>StartScreen, ConnectServer and ServerProjectWindow follow the broadcast; no focus re-reads; a stuck window reconnects when main's link connects; ConnectServer drops its connections on unmount</li><li>`smoke:v2`: a settings edit, a CONFLICT and its Reload, the live server list, reconnect and removal with no focus event</li></ul> | Settings work in server windows; server lists update live. |
 | **3d attention and notifications** (spec; design note below) | <ul><li>main's attention aggregator on this plan's per-server connections, subscribed to `attention` (decisions included; labelled by decision first, any status)</li><li>each OS notification and alert sound raised once, by main</li><li>the merged list in every window's notifications menu, legacy windows included</li><li>clicking an entry focuses or opens that `(serverId, projectId)` window and selects the session</li></ul> | Notifications across servers and windows. |
 | **phase 4 local server** (spec) | <ul><li>the local server supervisor (spawn, reuse, survive quit)</li><li>`.trekproj` import-only, and legacy file windows retired</li></ul> | Every project lives on a server. |
 
@@ -52,7 +52,7 @@ Out of scope here: the 3d and phase 4 rows. Desktop-UI MCP tools stay dropped fo
 9. **The CONFLICT UX: re-find, then ask.** On CONFLICT the pending value is dropped (the panel shows the server's), and the field is looked up in the mirror again. If the server already holds what the user wanted (a double click, another window making the same edit), nothing more happens. Otherwise one dialog: "*Label* was changed on the server while you were editing it.", detail "Reload shows the server's version and drops your change. Keep Mine saves yours over it.", buttons **Reload** (the default and Escape: it never overwrites anyone) and **Keep Mine** (sends the user's latest value again, with the newer value as `expected`). An edit made while the dialog is open was built on the newer value, so it wins over Keep Mine. Conflict dialogs come one at a time (a promise chain). **Reload** bumps `settingsReload`, which keys the panel's content: fields and pickers holding local state remount and read the store.
 10. **`dialog:confirm` gains `cancelLabel` and `defaultCancel`** (optional, both main and preload) for the Reload/Keep Mine dialog. Without them it behaves as before.
 11. **Failures other than CONFLICT go to `reportEdit`** (3c-3b-1 Decision 4): NOT_CONNECTED shows "may not have been saved", anything else the error, under "Could not save the setting" or "Could not rename the project". The edit queued behind it is dropped with it. The 3c-3b-1 checklist (Note 7) proposed `errors.report`, which is quiet on NOT_CONNECTED; the user decision for edits applies instead.
-12. **No cascade on tag deletion.** A file window's `setWorktreeTags` and `setCustomTags` also clear a deleted tag from every branch. Over v2 that would be one `branch.setTag`/`setCustomTags` per branch, none atomic with the settings change; the server keeps the stale id on the branch, which then shows no tag. (Question for the user, below.)
+12. **Tag deletion cascades on the server** (user decision, Task 0). A file window's `setWorktreeTags` and `setCustomTags` also clear a deleted tag from every branch. Doing that from the window would be one `branch.setTag`/`setCustomTags` per branch, none atomic with the settings change, so `project.updateSettings` does it itself, in the same patch. The window's setters send only the new list. No capability: an older server leaves the deleted id on its branches, which then shows no tag.
 13. **The setters overridden** (`SETTINGS_SETTERS`, typed `Pick<AppState, …>` like `OVERRIDDEN_SETTERS`, and restored on leave with them): `setClaudePermissionMode`, `setAudioAlerts`, `setTitleBarColor`, `setLogoImage`, `setBannerImage`, `setWorktreeTags`, `setCustomTags`, `setTerminalButtons`, `setGlobalTerminalButtons`, `setSessionSystemPrompt`, `setGlobalSystemPrompt`, `setSessionTypes`, `setProjectLlmDefault`, `setGlobalLlm`, `setLinearWorkspace`, `setAzureDevOpsBaseUrl` (TicketModal sets the last two), `setProjectName` (`project.rename`), `setLinkedDirs` (`repo.update`). Each sends what the store's setter would leave out as `null`: an empty list, a blank prompt, `undefined`. `setEnvironmentSettings` is not overridden: its section is hidden, and environments run on this machine.
 
 **The Settings panel (Task 3)**
@@ -68,7 +68,7 @@ Out of scope here: the 3d and phase 4 rows. Desktop-UI MCP tools stay dropped fo
     | Linear (API key) | edit | **hidden** (this machine's key; Linear waits for phase 5) | — |
     | Voice summaries (API key, voice) | edit | **hidden** (this machine's) | — |
     | Agents | edit | **project**: the project's default override and Global panel agent, pickers over `server.agents` (`useServerPicker`); this machine's default and the provider commands are replaced by "The server's default agent and each agent's command are set in the server's config file." | `updateSettings{llmDefault, globalLlm}` |
-    | Worktree tags, Custom tags | edit | edit (no cascade, Decision 12) | `updateSettings{worktreeTags, customTags}` |
+    | Worktree tags, Custom tags | edit | edit (the server clears a deleted tag from the branches, Decision 12) | `updateSettings{worktreeTags, customTags}` |
     | Terminal quick buttons, Global quick buttons | edit | edit | `updateSettings{terminalButtons, globalTerminalButtons}` |
     | Session system prompt, Global system prompt | edit | edit | `updateSettings{sessionSystemPrompt, globalSystemPrompt}` |
     | Session types | edit | edit; "Use the default agent" off starts from the server's default; pickers over `server.agents` | `updateSettings{sessionTypes}` |
@@ -155,7 +155,7 @@ Out of scope here: the 3d and phase 4 rows. Desktop-UI MCP tools stay dropped fo
 - **Unit tests:** `scripts/*.test.mjs`, run with `npm test` (`node --test scripts/*.test.mjs`).
   - Modules a test imports must be erasable TS (no enums, parameter properties or namespaces) with `.ts` on every runtime import.
   - `import type` lines are erased, so they may be extensionless and may name renderer modules (`../store`).
-- **Baseline:** 1244 tests pass at `471307b`. Each task states the count it ends at.
+- **Baseline:** 1244 tests pass at `471307b`; 1251 after Task 0. Each task states the count it ends at.
 - **Checks:**
   - `npm run typecheck`
   - `npm run build`
@@ -172,13 +172,15 @@ Out of scope here: the 3d and phase 4 rows. Desktop-UI MCP tools stay dropped fo
   ```
 
   `<model trailer>` is the trailer of the model doing the work. `git commit -- <paths>` only commits tracked files: a task that creates files runs `git add <new files>` first, or the commit fails with "pathspec did not match".
-- **Diffs in this plan** are unified diffs against the tree as the previous task leaves it (context lines included). Apply them by hand or with `git apply`; every hunk was produced from a prototype of this plan built on `471307b`, one commit per task, with the checks below run on it.
+- **Diffs in this plan** are unified diffs against the tree as the previous task leaves it (context lines included). Apply them by hand or with `git apply`; every hunk was produced from a prototype of this plan built on `471307b`, one commit per task, with the checks below run on it. Task 0 was added afterwards and is real (`16ffcac`); it touches only server files and their tests, and Tasks 1–9 apply cleanly on top of it.
 - **Test names in failure output** are listed without their `not ok N` numbers, which depend on the order `node --test` runs the files in.
 
 ## File map
 
 | File | Status | Task | Responsibility |
 |---|---|---|---|
+| `server/src/projects/settings.ts`, `server/src/v2.ts`, `PROTOCOL.md` | modify | 0 | `pruneDeletedTags`; `project.updateSettings` clears deleted tags from the branches in the same change |
+| `scripts/serverProjectSettings.test.mjs`, `scripts/serverV2.test.mjs` | modify | 0 | tests |
 | `src/renderer/src/v2/settingsWriter.ts` | create | 1 | `createSettingsWriter`, `sameSetting`: one compare-and-set per field, the overlay, re-find then ask |
 | `src/renderer/src/v2/settingsOverrides.ts` | create | 2 | `SETTINGS_SETTERS`, the fields (`settingField`, `nameField`, `linkedDirsField`), `v2SettingsOverrides` |
 | `src/renderer/src/v2/installV2.ts` | modify | 2 | the settings requests (with rev waits), the conflict dialog, the writer, the overlay; the overrides and their originals |
@@ -204,7 +206,320 @@ Out of scope here: the 3d and phase 4 rows. Desktop-UI MCP tools stay dropped fo
 | `scripts/backendFeatures.test.mjs`, `v2SessionChoices.test.mjs` | modify | 3, 4 | tests |
 | `scripts/v2-smoke.mjs` | modify | 8 | the 3c-3b-2 checks |
 
-No file under `server/` or `src/shared/client` changes.
+No other file under `server/` changes, and nothing under `src/shared/client`.
+
+---
+
+### Task 0: tag deletion cascade on the server (added after the prototype; user decision)
+
+The user's answer to the plan's tag question: deleting a tag in a server window clears it from every branch, as a file window's `setWorktreeTags`/`setCustomTags` do, and atomically. The server does it inside `project.updateSettings`: one `ProjectState.apply`, so the settings change and the branches' change go out as one patch with one rev. The window's setters (Task 2) send only the new tag list, as before.
+
+What the file window does, matched exactly (`store.ts`): `setWorktreeTags(tags)` keeps each repository's `branchTags[branch]` only if its id is in `tags`; `setCustomTags(tags)` keeps each branch's custom tag ids still in `tags` and drops an emptied list. So `pruneDeletedTags` runs only when the patch names `worktreeTags` or `customTags` (a value or `null`), and keeps the ids of the new list: for `worktreeTags`, the list after the patch, or `DEFAULT_WORKTREE_TAGS` when the key is removed (what the projector shows then); for `customTags`, the list after the patch, or none. A branch left with no data is dropped from `branchData`, as `branch.*` does. Renaming, recolouring and reordering keep the ids, so they clear nothing. `expected` is checked first, so a CONFLICT changes neither the settings nor the branches.
+
+No capability: the client does nothing differently. An older server keeps a deleted id on its branches, which shows as no tag (the plan's behaviour before this task).
+
+**Status:** done, committed on this branch at `16ffcac` (on top of the plan's commit `0884aa4`). Its steps are kept as a record; execution starts at Task 1. Tasks 1–9's diffs were checked with `git apply --check`, in order, on top of it.
+
+**Files:**
+- Modify: `server/src/projects/settings.ts` (`pruneDeletedTags`)
+- Modify: `server/src/v2.ts` (`project.updateSettings` runs it in the same `apply`)
+- Modify: `PROTOCOL.md` (the cascade, under the `expected` paragraph)
+- Test: `scripts/serverProjectSettings.test.mjs` (6 tests), `scripts/serverV2.test.mjs` (1 test)
+
+- [ ] **Step 1: Write the failing tests**
+
+The helper's cases:
+
+````diff
+diff --git a/scripts/serverProjectSettings.test.mjs b/scripts/serverProjectSettings.test.mjs
+index 42a92f7..afc508a 100644
+--- a/scripts/serverProjectSettings.test.mjs
++++ b/scripts/serverProjectSettings.test.mjs
+@@ -1,7 +1,8 @@
+ // scripts/serverProjectSettings.test.mjs — ProjectSettings keys and value kinds.
+ import test from 'node:test'
+ import assert from 'node:assert/strict'
+-import { applySettingsPatch, validateSettings } from '../server/src/projects/settings.ts'
++import { applySettingsPatch, pruneDeletedTags, validateSettings } from '../server/src/projects/settings.ts'
++import { DEFAULT_WORKTREE_TAGS } from '../src/shared/types.ts'
+ 
+ const code = (fn) => {
+   try {
+@@ -75,3 +76,81 @@ test('sessionTypes elements are validated', () => {
+   // Imports go through validateSettings, so they are covered too.
+   assert.equal(code(() => validateSettings({ sessionTypes: [{ ...ok, name: 'x'.repeat(201) }] }, 'settings')), 'BAD_REQUEST')
+ })
++
++// The tag cascade: what a file window's setWorktreeTags and setCustomTags do to the branches.
++const tag = (id, name = id) => ({ id, name, color: '#fff' })
++const tagRepos = () => [
++  {
++    id: 'r1', name: 'a', path: '/a', worktrees: [],
++    branchData: {
++      one: { tag: 'todo', customTags: ['x', 'y'] },
++      two: { tag: 'done', note: 'n' },
++      three: { customTags: ['y'] },
++      four: { tag: 'todo' },
++      five: { note: 'only' }
++    }
++  },
++  { id: 'r2', name: 'b', path: '/b', worktrees: [], branchData: { one: { tag: 'todo', customTags: ['x'] } } }
++]
++const prune = (repos, current, patch) => pruneDeletedTags(repos, applySettingsPatch(current, patch), patch)
++const tagSettings = { worktreeTags: [tag('todo'), tag('done')], customTags: [tag('x'), tag('y')] }
++
++test('pruneDeletedTags: a deleted tag comes off every branch that had it, in every repository', () => {
++  const repos = tagRepos()
++  const next = prune(repos, tagSettings, { worktreeTags: [tag('done')] })
++  assert.deepEqual(next[0].branchData, {
++    one: { customTags: ['x', 'y'] },
++    two: { tag: 'done', note: 'n' },
++    three: { customTags: ['y'] },
++    five: { note: 'only' }
++  })
++  assert.deepEqual(next[1].branchData, { one: { customTags: ['x'] } })
++  // The input is not changed.
++  assert.deepEqual(repos, tagRepos())
++})
++
++test('pruneDeletedTags: a deleted custom tag comes off the lists; an emptied list is dropped', () => {
++  const next = prune(tagRepos(), tagSettings, { customTags: [tag('x')] })
++  assert.deepEqual(next[0].branchData, {
++    one: { tag: 'todo', customTags: ['x'] },
++    two: { tag: 'done', note: 'n' },
++    four: { tag: 'todo' },
++    five: { note: 'only' }
++  })
++  assert.deepEqual(next[1].branchData, { one: { tag: 'todo', customTags: ['x'] } })
++  // Removing the key deletes every custom tag.
++  const none = prune(tagRepos(), tagSettings, { customTags: null })
++  assert.deepEqual(none[1].branchData, { one: { tag: 'todo' } })
++  assert.equal(none[0].branchData.three, undefined)
++})
++
++test('pruneDeletedTags: unrelated tags, branches and repositories are untouched, as the same objects', () => {
++  const repos = tagRepos()
++  const next = prune(repos, tagSettings, { worktreeTags: [tag('todo')] })
++  assert.deepEqual(next[0].branchData.two, { note: 'n' })
++  assert.equal(next[0].branchData.one, repos[0].branchData.one)
++  assert.equal(next[0].branchData.five, repos[0].branchData.five)
++  assert.equal(next[1], repos[1])
++})
++
++test('pruneDeletedTags: renaming, recolouring or reordering tags clears nothing', () => {
++  const repos = tagRepos()
++  const renamed = { worktreeTags: [tag('done', 'Shipped'), { ...tag('todo'), color: '#000' }] }
++  assert.equal(prune(repos, tagSettings, renamed)[0], repos[0])
++  assert.equal(prune(repos, tagSettings, { customTags: [tag('y', 'Why'), tag('x')] })[0], repos[0])
++})
++
++test('pruneDeletedTags: a patch without either tag key changes nothing', () => {
++  const repos = tagRepos()
++  assert.equal(prune(repos, tagSettings, { audioAlerts: true, worktreeOrder: [] }), repos)
++  assert.equal(prune(repos, tagSettings, { worktreeTags: undefined }), repos)
++})
++
++test('pruneDeletedTags: worktreeTags removed or absent means the default tags', () => {
++  const repos = [{ id: 'r', name: 'a', path: '/a', worktrees: [], branchData: { a: { tag: 'In Review' }, b: { tag: 'todo' } } }]
++  // Removing the key brings back the defaults: their ids stay, others go.
++  assert.deepEqual(prune(repos, tagSettings, { worktreeTags: null })[0].branchData, { a: { tag: 'In Review' } })
++  // From the defaults to a list without "In Review".
++  const fromDefaults = prune(repos, {}, { worktreeTags: DEFAULT_WORKTREE_TAGS.filter((t) => t.id !== 'In Review') })
++  assert.deepEqual(fromDefaults[0].branchData, {})
++})
+````
+
+The handler: one patch, one rev; a stale `expected` sends nothing; a rename clears nothing:
+
+````diff
+diff --git a/scripts/serverV2.test.mjs b/scripts/serverV2.test.mjs
+index efaffc1..2cd64f2 100644
+--- a/scripts/serverV2.test.mjs
++++ b/scripts/serverV2.test.mjs
+@@ -241,6 +241,45 @@ test('project.updateSettings expected guards the settings a settings screen edit
+   assert.equal((await update({ audioAlerts: false }, { audioAlerts: null })).ok, true)
+ })
+ 
++test('project.updateSettings deleting a tag clears it from every branch in the same patch; a CONFLICT changes nothing', async (t) => {
++  const { a, call, sent } = setup(t)
++  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
++  const tags = [{ id: 'todo', name: 'Todo', color: '#fff' }, { id: 'done', name: 'Done', color: '#000' }]
++  const custom = [{ id: 'x', name: 'X', color: '#fff' }, { id: 'y', name: 'Y', color: '#000' }]
++  await call('project.updateSettings', { projectId, settings: { worktreeTags: tags, customTags: custom } })
++  const repoId = (await snapshotOf(call, projectId)).repositories[0].id
++  const ref = (branch) => ({ projectId, repoId, branch })
++  await call('branch.setTag', { ...ref('f1'), tag: 'todo' })
++  await call('branch.setCustomTags', { ...ref('f1'), customTags: ['x', 'y'] })
++  await call('branch.setTag', { ...ref('f2'), tag: 'done' })
++  await call('branch.setCustomTags', { ...ref('f3'), customTags: ['y'] })
++  const sub = await call('sub.subscribe', { topic: `project:${projectId}` })
++  sent.length = 0
++
++  // A stale guard: CONFLICT, and neither the settings nor the branches change.
++  const stale = await call('project.updateSettings', { projectId, settings: { worktreeTags: [tags[1]] }, expected: { worktreeTags: [] } })
++  assert.equal(stale.error.code, 'CONFLICT')
++  assert.equal(sent.length, 0)
++
++  // Renaming a tag (same id) clears nothing.
++  const renamed = [{ ...tags[0], name: 'To do' }, tags[1]]
++  assert.equal((await call('project.updateSettings', { projectId, settings: { worktreeTags: renamed }, expected: { worktreeTags: tags } })).ok, true)
++  assert.equal(sent.length, 1)
++  let state = applyStatePatch(sub.result, sent[0]).state
++  assert.deepEqual(state.snapshot.repositories[0].branchData, { f1: { tag: 'todo', customTags: ['x', 'y'] }, f2: { tag: 'done' }, f3: { customTags: ['y'] } })
++
++  // Deleting "todo" and "y": one patch, one rev, settings and branches together.
++  sent.length = 0
++  const res = await call('project.updateSettings', { projectId, settings: { worktreeTags: [tags[1]], customTags: [custom[0]] }, expected: { worktreeTags: renamed } })
++  assert.equal(res.ok, true, JSON.stringify(res))
++  assert.equal(sent.length, 1)
++  assert.equal(sent[0].rev, state.rev + 1)
++  state = applyStatePatch(state, sent[0]).state
++  assert.deepEqual(state.snapshot.settings.worktreeTags, [tags[1]])
++  assert.deepEqual(state.snapshot.repositories[0].branchData, { f1: { customTags: ['x'] }, f2: { tag: 'done' } })
++  assert.deepEqual(state.snapshot, await snapshotOf(call, projectId))
++})
++
+ test('wrong id types are BAD_REQUEST, not NOT_FOUND', async (t) => {
+   const { a, call } = setup(t)
+   const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+````
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `node --test scripts/serverProjectSettings.test.mjs 2>&1 | grep -E '^# (pass|fail)'`
+
+Expected: `# pass 0`, `# fail 1`: `pruneDeletedTags` is not exported (`SyntaxError: The requested module … does not provide an export named 'pruneDeletedTags'`).
+
+- [ ] **Step 3: Implement**
+
+````diff
+diff --git a/server/src/projects/settings.ts b/server/src/projects/settings.ts
+index c8b446e..e1f757a 100644
+--- a/server/src/projects/settings.ts
++++ b/server/src/projects/settings.ts
+@@ -1,7 +1,8 @@
+ // The keys a project's settings may hold and the kind of value each takes.
+ // Values are checked by kind only: their contents are client preferences the
+ // server stores and returns, not acts on.
+-import type { ProjectSettings } from '../../../src/shared/model/types'
++import type { BranchData, ProjectSettings, Repository } from '../../../src/shared/model/types'
++import { DEFAULT_WORKTREE_TAGS } from '../../../src/shared/types.ts'
+ import { isProviderId } from '../../../src/shared/providers/registry.ts'
+ import { codedError } from '../errors.ts'
+ import { checkTitle, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
+@@ -103,3 +104,45 @@ export function applySettingsPatch(current: ProjectSettings, patch: Record<strin
+   }
+   return next as ProjectSettings
+ }
++
++/** The ids of a tag list; entries without a string id name no tag. */
++function tagIds(tags: unknown): Set<string> {
++  const ids = new Set<string>()
++  if (Array.isArray(tags)) for (const t of tags) if (isRecord(t) && typeof t.id === 'string') ids.add(t.id)
++  return ids
++}
++
++/**
++ * The tag cascade of a settings patch, as a file window's setWorktreeTags and
++ * setCustomTags do it: when the patch sets `worktreeTags` (or removes it, which
++ * brings back DEFAULT_WORKTREE_TAGS), every branch whose `tag` is not in the new
++ * list becomes untagged; when it sets or removes `customTags`, every branch keeps
++ * only the custom tag ids still listed, and an emptied list is dropped. A branch
++ * left with no data is dropped, as `branch.*` does. A patch that does not name
++ * either key changes nothing. `settings` is the project's settings after the
++ * patch. Returns the repositories, the unchanged ones as they were.
++ */
++export function pruneDeletedTags(repositories: Repository[], settings: ProjectSettings, patch: Record<string, unknown>): Repository[] {
++  const tags = Object.hasOwn(patch, 'worktreeTags') && patch.worktreeTags !== undefined
++    ? tagIds(settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS)
++    : undefined
++  const custom = Object.hasOwn(patch, 'customTags') && patch.customTags !== undefined ? tagIds(settings.customTags) : undefined
++  if (!tags && !custom) return repositories
++  return repositories.map((repo) => {
++    let branchData: Record<string, BranchData> | undefined
++    for (const [branch, data] of Object.entries(repo.branchData)) {
++      const dropTag = tags !== undefined && data.tag !== undefined && !tags.has(data.tag)
++      const kept = custom && data.customTags?.filter((id) => custom.has(id))
++      const dropCustom = kept !== undefined && kept.length !== data.customTags!.length
++      if (!dropTag && !dropCustom) continue
++      const next: BranchData = { ...data }
++      if (dropTag) delete next.tag
++      if (dropCustom && kept.length > 0) next.customTags = kept
++      else if (dropCustom) delete next.customTags
++      branchData ??= { ...repo.branchData }
++      if (Object.keys(next).length === 0) delete branchData[branch]
++      else branchData[branch] = next
++    }
++    return branchData ? { ...repo, branchData } : repo
++  })
++}
+````
+
+````diff
+diff --git a/server/src/v2.ts b/server/src/v2.ts
+index 0750e9a..dafb771 100644
+--- a/server/src/v2.ts
++++ b/server/src/v2.ts
+@@ -16,7 +16,7 @@ import { checkImport } from './projects/importCheck.ts'
+ import { findRegistered, newRepository, repoIn } from './projects/model.ts'
+ import type { ProjectState } from './projects/state.ts'
+ import type { SessionManager } from './sessions/manager.ts'
+-import { applySettingsPatch, isSettingsKey } from './projects/settings.ts'
++import { applySettingsPatch, isSettingsKey, pruneDeletedTags } from './projects/settings.ts'
+ import { realOrResolved } from './repos.ts'
+ import {
+   assertNoProtoKeys,
+@@ -145,6 +145,8 @@ const handlers: Record<string, Handler> = {
+         checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
+       }
+       d.settings = applySettingsPatch(d.settings, patch)
++      // A deleted tag comes off every branch in the same change (one patch, one rev).
++      d.repositories = pruneDeletedTags(d.repositories, d.settings, patch)
+     })
+     return null
+   },
+````
+
+- [ ] **Step 4: Document it**
+
+````diff
+diff --git a/PROTOCOL.md b/PROTOCOL.md
+index 4d84837..8f457a2 100644
+--- a/PROTOCOL.md
++++ b/PROTOCOL.md
+@@ -292,6 +292,17 @@ and `repo.update`, only the keys listed in `expected` are compared. A
+ project-wide rev guard is not used because the rev moves on every status or git
+ change, so it would almost always fail. Everything else is last-write-wins.
+ 
++A `project.updateSettings` that sets or removes `worktreeTags` or `customTags`
++also clears deleted tags from the branches, in the same change (one patch, one
++rev), as a file window does: every branch whose `tag` is not in the new
++`worktreeTags` (the default tags when the key is removed) loses its `tag`, and
++every branch keeps only the `customTags` ids still in the new `customTags`
++(none when the key is removed), dropping an emptied list. A branch left with no
++data is dropped from `branchData`. Renaming, recolouring or reordering tags keeps
++their ids, so it clears nothing. `expected` is checked before anything changes:
++a `CONFLICT` changes neither the settings nor the branches. Older servers leave
++deleted ids on the branches, where clients show no tag for them.
++
+ **Worktrees.** A project lists every git worktree of its repositories: the
+ server polls `git worktree list` and adds or removes rows to match. Projects
+ that share a repository see the same worktrees, each with its own ids and
+````
+
+- [ ] **Step 5: Run the tests**
+
+Run: `node --test scripts/serverProjectSettings.test.mjs scripts/serverV2.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 48`, `# fail 0`.
+
+Run: `npm run typecheck && npm --prefix server run typecheck` → no errors. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1251`, `# fail 0`.
+
+Run: `npm --prefix server run build && npm --prefix server run smoke 2>&1 | tail -1` → `SERVER SMOKE PASS`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(server): deleting a tag in project.updateSettings clears it from every branch, in the same change" -m "Co-Authored-By: <model trailer>" -- server/src/projects/settings.ts server/src/v2.ts scripts/serverProjectSettings.test.mjs scripts/serverV2.test.mjs PROTOCOL.md
+```
 
 ---
 
@@ -621,7 +936,7 @@ index 0000000..b39d4cf
 
 Run: `node --test scripts/v2SettingsWriter.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 13`, `# fail 0`.
 
-Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1257`, `# fail 0`.
+Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1264`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -766,7 +1081,7 @@ The overrides and their fields:
 ````diff
 diff --git a/src/renderer/src/v2/settingsOverrides.ts b/src/renderer/src/v2/settingsOverrides.ts
 new file mode 100644
-index 0000000..8b7fdde
+index 0000000..88798ed
 --- /dev/null
 +++ b/src/renderer/src/v2/settingsOverrides.ts
 @@ -0,0 +1,134 @@
@@ -776,9 +1091,9 @@ index 0000000..8b7fdde
 +// server's form here: what the store's setter would leave out (an empty list,
 +// a blank prompt, undefined) is sent as null, which removes the key.
 +//
-+// No cascade: deleting a workflow or custom tag does not clear it from the
-+// branches carrying it, as the store's setter does in a file window. A branch
-+// left with a deleted tag shows none (the tag lookups find nothing).
++// Tags: only the new list is sent. The server clears a deleted workflow or
++// custom tag from every branch in the same change (project.updateSettings),
++// as the store's setter does in a file window.
 +//
 +// Pure: installV2.ts supplies the requests and the writer.
 +import type { Project } from '../../../shared/model/types'
@@ -1126,7 +1441,7 @@ index 48e4dc5..a0cf118 100644
 
 Run: `node --test scripts/v2SettingsOverrides.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 4`, `# fail 0`.
 
-Run: `npm run typecheck` → no output (the protocol types accept `expected` on `project.rename` and `repo.update`). `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1261`, `# fail 0`.
+Run: `npm run typecheck` → no output (the protocol types accept `expected` on `project.rename` and `repo.update`). `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1268`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -2209,7 +2524,7 @@ index ebd8d57..d03a9a8 100644
 
 - [ ] **Step 5: Verify**
 
-Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1262`, `# fail 0`.
+Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1269`, `# fail 0`.
 
 Run: `npm run smoke 2>&1 | tail -1` → `SMOKE PASS` (a file window's Settings and terminals are unchanged). The server window's panel is checked by `smoke:v2` (Task 8).
 
@@ -2354,7 +2669,7 @@ index 024489c..c935ab0 100644
 
 - [ ] **Step 4: Run the tests**
 
-Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1263`, `# fail 0`.
+Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1270`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -2827,7 +3142,7 @@ Run: `node --test scripts/mainServerLinks.test.mjs 2>&1 | grep -E '^# (pass|fail
 
 The re-pointed test guards the security rule: with the `seen.url !== entry.url` check removed (`if (!seen) continue`), "a token read for the old URL never goes to a new one" fails (the prototype checked this both ways).
 
-Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1273`, `# fail 0`.
+Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1280`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -3020,7 +3335,7 @@ index 6e794da..80fe9a7 100644
 
 Main's wiring has no unit test (it is Electron); Task 5 covers the logic and `smoke:v2` (Task 8) the broadcast end to end.
 
-Run: `npm run typecheck` → no output. `npm run build 2>&1 | tail -1` → `✓ built in …`. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1273`, `# fail 0`.
+Run: `npm run typecheck` → no output. `npm run build 2>&1 | tail -1` → `✓ built in …`. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1280`, `# fail 0`.
 
 Run: `grep -n "send('appServers:changed'" src/main/*.ts` → the one line in `appServers.ts`, sending the snapshot `serverLinks.ts` built.
 
@@ -3698,7 +4013,7 @@ index 0afa861..7ebf490 100644
 
 - [ ] **Step 5: Verify**
 
-Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1278`, `# fail 0`.
+Run: `npm run typecheck` → no output. `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1285`, `# fail 0`.
 
 Run: `grep -rn "addEventListener('focus'" src/renderer/src` → only `linear.ts` and `components/Workspace.tsx` (a file window's Linear and status polling, unchanged).
 
@@ -4000,7 +4315,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1278`, `# fail 0`: the baseline 1244 at `471307b`, plus 13 (Task 1), 4 (Task 2), 1 (Task 3: the section map; two tests changed), 1 (Task 4), 10 (Task 5) and 5 (Task 7).
+Expected: `# pass 1285`, `# fail 0`: the baseline 1244 at `471307b`, plus 7 (Task 0), 13 (Task 1), 4 (Task 2), 1 (Task 3: the section map; two tests changed), 1 (Task 4), 10 (Task 5) and 5 (Task 7).
 
 - [ ] **Step 2: Types and build**
 
@@ -4043,7 +4358,7 @@ Design only; nothing here is built in 3c-3b-2.
 1. **The overlay re-projects the project on every settings edit** (`applyV2Project` on the mirror's snapshot): O(project), as a patch is. Text commits on blur, so this is once per field edit, not per keystroke; a colour drag re-projects per change event.
 2. **A 3c-2 server sends no rev**, so an edit's overlay goes when the response arrives; if that server sends the patch after the response, the old value shows for that gap. 3c-3a servers send the patch first and the rev with the response.
 3. **Keep Mine replaces the whole key.** Settings are compared and replaced per key, so two clients editing different session types (or quick buttons) at once conflict on the whole list, and Keep Mine writes the user's whole list over the other client's.
-4. **Deleting a tag leaves it on branches** (Decision 12): the server keeps the deleted id, which shows as no tag; re-adding a tag with that id would bring it back on those branches.
+4. **An older server does not cascade a tag deletion** (Decision 12): it keeps the deleted id on its branches, which shows as no tag. The cascade also keeps only the ids in the new list, as a file window does, so a branch tag id that was already unknown (left by an older server, or set directly with `branch.setTag`) is cleared by the next tag edit.
 5. **A remote rename while typing the project name** remounts the name field (it is keyed by the name, as in a file window) and drops the typing.
 6. **A token added on the server** is noticed only on the next focus of any window at least 10 s after the last retry (or by Test); until then main's link and the window stay in `needs-auth`.
 7. **Main keeps a socket per server with a token for the app's life**, with no window open too (pings every 15 s). Up to 32.
@@ -4053,4 +4368,4 @@ Design only; nothing here is built in 3c-3b-2.
 
 ## Questions for the user
 
-1. **Tag deletion in a server window**: keep it as is (a deleted tag stays on its branches as an unknown id, shown as no tag), have the window also clear it branch by branch (one request per branch, not atomic), or add a server-side cascade to `project.updateSettings` (a server change, in 3d or later)?
+None open. The tag deletion question was answered: the server clears a deleted tag from every branch in the same `project.updateSettings` change (Task 0).
