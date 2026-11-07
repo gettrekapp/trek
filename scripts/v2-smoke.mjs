@@ -33,20 +33,28 @@
 //     a dismiss clears it on the server, and so does typing an answer; the New session menu lists
 //     the server's agents (server.agents, asked by the window), greys out the ones not installed,
 //     and "Choose…" offers them; the Global bar names the agent the server would start.
+//   - 3c-3b-2 settings: the Settings panel shows the project's sections only; a prompt typed and
+//     blurred is saved with project.updateSettings and its expected value; a session type added
+//     and named at once builds on the pending add; a CONFLICT (another client's edit the window
+//     has not seen yet, its patches held in main) asks, and Reload shows the server's value.
 //   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
 //     with the reconnecting overlay and disables the commands; restarting clears all three. A note
 //     typed as the link drops is kept with no dialog and saved once it is back.
 //   - Closing a server window shows no prompt; its recent reopens it in an empty window.
-//   - A needs-auth window reconnects on focus once its token is set in another window.
-//   - A needs-auth window notices its entry removed on focus; a removed server is terminal
-//     (no further v2socket:open calls) and its recents say Server removed; × removes them.
+//   - main's broadcast: another window's Connect list shows a server added elsewhere, with main's
+//     connection status, and no focus event; no broadcast carries a token.
+//   - A needs-auth window reconnects, with no focus event, once its token is set in another window
+//     (main's connection for the entry connects); it notices its entry removed the same way; a
+//     removed server is terminal (no further v2socket:open calls) and its recents say Server
+//     removed; × removes them.
 //   - No console or page errors in any window, including later and restored ones.
 // Every wait is bounded, and a watchdog fails the whole run after WATCHDOG_MS. Ctrl+C (or
 // SIGTERM) still stops the server and removes the temp dirs.
 //
-// Electron internals: the relay-open count reads ipcMain._invokeHandlers (private), and the
-// focus check patches BrowserWindow.prototype.focus. Either may need updating on an Electron
-// upgrade; the first falls back to the view alone, the second fails the run with a message.
+// Electron internals: the relay-open count reads ipcMain._invokeHandlers (private), the
+// focus check patches BrowserWindow.prototype.focus, and the conflict check holds a window's
+// patches by shadowing its webContents.send. Any may need updating on an Electron upgrade; the
+// first falls back to the view alone, the others fail the run with a message.
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
@@ -201,16 +209,18 @@ const launch = async () => {
   // Every window, including ones opened later and ones restored on launch.
   app.on('window', watch)
   for (const page of app.windows()) watch(page)
-  // Answers every message box with button 1 (Remove's confirm) and records its message.
+  // Answers every message box with button 1 (Remove's confirm), or what __answer says for its
+  // message, and records the message.
   await app.evaluate(({ dialog }) => {
     globalThis.__dialogs = []
     const record = (args) => {
       const options = args.find((a) => a && typeof a === 'object' && 'message' in a)
       globalThis.__dialogs.push(options?.message ?? '')
+      return options?.message ?? ''
     }
     dialog.showMessageBox = async (...args) => {
-      record(args)
-      return { response: 1, checkboxChecked: false }
+      const message = record(args)
+      return { response: globalThis.__answer?.(message) ?? 1, checkboxChecked: false }
     }
     dialog.showMessageBoxSync = (...args) => {
       record(args)
@@ -836,6 +846,85 @@ try {
   await detail.locator('.panel-btn', { hasText: /file/ }).click()
   await detail.locator('.terminal-pane:visible').waitFor({ timeout: 5000 })
 
+  // ---- 6c. Settings, edited on the server ---------------------------------------------------
+
+  await detail.locator('.panel-btn[title="App settings"]').click()
+  const settings = w1.locator('.server-window .settings-panel')
+  await settings.waitFor({ timeout: 5000 })
+  check("a server window's Settings show the project's sections only", await settings.locator('h3').allTextContents(), [
+    'Settings',
+    'Appearance',
+    'Agents',
+    'Worktree tags',
+    'Custom tags',
+    'Terminal quick buttons',
+    'Session system prompt',
+    'Global system prompt',
+    'Global quick buttons',
+    'Session types'
+  ])
+  check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
+  const prompt = settings.locator('.session-prompt-input')
+  const settingsNow = async () => (await projectNow()).settings
+  let sentAt = await sentCount()
+  await prompt.fill('Run the tests first')
+  await prompt.blur()
+  check('a prompt typed and blurred is saved on the server', await until(async () => (await settingsNow()).sessionSystemPrompt, 'Run the tests first'), 'Run the tests first')
+  check('with project.updateSettings and the value it started from', (await sentSince(sentAt)).filter((r) => r.method === 'project.updateSettings').map((r) => r.params), [
+    { projectId: target.projectId, settings: { sessionSystemPrompt: 'Run the tests first' }, expected: { sessionSystemPrompt: null } }
+  ])
+  // Added and named at once: the name is built on the pending add, which shows straight away.
+  await settings.locator('button', { hasText: '+ Add session type' }).click()
+  const typeName = settings.locator('.quick-btn-row input[placeholder="Name, e.g. Review"]')
+  await typeName.fill('Review')
+  await typeName.blur()
+  check('a session type added and named at once is saved whole', await until(async () => (await settingsNow()).sessionTypes?.map((t) => t.name), ['Review']), ['Review'])
+
+  // A CONFLICT: another client's edit lands while this window has not seen it (its patches are
+  // held in main), so the window's edit carries a stale expected value. It asks; Reload is button 0.
+  const wc1 = await webContentsIdOf('w1')
+  const holdable = await app.evaluate(({ webContents }, id) => {
+    const wc = webContents.fromId(id)
+    if (!wc || typeof wc.send !== 'function') return false
+    const send = wc.send.bind(wc)
+    globalThis.__held = null
+    wc.send = (channel, ...args) => {
+      const event = args[0]
+      if (globalThis.__held && channel === 'v2socket:event' && event?.type === 'message' && String(event.data).includes('"state.patch"')) {
+        globalThis.__held.push([channel, ...args])
+        return
+      }
+      send(channel, ...args)
+    }
+    globalThis.__releaseHeld = () => {
+      const held = globalThis.__held ?? []
+      globalThis.__held = null
+      for (const args of held) send(...args)
+    }
+    globalThis.__answer = (message) => (message.includes('was changed on the server') ? 0 : 1)
+    return true
+  }, wc1)
+  if (!holdable) throw new Error("v2-smoke: cannot shadow the window's webContents.send; Electron internals changed, update the conflict check")
+  const dialogsAtConflict = (await dialogs()).length
+  const reloadsBefore = await w1.evaluate(() => window.__store.getState().settingsReload)
+  await app.evaluate(() => (globalThis.__held = []))
+  await live.request('project.updateSettings', { projectId: target.projectId, settings: { sessionSystemPrompt: 'theirs' } })
+  sentAt = await sentCount()
+  await prompt.fill('mine')
+  await prompt.blur()
+  const conflictMessage = 'Session system prompt was changed on the server while you were editing it.'
+  check('a stale edit is refused, and asks', await until(async () => (await dialogs()).slice(dialogsAtConflict), [conflictMessage]), [conflictMessage])
+  check('it was sent with the value the window had', (await sentSince(sentAt)).filter((r) => r.method === 'project.updateSettings').map((r) => r.params.expected), [
+    { sessionSystemPrompt: 'Run the tests first' }
+  ])
+  await app.evaluate(() => globalThis.__releaseHeld())
+  check('Reload shows the server’s value', await until(() => prompt.inputValue(), 'theirs'), 'theirs')
+  check('and remounts the panel', await w1.evaluate(() => window.__store.getState().settingsReload), reloadsBefore + 1)
+  check('the server keeps the other client’s edit', (await settingsNow()).sessionSystemPrompt, 'theirs')
+  await app.evaluate(() => (globalThis.__answer = null))
+  await detail.locator('.panel-btn[title="App settings"]').click()
+  await detail.locator('.terminal-pane:visible').waitFor({ timeout: 5000 })
+
   // ---- 7. Disconnect: the banner shows, the tree stays; back again once the server is.
 
   // A note typed as the link drops is kept, with no dialog, and saved once the link is back.
@@ -913,8 +1002,33 @@ try {
   check('its recent reopens it in the empty window', await w5.evaluate(() => window.__store.getState().serverWindow?.projectId), target.projectId)
   check('which takes its title', await until(() => titleOf('w5'), 'Demo', 5000), 'Demo')
 
-  // ---- A window stuck in needs-auth never retries by itself: on focus it reconnects, so a
-  // token set in another window takes.
+  // ---- The server list follows main's broadcast: another window's Connect view shows a server
+  // added elsewhere, with main's connection status, and no focus event.
+  const w7 = await newWindow()
+  await tag(w7, 'w7')
+  await w7.evaluate(() => {
+    window.__changes = []
+    window.api.appServers.onChanged((snapshot) => window.__changes.push(snapshot))
+  })
+  await w7.locator('.start-actions button', { hasText: 'Connect to server…' }).click()
+  await w7.locator('.connect-server-item').first().waitFor({ timeout: 10_000 })
+  await countTrustedFocus(w7)
+  const added = await w5.evaluate(([url, t]) => window.api.appServers.save({ name: 'Live', url, token: t }), [`ws://127.0.0.1:${port}`, token])
+  const liveRow = w7.locator('.connect-server-item', { hasText: 'Live' })
+  await liveRow.waitFor({ timeout: 5000 })
+  const liveStatus = await until(() => liveRow.locator('.connect-server-status').textContent(), 'Connected')
+  if ((await trustedFocus(w7)) > 0) inconclusive('a server added in another window shows here, connected, with no focus event', 'the window was focused meanwhile')
+  else check('a server added in another window shows here, connected, with no focus event', liveStatus, 'Connected')
+  await w5.evaluate((id) => window.api.appServers.remove(id), added.id)
+  await liveRow.waitFor({ state: 'detached', timeout: 5000 })
+  check('and goes when it is removed there', await liveRow.count(), 0)
+  const changes = await w7.evaluate(() => window.__changes)
+  check('every broadcast reached the window, none with a token', [changes.length > 0, JSON.stringify(changes).includes(token)], [true, false])
+  await closeTagged('w7')
+  check('the list window closes', await until(windowCount, 1), 1)
+
+  // ---- A window stuck in needs-auth never retries by itself: once main's connection to the entry
+  // connects (its token set in another window), the broadcast says so and it reconnects.
   const fixable = await w5.evaluate((url) => window.api.appServers.save({ name: 'Fixable', url, token: 'wrong-token' }), `ws://127.0.0.1:${port}`)
   await w5.evaluate(([id, projectId]) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId }), [fixable.id, target.projectId])
   await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).waitFor({ timeout: 10_000 })
@@ -922,29 +1036,20 @@ try {
   const w6 = await newWindow()
   await tag(w6, 'w6')
   await w6.evaluate(([id, t]) => window.api.appServers.setToken(id, t), [fixable.id, token])
-  await w5.evaluate(() => window.dispatchEvent(new Event('focus')))
   await w5.locator('.server-window-banner').waitFor({ state: 'detached', timeout: 10_000 })
   await tree5.locator('.wt-name', { hasText: 'feature-x' }).waitFor({ timeout: 10_000 })
-  check('on focus it reconnects with the new token', [await w5.locator('.server-window-banner').count(), await tree5.isVisible()], [0, true])
+  check('it reconnects with the new token, with no focus event', [await w5.locator('.server-window-banner').count(), await tree5.isVisible()], [0, true])
   await closeTagged('w6')
   check('the token window closes', await until(windowCount, 1), 1)
   await w5.evaluate((id) => window.api.appServers.remove(id), fixable.id)
 
-  // ---- A window stuck in needs-auth never retries, so only the focus re-check of the
-  // server list can see its entry removed from another window.
+  // ---- A window stuck in needs-auth sees its entry removed from another window at once.
   const stuck = await w5.evaluate((url) => window.api.appServers.save({ name: 'Stuck', url, token: 'wrong-token' }), `ws://127.0.0.1:${port}`)
   await w5.evaluate((id) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId: 'whatever' }), stuck.id)
   await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).waitFor({ timeout: 10_000 })
-  // A real focus (another window closing, the OS) re-reads the list too: then this proves nothing.
-  await countTrustedFocus(w5)
   await w5.evaluate((id) => window.api.appServers.remove(id), stuck.id)
-  await sleep(500)
-  const stuckBanner = await w5.locator('.server-window-banner', { hasText: 'Token rejected' }).count()
-  if (stuckBanner !== 1 && (await trustedFocus(w5)) > 0) inconclusive('a stuck window does not notice the removal by itself', 'the window was focused meanwhile')
-  else check('a stuck window does not notice the removal by itself', stuckBanner, 1)
-  await w5.evaluate(() => window.dispatchEvent(new Event('focus')))
   await w5.locator('.server-window-message h2', { hasText: 'Server removed' }).waitFor({ timeout: 5000 })
-  check('on focus it re-reads the list and shows Server removed', await w5.locator('.server-window-message h2').textContent(), 'Server removed')
+  check('a stuck window shows Server removed, with no focus event', await w5.locator('.server-window-message h2').textContent(), 'Server removed')
   await w5.evaluate(([id, projectId]) => window.__store.getState().setServerWindow({ serverEntryId: id, projectId }), [entryId, target.projectId])
   await tree5.waitFor({ timeout: 10_000 })
   await w5.locator('.title-text', { hasText: 'Demo' }).waitFor({ timeout: 5000 })
@@ -966,8 +1071,6 @@ try {
     return true
   })
   const opens = () => app.evaluate(() => globalThis.__v2Opens)
-  // A real focus re-reads the server list, and may see the removal before any relay open.
-  await countTrustedFocus(w5)
 
   // Server removed (as from another window): the relay's removed result is terminal, no retries.
   await w5.evaluate((id) => window.api.appServers.remove(id), entryId)
@@ -975,9 +1078,8 @@ try {
   check('a removed server shows Server removed', await w5.locator('.server-window-message button').allTextContents(), ['Close'])
   check('both titles say Server removed', [await w5.locator('.title-text').textContent(), await until(() => titleOf('w5'), 'Server removed', 5000)], ['Server removed', 'Server removed'])
   if (hooked) {
+    // The broadcast usually drops the entry before the SDK's first retry, so that retry may never open.
     const before = await opens()
-    if (before >= 1 || (await trustedFocus(w5)) === 0) check('the hook saw the refused retry', before >= 1, true)
-    else inconclusive('the hook saw the refused retry', 'a focus re-read the server list first')
     await sleep(3000)
     check('no further relay opens over 3 s', (await opens()) - before, 0)
   } else {
