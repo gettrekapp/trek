@@ -61,7 +61,7 @@
     - *Server-side policy (chosen)*: the server runs `runner.checkTool` on every bot `tools/call` and refuses anything but `allow`, with the policy's own reason ("Needs approval. Call …request_approval…"). The hook answers `allow` for `mcp__trek-dev__*` without checking, so an approval is spent exactly once, by the call that reaches the server. One authority and no new state; nothing depends on argument identity; a direct `curl` meets the same checks as the CLI ("No bot turn is running", approvals, the always-ask set); and if the CLI ever silently drops `--settings` (spike prototype 2), Trek's tools are still checked. The cost is that a refusal reaches the model as a tool error rather than a hook denial; the text is the same.
 
     `request_approval` goes through the same gate (it is free, but now needs a running turn, as it did through the hook). `/bot/policy` keeps answering for the CLI's own tools; a bot that POSTs to it directly can only spend its own approvals.
-14. **Where the delegation rule lives.** `ALWAYS_ASK_TOOLS` in `policy.ts`, checked in `tierOf` before the overrides, only for `mcp__trek-dev__` names. `start_session` and `send_prompt` leave `FREE_TOOLS`. An approved call still runs (approvals are matched before the tier). `enqueue_prompt` stays free: see Questions.
+14. **Where the delegation rule lives.** `ALWAYS_ASK_TOOLS` in `policy.ts`, checked in `tierOf` before the overrides, only for `mcp__trek-dev__` names. `start_session` and `send_prompt` leave `FREE_TOOLS`. An approved call still runs (approvals are matched before the tier). `enqueue_prompt` stays free (user decision). *Review fix:* `start_stack`, `create_worktree`, `load_worktree`, `save_session_type` and `delete_session_type` joined the set (user decision); see Review fixes.
 15. **Platform refusal is quiet; a failed probe is loud.** An unsupported platform never changes, and it can be the first thing a shared project shows on opening, so `attach` refuses with the no-alert view (`badCommandView`), before asking for consent. A failed probe (or a bot folder inside userData) is `errorView`, with the decision alert, like other start failures.
 16. **Outcome kinds.** `ENOENT` when spawning means the sandbox command is missing: kind `'sandbox'`, "The bot's OS sandbox is not available: … was not found". The runner pauses on it like `'missing'` and doesn't count it. A missing CLI inside the sandbox can't be an `ENOENT` any more; `sandbox-exec` exits 71 with `sandbox-exec: execvp() of 'x' failed: No such file or directory`, and `bwrap` exits 1 with `bwrap: execvp x: No such file or directory` (both verified). A turn with no result whose stderr has that line is `'missing'`, with the same "no shell" hint as before.
 17. **The second layer in `--settings`.** `permissions.deny` gets `Read(//<dir>/**)` and `Edit(//<dir>/**)` for the real path of userData and, if it differs, `app.getPath('userData')`'s spelling. `sandbox.enabled: false` is explicit, so a user's `~/.claude/settings.json` that turns Claude Code's sandbox on can't break every Bash call with `sandbox_apply` errors. A real `claude -p` (2.1.319, haiku) run under the generated profile with exactly these settings showed they are accepted, not silently dropped: the hook ran for every tool with the expanded token, `cat` of userData was refused by the permission rules ("Permission to use Bash with command cat …"), the Read tool got "File is in a directory that is denied by your permission settings", `python3` got `PermissionError` from the OS, and the inline MCP server connected and served `tools/call`.
@@ -69,7 +69,7 @@
 
 **The MCP config (Task 3)**
 
-19. **`botMcpAccess` returns `{ token, port }` and writes nothing.** `botClients` hold no `configPath`; only session clients (`SessionClient`) do, and `releaseMcpWindow` removes only their files. `removeStaleConfigs` keeps its `mcp-(bot-|gemini-)?\d+` pattern for files older versions left, and `BOT_SECRET_FILES` keeps `mcp-*.json` (session and Gemini configs still live there).
+19. **`botMcpAccess` returns `{ token, port }` and writes nothing.** *Review fix:* it now returns `{ port }` only; each turn gets its token from `openBotTurn` (see Review fixes). `botClients` hold no `configPath`; only session clients (`SessionClient`) do, and `releaseMcpWindow` removes only their files. `removeStaleConfigs` keeps its `mcp-(bot-|gemini-)?\d+` pattern for files older versions left, and `BOT_SECRET_FILES` keeps `mcp-*.json` (session and Gemini configs still live there).
 
 **Tests (all tasks)**
 
@@ -85,7 +85,7 @@
 - **Unit tests:** `scripts/*.test.mjs`, run with `npm test` (`node --test scripts/*.test.mjs`).
   - Modules a test imports must be erasable TS (no enums, parameter properties or namespaces) with `.ts` on every runtime import. `src/host/bot/sandbox.ts` and `turnProcess.ts` import nothing from Electron.
   - `import type` lines are erased, so they may be extensionless.
-- **Baseline:** 1321 tests pass at `4671b50`. Each task states the count it ends at; the plan ends at 1343 passing and 1 skipped (the opt-in LaunchServices check, Decision 21).
+- **Baseline:** 1321 tests pass at `4671b50`. Each task states the count it ends at. After the review fixes to Tasks 1–3 (`8f3181a`), 1359 pass; the plan ends at 1363 passing and 1 skipped (the opt-in LaunchServices check, Decision 21).
 - **Checks:**
   - `npm run typecheck`
   - `npm run build`
@@ -105,7 +105,7 @@
   `<model trailer>` is the trailer of the model doing the work. `git commit -- <paths>` only commits tracked files: a task that creates files runs `git add <new files>` first, or the commit fails with "pathspec did not match".
 - **Diffs in this plan** are unified diffs against the tree as the previous task leaves it (context lines included). Apply them by hand or with `git apply`. Every hunk was produced from a prototype of this plan built on `4671b50`, one commit per task, with each task's checks run on it.
 - **Test names in failure output** are listed without their `not ok N` numbers, which depend on the order `node --test` runs the files in.
-- **`smoke:bot` totals:** 111 checks at `4671b50`; 119 after Task 2, 123 after Task 3, 124 after Task 7, 129 after Task 8.
+- **`smoke:bot` totals:** 111 checks at `4671b50`; 119 after Task 2, 123 after Task 3, 138 after the review fixes, 139 after Task 7, 144 after Task 8.
 
 ## File map
 
@@ -126,8 +126,11 @@
 | `scripts/fixtures/fake-claude.mjs` | modify | 2, 3, 7 | `ASKTOOL` and direct calls; the inline config; `CANARY` |
 | `scripts/bot-smoke.mjs` | modify | 2, 3, 7, 8 | direct calls refused and approved; no config file; the canary under the sandbox; the settings; a folder inside userData |
 | `docs/superpowers/specs/2026-11-02-project-bot-core-design.md`, `2026-11-07-bot-os-sandbox.md` | modify | 9 | the sandbox and the always-ask tier; the spike's outcome |
+| `src/main/mcpRpc.ts`, `src/host/bot/mcpHandlers.ts` | create | review | the JSON-RPC handling and `gateBotCall`; the bot's handlers (pure) |
+| `src/shared/providers/codex.ts`, `types.ts`, `server/src/mcp/access.ts` | modify | review | Codex's `http_headers_helper` and its 0600 headers file |
+| `scripts/botMcpGate.test.mjs`, `scripts/botHook.test.mjs` | create | review | the gate and handlers against a real runner; the hook's argv |
 
-Nothing under `server/`, `src/renderer/` or `src/shared/` changes. The renderer already shows any `BotView` reason, so the refusals need no UI work.
+Tasks 4–10 change nothing under `server/`, `src/renderer/` or `src/shared/` (the review fixes did: see that section). The renderer already shows any `BotView` reason, so the refusals need no UI work.
 
 ---
 
@@ -1576,9 +1579,35 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(bo
 
 ---
 
+## Review fixes (Tasks 1–3, done)
+
+A security review of Tasks 1–6 (threat model: a prompt-injected bot with a shell, as the same OS user) led to these, committed as `aa54103` and `8f3181a`. Tasks 7–10 below were rebased onto them: every diff applies in order on `8f3181a` (`git apply --check`), and each task's checks were run on the result.
+
+1. **No Trek token in any process's environment or argv.** On macOS any process of the user can read another's argv and environment with `sysctl(KERN_PROCARGS2)` (what `ps -E` uses). Seatbelt does not gate it: on macOS 26.2 a sandboxed C or `python3` ctypes probe still read a node process's environment under `(deny process-info* (target others))`, `(deny process-info-pidinfo (target others))`, `(deny sysctl-read)` and even `(deny default)` with only exec and file reads allowed. A bare `(deny process-info*)` hides pids and paths but not that. `ps` itself can't run in the sandbox (no setuid exec). So the macOS profile gets **no** process-info rule (it would be a no-op for env and args), and the fix is to keep tokens out:
+   - **Claude, Local:** `--mcp-config` names a 0600 file (unchanged). **Gemini:** `GEMINI_CLI_SYSTEM_SETTINGS_PATH` names a 0600 file (unchanged). **Grok:** no MCP.
+   - **Codex** had `TREK_MCP_TOKEN` in its environment (`bearer_token_env_var`). It now gets `-c mcp_servers.trek-dev.http_headers_helper="/bin/cat '<file>'"`: Codex runs the helper (`sh -c`, cleared environment) and reads the headers it prints from a 0600 `mcp-codex-<window>.json` (server: `<project>.codex.json`). `McpAccess.codexHeadersHelper` carries the command. The same `buildLaunch` serves the v2 server, so both paths are fixed.
+   - **The bot** still has `TREK_BOT_TOKEN` in its own environment (the inline `--mcp-config` needs it); it is now per turn (3).
+   - Linux: bwrap's PID namespace already hides other processes; `bwrap-check.mjs` now checks `/proc/<pid>/environ`, `cmdline`, `ps eww -A` and `kill -0` against an outside process holding a secret (41 checks).
+2. **Shell analysis is bounded by work.** `parseShell` counts segments across `sh -c`/`eval` as it goes; a `cd` (or `git -C`) past 64 levels or 4096 characters, or any path past 256 levels, is "too deeply nested"; `analyzeShell` has a step budget (`SHELL_STEP_LIMIT` = 50 000: characters scanned, segments, path components returned) and throws "too complex" once spent. `'cd a;'.repeat(1999)` took 73 s on the main thread; it is refused in a few ms, and the worst accepted command is about 0.6 s. Tests assert steps, with a 10 s wall backstop.
+3. **A bot token per turn.** `openBotTurn(contents)` mints a token at each turn's start; it is revoked when the turn settles (done, failed, timed out, stopped, killed) and on window close. Between turns a bot token gets 401 on both `/mcp` and `/bot/policy`.
+4. **The hook keeps the token out of argv:** `{ printf 'Authorization: Bearer %s\n' "$TREK_BOT_TOKEN" | curl … -H @- --data-binary @/dev/fd/3 …; } 3<&0 || exit 2` (`botPolicyHook` in `turnProcess.ts`). `printf` is a builtin; curl reads the header from stdin (curl 7.55+, any supported macOS or distro; `--variable`/`--expand-header` would need 8.3, which Debian 12 and older macOS lack, and a `node` hook would need Node on PATH, which the native Claude CLI doesn't).
+5. **Always ask** now also covers `start_stack`, `create_worktree`, `load_worktree`, `save_session_type`, `delete_session_type`; `enqueue_prompt` stays free.
+6. **Minor:** `TREK_TOOL_PREFIX` is derived from `BOT_MCP_SERVER`; a `tools/call` whose `arguments` isn't a plain object is -32602.
+7. **Tests:** the JSON-RPC handling moved to `src/main/mcpRpc.ts` (`gateBotCall`, `handleMessage`, `handleBody`) and the handlers to `src/host/bot/mcpHandlers.ts`, both pure and tested in `scripts/botMcpGate.test.mjs` (11) against a real `BotRunner`; the hook in `scripts/botHook.test.mjs` (2). A session token is never gated, by design (`gateBotCall`'s comment). `smoke:bot` checks per-turn revocation, curl's argv, the always-ask tools, stale `mcp-codex-`/`mcp-gemini-` sweeps and a `PEEK` turn (`ps -E -ww -A` from the bot finds no Trek token); `smoke:providers` runs a Global Codex session and checks `ps -E` of it.
+
+New files: `src/main/mcpRpc.ts`, `src/host/bot/mcpHandlers.ts`, `scripts/botMcpGate.test.mjs`, `scripts/botHook.test.mjs`. What this changes below: Task 7 passes the sandbox next to the per-turn token in `bind`; Task 8's `botSettings` uses `botPolicyHook` and drops `hookSettings`; Task 9's docs describe the per-turn token, the no-env rule and the wider always-ask set; the counts are updated throughout.
+
+### Known gaps
+
+1. **Codex older than 0.148.0** ignores `http_headers_helper` (unknown keys are dropped), so it reaches Trek's MCP server with no token and gets 401: no Trek tools until Codex is updated. Trek does not fall back to the environment.
+2. **macOS can't hide another process's argv and environment** from the sandboxed bot (above). Nothing of Trek's is there now, but anything else the user's processes carry in their environment (cloud credentials exported in a shell profile, say) is readable by the bot, sandboxed or not. `botSandboxMac.test.mjs` asserts this gap still exists ("known gap: KERN_PROCARGS2 …"), so the docs are revisited if macOS closes it.
+3. **The bot's own token is in its own environment**, so any process of the user can read it while a turn runs. It is gated by the same policy and dies with the turn.
+
+---
+
 ### Task 7: Every turn runs in the sandbox
 
-`runTurn` spawns the sandbox with the CLI's argv after it, and there is no way to call it without one (Decisions 1, 16). `attach` builds the sandbox from the real path of userData, refusing quietly on Windows and other platforms (Decision 15), and every turn gets it. From here on the smoke's fake CLI runs under `sandbox-exec` (Decision 20).
+`runTurn` spawns the sandbox with the CLI's argv after it, and there is no way to call it without one (Decisions 1, 16). `attach` builds the sandbox from the real path of userData, refusing quietly on Windows and other platforms (Decision 15), and every turn gets it, next to its per-turn token (`openBotTurn`, from the review fixes). From here on the smoke's fake CLI runs under `sandbox-exec` (Decision 20); its `PEEK` turn then gets `ps: Operation not permitted`, and its checks (no Trek token seen) still hold.
 
 **Files:**
 - Modify: `src/host/bot/turnProcess.ts` (`TurnOptions.sandbox`, `'sandbox'`, `MISSING_IN_SANDBOX`)
@@ -1593,20 +1622,20 @@ The fake CLI's `CANARY` mode:
 
 ````diff
 diff --git a/scripts/fixtures/fake-claude.mjs b/scripts/fixtures/fake-claude.mjs
-index 5d6a223..f028a2e 100755
+index f1e05ea..85830f4 100755
 --- a/scripts/fixtures/fake-claude.mjs
 +++ b/scripts/fixtures/fake-claude.mjs
 @@ -1,7 +1,7 @@
  #!/usr/bin/env node
  // Stands in for the Claude CLI in tests. The wake text picks the behaviour, or the whole prompt if it has no wake tags.
--import { spawn } from 'node:child_process'
+-import { spawn, spawnSync } from 'node:child_process'
 -import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 +import { execFileSync, spawn, spawnSync } from 'node:child_process'
 +import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
  
  const argv = process.argv.slice(2)
  const arg = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined)
-@@ -100,6 +100,25 @@ if (wake.includes('HANG')) {
+@@ -107,6 +107,25 @@ if (wake.includes('HANG')) {
      })
    })
    finish()
@@ -1771,21 +1800,21 @@ index 811fc0f..c6a7cae 100644
 
 ````diff
 diff --git a/scripts/bot-smoke.mjs b/scripts/bot-smoke.mjs
-index 6ca38cc..e79a852 100644
+index de9143b..36ef109 100644
 --- a/scripts/bot-smoke.mjs
 +++ b/scripts/bot-smoke.mjs
-@@ -47,7 +47,9 @@ const startElectron = async ({ restore = false, dataDir = userData, argLog = log
-     FAKE_CLAUDE_PID_FILE: pidFile,
+@@ -49,7 +49,9 @@ const startElectron = async ({ restore = false, dataDir = userData, argLog = log
      FAKE_CLAUDE_PIDS: descendantPids,
      FAKE_CLAUDE_GATE: gate,
--    FAKE_CLAUDE_TOKEN_FILE: tokenFile
-+    FAKE_CLAUDE_TOKEN_FILE: tokenFile,
+     FAKE_CLAUDE_TOKEN_FILE: tokenFile,
+-    FAKE_CLAUDE_PEEK_FILE: peekFile
++    FAKE_CLAUDE_PEEK_FILE: peekFile,
 +    // A file in this run's userData, which the CANARY turn tries to read.
 +    FAKE_CLAUDE_SECRET: join(dataDir, 'bot-consent.json')
    }
    if (restore) delete env.TREK_NO_WINDOW_RESTORE
    else env.TREK_NO_WINDOW_RESTORE = '1'
-@@ -186,6 +188,8 @@ try {
+@@ -196,6 +198,8 @@ try {
  
      await say('hello')
      check('chat gets a reply', await seen('echo:hello'), true)
@@ -1927,18 +1956,18 @@ index fec80aa..c906e06 100644
 
 ````diff
 diff --git a/src/main/bot.ts b/src/main/bot.ts
-index dfd6340..47aeedc 100644
+index 888ae67..f992460 100644
 --- a/src/main/bot.ts
 +++ b/src/main/bot.ts
-@@ -10,6 +10,7 @@ import {
-   createBotFolder, defaultBotFolder, isDirectory, looksLikeBotFolder, readConfig, readEvents
+@@ -11,6 +11,7 @@ import {
  } from '../host/bot/memory.ts'
+ import { botMcpHandlers } from '../host/bot/mcpHandlers.ts'
  import { BotRunner } from '../host/bot/runner.ts'
 +import { sandboxFor, type Sandbox, type SandboxPlan } from '../host/bot/sandbox.ts'
- import { botMcpConfig, killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
- import { isConsented, recordConsent } from './botConsent'
- import { BOT_SECRET_FILES } from './botSecretFiles'
-@@ -39,6 +40,17 @@ let quitting = false
+ import {
+   botMcpConfig, botPolicyHook, killAllTurnsNow, runTurn, type TurnHandle
+ } from '../host/bot/turnProcess.ts'
+@@ -42,6 +43,17 @@ let quitting = false
  
  const secretPaths = (): string[] => BOT_SECRET_FILES.map((n) => join(app.getPath('userData'), n))
  
@@ -1956,7 +1985,7 @@ index dfd6340..47aeedc 100644
  function sendView(contents: WebContents, view: BotView): void {
    if (!contents.isDestroyed()) contents.send('bot:view', view)
  }
-@@ -133,7 +145,10 @@ function inUseView(folder: string, reason: string): BotView {
+@@ -136,7 +148,10 @@ function inUseView(folder: string, reason: string): BotView {
    return { ...errorView(folder, reason), folderInUse: true }
  }
  
@@ -1968,7 +1997,7 @@ index dfd6340..47aeedc 100644
  function badCommandView(folder: string, reason: string): BotView {
    return { ...OFF_VIEW, phase: 'error', folder, reason }
  }
-@@ -162,6 +177,7 @@ function bind(
+@@ -165,6 +180,7 @@ function bind(
    request: BotAttach,
    place: { key: string; folder: string; folderId: string },
    access: BotMcpAccess,
@@ -1976,17 +2005,17 @@ index dfd6340..47aeedc 100644
    releaseLock: () => void
  ): void {
    const { folder } = place
-@@ -189,7 +205,8 @@ function bind(
+@@ -203,7 +219,8 @@ function bind(
              settings: hookSettings(access.port),
              addDirs: bound.attach.repoPaths.filter((p) => existsSync(p)),
-             env: { TREK_BOT_TOKEN: access.token },
+             env: { TREK_BOT_TOKEN: turnToken.token },
 -            timeoutMs: turn.timeoutMs
 +            timeoutMs: turn.timeoutMs,
 +            sandbox
            },
            onEvent
-         ),
-@@ -224,7 +241,8 @@ async function startBot(
+         )
+@@ -241,7 +258,8 @@ async function startBot(
    windowId: number,
    request: BotAttach,
    key: string,
@@ -1996,7 +2025,7 @@ index dfd6340..47aeedc 100644
  ): Promise<void> {
    const access = await botMcpAccess(contents)
    const folderId = folderIdOf(folder)
-@@ -248,7 +266,7 @@ async function startBot(
+@@ -265,7 +283,7 @@ async function startBot(
      return
    }
    try {
@@ -2005,7 +2034,7 @@ index dfd6340..47aeedc 100644
    } catch (err) {
      lock.release()
      throw err
-@@ -272,6 +290,13 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
+@@ -289,6 +307,13 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
      sendView(contents, badCommandView(folder, problem))
      return
    }
@@ -2019,7 +2048,7 @@ index dfd6340..47aeedc 100644
    if (!(await isConsented(consentEntry(request.filePath, folder, request.claudeCommand)))) {
      await teardown(windowId)
      sendView(contents, consentView(folder, request.claudeCommand.trim()))
-@@ -286,7 +311,7 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
+@@ -303,7 +328,7 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
    }
    await teardown(windowId)
    try {
@@ -2034,12 +2063,12 @@ index dfd6340..47aeedc 100644
 
 Run: `npm run typecheck` → no errors.
 Run: `node --test scripts/botTurn.test.mjs scripts/botRunner.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 132`, `# fail 0`. The existing kill, timeout, descendant and `killAllTurnsNow` tests now run through `sandbox-exec` too and still pass: it execs the CLI in place, so the group kill and the SIGKILL grace reach it unchanged.
-Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1342`, `# fail 0`, `# skipped 1`.
+Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1362`, `# fail 0`, `# skipped 1`.
 Run: `npm run build && node scripts/bot-smoke.mjs 2>&1 | grep -E 'OS sandbox|checks? (passed|failed)'` →
 
 ```
 ok   the CLI runs in the OS sandbox: userData is unreadable, other commands run: true
-All 124 checks passed
+All 139 checks passed
 ```
 
 - [ ] **Step 7: Commit**
@@ -2052,7 +2081,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(bo
 
 ### Task 8: The canary at start, the second layer, and folders inside userData
 
-`startBot` proves the sandbox before anything else (Decision 12), the turn's `--settings` gain the deny rules and `sandbox.enabled: false` (Decision 17), and a bot folder inside userData is refused while a repository there is left out of `--add-dir` (Decision 18). `hookSettings` moves out of `bot.ts` into the pure `botSettings`.
+`startBot` proves the sandbox before anything else (Decision 12), the turn's `--settings` gain the deny rules and `sandbox.enabled: false` (Decision 17), and a bot folder inside userData is refused while a repository there is left out of `--add-dir` (Decision 18). `hookSettings` moves out of `bot.ts` into the pure `botSettings`, whose hook is `botPolicyHook` (the review fixes' token-on-stdin command).
 
 **Files:**
 - Modify: `src/host/bot/turnProcess.ts` (`botSettings`)
@@ -2063,7 +2092,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(bo
 
 ````diff
 diff --git a/scripts/botTurn.test.mjs b/scripts/botTurn.test.mjs
-index 70b41f6..30cae67 100644
+index 70b41f6..cd8db46 100644
 --- a/scripts/botTurn.test.mjs
 +++ b/scripts/botTurn.test.mjs
 @@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process'
@@ -2071,11 +2100,11 @@ index 70b41f6..30cae67 100644
  import { tmpdir } from 'node:os'
  import { join, resolve } from 'node:path'
 -import { botMcpConfig, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
-+import { botMcpConfig, botSettings, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
++import { botMcpConfig, botPolicyHook, botSettings, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
  import { startHeartbeat } from '../src/host/bot/heartbeat.ts'
  import { sandboxFor } from '../src/host/bot/sandbox.ts'
  
-@@ -65,6 +65,21 @@ test('the MCP config is inline and leaves the token to the environment', () => {
+@@ -65,6 +65,19 @@ test('the MCP config is inline and leaves the token to the environment', () => {
    })
  })
  
@@ -2088,10 +2117,8 @@ index 70b41f6..30cae67 100644
 +  assert.deepEqual(settings.sandbox, { enabled: false })
 +  const [hook] = settings.hooks.PreToolUse
 +  assert.equal(hook.matcher, '*')
-+  assert.equal(
-+    hook.hooks[0].command,
-+    'curl -sS --fail --max-time 10 -X POST -H "Authorization: Bearer $TREK_BOT_TOKEN" --data-binary @- http://127.0.0.1:4711/bot/policy || exit 2'
-+  )
++  // The hook itself (token on curl's stdin, never argv) is checked in botHook.test.mjs.
++  assert.equal(hook.hooks[0].command, botPolicyHook(4711))
 +})
 +
  test('resume uses --resume', async () => {
@@ -2103,10 +2130,10 @@ The smoke checks the real turn's settings and the canary file, and opens a proje
 
 ````diff
 diff --git a/scripts/bot-smoke.mjs b/scripts/bot-smoke.mjs
-index e79a852..0304851 100644
+index 36ef109..f6b390d 100644
 --- a/scripts/bot-smoke.mjs
 +++ b/scripts/bot-smoke.mjs
-@@ -193,6 +193,10 @@ try {
+@@ -203,6 +203,10 @@ try {
      const argv = JSON.parse(readFileSync(log, 'utf8').trim().split('\n')[0])
      check('strict MCP config', argv.includes('--strict-mcp-config'), true)
      check('hook settings passed', argv[argv.indexOf('--settings') + 1].includes('/bot/policy'), true)
@@ -2117,7 +2144,7 @@ index e79a852..0304851 100644
      check('repo added', argv[argv.indexOf('--add-dir') + 1], repo)
  
      // --- The policy route
-@@ -477,6 +481,21 @@ try {
+@@ -508,6 +512,21 @@ try {
      check('a relative command is refused with a reason', await shown(bad), true)
      const refused = await botView(win)
      check('that is not a question or an alert', [refused.needsConsent, refused.bound, refused.decision], [false, false, null])
@@ -2157,28 +2184,27 @@ Expected:
 
 ````diff
 diff --git a/src/host/bot/turnProcess.ts b/src/host/bot/turnProcess.ts
-index e4e9f71..4e643e1 100644
+index de233be..bd0cac8 100644
 --- a/src/host/bot/turnProcess.ts
 +++ b/src/host/bot/turnProcess.ts
-@@ -66,6 +66,24 @@ export function botMcpConfig(port: number): string {
-   })
+@@ -82,6 +82,23 @@ export function botPolicyHook(port: number): string {
+   )
  }
  
 +/**
 + * The bot's `--settings`:
-+ * - the policy hook, which blocks the tool if Trek can't answer (curl --fail, then exit 2);
++ * - the policy hook (botPolicyHook), which blocks the tool if Trek can't answer;
 + * - `Read`/`Edit` deny rules for each of `deniedDirs`, so the model gets a clear denial for
 + *   Trek's data folder (the OS sandbox is what enforces it);
 + * - Claude Code's own sandbox off, since it can't start inside Trek's, whatever the user's settings say.
 + */
 +export function botSettings(port: number, deniedDirs: string[]): string {
-+  const command = `curl -sS --fail --max-time 10 -X POST -H "Authorization: Bearer $TREK_BOT_TOKEN" --data-binary @- http://127.0.0.1:${port}/bot/policy || exit 2`
 +  // `//` starts an absolute path in a permission rule.
 +  const deny = [...new Set(deniedDirs)].flatMap((dir) => [`Read(/${dir}/**)`, `Edit(/${dir}/**)`])
 +  return JSON.stringify({
 +    permissions: { deny },
 +    sandbox: { enabled: false },
-+    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }] }
++    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command: botPolicyHook(port) }] }] }
 +  })
 +}
 +
@@ -2193,7 +2219,7 @@ The probe comes right after `botMcpAccess`, before the wait for a stopping runne
 
 ````diff
 diff --git a/src/main/bot.ts b/src/main/bot.ts
-index 47aeedc..b259d15 100644
+index f992460..dcdd7eb 100644
 --- a/src/main/bot.ts
 +++ b/src/main/bot.ts
 @@ -1,6 +1,7 @@
@@ -2204,18 +2230,19 @@ index 47aeedc..b259d15 100644
  import { join, resolve } from 'node:path'
  import { OFF_VIEW, type BotAttach, type BotEvent, type BotView, type TrekSnapshot } from '../shared/bot'
  import { commandProblem, consentEntry } from '../host/bot/consent.ts'
-@@ -10,8 +11,8 @@ import {
-   createBotFolder, defaultBotFolder, isDirectory, looksLikeBotFolder, readConfig, readEvents
+@@ -11,9 +12,9 @@ import {
  } from '../host/bot/memory.ts'
+ import { botMcpHandlers } from '../host/bot/mcpHandlers.ts'
  import { BotRunner } from '../host/bot/runner.ts'
 -import { sandboxFor, type Sandbox, type SandboxPlan } from '../host/bot/sandbox.ts'
--import { botMcpConfig, killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
 +import { insideUserData, probeSandbox, sandboxFor, type Sandbox } from '../host/bot/sandbox.ts'
-+import { botMcpConfig, botSettings, killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
+ import {
+-  botMcpConfig, botPolicyHook, killAllTurnsNow, runTurn, type TurnHandle
++  botMcpConfig, botSettings, killAllTurnsNow, runTurn, type TurnHandle
+ } from '../host/bot/turnProcess.ts'
  import { isConsented, recordConsent } from './botConsent'
  import { BOT_SECRET_FILES } from './botSecretFiles'
- import { botMcpAccess, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
-@@ -40,17 +41,34 @@ let quitting = false
+@@ -43,17 +44,34 @@ let quitting = false
  
  const secretPaths = (): string[] => BOT_SECRET_FILES.map((n) => join(app.getPath('userData'), n))
  
@@ -2253,13 +2280,13 @@ index 47aeedc..b259d15 100644
  function sendView(contents: WebContents, view: BotView): void {
    if (!contents.isDestroyed()) contents.send('bot:view', view)
  }
-@@ -59,14 +77,6 @@ function sendEvent(contents: WebContents, event: BotEvent): void {
+@@ -62,14 +80,6 @@ function sendEvent(contents: WebContents, event: BotEvent): void {
    if (!contents.isDestroyed()) contents.send('bot:event', event)
  }
  
--/** Blocks the tool if the app can't answer: curl --fail plus exit 2 fails closed. */
+-/** Blocks the tool if the app can't answer: see botPolicyHook. */
 -function hookSettings(port: number): string {
--  const command = `curl -sS --fail --max-time 10 -X POST -H "Authorization: Bearer $TREK_BOT_TOKEN" --data-binary @- http://127.0.0.1:${port}/bot/policy || exit 2`
+-  const command = botPolicyHook(port)
 -  return JSON.stringify({
 -    hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }] }
 -  })
@@ -2268,7 +2295,7 @@ index 47aeedc..b259d15 100644
  function folderIdOf(folder: string): string {
    try {
      return realpathSync(folder)
-@@ -177,9 +187,11 @@ function bind(
+@@ -180,9 +190,11 @@ function bind(
    request: BotAttach,
    place: { key: string; folder: string; folderId: string },
    access: BotMcpAccess,
@@ -2281,7 +2308,7 @@ index 47aeedc..b259d15 100644
    const { folder } = place
    const bound: BoundBot = {
      ...place,
-@@ -202,11 +214,12 @@ function bind(
+@@ -216,11 +228,12 @@ function bind(
              sessionId: turn.sessionId,
              resume: turn.resume,
              mcpConfig: botMcpConfig(access.port),
@@ -2290,14 +2317,14 @@ index 47aeedc..b259d15 100644
 +            settings,
 +            // A repository the sandbox hides would only confuse the CLI.
 +            addDirs: bound.attach.repoPaths.filter((p) => existsSync(p) && outsideUserData(box, p)),
-             env: { TREK_BOT_TOKEN: access.token },
+             env: { TREK_BOT_TOKEN: turnToken.token },
              timeoutMs: turn.timeoutMs,
 -            sandbox
 +            sandbox: box.sandbox
            },
            onEvent
-         ),
-@@ -242,9 +255,14 @@ async function startBot(
+         )
+@@ -259,9 +272,14 @@ async function startBot(
    request: BotAttach,
    key: string,
    folder: string,
@@ -2313,7 +2340,7 @@ index 47aeedc..b259d15 100644
    const folderId = folderIdOf(folder)
    for (let done = stopping.get(folderId); done; done = stopping.get(folderId)) await done
    // Nothing below awaits until the bot is in `bots`, so another window can't claim the folder meanwhile.
-@@ -253,6 +271,10 @@ async function startBot(
+@@ -270,6 +288,10 @@ async function startBot(
      sendView(contents, missingView(folder))
      return
    }
@@ -2324,7 +2351,7 @@ index 47aeedc..b259d15 100644
    if ([...bots.values()].some((bot) => bot.folderId === folderId)) {
      sendView(contents, inUseView(folder, `Another window's bot is using this folder: ${folder}`))
      return
-@@ -266,7 +288,7 @@ async function startBot(
+@@ -283,7 +305,7 @@ async function startBot(
      return
    }
    try {
@@ -2333,7 +2360,7 @@ index 47aeedc..b259d15 100644
    } catch (err) {
      lock.release()
      throw err
-@@ -311,7 +333,7 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
+@@ -328,7 +350,7 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
    }
    await teardown(windowId)
    try {
@@ -2347,7 +2374,7 @@ index 47aeedc..b259d15 100644
 - [ ] **Step 5: Verify**
 
 Run: `npm run typecheck` → no errors. Run: `node --test scripts/botTurn.test.mjs 2>&1 | grep -E '^# (pass|fail)'` → `# pass 39`, `# fail 0`.
-Run: `npm test 2>&1 | grep -E '^# (pass|fail|skipped)'` → `# pass 1343`, `# fail 0`, `# skipped 1`.
+Run: `npm test 2>&1 | grep -E '^# (pass|fail|skipped)'` → `# pass 1363`, `# fail 0`, `# skipped 1`.
 Run: `npm run build && node scripts/bot-smoke.mjs 2>&1 | grep -E 'userData|sandbox|inside|checks? (passed|failed)'` → includes
 
 ```
@@ -2357,7 +2384,7 @@ ok   the settings turn Claude Code's own sandbox off: {"enabled":false}
 ok   the sandbox was proved with a canary in userData: true
 ok   no bot MCP config file in userData: []
 ok   a bot folder inside userData is refused: true
-All 129 checks passed
+All 144 checks passed
 ```
 
 - [ ] **Step 6: Commit**
@@ -2370,7 +2397,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(bo
 
 ### Task 9: Docs
 
-The core design gets the sandbox, the inline config, the server-side check and the always-ask tier; the spike gets a pointer to this plan and its two departures; `botSecretFiles.ts` says which layer is which.
+The core design gets the sandbox, the inline config, the per-turn token, the rule that no token is in any process's env or argv, the server-side check and the always-ask tier; the spike gets a pointer to this plan, its two departures and the review's process-info finding; `botSecretFiles.ts` says which layer is which (its `mcp-*.json` comment already names `mcp-codex-<id>`).
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-11-02-project-bot-core-design.md`
@@ -2381,10 +2408,10 @@ The core design gets the sandbox, the inline config, the server-side check and t
 
 ````diff
 diff --git a/docs/superpowers/specs/2026-11-02-project-bot-core-design.md b/docs/superpowers/specs/2026-11-02-project-bot-core-design.md
-index a0139d0..d567e86 100644
+index a0139d0..6a1dab1 100644
 --- a/docs/superpowers/specs/2026-11-02-project-bot-core-design.md
 +++ b/docs/superpowers/specs/2026-11-02-project-bot-core-design.md
-@@ -173,9 +173,14 @@ The starter `BOT.md` tells the bot:
+@@ -173,9 +173,20 @@ The starter `BOT.md` tells the bot:
  
  - Runs locally with `.trekbot/` as the working directory and `--add-dir` for each
    local repository, the same pattern as Global Claude.
@@ -2392,9 +2419,15 @@ index a0139d0..d567e86 100644
 -  sessions, so that the policy route and `request_approval` are out of their reach.
 -  Remote worktrees are reached through those tools only.
 +- Uses its own MCP token for `trek-dev` tools, separate from the window's sessions, so
-+  that the policy route and `request_approval` are out of their reach. The config is
-+  passed inline and names `${TREK_BOT_TOKEN}`, which the CLI fills in from its
-+  environment; no file holds it. Remote worktrees are reached through those tools only.
++  that the policy route and `request_approval` are out of their reach. Each turn gets a
++  fresh token, revoked when the turn ends, so between turns no bot token works. The
++  config is passed inline and names `${TREK_BOT_TOKEN}`, which the CLI fills in from its
++  environment; no file holds it, and the policy hook hands it to curl on stdin, never in
++  argv. Remote worktrees are reached through those tools only.
++- No session's token is in any process's environment or argv: on macOS any process of
++  the user, the sandboxed bot's included, can read another's (`ps -E`, `KERN_PROCARGS2`),
++  and Seatbelt can't stop it. Claude, Local and Gemini read 0600 config files; Codex runs
++  an `http_headers_helper` that prints a 0600 headers file (Codex 0.148 or later).
 +- Runs inside an OS sandbox that hides Trek's userData from the whole process tree:
 +  `sandbox-exec` on macOS, `bwrap` on Linux. Windows has none, so the bot doesn't run
 +  there. Each start proves the sandbox with a canary file first, and refuses to run
@@ -2402,7 +2435,7 @@ index a0139d0..d567e86 100644
  - Default timeout is 15 minutes. On timeout, the process tree is killed.
  - Default cap is 100 turns per local day. Once reached, heartbeats and reflection
    stop until the next day, while chat and approval decisions still run.
-@@ -183,13 +188,16 @@ The starter `BOT.md` tells the bot:
+@@ -183,13 +194,16 @@ The starter `BOT.md` tells the bot:
  ## Autonomy tiers
  
  A `PreToolUse` hook sends each tool call to `Policy`, which allows or denies it.
@@ -2410,15 +2443,16 @@ index a0139d0..d567e86 100644
 -fixed.
 +Trek's own tools are checked by Trek's MCP server instead, when the call arrives, so
 +a bot that calls the server directly with its token meets the same policy.
-+`POLICY.json` can move items between the free and ask tiers, except the delegation
++`POLICY.json` can move items between the free and ask tiers, except the always-ask
 +tools below. The never tier is fixed.
  
  | Tier | Behaviour | Defaults |
  |---|---|---|
 -| Free | Allowed | Read files; write `HEARTBEAT.md`, `MEMORY.md`, `knowledge/`, `journal/`; start and prompt sessions; create worktrees; run stacks; set notes and tags |
-+| Free | Allowed | Read files; write `HEARTBEAT.md`, `MEMORY.md`, `knowledge/`, `journal/`; queue prompts; create worktrees; run stacks; set notes and tags |
- | Ask | Denied until approved | `git push`, opening or merging PRs, closing sessions, unloading or deleting worktrees, promoting to primary, changing session types |
-+| Always ask | Denied until approved, whatever `POLICY.json` says | `start_session`, `send_prompt`, `send_keys`: worktree sessions run outside the bot's sandbox |
+-| Ask | Denied until approved | `git push`, opening or merging PRs, closing sessions, unloading or deleting worktrees, promoting to primary, changing session types |
++| Free | Allowed | Read files; write `HEARTBEAT.md`, `MEMORY.md`, `knowledge/`, `journal/`; queue prompts; read terminals; stop stacks; set notes and tags |
++| Ask | Denied until approved | `git push`, opening or merging PRs, closing sessions, unloading or deleting worktrees, promoting to primary |
++| Always ask | Denied until approved, whatever `POLICY.json` says | `start_session`, `send_prompt`, `send_keys`, `start_stack`, `create_worktree`, `load_worktree`, `save_session_type`, `delete_session_type`: each runs something (a session, a stack, a worktree's setup) outside the bot's sandbox |
  | Never | Always denied | Writing `BOT.md`, `POLICY.json`, `config.json` or `state/`; destroying the bot folder or an ancestor of it; force-push; reading or overwriting Trek's secret stores |
  
  Trek tools match by exact name, so that enforcement is firm. Shell commands match
@@ -2426,10 +2460,10 @@ index a0139d0..d567e86 100644
 
 ````diff
 diff --git a/docs/superpowers/specs/2026-11-07-bot-os-sandbox.md b/docs/superpowers/specs/2026-11-07-bot-os-sandbox.md
-index 1758210..4bf76e9 100644
+index 1758210..40cccb2 100644
 --- a/docs/superpowers/specs/2026-11-07-bot-os-sandbox.md
 +++ b/docs/superpowers/specs/2026-11-07-bot-os-sandbox.md
-@@ -13,6 +13,16 @@ around it with `$( )`, variables, `pushd`, `grep -r ~`, `find -exec cat`, `tar`,
+@@ -13,6 +13,22 @@ around it with `$( )`, variables, `pushd`, `grep -r ~`, `find -exec cat`, `tar`,
  
  This is a spike. The prototypes were throwaway and have been deleted. Only this doc is committed.
  
@@ -2443,6 +2477,12 @@ index 1758210..4bf76e9 100644
 +  `tools/call` itself, and the hook leaves `mcp__trek-dev__*` calls to it. There is no ticket to
 +  match, so nothing depends on the CLI sending the exact input the hook saw.
 +
++A security review then found what the sandbox can't hide on macOS: other processes' argv and
++environment. Seatbelt doesn't gate `sysctl(KERN_PROCARGS2)`; `(deny process-info* (target others))`,
++`(deny sysctl-read)` and `(deny default)` all leave it readable (`ps -E` itself can't run in the
++sandbox, being setuid). So no Trek token is in any process's environment or argv, Codex's included,
++and the bot's token is per turn. On Linux the PID namespace hides other processes' `/proc` entries.
++
  Environment for every prototype: macOS 26.2 (25C56), Apple silicon, Claude Code `2.1.319`
  (logged in with claude.ai auth), `--model haiku`. Every prototype used a dummy "secret" directory
  under the session scratchpad. In the outputs below `$S` stands for that directory.
@@ -2450,7 +2490,7 @@ index 1758210..4bf76e9 100644
 
 ````diff
 diff --git a/src/main/botSecretFiles.ts b/src/main/botSecretFiles.ts
-index 5ef0651..5bc4dd2 100644
+index 709b629..f7fc51b 100644
 --- a/src/main/botSecretFiles.ts
 +++ b/src/main/botSecretFiles.ts
 @@ -1,5 +1,8 @@
@@ -2462,16 +2502,6 @@ index 5ef0651..5bc4dd2 100644
  // Policy also denies each one's temp and set-aside copies (`<name>.<pid>.tmp`, `<name>.corrupt-<time>`),
  // and `*` stands for any run of characters in a name, for the per-window MCP configs.
  export const BOT_SECRET_FILES = [
-@@ -15,7 +18,8 @@ export const BOT_SECRET_FILES = [
-   // Docker environments: each one's env vars (database passwords, API keys) for compose. The bot
-   // runs environments through Trek's tools, never this file.
-   'environments.json',
--  // MCP configs: each holds a bearer token for the app's MCP server (mcp-<id>, mcp-bot-<id>, mcp-gemini-<id>).
-+  // MCP configs: each holds a bearer token for the app's MCP server (mcp-<id>, mcp-gemini-<id>, and
-+  // mcp-bot-<id> from older versions).
-   'mcp-*.json',
-   'global-claude-mcp.json'
- ]
 ````
 
 - [ ] **Step 2: Verify**
@@ -2494,16 +2524,16 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "docs(bo
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail|skipped)'`
 
-Expected: `# pass 1343`, `# fail 0`, `# skipped 1`: the baseline 1321, plus 2 (Task 1), 1 (Task 3), 8 (Task 4), 7 (Task 5, with its LaunchServices check skipped as opt-in), 3 (Task 7: 2 in `botTurn.test.mjs`, 1 in `botRunner.test.mjs`) and 1 (Task 8). Per file: `botPolicy.test.mjs` 67, `botTurn.test.mjs` 39, `botRunner.test.mjs` 94, `botSandbox.test.mjs` 8, `botSandboxMac.test.mjs` 7 passed and 1 skipped.
+Expected: `# pass 1363`, `# fail 0`, `# skipped 1`: the baseline 1321, plus 2 (Task 1), 1 (Task 3), 8 (Task 4), 7 (Task 5, with its LaunchServices check skipped as opt-in), 20 (the review fixes: 11 in `botMcpGate.test.mjs`, 2 in `botHook.test.mjs`, 3 in `botShellCommand.test.mjs`, 2 in `providers.test.mjs`, 2 in `botSandboxMac.test.mjs`), 3 (Task 7: 2 in `botTurn.test.mjs`, 1 in `botRunner.test.mjs`) and 1 (Task 8). Per file: `botPolicy.test.mjs` 67, `botTurn.test.mjs` 39, `botRunner.test.mjs` 94, `botSandbox.test.mjs` 8, `botSandboxMac.test.mjs` 9 passed and 1 skipped, `botMcpGate.test.mjs` 11, `botHook.test.mjs` 2, `botShellCommand.test.mjs` 17.
 
 Run: `npm run test:bot-sandbox-mac 2>&1 | grep -E '^not ok|^# (pass|fail|skipped)'`
 
-Expected: `# pass 8`, `# fail 0`, `# skipped 0`: the opt-in LaunchServices check (an app written in the sandbox can't be opened; the same app opened outside runs) passes along with the rest.
+Expected: `# pass 10`, `# fail 0`, `# skipped 0`: the opt-in LaunchServices check (an app written in the sandbox can't be opened; the same app opened outside runs) passes along with the rest.
 
 - [ ] **Step 2: Types, build, Linux**
 
 Run: `npm run typecheck` → no errors. Run: `npm run build && npm --prefix server run build` → both succeed.
-Run: `npm run test:bot-sandbox-linux 2>&1 | tail -1` → `LINUX SANDBOX PASS (34 checks)` (or the `SKIP:` line where Docker is missing).
+Run: `npm run test:bot-sandbox-linux 2>&1 | tail -1` → `LINUX SANDBOX PASS (41 checks)` (or the `SKIP:` line where Docker is missing).
 
 - [ ] **Step 3: The smokes, one at a time**
 
@@ -2511,7 +2541,8 @@ Run each after the previous has exited:
 
 | Command | Expected |
 |---|---|
-| `node scripts/bot-smoke.mjs 2>&1 \| tail -1` | `All 129 checks passed` |
+| `node scripts/bot-smoke.mjs 2>&1 \| tail -1` | `All 144 checks passed` |
+| `node scripts/providers-smoke.mjs 2>&1 \| tail -1` | `providers smoke passed` |
 | `node scripts/smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (142 checks)` |
@@ -2519,7 +2550,7 @@ Run each after the previous has exited:
 
 - [ ] **Step 4: One real turn (optional, costs about $0.01)**
 
-With Trek running from this branch, enable a project's bot with the real `claude` as its command and say: "Run `cat '<userData>/bot-consent.json'`, then `python3 -I -c "print(open('<userData>/bot-consent.json').read())"`, then use the Read tool on that file, then call list_worktrees." Expected: the `cat` and Read are denied by the permission rules, `python3` gets `PermissionError: [Errno 1] Operation not permitted` from the OS, and `list_worktrees` runs. This is what the prototype's real run (Decision 17) showed outside Trek.
+With Trek running from this branch, enable a project's bot with the real `claude` as its command and say: "Run `cat '<userData>/bot-consent.json'`, then `python3 -I -c "print(open('<userData>/bot-consent.json').read())"`, then use the Read tool on that file, then call list_worktrees." Expected: the `cat` and Read are denied by the permission rules, `python3` gets `PermissionError: [Errno 1] Operation not permitted` from the OS, and `list_worktrees` runs. This is what the prototype's real run (Decision 17) showed outside Trek. Adding "then run `ps -E -ww -A`" gets `ps: Operation not permitted`.
 
 - [ ] **Step 5: A clean tree**
 
@@ -2541,7 +2572,7 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 2. **Pre-existing hard links** to a userData file elsewhere are readable on both platforms (the profile and the tmpfs match paths, not inodes). Trek makes none; the bot can't make new ones. Backups and snapshots (Time Machine local snapshots, a backup disk under `/Volumes`) hold copies under other paths; the secret stores are `safeStorage`-encrypted there, but `environments.json` and session `mcp-*.json` are plaintext.
 3. **Linux: other mounts of the same filesystem.** `--dev-bind / /` brings in every mount. If the home filesystem is also mounted elsewhere (a bind mount, a btrfs top-level subvolume mounted at `/mnt`), userData is visible under that second path. The probe only checks the main path.
 4. **Linux distributions that restrict user namespaces** (Ubuntu 24.04's AppArmor rule, hardened kernels) or ship an old `bwrap`: the probe fails and the bot refuses with bwrap's own message. Ubuntu ships an AppArmor profile for `bwrap` that allows it, but this is untested outside Docker.
-5. **The token is still known to the bot.** It can call `/bot/policy` and `/mcp` itself; both now run the same policy, so it gains nothing except the ability to spend its own approvals early. `request_approval` only queues a request for the user.
+5. **The token is still known to the bot.** It can call `/bot/policy` and `/mcp` itself; both now run the same policy, so it gains nothing except the ability to spend its own approvals early. `request_approval` only queues a request for the user. Since the review fixes the token lives only as long as its turn.
 6. **Silent `--settings` drop** (spike prototype 2). Under this plan a dropped settings value no longer opens userData (the OS layer doesn't depend on it) or Trek's tools (the server checks them); it would drop the hook for the CLI's own tools, which `-p` mode then denies ("requires approval"). The real run showed 2.1.319 accepts this plan's settings.
 7. **Turn timing.** `sandbox-exec` adds a few milliseconds per spawn. The turn tests now run every fake turn through it; across six full `npm test` runs on the prototype there was one unexplained single failure that did not reproduce (five clean runs followed), most likely one of the timing-bound turn tests under parallel load.
 8. **The macOS integration test opens a background app** (its control case) from the test's temp directory, outside the sandbox, on every `npm test` on a Mac. LaunchServices registers that bundle id (`com.trek.sandbox-test.<pid>`) for the run.
@@ -2549,4 +2580,4 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ## Questions for the user
 
-1. **`enqueue_prompt` is still free.** It queues a prompt for a worktree session, to run when that session is next idle: the same confused-deputy route as `send_prompt`, only later. The brief named `start_session`, `send_prompt` and `send_keys`, so this plan leaves `enqueue_prompt` (and `remove_queued_prompt`) free. Should `enqueue_prompt` join the always-ask set? It is a one-word change to `ALWAYS_ASK_TOOLS` and `FREE_TOOLS` plus one test line.
+1. ~~**`enqueue_prompt` is still free.**~~ Answered (user decision, review fixes): `enqueue_prompt` stays free; `start_stack`, `create_worktree`, `load_worktree`, `save_session_type` and `delete_session_type` joined the always-ask set instead.
