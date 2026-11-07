@@ -3844,7 +3844,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(se
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1187`, `# fail 0`: the baseline 1157 at `ed8bda9`, plus 3 (Task 1), 3 (Task 2), 5 (Task 3), 5 (Task 4), 6 (Task 5), 1 (Task 6), 1 (Task 7), 5 (Task 8) and 1 (Task 9).
+Expected: `# pass 1187`, `# fail 0`: the baseline 1157 at `ed8bda9`, plus 3 (Task 1), 3 (Task 2), 5 (Task 3), 5 (Task 4), 6 (Task 5), 1 (Task 6), 1 (Task 7), 5 (Task 8) and 1 (Task 9). After the review fixes below: `# pass 1195`.
 
 - [ ] **Step 2: Typecheck and build**
 
@@ -3855,7 +3855,7 @@ Expected: clean typechecks; `✓ built in …`; `⚡ Done in …`.
 - [ ] **Step 3: The server and SDK smokes**
 
 ```bash
-npm --prefix server run smoke 2>&1 | tail -1   # SERVER SMOKE PASS
+npm --prefix server run smoke 2>&1 | tail -1   # SERVER SMOKE PASS (77 ok lines after the review fixes, 74 before)
 npm run smoke:client 2>&1 | tail -1            # CLIENT CONTRACT PASS
 ```
 
@@ -3885,6 +3885,36 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+## Review fixes (done)
+
+Applied after the Tasks 1–4 review and the final review. `npm test` goes from 1187 to 1195 (8 new tests); the server smoke from 74 to 77 `ok` lines; the client contract stays at 12 checks.
+
+**SDK (`src/shared/client/mirror.ts`, `connection.ts`)**
+
+1. **`whenRev` no longer trusts a stale state.** An entry carries `stale`, set when the connection leaves `connected` and cleared by the next reply to a subscribe. The immediate resolve needs `!entry.loading && !entry.stale`, which also covers the window between `connected` (emitted before the welcome listeners) and the welcome's resubscribe. Test: state at rev 80, a reconnect; `whenRev(5)` while down, from a `connected` status listener, and with the resubscribe in flight all stay pending until the new snapshot (rev 7).
+2. **A held `NOT_FOUND`** rejects at once only under the same guard. Test: NOT_FOUND, reconnect, the waits resolve with the resubscribe's snapshot.
+3. **`rev` is validated**: a non-integer or negative value rejects with `BAD_REQUEST`.
+4. **A closed connection** rejects with `CLOSED` before the subscription check.
+5. **Waiters settle before `notify`**, for snapshots and patches, so a listener that unsubscribes during notify does not turn a success into `UNSUBSCRIBED`. Test covers both paths.
+6. **Null or non-object event payloads** are dropped before `onPatch`/`onEnded`; both also need a string `topic`. Test.
+7. **`details`** keeps only a string `reason`, on the client (`connection.ts`) and the server (`toWireError`). Tests on both sides.
+10. **`timeoutMs`: documented, no default.** The right bound is the caller's (a spinner, a background refresh), and every wait already ends on unsubscribe, close or `TOPIC_ENDED`; a default would either cut a slow legitimate wait or be too long to matter. `WhenRevOptions`, the `whenRev` doc comment and PROTOCOL.md say to always pass one.
+- Test: `topic.ended` while `whenRev` waits on an in-flight subscribe rejects it with `TOPIC_ENDED`, and the late reply is ignored.
+
+**Server**
+
+8. **Dirty check**: `removeUnforced` runs one `git --no-optional-locks status --porcelain` (`hasChanges`, through `gitService.git`; no narrower helper existed) instead of `worktreeStatuses`, which also ran `rev-list`. An unreadable status sends no details. Test: a modified tracked file reads as `dirty`.
+11. **`checkQuestion` collapses whitespace**: each run of whitespace (line breaks, tabs) becomes one space, then it is trimmed; any other control character left is `BAD_REQUEST` (`checkTitle`'s range). Collapsing rather than rejecting newlines, because agents naturally write multi-line questions and the app shows one line. PROTOCOL.md and the MCP tool's `question` description say so. Tests in the decisions test.
+15. **`CommandProbe` runs at most 8 checks at once** (`MAX_PROBES_IN_FLIGHT`); a new program beyond that resolves `false` uncached, so the next call checks it. A program already in flight still shares its check. Test.
+16. **`commandBinary`** documents that it is a best-effort hint (`env FOO=1 claude` gives `env`).
+- **Server smoke**: an async handler's `res` (`worktree.create`) carries the project rev; the dirty `worktree.remove` error and v1 `res` frames carry none.
+
+**Docs and smokes**
+
+9, 12, 13, 14. PROTOCOL.md: `project.rename` reports the project topic's rev (wait on `server` without a rev for the project list); `server.agents` carries a rev only with a `projectId`, and a rev on a read is not a change; `server.agents`' `llmDefault` is always the server's, overridden by `settings.llmDefault` as for `session.start`; `session.restart` keeps an open decision (now also asserted in the decisions test).
+17. `scripts/v2-smoke.mjs`: the exit text is polled with `until(...)`.
+18. `scripts/client-contract.mjs`: the welcome must list all five capabilities.
+
 ## Notes for 3c-3b
 
 Found while prototyping this plan.
@@ -3899,6 +3929,15 @@ Found while prototyping this plan.
 8. **`ClientError.details` always exists as a property** (a class field), possibly `undefined`; test its value.
 9. **3d reads `attention` entries in any status**: an entry with only a decision is `idle`, `working` or `exited`, with `since` = the decision's `at`. 3d should label it by `decision`, not by `status`.
 
+From the reviews:
+
+10. **Decisions.** Gate on the `decisions` capability. Map `Session.decision` from the project topic. DecisionIcon and NotificationsMenu dismiss with `session.dismissDecision {projectId, sessionId}`. Never clear a decision locally: any input the server counts clears it, a queued prompt included, and the patch says so. A restarted or exited session can still hold one. Display the question as-is: the server has collapsed it to one line with no control characters.
+11. **Attention topic (3d).** `status` can be any value; entries may carry a `decision`; `since = decision.at` when the entry is listed only for its decision; label by decision first.
+12. **Agents.** Gate on `agents`. Fetch once per window or server. Label Default with `settings.llmDefault ?? llmDefault` (`settings.globalLlm ?? llmDefault` for Global). Re-fetch after a `claudeCommand` edit, remembering each program's answer is cached for 60 s (an edit to a new program is checked at once; going back to one checked within the minute reuses that answer). Grey out agents that aren't installed instead of hiding them.
+13. **Dequeue.** Gate on `dequeue`; send `{index, expected}`; a `CONFLICT` is silent.
+14. **Revs.** A rev on a read is not a change. Always pass `timeoutMs` to `whenRev`.
+15. **Settings.** Any `ProjectSettings` key can be guarded with `expected` (null means absent; arrays are compared by order). The server's `llm` section stays file-only, so keep the "edit the server config" hint.
+
 ## Risks
 
 1. **The rev on queries.** Reads that name a project carry the rev they read at (Decision 14). It is accurate but not useful; a client must not take it as "this read changed something".
@@ -3906,6 +3945,6 @@ Found while prototyping this plan.
 3. **`dirty` is read after the refusal.** A worktree that is both locked and dirty reports `dirty`; the app's forced retry then fails on the lock and shows git's message. A worktree whose status cannot be read (the directory half-removed) reports no reason, and the app shows the plain error as today.
 4. **`installed` is a hint.** It checks the server user's login shell (`$SHELL -lc 'command -v …'`), not the agent's launch (`$SHELL -ilc`, interactive); an alias defined only for interactive shells reads as not installed although the session would start. `session.start` remains the real test.
 5. **Decisions are lost on a server restart** (runtime only, Decision 3), as statuses are. An agent resumed after a restart that is still waiting on its question shows no decision until it asks again.
-6. **`MAX_QUESTION_LENGTH` is new.** The desktop's tool takes any length; an agent that sends a long question to the server gets `BAD_REQUEST` and has to shorten it (the tool's description says "at most 1000 characters").
+6. **`MAX_QUESTION_LENGTH` is new.** The desktop's tool takes any length; an agent that sends a long question to the server gets `BAD_REQUEST` and has to shorten it (the tool's description says "at most 1000 characters"). The limit applies after whitespace runs collapse to one space; a question with another control character (an escape sequence) is refused.
 7. **`topic.ended` covers only deletion.** `TopicHub.drop` has no other caller today; a future drop with another reason must extend `TopicEndReason`, and old SDKs read an unknown reason as an end anyway (`TOPIC_ENDED`, message `… ended: <reason>`).
 8. **The capability list is static except `mcp`.** A server that loses a feature at runtime other than MCP has no way to say so; none can today.

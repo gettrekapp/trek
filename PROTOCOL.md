@@ -239,8 +239,14 @@ once the method finished, so it covers every change the command made.
 `project.create`, `project.import`, `project.delete`, `server.addRepo` and
 `server.removeRepo` carry the `server` topic's rev instead. A query that names a
 project (`repo.listBranches`, `worktree.changes`, `worktree.diff`) carries the
-rev it read at. Methods that name no topic (`sys.ping`, `pty.*`, `sub.*`,
-`project.list`), error replies, and a project whose topic is gone carry none.
+rev it read at, and so does `server.agents` when given a `projectId` (without
+one it carries none). A rev on a read is not a change: it only says how current
+the answer is. `project.rename` names a project, so it reports the project
+topic's rev, though the new name also reaches the `server` topic's project list;
+a caller waiting for that list should wait on `server` without a rev (for the
+next patch or snapshot that shows the name). Methods that name no topic
+(`sys.ping`, `pty.*`, `sub.*`, `project.list`), error replies, v1 responses, and
+a project whose topic is gone carry none.
 
 ```json
 { "type": "res", "id": 9, "ok": true, "result": { "worktreeId": "w3" },
@@ -437,13 +443,20 @@ settings override it: `llmDefault`, `globalLlm`, `claudePermissionMode`,
 
 **Which agents.** `server.agents {projectId?}` returns `{llmDefault, agents:
 [{provider, label, installed}]}`: the `llm` section's default (Claude when it
-names none), and every provider the server knows, in its order. `installed`
+names none), and every provider the server knows, in its order. `llmDefault` is
+always the server's, even with a `projectId`: a project's `settings.llmDefault`
+overrides it, as it does for `session.start`, so a client labels its Default
+choice with `settings.llmDefault ?? llmDefault` (`settings.globalLlm` for a
+Global session). `installed`
 says whether the program of the command the server would run for that provider
 (the project's `claudeCommand` for Claude when `projectId` names a project that
 has one, else the `llm` section's `command`, else the provider's default; the
-program is the first word after any `NAME=value` assignments) is found by
+program is the first word after any `NAME=value` assignments, a best-effort
+hint: `env FOO=1 claude` checks `env`) is found by
 `command -v` in the server user's login shell. Each program's answer is reused
-for a minute, so the first call can take a few seconds. The command lines
+for a minute, so the first call can take a few seconds. At most 8 checks run at
+once; a program asked for beyond that reads as not installed for that call and
+is checked on a later one. The command lines
 themselves are not sent: they may carry secrets. An unknown `projectId` is
 `NOT_FOUND`. A provider that is installed can still fail to start (a local
 model's backend may be down, say); `session.start` reports that as usual.
@@ -551,10 +564,14 @@ every client:
 - when `worktree.unload` (or a repository removal, for Global sessions) ends the
   agent that asked, and with the session on `session.close`.
 
-`session.seen` does not clear it, and an agent that exits keeps it until one of
-the above. Decisions are runtime only, like statuses: never saved on their own,
-and dropped when a project loads or is imported. `question` is trimmed and must
-be 1 to 1000 characters, else `BAD_REQUEST`.
+`session.seen` does not clear it, an agent that exits keeps it until one of
+the above, and `session.restart` keeps an open decision too (the restarted
+agent's first input clears it as usual). Decisions are runtime only, like
+statuses: never saved on their own, and dropped when a project loads or is
+imported. `question` is shown on one line: each run of whitespace (line breaks
+and tabs included) becomes one space and the result is trimmed. It must then be
+1 to 1000 characters with no other control character, else `BAD_REQUEST`, so a
+client can display it as-is.
 
 Known gaps, the same as on the desktop unless noted:
 
@@ -764,7 +781,7 @@ or `null`.
 | `load_worktree` | `worktree` | `{loaded: true, sessions}` |
 | `unload_worktree` | `worktree` | `{unloaded: true}` |
 | `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, decision, worktree}`, `worktree` being an entry (`null` for a Global session) |
-| `request_decision` | `terminalId`, `question` (1 to 1000 characters once trimmed) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
+| `request_decision` | `terminalId`, `question` (1 to 1000 characters once whitespace runs become one space and it is trimmed; no other control characters) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
 | `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
 | `close_session` | `terminalId` | `{closed: true}` |
 | `send_prompt` | `terminalId`, `text` | `{sent: true}` |
@@ -894,7 +911,8 @@ then stale, so no ping starts and no welcome listener runs for it.
 when the socket closes. The default timeout is 60 s (`requestTimeoutMs`, or
 `timeoutMs` per call); a timeout fails with `TIMEOUT`. Error replies reject with a
 `ClientError` carrying the server's `code`, and its `details` when the reply has
-an object there (anything else is dropped). `requestWithRev(method, params)`
+an object there with a string `reason` (only `reason` is kept; anything else is
+dropped). `requestWithRev(method, params)`
 resolves with `{result, rev?}`: the response's `rev` (see "Revs in responses"),
 left out when the server sent none or a malformed one.
 
@@ -930,17 +948,25 @@ after a reconnect either; a listener added later gets the same error at once.
 
 **Waiting for a rev.** `TopicMirror.whenRev(topic, rev, {timeoutMs?})` resolves
 with the topic's state once the mirror holds `rev` or later, at once if it
-already does. A snapshot from a subscribe sent after the call also resolves it,
+already does and the state is current: while a (re)subscribe is in flight, or
+after the connection dropped and before the welcome's resubscribe answers, the
+held state (and a held `NOT_FOUND`) may be from a server that has since
+restarted, so it waits for that answer instead. A snapshot from a subscribe sent after the call also resolves it,
 whatever its rev: that is the newest state the server has (after a server
 restart revs start again at 0, so "at least `rev`" might never come). It needs
 a current subscription and rejects with `NOT_SUBSCRIBED` without one. It
 rejects with the topic's `NOT_FOUND` or `TOPIC_ENDED`, with `CLOSED` when the connection closes,
 with `UNSUBSCRIBED` when the topic's last listener leaves, and with `TIMEOUT`
-after `timeoutMs` (on the connection's timers; without it there is no limit).
-A transient subscribe failure keeps it waiting for the retry. The usual use:
-`const {result, rev} = await conn.requestWithRev(...)`, then
-`if (rev) await mirror.whenRev(rev.topic, rev.rev)` before reading what the
-command made.
+after `timeoutMs` (on the connection's timers). `rev` must be a non-negative
+integer, else `BAD_REQUEST`; on a closed connection it rejects with `CLOSED`
+first. Waiters settle before listeners hear the same state, so a listener that
+unsubscribes does not turn a success into `UNSUBSCRIBED`. A transient subscribe
+failure keeps it waiting for the retry. Always pass `timeoutMs`: there is no
+default, because the right bound is the caller's, and without one a rev that
+never comes (a rev from before a server restart, say) waits as long as the
+subscription lasts. The usual use: `const {result, rev} = await
+conn.requestWithRev(...)`, then `if (rev) await mirror.whenRev(rev.topic,
+rev.rev, {timeoutMs: 10_000})` before reading what the command made.
 
 **PtyStream.** `attach(ptyId, handlers)` registers the handlers before the request
 (the replay arrives first, as `onData(data, true)`) and resolves with the

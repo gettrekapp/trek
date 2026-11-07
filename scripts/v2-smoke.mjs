@@ -668,7 +668,7 @@ try {
   await w1.keyboard.press('Enter')
   const exitedOverlay = detail.locator('.terminal-pane:visible .exited-overlay')
   await exitedOverlay.waitFor({ timeout: 10_000 })
-  check('the exit shows in the terminal', (await term(s1)).includes('[process exited with code 3]'), true)
+  check('the exit shows in the terminal', await until(() => term(s1).then((t) => t.includes('[process exited with code 3]')), true), true)
   await exitedOverlay.locator('button', { hasText: 'Restart' }).click()
   await exitedOverlay.waitFor({ state: 'detached', timeout: 10_000 })
   check('Restart runs the session again on the server', await until(async () => {
