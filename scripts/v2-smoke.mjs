@@ -24,10 +24,11 @@
 //   - The working window (3c-2): Add Worktree creates one on the server and starts a session;
 //     typing is echoed by the fake agent; the shown pane sizes the pty while a tab that was never
 //     shown leaves another client's 150x50 alone; quit and Restart; queue a prompt and send it;
-//     set a tag and a note; the Changes tab and a diff; the Global panel (the server has MCP)
+//     set a tag and a note, and a note set by another client shows in the open panel; the Changes tab and a diff; the Global panel (the server has MCP)
 //     starts exactly one session and has no bot tab; Delete worktree removes it on the server.
 //   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
-//     with the reconnecting overlay and disables the commands; restarting clears all three.
+//     with the reconnecting overlay and disables the commands; restarting clears all three. A note
+//     typed as the link drops is kept with no dialog and saved once it is back.
 //   - Closing a server window shows no prompt; its recent reopens it in an empty window.
 //   - A needs-auth window reconnects on focus once its token is set in another window.
 //   - A needs-auth window notices its entry removed on focus; a removed server is terminal
@@ -647,14 +648,20 @@ try {
     const size = await w1.evaluate((id) => window.__terminals.terminalSize(id), id)
     return size ? [size.cols, size.rows] : null
   }
-  check('the shown pane sized the pty to itself', await until(() => ptySize(s1), await localSize(s1), 5000), await localSize(s1))
+  // The pane's own size is read on each try too: it may still be settling when the session first shows.
+  let paneSize = null
+  await until(async () => {
+    paneSize = await localSize(s1)
+    return paneSize !== null && JSON.stringify(await ptySize(s1)) === JSON.stringify(paneSize)
+  }, true, 5000)
+  check('the shown pane sized the pty to itself', await ptySize(s1), paneSize)
   // Another client starts a 150x50 session in a loaded worktree this window is not showing.
   const featureX = worktreeNamed(await projectNow(), 'feature-x')
   const other = await live.request('session.start', { projectId: target.projectId, worktreeId: featureX.id, cols: 150, rows: 50 })
   await until(() => w1.evaluate((id) => !!window.__store.getState().terminals[id], other.sessionId), true)
   await sleep(1000)
   check('an off-screen tab does not shrink the pty', await ptySize(other.sessionId), [150, 50])
-  check('it took the pty\'s size instead of 80x24', await localSize(other.sessionId), [150, 50])
+  check('it took the pty\'s size instead of 80x24', await until(() => localSize(other.sessionId), [150, 50]), [150, 50])
 
   // Restart: the agent exits, the pane offers Restart, and the new pty is marked off.
   await w1.keyboard.type('quit')
@@ -688,6 +695,11 @@ try {
   await detail.locator('.panel-btn', { hasText: 'Notes' }).click()
   await detail.locator('.notes-textarea').fill('a note from the smoke')
   check('the note is saved on the server', await until(async () => (await branchData()).note, 'a note from the smoke'), 'a note from the smoke')
+  // After the window's own save, the panel follows the server again: an edit from another client shows.
+  const notes = detail.locator('.notes-textarea')
+  const alphaId = (await projectNow()).repositories.find((r) => r.name === 'Alpha').id
+  await live.request('branch.setNote', { projectId: target.projectId, repoId: alphaId, branch: 'smoke-wt', note: 'a remote edit' })
+  check('a remote edit shows in the open notes panel', await until(() => notes.inputValue(), 'a remote edit'), 'a remote edit')
 
   // Changes and a diff, read from the server.
   writeFileSync(join(created.path, 'smoke.txt'), 'hello from the smoke\n')
@@ -704,8 +716,16 @@ try {
 
   // ---- 7. Disconnect: the banner shows, the tree stays; back again once the server is.
 
+  // A note typed as the link drops is kept, with no dialog, and saved once the link is back.
+  await detail.locator('.panel-btn', { hasText: 'Notes' }).click()
+  const dialogsAtDrop = (await dialogs()).length
+  await notes.fill('typed as the link drops')
   await stopDaemon()
   await w1.locator('.server-window-banner').waitFor({ timeout: 10_000 })
+  await sleep(1000) // past the save's typing pause
+  check('the note typed as the link dropped is kept', await notes.inputValue(), 'typed as the link drops')
+  await detail.locator('.panel-btn', { hasText: 'Notes' }).click()
+  await detail.locator('.terminal-pane:visible').waitFor({ timeout: 5000 })
   const banner = await w1.locator('.server-window-banner').textContent()
   check('the disconnect banner shows the status and last seen', [banner.startsWith('Disconnected'), banner.includes('last seen')], [true, true])
   check('the tree stays visible', (await restoredTree.locator('.wt-name').allTextContents()).includes('feature-x'), true)
@@ -730,6 +750,8 @@ try {
 
   // ---- 7b. The Global panel: the server has MCP, so it is offered; opening it starts one session.
   check('the SDK connection is back too', await until(() => live.status, 'connected', 20_000), 'connected')
+  check('and the note typed as it dropped reaches the server', await until(async () => (await branchData()).note, 'typed as the link drops'), 'typed as the link drops')
+  check('with no "Could not save the note" dialog', (await dialogs()).slice(dialogsAtDrop), [])
   await w1.locator('.server-window .global-bar').click()
   const globalTabs = w1.locator('.server-window .global-tab')
   await globalTabs.first().waitFor({ timeout: 10_000 })
