@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { commitStale, textCommit } from '../v2/settingsWriter'
 
 /**
  * A Settings text field. `live` (a file window): every keystroke commits, as
@@ -6,7 +7,9 @@ import { useEffect, useRef, useState } from 'react'
  * is a request) the text is a local draft, committed on blur, or on Enter for
  * a one-line field; Escape puts the value back. While not being edited it
  * follows the value (a server window shows a pending edit at once, so a
- * committed draft does not flash the old text).
+ * committed draft does not flash the old text). A draft whose value changed
+ * elsewhere while it was typed is committed as stale: the server window's
+ * writer asks Reload or Keep Mine rather than send it over the newer value.
  */
 export function SettingText({
   value,
@@ -29,6 +32,8 @@ export function SettingText({
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
   const cancelled = useRef(false)
+  /** The value when editing began */
+  const base = useRef(value)
   useEffect(() => {
     if (!editing) setDraft(value)
   }, [value, editing])
@@ -49,12 +54,15 @@ export function SettingText({
       setDraft(value)
       return
     }
-    if (draft !== value) onCommit(draft)
+    const action = textCommit(base.current, value, draft)
+    if (action === 'write') onCommit(draft)
+    else if (action === 'stale') commitStale(() => onCommit(draft))
   }
   const handlers = {
     value: draft,
     onFocus: () => {
       cancelled.current = false
+      base.current = value
       setEditing(true)
     },
     onBlur: commit

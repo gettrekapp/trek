@@ -125,6 +125,12 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // mirror holds the server's answer; a CONFLICT asks Reload or Keep Mine (settingsWriter.ts).
   const topic = `project:${projectId}` as const
   const mirrorProject = (): Project | undefined => (left ? undefined : registered()?.mirror.get(topic)?.snapshot)
+  // Each resolves once the mirror holds its rev, or once that wait ends without it (a timeout, the
+  // connection closed, `leave()`): the request already succeeded, so the server has the value. The
+  // writer then drops the pending edit, and the field may show the mirror's older value for a
+  // moment, until the mirror catches up (its next patch, or the snapshot after a reconnect). That
+  // flash is harmless: nothing is sent or lost, and no dialog follows. After `leave()`, `left`
+  // stops the re-projection too.
   const settingsRequests: SettingsRequests = {
     updateSettings: async (settings, expected) => {
       const { rev } = await requestWithRev('project.updateSettings', { projectId, settings, expected })
@@ -245,7 +251,11 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     projectId,
     backend,
     leave: () => {
-      // While requests still go out: each unsaved draft is sent once more, or its text shown.
+      // While requests still go out: a Settings text field being edited commits its draft on
+      // blur (SettingText; React runs the handler synchronously), and each unsaved note draft
+      // is sent once more, or its text shown. Their answers are ignored once the window left.
+      const active = document.activeElement
+      if (active instanceof HTMLElement && active.closest('.settings-panel')) active.blur()
       drafts.leave()
       setV2NoteDrafts(null)
       offDrafts()

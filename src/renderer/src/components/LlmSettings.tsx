@@ -4,6 +4,7 @@ import { scheduleAutoSave } from '../persistence'
 import { defaultSessionLlm, updateLlmSettings } from '../llm'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 import { PROVIDER_LIST } from '../../../shared/providers/registry'
+import { serverGlobalStart } from '../../../shared/providers/selection'
 import { DEFAULT_LLM_SETTINGS, DEFAULT_LOCAL_URLS } from '../../../shared/providers/types'
 import type {
   LlmProvider,
@@ -71,12 +72,16 @@ function DraftInput({
 export function LlmSettings({ projectOnly = false }: { projectOnly?: boolean }): React.JSX.Element {
   const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
   const project = useAppStore((s) => s.project)
-  const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
+  const serverAgents = useAppStore((s) => s.serverAgents)
+  const serverDefault = serverAgents?.llmDefault
   const picker = useServerPicker()
   /** What an override starts from: this machine's default, or the server's. */
   const startFrom = (): LlmSelection => (projectOnly ? (serverDefault ?? { provider: 'claude' }) : defaultSessionLlm())
   /** The Global panel's agents need MCP tools, among the ones this window may pick. */
   const mcpOnly = (p: LlmProvider): boolean => p.capabilities.mcp && (!picker.filter || picker.filter(p))
+  /** What a Global panel override starts from: Claude, or on a server one of its MCP-capable agents. */
+  const globalStart = (): LlmSelection =>
+    projectOnly ? serverGlobalStart(serverDefault, serverAgents?.agents.map((a) => a.provider)) : { provider: 'claude' }
   const setProjectLlmDefault = useAppStore((s) => s.setProjectLlmDefault)
   const setGlobalLlm = useAppStore((s) => s.setGlobalLlm)
   const [testResult, setTestResult] = useState<string | null>(null)
@@ -163,7 +168,7 @@ export function LlmSettings({ projectOnly = false }: { projectOnly?: boolean }):
               <input
                 type="checkbox"
                 checked={!project.globalLlm}
-                onChange={(e) => setGlobal(e.target.checked ? undefined : { provider: 'claude' })}
+                onChange={(e) => setGlobal(e.target.checked ? undefined : globalStart())}
               />
               Same as the session default
             </label>

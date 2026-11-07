@@ -13,7 +13,12 @@
 // - A CONFLICT means another client changed the field first. It is looked up
 //   again: if the server already holds what the user wanted, nothing more
 //   happens; otherwise the user picks Reload (the panel re-reads the mirror) or
-//   Keep Mine (sent again over the newer value). One dialog at a time.
+//   Keep Mine (sent again over the newer value). One dialog at a time. Keep
+//   Mine does nothing when the field was written again since the conflict was
+//   raised (a per-field write count): that edit is newer, finished or not.
+// - A text field's draft whose value changed elsewhere while it was being
+//   typed (`textCommit` says 'stale', SettingText commits it through
+//   `commitStale`) is not sent over the newer value: it asks the same dialog.
 // - Any other failure goes to `reportEdit` (NOT_CONNECTED: "may not have been
 //   saved"); no retry.
 import { deepEqual } from '../../../shared/sync/jsonDiff.ts'
@@ -49,8 +54,17 @@ export interface SettingsWriterDeps {
   reportEdit(title: string, err: unknown): void
 }
 
+export interface WriteOptions {
+  /**
+   * The value was built on one the field no longer holds (another client changed
+   * it while the user typed): ask Reload or Keep Mine instead of sending it.
+   * Defaults to whether the write runs inside `commitStale`.
+   */
+  stale?: boolean
+}
+
 export interface SettingsWriter {
-  write(field: SettingsField, value: unknown): void
+  write(field: SettingsField, value: unknown, options?: WriteOptions): void
   /** `project` with every pending edit applied */
   overlay(project: Project): Project
   /** The window left: pending edits are forgotten and their answers ignored */
@@ -68,9 +82,38 @@ interface Pending {
 /** null and absent are the same value, as on the server. */
 export const sameSetting = (a: unknown, b: unknown): boolean => deepEqual(a ?? null, b ?? null)
 
+/**
+ * A text field's commit on blur: `base` is the value when its editing began,
+ * `value` the value now, `draft` the text typed. Nothing when the draft is
+ * the value now, or was never changed from the base (the newer value stands);
+ * 'stale' when the value changed meanwhile under a changed draft.
+ */
+export function textCommit(base: string, value: string, draft: string): 'none' | 'write' | 'stale' {
+  if (draft === value || draft === base) return 'none'
+  return value === base ? 'write' : 'stale'
+}
+
+let staleCommit = false
+
+/**
+ * Runs `commit` (a text field's onCommit, which reaches `write` synchronously
+ * through the store's setter) as a stale write: see `WriteOptions.stale`.
+ */
+export function commitStale(commit: () => void): void {
+  staleCommit = true
+  try {
+    commit()
+  } finally {
+    staleCommit = false
+  }
+}
+
 export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
   const pending = new Map<string, Pending>()
+  /** Bumped by every `write`, per field: a conflict's Keep Mine checks it has not moved */
+  const writes = new Map<string, number>()
   let asking: Promise<unknown> = Promise.resolve()
+  const writeCount = (key: string): number => writes.get(key) ?? 0
 
   const send = (p: Pending, value: unknown, expected: unknown): void => {
     p.sent = value
@@ -103,22 +146,36 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
     pending.delete(field.key)
     deps.changed()
     if (errorCode(err) !== 'CONFLICT') return deps.reportEdit(field.title, err)
+    conflict(field, wanted)
+  }
+
+  /** Another client changed `field` under `wanted`: Reload, or Keep Mine unless a newer write came since. */
+  const conflict = (field: SettingsField, wanted: unknown): void => {
+    // No project (the window left, or no snapshot yet): nothing to ask about.
     const now = deps.project()
-    if (now && sameSetting(field.current(now), wanted)) return
+    if (!now || sameSetting(field.current(now), wanted)) return
+    const count = writeCount(field.key)
     asking = asking
       .then(() => deps.askConflict(field.label))
       .then((choice) => {
         if (choice === 'reload') return deps.reload()
         const latest = deps.project()
-        // An edit made while the dialog was open was built on the newer value: it wins.
-        if (!latest || pending.has(field.key)) return
-        start(field, wanted, field.current(latest))
+        // An edit made since was built on the newer value, or is newer still: it wins.
+        if (!latest || writeCount(field.key) !== count) return
+        // One is still in flight on this field (an earlier Keep Mine, or an edit sent before a stale
+        // draft's commit): this one goes after it.
+        const p = pending.get(field.key)
+        if (!p) return start(field, wanted, field.current(latest))
+        p.next = { value: wanted }
+        deps.changed()
       })
       .catch(() => undefined)
   }
 
   return {
-    write: (field, value) => {
+    write: (field, value, options) => {
+      writes.set(field.key, writeCount(field.key) + 1)
+      if (options?.stale ?? staleCommit) return conflict(field, value)
       const p = pending.get(field.key)
       if (p) {
         p.next = { value }

@@ -10,6 +10,7 @@ import {
   resolveNewSessionLlm,
   sanitizeLlmSelection,
   sanitizeProjectLlm,
+  serverGlobalStart,
   sessionLaunch,
   sessionsAfterMove,
   sessionMigrates
@@ -153,4 +154,16 @@ test('sessionLaunch: new sessions get a fresh id; saved ones resume when they ca
   // Codex ids are its own (quoted on the command line); Grok can't resume at all.
   assert.deepEqual(sessionLaunch(caps('codex'), 'codex-id', fresh), { sessionId: 'codex-id', resume: true })
   assert.deepEqual(sessionLaunch(caps('grok'), 'g', fresh), { sessionId: 'g', resume: false })
+})
+
+test('serverGlobalStart: the server default if it can use MCP and is listed, else the first listed MCP agent, else Claude', () => {
+  assert.deepEqual(serverGlobalStart({ provider: 'codex', model: 'm' }, ['claude', 'codex']), { provider: 'codex', model: 'm' })
+  // Grok has no MCP: the first listed agent that does.
+  assert.deepEqual(serverGlobalStart({ provider: 'grok' }, ['grok', 'gemini', 'claude']), { provider: 'gemini' })
+  // Claude is not on this server: never offered.
+  assert.deepEqual(serverGlobalStart({ provider: 'claude' }, ['grok', 'codex']), { provider: 'codex' })
+  assert.deepEqual(serverGlobalStart(undefined, ['grok', 'local']), { provider: 'local' })
+  assert.deepEqual(serverGlobalStart(undefined, ['grok']), { provider: 'claude' })
+  assert.deepEqual(serverGlobalStart({ provider: 'gemini' }, undefined), { provider: 'gemini' })
+  assert.deepEqual(serverGlobalStart(undefined, undefined), { provider: 'claude' })
 })

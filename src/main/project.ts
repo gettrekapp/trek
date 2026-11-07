@@ -136,12 +136,13 @@ export function registerProjectHandlers(): void {
       }
     ): Promise<boolean> => {
       const win = BrowserWindow.fromWebContents(event.sender)!
+      // From a renderer: anything but text is made text, so a bad call never throws in the dialog.
       const result = await dialog.showMessageBox(win, {
         type: 'warning',
-        title: opts.title,
-        message: opts.message,
-        detail: opts.detail,
-        buttons: [typeof opts.cancelLabel === 'string' && opts.cancelLabel ? opts.cancelLabel : 'Cancel', opts.confirmLabel],
+        title: String(opts.title ?? ''),
+        message: String(opts.message ?? ''),
+        detail: typeof opts.detail === 'string' ? opts.detail : undefined,
+        buttons: [typeof opts.cancelLabel === 'string' && opts.cancelLabel ? opts.cancelLabel : 'Cancel', String(opts.confirmLabel ?? 'OK')],
         defaultId: opts.defaultCancel === true ? 0 : 1,
         cancelId: 0
       })

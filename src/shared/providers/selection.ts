@@ -55,6 +55,21 @@ export function resolveGlobalLlm(
   return { ...CLAUDE }
 }
 
+/**
+ * Where a server window's Global panel override starts: the server's default
+ * when it can use Trek's tools (MCP) and the server lists it, else the first
+ * MCP-capable agent the server lists (in its order), else Claude.
+ */
+export function serverGlobalStart(
+  serverDefault: LlmSelection | undefined,
+  listed: readonly string[] | undefined
+): LlmSelection {
+  const offered = (id: string): boolean => isProviderId(id) && getProvider(id).capabilities.mcp && (!listed || listed.includes(id))
+  if (serverDefault && offered(serverDefault.provider)) return serverDefault
+  const first = listed?.find(offered)
+  return first && isProviderId(first) ? { provider: first } : { ...CLAUDE }
+}
+
 /** Effort levels on offer for a selection's model. */
 export function effortsFor(selection: LlmSelection): string[] {
   const provider = getProvider(selection.provider)

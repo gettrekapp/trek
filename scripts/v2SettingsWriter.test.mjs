@@ -1,7 +1,7 @@
 // scripts/v2SettingsWriter.test.mjs — a server window's settings edits: one compare-and-set per field at a time.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createSettingsWriter, sameSetting } from '../src/renderer/src/v2/settingsWriter.ts'
+import { commitStale, createSettingsWriter, sameSetting, textCommit } from '../src/renderer/src/v2/settingsWriter.ts'
 
 class CodedError extends Error {
   constructor(code, message = code) {
@@ -170,12 +170,16 @@ test('an edit made while the conflict dialog is open wins over Keep Mine', async
   sends[0].fail(new CodedError('CONFLICT'))
   await tick()
   held.write(field('audioAlerts'), false)
+  // That newer edit has already finished: Keep Mine still does not send over it.
+  sends[1].ok()
+  await tick()
   answer('keep')
   await tick()
   assert.deepEqual(sends.map(({ value, expected }) => [value, expected]), [
     [true, false],
     [false, null]
   ])
+  assert.equal(mirror.project.settings.audioAlerts, false)
 })
 
 test('conflict dialogs come one at a time', async () => {
@@ -230,4 +234,113 @@ test('after clear, answers in flight change nothing', async () => {
   await tick()
   assert.deepEqual(log, ['changed', 'changed'])
   assert.equal(sends.length, 1)
+})
+
+/** A writer over `setup`'s mirror whose conflict dialog stays open until `answer(choice)`. */
+function heldWriter(ctx) {
+  const asks = []
+  const log = []
+  const writer = createSettingsWriter({
+    project: () => ctx.mirror.project,
+    changed: () => {},
+    askConflict: (label) => new Promise((r) => asks.push({ label, answer: r })),
+    reload: () => log.push('reload'),
+    reportEdit: (title, err) => log.push(`report ${err.code}`)
+  })
+  return { writer, asks, log }
+}
+
+test('a CONFLICT on the queued second send: it carried the first value as expected, and asks', async () => {
+  const ctx = setup({ settings: { titleBarColor: '#000000' }, choices: ['keep'] })
+  const { writer, field, sends, mirror, log } = ctx
+  writer.write(field('titleBarColor'), '#111111')
+  writer.write(field('titleBarColor'), '#222222')
+  sends[0].ok()
+  await tick()
+  assert.deepEqual([sends[1].value, sends[1].expected], ['#222222', '#111111'])
+  mirror.project.settings.titleBarColor = '#999999'
+  sends[1].fail(new CodedError('CONFLICT'))
+  await tick()
+  assert.deepEqual(log.filter((l) => l.startsWith('ask')), ['ask titleBarColor'])
+  assert.deepEqual([sends[2].value, sends[2].expected], ['#222222', '#999999'])
+})
+
+test('a write with no project (no snapshot, or the window left) sends nothing and shows nothing', () => {
+  const { writer, field, sends, mirror, log } = setup({ settings: { audioAlerts: false } })
+  const project = mirror.project
+  mirror.project = undefined
+  writer.write(field('audioAlerts'), true)
+  writer.write(field('logoImage'), 'x', { stale: true })
+  assert.equal(sends.length, 0)
+  assert.deepEqual(log, [])
+  assert.equal(writer.overlay(project).settings.audioAlerts, false)
+})
+
+test('textCommit: a draft over a value changed meanwhile is stale; an unchanged draft lets the newer value stand', () => {
+  assert.equal(textCommit('a', 'a', 'a'), 'none')
+  assert.equal(textCommit('a', 'a', 'mine'), 'write')
+  assert.equal(textCommit('a', 'theirs', 'mine'), 'stale')
+  assert.equal(textCommit('a', 'theirs', 'a'), 'none', 'not edited: the newer value stands')
+  assert.equal(textCommit('a', 'same', 'same'), 'none', 'already what the user typed')
+})
+
+test('a stale draft is not sent: it asks, and Reload drops it', async () => {
+  const ctx = setup({ settings: { sessionSystemPrompt: 'theirs' }, choices: ['reload'] })
+  const { writer, field, sends, log, shown } = ctx
+  commitStale(() => writer.write(field('sessionSystemPrompt'), 'mine'))
+  await tick()
+  assert.equal(sends.length, 0)
+  assert.deepEqual(log, ['ask sessionSystemPrompt', 'reload'])
+  assert.equal(shown('sessionSystemPrompt'), 'theirs')
+  // Outside commitStale, a write is an ordinary one again.
+  writer.write(field('sessionSystemPrompt'), 'later')
+  assert.deepEqual([sends[0].value, sends[0].expected], ['later', 'theirs'])
+})
+
+test('a stale draft: Keep Mine sends it over the newer value', async () => {
+  const { writer, field, sends, log } = setup({ settings: { sessionSystemPrompt: 'theirs' }, choices: ['keep'] })
+  writer.write(field('sessionSystemPrompt'), 'mine', { stale: true })
+  await tick()
+  assert.deepEqual(log.filter((l) => l.startsWith('ask')), ['ask sessionSystemPrompt'])
+  assert.deepEqual(sends.map(({ value, expected }) => [value, expected]), [['mine', 'theirs']])
+})
+
+test('a stale draft that is already the server value asks nothing', async () => {
+  const { writer, field, sends, log } = setup({ settings: { sessionSystemPrompt: 'same' } })
+  writer.write(field('sessionSystemPrompt'), 'same', { stale: true })
+  await tick()
+  assert.deepEqual([sends.length, log], [0, []])
+})
+
+test('a stale draft: Keep Mine waits behind an edit of the field still in flight', async () => {
+  const ctx = setup({ settings: { a: 1 } })
+  const { writer, asks } = heldWriter(ctx)
+  const { field, sends } = ctx
+  writer.write(field('a'), 2)
+  ctx.mirror.project.settings.a = 5
+  writer.write(field('a'), 3, { stale: true })
+  await tick()
+  asks[0].answer('keep')
+  await tick()
+  assert.equal(sends.length, 1)
+  sends[0].ok()
+  await tick()
+  assert.deepEqual(sends.map(({ value, expected }) => [value, expected]), [
+    [2, 1],
+    [3, 2]
+  ])
+})
+
+test('a stale draft: Keep Mine is skipped when the field was written again, even if that edit already finished', async () => {
+  const ctx = setup({ settings: { a: 1 } })
+  const { writer, asks } = heldWriter(ctx)
+  const { field, sends } = ctx
+  writer.write(field('a'), 2, { stale: true })
+  await tick()
+  writer.write(field('a'), 4)
+  sends[0].ok()
+  await tick()
+  asks[0].answer('keep')
+  await tick()
+  assert.deepEqual(sends.map(({ value, expected }) => [value, expected]), [[4, 1]])
 })
