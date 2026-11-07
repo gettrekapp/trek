@@ -19,7 +19,7 @@ process.env.GIT_CONFIG_GLOBAL = '/dev/null'
 process.env.GIT_CONFIG_NOSYSTEM = '1'
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 
-const s = (id, status = 'idle') => ({ id, title: id, llm: { provider: 'claude' }, queue: ['q'], status })
+const s = (id, status = 'idle', extra = {}) => ({ id, title: id, llm: { provider: 'claude' }, queue: ['q'], status, ...extra })
 const project = {
   id: 'p', name: 'P',
   settings: { worktreeTags: [{ id: 't1', name: 'Todo', color: '#fff' }], customTags: [{ id: 'c1', name: 'Hot', color: '#f00' }] },
@@ -27,7 +27,7 @@ const project = {
   repositories: [
     { id: 'ra', name: 'A', path: '/r/a', branchData: { feat: { tag: 't1', customTags: ['c1'], note: 'n', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3' } }, worktrees: [
       { id: 'am', name: 'A', path: '/r/a', branch: 'main', isMain: true, loaded: false, sessions: [] },
-      { id: 'af', name: 'feat', path: '/r/a-feat', branch: 'feat', isMain: false, loaded: true, dirty: true, ahead: 1, behind: 0, sessions: [s('s1', 'working')] }
+      { id: 'af', name: 'feat', path: '/r/a-feat', branch: 'feat', isMain: false, loaded: true, dirty: true, ahead: 1, behind: 0, sessions: [s('s1', 'working'), s('s2', 'idle', { decision: { question: 'Which?', at: 1 } })] }
     ] },
     { id: 'rb', name: 'B', path: '/r/b', branchData: {}, worktrees: [
       { id: 'bm', name: 'B', path: '/r/b', branch: 'main', isMain: true, loaded: false, sessions: [] }
@@ -40,7 +40,10 @@ test('describeWorktree', () => {
     worktree: 'af', repo: 'A', repoId: 'ra', path: '/r/a-feat', branch: 'feat', primary: false, missing: false,
     tag: 'Todo', customTags: ['Hot'], ticket: 'TOW-1', pullRequest: 'https://github.com/o/r/pull/3', note: 'n',
     dirty: true, ahead: 1, behind: 0, loaded: true,
-    sessions: [{ terminalId: 's1', title: 's1', status: 'working', llm: { provider: 'claude' }, queue: ['q'] }]
+    sessions: [
+      { terminalId: 's1', title: 's1', status: 'working', llm: { provider: 'claude' }, queue: ['q'], decision: null },
+      { terminalId: 's2', title: 's2', status: 'idle', llm: { provider: 'claude' }, queue: ['q'], decision: 'Which?' }
+    ]
   })
 })
 
@@ -108,7 +111,7 @@ test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
     'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session',
     'list_session_types', 'list_worktrees', 'load_worktree', 'read_terminal', 'remove_queued_prompt',
-    'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
+    'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'unload_worktree',
     'wait_for_sessions'
   ])
@@ -460,12 +463,33 @@ test('delete_session_type: unknown type is NOT_FOUND, and malformed saved entrie
   assert.deepEqual(await s.call('list_session_types', {}), [{ id: 'z' }, { id: 'k', name: 'Keep', systemPrompt: '' }])
 })
 
-test('Global sessions: only get_current_session reaches them', async (t) => {
+test('request_decision flags the session for every client; typing answers it; bad arguments', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  assert.deepEqual(await s.call('request_decision', { terminalId, question: ' Use Postgres or SQLite? ' }), { notified: true })
+  const session = () => s.projects.require(s.projectId).repositories[0].worktrees[0].sessions[0]
+  assert.equal(session().decision.question, 'Use Postgres or SQLite?')
+  assert.equal((await s.call('get_current_session', { terminalId })).decision, 'Use Postgres or SQLite?')
+  assert.equal((await s.call('list_worktrees', {}))[0].sessions[0].decision, 'Use Postgres or SQLite?')
+  await s.call('send_keys', { terminalId, keys: ['1', 'enter'] })
+  assert.equal(session().decision, undefined)
+  assert.equal((await s.call('get_current_session', { terminalId })).decision, null)
+  await assert.rejects(s.call('request_decision', { terminalId, question: '  ' }), (e) => e.code === 'BAD_REQUEST' && /question is required/.test(e.message))
+  await assert.rejects(s.call('request_decision', { terminalId, question: 7 }), (e) => e.code === 'BAD_REQUEST')
+  await assert.rejects(s.call('request_decision', { question: 'q' }), (e) => e.code === 'BAD_REQUEST' && /terminalId/.test(e.message))
+  await assert.rejects(s.call('request_decision', { terminalId: 'nope', question: 'q' }), (e) => e.code === 'NOT_FOUND')
+  const other = s.callerFor(s.projects.create('Q', [{ registered: s.registered, name: undefined }]))
+  await assert.rejects(other('request_decision', { terminalId, question: 'q' }), (e) => e.code === 'NOT_FOUND', 'another project cannot flag it')
+})
+
+test('Global sessions: only get_current_session and request_decision reach them', async (t) => {
   const s = await toolSetup(t)
   const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, cols: 80, rows: 24 })
   const me = await s.call('get_current_session', { terminalId: sessionId })
   assert.equal(me.terminalId, sessionId)
   assert.equal(me.worktree, null)
+  assert.deepEqual(await s.call('request_decision', { terminalId: sessionId, question: 'Which repo?' }), { notified: true })
+  assert.equal(s.projects.require(s.projectId).globalSessions[0].decision.question, 'Which repo?')
   const calls = [
     ['send_prompt', { terminalId: sessionId, text: 'x' }],
     ['enqueue_prompt', { terminalId: sessionId, text: 'x' }],

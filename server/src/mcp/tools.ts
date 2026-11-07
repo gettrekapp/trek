@@ -61,6 +61,22 @@ export const MCP_TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'request_decision',
+    description:
+      "Tell the user you need them to make a decision before you can continue. Flags your session for every Trek client of this server and lists it in their notifications; it clears when the user types in your session or dismisses it. Call it whenever you stop to ask the user to choose between options or approve an approach, after writing the question and options in your reply, then end your turn and wait for their answer. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
+        question: {
+          type: 'string',
+          description: 'One-line summary of the decision needed, shown in the notification (at most 1000 characters)'
+        }
+      },
+      required: ['terminalId', 'question']
+    }
+  },
+  {
     name: 'create_worktree',
     description:
       'Create a git worktree for a branch next to the repository (<repo>-<branch>) and add it to the project. By default cuts a new branch from the latest master/main (fetched from origin first); set existingBranch to check out a branch that already exists. Shared project dirs are linked in and the branch gets the first workflow tag. Returns the new worktree in the same shape as a list_worktrees entry — use start_session to start an agent session in it.',
@@ -278,7 +294,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   store: ConfigStore
@@ -550,6 +566,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         status: session.status,
         llm: session.llm,
         queue: session.queue,
+        decision: session.decision?.question ?? null,
         worktree: repo && worktree ? describeWorktree(project, repo, worktree) : null
       }
     }
@@ -762,6 +779,13 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           }
           return { terminalId: sessionId, status: statusOf(sessionId), promptSent: true }
         })
+      },
+
+      request_decision: (args) => {
+        // Global sessions may ask too, so this does not go through targetIn.
+        const { session } = sessionIn(args.terminalId)
+        deps.sessions.requestDecision({ projectId, sessionId: session.id, question: args.question })
+        return { notified: true }
       },
 
       close_session: async (args) => {

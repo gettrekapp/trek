@@ -25,7 +25,14 @@ export function describeWorktree(project: Project, repo: Repository, w: Worktree
     ahead: w.ahead,
     behind: w.behind,
     loaded: w.loaded,
-    sessions: w.sessions.map((s) => ({ terminalId: s.id, title: s.title, status: s.status, llm: s.llm, queue: s.queue }))
+    sessions: w.sessions.map((s) => ({
+      terminalId: s.id,
+      title: s.title,
+      status: s.status,
+      llm: s.llm,
+      queue: s.queue,
+      decision: s.decision?.question ?? null
+    }))
   }
 }
 

@@ -724,14 +724,16 @@ lists the paths. Arguments are validated: a field of the wrong type is
 `BAD_REQUEST`, not read as empty.
 
 **Global sessions.** A Global session can only be read, through
-`get_current_session`, which answers with `worktree: null`. Every other tool that
-takes a `terminalId` refuses it with `BAD_REQUEST` ("the Global session can't be
-targeted by tools"). An unknown session is `NOT_FOUND`.
+`get_current_session`, which answers with `worktree: null`, and can ask for a
+decision with `request_decision`. Every other tool that takes a `terminalId`
+refuses it with `BAD_REQUEST` ("the Global session can't be targeted by tools").
+An unknown session is `NOT_FOUND`.
 
 A *worktree entry* below is what `list_worktrees` returns for one worktree:
 `{worktree, repo, repoId, path, branch, primary, missing, tag, customTags, ticket,
 pullRequest, note, dirty, ahead, behind, loaded, sessions: [{terminalId, title,
-status, llm, queue}]}`.
+status, llm, queue, decision}]}`, where `decision` is the open decision's question
+or `null`.
 
 | Tool | Parameters | Result |
 |---|---|---|
@@ -739,7 +741,8 @@ status, llm, queue}]}`.
 | `create_worktree` | `branch`; `existingBranch?` (check out an existing branch; default false); `repo?` (name or id; required with several repositories) | the new worktree entry |
 | `load_worktree` | `worktree` | `{loaded: true, sessions}` |
 | `unload_worktree` | `worktree` | `{unloaded: true}` |
-| `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, worktree}`, `worktree` being an entry (`null` for a Global session) |
+| `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, decision, worktree}`, `worktree` being an entry (`null` for a Global session) |
+| `request_decision` | `terminalId`, `question` (1 to 1000 characters once trimmed) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
 | `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
 | `close_session` | `terminalId` | `{closed: true}` |
 | `send_prompt` | `terminalId`, `text` | `{sent: true}` |
@@ -757,7 +760,7 @@ status, llm, queue}]}`.
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
 
-That is 21 tools. Tags are matched by name or id, case-insensitively, and an
+That is 22 tools. Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` takes the
 Linear workspace or Azure DevOps base URL from a URL and saves it to the project's
 settings. A worktree with a detached HEAD has no branch data, so the `set_worktree_*`
@@ -770,9 +773,7 @@ and needs a `name` to create. A name already used by another type is `BAD_REQUES
 not listed, and calling one is `-32602`.
 
 - Desktop UI only: `get_selected_worktree` and `focus_session` (selection lives in
-  clients), `promote_to_primary` (it needs a confirmation dialog), and
-  `request_decision` (the decision flag and its notification belong to phase 3's
-  notifications menu).
+  clients), and `promote_to_primary` (it needs a confirmation dialog).
 - Phase 5: `speak_summary` (voice) and `get_stack`, `start_stack`, `stop_stack`,
   `read_stack_log` (Docker).
 
