@@ -1,7 +1,8 @@
 // scripts/serverProjectSettings.test.mjs — ProjectSettings keys and value kinds.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { applySettingsPatch, validateSettings } from '../server/src/projects/settings.ts'
+import { applySettingsPatch, pruneDeletedTags, validateSettings } from '../server/src/projects/settings.ts'
+import { DEFAULT_WORKTREE_TAGS } from '../src/shared/types.ts'
 
 const code = (fn) => {
   try {
@@ -74,4 +75,82 @@ test('sessionTypes elements are validated', () => {
   assert.equal(code(() => applySettingsPatch({}, { sessionTypes: many(101) })), 'BAD_REQUEST')
   // Imports go through validateSettings, so they are covered too.
   assert.equal(code(() => validateSettings({ sessionTypes: [{ ...ok, name: 'x'.repeat(201) }] }, 'settings')), 'BAD_REQUEST')
+})
+
+// The tag cascade: what a file window's setWorktreeTags and setCustomTags do to the branches.
+const tag = (id, name = id) => ({ id, name, color: '#fff' })
+const tagRepos = () => [
+  {
+    id: 'r1', name: 'a', path: '/a', worktrees: [],
+    branchData: {
+      one: { tag: 'todo', customTags: ['x', 'y'] },
+      two: { tag: 'done', note: 'n' },
+      three: { customTags: ['y'] },
+      four: { tag: 'todo' },
+      five: { note: 'only' }
+    }
+  },
+  { id: 'r2', name: 'b', path: '/b', worktrees: [], branchData: { one: { tag: 'todo', customTags: ['x'] } } }
+]
+const prune = (repos, current, patch) => pruneDeletedTags(repos, applySettingsPatch(current, patch), patch)
+const tagSettings = { worktreeTags: [tag('todo'), tag('done')], customTags: [tag('x'), tag('y')] }
+
+test('pruneDeletedTags: a deleted tag comes off every branch that had it, in every repository', () => {
+  const repos = tagRepos()
+  const next = prune(repos, tagSettings, { worktreeTags: [tag('done')] })
+  assert.deepEqual(next[0].branchData, {
+    one: { customTags: ['x', 'y'] },
+    two: { tag: 'done', note: 'n' },
+    three: { customTags: ['y'] },
+    five: { note: 'only' }
+  })
+  assert.deepEqual(next[1].branchData, { one: { customTags: ['x'] } })
+  // The input is not changed.
+  assert.deepEqual(repos, tagRepos())
+})
+
+test('pruneDeletedTags: a deleted custom tag comes off the lists; an emptied list is dropped', () => {
+  const next = prune(tagRepos(), tagSettings, { customTags: [tag('x')] })
+  assert.deepEqual(next[0].branchData, {
+    one: { tag: 'todo', customTags: ['x'] },
+    two: { tag: 'done', note: 'n' },
+    four: { tag: 'todo' },
+    five: { note: 'only' }
+  })
+  assert.deepEqual(next[1].branchData, { one: { tag: 'todo', customTags: ['x'] } })
+  // Removing the key deletes every custom tag.
+  const none = prune(tagRepos(), tagSettings, { customTags: null })
+  assert.deepEqual(none[1].branchData, { one: { tag: 'todo' } })
+  assert.equal(none[0].branchData.three, undefined)
+})
+
+test('pruneDeletedTags: unrelated tags, branches and repositories are untouched, as the same objects', () => {
+  const repos = tagRepos()
+  const next = prune(repos, tagSettings, { worktreeTags: [tag('todo')] })
+  assert.deepEqual(next[0].branchData.two, { note: 'n' })
+  assert.equal(next[0].branchData.one, repos[0].branchData.one)
+  assert.equal(next[0].branchData.five, repos[0].branchData.five)
+  assert.equal(next[1], repos[1])
+})
+
+test('pruneDeletedTags: renaming, recolouring or reordering tags clears nothing', () => {
+  const repos = tagRepos()
+  const renamed = { worktreeTags: [tag('done', 'Shipped'), { ...tag('todo'), color: '#000' }] }
+  assert.equal(prune(repos, tagSettings, renamed)[0], repos[0])
+  assert.equal(prune(repos, tagSettings, { customTags: [tag('y', 'Why'), tag('x')] })[0], repos[0])
+})
+
+test('pruneDeletedTags: a patch without either tag key changes nothing', () => {
+  const repos = tagRepos()
+  assert.equal(prune(repos, tagSettings, { audioAlerts: true, worktreeOrder: [] }), repos)
+  assert.equal(prune(repos, tagSettings, { worktreeTags: undefined }), repos)
+})
+
+test('pruneDeletedTags: worktreeTags removed or absent means the default tags', () => {
+  const repos = [{ id: 'r', name: 'a', path: '/a', worktrees: [], branchData: { a: { tag: 'In Review' }, b: { tag: 'todo' } } }]
+  // Removing the key brings back the defaults: their ids stay, others go.
+  assert.deepEqual(prune(repos, tagSettings, { worktreeTags: null })[0].branchData, { a: { tag: 'In Review' } })
+  // From the defaults to a list without "In Review".
+  const fromDefaults = prune(repos, {}, { worktreeTags: DEFAULT_WORKTREE_TAGS.filter((t) => t.id !== 'In Review') })
+  assert.deepEqual(fromDefaults[0].branchData, {})
 })

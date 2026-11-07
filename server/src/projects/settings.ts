@@ -1,7 +1,8 @@
 // The keys a project's settings may hold and the kind of value each takes.
 // Values are checked by kind only: their contents are client preferences the
 // server stores and returns, not acts on.
-import type { ProjectSettings } from '../../../src/shared/model/types'
+import type { BranchData, ProjectSettings, Repository } from '../../../src/shared/model/types'
+import { DEFAULT_WORKTREE_TAGS } from '../../../src/shared/types.ts'
 import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { codedError } from '../errors.ts'
 import { checkTitle, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
@@ -102,4 +103,46 @@ export function applySettingsPatch(current: ProjectSettings, patch: Record<strin
     }
   }
   return next as ProjectSettings
+}
+
+/** The ids of a tag list; entries without a string id name no tag. */
+function tagIds(tags: unknown): Set<string> {
+  const ids = new Set<string>()
+  if (Array.isArray(tags)) for (const t of tags) if (isRecord(t) && typeof t.id === 'string') ids.add(t.id)
+  return ids
+}
+
+/**
+ * The tag cascade of a settings patch, as a file window's setWorktreeTags and
+ * setCustomTags do it: when the patch sets `worktreeTags` (or removes it, which
+ * brings back DEFAULT_WORKTREE_TAGS), every branch whose `tag` is not in the new
+ * list becomes untagged; when it sets or removes `customTags`, every branch keeps
+ * only the custom tag ids still listed, and an emptied list is dropped. A branch
+ * left with no data is dropped, as `branch.*` does. A patch that does not name
+ * either key changes nothing. `settings` is the project's settings after the
+ * patch. Returns the repositories, the unchanged ones as they were.
+ */
+export function pruneDeletedTags(repositories: Repository[], settings: ProjectSettings, patch: Record<string, unknown>): Repository[] {
+  const tags = Object.hasOwn(patch, 'worktreeTags') && patch.worktreeTags !== undefined
+    ? tagIds(settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS)
+    : undefined
+  const custom = Object.hasOwn(patch, 'customTags') && patch.customTags !== undefined ? tagIds(settings.customTags) : undefined
+  if (!tags && !custom) return repositories
+  return repositories.map((repo) => {
+    let branchData: Record<string, BranchData> | undefined
+    for (const [branch, data] of Object.entries(repo.branchData)) {
+      const dropTag = tags !== undefined && data.tag !== undefined && !tags.has(data.tag)
+      const kept = custom && data.customTags?.filter((id) => custom.has(id))
+      const dropCustom = kept !== undefined && kept.length !== data.customTags!.length
+      if (!dropTag && !dropCustom) continue
+      const next: BranchData = { ...data }
+      if (dropTag) delete next.tag
+      if (dropCustom && kept.length > 0) next.customTags = kept
+      else if (dropCustom) delete next.customTags
+      branchData ??= { ...repo.branchData }
+      if (Object.keys(next).length === 0) delete branchData[branch]
+      else branchData[branch] = next
+    }
+    return branchData ? { ...repo, branchData } : repo
+  })
 }

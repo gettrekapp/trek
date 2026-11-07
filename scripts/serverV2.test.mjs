@@ -241,6 +241,45 @@ test('project.updateSettings expected guards the settings a settings screen edit
   assert.equal((await update({ audioAlerts: false }, { audioAlerts: null })).ok, true)
 })
 
+test('project.updateSettings deleting a tag clears it from every branch in the same patch; a CONFLICT changes nothing', async (t) => {
+  const { a, call, sent } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  const tags = [{ id: 'todo', name: 'Todo', color: '#fff' }, { id: 'done', name: 'Done', color: '#000' }]
+  const custom = [{ id: 'x', name: 'X', color: '#fff' }, { id: 'y', name: 'Y', color: '#000' }]
+  await call('project.updateSettings', { projectId, settings: { worktreeTags: tags, customTags: custom } })
+  const repoId = (await snapshotOf(call, projectId)).repositories[0].id
+  const ref = (branch) => ({ projectId, repoId, branch })
+  await call('branch.setTag', { ...ref('f1'), tag: 'todo' })
+  await call('branch.setCustomTags', { ...ref('f1'), customTags: ['x', 'y'] })
+  await call('branch.setTag', { ...ref('f2'), tag: 'done' })
+  await call('branch.setCustomTags', { ...ref('f3'), customTags: ['y'] })
+  const sub = await call('sub.subscribe', { topic: `project:${projectId}` })
+  sent.length = 0
+
+  // A stale guard: CONFLICT, and neither the settings nor the branches change.
+  const stale = await call('project.updateSettings', { projectId, settings: { worktreeTags: [tags[1]] }, expected: { worktreeTags: [] } })
+  assert.equal(stale.error.code, 'CONFLICT')
+  assert.equal(sent.length, 0)
+
+  // Renaming a tag (same id) clears nothing.
+  const renamed = [{ ...tags[0], name: 'To do' }, tags[1]]
+  assert.equal((await call('project.updateSettings', { projectId, settings: { worktreeTags: renamed }, expected: { worktreeTags: tags } })).ok, true)
+  assert.equal(sent.length, 1)
+  let state = applyStatePatch(sub.result, sent[0]).state
+  assert.deepEqual(state.snapshot.repositories[0].branchData, { f1: { tag: 'todo', customTags: ['x', 'y'] }, f2: { tag: 'done' }, f3: { customTags: ['y'] } })
+
+  // Deleting "todo" and "y": one patch, one rev, settings and branches together.
+  sent.length = 0
+  const res = await call('project.updateSettings', { projectId, settings: { worktreeTags: [tags[1]], customTags: [custom[0]] }, expected: { worktreeTags: renamed } })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0].rev, state.rev + 1)
+  state = applyStatePatch(state, sent[0]).state
+  assert.deepEqual(state.snapshot.settings.worktreeTags, [tags[1]])
+  assert.deepEqual(state.snapshot.repositories[0].branchData, { f1: { customTags: ['x'] }, f2: { tag: 'done' } })
+  assert.deepEqual(state.snapshot, await snapshotOf(call, projectId))
+})
+
 test('wrong id types are BAD_REQUEST, not NOT_FOUND', async (t) => {
   const { a, call } = setup(t)
   const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result

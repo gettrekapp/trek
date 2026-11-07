@@ -16,7 +16,7 @@ import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
 import type { SessionManager } from './sessions/manager.ts'
-import { applySettingsPatch, isSettingsKey } from './projects/settings.ts'
+import { applySettingsPatch, isSettingsKey, pruneDeletedTags } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
 import {
   assertNoProtoKeys,
@@ -145,6 +145,8 @@ const handlers: Record<string, Handler> = {
         checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
       }
       d.settings = applySettingsPatch(d.settings, patch)
+      // A deleted tag comes off every branch in the same change (one patch, one rev).
+      d.repositories = pruneDeletedTags(d.repositories, d.settings, patch)
     })
     return null
   },

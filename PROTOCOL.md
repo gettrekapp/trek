@@ -292,6 +292,17 @@ and `repo.update`, only the keys listed in `expected` are compared. A
 project-wide rev guard is not used because the rev moves on every status or git
 change, so it would almost always fail. Everything else is last-write-wins.
 
+A `project.updateSettings` that sets or removes `worktreeTags` or `customTags`
+also clears deleted tags from the branches, in the same change (one patch, one
+rev), as a file window does: every branch whose `tag` is not in the new
+`worktreeTags` (the default tags when the key is removed) loses its `tag`, and
+every branch keeps only the `customTags` ids still in the new `customTags`
+(none when the key is removed), dropping an emptied list. A branch left with no
+data is dropped from `branchData`. Renaming, recolouring or reordering tags keeps
+their ids, so it clears nothing. `expected` is checked before anything changes:
+a `CONFLICT` changes neither the settings nor the branches. Older servers leave
+deleted ids on the branches, where clients show no tag for them.
+
 **Worktrees.** A project lists every git worktree of its repositories: the
 server polls `git worktree list` and adds or removes rows to match. Projects
 that share a repository see the same worktrees, each with its own ids and
