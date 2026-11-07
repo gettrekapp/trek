@@ -6,6 +6,7 @@ import {
   agentsFetchKey,
   agentsRetryDelay,
   agentsStale,
+  createPickMemory,
   serverFirstPick,
   v2GlobalLabel,
   v2ServerAgents,
@@ -97,4 +98,14 @@ test("Choose… starts from the last server pick only while the current server l
   assert.deepEqual(serverFirstPick(last, ['claude', 'codex'], { provider: 'codex' }, fallback), { provider: 'codex' })
   assert.deepEqual(serverFirstPick(last, ['claude'], undefined, fallback), fallback)
   assert.deepEqual(serverFirstPick(undefined, ['claude'], { provider: 'gemini' }, fallback), { provider: 'gemini' })
+})
+
+test('the last Choose… pick is kept per server', () => {
+  const picks = createPickMemory()
+  picks.set('box', { provider: 'codex', model: 'gpt-5' })
+  picks.set('lab', { provider: 'grok' })
+  picks.set('box', { provider: 'gemini' })
+  assert.deepEqual(picks.get('box'), { provider: 'gemini' })
+  assert.deepEqual(picks.get('lab'), { provider: 'grok' })
+  assert.equal(picks.get('other'), undefined)
 })

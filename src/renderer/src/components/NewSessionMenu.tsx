@@ -4,15 +4,15 @@ import { useAppStore } from '../store'
 import { defaultSessionLlm } from '../llm'
 import { LlmPicker } from './LlmPicker'
 import { describeLlm } from '../../../shared/providers/selection'
-import { serverFirstPick, v2ServerAgents, v2SessionChoices } from '../v2/sessionChoices'
+import { createPickMemory, serverFirstPick, v2ServerAgents, v2SessionChoices } from '../v2/sessionChoices'
 import type { LlmSelection } from '../../../shared/providers/types'
 import type { SessionType } from '../../../shared/types'
 
 const MENU_WIDTH = 300
 
-/** The last "Choose…" pick in this window, offered again next time; a server window's apart (its agents are the server's). */
+/** The last "Choose…" pick in this window, offered again next time; a server window's per server (its agents are the server's). */
 let lastPick: LlmSelection | undefined
-let lastServerPick: LlmSelection | undefined
+const serverPicks = createPickMemory()
 
 interface Props {
   disabled: boolean
@@ -40,7 +40,8 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
   const globalLlm = useAppStore((s) => s.project?.globalLlm)
   // A server window runs the session with the server's agents, not this machine's: the ones it
   // listed (server.agents), or the interim from the project's settings until it has.
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  const serverEntryId = useAppStore((s) => s.serverWindow?.serverEntryId ?? null)
+  const serverWindow = serverEntryId !== null
   const serverAgents = useAppStore((s) => s.serverAgents)
   const listed = serverWindow && serverAgents ? v2ServerAgents({ llmDefault }, serverAgents) : null
   const v2 = serverWindow && !listed ? v2SessionChoices({ llmDefault, globalLlm, sessionTypes }) : null
@@ -49,7 +50,7 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
   /** What "Choose…" starts from: the last pick, else the default the session would get. */
   const firstPick = (): LlmSelection =>
     listed
-      ? serverFirstPick(lastServerPick, listed.providers, llmDefault ?? serverAgents?.llmDefault, fallback)
+      ? serverFirstPick(serverEntryId ? serverPicks.get(serverEntryId) : undefined, listed.providers, llmDefault ?? serverAgents?.llmDefault, fallback)
       : (lastPick ?? fallback)
   const installed = listed ? Object.fromEntries(listed.agents.map((a) => [a.llm.provider, a.installed])) : null
 
@@ -146,7 +147,7 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
                     className="btn btn-accent"
                     disabled={pick.provider === 'local' && !pick.model}
                     onClick={() => {
-                      lastServerPick = pick
+                      if (serverEntryId) serverPicks.set(serverEntryId, pick)
                       start(undefined, pick)
                     }}
                   >

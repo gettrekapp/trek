@@ -112,6 +112,24 @@ export function agentsRetryDelay(attempt: number): number | null {
   return AGENTS_RETRY_MS[attempt - 1] ?? null
 }
 
+export interface PickMemory {
+  get(serverEntryId: string): LlmSelection | undefined
+  set(serverEntryId: string, pick: LlmSelection): void
+}
+
+/**
+ * The last "Choose…" pick of each server, for as long as the window lives: a
+ * window that moves between servers' projects offers each its own again,
+ * rather than the default after every switch.
+ */
+export function createPickMemory(): PickMemory {
+  const picks = new Map<string, LlmSelection>()
+  return {
+    get: (serverEntryId) => picks.get(serverEntryId),
+    set: (serverEntryId, pick) => void picks.set(serverEntryId, pick)
+  }
+}
+
 /**
  * Where a server window's "Choose…" starts: the last pick there, while the
  * current server lists its agent (another server, or this one after an
