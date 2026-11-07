@@ -14,7 +14,7 @@ import type {
   EventFrame,
   EventPayloads as EventPayloadsV1,
   PtyInfo,
-  ResFrame
+  WireError
 } from './protocol.ts'
 import type { LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
@@ -224,7 +224,18 @@ type SameKeys<A, B> = [Exclude<keyof A, keyof B>, Exclude<keyof B, keyof A>] ext
 /** Compile-time check: every method has both params and a result type. */
 export const _catalogComplete: SameKeys<MethodParamsV2, MethodResultsV2> = true
 
-export type ServerFrameV2 = WelcomeFrameV2 | ResFrame | EventFrame
+/** A topic's rev, as a successful response reports it (PROTOCOL.md, "Revs"). */
+export interface TopicRev {
+  topic: Topic
+  rev: number
+}
+
+/** A v2 response. A success may carry the rev its command left a topic at. */
+export type ResFrameV2 =
+  | { type: 'res'; id: number; ok: true; result: unknown; rev?: TopicRev }
+  | { type: 'res'; id: number; ok: false; error: WireError }
+
+export type ServerFrameV2 = WelcomeFrameV2 | ResFrameV2 | EventFrame
 
 export interface StatePatchPayload extends StatePatch {
   topic: Topic

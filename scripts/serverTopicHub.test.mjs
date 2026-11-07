@@ -110,6 +110,18 @@ test('drop forgets the topic and its subscribers; publishing again starts at rev
   assert.equal(sub.sent.length, 1)
 })
 
+test('rev reads the current rev; undefined for a topic never published or dropped', () => {
+  const hub = new TopicHub()
+  assert.equal(hub.rev('project:p'), undefined)
+  hub.publish('project:p', { n: 0 })
+  assert.equal(hub.rev('project:p'), 0)
+  hub.publish('project:p', { n: 1 })
+  hub.publish('project:p', { n: 1 })
+  assert.equal(hub.rev('project:p'), 1, 'an unchanged snapshot keeps the rev')
+  hub.drop('project:p')
+  assert.equal(hub.rev('project:p'), undefined)
+})
+
 test('subscriberCount follows subscribe, unsubscribe and unsubscribeAll', () => {
   const hub = new TopicHub()
   hub.publish('project:p', { a: 1 })

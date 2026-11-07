@@ -1,7 +1,8 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload
 // and the v2 pty.* stream. Attention (working/done) arrives in 2d-2.
-import { parseTopic } from '../../src/shared/model/topics.ts'
+import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
+import type { TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
@@ -257,6 +258,29 @@ const handlers: Record<string, Handler> = {
 
   ...worktreeHandlers,
   ...sessionHandlers
+}
+
+/** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */
+const SERVER_TOPIC_METHODS: ReadonlySet<string> = new Set([
+  'project.create',
+  'project.import',
+  'project.delete',
+  'server.addRepo',
+  'server.removeRepo'
+])
+
+/**
+ * The rev a successful response reports (PROTOCOL.md, "Revs"): the `server` topic's for
+ * the commands above, else the project topic's for a method whose params name a project
+ * that still has one. Read once the handler is done, so it covers every change it made.
+ */
+export function responseRev(method: string, params: unknown, hub: TopicHub): TopicRev | undefined {
+  let topic: Topic | undefined
+  if (SERVER_TOPIC_METHODS.has(method)) topic = 'server'
+  else if (isRecord(params) && typeof params.projectId === 'string') topic = projectTopic(params.projectId)
+  if (!topic) return undefined
+  const rev = hub.rev(topic)
+  return rev === undefined ? undefined : { topic, rev }
 }
 
 /**

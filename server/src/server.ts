@@ -10,7 +10,8 @@ import {
 import {
   PROTOCOL_VERSION_V2,
   SUPPORTED_PROTOCOL_VERSIONS,
-  type ServerFrameV2
+  type ServerFrameV2,
+  type TopicRev
 } from '../../src/shared/protocolV2'
 import type { Outcome } from './errors'
 import { isRecord } from './validate'
@@ -22,7 +23,7 @@ import { dispatch } from './rpc'
 import { publishServerState } from './serverState'
 import { activeTokenHashes, matchToken } from './tokens'
 import { TopicHub, type Subscriber } from './topicHub'
-import { dispatchV2 } from './v2'
+import { dispatchV2, responseRev } from './v2'
 import { GitPoller } from './git/poller'
 import { SessionManager } from './sessions/manager'
 import type { TerminalSink } from './sessions/terminalHost'
@@ -171,9 +172,9 @@ export function startServer(
       missedPongs = 0
     })
 
-    const respond = (id: number, outcome: Outcome): void => {
+    const respond = (id: number, outcome: Outcome, rev?: TopicRev): void => {
       if (outcome.ok) {
-        sendFrame(ws, { type: 'res', id, ok: true, result: outcome.result })
+        sendFrame(ws, rev ? { type: 'res', id, ok: true, result: outcome.result, rev } : { type: 'res', id, ok: true, result: outcome.result })
       } else {
         sendFrame(ws, { type: 'res', id, ok: false, error: outcome.error })
       }
@@ -277,10 +278,14 @@ export function startServer(
               }
             : undefined
         })
+        const method = frame.method
+        const params = frame.params
+        // A success reports the rev its command left the topic at, read as it answers.
+        const answer = (o: Outcome): void => respond(id, o, o.ok ? responseRev(method, params, hub) : undefined)
         // Answer synchronous handlers in this tick: a sub.subscribe response
         // must reach the client before any patch for the topic it subscribed to.
-        if (outcome instanceof Promise) outcome.then((o) => respond(id, o)).catch(internalError)
-        else respond(id, outcome)
+        if (outcome instanceof Promise) outcome.then(answer).catch(internalError)
+        else answer(outcome)
       } else {
         dispatch(frame.method, frame.params, { config: store.config, guard: store.guard, ptys, ws })
           .then((o) => respond(id, o))

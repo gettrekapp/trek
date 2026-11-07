@@ -64,6 +64,34 @@ test('an error reply carries the server\'s details; malformed details are droppe
   await assert.rejects(odd, (e) => e.details === undefined)
 })
 
+test('requestWithRev resolves with the result and the response rev; request() still resolves the bare result', async () => {
+  const { server, conn } = setup()
+  await assert.rejects(conn.requestWithRev('sys.ping', { t: 1 }), (e) => e.code === 'NOT_CONNECTED')
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  const rev = { topic: 'project:p', rev: 12 }
+  const withRev = conn.requestWithRev('worktree.create', { projectId: 'p', repoId: 'r', branch: 'b', createBranch: true })
+  sock.reply(sock.lastReq('worktree.create'), { worktreeId: 'w' }, { rev })
+  assert.deepEqual(await withRev, { result: { worktreeId: 'w' }, rev })
+  const bare = conn.request('project.rename', { projectId: 'p', name: 'x' })
+  sock.reply(sock.lastReq('project.rename'), null, { rev })
+  assert.equal(await bare, null)
+  // An older server sends no rev; a malformed one is dropped.
+  const none = conn.requestWithRev('project.rename', { projectId: 'p', name: 'y' })
+  sock.reply(sock.lastReq('project.rename'), null)
+  assert.deepEqual(await none, { result: null })
+  for (const odd of [{ topic: 'project:p', rev: -1 }, { topic: 3, rev: 1 }, { topic: 'server', rev: 1.5 }, 'server', null]) {
+    const r = conn.requestWithRev('project.rename', { projectId: 'p', name: 'z' })
+    sock.reply(sock.lastReq('project.rename'), null, { rev: odd })
+    assert.deepEqual(await r, { result: null }, JSON.stringify(odd))
+  }
+  const refused = conn.requestWithRev('project.rename', { projectId: 'p', name: 'q' })
+  sock.fail(sock.lastReq('project.rename'), 'CONFLICT', 'changed')
+  await assert.rejects(refused, (e) => e.code === 'CONFLICT')
+})
+
 test('reconnects with backoff 1s, 2s, 4s… capped at 30s, reset by welcome', () => {
   const { server, clock, conn, statuses } = setup()
   conn.connect()

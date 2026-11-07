@@ -30,6 +30,11 @@ export class TopicHub {
     return () => this.subscribeListeners.delete(listener)
   }
 
+  /** The topic's current rev; undefined if it was never published or was dropped. */
+  rev(topic: Topic): number | undefined {
+    return this.topics.get(topic)?.rev
+  }
+
   subscriberCount(topic: Topic): number {
     return this.topics.get(topic)?.subscribers.size ?? 0
   }

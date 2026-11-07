@@ -213,6 +213,27 @@ comes from the `server` topic.
 - Subscriptions end with `sub.unsubscribe` or when the socket closes.
 - Unknown topics fail with `BAD_REQUEST`; unknown project ids with `NOT_FOUND`.
 
+**Revs in responses.** A successful response to a method whose params name a
+`projectId` carries `rev: {topic: "project:<id>", rev}`: the project topic's rev
+once the method finished, so it covers every change the command made.
+`project.create`, `project.import`, `project.delete`, `server.addRepo` and
+`server.removeRepo` carry the `server` topic's rev instead. A query that names a
+project (`repo.listBranches`, `worktree.changes`, `worktree.diff`) carries the
+rev it read at. Methods that name no topic (`sys.ping`, `pty.*`, `sub.*`,
+`project.list`), error replies, and a project whose topic is gone carry none.
+
+```json
+{ "type": "res", "id": 9, "ok": true, "result": { "worktreeId": "w3" },
+  "rev": { "topic": "project:p1", "rev": 57 } }
+```
+
+The server writes a topic's patches to a subscriber before the response of any
+later command on the same socket, so a subscribed client has usually applied
+that rev by the time the response arrives (not while it is resubscribing).
+`rev` lets it know for sure. Other clients' changes move the rev too, so the
+test is always "at least `rev`", never "exactly". Revs start again at 0 when the
+server restarts. A server without this field simply leaves it out.
+
 ## Commands
 
 | Group | Methods |

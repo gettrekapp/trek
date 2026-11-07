@@ -10,7 +10,7 @@ import { ConfigStore } from '../server/src/configStore.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { publishServerState } from '../server/src/serverState.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
-import { dispatchV2 } from '../server/src/v2.ts'
+import { dispatchV2, responseRev } from '../server/src/v2.ts'
 import { applyStatePatch } from '../src/shared/sync/topicState.ts'
 
 function setup(t) {
@@ -47,7 +47,7 @@ function setup(t) {
     forgetGlobal: (projectId) => forgotten.push(['global', projectId])
   }
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects: holder.projects, sessions })
-  return { dir, a, store, sent, call, forgotten, projects: holder.projects }
+  return { dir, a, store, hub, sent, call, forgotten, projects: holder.projects }
 }
 
 test('subscribing to server returns identity, repos and no projects', async (t) => {
@@ -225,6 +225,30 @@ test('project.delete removes it everywhere; removeRepo is IN_USE until then', as
   assert.equal((await call('sub.subscribe', { topic: `project:${projectId}` })).error.code, 'NOT_FOUND')
   assert.equal((await call('project.delete', { projectId })).error.code, 'NOT_FOUND')
   assert.equal((await call('server.removeRepo', { repoId: 'a' })).ok, true)
+})
+
+test('responseRev: a project command reports its project topic, a registry or project-list command the server topic', async (t) => {
+  const { a, hub, call } = setup(t)
+  const params = { name: 'P', repositories: [{ path: a }] }
+  const { projectId } = (await call('project.create', params)).result
+  const serverRev = hub.rev('server')
+  assert.deepEqual(responseRev('project.create', params, hub), { topic: 'server', rev: serverRev })
+  const topic = `project:${projectId}`
+  assert.deepEqual(responseRev('project.rename', { projectId }, hub), { topic, rev: 0 })
+  await call('project.rename', { projectId, name: 'Q' })
+  await call('project.rename', { projectId, name: 'R' })
+  assert.deepEqual(responseRev('project.rename', { projectId }, hub), { topic, rev: 2 })
+  // A read that names a project reports the rev it read at.
+  assert.deepEqual(responseRev('repo.listBranches', { projectId, repoId: 'x' }, hub), { topic, rev: 2 })
+  // Renames and the delete each change the server topic's project list.
+  await call('project.delete', { projectId })
+  assert.equal(hub.rev('server'), serverRev + 3)
+  assert.deepEqual(responseRev('project.delete', { projectId }, hub), { topic: 'server', rev: serverRev + 3 })
+  assert.equal(responseRev('project.rename', { projectId }, hub), undefined, 'the topic is gone')
+  assert.equal(responseRev('sys.ping', { t: 1 }, hub), undefined)
+  assert.equal(responseRev('pty.write', { ptyId: 'x', data: 'y' }, hub), undefined)
+  assert.equal(responseRev('project.rename', { projectId: 5 }, hub), undefined)
+  assert.equal(responseRev('project.rename', undefined, hub), undefined)
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {

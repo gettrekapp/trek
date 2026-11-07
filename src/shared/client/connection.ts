@@ -8,7 +8,8 @@ import {
   PROTOCOL_VERSION_V2,
   type MethodNameV2,
   type MethodParamsV2,
-  type MethodResultsV2
+  type MethodResultsV2,
+  type TopicRev
 } from '../protocolV2.ts'
 import { OPEN, realTimers, type SocketFactory, type SocketLike, type Timers } from './socket.ts'
 
@@ -57,6 +58,30 @@ export interface RequestOptions {
   timeoutMs?: number
 }
 
+/** What `requestWithRev` resolves with. */
+export interface RevResult<M extends MethodNameV2> {
+  result: MethodResultsV2[M]
+  /**
+   * The rev the command left its topic at (PROTOCOL.md, "Revs"). Absent for a
+   * method that names no topic, and from a server older than this field.
+   */
+  rev?: TopicRev
+}
+
+/** A successful reply, before `request` unwraps it. */
+interface Reply {
+  result: unknown
+  rev?: TopicRev
+}
+
+/** The response's `rev`, if it has the right shape. */
+function parseRev(value: unknown): TopicRev | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { topic, rev } = value as { topic?: unknown; rev?: unknown }
+  if (typeof topic !== 'string' || !Number.isInteger(rev) || (rev as number) < 0) return undefined
+  return { topic: topic as TopicRev['topic'], rev: rev as number }
+}
+
 export class ClientError extends Error {
   readonly code: string
   /** The server's `error.details`, when its reply carried any */
@@ -86,7 +111,7 @@ export const SERVER_REMOVED_MESSAGE = 'Server removed'
 type Listener<T> = (value: T) => void
 
 interface Pending {
-  resolve(value: unknown): void
+  resolve(value: Reply): void
   reject(err: Error): void
   timer: unknown
 }
@@ -100,6 +125,7 @@ interface IncomingFrame {
   error?: { code?: unknown; message?: unknown; details?: unknown }
   event?: unknown
   payload?: unknown
+  rev?: unknown
   serverId?: unknown
   serverName?: unknown
   daemonVersion?: unknown
@@ -184,7 +210,18 @@ export class ServerConnection {
     params: MethodParamsV2[M],
     options: RequestOptions = {}
   ): Promise<MethodResultsV2[M]> {
-    return this.send(method, params, options.timeoutMs) as Promise<MethodResultsV2[M]>
+    return this.send(method, params, options.timeoutMs).then((reply) => reply.result as MethodResultsV2[M])
+  }
+
+  /** As `request`, and also hands back the rev the response reports (see `TopicMirror.whenRev`). */
+  requestWithRev<M extends MethodNameV2>(
+    method: M,
+    params: MethodParamsV2[M],
+    options: RequestOptions = {}
+  ): Promise<RevResult<M>> {
+    return this.send(method, params, options.timeoutMs).then((reply) =>
+      reply.rev ? { result: reply.result as MethodResultsV2[M], rev: reply.rev } : { result: reply.result as MethodResultsV2[M] }
+    )
   }
 
   /**
@@ -192,13 +229,13 @@ export class ServerConnection {
    * before the promise rejects, so the ping can close the socket at once rather
    * than a microtask later.
    */
-  private send(method: string, params: unknown, timeoutMs: number | undefined, onTimeout?: () => void): Promise<unknown> {
+  private send(method: string, params: unknown, timeoutMs: number | undefined, onTimeout?: () => void): Promise<Reply> {
     const socket = this.socket
     if (this.status !== 'connected' || !socket || socket.readyState !== OPEN) {
       return Promise.reject(new ClientError('NOT_CONNECTED', 'not connected to the server'))
     }
     const id = this.nextId++
-    return new Promise((resolve, reject) => {
+    return new Promise<Reply>((resolve, reject) => {
       const timer = this.timers.setTimeout(() => {
         if (!this.pending.delete(id)) return
         onTimeout?.()
@@ -299,7 +336,8 @@ export class ServerConnection {
       this.pending.delete(frame.id)
       this.timers.clearTimeout(pending.timer)
       if (frame.ok) {
-        pending.resolve(frame.result)
+        const rev = parseRev(frame.rev)
+        pending.resolve(rev ? { result: frame.result, rev } : { result: frame.result })
       } else {
         const code = typeof frame.error?.code === 'string' ? frame.error.code : 'INTERNAL'
         const message = typeof frame.error?.message === 'string' ? frame.error.message : 'request failed'

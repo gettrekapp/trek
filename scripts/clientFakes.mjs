@@ -157,9 +157,10 @@ function fakeSocket(url) {
         ...extra
       })
     },
-    reply(reqFrame, result) {
+    /** `extra` adds fields to the res frame (say, `{rev: {topic, rev}}`). */
+    reply(reqFrame, result, extra = {}) {
       if (!reqFrame) throw new Error('fake socket: reply() to a missing request')
-      sock.receive({ type: 'res', id: reqFrame.id, ok: true, result })
+      sock.receive({ type: 'res', id: reqFrame.id, ok: true, result, ...extra })
     },
     fail(reqFrame, code, message, details) {
       if (!reqFrame) throw new Error('fake socket: fail() of a missing request')
