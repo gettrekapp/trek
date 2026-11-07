@@ -57,20 +57,27 @@ export const codex: LlmProvider = {
     // Attached, so a value starting with a dash can never be read as a flag.
     if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
     if (o.effort) parts.push(config('model_reasoning_effort', o.effort))
+    // The token comes from a helper command (Codex 0.148+), never the environment: any process of
+    // this user, the bot's included, can read another's environment (`ps -E`, KERN_PROCARGS2).
     if (o.mcp) {
       parts.push(
         config('mcp_servers.trek-dev.url', o.mcp.url),
-        config('mcp_servers.trek-dev.bearer_token_env_var', 'TREK_MCP_TOKEN')
+        config('mcp_servers.trek-dev.http_headers_helper', o.mcp.codexHeadersHelper)
       )
     }
     if (o.systemPrompt) parts.push(config('developer_instructions', o.systemPrompt))
     for (const dir of o.addDirs ?? []) parts.push(`--add-dir ${shellQuote(dir)}`)
     if (!o.resume && o.initialMessage) parts.push('--', shellQuote(o.initialMessage))
-    return {
-      command: joinCommand(parts),
-      ...(o.mcp ? { env: { TREK_MCP_TOKEN: o.mcp.token } } : {})
-    }
+    return { command: joinCommand(parts) }
   }
+}
+
+/**
+ * The `http_headers_helper` command for a headers file (`{"Authorization": "Bearer …"}`, mode 0600).
+ * Codex runs it with `sh -c` (`cmd /C` on Windows) and a cleared environment, so the path is absolute.
+ */
+export function codexHeadersHelper(headersPath: string, platform: string): string {
+  return platform === 'win32' ? `type "${headersPath}"` : `/bin/cat ${shellQuote(headersPath)}`
 }
 
 export interface CodexSessionMeta {

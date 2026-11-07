@@ -56,6 +56,26 @@ check('the rename was put back', readFileSync(secret, 'utf8') === SECRET)
 sh(`echo x > "${userData}/new.json"`)
 check('a write lands in the tmpfs, not in userData', !existsSync(join(userData, 'new.json')))
 
+// Another process of this user, outside the sandbox, with a secret in its environment (as a
+// Codex session once had its MCP token). The PID namespace hides it, its /proc entry included.
+const ENV_SECRET = `ENVSECRET-${process.pid}`
+const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { env: { ...process.env, HELD_SECRET: ENV_SECRET }, stdio: 'ignore' })
+await new Promise((done) => setTimeout(done, 300))
+const environ = `/proc/${holder.pid}/environ`
+check('outside the sandbox its environment is readable, so the checks below mean something', readFileSync(environ, 'utf8').includes(ENV_SECRET))
+const peek = (name, script) => {
+  const ran = sh(script)
+  check(`hidden: ${name}`, !ran.out.includes(ENV_SECRET), ran.out)
+  return ran
+}
+peek('its /proc/<pid>/environ', `cat ${environ}`)
+peek('its /proc/<pid>/cmdline and status', `cat /proc/${holder.pid}/cmdline /proc/${holder.pid}/status`)
+peek('ps with environments, every process', 'ps eww -A')
+peek('every /proc/*/environ', 'cat /proc/[0-9]*/environ')
+check('its pid does not exist inside', sh(`kill -0 ${holder.pid}`).status !== 0)
+check('only the sandbox\'s own processes are listed', !sh('ps -A -o pid=').out.split(/\s+/).includes(String(holder.pid)))
+holder.kill('SIGKILL')
+
 for (const script of ['/usr/bin/true', 'node -e "console.log(1 + 1)"', 'echo ok > made.txt && cat made.txt && rm made.txt', 'ls / > /dev/null', `ls "${config}" > /dev/null`, 'id -u']) {
   const ran = sh(script)
   check(`works: ${script}`, ran.status === 0, ran.out)

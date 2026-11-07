@@ -63,6 +63,22 @@ export function botMcpConfig(port: number): string {
   })
 }
 
+/** The prefix of Trek's tools in the bot's CLI: `mcp__trek-dev__<name>`. */
+export const TREK_TOOL_PREFIX = `mcp__${BOT_MCP_SERVER}__`
+
+/**
+ * The bot's PreToolUse hook command: sends the hook's input to Trek's policy route. The token goes
+ * to curl on stdin (`-H @-`, from `printf`, a shell builtin), so it is never in any argv; the
+ * hook's own stdin moves to fd 3 for the body. Blocks the tool if Trek can't answer (curl --fail,
+ * then exit 2). Needs only a POSIX sh and curl 7.55+.
+ */
+export function botPolicyHook(port: number): string {
+  return (
+    `{ printf 'Authorization: Bearer %s\\n' "$TREK_BOT_TOKEN" | ` +
+    `curl -sS --fail --max-time 10 -X POST -H @- --data-binary @/dev/fd/3 http://127.0.0.1:${port}/bot/policy; } 3<&0 || exit 2`
+  )
+}
+
 export function claudeArgs(options: TurnOptions): string[] {
   return [
     '-p',

@@ -25,6 +25,12 @@ export function ancestorsOf(dir: string): string[] {
 /**
  * The Seatbelt profile, for `ancestors` (at least 1) ancestors of userData. Every path comes in as
  * a `-D` parameter, so none is ever quoted into the profile's text.
+ *
+ * It has no process-info rule. Seatbelt doesn't gate sysctl(KERN_PROCARGS2), which returns another
+ * process's argv and environment: on macOS 26.2, `(deny process-info* (target others))`,
+ * `(deny sysctl-read)` and even `(deny default)` all leave it readable (botSandboxMac.test.mjs
+ * records this). A bare `(deny process-info*)` only hides pids and paths, and `ps` can't run here
+ * anyway (no setuid exec). So Trek keeps every token out of every process's env and argv instead.
  */
 export function macProfile(ancestors: number): string {
   const literals = Array.from({ length: ancestors }, (_, i) => `(literal (param "ANC${i}"))`).join(' ')

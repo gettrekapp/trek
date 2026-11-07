@@ -2,7 +2,7 @@
 // around plain shells, python and node, against a fake userData. No Claude CLI. macOS only.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -111,6 +111,49 @@ test('an app the bot writes cannot be opened through LaunchServices', { skip: sk
   assert.equal(readFileSync(escaped, 'utf8'), SECRET)
 })
 
+/** An unsandboxed process holding a secret in its environment (and none in its argv), as a Codex session once did. */
+const envHolder = (t) => {
+  const secret = `ENVSECRET-${process.pid}-${Date.now()}`
+  const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { env: { ...process.env, HELD_SECRET: secret }, stdio: 'ignore' })
+  t.after(() => child.kill('SIGKILL'))
+  // Until it has exec'd, its args are the parent's.
+  spawnSync('/bin/sleep', ['0.3'])
+  return { pid: child.pid, secret }
+}
+
+test("another process's environment does not show in ps from inside the sandbox", { skip }, (t) => {
+  const { pid, secret } = envHolder(t)
+  // The control: outside the sandbox, ps -E shows it.
+  assert.ok(spawnSync('/bin/ps', ['-E', '-ww', '-p', String(pid)], { encoding: 'utf8' }).stdout.includes(secret), 'control')
+  const ran = sh(`ps -E -ww -p ${pid}; ps -E -ww -A`)
+  assert.ok(!ran.out.includes(secret), ran.out.slice(0, 500))
+  // ps is setuid root, and the sandbox won't exec a setuid binary at all.
+  assert.match(ran.out, /ps: Operation not permitted/)
+})
+
+// Seatbelt does not gate sysctl(KERN_PROCARGS2): on macOS 26.2 no rule tried stops it, not
+// (deny process-info* (target others)), not (deny sysctl-read), not even (deny default). So any
+// process of this user, sandboxed or not, can read another's argv and environment. This is why
+// no Trek token is ever put in a process's environment or argv (see providers.test.mjs), and
+// why the profile has no process-info rule. If this starts failing, macOS now hides it: say so.
+test('known gap: KERN_PROCARGS2 still reads another process\'s environment from inside the sandbox', { skip: skip || (!hasPython && 'no python3') }, (t) => {
+  const { pid, secret } = envHolder(t)
+  const probe = [
+    'import ctypes, sys',
+    'libc = ctypes.CDLL(None)',
+    'pid, want = int(sys.argv[1]), sys.argv[2][::-1].encode()',
+    'mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2',
+    'size = ctypes.c_size_t(1 << 20)',
+    'buf = ctypes.create_string_buffer(1 << 20)',
+    'ok = libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) == 0',
+    "print('read' if ok else 'denied', 'found' if ok and want in buf.raw[:size.value] else 'absent')"
+  ].join('\n')
+  // The secret is reversed on the command line, so the probe's own argv never holds it.
+  const reversed = [...secret].reverse().join('')
+  const ran = spawnSync(sandbox.command, [...sandbox.args, 'python3', '-I', '-c', probe, String(pid), reversed], { encoding: 'utf8', timeout: 20_000 })
+  assert.equal(ran.stdout.trim(), 'read found', ran.stderr)
+})
+
 test('ordinary commands still work', { skip }, () => {
   for (const script of [
     '/usr/bin/true',
@@ -118,6 +161,9 @@ test('ordinary commands still work', { skip }, () => {
     'echo ok > made.txt && cat made.txt && rm made.txt',
     'node -e "console.log(1 + 1)"',
     'ls ~ > /dev/null && ls / > /dev/null',
+    // The bot's own children: started, waited on and signalled.
+    'sleep 5 & kill $! && wait $! ; test $? -ne 0',
+    'node -e "const c = require(\'child_process\').spawn(\'sleep\', [\'5\']); setTimeout(() => { process.kill(c.pid, 0); c.kill() }, 100)"',
     `ls "${ancestor}" > /dev/null`
   ]) {
     assert.equal(sh(script).status, 0, script)

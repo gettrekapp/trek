@@ -9,11 +9,14 @@ import { acquireBotLock } from '../host/bot/lock.ts'
 import {
   createBotFolder, defaultBotFolder, isDirectory, looksLikeBotFolder, readConfig, readEvents
 } from '../host/bot/memory.ts'
+import { botMcpHandlers } from '../host/bot/mcpHandlers.ts'
 import { BotRunner } from '../host/bot/runner.ts'
-import { botMcpConfig, killAllTurnsNow, runTurn } from '../host/bot/turnProcess.ts'
+import {
+  botMcpConfig, botPolicyHook, killAllTurnsNow, runTurn, type TurnHandle
+} from '../host/bot/turnProcess.ts'
 import { isConsented, recordConsent } from './botConsent'
 import { BOT_SECRET_FILES } from './botSecretFiles'
-import { botMcpAccess, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
+import { botMcpAccess, openBotTurn, readBotSnapshot, releaseMcpWindow, setBotMcpHandlers, type BotMcpAccess } from './mcp'
 
 interface BoundBot {
   key: string
@@ -47,9 +50,9 @@ function sendEvent(contents: WebContents, event: BotEvent): void {
   if (!contents.isDestroyed()) contents.send('bot:event', event)
 }
 
-/** Blocks the tool if the app can't answer: curl --fail plus exit 2 fails closed. */
+/** Blocks the tool if the app can't answer: see botPolicyHook. */
 function hookSettings(port: number): string {
-  const command = `curl -sS --fail --max-time 10 -X POST -H "Authorization: Bearer $TREK_BOT_TOKEN" --data-binary @- http://127.0.0.1:${port}/bot/policy || exit 2`
+  const command = botPolicyHook(port)
   return JSON.stringify({
     hooks: { PreToolUse: [{ matcher: '*', hooks: [{ type: 'command', command }] }] }
   })
@@ -176,8 +179,19 @@ function bind(
       now: Date.now,
       newSessionId: randomUUID,
       snapshot: async () => (await readBotSnapshot(contents)) as TrekSnapshot,
-      runTurn: (turn, onEvent) =>
-        runTurn(
+      runTurn: (turn, onEvent) => {
+        // A token for this turn only, revoked when it settles: done, failed, stopped or killed.
+        let turnToken: ReturnType<typeof openBotTurn>
+        try {
+          turnToken = openBotTurn(contents)
+        } catch (err) {
+          const ended: TurnHandle = {
+            done: Promise.resolve({ kind: 'crash', text: (err as Error).message, sessionStarted: false }),
+            kill: () => {}
+          }
+          return ended
+        }
+        const handle = runTurn(
           {
             command: bound.attach.claudeCommand.trim().split(/\s+/),
             cwd: folder,
@@ -188,11 +202,14 @@ function bind(
             mcpConfig: botMcpConfig(access.port),
             settings: hookSettings(access.port),
             addDirs: bound.attach.repoPaths.filter((p) => existsSync(p)),
-            env: { TREK_BOT_TOKEN: access.token },
+            env: { TREK_BOT_TOKEN: turnToken.token },
             timeoutMs: turn.timeoutMs
           },
           onEvent
-        ),
+        )
+        void handle.done.finally(turnToken.close)
+        return handle
+      },
       onView: (view) => sendView(contents, view),
       onEvent: (event) => sendEvent(contents, event),
       // Called from inside the runner, so stopping it has to wait until that call has returned.
@@ -294,48 +311,8 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
   }
 }
 
-const TREK_TOOL_PREFIX = 'mcp__trek-dev__'
-
-const hookAnswer = (allow: boolean, reason: string): object => ({
-  hookSpecificOutput: {
-    hookEventName: 'PreToolUse',
-    permissionDecision: allow ? 'allow' : 'deny',
-    permissionDecisionReason: reason
-  }
-})
-
 export function registerBotHandlers(): void {
-  setBotMcpHandlers({
-    // A throw reaches the 500 in startMcpServer, which blocks the tool, as does anything but allow here.
-    policy: (windowId, hook) => {
-      const tool = String(hook.tool_name ?? '')
-      // Trek's own tools are checked once, by toolCall, when the call reaches the MCP server.
-      // Checking here as well would spend an approval before the call it was for.
-      if (tool.startsWith(TREK_TOOL_PREFIX)) return hookAnswer(true, 'Trek checks this call when it runs.')
-      const bot = bots.get(windowId)
-      const decision = bot
-        ? bot.runner.checkTool(
-            { tool, input: (hook.tool_input ?? {}) as Record<string, unknown> },
-            typeof hook.cwd === 'string' ? hook.cwd : undefined
-          )
-        : { decision: 'deny', reason: 'The bot is not running' }
-      return hookAnswer(decision.decision === 'allow', decision.reason)
-    },
-    toolCall: (windowId, name, args) => {
-      const bot = bots.get(windowId)
-      if (!bot) return { allowed: false, reason: 'The bot is not running' }
-      const decision = bot.runner.checkTool({ tool: `${TREK_TOOL_PREFIX}${name}`, input: args })
-      return { allowed: decision.decision === 'allow', reason: decision.reason }
-    },
-    requestApproval: (windowId, args) => {
-      const bot = bots.get(windowId)
-      if (!bot) throw new Error('The bot is not running')
-      if (typeof args.tool !== 'string' || typeof args.reason !== 'string' || !args.input || typeof args.input !== 'object') {
-        throw new Error('tool, input and reason are required')
-      }
-      return bot.runner.requestApproval(args.tool, args.input as Record<string, unknown>, args.reason)
-    }
-  })
+  setBotMcpHandlers(botMcpHandlers((windowId) => bots.get(windowId)?.runner))
 
   ipcMain.handle('bot:attach', (event, request: BotAttach | null) => {
     const contents = event.sender

@@ -5,7 +5,11 @@ import { readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import type { McpCallRequest, McpCallResponse } from '../shared/types'
+import { codexHeadersHelper } from '../shared/providers/codex.ts'
 import { PROVIDER_IDS, type McpAccess } from '../shared/providers/types'
+import { handleBody, type BotMcpHandlers, type RpcDeps } from './mcpRpc'
+
+export type { BotMcpHandlers } from './mcpRpc'
 
 /**
  * MCP server (Streamable HTTP, JSON responses only) that lets the global
@@ -388,13 +392,6 @@ const BOT_TOOLS = [
   }
 ]
 
-export interface BotMcpHandlers {
-  policy: (windowId: number, hookInput: Record<string, unknown>) => object
-  /** The bot's policy for a call that has reached this server. Anything but `allowed` is refused. */
-  toolCall: (windowId: number, name: string, args: Record<string, unknown>) => { allowed: boolean; reason: string }
-  requestApproval: (windowId: number, args: Record<string, unknown>) => string
-}
-
 let botHandlers: BotMcpHandlers | null = null
 
 export function setBotMcpHandlers(handlers: BotMcpHandlers): void {
@@ -403,13 +400,6 @@ export function setBotMcpHandlers(handlers: BotMcpHandlers): void {
 
 const INSTRUCTIONS =
   'Controls the Trek Dev app. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them (get_selected_worktree for the one the user has selected), start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), wait_for_sessions and read_terminal to follow progress, and get_stack/start_stack/stop_stack to run the dev stack of a local worktree. A worktree session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so the app flags it.'
-
-interface JsonRpcMessage {
-  jsonrpc: '2.0'
-  id?: string | number | null
-  method?: string
-  params?: Record<string, unknown>
-}
 
 const pending = new Map<
   string,
@@ -427,16 +417,18 @@ interface McpClient {
 interface SessionClient extends McpClient {
   configPath: string
   written: Promise<void>
-  /** The Gemini settings file, written on first non-Claude access */
-  geminiWritten?: Promise<string>
+  /** The Gemini settings and Codex headers files, written on first non-Claude access */
+  geminiWritten?: Promise<{ geminiSettingsPath: string; codexHeadersPath: string }>
 }
 
 const clients = new Map<number, SessionClient>()
 /**
- * Bot turns get their own token, so bot-only routes and tools stay out of other sessions' reach.
- * No file holds it: the bot's config is inline, and the CLI reads the token from its environment.
+ * Each bot turn gets its own token, by token, so bot-only routes and tools stay out of other
+ * sessions' reach. It lives from the turn's start until it settles (or the window closes), so a
+ * token copied out of a turn is worthless afterwards. No file holds it: the bot's config is
+ * inline, and the CLI reads the token from its environment.
  */
-const botClients = new Map<number, McpClient>()
+const botTurns = new Map<string, McpClient>()
 
 function callRenderer(
   client: McpClient,
@@ -458,67 +450,15 @@ function callRenderer(
   })
 }
 
-async function handleMessage(msg: JsonRpcMessage, client: McpClient): Promise<object | null> {
-  const isRequest = msg.id !== undefined && msg.id !== null
-  const reply = (result: object): object => ({ jsonrpc: '2.0', id: msg.id, result })
-  const fail = (code: number, message: string): object => ({
-    jsonrpc: '2.0',
-    id: msg.id ?? null,
-    error: { code, message }
-  })
-  if (!isRequest) return null
-
-  switch (msg.method) {
-    case 'initialize': {
-      const requested = msg.params?.protocolVersion
-      const protocolVersion =
-        typeof requested === 'string' && SUPPORTED_VERSIONS.includes(requested)
-          ? requested
-          : SUPPORTED_VERSIONS[0]
-      return reply({
-        protocolVersion,
-        capabilities: { tools: {} },
-        serverInfo: { name: MCP_SERVER_NAME, version: app.getVersion() },
-        instructions: INSTRUCTIONS
-      })
-    }
-    case 'ping':
-      return reply({})
-    case 'tools/list':
-      return reply({ tools: client.bot ? [...TOOLS, ...BOT_TOOLS] : TOOLS })
-    case 'tools/call': {
-      const name = msg.params?.name
-      const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
-      const known = typeof name === 'string' && [...TOOLS, ...(client.bot ? BOT_TOOLS : [])].some((t) => t.name === name)
-      if (!known) return fail(-32602, `Unknown tool: ${String(name)}`)
-      // The bot's token is in its environment, so its shell can call this server directly. The
-      // policy runs here, on every call, so that skipping the CLI's hook gains nothing.
-      if (client.bot) {
-        let gate: { allowed: boolean; reason: string }
-        try {
-          gate = botHandlers!.toolCall(client.windowId, name, args)
-        } catch (err) {
-          gate = { allowed: false, reason: String(err) }
-        }
-        if (!gate.allowed) return reply({ content: [{ type: 'text', text: gate.reason }], isError: true })
-      }
-      if (client.bot && BOT_TOOLS.some((t) => t.name === name)) {
-        try {
-          // The runner words this: end the turn, or run the call now if it is already approved.
-          const text = botHandlers!.requestApproval(client.windowId, args)
-          return reply({ content: [{ type: 'text', text }], isError: false })
-        } catch (err) {
-          return reply({ content: [{ type: 'text', text: String(err) }], isError: true })
-        }
-      }
-      const response = await callRenderer(client, name, args)
-      const text = response.ok
-        ? JSON.stringify(response.result ?? null, null, 2)
-        : (response.error ?? 'Unknown error')
-      return reply({ content: [{ type: 'text', text }], isError: !response.ok })
-    }
-    default:
-      return fail(-32601, `Method not found: ${String(msg.method)}`)
+function rpcDeps(client: McpClient): RpcDeps {
+  return {
+    tools: TOOLS,
+    botTools: BOT_TOOLS,
+    handlers: botHandlers,
+    serverInfo: { name: MCP_SERVER_NAME, version: app.getVersion() },
+    instructions: INSTRUCTIONS,
+    supportedVersions: SUPPORTED_VERSIONS,
+    callRenderer: (name, args) => callRenderer(client, name, args)
   }
 }
 
@@ -533,7 +473,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 
 function clientFor(req: IncomingMessage): McpClient | undefined {
   const actual = Buffer.from(req.headers.authorization ?? '')
-  return [...clients.values(), ...botClients.values()].find((client) => {
+  return [...clients.values(), ...botTurns.values()].find((client) => {
     const expected = Buffer.from(`Bearer ${client.token}`)
     return actual.length === expected.length && timingSafeEqual(actual, expected)
   })
@@ -576,29 +516,28 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     return
   }
 
-  const batch = Array.isArray(body)
-  const messages = (batch ? body : [body]) as JsonRpcMessage[]
-  const replies = (await Promise.all(messages.map((m) => handleMessage(m, client)))).filter(Boolean)
-  if (replies.length === 0) {
+  const answer = await handleBody(body, client, rpcDeps(client))
+  if (answer === null) {
     res.writeHead(202).end()
     return
   }
   res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify(batch ? replies : replies[0]))
+  res.end(JSON.stringify(answer))
 }
 
 let portPromise: Promise<number> | null = null
 
 /**
- * Per-window config files don't outlive a launch; a crash can leave them behind. `mcp-bot-<id>.json`
- * is no longer written (the bot's config is inline), but older versions left them.
+ * Per-window config files (`mcp-<id>`, `mcp-gemini-<id>`, `mcp-codex-<id>`) don't outlive a launch;
+ * a crash can leave them behind. `mcp-bot-<id>.json` is no longer written (the bot's config is
+ * inline), but older versions left them.
  */
 async function removeStaleConfigs(): Promise<void> {
   const dir = app.getPath('userData')
   const names = await readdir(dir)
   await Promise.all(
     names
-      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-(bot-|gemini-)?\d+\.json$/.test(n))
+      .filter((n) => n === 'global-claude-mcp.json' || /^mcp-(bot-|gemini-|codex-)?\d+\.json$/.test(n))
       .map((n) => rm(join(dir, n), { force: true }))
   )
 }
@@ -666,62 +605,74 @@ async function accessFor(contents: WebContents): Promise<McpAccess> {
   const url = `http://127.0.0.1:${port}/mcp`
   // Written once per window, like the Claude config. Gemini reads MCP servers from a
   // settings file and trusts this one's tools, the equivalent of --allowedTools mcp__trek-dev.
+  // Codex runs a helper command that prints the headers file, so its token is in no env or argv.
   client.geminiWritten ??= (async () => {
-    const path = join(app.getPath('userData'), `mcp-gemini-${contents.id}.json`)
-    const settings = {
-      mcpServers: {
-        [MCP_SERVER_NAME]: {
-          httpUrl: url,
-          headers: { Authorization: `Bearer ${client.token}` },
-          trust: true
-        }
-      }
-    }
-    await writeFile(path, JSON.stringify(settings, null, 2), { mode: 0o600 })
-    return path
+    const headers = { Authorization: `Bearer ${client.token}` }
+    const geminiSettingsPath = join(app.getPath('userData'), `mcp-gemini-${contents.id}.json`)
+    const codexHeadersPath = join(app.getPath('userData'), `mcp-codex-${contents.id}.json`)
+    const settings = { mcpServers: { [MCP_SERVER_NAME]: { httpUrl: url, headers, trust: true } } }
+    await writeFile(geminiSettingsPath, JSON.stringify(settings, null, 2), { mode: 0o600 })
+    await writeFile(codexHeadersPath, JSON.stringify(headers), { mode: 0o600 })
+    return { geminiSettingsPath, codexHeadersPath }
   })()
-  let geminiSettingsPath: string
+  let written: { geminiSettingsPath: string; codexHeadersPath: string }
   try {
-    geminiSettingsPath = await client.geminiWritten
+    written = await client.geminiWritten
   } catch (err) {
     client.geminiWritten = undefined
     throw err
   }
   // The window may have closed (and had its files removed) while we were writing.
   if (contents.isDestroyed()) {
-    void rm(geminiSettingsPath, { force: true }).catch((err) => console.error(err))
+    for (const path of Object.values(written)) void rm(path, { force: true }).catch((err) => console.error(err))
     throw new Error('The app window is not open')
   }
-  return { configPath, url, token: client.token, geminiSettingsPath }
+  return {
+    configPath,
+    url,
+    token: client.token,
+    geminiSettingsPath: written.geminiSettingsPath,
+    codexHeadersHelper: codexHeadersHelper(written.codexHeadersPath, process.platform)
+  }
 }
 
 export interface BotMcpAccess {
-  token: string
   port: number
 }
 
-/** The bot's own token for this window, made once. Nothing is written: see botMcpConfig. */
+/** Starts the MCP server if need be, for the bot's turns. Tokens are per turn: see openBotTurn. */
 export async function botMcpAccess(contents: WebContents): Promise<BotMcpAccess> {
   portPromise ??= startMcpServer().catch((err) => {
     portPromise = null
     throw err
   })
   const port = await portPromise
+  if (contents.isDestroyed()) throw new Error('The app window is not open')
+  return { port }
+}
+
+export interface BotTurnToken {
+  token: string
+  /** Revokes the token. Safe to call more than once. */
+  close: () => void
+}
+
+/**
+ * A fresh token for one bot turn, valid until `close` (when the turn settles) or the window closes.
+ * Between turns no bot token works at all, so a call with none running gets a 401.
+ */
+export function openBotTurn(contents: WebContents): BotTurnToken {
   // A window closed by now has been released, and nothing would release a new token.
   if (contents.isDestroyed()) throw new Error('The app window is not open')
-  const existing = botClients.get(contents.id)
-  if (existing) return { token: existing.token, port }
   const token = randomBytes(32).toString('hex')
-  botClients.set(contents.id, { windowId: contents.id, contents, token, bot: true })
-  return { token, port }
+  botTurns.set(token, { windowId: contents.id, contents, token, bot: true })
+  return { token, close: () => void botTurns.delete(token) }
 }
 
 /** Reads the renderer's session state for the bot's change check. Not an MCP tool. */
 export async function readBotSnapshot(contents: WebContents): Promise<unknown> {
   if (contents.isDestroyed()) throw new Error('The app window is not open')
-  const client = botClients.get(contents.id)
-  if (!client) throw new Error('The bot has no connection to this window')
-  const response = await callRenderer(client, 'bot_snapshot', {})
+  const response = await callRenderer({ windowId: contents.id, contents, token: '', bot: true }, 'bot_snapshot', {})
   if (!response.ok) throw new Error(response.error ?? 'Unknown error')
   return response.result
 }
@@ -739,10 +690,10 @@ export function releaseMcpWindow(windowId: number): void {
     clients.delete(windowId)
     void rm(session.configPath, { force: true }).catch((err) => console.error(err))
   }
-  botClients.delete(windowId)
-  void rm(join(app.getPath('userData'), `mcp-gemini-${windowId}.json`), { force: true }).catch(
-    (err) => console.error(err)
-  )
+  for (const [token, client] of botTurns) if (client.windowId === windowId) botTurns.delete(token)
+  for (const name of [`mcp-gemini-${windowId}.json`, `mcp-codex-${windowId}.json`]) {
+    void rm(join(app.getPath('userData'), name), { force: true }).catch((err) => console.error(err))
+  }
 }
 
 export function registerMcpHandlers(): void {

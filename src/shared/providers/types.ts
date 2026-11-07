@@ -44,10 +44,15 @@ export interface McpAccess {
   configPath: string
   /** http://127.0.0.1:<port>/mcp */
   url: string
-  /** Bearer token for this window */
+  /** Bearer token for this window. No provider passes it in env or argv: see the files below. */
   token: string
   /** Gemini system-settings file holding the same server */
   geminiSettingsPath: string
+  /**
+   * For Codex's `http_headers_helper`: a command that prints `{"Authorization": "Bearer …"}` from a
+   * 0600 file. Codex runs it itself, so the token is in neither Codex's environment nor its argv.
+   */
+  codexHeadersHelper: string
 }
 
 export type LocalBackend = 'ollama' | 'lmstudio'

@@ -1147,13 +1147,16 @@ test('terminal sizes are capped at 500 columns and 200 rows', (t) => {
 })
 
 test('sessions launch with the project\'s MCP access; Global sessions get the role prompt', (t) => {
-  const s = setup(t, { mcpAccess: (projectId) => ({ configPath: `/m/${projectId}.json`, url: 'http://127.0.0.1:9/mcp', token: 'tok', geminiSettingsPath: `/m/${projectId}-g.json` }) })
+  const s = setup(t, { mcpAccess: (projectId) => ({ configPath: `/m/${projectId}.json`, url: 'http://127.0.0.1:9/mcp', token: 'tok', geminiSettingsPath: `/m/${projectId}-g.json`, codexHeadersHelper: `/bin/cat '/m/${projectId}.codex.json'` }) })
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
   assert.match(cmd(s.spawned[0]), new RegExp(`--mcp-config '/m/${s.projectId}.json' --allowedTools mcp__trek-dev`))
   s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
   assert.match(cmd(s.spawned[1]), /global Claude session/)
   s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', llm: { provider: 'codex' }, ...size })
-  assert.equal(s.spawned[2].opts.env.TREK_MCP_TOKEN, 'tok')
+  // Codex reads its token through the helper, from a file: never from its environment or argv.
+  assert.match(cmd(s.spawned[2]), new RegExp(`http_headers_helper="/bin/cat .*/m/${s.projectId}\\.codex\\.json`))
+  assert.ok(!JSON.stringify(s.spawned[2].opts.env).includes('tok'))
+  assert.ok(!cmd(s.spawned[2]).includes('tok'))
 })
 
 test('without MCP access sessions launch as before', (t) => {

@@ -33,6 +33,11 @@ test('accessFor writes the Claude and Gemini files once per project, mode 0600',
     mcpServers: { 'trek-dev': { httpUrl: a.url, headers: { Authorization: `Bearer ${a.token}` }, trust: true } }
   })
   assert.equal(statSync(a.configPath).mode & 0o777, 0o600)
+  // Codex reads the token through a helper command, from a file of its own: never from env or argv.
+  const codexFile = join(mcpDir, 'p1.codex.json')
+  assert.equal(a.codexHeadersHelper, `/bin/cat '${codexFile}'`)
+  assert.deepEqual(JSON.parse(readFileSync(codexFile, 'utf8')), { Authorization: `Bearer ${a.token}` })
+  assert.equal(statSync(codexFile).mode & 0o777, 0o600)
   assert.equal(statSync(mcpDir).mode & 0o777, 0o700)
   assert.deepEqual(store.accessFor('p1'), a, 'the same token and files on the next call')
   assert.notEqual(store.accessFor('p2').token, a.token)
@@ -51,6 +56,7 @@ test('projectFor matches the bearer header; revoke removes token and files', (t)
   assert.equal(store.projectFor(`Bearer ${a.token}`), undefined)
   assert.equal(existsSync(a.configPath), false)
   assert.equal(existsSync(a.geminiSettingsPath), false)
+  assert.equal(existsSync(join(mcpDir, 'p1.codex.json')), false)
 })
 
 test('the constructor clears files from an earlier run', (t) => {
@@ -155,9 +161,11 @@ test('accessFor rewrites deleted files with the same token (a second start swept
   const a = store.accessFor('p1')
   rmSync(a.configPath)
   rmSync(a.geminiSettingsPath)
+  rmSync(join(mcpDir, 'p1.codex.json'))
   const b = store.accessFor('p1')
   assert.equal(b.token, a.token)
   assert.ok(existsSync(a.configPath) && existsSync(a.geminiSettingsPath))
   assert.equal(JSON.parse(readFileSync(a.configPath, 'utf8')).mcpServers['trek-dev'].headers.Authorization, `Bearer ${a.token}`)
   assert.equal(statSync(a.geminiSettingsPath).mode & 0o777, 0o600)
+  assert.equal(JSON.parse(readFileSync(join(mcpDir, 'p1.codex.json'), 'utf8')).Authorization, `Bearer ${a.token}`)
 })

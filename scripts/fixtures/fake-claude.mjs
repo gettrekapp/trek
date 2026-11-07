@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Stands in for the Claude CLI in tests. The wake text picks the behaviour, or the whole prompt if it has no wake tags.
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
@@ -83,6 +83,13 @@ if (wake.includes('HANG')) {
 } else if (wake.includes('LIMITED')) {
   emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected' } })
   finish("You've hit your limit", true)
+} else if (wake.includes('PEEK')) {
+  // What any process of this user can see of the others: every process's argv and environment.
+  const flags = process.platform === 'darwin' ? ['-E', '-ww', '-A'] : ['eww', '-A']
+  const ps = spawnSync('ps', [...flags, '-o', 'pid=,command='], { encoding: 'utf8' })
+  writeFileSync(process.env.FAKE_CLAUDE_PEEK_FILE, `${ps.stdout ?? ''}${ps.stderr ?? ''}`)
+  say('peek:done')
+  finish()
 } else if (wake.includes('ASKME')) {
   say(`policy:${await askPolicy('git push origin smoke')}`)
   const server = mcp()

@@ -17,7 +17,8 @@ execSync('git init -q -b master && git -c user.email=s@s -c user.name=s commit -
 })
 const bin = realpathSync(mkdtempSync(join(tmpdir(), 'trek-fake-bin-')))
 // Each fake agent prints one line per argument, shows its "working" marker, goes quiet, then
-// stays alive reading stdin so the tab doesn't exit.
+// stays alive reading stdin so the tab doesn't exit. It ends as node, not a system binary:
+// macOS hides a platform binary's environment from ps -E, which would make the env check vacuous.
 for (const [name, marker] of [
   ['fake-codex', 'esc to interrupt'],
   ['fake-gemini', 'esc to cancel']
@@ -25,7 +26,7 @@ for (const [name, marker] of [
   const path = join(bin, name)
   writeFileSync(
     path,
-    `#!/bin/sh\nfor a in "$@"; do echo "ARG[$a]"; done\necho "working (${marker})"\nsleep 1\necho ready\nexec cat\n`
+    `#!/bin/sh\nfor a in "$@"; do echo "ARG[$a]"; done\necho "PID[$$]"\necho "working (${marker})"\nsleep 1\necho ready\nexec "${process.execPath}" -e 'process.stdin.pipe(process.stdout)'\n`
   )
   chmodSync(path, 0o755)
 }
@@ -104,6 +105,42 @@ try {
     }
     check(`${c.provider}: status settled to done`, meta?.status === 'done', String(meta?.status))
     check(`${c.provider}: meta records the provider`, meta?.llm?.provider === c.provider)
+  }
+
+  // A Global Codex session gets Trek's MCP server. Its token must be in neither its argv nor its
+  // environment, where any process of this user (a sandboxed bot's included) could read it.
+  {
+    const access = await win.evaluate(() => window.api.getMcpAccess())
+    const id = await win.evaluate(() => window.__terminals.startGlobalTerminal({ sessionId: '', title: 'Codex', llm: { provider: 'codex' } }))
+    check('codex global: session started', !!id)
+    let text = ''
+    for (let i = 0; i < 50 && !text.includes('ready'); i++) {
+      await sleep(200)
+      text = await win.evaluate((id) => window.__terminals.readTerminal(id, 200) ?? '', id)
+    }
+    const argLines = text.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('ARG['))
+    const pid = Number(/PID\[(\d+)\]/.exec(text)?.[1])
+    check('codex global: launched with an MCP url', argLines.some((l) => l.includes(`mcp_servers.trek-dev.url="${access.url}"`)), argLines.join(' | '))
+    check('codex global: no bearer_token_env_var', !argLines.some((l) => l.includes('bearer_token_env_var')), argLines.join(' | '))
+    const helperArg = argLines.find((l) => l.includes('mcp_servers.trek-dev.http_headers_helper='))
+    check('codex global: given a headers helper', !!helperArg, argLines.join(' | '))
+    check('codex global: the token is not in argv', !text.includes(access.token))
+    const seen = execSync(`ps -E -ww -p ${pid} -o command=`, { encoding: 'utf8' })
+    // The control: its environment is visible, Trek's own variables in it.
+    check('codex global: ps -E shows its environment', seen.includes(`TREK_TERMINAL_ID=${id}`), seen.slice(0, 300))
+    check("codex global: the token is not in its environment or argv (ps -E)", !seen.includes(access.token))
+    if (helperArg) {
+      // Run the helper as Codex does (sh -c, cleared environment), then use what it prints.
+      const helper = JSON.parse(helperArg.slice(helperArg.indexOf('=') + 1, -1))
+      const headers = JSON.parse(execSync(helper, { encoding: 'utf8', shell: '/bin/sh', env: {} }))
+      check('codex global: the helper prints the Authorization header', headers.Authorization === `Bearer ${access.token}`)
+      const res = await fetch(access.url, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} })
+      })
+      check('codex global: those headers reach the MCP server', res.status === 200, String(res.status))
+    }
   }
 } finally {
   // Quitting asks to confirm while sessions are running, so exit the app directly.

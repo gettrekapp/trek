@@ -21,7 +21,8 @@ const MCP = {
   configPath: '/u/mcp-1.json',
   url: 'http://127.0.0.1:5000/mcp',
   token: 'tok',
-  geminiSettingsPath: '/u/mcp-gemini-1.json'
+  geminiSettingsPath: '/u/mcp-gemini-1.json',
+  codexHeadersHelper: "/bin/cat '/u/mcp-codex-1.json'"
 }
 
 test('claude: a plain new session matches today', () => {
@@ -124,7 +125,7 @@ test('parseLocalModels reads Ollama tags and LM Studio models', () => {
   assert.deepEqual(parseLocalModels('ollama', { nope: true }), [])
 })
 
-import { codex, parseCodexSessionMeta } from '../src/shared/providers/codex.ts'
+import { codex, codexHeadersHelper, parseCodexSessionMeta } from '../src/shared/providers/codex.ts'
 
 test('codex: a new session with everything', () => {
   const spec = codex.buildLaunch({
@@ -142,10 +143,26 @@ test('codex: a new session with everything', () => {
     spec.command,
     `codex --full-auto --model='gpt-5-codex' -c 'model_reasoning_effort="high"' ` +
       `-c 'mcp_servers.trek-dev.url="http://127.0.0.1:5000/mcp"' ` +
-      `-c 'mcp_servers.trek-dev.bearer_token_env_var="TREK_MCP_TOKEN"' ` +
+      `-c 'mcp_servers.trek-dev.http_headers_helper="/bin/cat '\\''/u/mcp-codex-1.json'\\''"' ` +
       `-c 'developer_instructions="Be \\"brief\\""' --add-dir '/other' -- 'hi'`
   )
-  assert.deepEqual(spec.env, { TREK_MCP_TOKEN: 'tok' })
+  // The token is in neither the environment nor argv: any process of this user can read both.
+  assert.equal(spec.env, undefined)
+  assert.ok(!spec.command.includes('tok'))
+})
+
+test('codex: the headers helper reads a file, quoted for sh, or with type on Windows', () => {
+  assert.equal(codexHeadersHelper("/u/it's/mcp-codex-1.json", 'darwin'), `/bin/cat '/u/it'\\''s/mcp-codex-1.json'`)
+  assert.equal(codexHeadersHelper('C:\\Users\\me\\mcp-codex-1.json', 'win32'), 'type "C:\\Users\\me\\mcp-codex-1.json"')
+})
+
+test('no provider puts the MCP token in its environment or argv', () => {
+  const mcp = { ...MCP, token: 'SECRET-TOKEN-XYZ' }
+  for (const provider of PROVIDER_LIST.filter((p) => p.capabilities.mcp)) {
+    const spec = provider.buildLaunch({ sessionId: ID, resume: false, mcp, initialMessage: 'hi' })
+    assert.ok(!spec.command.includes(mcp.token), `${provider.id} argv`)
+    assert.ok(!JSON.stringify(spec.env ?? {}).includes(mcp.token), `${provider.id} env`)
+  }
 })
 
 test('codex: resume puts the subcommand and id first; no first message', () => {

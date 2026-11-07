@@ -26,6 +26,7 @@ const pidFile = join(root, 'hang.pid')
 const gate = join(root, 'gate')
 const descendantPids = join(root, 'descendants.pids')
 const tokenFile = join(root, 'bot.token')
+const peekFile = join(root, 'peek.txt')
 const project = {
   version: 3,
   name: 'Smoke',
@@ -47,7 +48,8 @@ const startElectron = async ({ restore = false, dataDir = userData, argLog = log
     FAKE_CLAUDE_PID_FILE: pidFile,
     FAKE_CLAUDE_PIDS: descendantPids,
     FAKE_CLAUDE_GATE: gate,
-    FAKE_CLAUDE_TOKEN_FILE: tokenFile
+    FAKE_CLAUDE_TOKEN_FILE: tokenFile,
+    FAKE_CLAUDE_PEEK_FILE: peekFile
   }
   if (restore) delete env.TREK_NO_WINDOW_RESTORE
   else env.TREK_NO_WINDOW_RESTORE = '1'
@@ -144,6 +146,14 @@ const rpc = async (server, method, params) => {
   })
   return res.json()
 }
+const rpcStatus = async (server, method, params) => {
+  const res = await fetch(server.url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${server.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+  })
+  return res.status
+}
 const toolNames = async (server) => (await rpc(server, 'tools/list', {})).result.tools.map((t) => t.name)
 const callRefused = async (server, name, args) => {
   const reply = await rpc(server, 'tools/call', { name, arguments: args })
@@ -196,21 +206,22 @@ try {
     const botServer = JSON.parse(argv[argv.indexOf('--mcp-config') + 1]).mcpServers['trek-dev']
     check('the bot MCP config is inline, its token left to the environment', botServer.headers.Authorization, 'Bearer ${TREK_BOT_TOKEN}')
     check('no bot MCP config file in userData', readdirSync(userData).filter((n) => n.startsWith('mcp-bot-')), [])
-    const bot = { url: botServer.url, token: readFileSync(tokenFile, 'utf8') }
-    check('the CLI got the bot token in its environment', /^[0-9a-f]{64}$/.test(bot.token), true)
-    check('the token is not in argv', argv.some((a) => a.includes(bot.token)), false)
+    const ended = { url: botServer.url, token: readFileSync(tokenFile, 'utf8') }
+    check('the CLI got the bot token in its environment', /^[0-9a-f]{64}$/.test(ended.token), true)
+    check('the token is not in argv', argv.some((a) => a.includes(ended.token)), false)
     const call = JSON.stringify({ tool_name: 'Read', tool_input: { file_path: join(folder, 'BOT.md') } })
     check('an unknown token is refused', (await post(session, 'nonsense', call)).status, 401)
     check('a session token is refused', (await post(session, session.token, call)).status, 403)
-    check('a malformed body is a 500', (await post(bot, bot.token, '{not json')).status, 500)
-    const idle = await post(bot, bot.token, call)
-    check(
-      'with no turn running, the bot token gets a denial',
-      [idle.status, (await idle.json()).hookSpecificOutput.permissionDecision],
-      [200, 'deny']
-    )
+    // Each turn has its own token, revoked when the turn settles.
+    check("an ended turn's token is refused by the policy route", (await post(ended, ended.token, call)).status, 401)
+    check("an ended turn's token is refused by the MCP route", (await rpcStatus(ended, 'tools/list', {})), 401)
 
-    // --- What each token can reach
+    // --- What each token can reach, and the real hook command, during a real turn
+    await say('GATED')
+    check('the turn for the hook checks is running', await seen(/^gated$/), true)
+    const bot = { url: botServer.url, token: readFileSync(tokenFile, 'utf8') }
+    check('the running turn has a fresh token', [/^[0-9a-f]{64}$/.test(bot.token), bot.token !== ended.token], [true, true])
+    check('a malformed body is a 500', (await post(bot, bot.token, '{not json')).status, 500)
     const sessionTools = await toolNames(session)
     check('a session token is not offered request_approval', sessionTools.includes('request_approval'), false)
     check('the bot token is offered request_approval', (await toolNames(bot)).includes('request_approval'), true)
@@ -218,14 +229,19 @@ try {
     check('a session token cannot request approval', await callRefused(session, 'request_approval', approvalArgs), true)
     check('a session token cannot call bot_snapshot', await callRefused(session, 'bot_snapshot', {}), true)
     check('the bot token cannot call bot_snapshot', await callRefused(bot, 'bot_snapshot', {}), true)
-    check('with no turn running, a direct call with the bot token is refused', await callRefused(bot, 'list_worktrees', {}), true)
+    check('arguments that are not an object are refused', (await rpc(bot, 'tools/call', { name: 'list_worktrees', arguments: [] })).error?.code, -32602)
 
-    // --- The real hook command, as the CLI would run it, during a real turn
     const settings = JSON.parse(argv[argv.indexOf('--settings') + 1])
     const hookCommand = settings.hooks.PreToolUse[0].hooks[0].command
+    // A curl in front of the real one records its argv, so the checks can see the token isn't in it.
+    const shim = join(root, 'shim')
+    const curlArgv = join(root, 'curl-argv.log')
+    mkdirSync(shim, { recursive: true })
+    const realCurl = execSync('command -v curl', { encoding: 'utf8', shell: '/bin/sh' }).trim()
+    writeFileSync(join(shim, 'curl'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${curlArgv}"\nexec "${realCurl}" "$@"\n`, { mode: 0o755 })
     const runHook = (token, tool_name, tool_input) => {
       const input = JSON.stringify({ hook_event_name: 'PreToolUse', session_id: 's', cwd: folder, tool_name, tool_input })
-      const env = { PATH: process.env.PATH, TREK_BOT_TOKEN: token }
+      const env = { PATH: `${shim}:${process.env.PATH}`, TREK_BOT_TOKEN: token }
       const ran = spawnSync('sh', ['-c', hookCommand], { input, env, encoding: 'utf8' })
       let decision = null
       try {
@@ -235,20 +251,34 @@ try {
       }
       return [ran.status, decision]
     }
-    await say('GATED')
-    check('the turn for the hook checks is running', await seen('gated'), true)
     const readCall = { file_path: join(folder, 'BOT.md') }
     check('the hook allows a free call', runHook(bot.token, 'Read', readCall), [0, 'allow'])
     check('the hook denies an ask-tier call', runHook(bot.token, 'Bash', { command: 'git push origin smoke' }), [0, 'deny'])
     check('the hook exits 2 on a bad token', runHook('nonsense', 'Read', readCall)[0], 2)
+    check("the hook exits 2 on an ended turn's token", runHook(ended.token, 'Read', readCall)[0], 2)
     check('the hook leaves Trek tools to the MCP server', runHook(bot.token, 'mcp__trek-dev__close_session', { terminalId: 'x' }), [0, 'allow'])
+    const curlRuns = readFileSync(curlArgv, 'utf8').trim().split('\n')
+    check('the hook ran curl', curlRuns.length, 5)
+    check("the token is in none of curl's argv", curlRuns.some((line) => line.includes(bot.token) || line.includes('Bearer')), false)
     check('a free Trek tool called directly runs', await callRefused(bot, 'list_worktrees', {}), false)
     const direct = await rpc(bot, 'tools/call', { name: 'close_session', arguments: { terminalId: 'x' } })
     check('an ask-tier Trek tool called directly is refused', [direct.result?.isError, /Needs approval/.test(direct.result?.content?.[0]?.text)], [true, true])
     check('send_prompt called directly is refused', await callRefused(bot, 'send_prompt', { terminalId: 'x', prompt: 'cat secrets' }), true)
+    for (const name of ['start_stack', 'create_worktree', 'load_worktree', 'save_session_type', 'delete_session_type']) {
+      check(`${name} called directly needs approval`, /Needs approval/.test((await rpc(bot, 'tools/call', { name, arguments: {} })).result?.content?.[0]?.text), true)
+    }
     writeFileSync(gate, '')
     check('the gated turn ends', await seen('ungated'), true)
     await win.locator('.bot-phase', { hasText: 'Idle' }).waitFor({ timeout: 15000 })
+    check("once it ends, the gated turn's token is refused", await rpcStatus(bot, 'tools/list', {}), 401)
+
+    // The canary for other processes' environments: what the bot sees with ps -E. No Trek token
+    // may be in any process's environment or argv (sandboxed or not, macOS lets a process read them).
+    await say('PEEK')
+    check('the bot looked at every process', await seen('peek:done'), true)
+    const peeked = readFileSync(peekFile, 'utf8')
+    check("no session token in any process's env or argv", peeked.includes(session.token), false)
+    check("no bot token from an earlier turn in any process's env or argv", [ended.token, bot.token].some((t) => peeked.includes(t)), false)
 
     await say('HOLD')
     check('the first message is running', await seen('holding'), true)
@@ -303,7 +333,7 @@ try {
   // --- Second run: restart recovery, a held folder, a missing folder, closing mid-turn
   {
     // Left by an older version, which wrote the bot's MCP config to a file.
-    writeFileSync(join(userData, 'mcp-bot-7.json'), '{}')
+    for (const name of ['mcp-bot-7.json', 'mcp-gemini-7.json', 'mcp-codex-7.json']) writeFileSync(join(userData, name), '{}')
     const { win, errors } = await launch()
     const { say, seen, queuedOne, action } = helpers(win)
     await win.evaluate(
@@ -314,6 +344,7 @@ try {
     await showBot(win)
     check('still paused after a restart', await shown(win.locator('.bot-phase', { hasText: 'Paused' })), true)
     check("an older version's bot MCP config is removed", existsSync(join(userData, 'mcp-bot-7.json')), false)
+    check("a crashed run's Gemini and Codex files are removed", ['mcp-gemini-7.json', 'mcp-codex-7.json'].filter((n) => existsSync(join(userData, n))), [])
     check('queued message survives a restart', await queuedOne(), true)
     check('earlier activity is reloaded', await seen('echo:hello'), true)
     await action('Resume').click()
