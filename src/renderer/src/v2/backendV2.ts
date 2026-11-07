@@ -6,6 +6,11 @@
 // something the patch brings (a new worktree's path, a new session's tab)
 // waits for it with `whenProjected`.
 //
+// The methods its callers fire and forget (start, restart, close, load, unload,
+// unloadAll) never reject: a refusal goes to `report` (a dialog) and they
+// resolve, `start` with null. NOT_CONNECTED is not reported: the window shows
+// it is offline, and its commands are disabled.
+//
 // Pure: the store, the connection, the dialogs and the terminals come in as
 // `V2BackendDeps` (built by installV2.ts), so `node --test` covers it.
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
@@ -61,6 +66,8 @@ export interface V2BackendDeps {
   registeredRepoPath(repoId: string): Promise<string | null>
   /** Why the repository can't be removed now, or null */
   removalBlock(repo: Repository): string | null
+  /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
+  report(title: string, err: unknown): void
 }
 
 /**
@@ -69,12 +76,18 @@ export interface V2BackendDeps {
  */
 export const V2_START_SIZE = { cols: 120, rows: 32 }
 
-/** git's refusal to remove a worktree with uncommitted work, inside the server's GIT_ERROR. */
+/**
+ * git's refusal to remove a worktree with uncommitted work, inside the server's
+ * GIT_ERROR. English text: a git in another locale words it differently (Notes for 3c-3).
+ */
 const UNCOMMITTED = /modified or untracked/i
 
 class TargetError extends Error {
   readonly code = 'NOT_FOUND'
 }
+
+const REMOVE_FAILED = 'Could not delete worktree'
+const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
 export function createV2Backend(deps: V2BackendDeps): WindowBackend {
   const { projectId, request } = deps
@@ -93,6 +106,19 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     return worktreeOf(legacyId)
   }
   const session = (terminalId: string): { projectId: string; sessionId: string } => ({ projectId, sessionId: terminalId })
+
+  const report = (title: string, err: unknown): void => {
+    if (errorCode(err) !== 'NOT_CONNECTED') deps.report(title, err)
+  }
+  /** Runs a fire-and-forget method: a failure is reported, and it resolves with `fallback`. */
+  const reported = async <T>(title: string, fallback: T, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } catch (err) {
+      report(title, err)
+      return fallback
+    }
+  }
 
   /** Waits for the new session's tab, then makes it the worktree's active one, as legacy does. */
   const showStarted = async (sessionId: string): Promise<string> => {
@@ -141,19 +167,20 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       return features.value
     },
     sessions: {
-      start: async (target: SessionTarget, sessionType, llm) => {
-        const legacyId = 'worktreeId' in target ? target.worktreeId : legacyIdAt(target.path)
-        const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
-        if (!ref) return null
-        const { sessionId } = await request('session.start', {
-          projectId,
-          worktreeId: ref.worktreeId,
-          ...(sessionType ? { sessionTypeId: sessionType.id } : {}),
-          ...(llm ? { llm } : {}),
-          ...V2_START_SIZE
-        })
-        return showStarted(sessionId)
-      },
+      start: (target: SessionTarget, sessionType, llm) =>
+        reported('Could not start the session', null, async () => {
+          const legacyId = 'worktreeId' in target ? target.worktreeId : legacyIdAt(target.path)
+          const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
+          if (!ref) return null
+          const { sessionId } = await request('session.start', {
+            projectId,
+            worktreeId: ref.worktreeId,
+            ...(sessionType ? { sessionTypeId: sessionType.id } : {}),
+            ...(llm ? { llm } : {}),
+            ...V2_START_SIZE
+          })
+          return showStarted(sessionId)
+        }),
       startGlobal,
       // Only when there are none, and never twice: the panel asks again on every
       // render with no tabs, and the new session's patch is still on its way.
@@ -165,14 +192,17 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if ((deps.state().project?.globalSessions?.length ?? 0) > 0) return
         await startGlobal()
       },
-      restart: async (terminalId) => {
-        const size = deps.termSize(terminalId) ?? V2_START_SIZE
-        await request('session.restart', { ...session(terminalId), cols: size.cols, rows: size.rows })
-        deps.focus(terminalId)
-      },
-      close: async (terminalId) => {
-        await request('session.close', session(terminalId))
-      },
+      restart: (terminalId) =>
+        reported('Could not restart the session', undefined, async () => {
+          const size = deps.termSize(terminalId) ?? V2_START_SIZE
+          await request('session.restart', { ...session(terminalId), cols: size.cols, rows: size.rows })
+          deps.focus(terminalId)
+        }),
+      close: (terminalId) =>
+        reported('Could not close the session', undefined, async () => {
+          await request('session.close', session(terminalId))
+        }),
+      // session.rename takes an `expected` title too; not sent (Notes for 3c-3).
       rename: async (terminalId, title) => {
         const trimmed = title.trim()
         if (!trimmed || trimmed === deps.state().terminals[terminalId]?.title) return
@@ -196,15 +226,23 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       }
     },
     worktrees: {
-      load: async (legacyId) => {
-        await request('worktree.load', { projectId, worktreeId: worktreeOf(legacyId) })
-      },
-      unload: async (legacyId) => {
-        await request('worktree.unload', { projectId, worktreeId: worktreeOf(legacyId) })
-      },
+      load: (legacyId) =>
+        reported('Could not load the worktree', undefined, async () => {
+          await request('worktree.load', { projectId, worktreeId: worktreeOf(legacyId) })
+        }),
+      unload: (legacyId) =>
+        reported('Could not unload the worktree', undefined, async () => {
+          await request('worktree.unload', { projectId, worktreeId: worktreeOf(legacyId) })
+        }),
+      // Each one on its own: one refusal doesn't keep the rest loaded. The first is reported.
       unloadAll: async () => {
-        const loaded = Object.keys(deps.state().loadedWorktrees)
-        await Promise.all(loaded.map((legacyId) => request('worktree.unload', { projectId, worktreeId: worktreeOf(legacyId) })))
+        const map = ids().worktrees
+        const targets = Object.keys(deps.state().loadedWorktrees).flatMap((legacyId) =>
+          map[legacyId] ? [map[legacyId].worktreeId] : []
+        )
+        const results = await Promise.allSettled(targets.map((worktreeId) => request('worktree.unload', { projectId, worktreeId })))
+        const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+        if (failed) report('Could not unload every worktree', failed.reason)
       },
       // The server links the dirs and tags the branch itself.
       create: async ({ repoId, branch, createBranch, fromPr }) => {
@@ -224,13 +262,19 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return { path, worktreeId }
       },
       // Legacy's dialogs and order (worktreeActions.deleteWorktree), with the
-      // server's rules: a loaded worktree is IN_USE, so it is unloaded first.
+      // server's rules: a loaded worktree is IN_USE, so it is unloaded first,
+      // and loaded again when the removal doesn't go through.
       remove: async (info, instance) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
-        if (!ref || legacyId === undefined) return
+        if (!ref || legacyId === undefined) {
+          await deps.showError(REMOVE_FAILED, 'This worktree is no longer in the project.')
+          return
+        }
+        const { worktreeId } = ref
         // The server's status poll; a stale "clean" is caught by git below.
         const dirty = info.dirty ?? false
+        const loaded = deps.state().loadedWorktrees[legacyId] === true
         const name = info.branch ?? info.path
         const confirmed = await deps.confirm({
           title: 'Delete Worktree',
@@ -238,44 +282,58 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           detail:
             `This runs "git worktree remove" on ${info.path} and deletes the directory. ` +
             `The branch itself is kept. ` +
+            (loaded ? 'Its running sessions will be stopped. ' : '') +
             (dirty
               ? 'This worktree has uncommitted changes — they will be permanently deleted.'
               : 'Uncommitted changes will block the deletion.'),
           confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
         })
         if (!confirmed) return
+        let wasLoaded = false
+        // Best effort: the removal's own error is the one to show.
+        const reload = async (): Promise<void> => {
+          if (wasLoaded) await request('worktree.load', { projectId, worktreeId }).catch(() => {})
+        }
+        const fail = async (err: unknown): Promise<void> => {
+          await reload()
+          await deps.showError(REMOVE_FAILED, errorText(err))
+        }
         try {
-          if (deps.state().loadedWorktrees[legacyId]) {
-            await request('worktree.unload', { projectId, worktreeId: ref.worktreeId })
+          if (loaded) {
+            await request('worktree.unload', { projectId, worktreeId })
+            wasLoaded = true
           }
-          await removeWorktree(ref.worktreeId, dirty)
+          await removeWorktree(worktreeId, dirty)
+          return
         } catch (err) {
           // Changes can appear between the poll and the removal.
           if (dirty || errorCode(err) !== 'GIT_ERROR' || !UNCOMMITTED.test(errorText(err))) {
-            await deps.showError('Could not delete worktree', errorText(err))
+            await fail(err)
             return
           }
-          const discard = await deps.confirm({
-            title: 'Delete Uncommitted Changes',
-            message: `“${name}” has uncommitted changes.`,
-            detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
-            confirmLabel: 'Delete Changes & Worktree'
-          })
-          if (!discard) return
-          try {
-            await removeWorktree(ref.worktreeId, true)
-          } catch (forceErr) {
-            await deps.showError('Could not delete worktree', errorText(forceErr))
-          }
+        }
+        const discard = await deps.confirm({
+          title: 'Delete Uncommitted Changes',
+          message: `“${name}” has uncommitted changes.`,
+          detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
+          confirmLabel: 'Delete Changes & Worktree'
+        })
+        if (!discard) {
+          await reload()
+          return
+        }
+        try {
+          await removeWorktree(worktreeId, true)
+        } catch (forceErr) {
+          await fail(forceErr)
         }
       },
       // The one settings write a server window makes (settings are read-only in v2).
+      // No keys clears the order; keys none of which map (a stale drag) send nothing.
       setOrder: async (keys) => {
-        const order = v2WorktreeOrder(keys, ids())
-        await request('project.updateSettings', {
-          projectId,
-          settings: { worktreeOrder: order.length > 0 ? order : null }
-        })
+        const order = keys.length === 0 ? null : v2WorktreeOrder(keys, ids())
+        if (order !== null && order.length === 0) return
+        await request('project.updateSettings', { projectId, settings: { worktreeOrder: order } })
       }
     },
     git: {
@@ -326,7 +384,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if (!path) return
         try {
           const { repoId } = await request('server.addRepo', { path })
-          const registered = (await deps.registeredRepoPath(repoId)) ?? path
+          const registered = await deps.registeredRepoPath(repoId)
+          if (registered === null) {
+            await deps.showError('Could not add the repository', NOT_REGISTERED)
+            return
+          }
           await request('repo.add', { projectId, path: registered })
         } catch (err) {
           await deps.showError('Could not add the repository', errorText(err))

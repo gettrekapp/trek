@@ -22,11 +22,12 @@ class CodedError extends Error {
 /**
  * A backend over fakes: `calls` records each request, `replies` answers by
  * method (a value, a function of the params, or an Error to reject with), and
- * `ui` records what the dialogs were asked.
+ * `ui` records what the dialogs were asked; `reports` what went to `report`.
  */
 function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [] } = {}) {
   const calls = []
   const ui = []
+  const reports = []
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
@@ -46,7 +47,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
       return value ?? null
     },
     // null stands for "no welcome yet" (undefined would take the default)
-    capabilities: () => capabilities ?? undefined,
+    capabilities: typeof capabilities === 'function' ? capabilities : () => capabilities ?? undefined,
     ids: () => idMap,
     state: () => st,
     // Each projectedAfter entry is applied to the state and ids before the check, like a patch arriving.
@@ -67,9 +68,10 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
       return answers.shift() ?? null
     },
     registeredRepoPath: async (repoId) => (repoId === 'srv-b' ? '/b' : null),
-    removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null)
+    removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null),
+    report: (title, err) => reports.push([title, err.code])
   })
-  return { backend, calls, ui, st }
+  return { backend, calls, ui, st, reports }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -79,6 +81,18 @@ test('features follow the welcome capabilities, with a stable object', () => {
   assert.equal(backend.features, backend.features)
   assert.equal(setup({ capabilities: [] }).backend.features.globalPanel, false)
   assert.equal(setup({ capabilities: null }).backend.features.globalPanel, false)
+})
+
+test('features before the welcome, then when the capabilities change', () => {
+  let caps
+  const { backend } = setup({ capabilities: () => caps })
+  const before = backend.features
+  assert.equal(before.globalPanel, false)
+  caps = ['mcp']
+  assert.equal(backend.features.globalPanel, true)
+  assert.notEqual(backend.features, before)
+  caps = []
+  assert.equal(backend.features.globalPanel, false)
 })
 
 test('start by instance id or by path sends session.start with the v2 worktree, a size, the type and agent', async () => {
@@ -100,6 +114,33 @@ test('start for an unknown target resolves null and sends nothing', async () => 
   assert.deepEqual(calls, [])
 })
 
+test('start: the id comes back even when its tab never shows up, and nothing is made active', async () => {
+  const { backend, ui } = setup({ replies: { 'session.start': { sessionId: 's9', ptyId: 'p9' } } })
+  assert.equal(await backend.sessions.start({ worktreeId: 'w2' }), 's9')
+  assert.deepEqual(ui, [])
+})
+
+test('start, restart and close report a refusal and resolve; NOT_CONNECTED is not reported', async () => {
+  const replies = {
+    'session.start': new CodedError('CAPACITY', 'too many sessions'),
+    'session.restart': new CodedError('NOT_CONNECTED', ''),
+    'session.close': new CodedError('NOT_FOUND', 'no session')
+  }
+  const { backend, reports, ui } = setup({ replies })
+  assert.equal(await backend.sessions.start({ worktreeId: 'w2' }), null)
+  assert.equal(await backend.sessions.restart('s1'), undefined)
+  assert.equal(await backend.sessions.close('s1'), undefined)
+  assert.deepEqual(reports, [
+    ['Could not start the session', 'CAPACITY'],
+    ['Could not close the session', 'NOT_FOUND']
+  ])
+  // No focus after a failed restart.
+  assert.deepEqual(ui, [])
+  const offline = setup({ replies: { 'session.start': new CodedError('NOT_CONNECTED', '') } })
+  assert.equal(await offline.backend.sessions.start({ worktreeId: 'w2' }), null)
+  assert.deepEqual(offline.reports, [])
+})
+
 test('openGlobal starts one session only when there are none, and never twice at once', async () => {
   const { backend, calls, st } = setup({ replies: { 'session.start': { sessionId: 'g1', ptyId: 'pg' } } })
   await Promise.all([backend.sessions.openGlobal(), backend.sessions.openGlobal()])
@@ -110,6 +151,19 @@ test('openGlobal starts one session only when there are none, and never twice at
   // A new tab (+) always starts one.
   await backend.sessions.startGlobal()
   assert.equal(calls.length, 2)
+})
+
+test('a failed global start rejects and clears the shared promise', async () => {
+  let n = 0
+  const replies = { 'session.start': () => (n++ === 0 ? new CodedError('CAPACITY', 'full') : { sessionId: 'g1', ptyId: 'pg' }) }
+  const { backend, calls } = setup({ replies })
+  await assert.rejects(backend.sessions.openGlobal(), { code: 'CAPACITY' })
+  await backend.sessions.openGlobal()
+  assert.equal(calls.length, 2)
+  n = 0
+  await assert.rejects(backend.sessions.startGlobal(), { code: 'CAPACITY' })
+  await backend.sessions.startGlobal()
+  assert.equal(calls.length, 4)
 })
 
 test('restart sends the terminal size (or the default), then focuses', async () => {
@@ -157,7 +211,29 @@ test('load, unload and unload-all address the v2 worktrees', async () => {
     ['worktree.unload', { projectId: 'p1', worktreeId: 'wm' }],
     ['worktree.unload', { projectId: 'p1', worktreeId: 'w2' }]
   ])
-  await assert.rejects(backend.worktrees.load('nope'), { code: 'NOT_FOUND' })
+  // Fire and forget: an unknown id is reported, not rejected.
+  await backend.worktrees.load('nope')
+})
+
+test('load and unload report a refusal and resolve', async () => {
+  const replies = { 'worktree.load': new CodedError('BAD_REQUEST', 'load the worktree first'), 'worktree.unload': new CodedError('IN_USE', 'busy') }
+  const { backend, reports } = setup({ replies })
+  assert.equal(await backend.worktrees.load('w2'), undefined)
+  assert.equal(await backend.worktrees.unload('w2'), undefined)
+  await backend.worktrees.load('nope')
+  assert.deepEqual(reports, [
+    ['Could not load the worktree', 'BAD_REQUEST'],
+    ['Could not unload the worktree', 'IN_USE'],
+    ['Could not load the worktree', 'NOT_FOUND']
+  ])
+})
+
+test('unloadAll skips stale ids, and one refusal does not stop the rest', async () => {
+  const replies = { 'worktree.unload': (p) => (p.worktreeId === 'wm' ? new CodedError('IN_USE', 'busy') : null) }
+  const { backend, calls, reports } = setup({ replies, state: { loadedWorktrees: { gone: true, [PRIMARY]: true, w2: true } } })
+  await backend.worktrees.unloadAll()
+  assert.deepEqual(calls.map(([, p]) => p.worktreeId), ['wm', 'w2'])
+  assert.deepEqual(reports, [['Could not unload every worktree', 'IN_USE']])
 })
 
 test('create sends worktree.create and resolves the path once the mirror shows the worktree', async () => {
@@ -189,6 +265,15 @@ test('remove: declined sends nothing', async () => {
   assert.deepEqual(calls, [])
 })
 
+test('remove: an id no longer in the project is shown, and nothing is sent', async () => {
+  const { backend, calls, ui } = setup()
+  await backend.worktrees.remove({ ...feat, path: '/gone' }, undefined)
+  await backend.worktrees.remove(feat, { id: 'stale', name: 'x', path: '/r-feat' })
+  const shown = ['error', 'Could not delete worktree', 'This worktree is no longer in the project.']
+  assert.deepEqual(ui, [shown, shown])
+  assert.deepEqual(calls, [])
+})
+
 test('remove: a loaded worktree is unloaded first; a dirty one is forced', async () => {
   const { backend, calls, ui } = setup({ confirms: [true], state: { loadedWorktrees: { w2: true } } })
   await backend.worktrees.remove({ ...feat, dirty: true }, undefined)
@@ -211,10 +296,69 @@ test('remove: changes that appeared since the poll ask again, then force', async
   assert.deepEqual(calls.map(([m, p]) => [m, p.force]), [['worktree.remove', false], ['worktree.remove', true]])
 })
 
-test('remove: any other failure is shown in a dialog and resolves', async () => {
-  const { backend, ui } = setup({ confirms: [true], replies: { 'worktree.remove': new CodedError('IN_USE', 'loaded in Other') } })
+const UNCOMMITTED_ERR = () => new CodedError('GIT_ERROR', "fatal: '/r-feat' contains modified or untracked files, use --force")
+const LOADED = { loadedWorktrees: { w2: true } }
+
+test('remove: the re-ask declined sends one remove, shows nothing, and loads the worktree again', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true, false], state: LOADED, replies: { 'worktree.remove': UNCOMMITTED_ERR() } })
   await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload', 'worktree.remove', 'worktree.load'])
+  assert.ok(!ui.some(([kind]) => kind === 'error'))
+})
+
+test('remove: a failed forced retry shows its own error, and loads the worktree again', async () => {
+  const replies = { 'worktree.remove': (p) => (p.force ? new CodedError('GIT_ERROR', 'permission denied') : UNCOMMITTED_ERR()) }
+  const { backend, calls, ui } = setup({ confirms: [true, true], state: LOADED, replies })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m, p]) => [m, p.force]), [
+    ['worktree.unload', undefined],
+    ['worktree.remove', false],
+    ['worktree.remove', true],
+    ['worktree.load', undefined]
+  ])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'permission denied'])
+})
+
+test('remove: an already forced removal that git still refuses is shown, with no re-ask', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true, true], replies: { 'worktree.remove': UNCOMMITTED_ERR() } })
+  await backend.worktrees.remove({ ...feat, dirty: true }, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.remove'])
+  assert.deepEqual(ui.map(([kind, title]) => [kind, title]), [['confirm', 'Delete Worktree'], ['error', 'Could not delete worktree']])
+})
+
+test('remove: another GIT_ERROR (locked) is shown, with no re-ask; the worktree is loaded again', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true, true], state: LOADED, replies: { 'worktree.remove': new CodedError('GIT_ERROR', "fatal: '/r-feat' is locked") } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload', 'worktree.remove', 'worktree.load'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', "fatal: '/r-feat' is locked"])
+  assert.equal(ui.filter(([kind]) => kind === 'confirm').length, 1)
+})
+
+test('remove: any other failure is shown in a dialog, the worktree is loaded again, and it resolves', async () => {
+  // A failed reload is ignored: the removal's error is the one shown.
+  const replies = { 'worktree.remove': new CodedError('IN_USE', 'loaded in Other'), 'worktree.load': new CodedError('GIT_ERROR', 'x') }
+  const { backend, calls, ui } = setup({ confirms: [true], state: LOADED, replies })
+  await backend.worktrees.remove(feat, undefined)
+  assert.equal(calls.at(-1)[0], 'worktree.load')
   assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'loaded in Other'])
+})
+
+test('remove: a failed unload is shown, and nothing is loaded again', async () => {
+  const { backend, calls, ui } = setup({ confirms: [true], state: LOADED, replies: { 'worktree.unload': new CodedError('IN_USE', 'busy') } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
+})
+
+test('remove and repos show the NOT_CONNECTED hint and resolve', async () => {
+  const offline = new CodedError('NOT_CONNECTED', '')
+  const replies = { 'worktree.remove': offline, 'server.addRepo': offline, 'repo.remove': offline }
+  const { backend, ui } = setup({ confirms: [true, '/x', true], replies })
+  await backend.worktrees.remove(feat, undefined)
+  await backend.repos.add()
+  await backend.repos.remove(repo())
+  const errors = ui.filter(([kind]) => kind === 'error').map(([, , message]) => message)
+  assert.deepEqual(errors, ['Not connected to the server', 'Not connected to the server', 'Not connected to the server'])
 })
 
 test('setOrder converts legacy keys and sends the one settings write', async () => {
@@ -223,6 +367,9 @@ test('setOrder converts legacy keys and sends the one settings write', async () 
   assert.deepEqual(calls, [['project.updateSettings', { projectId: 'p1', settings: { worktreeOrder: ['r1 /r-feat', 'r1 /r'] } }]])
   await backend.worktrees.setOrder([])
   assert.deepEqual(calls[1][1].settings, { worktreeOrder: null })
+  // Keys none of which map send nothing (rather than clearing the order).
+  await backend.worktrees.setOrder(['srv /x'])
+  assert.equal(calls.length, 2)
 })
 
 test('git: rows come from the mirror; the rest address the worktree by path', async () => {
@@ -241,6 +388,8 @@ test('git: rows come from the mirror; the rest address the worktree by path', as
     ['worktree.push', { projectId: 'p1', worktreeId: 'w2', setUpstream: true }]
   ])
   await assert.rejects(backend.git.changes({ path: '/gone' }), { code: 'NOT_FOUND' })
+  await assert.rejects(backend.git.pull({ path: '/gone' }, 'x'), { code: 'NOT_FOUND' })
+  await assert.rejects(backend.git.push({ path: '/gone' }, 'x'), { code: 'NOT_FOUND' })
 })
 
 test('branch data: custom tags send the whole list; a note carries what it started from; empty clears', async () => {
@@ -288,6 +437,20 @@ test('repos.add: cancelled sends nothing; a refusal is shown', async () => {
   assert.deepEqual(denied.ui.at(-1), ['error', 'Could not add the repository', '/x is outside the allowed roots'])
 })
 
+test('repos.add: a registration not visible yet is shown, and repo.add is not sent', async () => {
+  const { backend, calls, ui } = setup({ confirms: ['/c'], replies: { 'server.addRepo': { repoId: 'srv-c' } } })
+  await backend.repos.add()
+  assert.deepEqual(calls.map(([m]) => m), ['server.addRepo'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not add the repository', "Registered on the server but it isn't visible here yet — try again."])
+})
+
+test('repos.add: a refused repo.add after the registration is shown', async () => {
+  const replies = { 'server.addRepo': { repoId: 'srv-b' }, 'repo.add': new CodedError('CONFLICT', 'already in the project') }
+  const { backend, ui } = setup({ confirms: ['/b'], replies })
+  await backend.repos.add()
+  assert.deepEqual(ui.at(-1), ['error', 'Could not add the repository', 'already in the project'])
+})
+
 test('repos.remove: a block is shown; confirmed sends repo.remove', async () => {
   const blocked = setup()
   await blocked.backend.repos.remove({ id: 'blocked', name: 'b', path: '/b', worktrees: [] })
@@ -296,4 +459,10 @@ test('repos.remove: a block is shown; confirmed sends repo.remove', async () => 
   const { backend, calls } = setup({ confirms: [true] })
   await backend.repos.remove(repo())
   assert.deepEqual(calls, [['repo.remove', { projectId: 'p1', repoId: 'r1' }]])
+})
+
+test('repos.remove: a refusal is shown and resolves', async () => {
+  const { backend, ui } = setup({ confirms: [true], replies: { 'repo.remove': new CodedError('IN_USE', 'sessions are running') } })
+  await backend.repos.remove(repo())
+  assert.deepEqual(ui.at(-1), ['error', "Can't remove r", 'sessions are running'])
 })

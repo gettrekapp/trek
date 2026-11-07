@@ -11,7 +11,11 @@
 // Errors: every method returns a promise, so a v2 backend can reject with the
 // server's ClientError. `worktrees.create` rejects for its caller (the Add
 // Worktree dialog) to show; `worktrees.remove` and `repos.*` report failures
-// through their own dialogs and resolve, as legacy does today.
+// through their own dialogs and resolve, as legacy does today. The methods
+// callers fire and forget (`sessions.start`, `restart`, `close`,
+// `worktrees.load`, `unload`, `unloadAll`) report a refusal in a dialog and
+// resolve (`start` with null), never reject; a v2 backend skips the dialog for
+// NOT_CONNECTED, which the offline window already shows.
 import { GLOBAL_WORKTREE_ID, allWorktrees, hostRepoPath, repoById, useAppStore } from './store'
 import {
   closeGlobalTerminal,
