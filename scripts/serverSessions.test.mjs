@@ -496,6 +496,33 @@ test('enqueue appends, setQueue replaces; both are saved', (t) => {
   assert.throws(() => s.sessions.setQueue({ projectId: s.projectId, sessionId, queue: ['ok', 3] }), (e) => e.code === 'BAD_REQUEST')
 })
 
+test('dequeue removes one prompt, guarded by expected; it is saved', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const ref = { projectId: s.projectId, sessionId }
+  s.sessions.setQueue({ ...ref, queue: ['a', 'b', 'c'] })
+  const queue = () => s.wx().sessions[0].queue
+  const before = s.saves.length
+  assert.deepEqual(await call('session.dequeue', { ...ref, index: 1, expected: 'b' }), { ok: true, result: null })
+  assert.deepEqual(queue(), ['a', 'c'])
+  assert.equal(s.saves.length, before + 1)
+  // Another client sent 'a' meanwhile: index 0 is now 'c'.
+  s.sessions.setQueue({ ...ref, queue: ['c'] })
+  const stale = await call('session.dequeue', { ...ref, index: 0, expected: 'a' })
+  assert.deepEqual([stale.error.code, stale.error.message], ['CONFLICT', 'queue[0] changed since you read it'])
+  assert.equal((await call('session.dequeue', { ...ref, index: 3, expected: 'c' })).error.code, 'CONFLICT', 'the queue no longer reaches the index')
+  assert.equal((await call('session.dequeue', { ...ref, index: 3 })).error.code, 'BAD_REQUEST')
+  for (const index of [-1, 0.5, '0', undefined]) {
+    assert.equal((await call('session.dequeue', { ...ref, index })).error.code, 'BAD_REQUEST', String(index))
+  }
+  assert.equal((await call('session.dequeue', { ...ref, index: 0, expected: 3 })).error.code, 'BAD_REQUEST')
+  assert.deepEqual(queue(), ['c'])
+  await call('session.dequeue', { ...ref, index: 0 })
+  assert.deepEqual(queue(), [])
+  assert.equal((await call('session.dequeue', { ...ref, index: 0 })).error.message, 'the queue is empty')
+})
+
 test('sendPrompt pastes with CRs, bracketed when the agent asked for it, then presses enter', async (t) => {
   const s = setup(t)
   const { sessionId, ptyId } = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })

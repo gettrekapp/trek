@@ -287,6 +287,26 @@ export class SessionManager {
     return null
   }
 
+  /**
+   * Removes the queued prompt at `index`. With `expected` (the prompt the client
+   * saw there) it is compare-and-set: CONFLICT if that prompt changed or the queue
+   * no longer reaches `index`. Without it, an index past the end is BAD_REQUEST.
+   */
+  dequeue(p: any): null {
+    const index = p.index
+    if (!Number.isInteger(index) || index < 0) throw bad('index must be a non-negative integer')
+    if (p.expected !== undefined && typeof p.expected !== 'string') throw bad('expected must be a string')
+    this.mutate(p.projectId, p.sessionId, (s) => {
+      if (index >= s.queue.length) {
+        if (p.expected !== undefined) throw codedError('CONFLICT', 'the queue changed since you read it')
+        throw bad(s.queue.length ? `index must be 0–${s.queue.length - 1}` : 'the queue is empty')
+      }
+      checkExpected(`queue[${index}]`, s.queue[index], p.expected)
+      s.queue = s.queue.filter((_, i) => i !== index)
+    })
+    return null
+  }
+
   /** Types `text` into the running session as the desktop pastes it, then presses enter. */
   async sendPrompt(p: any): Promise<null> {
     const text = requireString(p.text, 'text')

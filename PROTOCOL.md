@@ -197,6 +197,7 @@ new optional field needs no capability: its absence says enough.
 | `mcp` | The server's MCP listener is up, so its sessions get the trek-dev tools (see [MCP](#mcp-trek-dev-on-the-server)). Listed per connection, only while the listener is up |
 | `topicEnd` | The server sends `topic.ended` before a topic stops (see Subscriptions) |
 | `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
+| `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 
@@ -260,7 +261,7 @@ server restarts. A server without this field simply leaves it out.
 | Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
-| Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
+| Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
@@ -275,8 +276,8 @@ reading the message (which may be git's own, localised text). Today the only key
 is `reason`, and the only reason is `dirty` (see `worktree.remove`). Clients
 ignore keys and reasons they don't know.
 
-`project.rename`, `project.updateSettings`, `branch.setNote`, `session.rename`
-and `repo.update` take an optional `expected`: the value the client believes the
+`project.rename`, `project.updateSettings`, `branch.setNote`, `session.rename`,
+`session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
 field has now. The server fails with `CONFLICT` only if that field's current
 value differs (deep equality, null means absent). For `project.updateSettings`
 and `repo.update`, only the keys listed in `expected` are compared. A
@@ -584,7 +585,13 @@ paste when the agent has turned that mode on, and `\r` follows 150 ms later. It
 answers `BAD_REQUEST` when the session has no running pty, or when `text` is longer
 than 1 MiB (1,048,576 UTF-16 code units), the limit of `pty.write`. `session.enqueue
 {text}` appends to the session's `queue` and `session.setQueue {queue}` replaces
-it; text and queue entries must be non-empty strings. A queue entry is at most
+it; text and queue entries must be non-empty strings. `session.dequeue {index,
+expected?}` removes the prompt at `index` (0-based) without touching the rest, so
+another client's enqueue or removal meanwhile is not lost, as it can be with a
+`setQueue` of the whole list. With `expected`, the prompt the client saw at
+`index`, it is compare-and-set: `CONFLICT` if that prompt changed or the queue no
+longer reaches `index`. Without it, an `index` past the end is `BAD_REQUEST`, as
+is an `index` that is not a non-negative integer. A queue entry is at most
 100,000 characters and a queue holds at most 100 entries; beyond that is
 `BAD_REQUEST`. The server only stores the queue and never sends it: a client sends
 a queued prompt itself, with `session.sendPrompt`, when the user chooses.

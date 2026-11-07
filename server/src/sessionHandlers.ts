@@ -28,6 +28,7 @@ export const sessionHandlers: Record<string, Handler> = {
   'session.sendPrompt': (p, ctx) => ctx.sessions.sendPrompt(p),
   'session.enqueue': (p, ctx) => ctx.sessions.enqueue(p),
   'session.setQueue': (p, ctx) => ctx.sessions.setQueue(p),
+  'session.dequeue': (p, ctx) => ctx.sessions.dequeue(p),
   'session.markComplete': (p, ctx) => ctx.sessions.markComplete(p),
   'session.seen': (p, ctx) => ctx.sessions.seen(p),
   'session.dismissDecision': (p, ctx) => ctx.sessions.dismissDecision(p),

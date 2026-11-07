@@ -824,7 +824,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
               : 'The queue is empty: there is no index to remove'
           )
         }
-        await v2('session.setQueue', { sessionId: session.id, queue: queue.filter((_, i) => i !== index) })
+        await v2('session.dequeue', { sessionId: session.id, index, expected: queue[index] })
         return { removed: queue[index], queue: sessionIn(session.id).session.queue }
       },
 

@@ -38,7 +38,9 @@ export const CAPABILITY = {
   /** The server sends `topic.ended` before a topic stops (a deleted project) */
   topicEnd: 'topicEnd',
   /** Sessions carry `decision` (MCP request_decision), and `session.dismissDecision` clears it */
-  decisions: 'decisions'
+  decisions: 'decisions',
+  /** `session.dequeue` removes one queued prompt, compare-and-set */
+  dequeue: 'dequeue'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -161,6 +163,8 @@ export interface MethodParamsV2 {
   /** Appends to the session's queue. Stored for a client to send; the server never sends it on its own */
   'session.enqueue': SessionRef & { text: string }
   'session.setQueue': SessionRef & { queue: string[] }
+  /** Removes one queued prompt; `expected` is the prompt the client saw at `index` */
+  'session.dequeue': SessionRef & { index: number; expected?: string }
   /** true = fully complete (tracking paused); false = resume tracking */
   'session.markComplete': SessionRef & { complete: boolean }
   /** A client showed the session to the user; clears attention/done for everyone */
@@ -223,6 +227,7 @@ export interface MethodResultsV2 {
   'session.sendPrompt': null
   'session.enqueue': null
   'session.setQueue': null
+  'session.dequeue': null
   'session.markComplete': null
   'session.seen': null
   'session.dismissDecision': null

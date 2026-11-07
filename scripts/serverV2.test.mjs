@@ -266,8 +266,8 @@ test('project.delete ends the project topic for its subscribers, before the serv
 })
 
 test('welcome capabilities: mcp while the listener is up, then what the server always has', () => {
-  assert.deepEqual(welcomeCapabilities(true), ['mcp', 'topicEnd', 'decisions'])
-  assert.deepEqual(welcomeCapabilities(false), ['topicEnd', 'decisions'])
+  assert.deepEqual(welcomeCapabilities(true), ['mcp', 'topicEnd', 'decisions', 'dequeue'])
+  assert.deepEqual(welcomeCapabilities(false), ['topicEnd', 'decisions', 'dequeue'])
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {
