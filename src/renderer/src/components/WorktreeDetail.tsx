@@ -127,6 +127,8 @@ export function WorktreeDetail({
   const [moveTarget, setMoveTarget] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  /** The title the rename started from: a server window refuses it if the title changed meanwhile */
+  const [editFrom, setEditFrom] = useState('')
   const serverStatus = useAppStore((s) => s.serverStatus)
   // A server window whose connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
@@ -240,7 +242,7 @@ export function WorktreeDetail({
 
   const commitRename = (): void => {
     if (editingId) {
-      renameTerminal(editingId, draft)
+      renameTerminal(editingId, draft, editFrom)
       scheduleAutoSave() // session titles persist in the project file
     }
     setEditingId(null)
@@ -733,6 +735,7 @@ export function WorktreeDetail({
                         e.stopPropagation()
                         setEditingId(id)
                         setDraft(meta.title)
+                        setEditFrom(meta.title)
                       }
                     }}
                     onDoubleClick={(e) => {
@@ -740,6 +743,7 @@ export function WorktreeDetail({
                       if (offline) return
                       setEditingId(id)
                       setDraft(meta.title)
+                      setEditFrom(meta.title)
                     }}
                   >
                     {meta.title}

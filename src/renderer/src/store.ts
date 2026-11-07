@@ -295,7 +295,8 @@ export interface AppState {
   registerTerminal: (meta: TerminalMeta) => void
   removeTerminal: (id: string) => void
   setActiveTerminal: (worktreeId: string, terminalId: string) => void
-  renameTerminal: (id: string, title: string) => void
+  /** `expected`: the title the edit started from (a server window sends it as a compare-and-set) */
+  renameTerminal: (id: string, title: string, expected?: string) => void
   setTerminalStatus: (id: string, status: TerminalStatus) => void
   clearTerminalAttention: (id: string) => void
   requestDecision: (id: string, question: string) => void

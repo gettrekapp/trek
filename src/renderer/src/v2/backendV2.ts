@@ -17,6 +17,8 @@
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
 import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
 import { errorCode, errorText } from './errors.ts'
+import { CAPABILITY } from '../../../shared/protocolV2.ts'
+import { ClientError } from '../../../shared/client/connection.ts'
 import { primaryWorktreeId } from '../../../shared/repositories.ts'
 import { hostKey } from '../../../shared/types.ts'
 import type { SessionTarget, WindowBackend } from '../backend'
@@ -33,6 +35,7 @@ export type V2RequestWithRev = <M extends MethodNameV2>(method: M, params: Metho
 export interface V2BackendState {
   project: ProjectFile | null
   terminals: Record<string, TerminalMeta>
+  terminalQueues: Record<string, string[]>
   loadedWorktrees: Record<string, true>
   hostWorktrees: Record<string, GitWorktreeInfo[]>
 }
@@ -86,9 +89,17 @@ export const V2_START_SIZE = { cols: 120, rows: 32 }
 
 /**
  * git's refusal to remove a worktree with uncommitted work, inside the server's
- * GIT_ERROR. English text: a git in another locale words it differently (Notes for 3c-3).
+ * GIT_ERROR, from a server that sends no `details.reason`. English text: a git
+ * in another locale words it differently.
  */
 const UNCOMMITTED = /modified or untracked/i
+
+/** The server refused a removal because the worktree has changes: `details.reason`, or git's English text. */
+function refusedAsDirty(err: unknown): boolean {
+  if (errorCode(err) !== 'GIT_ERROR') return false
+  const reason = (err as { details?: { reason?: unknown } }).details?.reason
+  return reason === 'dirty' || UNCOMMITTED.test(errorText(err))
+}
 
 class TargetError extends Error {
   readonly code = 'NOT_FOUND'
@@ -166,6 +177,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
   const branchRef = (repoId: string, branch: string) => ({ projectId, repoId, branch })
 
   let features: { caps: readonly string[] | undefined; value: BackendFeatures } | null = null
+  const can = (capability: string): boolean => deps.capabilities()?.includes(capability) ?? false
 
   return {
     kind: 'v2',
@@ -211,11 +223,16 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         reported('Could not close the session', undefined, async () => {
           await request('session.close', session(terminalId))
         }),
-      // session.rename takes an `expected` title too; not sent (Notes for 3c-3).
-      rename: async (terminalId, title) => {
+      // `expected`, the title the edit started from, makes it compare-and-set: a rename made elsewhere meanwhile wins.
+      rename: async (terminalId, title, expected) => {
         const trimmed = title.trim()
         if (!trimmed || trimmed === deps.state().terminals[terminalId]?.title) return
-        await request('session.rename', { ...session(terminalId), title: trimmed })
+        try {
+          await request('session.rename', { ...session(terminalId), title: trimmed, ...(expected !== undefined ? { expected } : {}) })
+        } catch (err) {
+          if (errorCode(err) !== 'CONFLICT') throw err
+          throw new ClientError('CONFLICT', `The session was renamed elsewhere meanwhile, so “${trimmed}” was not saved.`)
+        }
       },
       sendPrompt: async (terminalId, text, focus = true) => {
         await request('session.sendPrompt', { ...session(terminalId), text })
@@ -226,6 +243,16 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       setQueue: async (terminalId, queue) => {
         await request('session.setQueue', { ...session(terminalId), queue })
+      },
+      // Compare-and-set where the server has it; an older one gets the whole list without the item.
+      dequeue: async (terminalId, index, expected) => {
+        if (can(CAPABILITY.dequeue)) {
+          await request('session.dequeue', { ...session(terminalId), index, expected })
+          return
+        }
+        const queue = deps.state().terminalQueues[terminalId]
+        if (!queue || queue[index] !== expected) return
+        await request('session.setQueue', { ...session(terminalId), queue: queue.filter((_, i) => i !== index) })
       },
       markComplete: async (terminalId, complete) => {
         await request('session.markComplete', { ...session(terminalId), complete })
@@ -317,7 +344,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           return
         } catch (err) {
           // Changes can appear between the poll and the removal.
-          if (dirty || errorCode(err) !== 'GIT_ERROR' || !UNCOMMITTED.test(errorText(err))) {
+          if (dirty || !refusedAsDirty(err)) {
             await fail(err)
             return
           }

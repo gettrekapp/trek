@@ -12,6 +12,7 @@
 //
 // Pure: windowKind.ts installs the result with useAppStore.setState and puts
 // the originals back when the window leaves the server project.
+import { errorCode } from './errors.ts'
 import type { WindowBackend } from '../backend'
 import type { AppState } from '../store'
 
@@ -59,7 +60,8 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
   // `session.seen` already sent and not answered yet: a focus repeated meanwhile sends nothing.
   const seenInFlight = new Set<string>()
   return {
-    renameTerminal: (id, title) => send('Could not rename the session', backend.sessions.rename(id, title)),
+    renameTerminal: (id, title, expected) =>
+      send('Could not rename the session', backend.sessions.rename(id, title, expected)),
     toggleTerminalComplete: (id) => {
       const status = state().terminals[id]?.status
       if (!status || status === 'exited') return
@@ -77,10 +79,13 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
     },
     setTerminalQueue: (id, texts) => send('Could not update the queue', backend.sessions.setQueue(id, texts)),
     enqueueTerminalText: (id, text) => send('Could not queue the prompt', backend.sessions.enqueue(id, text)),
+    // Sent with the prompt the user saw there; a CONFLICT needs no dialog, the queue shown is about to change anyway.
     removeQueuedText: (id, index) => {
       const queue = state().terminalQueues[id]
       if (!queue || index < 0 || index >= queue.length) return
-      send('Could not update the queue', backend.sessions.setQueue(id, queue.filter((_, i) => i !== index)))
+      backend.sessions.dequeue(id, index, queue[index]).catch((err: unknown) => {
+        if (errorCode(err) !== 'CONFLICT') reports.reportEdit('Could not update the queue', err)
+      })
     },
     setBranchTag: (repoId, branch, tagId) => send('Could not set the tag', backend.branch.setTag(repoId, branch, tagId)),
     setBranchCustomTag: (repoId, branch, tagId, enabled) =>

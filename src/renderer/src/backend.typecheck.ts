@@ -24,6 +24,9 @@ export function checks(backend: WindowBackend): void {
   assertType<Returns<typeof sessions.sendPrompt, Promise<void>>>()
   assertType<Returns<typeof sessions.enqueue, Promise<void>>>()
   assertType<Returns<typeof sessions.setQueue, Promise<void>>>()
+  assertType<Returns<typeof sessions.dequeue, Promise<void>>>()
+  // A rename may carry the title it started from, for a compare-and-set.
+  assertType<Equal<Parameters<typeof sessions.rename>[2], string | undefined>>()
   assertType<Returns<typeof sessions.markComplete, Promise<void>>>()
   assertType<Returns<typeof sessions.seen, Promise<void>>>()
   assertType<Returns<typeof worktrees.setOrder, Promise<void>>>()

@@ -14,7 +14,7 @@ function fakeBackend(fail) {
   return {
     calls,
     backend: {
-      sessions: group('sessions', ['rename', 'markComplete', 'seen', 'setQueue', 'enqueue']),
+      sessions: group('sessions', ['rename', 'markComplete', 'seen', 'setQueue', 'enqueue', 'dequeue']),
       branch: group('branch', ['setTag', 'setCustomTag', 'setNote', 'setTicket', 'setPullRequest', 'setEnvVars']),
       worktrees: group('worktrees', ['setOrder'])
     }
@@ -38,7 +38,7 @@ test('overrides exactly the listed setters', () => {
 test('data edits go to the backend, with legacy ids', async () => {
   const { backend, calls } = fakeBackend()
   const o = v2SetterOverrides(backend, () => slice, quiet)
-  o.renameTerminal('busy', 'New')
+  o.renameTerminal('busy', 'New', 'Old')
   o.enqueueTerminalText('busy', 'later')
   o.setTerminalQueue('busy', ['z'])
   o.removeQueuedText('busy', 1)
@@ -52,10 +52,10 @@ test('data edits go to the backend, with legacy ids', async () => {
   o.setWorktreeOrder(['local /r'])
   await tick()
   assert.deepEqual(calls, [
-    ['sessions.rename', 'busy', 'New'],
+    ['sessions.rename', 'busy', 'New', 'Old'],
     ['sessions.enqueue', 'busy', 'later'],
     ['sessions.setQueue', 'busy', ['z']],
-    ['sessions.setQueue', 'busy', ['a', 'c']],
+    ['sessions.dequeue', 'busy', 1, 'b'],
     ['branch.setTag', 'r1', 'feat', 'review'],
     ['branch.setCustomTag', 'r1', 'feat', 'urgent', true],
     ['branch.setNote', 'r1', 'feat', ''],
@@ -134,4 +134,16 @@ test('seen is sent once while it is in flight, and again after it settled', asyn
   o.clearTerminalAttention('bell')
   o.clearTerminalAttention('done')
   assert.deepEqual(calls, ['bell', 'done', 'bell'])
+})
+
+test('a dequeue CONFLICT shows nothing; any other failure is reported as an edit', async () => {
+  const reports = []
+  const failing = (code) => ({
+    sessions: { dequeue: async () => Promise.reject(Object.assign(new Error('x'), { code })) }
+  })
+  const errors = { report: () => {}, reportEdit: (title, e) => reports.push([title, e.code]) }
+  v2SetterOverrides(failing('CONFLICT'), () => slice, errors).removeQueuedText('busy', 0)
+  v2SetterOverrides(failing('NOT_FOUND'), () => slice, errors).removeQueuedText('busy', 0)
+  await tick()
+  assert.deepEqual(reports, [['Could not update the queue', 'NOT_FOUND']])
 })

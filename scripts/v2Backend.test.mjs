@@ -13,9 +13,10 @@ const ids = () => ({
 const repo = (extra = {}) => ({ id: 'r1', name: 'r', path: '/r', worktrees: [{ id: 'w2', name: 'feat', path: '/r-feat', branch: 'feat' }], ...extra })
 
 class CodedError extends Error {
-  constructor(code, message) {
+  constructor(code, message, details) {
     super(message)
     this.code = code
+    this.details = details
   }
 }
 
@@ -34,6 +35,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
+    terminalQueues: {},
     loadedWorktrees: {},
     hostWorktrees: { 'r1 local': [{ path: '/r', repoId: 'r1', isMain: true }] },
     ...state
@@ -514,4 +516,42 @@ test('setNote resolves once the mirror holds the save; without a rev it waits fo
   const old = setup()
   await old.backend.branch.setNote('r1', 'feat', 'new', 'old')
   assert.deepEqual(old.waits, [])
+})
+
+test('remove: a refusal the server marks dirty asks again, whatever language git spoke', async () => {
+  let n = 0
+  const dirty = new CodedError('GIT_ERROR', "fatal: '/r-feat' contient des fichiers modifiés", { reason: 'dirty' })
+  const replies = { 'worktree.remove': () => (n++ === 0 ? dirty : null) }
+  const { backend, calls, ui } = setup({ confirms: [true, true], replies })
+  await backend.worktrees.remove(feat, { id: 'w2', name: 'feat', path: '/r-feat' })
+  assert.deepEqual(ui.map(([, title]) => title), ['Delete Worktree', 'Delete Uncommitted Changes'])
+  assert.deepEqual(calls.map(([m, p]) => [m, p.force]), [['worktree.remove', false], ['worktree.remove', true]])
+})
+
+test('rename sends the title it started from; a CONFLICT says the session was renamed elsewhere', async () => {
+  const st = { terminals: { s1: { id: 's1', worktreeId: 'w2', title: 'Old', sessionId: 's1', status: 'idle' } } }
+  const { backend, calls } = setup({ state: st })
+  await backend.sessions.rename('s1', ' New ', 'Old')
+  await backend.sessions.rename('s1', 'Newer')
+  assert.deepEqual(calls, [
+    ['session.rename', { projectId: 'p1', sessionId: 's1', title: 'New', expected: 'Old' }],
+    ['session.rename', { projectId: 'p1', sessionId: 's1', title: 'Newer' }]
+  ])
+  const conflict = setup({ state: st, replies: { 'session.rename': new CodedError('CONFLICT', 'title changed since you read it') } })
+  await assert.rejects(conflict.backend.sessions.rename('s1', 'New', 'Old'), (err) => {
+    assert.equal(err.code, 'CONFLICT')
+    assert.equal(err.message, 'The session was renamed elsewhere meanwhile, so “New” was not saved.')
+    return true
+  })
+})
+
+test('dequeue: session.dequeue where the server has it; otherwise the queue without the item, if it is still there', async () => {
+  const state = { terminalQueues: { s1: ['a', 'b', 'c'] } }
+  const { backend, calls } = setup({ state, capabilities: ['dequeue'] })
+  await backend.sessions.dequeue('s1', 1, 'b')
+  assert.deepEqual(calls, [['session.dequeue', { projectId: 'p1', sessionId: 's1', index: 1, expected: 'b' }]])
+  const old = setup({ state, capabilities: [] })
+  await old.backend.sessions.dequeue('s1', 1, 'b')
+  await old.backend.sessions.dequeue('s1', 1, 'stale')
+  assert.deepEqual(old.calls, [['session.setQueue', { projectId: 'p1', sessionId: 's1', queue: ['a', 'c'] }]])
 })

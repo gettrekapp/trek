@@ -85,11 +85,14 @@ export interface WindowBackend {
     restart(terminalId: string): Promise<void>
     /** Ends the session for good, wherever it runs */
     close(terminalId: string): Promise<void>
-    rename(terminalId: string, title: string): Promise<void>
+    /** `expected`: the title the edit started from; a v2 backend refuses the rename if it changed meanwhile */
+    rename(terminalId: string, title: string, expected?: string): Promise<void>
     /** Types the text into the session and submits it */
     sendPrompt(terminalId: string, text: string, focus?: boolean): Promise<void>
     enqueue(terminalId: string, text: string): Promise<void>
     setQueue(terminalId: string, queue: string[]): Promise<void>
+    /** Removes the queued prompt at `index`, if it still is `expected` */
+    dequeue(terminalId: string, index: number, expected: string): Promise<void>
     markComplete(terminalId: string, complete: boolean): Promise<void>
     /** The user has seen the session: clears attention and done */
     seen(terminalId: string): Promise<void>
@@ -199,6 +202,10 @@ export const legacyBackend: WindowBackend = {
     },
     setQueue: async (terminalId, queue) => {
       useAppStore.getState().setTerminalQueue(terminalId, queue)
+      scheduleAutoSave()
+    },
+    dequeue: async (terminalId, index) => {
+      useAppStore.getState().removeQueuedText(terminalId, index)
       scheduleAutoSave()
     },
     markComplete: async (terminalId, complete) => {

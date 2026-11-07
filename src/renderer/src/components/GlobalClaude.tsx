@@ -65,6 +65,8 @@ export function GlobalClaude(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  /** The title the rename started from: a server window refuses it if the title changed meanwhile */
+  const [editFrom, setEditFrom] = useState('')
   const hasTabs = order.length > 0
   const hasBot = useFeatures().bot
   const attention = order.some((id) => terminals[id]?.status === 'attention')
@@ -112,11 +114,12 @@ export function GlobalClaude(): React.JSX.Element {
     if (offline) return
     setEditingId(id)
     setDraft(terminals[id]?.title ?? '')
+    setEditFrom(terminals[id]?.title ?? '')
   }
 
   const commitRename = (): void => {
     if (editingId) {
-      useAppStore.getState().renameTerminal(editingId, draft)
+      useAppStore.getState().renameTerminal(editingId, draft, editFrom)
       saveGlobalSessions()
     }
     setEditingId(null)
