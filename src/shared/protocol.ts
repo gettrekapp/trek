@@ -45,7 +45,10 @@ export interface WireError {
 
 /** v2: what `WireError.details` may say. */
 export interface WireErrorDetails {
-  /** `dirty`: `worktree.remove` refused a worktree with modified or untracked files */
+  /**
+   * `dirty`: `worktree.remove` refused a worktree with modified or untracked files.
+   * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
+   */
   reason?: string
 }
 

@@ -6,7 +6,8 @@ import { applyStatePatch } from '../src/shared/sync/topicState.ts'
 
 function recorder() {
   const sent = []
-  return { sent, send: (topic, rev, ops) => sent.push({ topic, rev, ops }) }
+  const ends = []
+  return { sent, ends, send: (topic, rev, ops) => sent.push({ topic, rev, ops }), ended: (topic, reason) => ends.push({ topic, reason }) }
 }
 
 test('an unpublished topic cannot be subscribed to', () => {
@@ -120,6 +121,33 @@ test('rev reads the current rev; undefined for a topic never published or droppe
   assert.equal(hub.rev('project:p'), 1, 'an unchanged snapshot keeps the rev')
   hub.drop('project:p')
   assert.equal(hub.rev('project:p'), undefined)
+})
+
+test('drop tells each subscriber the topic ended, after forgetting it; others and later topics are untouched', (t) => {
+  const warn = t.mock.method(console, 'warn', () => {})
+  const hub = new TopicHub()
+  hub.publish('project:p', { n: 0 })
+  hub.publish('project:q', { n: 0 })
+  const a = recorder()
+  const b = recorder()
+  const other = recorder()
+  const plain = { send() {} }
+  const throwing = { send() {}, ended() { throw new Error('boom') } }
+  hub.subscribe('project:p', a)
+  hub.subscribe('project:p', throwing)
+  hub.subscribe('project:p', plain)
+  hub.subscribe('project:p', b)
+  hub.subscribe('project:q', other)
+  let revInside
+  a.ended = (topic, reason) => { a.ends.push({ topic, reason }); revInside = hub.rev(topic) }
+  hub.drop('project:p')
+  assert.deepEqual(a.ends, [{ topic: 'project:p', reason: 'deleted' }])
+  assert.deepEqual(b.ends, [{ topic: 'project:p', reason: 'deleted' }], 'a throwing subscriber does not stop the others')
+  assert.equal(revInside, undefined, 'the topic is already gone when subscribers hear it')
+  assert.deepEqual(other.ends, [])
+  assert.equal(warn.mock.callCount(), 1)
+  hub.drop('project:p')
+  assert.equal(a.ends.length, 1, 'dropping an unknown topic tells nobody')
 })
 
 test('subscriberCount follows subscribe, unsubscribe and unsubscribeAll', () => {

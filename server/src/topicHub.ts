@@ -3,11 +3,14 @@
 // subscriber the diff as a single patch. Snapshots are treated as immutable:
 // callers build a fresh object for each publish.
 import type { Topic } from '../../src/shared/model/topics'
+import type { TopicEndReason } from '../../src/shared/protocolV2'
 import { diffJson } from '../../src/shared/sync/jsonDiff.ts'
 import type { PatchOp } from '../../src/shared/sync/jsonPatch'
 
 export interface Subscriber {
   send(topic: Topic, rev: number, ops: PatchOp[]): void
+  /** The topic stopped for good (see `drop`); without it the subscriber is just forgotten */
+  ended?(topic: Topic, reason: TopicEndReason): void
 }
 
 interface TopicEntry {
@@ -83,9 +86,21 @@ export class TopicHub {
     return { snapshot: entry.snapshot, rev: entry.rev }
   }
 
-  /** Forgets the topic (a deleted project). Subscribers learn about it from the `server` topic. */
-  drop(topic: Topic): void {
+  /**
+   * Forgets the topic (a deleted project) and tells each of its subscribers it
+   * ended. A subscriber whose `ended` throws is logged; the others still hear it.
+   */
+  drop(topic: Topic, reason: TopicEndReason = 'deleted'): void {
+    const entry = this.topics.get(topic)
+    if (!entry) return
     this.topics.delete(topic)
+    for (const subscriber of [...entry.subscribers]) {
+      try {
+        subscriber.ended?.(topic, reason)
+      } catch (err) {
+        console.warn(`topic ${topic}: telling a subscriber it ended failed`, err)
+      }
+    }
   }
 
   unsubscribe(topic: Topic, subscriber: Subscriber): void {

@@ -28,6 +28,25 @@ export const SUPPORTED_PROTOCOL_VERSIONS: readonly number[] = [1, 2]
 /** Close reason sent with code 4002 when the client is older than the server allows. */
 export const CLOSE_REASON_UPGRADE_CLIENT = 'UPGRADE_CLIENT'
 
+/**
+ * `welcome.capabilities` values: the features a client cannot otherwise tell a
+ * server has (a method or an event). Clients hide or work around what is missing.
+ */
+export const CAPABILITY = {
+  /** The server's MCP listener is up, so sessions get the trek-dev tools (the Global panel needs them) */
+  mcp: 'mcp',
+  /** The server sends `topic.ended` before a topic stops (a deleted project) */
+  topicEnd: 'topicEnd'
+} as const
+
+/** Why a topic ended (`topic.ended`). */
+export type TopicEndReason = 'deleted'
+
+export interface TopicEndedPayload {
+  topic: Topic
+  reason: TopicEndReason
+}
+
 export interface WelcomeFrameV2 {
   type: 'welcome'
   protocolVersion: 2
@@ -246,4 +265,6 @@ export interface EventPayloadsV2 {
   'pty.exit': EventPayloadsV1['pty.exit']
   'daemon.shutdown': EventPayloadsV1['daemon.shutdown']
   'state.patch': StatePatchPayload
+  /** Sent to a topic's subscribers just before it stops; nothing more comes for it */
+  'topic.ended': TopicEndedPayload
 }

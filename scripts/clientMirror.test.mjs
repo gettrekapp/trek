@@ -421,3 +421,55 @@ test('a transient subscribe failure keeps whenRev waiting; the retry settles it'
   await tick()
   assert.deepEqual(wait.state, { snapshot: { n: 1 }, rev: 0 }, 'the retry was sent after the call')
 })
+
+// ---- topic.ended ----
+
+test('topic.ended reports TOPIC_ENDED with its reason, to current and later listeners, and rejects whenRev', async () => {
+  const { mirror, sock } = setup()
+  const seen = []
+  mirror.subscribe('project:p', (s) => seen.push(s))
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 3 })
+  await tick()
+  const wait = track(mirror.whenRev('project:p', 9))
+  sock.event('topic.ended', { topic: 'project:p', reason: 'deleted' })
+  await tick()
+  const err = seen.at(-1).error
+  assert.equal(err.code, 'TOPIC_ENDED')
+  assert.equal(err.message, 'project:p ended: deleted')
+  assert.deepEqual(err.details, { reason: 'deleted' })
+  assert.equal(wait.error, err)
+  assert.equal(mirror.get('project:p'), undefined, 'its state is dropped')
+  await assert.rejects(mirror.whenRev('project:p', 1), (e) => e.code === 'TOPIC_ENDED')
+  const late = []
+  mirror.subscribe('project:p', (s) => late.push(s))
+  assert.equal(late.at(-1).error.code, 'TOPIC_ENDED')
+  // Patches and a second end for it change nothing.
+  sock.event('state.patch', { topic: 'project:p', rev: 4, ops: [] })
+  sock.event('topic.ended', { topic: 'project:p', reason: 'deleted' })
+  assert.equal(seen.length, 2)
+})
+
+test('an ended topic is not subscribed again after a reconnect; an in-flight reply is ignored; others are', async () => {
+  const { server, clock, mirror, sock } = setup()
+  const seen = []
+  mirror.subscribe('project:p', (s) => seen.push(s))
+  mirror.subscribe('server', () => {})
+  sock.event('topic.ended', { topic: 'project:p', reason: 'deleted' })
+  // The first subscribe's reply arrives after the end: it is older, so it is ignored.
+  sock.reply(subReqs(sock)[0], { snapshot: { n: 1 }, rev: 0 })
+  await tick()
+  assert.equal(seen.at(-1).error.code, 'TOPIC_ENDED')
+  sock.serverClose(1006, '')
+  clock.advance(1000)
+  const next = server.last()
+  next.open()
+  next.welcome()
+  assert.deepEqual(subReqs(next).map((f) => f.params.topic), ['server'])
+  // An end for a topic the mirror does not hold is ignored, and an unknown reason still reads as an end.
+  next.event('topic.ended', { topic: 'project:other', reason: 'deleted' })
+  const stop = mirror.subscribe('project:q', (s) => seen.push(s))
+  next.event('topic.ended', { topic: 'project:q' })
+  assert.equal(seen.at(-1).error.message, 'project:q ended: ended')
+  stop()
+  assert.deepEqual(next.lastReq('sub.unsubscribe').params, { topic: 'project:q' })
+})

@@ -5,6 +5,7 @@
 // object, and a patch builds the next one from it. Treat them as read-only.
 import type { Topic, TopicSnapshot } from '../model/topics.ts'
 import { applyStatePatch, type TopicState } from '../sync/topicState.ts'
+import type { TopicEndedPayload } from '../protocolV2.ts'
 import { ClientError, type ServerConnection } from './connection.ts'
 
 /** What a listener of `topic` gets: the state, or an error. */
@@ -42,6 +43,8 @@ interface Entry {
   retryDelay: number
   /** `whenRev` calls waiting on this topic */
   waiters: Set<Waiter>
+  /** The server said the topic ended (`topic.ended`): it is never subscribed again */
+  ended: boolean
 }
 
 /** A subscribe that fails transiently (not NOT_FOUND or NOT_CONNECTED) is retried after 1 s, doubling to 30 s. */
@@ -56,6 +59,7 @@ export class TopicMirror {
     this.conn = conn
     conn.on('welcome', () => {
       for (const [topic, entry] of this.topics) {
+        if (entry.ended) continue
         this.cancelRetry(entry)
         entry.retryDelay = RETRY_MIN_MS
         this.resubscribe(topic)
@@ -63,6 +67,7 @@ export class TopicMirror {
     })
     conn.on('event', ({ event, payload }) => {
       if (event === 'state.patch') this.onPatch(payload as { topic: Topic; rev: number; ops: [] })
+      else if (event === 'topic.ended') this.onEnded(payload as Partial<TopicEndedPayload>)
     })
     conn.on('status', ({ status }) => {
       if (status === 'closed') this.onClosed()
@@ -82,7 +87,7 @@ export class TopicMirror {
     }
     let entry = this.topics.get(topic)
     if (!entry) {
-      entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS, waiters: new Set() }
+      entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS, waiters: new Set(), ended: false }
       this.topics.set(topic, entry)
       entry.listeners.add(listener)
       if (this.conn.status === 'connected') this.resubscribe(topic)
@@ -112,7 +117,7 @@ export class TopicMirror {
    * subscribe sent after this call, whatever its rev: that is the newest state the
    * server has, and after a server restart revs start again at 0. Needs a current
    * subscription (`NOT_SUBSCRIBED` otherwise). Rejects with the topic's error on
-   * `NOT_FOUND` and when the connection closes (`CLOSED`), with `UNSUBSCRIBED` when
+   * `NOT_FOUND`, `TOPIC_ENDED` and when the connection closes (`CLOSED`), with `UNSUBSCRIBED` when
    * its last listener leaves, and with `TIMEOUT` after `timeoutMs`. Transient
    * subscribe failures keep it waiting.
    */
@@ -120,7 +125,7 @@ export class TopicMirror {
     const entry = this.topics.get(topic)
     if (!entry) return Promise.reject(new ClientError('NOT_SUBSCRIBED', `${topic} is not subscribed`))
     if (entry.state && entry.state.rev >= rev) return Promise.resolve(entry.state as TopicState<TopicSnapshot<T>>)
-    if (entry.error?.code === 'NOT_FOUND') return Promise.reject(entry.error)
+    if (entry.error?.code === 'NOT_FOUND' || entry.ended) return Promise.reject(entry.error)
     return new Promise((resolve, reject) => {
       const waiter: Waiter = {
         rev,
@@ -189,6 +194,27 @@ export class TopicMirror {
       this.notify(entry, { error: closedError() })
       this.failWaiters(entry, closedError())
     }
+  }
+
+  /**
+   * The server ended the topic (a deleted project): drop its state, tell every
+   * listener with a `TOPIC_ENDED` error carrying the reason, and never subscribe
+   * to it again, not even after a reconnect. A listener added later hears the same error.
+   */
+  private onEnded(payload: Partial<TopicEndedPayload>): void {
+    const topic = payload.topic
+    const entry = topic === undefined ? undefined : this.topics.get(topic)
+    if (!entry || entry.ended) return
+    this.cancelRetry(entry)
+    // A subscribe reply still on its way is older than the end.
+    entry.attempt++
+    entry.loading = false
+    entry.ended = true
+    entry.state = undefined
+    const reason = typeof payload.reason === 'string' ? payload.reason : 'ended'
+    entry.error = new ClientError('TOPIC_ENDED', `${topic} ended: ${reason}`, { reason })
+    this.notify(entry, { error: entry.error })
+    this.failWaiters(entry, entry.error)
   }
 
   /** Resolves the waiters the current state satisfies; `attempt` names the subscribe that just brought it. */

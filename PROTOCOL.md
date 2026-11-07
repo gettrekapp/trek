@@ -188,6 +188,17 @@ version closes with `4002` and the reason `unsupported protocol version`;
 Clients key everything they cache by it. `repos` is gone; the project list
 comes from the `server` topic.
 
+`capabilities` names the features a client could not otherwise tell the server
+has (a method or an event); a client hides or works around what is missing. A
+new optional field needs no capability: its absence says enough.
+
+| Capability | Meaning |
+|---|---|
+| `mcp` | The server's MCP listener is up, so its sessions get the trek-dev tools (see [MCP](#mcp-trek-dev-on-the-server)). Listed per connection, only while the listener is up |
+| `topicEnd` | The server sends `topic.ended` before a topic stops (see Subscriptions) |
+
+The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
+
 ## Subscriptions
 
 ```json
@@ -212,6 +223,12 @@ comes from the `server` topic.
   replaces its mirror with the new snapshot. There is no replay log.
 - Subscriptions end with `sub.unsubscribe` or when the socket closes.
 - Unknown topics fail with `BAD_REQUEST`; unknown project ids with `NOT_FOUND`.
+- When a topic stops for good (today only a deleted project's), every subscriber
+  first gets `{"type": "event", "event": "topic.ended", "payload": {"topic":
+  "project:p1", "reason": "deleted"}}`, and nothing more for that topic. A
+  subscribe to it afterwards fails with `NOT_FOUND`. A server without the
+  `topicEnd` capability stops the topic silently; its clients learn about the
+  deletion from the `server` topic dropping the project.
 
 **Revs in responses.** A successful response to a method whose params name a
 `projectId` carries `rev: {topic: "project:<id>", rev}`: the project topic's rev
@@ -373,8 +390,9 @@ clears `tag`, `note`, `ticket`, `pr` or `env`. `branch.setCustomTags` with
 `customTags: null` or `[]` clears the custom tags; omitting `customTags` is
 `BAD_REQUEST`. A branch whose data becomes empty is removed from `branchData`.
 
-Deleting a project removes it from the `server` topic's `projects`; its
-`project:<id>` topic stops, and subscribing to it fails with `NOT_FOUND`. Once
+Deleting a project sends `topic.ended` (reason `deleted`) to the subscribers of
+its `project:<id>` topic, then removes it from the `server` topic's `projects`;
+the topic stops, and subscribing to it fails with `NOT_FOUND`. Once
 `project.delete` succeeds, the server kills the ptys of the project's sessions
 (Global ones included) and stops their Codex id discovery. Once `repo.remove`
 succeeds, it does the same for that repository's sessions and for the project's
@@ -617,7 +635,7 @@ scope keeps agents from acting on other projects by mistake. Other local users a
 kept out by the 0700 directory, the 0600 files and the bearer token.
 
 **Capabilities.** The v2 `welcome` frame's `capabilities` contains `"mcp"` when the
-server has MCP for its sessions (the listener is up), and is `[]` otherwise.
+server has MCP for its sessions (the listener is up), and lacks it otherwise.
 
 **Endpoint.** A second HTTP server inside `trek-server`, bound to `127.0.0.1` on
 an OS-chosen port, so it is never exposed (agents run on the server's machine). It
@@ -775,6 +793,7 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | Event | Payload |
 |---|---|
 | `state.patch` | `{topic, rev, ops}` |
+| `topic.ended` | `{topic, reason}`; `reason` is `deleted` (see Subscriptions) |
 | `pty.data` | as v1. Session status is computed on the server from live bytes, never from replay |
 | `pty.exit` | as v1 |
 | `daemon.shutdown` | as v1 |
@@ -856,13 +875,20 @@ connection is closed, every listener gets `{error}` with code `CLOSED` ("the
 connection was closed") and the topics are dropped; a `subscribe` after that
 gets the same error at once.
 
+**Ended topics.** On `topic.ended` the mirror drops the topic's state and gives
+every listener `{error}` with code `TOPIC_ENDED`, the message `<topic> ended:
+<reason>` and `details: {reason}`. It never subscribes to that topic again, not
+after a reconnect either; a listener added later gets the same error at once.
+`TOPIC_ENDED` is final, unlike `NOT_FOUND` (retried after a reconnect) and
+`CLOSED` (the connection, not the topic).
+
 **Waiting for a rev.** `TopicMirror.whenRev(topic, rev, {timeoutMs?})` resolves
 with the topic's state once the mirror holds `rev` or later, at once if it
 already does. A snapshot from a subscribe sent after the call also resolves it,
 whatever its rev: that is the newest state the server has (after a server
 restart revs start again at 0, so "at least `rev`" might never come). It needs
 a current subscription and rejects with `NOT_SUBSCRIBED` without one. It
-rejects with the topic's `NOT_FOUND`, with `CLOSED` when the connection closes,
+rejects with the topic's `NOT_FOUND` or `TOPIC_ENDED`, with `CLOSED` when the connection closes,
 with `UNSUBSCRIBED` when the topic's last listener leaves, and with `TIMEOUT`
 after `timeoutMs` (on the connection's timers; without it there is no limit).
 A transient subscribe failure keeps it waiting for the retry. The usual use:

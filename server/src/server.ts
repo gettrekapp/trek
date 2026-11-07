@@ -13,6 +13,7 @@ import {
   type ServerFrameV2,
   type TopicRev
 } from '../../src/shared/protocolV2'
+import { welcomeCapabilities } from './capabilities'
 import type { Outcome } from './errors'
 import { isRecord } from './validate'
 import type { ConfigStore } from './configStore'
@@ -150,6 +151,9 @@ export function startServer(
     const subscriber: Subscriber = {
       send(topic, rev, ops) {
         sendFrame(ws, { type: 'event', event: 'state.patch', payload: { topic, rev, ops } })
+      },
+      ended(topic, reason) {
+        sendFrame(ws, { type: 'event', event: 'topic.ended', payload: { topic, reason } })
       }
     }
 
@@ -240,7 +244,7 @@ export function startServer(
             daemonVersion,
             serverId: store.config.serverId ?? '',
             serverName: store.config.name ?? '',
-            capabilities: trek.mcp ? ['mcp'] : []
+            capabilities: welcomeCapabilities(trek.mcp !== undefined)
           })
         } else {
           sendFrame(ws, {

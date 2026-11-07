@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
@@ -38,7 +39,10 @@ function setup(t) {
     store.close()
   })
   const sent = []
-  const subscriber = { send: (topic, rev, ops) => sent.push({ topic, rev, ops }) }
+  const subscriber = {
+    send: (topic, rev, ops) => sent.push({ topic, rev, ops }),
+    ended: (topic, reason) => sent.push({ topic, ended: reason })
+  }
   /** Records what the handlers ask of the session manager */
   const forgotten = []
   const sessions = {
@@ -249,6 +253,21 @@ test('responseRev: a project command reports its project topic, a registry or pr
   assert.equal(responseRev('pty.write', { ptyId: 'x', data: 'y' }, hub), undefined)
   assert.equal(responseRev('project.rename', { projectId: 5 }, hub), undefined)
   assert.equal(responseRev('project.rename', undefined, hub), undefined)
+})
+
+test('project.delete ends the project topic for its subscribers, before the server topic drops it', async (t) => {
+  const { a, call, sent } = setup(t)
+  await call('sub.subscribe', { topic: 'server' })
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  await call('sub.subscribe', { topic: `project:${projectId}` })
+  sent.length = 0
+  await call('project.delete', { projectId })
+  assert.deepEqual(sent.map((m) => m.ended ? [m.topic, m.ended] : [m.topic, 'patch']), [[`project:${projectId}`, 'deleted'], ['server', 'patch']])
+})
+
+test('welcome capabilities: mcp while the listener is up, then what the server always has', () => {
+  assert.deepEqual(welcomeCapabilities(true), ['mcp', 'topicEnd'])
+  assert.deepEqual(welcomeCapabilities(false), ['topicEnd'])
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {
