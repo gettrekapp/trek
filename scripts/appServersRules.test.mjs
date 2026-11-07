@@ -1,7 +1,16 @@
 // scripts/appServersRules.test.mjs — app-wide server list parsing, input checks, and hello token injection.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseAppServers, shouldClearToken, validateServerInput, withToken } from '../src/main/appServersRules.ts'
+import {
+  parseAppServers,
+  reinsertAt,
+  shouldClearToken,
+  shouldRetryAfterTest,
+  testTokenRefusal,
+  validateServerInput,
+  withRemoving,
+  withToken
+} from '../src/main/appServersRules.ts'
 import { STATUS_LABELS, isLoopbackUrl, originOf } from '../src/shared/appServerRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
@@ -60,4 +69,54 @@ test('withToken sets the token on hello frames only', () => {
   const req = JSON.stringify({ type: 'req', id: 1, method: 'sys.ping', params: { token: 'x' } })
   assert.equal(withToken(req, 'secret'), req)
   assert.equal(withToken('not json', 'secret'), 'not json')
+})
+
+const A = { id: 'a', name: 'A', url: 'ws://a:1' }
+const B = { id: 'b', name: 'B', url: 'ws://b:1' }
+const C = { id: 'c', name: 'C', url: 'ws://c:1' }
+
+test('reinsertAt puts an entry back at its index, or at the end when the list has shrunk past it', () => {
+  const list = [A, C]
+  reinsertAt(list, 1, B)
+  assert.deepEqual(list, [A, B, C])
+  const short = [A]
+  reinsertAt(short, 5, C)
+  assert.deepEqual(short, [A, C], 'an index past the end goes at the end')
+  const empty = []
+  reinsertAt(empty, 2, B)
+  assert.deepEqual(empty, [B])
+  const front = [B]
+  reinsertAt(front, 0, A)
+  assert.deepEqual(front, [A, B])
+})
+
+test('withRemoving: the list with each entry a remove has not yet written, at its place, as copies', () => {
+  const list = [A, C]
+  const out = withRemoving(list, [{ entry: B, index: 1 }])
+  assert.deepEqual(out, [A, B, C])
+  assert.notEqual(out[0], A, 'copies, never the live entries')
+  assert.notEqual(out[1], B)
+  assert.deepEqual(list, [A, C], 'the list itself is untouched')
+  assert.deepEqual(withRemoving([], [{ entry: C, index: 2 }]), [C], 'past the end')
+  assert.deepEqual(withRemoving([A], []), [A])
+})
+
+test('testTokenRefusal: the token read goes only to the URL the entry had before it', () => {
+  assert.equal(testTokenRefusal('ws://a:1', { ...A }), null)
+  // A save re-pointed the entry while the token was read: never probe the old token against either URL.
+  assert.deepEqual(testTokenRefusal('ws://a:1', { ...A, url: 'wss://evil:1' }), { status: 'error', message: 'Server changed' })
+  // Removed meanwhile (or being removed: not in the list).
+  assert.deepEqual(testTokenRefusal('ws://a:1', undefined), { status: 'error', message: 'Server changed' })
+})
+
+test('shouldRetryAfterTest: only a connected Test of the URL the entry still has, with no remove started', () => {
+  const ok = { status: 'connected', message: '' }
+  assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', { ...A }, false), true)
+  for (const status of ['needs-auth', 'incompatible', 'error', 'disconnected']) {
+    assert.equal(shouldRetryAfterTest({ status, message: '' }, 'ws://a:1', { ...A }, false), false, status)
+  }
+  assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', { ...A, url: 'ws://other:1' }, false), false, 're-pointed during the probe')
+  assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', undefined, true), false, 'a remove started during the probe')
+  assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', { ...A }, true), false, 'being removed, even if still found')
+  assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', undefined, false), false, 'removed during the probe')
 })

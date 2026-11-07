@@ -8,7 +8,17 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSecretStore, writeFileAtomic } from './secrets'
-import { parseAppServers, shouldClearToken, validateServerInput, type AppServer } from './appServersRules'
+import {
+  parseAppServers,
+  reinsertAt,
+  shouldClearToken,
+  shouldRetryAfterTest,
+  testTokenRefusal,
+  validateServerInput,
+  withRemoving,
+  type AppServer,
+  type RemovingEntry
+} from './appServersRules'
 import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
@@ -26,7 +36,7 @@ let servers: AppServer[] | null = null
  * and the relay refuses them only for now, so a remove whose write fails (and
  * puts the entry back) never leaves a window on "Server removed" for good.
  */
-const removing = new Map<string, { entry: AppServer; index: number }>()
+const removing = new Map<string, RemovingEntry>()
 /** Main's own connections, from registerAppServerHandlers on */
 let links: ServerLinks | null = null
 
@@ -98,9 +108,7 @@ export function isAppServerRemoving(id: string): boolean {
 
 /** The list as main's connections and their snapshots see it: with the entries a remove has not yet written. */
 function linkEntries(): AppServer[] {
-  const out = loaded().map((s) => ({ ...s }))
-  for (const { entry, index } of removing.values()) out.splice(Math.min(index, out.length), 0, { ...entry })
-  return out
+  return withRemoving(loaded(), removing.values())
 }
 
 /** Main-only: never return this over IPC. */
@@ -206,19 +214,23 @@ async function remove(id: unknown): Promise<void> {
   const list = loaded()
   const index = list.findIndex((s) => s.id === key)
   const [gone] = index >= 0 ? list.splice(index, 1) : []
-  // Until it is off the disk, the broadcasts (a status change meanwhile included) still list it.
-  if (gone) removing.set(key, { entry: gone, index })
+  if (gone) {
+    // Until it is off the disk, the broadcasts (a status change meanwhile included) still list it.
+    removing.set(key, { entry: gone, index })
+    // Main's own connection stops now, not reconnecting with the cached token meanwhile;
+    // if the remove fails, the sync below brings it back.
+    links?.drop(key)
+  }
   closeForServer(key, 'server removed')
   try {
+    // An unknown id still has any stray token cleared, and nothing to write.
     await tokens.set(key, null)
-    if (!gone) return
-    try {
-      await persist()
-    } catch (err) {
-      // Still on disk, so back in the list (without its token).
-      list.splice(Math.min(index, list.length), 0, gone)
-      throw err
-    }
+    if (gone) await persist()
+  } catch (err) {
+    // The token clear or the write failed: still on disk, so back in the list (with its
+    // token, if the clear is what failed).
+    if (gone) reinsertAt(list, index, gone)
+    throw err
   } finally {
     // Back in the list, or gone for good: in the same step, so no snapshot misses or doubles it.
     if (gone) removing.delete(key)
@@ -226,16 +238,23 @@ async function remove(id: unknown): Promise<void> {
   }
 }
 
-/** One-shot v2 connection check through the 3a SDK; the connection is always closed. */
+/**
+ * One-shot v2 connection check through the 3a SDK; the connection is always closed.
+ * The token goes only to the URL the entry had when it was read: a save that
+ * re-points the entry meanwhile (or a remove) refuses this Test instead.
+ */
 async function test(id: unknown): Promise<AppServerTest> {
-  const server = requireKnown(id)
-  const token = await tokens.get(server.id)
+  const { id: key, url } = requireKnown(id)
+  const token = await tokens.get(key)
+  const refused = testTokenRefusal(url, getAppServer(key))
+  if (refused) return refused
   if (!token) return { status: 'needs-auth', message: 'No token set' }
 
-  const result = await probeServer({ url: server.url, token, createSocket: globalSocketFactory, clientVersion: app.getVersion() })
+  const result = await probeServer({ url, token, createSocket: globalSocketFactory, clientVersion: app.getVersion() })
   // The server takes this token now (added there, or the server upgraded): main's own
-  // connection, if stuck in needs-auth or incompatible, reconnects at once, unthrottled.
-  if (result.status === 'connected') links?.retry(server.id)
+  // connection, if stuck in needs-auth or incompatible, reconnects at once, unthrottled;
+  // unless the entry was re-pointed or is being removed while the probe ran.
+  if (shouldRetryAfterTest(result, url, getAppServer(key), removing.has(key))) links?.retry(key)
   return result
 }
 

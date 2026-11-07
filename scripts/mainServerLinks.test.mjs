@@ -234,3 +234,40 @@ test('retry(id) reconnects that entry only, if stuck, with no throttle', async (
   links.retry('missing')
   assert.equal(server.sockets.length, 5, 'connected, or unknown: nothing')
 })
+
+test('drop(id) closes the connection at once, with no reconnect; the next sync brings it back if still listed', async () => {
+  const { links, server, sockFor, clock, last } = setup({ entries: [box, lab], stored: { box: SECRET, lab: SECRET } })
+  await links.sync()
+  const sock = sockFor('ws://box:8800')
+  sock.open()
+  sock.welcome()
+  links.drop('box')
+  assert.equal(sock.readyState, 3)
+  assert.equal(links.get('box'), undefined)
+  assert.equal(last().servers[0].status, null, 'the snapshot shows it unconnected')
+  clock.advance(120_000)
+  assert.equal(server.sockets.filter((s) => s.url === 'ws://box:8800').length, 1, 'no reconnect with the cached token')
+  links.drop('missing')
+  // A remove that failed: the entry is still listed with its token, so the sync reconnects it.
+  await links.sync()
+  assert.equal(server.sockets.filter((s) => s.url === 'ws://box:8800').length, 2)
+  assert.equal(server.last().readyState, 0)
+})
+
+test('drop(id) during a sync\'s token reads: that sync leaves the entry to the next', async () => {
+  const { links, secrets, server, hold } = setup({ entries: [box], stored: { box: SECRET } })
+  await links.sync()
+  assert.equal(server.sockets.length, 1)
+  const release = hold()
+  const first = links.sync()
+  await new Promise((r) => setImmediate(r))
+  // As appServers.remove does: the link drops, then the token is cleared.
+  links.drop('box')
+  secrets.delete('box')
+  const second = links.sync()
+  release()
+  await first
+  await second
+  assert.equal(server.sockets.length, 1, 'the token read before the drop never reconnects')
+  assert.equal(links.get('box'), undefined)
+})

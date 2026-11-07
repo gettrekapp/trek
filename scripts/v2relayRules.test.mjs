@@ -1,7 +1,8 @@
 // scripts/v2relayRules.test.mjs — the relay's ownership table, one watch per window, and close-code rules.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_SOCKETS_PER_OWNER, RelayTable, clampCloseCode, clampCloseReason } from '../src/main/v2relayRules.ts'
+import { MAX_SOCKETS_PER_OWNER, RelayTable, clampCloseCode, clampCloseReason, goneRefusal, relayRefusal } from '../src/main/v2relayRules.ts'
+import { SERVER_REMOVED_MESSAGE } from '../src/shared/client/index.ts'
 
 test('clampCloseCode keeps 1000 and 3000–4999, otherwise 1000', () => {
   for (const ok of [1000, 3000, 4000, 4999]) assert.equal(clampCloseCode(ok), ok)
@@ -94,4 +95,17 @@ test('atCapacity caps sockets per window, 16 by default', () => {
   assert.equal(small.atCapacity(a), false)
   small.add({ id: '2', serverEntryId: 'x', owner: a })
   assert.equal(small.atCapacity(a), true)
+})
+
+test('goneRefusal: removed is final only once the remove has written the list', () => {
+  assert.deepEqual(goneRefusal(false), { ok: false, removed: true, reason: SERVER_REMOVED_MESSAGE })
+  assert.deepEqual(goneRefusal(true), { ok: false, removed: false, reason: 'Server being removed' }, 'a remove that may yet fail is temporary')
+})
+
+test('relayRefusal: after the token read, the open goes on only if the entry still has the URL it had', () => {
+  const before = { url: 'ws://box:1' }
+  assert.equal(relayRefusal(before, { url: 'ws://box:1' }, false), null)
+  assert.deepEqual(relayRefusal(before, { url: 'wss://evil:1' }, false), { ok: false, removed: false, reason: 'Server changed' }, 're-pointed: temporary')
+  assert.deepEqual(relayRefusal(before, undefined, false), { ok: false, removed: true, reason: SERVER_REMOVED_MESSAGE }, 'removed and written: final')
+  assert.deepEqual(relayRefusal(before, undefined, true), { ok: false, removed: false, reason: 'Server being removed' }, 'removing: temporary')
 })

@@ -52,6 +52,13 @@ export interface ServerLinks {
    * at once: a Test of the entry just succeeded, so the server takes it now.
    */
   retry(id: string): void
+  /**
+   * Closes the entry's connection now (a remove has begun), so it stops
+   * reconnecting with the token it holds. A sync already reading tokens leaves
+   * the entry alone; the next sync brings the connection back if the entry is
+   * still listed with a token (a remove that failed and put it back).
+   */
+  drop(id: string): void
   /** The connection for an entry (3d subscribes to `attention` on it) */
   get(id: string): RegisteredServer | undefined
   /** Closes every connection for good (quit) */
@@ -82,6 +89,9 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
   let closed = false
   let chain: Promise<void> = Promise.resolve()
   let lastRetry = -Infinity
+  /** Bumped by each `drop`, per entry: a sync whose token reads straddle one leaves the entry to the next sync */
+  const drops = new Map<string, number>()
+  const dropCount = (id: string): number => drops.get(id) ?? 0
 
   const link = (entry: AppServer): AppServerLink => {
     const has = hasToken.get(entry.id) ?? false
@@ -130,9 +140,10 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
 
   const apply = async (): Promise<void> => {
     const before = deps.entries()
+    const dropped = before.map((e) => dropCount(e.id))
     const read = await Promise.all(before.map((e) => deps.token(e.id).catch(() => null)))
     if (closed) return
-    const urlBefore = new Map(before.map((e, i) => [e.id, { url: e.url, token: read[i] }]))
+    const urlBefore = new Map(before.map((e, i) => [e.id, { url: e.url, token: read[i], drops: dropped[i] }]))
     const list = deps.entries()
     const ids = new Set(list.map((e) => e.id))
     for (const r of registry.list()) if (!ids.has(r.entry.id)) drop(r.entry.id)
@@ -140,8 +151,8 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     capped.clear()
     for (const entry of list) {
       const seen = urlBefore.get(entry.id)
-      // Added or re-pointed while the tokens were read: the sync that change queued handles it.
-      if (!seen || seen.url !== entry.url) continue
+      // Added, re-pointed or dropped while the tokens were read: the sync that change queued handles it.
+      if (!seen || seen.url !== entry.url || seen.drops !== dropCount(entry.id)) continue
       const token = seen.token
       hasToken.set(entry.id, !!token)
       const current = registry.get(entry.id)
@@ -186,6 +197,12 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     retry: (id) => {
       const connection = registry.get(id)?.connection
       if (!closed && connection && stuck(connection)) connection.reconnect()
+    },
+    drop: (id) => {
+      drops.set(id, dropCount(id) + 1)
+      if (closed || !registry.get(id)) return
+      drop(id)
+      emit()
     },
     get: (id) => registry.get(id),
     close: () => {

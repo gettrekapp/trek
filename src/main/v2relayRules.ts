@@ -1,5 +1,6 @@
 // The relay's bookkeeping, without Electron or sockets: which window owns which
 // socket, which windows are already watched, and the close-code rules. Pure.
+import { SERVER_REMOVED_MESSAGE } from '../shared/client/index.ts'
 
 export interface RelayEntry<Owner> {
   id: string
@@ -100,4 +101,25 @@ export class RelayTable<Owner extends object, Entry extends RelayEntry<Owner>> {
     this.watched.add(owner)
     return true
   }
+}
+
+export type RelayRefusal = { ok: false; removed: boolean; reason: string }
+
+/** The entry is not in the list: final only once a remove has written it (`removing` false), since a failed one puts it back. */
+export function goneRefusal(removing: boolean): RelayRefusal {
+  return removing
+    ? { ok: false, removed: false, reason: 'Server being removed' }
+    : { ok: false, removed: true, reason: SERVER_REMOVED_MESSAGE }
+}
+
+/**
+ * An open's check of the entry once its token is read, against `before` (the
+ * entry when the open began): removed meanwhile is `goneRefusal`; re-pointed
+ * meanwhile is temporary (the next open reads the new URL and token). null:
+ * the token may go to `before.url`.
+ */
+export function relayRefusal(before: { url: string }, now: { url: string } | undefined, removing: boolean): RelayRefusal | null {
+  if (!now) return goneRefusal(removing)
+  if (now.url !== before.url) return { ok: false, removed: false, reason: 'Server changed' }
+  return null
 }

@@ -6,8 +6,7 @@ import { ipcMain, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { withToken } from './appServersRules'
 import { getAppServer, getAppServerToken, isAppServerRemoving } from './appServers'
-import { RelayTable, clampCloseCode, clampCloseReason, type RelayEntry } from './v2relayRules'
-import { SERVER_REMOVED_MESSAGE } from '../shared/client/index.ts'
+import { RelayTable, clampCloseCode, clampCloseReason, goneRefusal, relayRefusal, type RelayEntry } from './v2relayRules'
 import type { V2SocketOpenResult } from '../shared/types'
 
 interface RelaySocket extends RelayEntry<WebContents> {
@@ -67,23 +66,21 @@ export function registerV2Relay(): void {
     const owner = event.sender
     const refuse = (reason: string, removed = false): V2SocketOpenResult => ({ ok: false, removed, reason })
     // A remove still writing the list may yet fail and put the entry back: not final until it is written.
-    const gone = (): V2SocketOpenResult =>
-      isAppServerRemoving(serverEntryId) ? refuse('Server being removed') : refuse(SERVER_REMOVED_MESSAGE, true)
     const server = getAppServer(serverEntryId)
-    if (!server) return gone()
+    if (!server) return goneRefusal(isAppServerRemoving(serverEntryId))
     watchOwner(owner)
     const generation = sockets.generation(owner)
     if (sockets.atCapacity(owner)) return refuse('Too many sockets for this window')
     const token = (await getAppServerToken(serverEntryId)) ?? ''
     // While the token was read the entry may have been removed or re-pointed, or
     // the window closed, reloaded or crashed: then this token goes nowhere.
-    // Removed meanwhile: final. Re-pointed meanwhile: transient, the next open reads the new URL and token.
+    // Removed meanwhile: final once written. Re-pointed meanwhile: transient, the next open reads
+    // the new URL and token (relayRefusal). `server` is a copy, so the socket opens to the URL checked.
     // appServers.save changes the URL in the same step as it queues the token write, and
     // the secret store runs this get after queued sets: so a read of the new URL never pairs
     // with the old token, and an old URL whose token read saw the new token fails this check.
-    const now = getAppServer(serverEntryId)
-    if (!now) return gone()
-    if (now.url !== server.url) return refuse('Server changed')
+    const moved = relayRefusal(server, getAppServer(serverEntryId), isAppServerRemoving(serverEntryId))
+    if (moved) return moved
     if (owner.isDestroyed()) return refuse('Window closed')
     if (sockets.generation(owner) !== generation) return refuse('Window reloaded')
     if (sockets.atCapacity(owner)) return refuse('Too many sockets for this window')
