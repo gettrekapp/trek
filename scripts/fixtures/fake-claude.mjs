@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Stands in for the Claude CLI in tests. The wake text picks the behaviour, or the whole prompt if it has no wake tags.
-import { spawn, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 
 const argv = process.argv.slice(2)
 const arg = (flag) => (argv.includes(flag) ? argv[argv.indexOf(flag) + 1] : undefined)
@@ -106,6 +106,25 @@ if (wake.includes('HANG')) {
       }
     })
   })
+  finish()
+} else if (wake.includes('CANARY')) {
+  // Tries a file in Trek's data the ways a tool or shell in the bot could. The turn's sandbox must stop each one.
+  const target = process.env.FAKE_CLAUDE_SECRET
+  const quiet = { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+  const tries = [
+    () => readFileSync(target, 'utf8'),
+    () => execFileSync('/bin/sh', ['-c', 'cat "$1"', 'sh', target], quiet),
+    () => execFileSync(process.execPath, ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(target)}, 'utf8'))`], quiet)
+  ]
+  const leaks = tries.filter((read) => {
+    try {
+      read()
+      return true
+    } catch {
+      return false
+    }
+  }).length
+  say(`canary:${leaks ? `LEAKED ${leaks}` : 'denied'} true:${spawnSync('/usr/bin/true').status === 0 ? 'ran' : 'failed'}`)
   finish()
 } else if (wake.includes('ASKTOOL')) {
   // POLICY.json puts list_session_types in the ask tier for this.

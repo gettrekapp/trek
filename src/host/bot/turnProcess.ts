@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import type { BotEventKind } from '../../shared/bot'
 import { classifyFailure, parseStreamLine } from './events.ts'
+import type { Sandbox } from './sandbox'
 
 export interface TurnOptions {
   /** The command and any arguments from the project's claudeCommand. */
@@ -17,9 +18,11 @@ export interface TurnOptions {
   addDirs: string[]
   env: Record<string, string>
   timeoutMs: number
+  /** The OS sandbox the CLI runs in (sandboxFor). There is no way to run a turn without one. */
+  sandbox: Sandbox
 }
 
-export type TurnOutcomeKind = 'ok' | 'crash' | 'timeout' | 'auth' | 'limit' | 'resume' | 'missing' | 'killed'
+export type TurnOutcomeKind = 'ok' | 'crash' | 'timeout' | 'auth' | 'limit' | 'resume' | 'missing' | 'killed' | 'sandbox'
 
 export interface TurnOutcome {
   kind: TurnOutcomeKind
@@ -108,10 +111,16 @@ const finished = (ending: TurnEnding): TurnHandle => ({
 const ignore = (): void => {}
 const NO_SHELL = 'The bot runs this command directly, without a shell, so shell aliases and env prefixes do not work.'
 
-function spawnFailure(err: NodeJS.ErrnoException, bin: string, cwd: string): TurnEnding {
+/** What sandbox-exec and bwrap print when the command they were to run doesn't exist. */
+const MISSING_IN_SANDBOX = /^(?:sandbox-exec: execvp\(\) of '.*' failed|bwrap: execvp .*): No such file or directory$/m
+
+const missingCli = (bin: string): TurnEnding => ({ kind: 'missing', text: `Claude CLI not found: ${bin}. ${NO_SHELL}` })
+
+/** The process spawned is the sandbox, so ENOENT there means the sandbox itself is missing. */
+function spawnFailure(err: NodeJS.ErrnoException, sandbox: string, cwd: string): TurnEnding {
   if (err.code !== 'ENOENT') return { kind: 'crash', text: err.message }
   return existsSync(cwd)
-    ? { kind: 'missing', text: `Claude CLI not found: ${bin}. ${NO_SHELL}` }
+    ? { kind: 'sandbox', text: `The bot's OS sandbox is not available: ${sandbox} was not found` }
     : { kind: 'crash', text: `Working directory not found: ${cwd}` }
 }
 
@@ -121,17 +130,19 @@ export function runTurn(
 ): TurnHandle {
   const [bin, ...prefix] = options.command
   if (!bin) return finished({ kind: 'missing', text: 'Claude CLI not found: the command is empty' })
+  const { sandbox } = options
   let child: ChildProcess
   try {
     // detached gives the turn its own process group, so killing it reaches its children.
-    child = spawn(bin, [...prefix, ...claudeArgs(options)], {
+    // sandbox-exec execs the CLI in place; bwrap stays as its parent, in the same group.
+    child = spawn(sandbox.command, [...sandbox.args, bin, ...prefix, ...claudeArgs(options)], {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true
     })
   } catch (err) {
-    return finished(spawnFailure(err as NodeJS.ErrnoException, bin, options.cwd))
+    return finished(spawnFailure(err as NodeJS.ErrnoException, sandbox.command, options.cwd))
   }
   const { pid, stdin, stdout, stderr } = child
   if (!stdin || !stdout || !stderr) {
@@ -268,12 +279,13 @@ export function runTurn(
     }
     if (result && !result.isError) return settle({ kind: 'ok', text: result.text })
     if (stopReason) return settle({ kind: stopReason, text: `Turn ${stopReason === 'timeout' ? 'timed out' : 'stopped'}` })
+    if (!result && MISSING_IN_SANDBOX.test(stderrText)) return settle(missingCli(bin))
     const text = [result?.text, stderrText.trim()].filter(Boolean).join('\n') || 'Claude exited without a result'
     // stderr can quote paths and stack traces, so it only decides when the result says nothing.
     const failure = classifyFailure(result?.text || stderrText, result?.apiStatus ?? null)
     settle({ kind: failure === 'auth' || !limited ? failure : 'limit', text })
   }
-  child.on('error', (err: NodeJS.ErrnoException) => settle(spawnFailure(err, bin, options.cwd)))
+  child.on('error', (err: NodeJS.ErrnoException) => settle(spawnFailure(err, sandbox.command, options.cwd)))
   child.on('exit', startDrain)
   child.on('close', finish)
 

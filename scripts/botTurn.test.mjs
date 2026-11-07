@@ -2,14 +2,22 @@
 import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { botMcpConfig, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
 import { startHeartbeat } from '../src/host/bot/heartbeat.ts'
+import { sandboxFor } from '../src/host/bot/sandbox.ts'
 
 const FAKE = resolve('scripts/fixtures/fake-claude.mjs')
-const dir = mkdtempSync(join(tmpdir(), 'bot-turn-'))
+const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bot-turn-')))
+// Every turn runs in the real sandbox, around a fake userData. Elsewhere than macOS, env stands in for it.
+const userData = join(dir, 'user data')
+mkdirSync(userData)
+const SECRET = join(userData, 'server-tokens.json')
+writeFileSync(SECRET, 'TOPSECRET')
+const mac = process.platform === 'darwin'
+const SANDBOX = mac ? sandboxFor('darwin', userData).sandbox : { command: '/usr/bin/env', args: [] }
 const run = (prompt, extra = {}) => {
   const events = []
   const handle = runTurn({
@@ -24,6 +32,7 @@ const run = (prompt, extra = {}) => {
     addDirs: ['/a', '/b'],
     env: {},
     timeoutMs: 20_000,
+    sandbox: SANDBOX,
     ...extra
   }, (e) => events.push(e))
   return { handle, events }
@@ -71,7 +80,20 @@ test('classifies failed turns', async () => {
   assert.equal((await run('x', { sessionId: 'bad', resume: true }).handle.done).kind, 'resume')
 })
 
-test('a missing command reports missing', async () => {
+test('the CLI runs inside the sandbox: Trek\'s data is unreadable, other commands run', { skip: !mac && 'macOS only' }, async () => {
+  const { handle, events } = run('CANARY', { env: { FAKE_CLAUDE_SECRET: SECRET } })
+  assert.equal((await handle.done).kind, 'ok')
+  assert.deepEqual(events, [{ kind: 'text', text: 'canary:denied true:ran' }])
+  assert.equal(readFileSync(SECRET, 'utf8'), 'TOPSECRET')
+})
+
+test('a missing sandbox command is a sandbox outcome, not a missing CLI', async () => {
+  const outcome = await run('hello', { sandbox: { command: join(dir, 'no-sandbox-exec'), args: [] } }).handle.done
+  assert.equal(outcome.kind, 'sandbox')
+  assert.equal(outcome.text, `The bot's OS sandbox is not available: ${join(dir, 'no-sandbox-exec')} was not found`)
+})
+
+test('a missing command reports missing', { skip: !mac && 'needs sandbox-exec' }, async () => {
   assert.equal((await run('x', { command: [join(dir, 'nope')] }).handle.done).kind, 'missing')
 })
 
@@ -146,7 +168,7 @@ test('running out of file descriptors is an outcome, not a throw', () => {
     try { for (;;) held.push(openSync('/dev/null', 'r')) } catch {}
     const outcome = await runTurn({
       command: ['/usr/bin/true'], cwd: '/', prompt: 'x', systemPrompt: 'S', sessionId: 's', resume: false,
-      mcpConfig: 'm', settings: 's', addDirs: [], env: {}, timeoutMs: 5000
+      mcpConfig: 'm', settings: 's', addDirs: [], env: {}, timeoutMs: 5000, sandbox: ${JSON.stringify(SANDBOX)}
     }, () => {}).done
     for (const fd of held) closeSync(fd)
     await new Promise((r) => setTimeout(r, 50))
@@ -171,7 +193,7 @@ test('a throwing onEvent never escapes or loses the result, mid-stream or in the
     let calls = 0
     const handle = runTurn({
       command: [FAKE], cwd: dir, prompt, systemPrompt: 'S', sessionId: 's1', resume: false, mcpConfig: 'm',
-      settings: '{}', addDirs: [], env: {}, timeoutMs: 20_000
+      settings: '{}', addDirs: [], env: {}, timeoutMs: 20_000, sandbox: SANDBOX
     }, () => {
       calls++
       throw new Error('listener broke')
@@ -216,7 +238,7 @@ test('a stop still SIGKILLs descendants after settling', async (t) => {
   t.after(() => killAll(readPids(file)))
   const handle = runTurn({
     command: [FAKE], cwd: dir, prompt: 'STUBBORN', systemPrompt: 'S', sessionId: 's1', resume: false, mcpConfig: 'm',
-    settings: '{}', addDirs: [], env: { FAKE_CLAUDE_PIDS: file }, timeoutMs: 20_000
+    settings: '{}', addDirs: [], env: { FAKE_CLAUDE_PIDS: file }, timeoutMs: 20_000, sandbox: SANDBOX
   }, (event) => {
     if (event.text === 'ready') handle.kill()
   })
@@ -409,7 +431,7 @@ test('the fake reads its mode from the wake alone', async () => {
 const stubbornTurn = (file, onReady) => {
   const handle = runTurn({
     command: [FAKE], cwd: dir, prompt: 'STUBBORN', systemPrompt: 'S', sessionId: 's1', resume: false, mcpConfig: 'm',
-    settings: '{}', addDirs: [], env: { FAKE_CLAUDE_PIDS: file }, timeoutMs: 20_000
+    settings: '{}', addDirs: [], env: { FAKE_CLAUDE_PIDS: file }, timeoutMs: 20_000, sandbox: SANDBOX
   }, (event) => {
     if (event.text === 'ready') onReady(handle)
   })
@@ -449,7 +471,7 @@ test('killAllTurnsNow leaves finished turns alone', async (t) => {
   assert.equal(kill.mock.callCount(), 0)
 })
 
-test('a missing CLI explains that there is no shell', async () => {
+test('a missing CLI explains that there is no shell', { skip: !mac && 'needs sandbox-exec' }, async () => {
   const { handle } = run('hello', { command: ['FOO=bar', 'claude'] })
   const outcome = await handle.done
   assert.equal(outcome.kind, 'missing')

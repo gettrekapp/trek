@@ -49,7 +49,9 @@ const startElectron = async ({ restore = false, dataDir = userData, argLog = log
     FAKE_CLAUDE_PIDS: descendantPids,
     FAKE_CLAUDE_GATE: gate,
     FAKE_CLAUDE_TOKEN_FILE: tokenFile,
-    FAKE_CLAUDE_PEEK_FILE: peekFile
+    FAKE_CLAUDE_PEEK_FILE: peekFile,
+    // A file in this run's userData, which the CANARY turn tries to read.
+    FAKE_CLAUDE_SECRET: join(dataDir, 'bot-consent.json')
   }
   if (restore) delete env.TREK_NO_WINDOW_RESTORE
   else env.TREK_NO_WINDOW_RESTORE = '1'
@@ -196,6 +198,8 @@ try {
 
     await say('hello')
     check('chat gets a reply', await seen('echo:hello'), true)
+    await say('CANARY')
+    check('the CLI runs in the OS sandbox: userData is unreadable, other commands run', await seen('canary:denied true:ran'), true)
     const argv = JSON.parse(readFileSync(log, 'utf8').trim().split('\n')[0])
     check('strict MCP config', argv.includes('--strict-mcp-config'), true)
     check('hook settings passed', argv[argv.indexOf('--settings') + 1].includes('/bot/policy'), true)

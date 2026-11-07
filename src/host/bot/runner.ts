@@ -46,7 +46,7 @@ const isUserWake = (wake: Wake): boolean => wake.kind === 'chat' || wake.kind ==
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const preview = (text: string): string => text.replace(/\s+/g, ' ').slice(0, SUMMARY_CAP)
 /** Turns that spent no real work, or that the bot had no part in ending, don't use up the daily cap. */
-const UNCOUNTED: ReadonlySet<TurnOutcome['kind']> = new Set<TurnOutcome['kind']>(['limit', 'killed', 'missing', 'auth'])
+const UNCOUNTED: ReadonlySet<TurnOutcome['kind']> = new Set<TurnOutcome['kind']>(['limit', 'killed', 'missing', 'auth', 'sandbox'])
 
 const pendingText = (id: string): string =>
   `Requested approval ${id}. End your turn; the answer arrives in a later turn.`
@@ -467,7 +467,7 @@ export class BotRunner {
 
     if (outcome.kind === 'limit') {
       this.state.limited = true
-    } else if (outcome.kind === 'auth' || outcome.kind === 'missing') {
+    } else if (outcome.kind === 'auth' || outcome.kind === 'missing' || outcome.kind === 'sandbox') {
       this.pauseWith(summary)
     } else if (outcome.kind !== 'killed') {
       this.state.failures++

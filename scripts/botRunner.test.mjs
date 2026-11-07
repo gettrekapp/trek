@@ -263,6 +263,18 @@ test('auth failure pauses straight away', async () => {
   assert.equal(loadState(t.folder).queue.length, 1)
 })
 
+test('a sandbox failure pauses straight away, keeps the chat and uses no turn', async () => {
+  const t = setup()
+  t.runner.start()
+  t.runner.send('msg')
+  await started(t, 1)
+  await t.finish({ kind: 'sandbox', text: "The bot's OS sandbox is not available: /usr/bin/sandbox-exec was not found" })
+  assert.equal(t.views.at(-1).phase, 'error')
+  assert.match(t.views.at(-1).reason, /OS sandbox is not available/)
+  assert.equal(loadState(t.folder).queue.length, 1)
+  assert.equal(loadState(t.folder).turnsToday, 0)
+})
+
 test('usage limit waits for the next heartbeat and is not a failure', async () => {
   const t = setup()
   t.runner.start()

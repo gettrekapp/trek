@@ -11,6 +11,7 @@ import {
 } from '../host/bot/memory.ts'
 import { botMcpHandlers } from '../host/bot/mcpHandlers.ts'
 import { BotRunner } from '../host/bot/runner.ts'
+import { sandboxFor, type Sandbox, type SandboxPlan } from '../host/bot/sandbox.ts'
 import {
   botMcpConfig, botPolicyHook, killAllTurnsNow, runTurn, type TurnHandle
 } from '../host/bot/turnProcess.ts'
@@ -41,6 +42,17 @@ const requested = new Map<number, BotAttach>()
 let quitting = false
 
 const secretPaths = (): string[] => BOT_SECRET_FILES.map((n) => join(app.getPath('userData'), n))
+
+/** The bot's OS sandbox on this machine, around the real path of userData. No sandbox, no bot. */
+function botSandbox(): SandboxPlan {
+  let userData: string
+  try {
+    userData = realpathSync(app.getPath('userData'))
+  } catch (err) {
+    return { ok: false, reason: `Trek's data folder could not be found for the bot's sandbox: ${(err as Error).message}` }
+  }
+  return sandboxFor(process.platform, userData)
+}
 
 function sendView(contents: WebContents, view: BotView): void {
   if (!contents.isDestroyed()) contents.send('bot:view', view)
@@ -136,7 +148,10 @@ function inUseView(folder: string, reason: string): BotView {
   return { ...errorView(folder, reason), folderInUse: true }
 }
 
-/** No alert, like the consent view: this can be the first thing a shared project shows on opening. */
+/**
+ * No alert, like the consent view: this can be the first thing a shared project shows on opening.
+ * For a command that breaks the rule, and for a platform with no sandbox for the bot.
+ */
 function badCommandView(folder: string, reason: string): BotView {
   return { ...OFF_VIEW, phase: 'error', folder, reason }
 }
@@ -165,6 +180,7 @@ function bind(
   request: BotAttach,
   place: { key: string; folder: string; folderId: string },
   access: BotMcpAccess,
+  sandbox: Sandbox,
   releaseLock: () => void
 ): void {
   const { folder } = place
@@ -203,7 +219,8 @@ function bind(
             settings: hookSettings(access.port),
             addDirs: bound.attach.repoPaths.filter((p) => existsSync(p)),
             env: { TREK_BOT_TOKEN: turnToken.token },
-            timeoutMs: turn.timeoutMs
+            timeoutMs: turn.timeoutMs,
+            sandbox
           },
           onEvent
         )
@@ -241,7 +258,8 @@ async function startBot(
   windowId: number,
   request: BotAttach,
   key: string,
-  folder: string
+  folder: string,
+  sandbox: Sandbox
 ): Promise<void> {
   const access = await botMcpAccess(contents)
   const folderId = folderIdOf(folder)
@@ -265,7 +283,7 @@ async function startBot(
     return
   }
   try {
-    bind(contents, windowId, request, { key, folder, folderId }, access, lock.release)
+    bind(contents, windowId, request, { key, folder, folderId }, access, sandbox, lock.release)
   } catch (err) {
     lock.release()
     throw err
@@ -289,6 +307,13 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
     sendView(contents, badCommandView(folder, problem))
     return
   }
+  // Asked before consent, and without an alert, like a bad command: on Windows it never changes.
+  const plan = botSandbox()
+  if (!plan.ok) {
+    await teardown(windowId)
+    sendView(contents, badCommandView(folder, plan.reason))
+    return
+  }
   if (!(await isConsented(consentEntry(request.filePath, folder, request.claudeCommand)))) {
     await teardown(windowId)
     sendView(contents, consentView(folder, request.claudeCommand.trim()))
@@ -303,7 +328,7 @@ async function attach(contents: WebContents, windowId: number, request: BotAttac
   }
   await teardown(windowId)
   try {
-    await startBot(contents, windowId, request, key, folder)
+    await startBot(contents, windowId, request, key, folder, plan.sandbox)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     sendView(contents, errorView(folder, `The bot could not start: ${message}`))
