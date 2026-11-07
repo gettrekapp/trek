@@ -19,6 +19,7 @@ import {
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
+import { errorText } from '../v2/errors'
 import { useFeatures } from '../useFeatures'
 import { promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
 import { branchLabel, gitStatusLabel, splitBranch } from './Sidebar'
@@ -261,7 +262,9 @@ export function WorktreeDetail({
       if (kind === 'pull') await getBackend().git.pull(loc, info.branch)
       else await getBackend().git.push(loc, info.branch)
     } catch (err) {
-      void window.api.showError(kind === 'pull' ? 'Git pull failed' : 'Git push failed', String(err))
+      // A server window's errors are ClientErrors (code + message), shown as one line.
+      const message = serverWindow ? errorText(err) : String(err)
+      void window.api.showError(kind === 'pull' ? 'Git pull failed' : 'Git push failed', message)
     } finally {
       setSyncBusy(null)
       onWorktreesChanged() // refresh ahead/behind counts

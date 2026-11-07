@@ -85,7 +85,7 @@ export interface V2Projection {
 }
 
 /** The legacy instance id of a v2 worktree: the main checkout is its repository's primary tab. */
-export function legacyWorktreeId(repoId: string, worktree: Worktree): string {
+function legacyWorktreeId(repoId: string, worktree: Worktree): string {
   return worktree.isMain ? primaryWorktreeId(repoId) : worktree.id
 }
 

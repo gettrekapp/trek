@@ -142,7 +142,13 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   const initial = useAppStore.getInitialState()
   const originals = Object.fromEntries(OVERRIDDEN_SETTERS.map((name) => [name, initial[name]])) as SetterOverrides
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
-  useAppStore.setState({ ...v2SetterOverrides(backend, () => useAppStore.getState(), report), serverOffline: true, serverLink: null })
+  // A server window has no bot tab, so a 'bot' view left from a file window would open the Global panel empty.
+  useAppStore.setState({
+    ...v2SetterOverrides(backend, () => useAppStore.getState(), report),
+    serverOffline: true,
+    serverLink: null,
+    globalView: 'sessions'
+  })
 
   return {
     entryId,

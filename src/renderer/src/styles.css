@@ -3972,45 +3972,9 @@ body.resizing-row {
   color: var(--text-muted);
 }
 
-.server-window-tree {
-  flex: 1;
-  max-width: 720px;
-  width: 100%;
-  padding-top: 10px;
-}
-
-.server-window-tree .wt-row {
-  cursor: default;
-}
-
-.server-window-loading,
-.server-window-empty {
+.server-window-loading {
   margin: 4px 22px;
   font-size: 12px;
-}
-
-.server-window-missing {
-  color: var(--danger);
-}
-
-.server-window-sessions {
-  list-style: none;
-  margin: 0 8px 4px 36px;
-  padding: 0;
-}
-
-.server-window-sessions li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 10px;
-  font-size: 12px;
-}
-
-.server-window-session-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .server-window-message {

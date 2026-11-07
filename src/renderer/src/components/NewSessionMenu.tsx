@@ -43,6 +43,14 @@ export function NewSessionMenu({ disabled, title, serverId = null, onStart }: Pr
   const fallback = defaultSessionLlm()
   const fallbackLabel = v2 ? v2.defaultLabel : describeLlm(fallback)
 
+  // Disabled while open (a server window going offline): close it, its picks would do nothing.
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false)
+      setChoosing(false)
+    }
+  }, [disabled])
+
   useEffect(() => {
     if (!open) return
     const onMouseDown = (e: MouseEvent): void => {
