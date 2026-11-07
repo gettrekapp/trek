@@ -2,6 +2,7 @@
 // ping, and reconnect with backoff. Ported from the desktop's v1 RemoteHost.
 // Pure TypeScript: the socket and the timers are injected.
 import { CLOSE_UNAUTHORIZED, CLOSE_UNSUPPORTED_VERSION } from '../protocol.ts'
+import type { WireErrorDetails } from '../protocol.ts'
 import {
   CLOSE_REASON_UPGRADE_CLIENT,
   PROTOCOL_VERSION_V2,
@@ -58,10 +59,13 @@ export interface RequestOptions {
 
 export class ClientError extends Error {
   readonly code: string
-  constructor(code: string, message: string) {
+  /** The server's `error.details`, when its reply carried any */
+  readonly details?: WireErrorDetails
+  constructor(code: string, message: string, details?: WireErrorDetails) {
     super(message)
     this.name = 'ClientError'
     this.code = code
+    this.details = details
   }
 }
 
@@ -93,7 +97,7 @@ interface IncomingFrame {
   id?: unknown
   ok?: unknown
   result?: unknown
-  error?: { code?: unknown; message?: unknown }
+  error?: { code?: unknown; message?: unknown; details?: unknown }
   event?: unknown
   payload?: unknown
   serverId?: unknown
@@ -299,7 +303,9 @@ export class ServerConnection {
       } else {
         const code = typeof frame.error?.code === 'string' ? frame.error.code : 'INTERNAL'
         const message = typeof frame.error?.message === 'string' ? frame.error.message : 'request failed'
-        pending.reject(new ClientError(code, message))
+        const details = frame.error?.details
+        const known = details && typeof details === 'object' && !Array.isArray(details) ? (details as WireErrorDetails) : undefined
+        pending.reject(new ClientError(code, message, known))
       }
       return
     }

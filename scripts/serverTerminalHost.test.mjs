@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalHost } from '../server/src/sessions/terminalHost.ts'
-import { toWireError } from '../server/src/errors.ts'
+import { codedError, toWireError } from '../server/src/errors.ts'
 
 function fakeSpawner() {
   const spawned = []
@@ -444,4 +444,13 @@ test('spawn and resize cap sizes at 500 columns and 200 rows', (t) => {
   assert.throws(() => host.resize('p1', 501, 24), bad)
   assert.throws(() => host.resize('p1', 80, 201), bad)
   host.resize('p1', 500, 200)
+})
+
+test('toWireError carries the details of a passed-through code, and only an object', () => {
+  assert.deepEqual(toWireError('worktree.remove', codedError('GIT_ERROR', 'dirty', { reason: 'dirty' })), { code: 'GIT_ERROR', message: 'dirty', details: { reason: 'dirty' } })
+  assert.deepEqual(toWireError('worktree.remove', codedError('GIT_ERROR', 'locked')), { code: 'GIT_ERROR', message: 'locked' })
+  const internal = Object.assign(new Error('boom'), { details: { reason: 'x' } })
+  assert.deepEqual(toWireError('session.start', internal), { code: 'INTERNAL', message: 'boom' })
+  const odd = Object.assign(codedError('GIT_ERROR', 'x'), { details: ['dirty'] })
+  assert.deepEqual(toWireError('worktree.remove', odd), { code: 'GIT_ERROR', message: 'x' })
 })

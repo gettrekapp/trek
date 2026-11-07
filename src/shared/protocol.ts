@@ -39,6 +39,14 @@ export type WireErrorCode =
 export interface WireError {
   code: WireErrorCode
   message: string
+  /** v2: a machine-readable detail of the refusal; clients ignore keys they don't know */
+  details?: WireErrorDetails
+}
+
+/** v2: what `WireError.details` may say. */
+export interface WireErrorDetails {
+  /** `dirty`: `worktree.remove` refused a worktree with modified or untracked files */
+  reason?: string
 }
 
 export interface RemoteRepo {

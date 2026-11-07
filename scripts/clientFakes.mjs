@@ -161,9 +161,9 @@ function fakeSocket(url) {
       if (!reqFrame) throw new Error('fake socket: reply() to a missing request')
       sock.receive({ type: 'res', id: reqFrame.id, ok: true, result })
     },
-    fail(reqFrame, code, message) {
+    fail(reqFrame, code, message, details) {
       if (!reqFrame) throw new Error('fake socket: fail() of a missing request')
-      sock.receive({ type: 'res', id: reqFrame.id, ok: false, error: { code, message } })
+      sock.receive({ type: 'res', id: reqFrame.id, ok: false, error: { code, message, ...(details === undefined ? {} : { details }) } })
     },
     event(event, payload) {
       sock.receive({ type: 'event', event, payload })

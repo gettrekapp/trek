@@ -231,6 +231,11 @@ Params and results are in `MethodParamsV2` / `MethodResultsV2`. Commands change
 state only through the server, so their effects arrive as patches. Command
 results carry only new ids; queries return their data.
 
+An error reply may carry `error.details`, an object a client can act on without
+reading the message (which may be git's own, localised text). Today the only key
+is `reason`, and the only reason is `dirty` (see `worktree.remove`). Clients
+ignore keys and reasons they don't know.
+
 `project.rename`, `project.updateSettings`, `branch.setNote`, `session.rename`
 and `repo.update` take an optional `expected`: the value the client believes the
 field has now. The server fails with `CONFLICT` only if that field's current
@@ -291,7 +296,11 @@ worktree stays on disk.
 
 `worktree.remove {projectId, worktreeId, force?}` runs `git worktree remove`
 and drops the row. A dirty worktree fails with `GIT_ERROR` unless
-`force: true`, so a client can confirm with the user and retry. The main
+`force: true`, so a client can confirm with the user and retry. When git refuses
+and the worktree has modified or untracked files (the server reads its status
+after the refusal, so git's locale does not matter), the error carries
+`details: {reason: "dirty"}`; any other refusal (a locked worktree, say) has no
+`details`. The main
 worktree is `BAD_REQUEST`; a worktree that any project has loaded is `IN_USE`.
 For a worktree whose directory was deleted but which git still lists, `git
 worktree remove` clears just that worktree from git's list; the server never
@@ -798,7 +807,8 @@ then stale, so no ping starts and no welcome listener runs for it.
 `connected` fails with `NOT_CONNECTED`, and so does every request still pending
 when the socket closes. The default timeout is 60 s (`requestTimeoutMs`, or
 `timeoutMs` per call); a timeout fails with `TIMEOUT`. Error replies reject with a
-`ClientError` carrying the server's `code`.
+`ClientError` carrying the server's `code`, and its `details` when the reply has
+an object there (anything else is dropped).
 
 **Mirror.** `TopicMirror.subscribe(topic, listener)` reference-counts per topic:
 the first listener sends `sub.subscribe`, later ones get the current state at

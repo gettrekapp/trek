@@ -29,6 +29,19 @@ async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * `git worktree remove` without --force. A refusal because of modified or untracked
+ * files is told apart by reading the worktree's status, not git's localised message.
+ */
+async function removeUnforced(repoPath: string, worktreePath: string): Promise<void> {
+  try {
+    await gitService.removeWorktree(repoPath, worktreePath)
+  } catch (err) {
+    const [status] = await gitService.worktreeStatuses([worktreePath])
+    throw codedError('GIT_ERROR', (err as Error).message, status?.dirty ? { reason: 'dirty' } : undefined)
+  }
+}
+
 /** Only a real branch name: not a revision expression like @{-1}, nor HEAD, a tag or a SHA. */
 async function checkBranchName(repoPath: string, branch: string, mustExist: boolean): Promise<void> {
   if (branch.startsWith('-')) throw bad('branch must not start with "-"')
@@ -169,9 +182,8 @@ export const worktreeHandlers: Record<string, Handler> = {
       // The block lasts until the re-read has marked the row missing.
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
-        await viaGit(() => force
-          ? gitService.removeWorktreeForce(repo.path, worktree.path)
-          : gitService.removeWorktree(repo.path, worktree.path))
+        if (force) await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path))
+        else await removeUnforced(repo.path, worktree.path)
         // Git has removed it. Even if the re-read fails, the row goes below.
         await ctx.poller.refresh(repo.path)
       } finally {

@@ -47,6 +47,23 @@ test('requests resolve, fail with the wire code, time out, and reject when not c
   await assert.rejects(cut, (e) => e.code === 'NOT_CONNECTED')
 })
 
+test('an error reply carries the server\'s details; malformed details are dropped', async () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  const dirty = conn.request('worktree.remove', { projectId: 'p', worktreeId: 'w' })
+  sock.fail(sock.lastReq('worktree.remove'), 'GIT_ERROR', 'contains modified or untracked files', { reason: 'dirty' })
+  await assert.rejects(dirty, (e) => e.code === 'GIT_ERROR' && e.details?.reason === 'dirty')
+  const plain = conn.request('worktree.remove', { projectId: 'p', worktreeId: 'w' })
+  sock.fail(sock.lastReq('worktree.remove'), 'GIT_ERROR', 'locked')
+  await assert.rejects(plain, (e) => e.code === 'GIT_ERROR' && e.details === undefined)
+  const odd = conn.request('worktree.remove', { projectId: 'p', worktreeId: 'w' })
+  sock.fail(sock.lastReq('worktree.remove'), 'GIT_ERROR', 'x', ['dirty'])
+  await assert.rejects(odd, (e) => e.details === undefined)
+})
+
 test('reconnects with backoff 1s, 2s, 4s… capped at 30s, reset by welcome', () => {
   const { server, clock, conn, statuses } = setup()
   conn.connect()
