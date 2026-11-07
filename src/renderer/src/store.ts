@@ -196,7 +196,7 @@ export interface PendingDecision {
   requestedAt: number
 }
 
-interface AppState {
+export interface AppState {
   filePath: string | null
   /** A v2 server project shown in this window; separate from the legacy `project`. A window is one or the other. */
   serverWindow: { serverEntryId: string; projectId: string } | null
