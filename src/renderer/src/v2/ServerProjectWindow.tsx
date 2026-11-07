@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useAppStore } from '../store'
 import { disposeV2Terminals, retryV2Terminals } from '../terminals'
 import { backendChanged } from '../backend'
-import { connectServerEntry, dropServerEntry, registeredServerEntry } from './serverClients'
+import { connectServerEntry, dropServerEntry } from './serverClients'
+import { shouldReconnect } from './appServerLinks'
+import { useAppServerLinks } from '../useAppServerLinks'
 import { applyV2Project } from './applyProjection'
 import { errorText } from './errors'
 import { projectGone, watchesServerTopic } from './projectWatch'
 import { V2Workspace } from './V2Workspace'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
 import { SERVER_REMOVED_MESSAGE, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
-import type { AppServerInfo } from '../../../shared/types'
+import type { AppServerLink } from '../../../shared/types'
 
 /**
  * A v2 server project: the `project:<id>` topic projected into the store and
@@ -31,12 +33,6 @@ function currentStatus(connection: ServerConnection): StatusChange {
   return removed ? { status, message, removed: true } : { status, message }
 }
 
-/** A status the SDK does not retry out of (a removed entry's error is final). */
-function isStuck(connection: ServerConnection): boolean {
-  const { status, removed } = connection
-  return status === 'needs-auth' || status === 'incompatible' || (status === 'error' && !removed)
-}
-
 /** The time, plus the date when it isn't today. */
 function formatLastSeen(t: number): string {
   const d = new Date(t)
@@ -47,55 +43,29 @@ function formatLastSeen(t: number): string {
 type View = { name: string } | { notFound: true } | { error: string } | null
 
 export function ServerProjectWindow({ serverEntryId, projectId, onTitle }: Props): React.JSX.Element {
-  /** undefined while loading, null when the entry is gone (for good: it never comes back). */
-  const [entry, setEntry] = useState<AppServerInfo | null | undefined>(undefined)
-  const [listError, setListError] = useState<string | null>(null)
-  const loaded = useRef(false)
+  // main's broadcast: a removal or rename in another window shows here at once, even while
+  // this window's connection is stuck (needs-auth, incompatible, error) and never retries.
+  const { servers, error: listError } = useAppServerLinks()
+  /** Set once the entry is gone: for good, it never comes back. */
+  const [removed, setRemoved] = useState(false)
 
   const markRemoved = useCallback(() => {
-    loaded.current = true
-    setEntry(null)
+    setRemoved(true)
     // Stop the connection retrying (it may be stuck in needs-auth or error, or not exist).
     dropServerEntry(serverEntryId)
   }, [serverEntryId])
 
-  // At mount and on every focus: a removal or rename in another window shows here
-  // even while the connection is stuck (needs-auth, incompatible, error) and never retries.
+  const found = servers?.find((s) => s.id === serverEntryId)
   useEffect(() => {
-    let live = true
-    const check = (): void => {
-      window.api.appServers
-        .list()
-        .then((list) => {
-          if (!live) return
-          const found = list.find((s) => s.id === serverEntryId)
-          if (!found) return markRemoved()
-          loaded.current = true
-          setListError(null)
-          setEntry((prev) => (prev === null ? null : found))
-          // Stuck states never retry by themselves; the token or URL may have been fixed in another window.
-          const connection = registeredServerEntry(serverEntryId)?.connection
-          if (connection && isStuck(connection)) connection.reconnect()
-        })
-        .catch((err: unknown) => {
-          // A failed re-check keeps what is shown; only a failed first read says so.
-          if (live && !loaded.current) setListError(`Could not read the server list: ${errorText(err)}`)
-        })
-    }
-    check()
-    window.addEventListener('focus', check)
-    return () => {
-      live = false
-      window.removeEventListener('focus', check)
-    }
-  }, [serverEntryId, markRemoved])
+    if (servers && !found) markRemoved()
+  }, [servers, found, markRemoved])
 
   useEffect(() => () => onTitle(null), [onTitle])
 
-  if (listError) return <ServerWindowMessage title={listError} />
-  if (entry === undefined) return <div className="server-window" />
-  if (entry === null) return <ServerRemoved onTitle={onTitle} />
-  return <ServerProjectTree entry={entry} projectId={projectId} onTitle={onTitle} onRemoved={markRemoved} />
+  if (removed) return <ServerRemoved onTitle={onTitle} />
+  if (listError && !servers) return <ServerWindowMessage title={listError} />
+  if (!found) return <div className="server-window" />
+  return <ServerProjectTree entry={found} projectId={projectId} onTitle={onTitle} onRemoved={markRemoved} />
 }
 
 function ServerProjectTree({
@@ -104,7 +74,7 @@ function ServerProjectTree({
   onTitle,
   onRemoved
 }: {
-  entry: AppServerInfo
+  entry: AppServerLink
   projectId: string
   onTitle: (name: string | null) => void
   /** The relay reported the entry gone: the parent shows "Server removed". */
@@ -186,6 +156,12 @@ function ServerProjectTree({
     }
   }, [registered, entry.id, projectId])
 
+  // Stuck states never retry by themselves: once main's connection to the entry is up (a token
+  // set, or the server fixed, in any window), this one is worth another try.
+  useEffect(() => {
+    if (shouldReconnect(entry, registered.connection)) registered.connection.reconnect()
+  }, [entry.status, registered])
+
   // Structural (the relay's open result), never the message text.
   const removed = status.removed === true
   useEffect(() => {
@@ -244,7 +220,7 @@ function ServerRemoved({ onTitle }: { onTitle: (name: string | null) => void }):
   return <ServerWindowMessage title={SERVER_REMOVED_MESSAGE} />
 }
 
-function ProjectNotFound({ entry }: { entry: AppServerInfo }): React.JSX.Element {
+function ProjectNotFound({ entry }: { entry: AppServerLink }): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const pickAnother = async (): Promise<void> => {
     try {

@@ -1,24 +1,27 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { errorText } from '../v2/errors'
+import { shouldReconnect } from '../v2/appServerLinks'
+import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
 import { STATUS_LABELS, isLoopbackUrl, originOf } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
-import type { AppServerInfo, AppServerTest } from '../../../shared/types'
+import type { AppServerLink, AppServerTest } from '../../../shared/types'
 
 /**
  * The start screen's Connect to server view: the app-wide trek-server list
  * (add, edit, token, test, remove) and, for the picked server, its projects.
- * Tokens go to main and are never read back. Connections live in the
- * renderer-wide registry and stay open when this view unmounts.
+ * Tokens go to main and are never read back. The list and each row's status
+ * are main's broadcast (main holds a connection per server with a token), so
+ * a change made in another window shows here at once. The picked server's
+ * projects come over this window's own connection, closed when the view
+ * unmounts (unless the window has just opened one of them).
  */
 
 interface Props {
   onBack: () => void
-  /** The list changed (added, edited or removed), so the start screen re-reads it. */
-  onServersChanged: () => void
 }
 
 interface FormState {
@@ -51,10 +54,8 @@ function needsTokenAgain(form: FormState): boolean {
   return originOf(form.savedUrl) !== originOf(form.url)
 }
 
-export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.Element {
-  const [servers, setServers] = useState<AppServerInfo[] | null>(null)
-  const [listError, setListError] = useState<string | null>(null)
-  const [statuses, setStatuses] = useState<Record<string, StatusChange>>({})
+export function ConnectServer({ onBack }: Props): React.JSX.Element {
+  const { servers, error: listError } = useAppServerLinks()
   const [selectedId, setSelectedId] = useState<string | null>(() => useAppStore.getState().connectServerId)
   const [form, setForm] = useState<FormState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -63,58 +64,35 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
   const [tokenValue, setTokenValue] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
-  /** Ids from the last list read, so the next read can drop removed entries' connections. */
+  /** Ids from the last snapshot, so the next can drop removed entries' connections. */
   const knownIds = useRef<Set<string>>(new Set())
   const tokenInputId = useId()
 
-  const load = useCallback(async (): Promise<AppServerInfo[] | null> => {
-    try {
-      const list = await window.api.appServers.list()
-      // Removed (here or in another window): close its connection, so it stops
-      // retrying. A server window shows its own entry's "Server removed" state,
-      // but that window renders no Connect view, so skip it only to be safe.
-      const ids = new Set(list.map((s) => s.id))
+  // Removed (here or in another window): close its connection, so it stops retrying.
+  // A server window shows its own entry's "Server removed" state, but that window
+  // renders no Connect view, so skip it only to be safe.
+  useEffect(() => {
+    if (!servers) return
+    const ids = new Set(servers.map((s) => s.id))
+    const shown = useAppStore.getState().serverWindow?.serverEntryId
+    for (const id of knownIds.current) if (!ids.has(id) && id !== shown) dropServerEntry(id)
+    knownIds.current = ids
+  }, [servers])
+
+  // The view goes: so do the connections it opened for the picked server's projects. Not the
+  // one the window has just opened a project on (setServerWindow runs before this unmounts).
+  useEffect(
+    () => () => {
       const shown = useAppStore.getState().serverWindow?.serverEntryId
-      for (const id of knownIds.current) if (!ids.has(id) && id !== shown) dropServerEntry(id)
-      knownIds.current = ids
-      setServers(list)
-      setListError(null)
-      return list
-    } catch (err) {
-      setListError(`Could not read the server list: ${errorText(err)}`)
-      return null
-    }
-  }, [])
+      for (const id of knownIds.current) if (id !== shown) dropServerEntry(id)
+    },
+    []
+  )
 
   // connectServerId is a one-shot: picked above, now cleared.
   useEffect(() => {
     if (useAppStore.getState().connectServerId) useAppStore.getState().setConnectServerId(null)
   }, [])
-
-  useEffect(() => {
-    void load()
-    // Another window may have changed the list.
-    const onFocus = (): void => void load()
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [load])
-
-  // One connection per server that has a token; its status drives the row's dot.
-  useEffect(() => {
-    if (!servers) return
-    const unsubscribers: (() => void)[] = []
-    const next: Record<string, StatusChange> = {}
-    for (const server of servers) {
-      if (!server.hasToken) continue
-      const { connection } = connectServerEntry(server.id)
-      next[server.id] = { status: connection.status, message: connection.statusMessage }
-      unsubscribers.push(
-        connection.on('status', (change) => setStatuses((s) => ({ ...s, [server.id]: change })))
-      )
-    }
-    setStatuses(next)
-    return () => unsubscribers.forEach((u) => u())
-  }, [servers])
 
   const setRowError = (id: string, message: string | null): void =>
     setRowErrors((e) => {
@@ -129,7 +107,7 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
     setForm({ id: null, name: '', url: 'wss://', token: '', savedUrl: null })
   }
 
-  const startEdit = (server: AppServerInfo): void => {
+  const startEdit = (server: AppServerLink): void => {
     setFormError(null)
     setForm({ id: server.id, name: server.name, url: server.url, token: '', savedUrl: server.url })
   }
@@ -153,8 +131,6 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
       registeredServerEntry(saved.id)?.connection.reconnect()
       setForm(null)
       setSelectedId(saved.id)
-      await load()
-      onServersChanged()
     } catch (err) {
       setFormError(errorText(err))
     } finally {
@@ -162,7 +138,7 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
     }
   }
 
-  const saveToken = async (server: AppServerInfo): Promise<void> => {
+  const saveToken = async (server: AppServerLink): Promise<void> => {
     const token = tokenValue.trim()
     if (!token) return
     setRowError(server.id, null)
@@ -171,13 +147,12 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
       setTokenFor(null)
       setTokenValue('')
       registeredServerEntry(server.id)?.connection.reconnect()
-      await load()
     } catch (err) {
       setRowError(server.id, `Could not save the token: ${errorText(err)}`)
     }
   }
 
-  const test = async (server: AppServerInfo): Promise<void> => {
+  const test = async (server: AppServerLink): Promise<void> => {
     setTests((t) => ({ ...t, [server.id]: { busy: true } }))
     try {
       const result = await window.api.appServers.test(server.id)
@@ -187,7 +162,7 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
     }
   }
 
-  const remove = async (server: AppServerInfo): Promise<void> => {
+  const remove = async (server: AppServerLink): Promise<void> => {
     const confirmed = await window.api.confirm({
       title: 'Remove Server',
       message: `Remove server “${server.name}”?`,
@@ -208,8 +183,6 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
     // Functional updates: the confirm and remove awaits may have outlived this render's state.
     setSelectedId((id) => (id === server.id ? null : id))
     setForm((f) => (f?.id === server.id ? null : f))
-    await load()
-    onServersChanged()
   }
 
   const selected = servers?.find((s) => s.id === selectedId) ?? null
@@ -235,15 +208,14 @@ export function ConnectServer({ onBack, onServersChanged }: Props): React.JSX.El
       )}
 
       {servers?.map((server) => {
-        const status = statuses[server.id]
         const testState = tests[server.id]
-        const label = server.hasToken ? (status ? STATUS_LABELS[status.status] : 'Not connected') : 'Needs a token'
-        const message = server.hasToken ? status?.message : 'Set a token to connect'
+        const label = server.hasToken ? (server.status ? STATUS_LABELS[server.status] : 'Not connected') : 'Needs a token'
+        const message = server.hasToken ? server.message : 'Set a token to connect'
         return (
           <div key={server.id} className={`connect-server-item${selectedId === server.id ? ' selected' : ''}`}>
             <div className="server-row">
               <span
-                className={`wt-dot ${server.hasToken ? dotClass(status?.status) : 'exited'}`}
+                className={`wt-dot ${server.hasToken ? dotClass(server.status ?? undefined) : 'exited'}`}
                 title={message ? `${label}: ${message}` : label}
               />
               <span className="connect-server-name">{server.name}</span>
@@ -425,7 +397,7 @@ function ServerForm({ form, setForm, tokenRequired, hasToken, error, saving, can
 type TopicView = { snapshot: ServerTopic } | { error: string } | null
 
 /** The picked server's projects, from its `server` topic. */
-function ServerProjects({ server }: { server: AppServerInfo }): React.JSX.Element {
+function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Element {
   const setServerWindow = useAppStore((s) => s.setServerWindow)
   const [status, setStatus] = useState<StatusChange>({ status: 'connecting', message: '' })
   const [topic, setTopic] = useState<TopicView>(null)
@@ -446,6 +418,11 @@ function ServerProjects({ server }: { server: AppServerInfo }): React.JSX.Elemen
       offTopic()
     }
   }, [registered])
+
+  // Stuck (a wrong token, say) while main's connection to the entry is up: fixed since, so retry.
+  useEffect(() => {
+    if (shouldReconnect(server, registered.connection)) registered.connection.reconnect()
+  }, [server.status, registered])
 
   const connected = status.status === 'connected'
   const serverName = registered.connection.welcome?.serverName ?? ''

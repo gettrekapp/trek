@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { baseName, useAppStore } from '../store'
 import { syncWindowProject } from '../windowLifecycle'
 import { errorText } from '../v2/errors'
 import { ConnectServer } from './ConnectServer'
+import { useAppServerLinks } from '../useAppServerLinks'
 import type { OpenedProject, ProjectFile, RecentEntry } from '../../../shared/types'
 
 export function StartScreen(): React.JSX.Element {
@@ -13,22 +14,10 @@ export function StartScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recents, setRecents] = useState<RecentEntry[]>([])
-  /** The app-wide servers' current labels by id; null until loaded, so nothing shows "Server removed" early. */
-  const [serverNames, setServerNames] = useState<Map<string, string> | null>(null)
-
-  const loadServers = useCallback((): void => {
-    window.api.appServers
-      .list()
-      .then((list) => setServerNames(new Map(list.map((s) => [s.id, s.name]))))
-      .catch(() => setServerNames(null))
-  }, [])
-
-  useEffect(() => {
-    // Servers can be added or removed from another window, so re-read on focus too.
-    loadServers()
-    window.addEventListener('focus', loadServers)
-    return () => window.removeEventListener('focus', loadServers)
-  }, [loadServers])
+  // The app-wide servers' current labels by id, from main's broadcast (so a change in another
+  // window shows at once); null until the first snapshot, so nothing shows "Server removed" early.
+  const { servers } = useAppServerLinks()
+  const serverNames = useMemo(() => (servers ? new Map(servers.map((s) => [s.id, s.name])) : null), [servers])
 
   // Again on coming back from Connect, which may have opened (and so recorded) a server project.
   useEffect(() => {
@@ -123,7 +112,7 @@ export function StartScreen(): React.JSX.Element {
       <h1>Trek Dev</h1>
       <p className="muted">Run coding agents across git worktrees, side by side.</p>
       {error && <div className="error">{error}</div>}
-      {view === 'connect' && <ConnectServer onBack={() => setView('home')} onServersChanged={loadServers} />}
+      {view === 'connect' && <ConnectServer onBack={() => setView('home')} />}
       {view === 'home' && (
         <>
           <div className="start-actions">
