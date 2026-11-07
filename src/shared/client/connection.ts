@@ -341,8 +341,10 @@ export class ServerConnection {
       } else {
         const code = typeof frame.error?.code === 'string' ? frame.error.code : 'INTERNAL'
         const message = typeof frame.error?.message === 'string' ? frame.error.message : 'request failed'
-        const details = frame.error?.details
-        const known = details && typeof details === 'object' && !Array.isArray(details) ? (details as WireErrorDetails) : undefined
+        // Only the fields WireErrorDetails names, with the right types.
+        const details: unknown = frame.error?.details
+        const reason = details && typeof details === 'object' ? (details as { reason?: unknown }).reason : undefined
+        const known: WireErrorDetails | undefined = typeof reason === 'string' ? { reason } : undefined
         pending.reject(new ClientError(code, message, known))
       }
       return

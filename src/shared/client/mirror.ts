@@ -15,7 +15,12 @@ export type MirrorListener<T extends Topic = Topic> = (update: MirrorUpdate<T>) 
 type Listener = (update: TopicState<unknown> | { error: ClientError }) => void
 
 export interface WhenRevOptions {
-  /** Reject with TIMEOUT after this long, on the connection's timers. Without it the wait has no limit. */
+  /**
+   * Reject with TIMEOUT after this long, on the connection's timers. Always pass
+   * one: without it the wait has no limit of its own and ends only with the rev,
+   * an error, the last unsubscribe or the connection's close. There is no default
+   * because the right bound is the caller's (a spinner, a background refresh).
+   */
   timeoutMs?: number
 }
 
@@ -37,6 +42,12 @@ interface Entry {
   attempt: number
   /** A sub.subscribe is in flight: patches meanwhile are older than its snapshot, so they are ignored */
   loading: boolean
+  /**
+   * The connection dropped since the last reply to a subscribe: `state` and
+   * `error` may be from a server that has since restarted, so `whenRev` does not
+   * trust them until the welcome's resubscribe answers.
+   */
+  stale: boolean
   /** Pending retry after a transient subscribe failure */
   retryTimer: unknown
   /** The next retry's delay */
@@ -66,11 +77,14 @@ export class TopicMirror {
       }
     })
     conn.on('event', ({ event, payload }) => {
+      if (!payload || typeof payload !== 'object') return
       if (event === 'state.patch') this.onPatch(payload as { topic: Topic; rev: number; ops: [] })
       else if (event === 'topic.ended') this.onEnded(payload as Partial<TopicEndedPayload>)
     })
     conn.on('status', ({ status }) => {
       if (status === 'closed') this.onClosed()
+      // 'connected' comes before the welcome (and so before the resubscribe): only a reply clears this.
+      else if (status !== 'connected') for (const entry of this.topics.values()) entry.stale = true
     })
   }
 
@@ -87,7 +101,7 @@ export class TopicMirror {
     }
     let entry = this.topics.get(topic)
     if (!entry) {
-      entry = { listeners: new Set(), attempt: 0, loading: false, retryTimer: null, retryDelay: RETRY_MIN_MS, waiters: new Set(), ended: false }
+      entry = { listeners: new Set(), attempt: 0, loading: false, stale: false, retryTimer: null, retryDelay: RETRY_MIN_MS, waiters: new Set(), ended: false }
       this.topics.set(topic, entry)
       entry.listeners.add(listener)
       if (this.conn.status === 'connected') this.resubscribe(topic)
@@ -119,13 +133,20 @@ export class TopicMirror {
    * subscription (`NOT_SUBSCRIBED` otherwise). Rejects with the topic's error on
    * `NOT_FOUND`, `TOPIC_ENDED` and when the connection closes (`CLOSED`), with `UNSUBSCRIBED` when
    * its last listener leaves, and with `TIMEOUT` after `timeoutMs`. Transient
-   * subscribe failures keep it waiting.
+   * subscribe failures keep it waiting. While a subscribe is in flight, or after
+   * the connection dropped and before the resubscribe answers, the held state and
+   * error may be stale, so it waits for that answer. `rev` must be a non-negative
+   * integer (`BAD_REQUEST`). Always pass `timeoutMs` (see `WhenRevOptions`).
    */
   whenRev<T extends Topic>(topic: T, rev: number, options: WhenRevOptions = {}): Promise<TopicState<TopicSnapshot<T>>> {
+    if (this.conn.status === 'closed') return Promise.reject(closedError())
+    if (!Number.isInteger(rev) || rev < 0) return Promise.reject(new ClientError('BAD_REQUEST', 'rev must be a non-negative integer'))
     const entry = this.topics.get(topic)
     if (!entry) return Promise.reject(new ClientError('NOT_SUBSCRIBED', `${topic} is not subscribed`))
-    if (entry.state && entry.state.rev >= rev) return Promise.resolve(entry.state as TopicState<TopicSnapshot<T>>)
-    if (entry.error?.code === 'NOT_FOUND' || entry.ended) return Promise.reject(entry.error)
+    if (entry.ended) return Promise.reject(entry.error)
+    const current = !entry.loading && !entry.stale
+    if (current && entry.state && entry.state.rev >= rev) return Promise.resolve(entry.state as TopicState<TopicSnapshot<T>>)
+    if (current && entry.error?.code === 'NOT_FOUND') return Promise.reject(entry.error)
     return new Promise((resolve, reject) => {
       const waiter: Waiter = {
         rev,
@@ -160,16 +181,20 @@ export class TopicMirror {
       (result) => {
         if (this.topics.get(topic) !== entry || entry.attempt !== attempt) return
         entry.loading = false
+        entry.stale = false
         entry.state = { snapshot: result.snapshot, rev: result.rev }
         entry.error = undefined
         entry.retryDelay = RETRY_MIN_MS
-        this.notify(entry, entry.state)
+        // Waiters first: a listener that unsubscribes must not turn their success into UNSUBSCRIBED.
+        const state = entry.state
         this.settle(entry, attempt)
+        this.notify(entry, state)
       },
       (err: ClientError) => {
         if (this.topics.get(topic) !== entry || entry.attempt !== attempt) return
         entry.loading = false
         if (err.code === 'NOT_CONNECTED') return // the next welcome resubscribes
+        entry.stale = false
         // The topic is gone: drop the state so stale data is not shown or patched.
         if (err.code === 'NOT_FOUND') entry.state = undefined
         entry.error = err
@@ -203,7 +228,7 @@ export class TopicMirror {
    */
   private onEnded(payload: Partial<TopicEndedPayload>): void {
     const topic = payload.topic
-    const entry = topic === undefined ? undefined : this.topics.get(topic)
+    const entry = typeof topic === 'string' ? this.topics.get(topic) : undefined
     if (!entry || entry.ended) return
     this.cancelRetry(entry)
     // A subscribe reply still on its way is older than the end.
@@ -258,13 +283,15 @@ export class TopicMirror {
   }
 
   private onPatch(patch: { topic: Topic; rev: number; ops: [] }): void {
+    if (typeof patch.topic !== 'string') return
     const entry = this.topics.get(patch.topic)
     if (!entry?.state || entry.loading) return
     const outcome = applyStatePatch(entry.state, patch)
     if (outcome.kind === 'applied') {
       entry.state = outcome.state
-      this.notify(entry, entry.state)
+      // Waiters first, as for a snapshot.
       this.settle(entry)
+      this.notify(entry, outcome.state)
     } else if (outcome.kind === 'resync') {
       this.resubscribe(patch.topic)
     }

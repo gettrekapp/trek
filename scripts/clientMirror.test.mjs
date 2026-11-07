@@ -422,6 +422,102 @@ test('a transient subscribe failure keeps whenRev waiting; the retry settles it'
   assert.deepEqual(wait.state, { snapshot: { n: 1 }, rev: 0 }, 'the retry was sent after the call')
 })
 
+test('whenRev does not trust a state from before a reconnect: it waits for the resubscribe', async () => {
+  const { server, clock, conn, mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 80 })
+  await tick()
+  sock.serverClose(1006, '')
+  const whileDown = track(mirror.whenRev('project:p', 5))
+  clock.advance(1000)
+  const next = server.last()
+  next.open()
+  // App code that sends a command on 'connected' runs before the welcome resubscribes.
+  let onConnected
+  conn.on('status', ({ status }) => {
+    if (status === 'connected' && !onConnected) onConnected = track(mirror.whenRev('project:p', 5))
+  })
+  next.welcome()
+  const inFlight = track(mirror.whenRev('project:p', 5))
+  await tick()
+  assert.ok(onConnected, 'the status listener ran')
+  assert.deepEqual([whileDown.settled, onConnected.settled, inFlight.settled], [false, false, false], 'rev 80 is from the old server')
+  next.reply(next.lastReq('sub.subscribe'), { snapshot: { n: 2 }, rev: 7 })
+  await tick()
+  for (const w of [whileDown, onConnected, inFlight]) assert.deepEqual(w.state, { snapshot: { n: 2 }, rev: 7 })
+  assert.deepEqual(await mirror.whenRev('project:p', 5), { snapshot: { n: 2 }, rev: 7 }, 'at once again')
+})
+
+test('a stale NOT_FOUND does not reject whenRev while a resubscribe is in flight', async () => {
+  const { server, clock, mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  sock.fail(sock.lastReq('sub.subscribe'), 'NOT_FOUND', 'gone')
+  await tick()
+  sock.serverClose(1006, '')
+  const down = track(mirror.whenRev('project:p', 1))
+  clock.advance(1000)
+  const next = server.last()
+  next.open()
+  next.welcome()
+  const inFlight = track(mirror.whenRev('project:p', 1))
+  await tick()
+  assert.deepEqual([down.settled, inFlight.settled], [false, false])
+  next.reply(next.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 1 })
+  await tick()
+  assert.equal(down.state.rev, 1)
+  assert.equal(inFlight.state.rev, 1)
+})
+
+test('whenRev: a bad rev is BAD_REQUEST; a closed connection is CLOSED, not NOT_SUBSCRIBED', async () => {
+  const { conn, mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: {}, rev: 3 })
+  await tick()
+  for (const rev of [-1, 1.5, NaN, Infinity, '2', undefined]) {
+    await assert.rejects(mirror.whenRev('project:p', rev), (e) => e.code === 'BAD_REQUEST', String(rev))
+  }
+  assert.equal((await mirror.whenRev('project:p', 0)).rev, 3)
+  conn.close()
+  await assert.rejects(mirror.whenRev('project:p', 1), (e) => e.code === 'CLOSED')
+})
+
+test('whenRev settles before listeners hear the state: one that unsubscribes does not turn it into UNSUBSCRIBED', async () => {
+  const { mirror, sock } = setup()
+  let stop = () => {}
+  stop = mirror.subscribe('project:p', (u) => { if (u.rev >= 2) stop() })
+  const first = track(mirror.whenRev('project:p', 0))
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 1 })
+  await tick()
+  assert.equal(first.state.rev, 1)
+  const byPatch = track(mirror.whenRev('project:p', 2))
+  sock.event('state.patch', { topic: 'project:p', rev: 2, ops: [] })
+  await tick()
+  assert.equal(byPatch.error, undefined)
+  assert.equal(byPatch.state.rev, 2)
+  assert.equal(mirror.get('project:p'), undefined, 'the listener did unsubscribe')
+
+  let stop2 = () => {}
+  stop2 = mirror.subscribe('project:q', () => stop2())
+  const bySnapshot = track(mirror.whenRev('project:q', 0))
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: {}, rev: 0 })
+  await tick()
+  assert.equal(bySnapshot.state.rev, 0)
+})
+
+test('state.patch and topic.ended with a null or malformed payload are ignored', async () => {
+  const { mirror, sock } = setup()
+  const seen = []
+  mirror.subscribe('project:p', (u) => seen.push(u))
+  sock.reply(sock.lastReq('sub.subscribe'), { snapshot: { n: 1 }, rev: 1 })
+  await tick()
+  for (const payload of [null, undefined, 5, 'x', { topic: 7 }]) {
+    sock.event('topic.ended', payload)
+    sock.event('state.patch', payload)
+  }
+  assert.equal(seen.length, 1)
+  assert.deepEqual(mirror.get('project:p'), { snapshot: { n: 1 }, rev: 1 })
+})
+
 // ---- topic.ended ----
 
 test('topic.ended reports TOPIC_ENDED with its reason, to current and later listeners, and rejects whenRev', async () => {
@@ -472,4 +568,17 @@ test('an ended topic is not subscribed again after a reconnect; an in-flight rep
   assert.equal(seen.at(-1).error.message, 'project:q ended: ended')
   stop()
   assert.deepEqual(next.lastReq('sub.unsubscribe').params, { topic: 'project:q' })
+})
+
+test('topic.ended while whenRev waits on an in-flight subscribe rejects it; the late reply is ignored', async () => {
+  const { mirror, sock } = setup()
+  mirror.subscribe('project:p', () => {})
+  const wait = track(mirror.whenRev('project:p', 1, { timeoutMs: 5000 }))
+  const req = sock.lastReq('sub.subscribe')
+  sock.event('topic.ended', { topic: 'project:p', reason: 'deleted' })
+  await tick()
+  assert.equal(wait.error.code, 'TOPIC_ENDED')
+  sock.reply(req, { snapshot: { n: 1 }, rev: 1 })
+  await tick()
+  assert.equal(mirror.get('project:p'), undefined)
 })

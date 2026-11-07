@@ -62,6 +62,12 @@ test('an error reply carries the server\'s details; malformed details are droppe
   const odd = conn.request('worktree.remove', { projectId: 'p', worktreeId: 'w' })
   sock.fail(sock.lastReq('worktree.remove'), 'GIT_ERROR', 'x', ['dirty'])
   await assert.rejects(odd, (e) => e.details === undefined)
+  const numeric = conn.request('worktree.remove', { projectId: 'p', worktreeId: 'w' })
+  sock.fail(sock.lastReq('worktree.remove'), 'GIT_ERROR', 'x', { reason: 5 })
+  await assert.rejects(numeric, (e) => e.details === undefined, 'a reason that is not a string is dropped')
+  const extra = conn.request('worktree.remove', { projectId: 'p', worktreeId: 'w' })
+  sock.fail(sock.lastReq('worktree.remove'), 'GIT_ERROR', 'x', { reason: 'dirty', other: 1 })
+  await assert.rejects(extra, (e) => JSON.stringify(e.details) === '{"reason":"dirty"}', 'only the named fields')
 })
 
 test('requestWithRev resolves with the result and the response rev; request() still resolves the bare result', async () => {
