@@ -160,6 +160,50 @@ export interface AppServersChanged {
 }
 
 /**
+ * One session that needs the user, on one app-wide server, as main's attention
+ * aggregator lists it (`attention:changed`). Built field by field from the
+ * server's `attention` entry and the server list's name: no token, no URL.
+ */
+export interface AttentionItem {
+  /** `JSON.stringify([serverEntryId, projectId, sessionId])`: what a window sends back to open or dismiss it */
+  key: string
+  serverEntryId: string
+  /** The user's name for the server entry */
+  serverName: string
+  projectId: string
+  /** '' from a server older than 3d */
+  projectName: string
+  /** null = a Global panel session */
+  worktreeId: string | null
+  sessionId: string
+  title: string
+  status: string
+  /** Epoch ms (the server's clock): when it entered attention or done, else when its decision was asked */
+  since: number
+  /** The open decision's question, shown as-is (the server sends one clean line) */
+  question?: string
+  /** When the decision was asked (epoch ms) */
+  askedAt?: number
+  /** main's connection to the server is down or failed: this is the last state it saw */
+  stale?: true
+}
+
+/** `attention:changed`, and `attention:list`'s answer. `seq` grows with each one: a window keeps the highest. */
+export interface AttentionChanged {
+  seq: number
+  /** Newest first */
+  items: AttentionItem[]
+}
+
+/** Main asks a window to show one of its sessions (a click on a notification or a menu entry). */
+export interface SessionSelect {
+  projectId: string
+  sessionId: string
+  /** null = a Global panel session */
+  worktreeId: string | null
+}
+
+/**
  * `v2socket:open`: the relay socket's id, or why there is none. `removed` means
  * the server entry is gone for good (terminal); any other refusal is transient.
  */
