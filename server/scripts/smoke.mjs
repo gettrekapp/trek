@@ -1,6 +1,7 @@
 // trek-server smoke test: throwaway config + temp git repo, then handshake,
 // git.listWorktrees, pty spawn/echo/kill, the projects flow (create, branch
-// note, persist, delete) and an auth-rejection check.
+// note, persist, delete), revs in responses, decisions, server.agents, the
+// topic end of a deleted project and an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
@@ -216,9 +217,9 @@ async function nextPatch(conn, topic, state, timeoutMs = 4000) {
 const v2 = await connect(2, token)
 if (v2.welcome?.protocolVersion !== 2 || !/^[0-9a-f-]{36}$/.test(v2.welcome.serverId ?? '')) {
   fail(`v2 welcome: ${JSON.stringify(v2.welcome)}`)
-} else if (!v2.welcome.capabilities?.includes('mcp')) {
-  fail(`v2 welcome capabilities lack mcp: ${JSON.stringify(v2.welcome.capabilities)}`)
-} else ok(`v2 welcome: server "${v2.welcome.serverName}" ${v2.welcome.serverId}`)
+} else if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents'].every((c) => v2.welcome.capabilities?.includes(c))) {
+  fail(`v2 welcome capabilities: ${JSON.stringify(v2.welcome.capabilities)}`)
+} else ok(`v2 welcome: server "${v2.welcome.serverName}" ${v2.welcome.serverId}, capabilities ${v2.welcome.capabilities.join(',')}`)
 
 const subbed = await v2.req('sub.subscribe', { topic: 'server' })
 let serverState = subbed.result
@@ -400,6 +401,18 @@ if (!noted.ok) fail(`branch.setNote: ${JSON.stringify(noted)}`)
 proj = await nextPatch(pc, `project:${projectId}`, proj)
 if (proj.snapshot.repositories[0].branchData.main?.note !== 'from smoke') fail('branch.setNote not patched')
 else ok('branch.setNote: patched into the project topic')
+{
+  // The response names the rev the note made, and that patch was written before it.
+  const at = pc.frames.indexOf(noted)
+  const patchAt = pc.frames.findIndex((f) => f.type === 'event' && f.event === 'state.patch' &&
+    f.payload.topic === `project:${projectId}` && f.payload.rev === noted.rev?.rev)
+  if (noted.rev?.topic !== `project:${projectId}` || noted.rev.rev !== proj.rev || patchAt < 0 || patchAt > at) {
+    fail(`branch.setNote rev: ${JSON.stringify(noted.rev)}, topic at ${proj.rev}, patch frame ${patchAt}, res frame ${at}`)
+  } else ok(`response rev: branch.setNote answered rev ${noted.rev.rev}, after its patch`)
+  const listed = await pc.req('project.list', {})
+  if (!listed.ok || 'rev' in listed) fail(`project.list carries a rev: ${JSON.stringify(listed)}`)
+  else ok('response rev: a method that names no project carries none')
+}
 
 // --- worktrees ---
 // The poller also patches the project topic, so apply patches until `cond` holds (bounded).
@@ -428,6 +441,12 @@ const wtChanges = await pc.req('worktree.changes', { projectId, worktreeId: wtId
 if (!wtChanges.ok || !Array.isArray(wtChanges.result.files)) fail(`worktree.changes: ${JSON.stringify(wtChanges)}`)
 else ok('worktree.changes answers')
 
+// A dirty worktree is refused with a reason the client can act on, whatever git's locale.
+writeFileSync(join(wtRow.path, 'scratch.txt'), 'x')
+const wtDirty = await pc.req('worktree.remove', { projectId, worktreeId: wtId })
+if (wtDirty.ok || wtDirty.error.code !== 'GIT_ERROR' || wtDirty.error.details?.reason !== 'dirty') fail(`worktree.remove dirty: ${JSON.stringify(wtDirty)}`)
+else ok('worktree.remove: a dirty worktree is GIT_ERROR with details.reason "dirty"')
+rmSync(join(wtRow.path, 'scratch.txt'))
 const wtRemoved = await pc.req('worktree.remove', { projectId, worktreeId: wtId })
 if (!wtRemoved.ok || existsSync(wtRow?.path ?? '')) fail(`worktree.remove: ${JSON.stringify(wtRemoved)}`)
 await patchUntil(() => !projWorktrees().some((w) => w.id === wtId))
@@ -599,6 +618,47 @@ const mcpConfigPath = join(work, 'data', 'mcp', `${projectId}.json`)
     if (called.body?.result?.isError !== false || !Array.isArray(worktrees) || worktrees.length !== 1) {
       fail(`mcp tools/call list_worktrees: ${JSON.stringify(called)}`)
     } else ok(`mcp tools/call list_worktrees: one worktree (${worktrees[0].branch})`)
+
+    // A decision: asked through MCP, seen in the project and attention topics, answered by typing.
+    const asking = await pc.req('session.start', { projectId, worktreeId: mainId, cols: 80, rows: 24, llm: { provider: 'local' } })
+    if (!asking.ok) fail(`decision session.start: ${JSON.stringify(asking)}`)
+    else {
+      const { sessionId: askId, ptyId: askPty } = asking.result
+      const askSession = () => projWorktrees().find((w) => w.isMain)?.sessions.find((x) => x.id === askId)
+      let att = (await pc.req('sub.subscribe', { topic: 'attention' })).result
+      const asked = await rpc('tools/call', { name: 'request_decision', arguments: { terminalId: askId, question: 'Ship it?' } })
+      if (asked.body?.result?.isError !== false) fail(`mcp request_decision: ${JSON.stringify(asked)}`)
+      await patchUntil(() => askSession()?.decision?.question === 'Ship it?')
+      if (askSession()?.decision?.question !== 'Ship it?') fail(`decision not in the project topic: ${JSON.stringify(askSession())}`)
+      else ok('mcp request_decision: the session carries the decision')
+      for (let i = 0; i < 8 && !att.snapshot.entries.some((e) => e.sessionId === askId && e.decision); i++) {
+        try { att = await nextPatch(pc, 'attention', att, 2500) } catch { break }
+      }
+      if (!att.snapshot.entries.some((e) => e.sessionId === askId && e.decision?.question === 'Ship it?')) fail(`attention lacks the decision: ${JSON.stringify(att.snapshot)}`)
+      else ok('attention topic: lists the decision')
+      await pc.req('pty.attach', { ptyId: askPty })
+      await pc.req('pty.write', { ptyId: askPty, data: 'y' })
+      await patchUntil(() => askSession() && !askSession().decision)
+      if (!askSession() || askSession().decision) fail(`typing did not answer the decision: ${JSON.stringify(askSession())}`)
+      else ok('pty.write: user input answers the decision')
+
+      // session.dequeue: one prompt, compare-and-set.
+      await pc.req('session.setQueue', { projectId, sessionId: askId, queue: ['a', 'b'] })
+      const dq = await pc.req('session.dequeue', { projectId, sessionId: askId, index: 0, expected: 'a' })
+      const stale = await pc.req('session.dequeue', { projectId, sessionId: askId, index: 0, expected: 'a' })
+      await patchUntil(() => askSession()?.queue.length === 1)
+      if (!dq.ok || stale.error?.code !== 'CONFLICT' || askSession()?.queue[0] !== 'b') fail(`session.dequeue: ${JSON.stringify({ dq, stale, queue: askSession()?.queue })}`)
+      else ok('session.dequeue: removes the prompt it saw; a stale one is CONFLICT')
+      await pc.req('session.close', { projectId, sessionId: askId })
+      await patchUntil(() => !askSession())
+    }
+
+    const agents = await pc.req('server.agents', {})
+    const agentOf = (id) => agents.result?.agents?.find((a) => a.provider === id)
+    if (!agents.ok || agents.result.llmDefault?.provider !== 'claude' || agents.result.agents.length !== 5 ||
+      agentOf('claude')?.installed !== true || agentOf('local')?.installed !== true || JSON.stringify(agents.result).includes(fakeAgent)) {
+      fail(`server.agents: ${JSON.stringify(agents)}`)
+    } else ok(`server.agents: ${agents.result.agents.map((a) => `${a.provider}${a.installed ? '' : ' (not installed)'}`).join(', ')}`)
     const wrong = await rpc('ping', {}, { Authorization: `Bearer ${'0'.repeat(64)}` })
     if (wrong.status !== 401) fail(`mcp wrong token: ${wrong.status}`)
     else ok('mcp wrong token: 401')
@@ -630,6 +690,13 @@ else ok('project persisted to the data dir')
 const deleted = await pc.req('project.delete', { projectId })
 if (!deleted.ok || existsSync(stored)) fail(`project.delete: ${JSON.stringify(deleted)}`)
 else ok('project.delete: removed from disk')
+{
+  const ended = pc.frames.findIndex((f) => f.type === 'event' && f.event === 'topic.ended' && f.payload.topic === `project:${projectId}`)
+  const endFrame = pc.frames[ended]
+  if (ended < 0 || endFrame.payload.reason !== 'deleted' || ended > pc.frames.indexOf(deleted) || deleted.rev?.topic !== 'server') {
+    fail(`topic.ended: ${JSON.stringify(endFrame)} at ${ended}, response ${JSON.stringify(deleted)}`)
+  } else ok('project.delete: topic.ended "deleted" before the response, which reports the server topic rev')
+}
 if (existsSync(mcpConfigPath)) fail(`project.delete left its MCP config file: ${mcpConfigPath}`)
 else ok('project.delete: MCP config file removed')
 srv = await nextPatch(pc, 'server', srv)

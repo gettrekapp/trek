@@ -1,7 +1,8 @@
 // Contract smoke for the client SDK (src/shared/client/) against a real,
 // built trek-server: connect, mirror the server and project topics, create a
-// project, start a session and stream its pty, survive a reconnect, and reach
-// needs-auth with a wrong token. Uses only the SDK and the global WebSocket.
+// project and wait for its rev, start a session and stream its pty, survive a
+// reconnect, see a deleted project's topic end, and reach needs-auth with a
+// wrong token. Uses only the SDK and the global WebSocket.
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
@@ -105,7 +106,7 @@ const mirror = new TopicMirror(conn)
 const ptys = new PtyStream(conn)
 conn.connect()
 if (!(await waitFor(() => conn.status === 'connected'))) abort(`connect: status ${conn.status} (${statuses.join(' > ')})`)
-if (!conn.welcome?.capabilities.includes('mcp')) fail(`welcome capabilities lack mcp: ${JSON.stringify(conn.welcome)}`)
+if (!['mcp', 'topicEnd'].every((c) => conn.welcome?.capabilities.includes(c))) fail(`welcome capabilities: ${JSON.stringify(conn.welcome)}`)
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
 
 // --- 2. server topic ---
@@ -122,14 +123,24 @@ else ok('server topic: mirror lists the registered repo')
 
 // --- 3. project.create ---
 let projectId
+let createdRev
 try {
-  projectId = (await conn.request('project.create', { name: 'Contract', repositories: [{ path: repo }] })).projectId
+  const created = await conn.requestWithRev('project.create', { name: 'Contract', repositories: [{ path: repo }] })
+  projectId = created.result.projectId
+  createdRev = created.rev
 } catch (err) {
   abort(`project.create: ${err.code} ${err.message}`)
 }
-if (!(await waitFor(() => server.snapshot.projects.some((p) => p.id === projectId)))) {
-  fail(`server mirror lacks the new project: ${JSON.stringify(server.snapshot.projects)}`)
-} else ok(`project.create: ${projectId} appears in the server mirror`)
+if (createdRev?.topic !== 'server') abort(`project.create rev: ${JSON.stringify(createdRev)}`)
+try {
+  // whenRev resolves only once the mirror holds the rev the response named.
+  const state = await mirror.whenRev('server', createdRev.rev, { timeoutMs: WAIT_MS })
+  if (state.rev < createdRev.rev || !state.snapshot.projects.some((p) => p.id === projectId)) {
+    fail(`whenRev resolved early: rev ${state.rev} < ${createdRev.rev}, ${JSON.stringify(state.snapshot.projects)}`)
+  } else ok(`project.create: ${projectId} in the server mirror at rev ${state.rev} (response rev ${createdRev.rev})`)
+} catch (err) {
+  fail(`whenRev(server, ${createdRev.rev}): ${err.code} ${err.message}`)
+}
 
 // --- 4. project topic, session, pty ---
 const projectTopic = `project:${projectId}`
@@ -202,12 +213,23 @@ if (!(await waitFor(() => exitCode !== null, 6000))) fail('pty: no exit after th
 else ok(`pty: exit ${exitCode} delivered after the reattach`)
 if (ptyErrors.length) fail(`pty errors: ${ptyErrors.map(String).join('; ')}`)
 
-// --- 6. wrong token ---
+// --- 6. a deleted project's topic ends ---
+try {
+  const deleted = await conn.requestWithRev('project.delete', { projectId })
+  if (deleted.rev?.topic !== 'server') fail(`project.delete rev: ${JSON.stringify(deleted.rev)}`)
+} catch (err) {
+  fail(`project.delete: ${err.code} ${err.message}`)
+}
+if (!(await waitFor(() => projectError?.code === 'TOPIC_ENDED'))) fail(`project topic after delete: ${projectError?.code ?? 'no error'}`)
+else if (projectError.details?.reason !== 'deleted' || mirror.get(projectTopic) !== undefined) fail(`topic end: ${JSON.stringify(projectError.details)}`)
+else ok(`project.delete: the project mirror hears TOPIC_ENDED (${projectError.message})`)
+
+// --- 7. wrong token ---
 const bad = new ServerConnection({ url, token: 'wrong-token', createSocket: globalSocketFactory, client: 'contract-bad' })
 conns.push(bad)
 bad.connect()
 if (!(await waitFor(() => bad.status === 'needs-auth'))) fail(`wrong token: status ${bad.status} (${bad.statusMessage})`)
 else ok(`wrong token: needs-auth (${bad.statusMessage})`)
 
-// --- 7. clean up ---
+// --- 8. clean up ---
 finish()

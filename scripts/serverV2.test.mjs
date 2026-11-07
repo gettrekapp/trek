@@ -210,6 +210,37 @@ test('project.updateSettings merges, null removes, expected is per key', async (
   assert.equal((await snapshotOf(call, projectId)).settings.claudeCommand, 'c')
 })
 
+test('project.updateSettings expected guards the settings a settings screen edits: absent is null, values compare deeply', async (t) => {
+  const { a, call } = setup(t)
+  const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
+  const update = (settings, expected) => call('project.updateSettings', { projectId, settings, expected })
+  const review = [{ id: 'rev', name: 'Review', systemPrompt: 'Review it', llm: { provider: 'codex' } }]
+  const buttons = [{ id: 'b', label: 'Test', text: 'npm test' }]
+  // Keys never set match null.
+  const first = await update(
+    { sessionTypes: review, terminalButtons: buttons, worktreeTags: [{ id: 't', name: 'Todo', color: '#fff' }], llmDefault: { provider: 'gemini' }, bot: { enabled: false }, audioAlerts: true },
+    { sessionTypes: null, terminalButtons: null, worktreeTags: null, llmDefault: null, bot: null, audioAlerts: null, customTags: null, globalLlm: null, claudeCommand: null }
+  )
+  assert.equal(first.ok, true, JSON.stringify(first))
+  // A structurally equal copy of each current value passes.
+  const second = await update(
+    { sessionTypes: [...review, { id: 'fix', name: 'Fix', systemPrompt: '' }] },
+    { sessionTypes: structuredClone(review), llmDefault: { provider: 'gemini' }, bot: { enabled: false } }
+  )
+  assert.equal(second.ok, true, JSON.stringify(second))
+  // A stale value of one guarded key fails the whole patch.
+  const stale = await update({ terminalButtons: [], audioAlerts: false }, { terminalButtons: [], audioAlerts: true })
+  assert.deepEqual([stale.error.code, stale.error.message], ['CONFLICT', 'settings.terminalButtons changed since you read it'])
+  const settings = (await snapshotOf(call, projectId)).settings
+  assert.deepEqual(settings.terminalButtons, buttons)
+  assert.equal(settings.audioAlerts, true)
+  assert.equal(settings.sessionTypes.length, 2)
+  // Order matters inside an array; a removed key reads as null again.
+  assert.equal((await update({ audioAlerts: null }, { sessionTypes: [...settings.sessionTypes].reverse() })).error.code, 'CONFLICT')
+  assert.equal((await update({ audioAlerts: null }, { audioAlerts: true })).ok, true)
+  assert.equal((await update({ audioAlerts: false }, { audioAlerts: null })).ok, true)
+})
+
 test('wrong id types are BAD_REQUEST, not NOT_FOUND', async (t) => {
   const { a, call } = setup(t)
   const { projectId } = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result
