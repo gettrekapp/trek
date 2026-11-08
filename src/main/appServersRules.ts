@@ -1,5 +1,5 @@
 // The app-wide trek-server list, validated; and the hello-token injection the relay does. Pure.
-import { originOf } from '../shared/appServerRules.ts'
+import { isLoopbackUrl, originOf } from '../shared/appServerRules.ts'
 import { LOCAL_ENTRY_ID } from './localServerRules.ts'
 import type { LocalServerStatus } from '../shared/types.ts'
 
@@ -74,6 +74,24 @@ export function rejectDuplicateServer(list: readonly AppServer[], url: string, s
   if (key === null) return
   const other = list.find((s) => s.id !== selfId && serverKey(s.url) === key)
   if (other) throw new Error(`This server is already in the list as "${other.name}"`)
+}
+
+/**
+ * Refuses a saved entry for the Local server's current URL (`localUrl`, null when it is
+ * not running): Local is listed first and connected by Trek itself, with a token that
+ * changes on each restart. Any loopback name (localhost, 127.0.0.1, ::1) on its port counts.
+ */
+export function rejectLocalServerUrl(url: string, localUrl: string | null): void {
+  if (localUrl === null) return
+  const key = serverKey(url)
+  if (key === null) return
+  let same = key === serverKey(localUrl)
+  if (!same && isLoopbackUrl(url)) {
+    const a = new URL(url.trim())
+    const b = new URL(localUrl)
+    same = a.protocol === b.protocol && a.port === b.port && a.pathname.replace(/\/+$/, '') === ''
+  }
+  if (same) throw new Error('This is the Local server (listed first). Trek connects to it itself, so it needs no entry.')
 }
 
 /**

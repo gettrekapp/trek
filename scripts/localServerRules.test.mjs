@@ -8,16 +8,20 @@ import {
   LOCAL_ENTRY_ID,
   LOCAL_PROFILE_ENV,
   LOG_ROTATE_BYTES,
+  LOST_RACE_MIN_WAIT_MS,
   READY_TIMEOUT_MS,
   afterStop,
   childEnv,
   compareVersions,
   isLocalServerCommand,
+  keepAfterFailure,
   localPaths,
   localProfileArgs,
   localProfileName,
+  localServerDisabled,
   localUrl,
   logTail,
+  lostRaceDeadline,
   parseBuildJson,
   probeVerdict,
   resetDecision,
@@ -279,4 +283,38 @@ test('logTail: the last lines, trimmed; rotation past 1 MB', () => {
   assert.equal(logTail('a\n   \n\t\nb\n \n', 5), 'a\nb', 'whitespace-only lines are dropped')
   assert.equal(logTail('a\r\nb\r\n\r\nc\r\n', 2), 'b\nc', 'CRLF')
   assert.equal(LOG_ROTATE_BYTES, 1024 * 1024)
+})
+
+test('TREK_NO_LOCAL_SERVER: on only as 1, true or yes', () => {
+  for (const on of ['1', 'true', 'yes', 'TRUE', ' Yes ']) assert.equal(localServerDisabled({ TREK_NO_LOCAL_SERVER: on }), true, JSON.stringify(on))
+  for (const off of [undefined, '', '0', 'false', 'no', 'off', '2', 'y']) assert.equal(localServerDisabled({ TREK_NO_LOCAL_SERVER: off }), false, JSON.stringify(off))
+  assert.equal(localServerDisabled({}), false)
+})
+
+test("lostRaceDeadline: the loser of the lock waits out the winner's start, from the lock's mtime", () => {
+  const now = 1_000_000
+  assert.ok(READY_TIMEOUT_MS >= 15_000, 'as long as a start may take')
+  assert.equal(lostRaceDeadline(now, now), now + READY_TIMEOUT_MS, 'a lock just taken: the full ready timeout')
+  assert.equal(lostRaceDeadline(now, now - 4_000), now - 4_000 + READY_TIMEOUT_MS, 'one taken 4 s ago: the rest of it')
+  assert.ok(lostRaceDeadline(now, now - 4_000) - now > 8_000, 'more than the old 8 s')
+  assert.equal(lostRaceDeadline(now, now - 120_000), now + LOST_RACE_MIN_WAIT_MS, 'an old lock: a short grace only')
+  assert.equal(lostRaceDeadline(now, now + 60_000), now + READY_TIMEOUT_MS, 'a lock dated in the future counts as now')
+  assert.equal(lostRaceDeadline(now, undefined), now + READY_TIMEOUT_MS, 'no lock read')
+  assert.equal(lostRaceDeadline(now, Number.NaN), now + READY_TIMEOUT_MS)
+  // Waiting until then means Reset no longer refuses the lock as young.
+  const deadline = lostRaceDeadline(now, now - 1_000)
+  assert.equal(resetDecision({ lockPid: 9, lockAlive: true, lockAgeMs: deadline - (now - 1_000), info: undefined, welcomed: false, portRefused: false, holderIsServer: false }), 'reset')
+})
+
+test('keepAfterFailure: a failed stop or restart keeps a server local.json still names alive', () => {
+  const cur = { pid: 4242, port: 51234, token: 't' }
+  assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: { ...cur }, alive: true }), true)
+  assert.equal(keepAfterFailure({ op: 'restart', current: cur, info: { ...cur }, alive: true }), true)
+  assert.equal(keepAfterFailure({ op: 'start', current: cur, info: { ...cur }, alive: true }), false, 'a start')
+  assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: { ...cur }, alive: false }), false, 'its pid is gone')
+  assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: undefined, alive: false }), false, 'local.json went')
+  assert.equal(keepAfterFailure({ op: 'stop', current: null, info: { ...cur }, alive: true }), false, 'none in use')
+  assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: { ...cur, pid: 1 }, alive: true }), false, 'another pid')
+  assert.equal(keepAfterFailure({ op: 'stop', current: cur, info: { ...cur, port: 1 }, alive: true }), false, 'another port')
+  assert.equal(keepAfterFailure({ op: 'restart', current: cur, info: { ...cur, token: 'u' }, alive: true }), false, 'another token')
 })

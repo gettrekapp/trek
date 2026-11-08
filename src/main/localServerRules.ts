@@ -12,9 +12,10 @@ import {
   localProfileDir,
   type LocalInfo
 } from '../shared/localServer.ts'
+import type { LocalServerStatus } from '../shared/types.ts'
 
-/** The synthetic app-server entry's id: recents and open-windows.json are keyed by it. */
-export const LOCAL_ENTRY_ID = 'local'
+/** The synthetic app-server entry's id (shared, so the renderer uses the same one). */
+export { LOCAL_ENTRY_ID } from '../shared/appServerRules.ts'
 export const LOCAL_ENTRY_NAME = 'Local'
 /** The server's stdout and stderr, in the profile beside local.json */
 export const LOCAL_LOG_FILE = 'server.log'
@@ -22,10 +23,48 @@ export const LOCAL_LOG_FILE = 'server.log'
 export const LOG_ROTATE_BYTES = 1024 * 1024
 /** How long a spawn waits for local.json (Notes for 4b, 14) */
 export const READY_TIMEOUT_MS = 15_000
-/** After an exit 3, how long the winner of the lock has to write local.json (Notes for 4b, 9) */
-export const LOST_RACE_WAIT_MS = 8_000
+/** After an exit 3, the least time the winner of the lock is still given to answer (lostRaceDeadline) */
+export const LOST_RACE_MIN_WAIT_MS = 2_000
 /** A hello to what local.json names gives up after this */
 export const PROBE_TIMEOUT_MS = 3_000
+
+/** Set by the smokes that test other things: no Local server, entry or menu. */
+export const NO_LOCAL_SERVER_ENV = 'TREK_NO_LOCAL_SERVER'
+
+/** TREK_NO_LOCAL_SERVER is on only as `1`, `true` or `yes` (any case, spaces trimmed); unset, `0`, `` or anything else is off. */
+export function localServerDisabled(env: Readonly<Record<string, string | undefined>>): boolean {
+  return ['1', 'true', 'yes'].includes((env[NO_LOCAL_SERVER_ENV] ?? '').trim().toLowerCase())
+}
+
+/**
+ * After an exit 3 (another start holds the lock, Notes for 4b, 9): when to stop waiting
+ * for the winner's server to answer. The winner has READY_TIMEOUT_MS from taking the lock
+ * (the lock's mtime), the same span before which Reset refuses a live holder's lock, so
+ * the loser waits until then, and at least LOST_RACE_MIN_WAIT_MS. No lock read (it went,
+ * or did not parse): READY_TIMEOUT_MS from now. A lock dated in the future counts as now.
+ */
+export function lostRaceDeadline(now: number, lockMtimeMs: number | undefined): number {
+  if (lockMtimeMs === undefined || !Number.isFinite(lockMtimeMs)) return now + READY_TIMEOUT_MS
+  return Math.max(Math.min(lockMtimeMs, now) + READY_TIMEOUT_MS, now + LOST_RACE_MIN_WAIT_MS)
+}
+
+/** What a failed job set out to do: the error's title and status line say which. */
+export type LocalOp = NonNullable<LocalServerStatus['failed']>
+
+/**
+ * A failed job keeps the server main is using only when it was a stop or a restart
+ * (a start had none to keep) and local.json still names that same server (pid, port,
+ * token) with its pid alive: the windows stay connected to a server that still runs.
+ */
+export function keepAfterFailure(f: {
+  op: LocalOp
+  current: Pick<LocalInfo, 'pid' | 'port' | 'token'> | null
+  info: Pick<LocalInfo, 'pid' | 'port' | 'token'> | undefined
+  alive: boolean
+}): boolean {
+  if (f.op === 'start' || !f.current || !f.info || !f.alive) return false
+  return f.info.pid === f.current.pid && f.info.port === f.current.port && f.info.token === f.current.token
+}
 
 export interface LocalPaths {
   dir: string

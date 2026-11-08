@@ -40,17 +40,19 @@ import {
   LOCAL_ENTRY_NAME,
   LOCAL_PROFILE_ENV,
   LOG_ROTATE_BYTES,
-  LOST_RACE_WAIT_MS,
   PROBE_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   afterStop,
   childEnv,
   isLocalServerCommand,
+  keepAfterFailure,
   localPaths,
   localProfileArgs,
   localProfileName,
+  localServerDisabled,
   localUrl,
   logTail,
+  lostRaceDeadline,
   parseBuildJson,
   probeVerdict,
   resetDecision,
@@ -59,15 +61,21 @@ import {
   spawnFailure,
   type BundledBuild,
   type FileId,
+  type LocalOp,
   type LocalPaths
 } from './localServerRules'
+import { localErrorTitle } from '../shared/appServerRules.ts'
 import type { AppServer } from './appServersRules'
 import type { LocalServerStatus } from '../shared/types'
 
-/** Set by the smokes that test other things, so they never start a Local server in the user's home. */
-export const LOCAL_SERVER_DISABLED = !!process.env.TREK_NO_LOCAL_SERVER
+/** TREK_NO_LOCAL_SERVER=1 (or true, yes): set by the smokes that test other things, so they never start a Local server in the user's home. */
+export const LOCAL_SERVER_DISABLED = localServerDisabled(process.env)
 /** `stop --local` waits up to 10 s itself; this bounds the wait for it. */
 const STOP_TIMEOUT_MS = 15_000
+/** Quit with "Stop local server on quit": how long it waits for a job in progress before stopping directly */
+const QUIT_WAIT_MS = 20_000
+/** ...and how long that direct `stop --local` may take */
+const QUIT_DIRECT_STOP_MS = 10_000
 const POLL_MS = 100
 
 /** The profile this Trek uses: the default one when packaged, `dev` (or TREK_LOCAL_PROFILE's) for a dev build (Decision 27). */
@@ -82,10 +90,18 @@ let status: LocalServerStatus = { state: 'stopped', message: '', canReset: false
 /** One start, stop, restart or reset at a time; refresh waits its turn behind them. */
 let chain: Promise<unknown> = Promise.resolve()
 let busy = false
+/** A refresh asked for while a job ran: it runs once that job is done. */
+let refreshPending = false
+/** A restart asked for (confirming, or queued) that has not begun: another request joins it. */
+let restartRequested: Promise<void> | null = null
+/** Quit has begun: no new job starts, no watch is re-armed. */
+let quitting = false
 /** Skew already asked about, by pid: one question per server run. */
 const askedSkew = new Set<number>()
 const listeners = new Set<() => void>()
 let watcher: FSWatcher | null = null
+/** The watch failed (its error event, or the profile dir went): checkLocalServer re-arms it. */
+let watchBroken = false
 let refreshTimer: NodeJS.Timeout | null = null
 
 function profile(): LocalPaths {
@@ -265,9 +281,14 @@ function useServer(info: LocalInfo, adopted = true): void {
   if (skew) void offerSkewRestart(info)
 }
 
-function fail(message: string, canReset = false): void {
-  current = null
-  setStatus({ state: 'error', message, canReset })
+/**
+ * The error state. A failed stop or restart keeps the server main is using while local.json
+ * still names it alive (keepAfterFailure), so the windows stay connected to it.
+ */
+function fail(message: string, canReset = false, op: LocalOp = 'start'): void {
+  const info = readInfo()
+  if (!keepAfterFailure({ op, current, info, alive: !!info && pidAlive(info.pid) })) current = null
+  setStatus({ state: 'error', message, canReset, failed: op })
 }
 
 /** Runs `job` after any start, stop, restart or reset in progress. */
@@ -278,10 +299,27 @@ function queue<T>(job: () => Promise<T>): Promise<T> {
       return await job()
     } finally {
       busy = false
+      if (refreshPending) {
+        refreshPending = false
+        refreshSoon()
+      }
     }
   })
   chain = run.catch(() => undefined)
   return run
+}
+
+/**
+ * A user's job (start, stop, restart, reset), queued; its error dialog comes after the job,
+ * outside the queue, so an open dialog never holds the next job (or quit). Skipped once quit has begun.
+ */
+async function operate(job: () => Promise<void>): Promise<void> {
+  const failed = await queue(async () => {
+    if (quitting) return null
+    await job()
+    return status.state === 'error' ? { ...status } : null
+  })
+  if (failed) await showError(failed)
 }
 
 /** Opens the log for appending (0600), moving a large one aside first, with a header line. */
@@ -355,8 +393,8 @@ async function spawnAndWait(): Promise<void> {
   }
   const failure = spawnFailure(exit, readLogTail())
   if (failure.kind === 'lock-held') {
-    // Another start won the lock: its local.json may still be on its way.
-    const until = Date.now() + LOST_RACE_WAIT_MS
+    // Another start won the lock: its local.json may still be on its way, as long as its own start may take.
+    const until = lostRaceDeadline(Date.now(), readLock()?.mtimeMs)
     while (Date.now() < until) {
       const found = await probe()
       if ('info' in found) {
@@ -388,14 +426,14 @@ async function ensure(): Promise<void> {
 }
 
 /** Runs the bundled CLI (`stop --local`) to its end; its exit code (null on a timeout) and output. */
-function runCli(args: string[]): Promise<{ code: number | null; output: string }> {
+function runCli(args: string[], timeoutMs = STOP_TIMEOUT_MS): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
     let output = ''
     const child = spawn(process.execPath, [serverBundle(), ...args], { cwd: homedir(), env: childEnv(process.env), stdio: ['ignore', 'pipe', 'pipe'] })
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       resolve({ code: null, output })
-    }, STOP_TIMEOUT_MS)
+    }, timeoutMs)
     child.stdout.on('data', (d) => (output += d))
     child.stderr.on('data', (d) => (output += d))
     child.once('error', (err) => {
@@ -409,10 +447,12 @@ function runCli(args: string[]): Promise<{ code: number | null; output: string }
   })
 }
 
-/** `stop --local`; then the target's files are gone, or what is left of them. */
+/**
+ * `stop --local`; then the target's files are gone, or what is left of them. `current` is
+ * kept meanwhile (the server runs until it stops); the caller clears it, or fail() decides.
+ */
 async function stopServer(): Promise<{ code: number | null; output: string; target: number | undefined }> {
   const target = current?.pid ?? readInfo()?.pid
-  current = null
   setStatus({ state: 'stopping', message: '', canReset: false })
   const result = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)])
   return { ...result, target }
@@ -420,8 +460,10 @@ async function stopServer(): Promise<{ code: number | null; output: string; targ
 
 async function stop(): Promise<void> {
   const { code, output } = await stopServer()
-  if (code === 0) setStatus({ state: 'stopped', message: 'Stopped from the menu', canReset: false })
-  else fail(`Could not stop the local server (stop --local exited ${code ?? 'on a timeout'}).\n\n${output.trim()}`)
+  if (code === 0) {
+    current = null
+    setStatus({ state: 'stopped', message: 'Stopped from the menu', canReset: false })
+  } else fail(`Could not stop the local server (stop --local exited ${code ?? 'on a timeout'}).\n\n${output.trim()}`, false, 'stop')
 }
 
 /** Stop (SIGKILL only the pid both files still name, Notes for 4b 13), then start. */
@@ -439,7 +481,7 @@ async function restart(): Promise<void> {
       holderIsServer: alive ? await holderIsServer(target) : undefined
     })
     if (next === 'refuse') {
-      fail(`Could not stop the local server (pid ${target}), so it was not restarted.\n\n${output.trim()}`)
+      fail(`Could not stop the local server (pid ${target}), so it was not restarted.\n\n${output.trim()}`, false, 'restart')
       return
     }
     if (next === 'sigkill') {
@@ -448,7 +490,7 @@ async function restart(): Promise<void> {
       } catch (err) {
         // ESRCH: it exited meanwhile, so spawn. Anything else (EPERM) is reported.
         if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-          fail(`Could not stop the local server (pid ${target}): SIGKILL failed (${(err as Error).message}), so it was not restarted.`)
+          fail(`Could not stop the local server (pid ${target}): SIGKILL failed (${(err as Error).message}), so it was not restarted.`, false, 'restart')
           return
         }
       }
@@ -456,6 +498,7 @@ async function restart(): Promise<void> {
       while (pidAlive(target) && Date.now() < until) await sleep(POLL_MS)
     }
   }
+  current = null
   await spawnAndWait()
 }
 
@@ -501,7 +544,12 @@ async function reset(): Promise<void> {
  * follow it. Waits behind any job in progress, which sets the state itself.
  */
 function refresh(): void {
-  if (LOCAL_SERVER_DISABLED || busy) return
+  if (LOCAL_SERVER_DISABLED || quitting) return
+  // A job is running: look once it is done (a local.json change meanwhile is not lost).
+  if (busy) {
+    refreshPending = true
+    return
+  }
   void queue(async () => {
     const info = readInfo()
     if (current && info && info.pid === current.pid && info.port === current.port && info.token === current.token && pidAlive(info.pid)) return
@@ -547,21 +595,34 @@ async function offerSkewRestart(info: LocalInfo): Promise<void> {
     defaultId: 0,
     cancelId: 1
   })
-  if (response === 0 && current?.pid === info.pid) await restartLocalServer()
+  // This question was the confirmation: the restart asks nothing more.
+  if (response === 0 && current?.pid === info.pid) await restartLocalServer({ confirm: false })
 }
 
-async function showError(): Promise<void> {
-  if (status.state !== 'error') return
+/** A manual restart ends every terminal on Local: ask first. */
+async function confirmRestart(): Promise<boolean> {
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    message: 'Restart the local server?',
+    detail: 'Every terminal on Local closes; agent sessions resume when you open their worktrees again.',
+    buttons: ['Restart Local Server', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1
+  })
+  return response === 0
+}
+
+/** A failed job's dialog, shown after the job (operate), so it never holds the queue. */
+async function showError(failed: LocalServerStatus): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: 'error',
-    message: 'The local server could not start.',
-    detail: status.message,
-    buttons: status.canReset ? ['Reset Local Server', 'OK'] : ['OK'],
-    defaultId: status.canReset ? 1 : 0,
-    cancelId: status.canReset ? 1 : 0
+    message: localErrorTitle(failed.failed),
+    detail: failed.message,
+    buttons: failed.canReset ? ['Reset Local Server', 'OK'] : ['OK'],
+    defaultId: failed.canReset ? 1 : 0,
+    cancelId: failed.canReset ? 1 : 0
   })
-  // Queued after the job that showed this dialog (awaiting it here would wait on ourselves).
-  if (status.canReset && response === 0) void resetLocalServer()
+  if (failed.canReset && response === 0) void resetLocalServer()
 }
 
 // ---- The API: appServers.ts, the menu, the IPC and quit ----
@@ -574,6 +635,11 @@ export function localServerStatus(): LocalServerStatus {
 export function localEntry(): (AppServer & { local: LocalServerStatus }) | null {
   if (LOCAL_SERVER_DISABLED) return null
   return { id: LOCAL_ENTRY_ID, name: LOCAL_ENTRY_NAME, url: current ? localUrl(current.port) : 'ws://127.0.0.1', local: localServerStatus() }
+}
+
+/** The running Local server's URL; null when main is using none. */
+export function localServerUrl(): string | null {
+  return current ? localUrl(current.port) : null
 }
 
 /**
@@ -599,37 +665,69 @@ export function onLocalServerChanged(listener: () => void): () => void {
 
 /** main's own connection to Local went down, or a window came to the front: look again. */
 export function checkLocalServer(): void {
+  if (watchBroken && !quitting && !LOCAL_SERVER_DISABLED) armWatch()
   refreshSoon()
 }
 
 export function startLocalServer(): Promise<void> {
-  return queue(async () => {
-    await ensure()
-    await showError()
-  })
+  return operate(() => ensure())
 }
 
 export function stopLocalServer(): Promise<void> {
-  return queue(async () => {
-    await stop()
-    await showError()
-  })
+  return operate(() => stop())
 }
 
-export function restartLocalServer(): Promise<void> {
-  // Queued behind the skew dialog's caller too: never inside another job.
-  return queue(async () => {
-    if (!current && !readInfo()) await spawnAndWait()
-    else await restart()
-    await showError()
-  })
+/**
+ * Restart (the menu, the server list, a Local window, the skew question). It asks first
+ * unless `confirm: false` (the skew question already did) or nothing is running. A restart
+ * asked for while another is confirming or queued joins it.
+ */
+export function restartLocalServer(options: { confirm?: boolean } = {}): Promise<void> {
+  if (restartRequested) return restartRequested
+  const request: Promise<void> = (async () => {
+    if (options.confirm !== false && (current || readInfo()) && !(await confirmRestart())) return
+    await operate(async () => {
+      // Begun: a restart asked for from now on is a new one.
+      if (restartRequested === request) restartRequested = null
+      if (!current && !readInfo()) await spawnAndWait()
+      else await restart()
+    })
+  })()
+  restartRequested = request
+  const settled = (): void => {
+    if (restartRequested === request) restartRequested = null
+  }
+  request.then(settled, settled)
+  return request
 }
 
 export function resetLocalServer(): Promise<void> {
-  return queue(async () => {
-    await reset()
-    await showError()
-  })
+  return operate(() => reset())
+}
+
+/**
+ * Watches the profile dir for local.json. An error (the dir went) closes the watch and
+ * marks it broken; checkLocalServer (a focus, main's link going down) arms it again,
+ * which fails quietly until the dir is back.
+ */
+function armWatch(): void {
+  try {
+    const w = watch(profile().dir, (_event, name) => {
+      if (name === null || String(name) === 'local.json') refreshSoon()
+    })
+    w.on('error', (err) => {
+      console.warn('trek: the local server profile watch failed; it is re-armed on the next check', err)
+      w.close()
+      if (watcher === w) watcher = null
+      watchBroken = true
+    })
+    watcher = w
+    watchBroken = false
+  } catch (err) {
+    if (!watchBroken) console.warn('trek: cannot watch the local server profile; it is re-armed on the next check', err)
+    watcher = null
+    watchBroken = true
+  }
 }
 
 /** App start: reuse or spawn, then follow local.json. */
@@ -637,13 +735,10 @@ export function superviseLocalServer(): Promise<void> {
   if (LOCAL_SERVER_DISABLED) return Promise.resolve()
   try {
     mkdirSync(profile().dir, { recursive: true, mode: 0o700 })
-    watcher = watch(profile().dir, (_event, name) => {
-      if (name === null || String(name) === 'local.json') refreshSoon()
-    })
-    watcher.on('error', () => undefined)
   } catch (err) {
-    console.warn('trek: cannot watch the local server profile', err)
+    console.warn('trek: cannot create the local server profile', err)
   }
+  armWatch()
   return startLocalServer()
 }
 
@@ -656,10 +751,30 @@ export function registerLocalServerHandlers(): void {
   ipcMain.handle('localServer:reset', () => resetLocalServer())
 }
 
-/** Quit: stop it only when "Stop local server on quit" is on. Never throws. */
+/**
+ * Quit: stop it only when "Stop local server on quit" is on. Never throws, and is bounded:
+ * a job in progress (a start can take READY_TIMEOUT_MS and more) gets QUIT_WAIT_MS, then
+ * `stop --local` runs directly, for at most QUIT_DIRECT_STOP_MS.
+ */
 export async function quitLocalServer(stopIt: boolean): Promise<void> {
+  quitting = true
   watcher?.close()
   watcher = null
   if (LOCAL_SERVER_DISABLED || !stopIt) return
-  await queue(() => stopServer()).catch((err) => console.error('trek: stopping the local server on quit failed', err))
+  let timer: NodeJS.Timeout | undefined
+  const stopped = await Promise.race([
+    queue(() => stopServer()).then(
+      () => true,
+      (err) => {
+        console.error('trek: stopping the local server on quit failed', err)
+        return true
+      }
+    ),
+    new Promise<boolean>((resolve) => (timer = setTimeout(() => resolve(false), QUIT_WAIT_MS)))
+  ])
+  clearTimeout(timer)
+  if (stopped) return
+  console.warn(`trek: the local server was still busy after ${QUIT_WAIT_MS / 1000} s at quit; running stop --local directly`)
+  const { code, output } = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)], QUIT_DIRECT_STOP_MS)
+  if (code !== 0) console.error(`trek: stop --local at quit exited ${code ?? 'on a timeout'}: ${output.trim()}`)
 }

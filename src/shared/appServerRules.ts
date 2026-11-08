@@ -2,6 +2,9 @@
 import type { ConnectionStatus } from './client/connection.ts'
 import type { LocalServerStatus } from './types.ts'
 
+/** The synthetic app-server entry's id, for the Local server: recents and open-windows.json are keyed by it. */
+export const LOCAL_ENTRY_ID = 'local'
+
 /** What each connection status reads as in the UI. */
 export const STATUS_LABELS: Record<ConnectionStatus, string> = {
   connected: 'Connected',
@@ -33,7 +36,7 @@ export function isLoopbackUrl(url: string): boolean {
 }
 
 /** The Local server's state in a line: the server list, the menu's status item. */
-export function localStatusLabel(local: Pick<LocalServerStatus, 'state' | 'pid' | 'version' | 'skew'>): string {
+export function localStatusLabel(local: Pick<LocalServerStatus, 'state' | 'pid' | 'version' | 'skew' | 'failed'>): string {
   switch (local.state) {
     case 'running':
       return `Running${local.version ? ` ${local.version}` : ''}${local.pid ? ` (pid ${local.pid})` : ''}${local.skew ? ' · not this Trek\'s version' : ''}`
@@ -44,6 +47,11 @@ export function localStatusLabel(local: Pick<LocalServerStatus, 'state' | 'pid' 
     case 'stopped':
       return 'Stopped'
     case 'error':
-      return 'Could not start'
+      return `Could not ${local.failed ?? 'start'}`
   }
+}
+
+/** The error dialog's title: what failed (a start, unless the status says a stop or a restart). */
+export function localErrorTitle(failed: LocalServerStatus['failed']): string {
+  return `The local server could not ${failed ?? 'start'}.`
 }

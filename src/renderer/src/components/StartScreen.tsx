@@ -4,6 +4,7 @@ import { syncWindowProject } from '../windowLifecycle'
 import { errorText } from '../v2/errors'
 import { ConnectServer } from './ConnectServer'
 import { useAppServerLinks } from '../useAppServerLinks'
+import { LOCAL_ENTRY_ID } from '../../../shared/appServerRules.ts'
 import type { OpenedProject, ProjectFile, RecentEntry } from '../../../shared/types'
 
 export function StartScreen(): React.JSX.Element {
@@ -144,7 +145,7 @@ export function StartScreen(): React.JSX.Element {
                       <button disabled={busy} onClick={() => void openServerRecent(entry)}>
                         <span className="recent-name">
                           {entry.name || entry.projectId}
-                          <span className="mini-chip recent-server-chip">{entry.serverEntryId === 'local' ? 'local' : 'server'}</span>
+                          <span className="mini-chip recent-server-chip">{entry.serverEntryId === LOCAL_ENTRY_ID ? 'local' : 'server'}</span>
                         </span>
                         <span className="recent-path">
                           {serverNames && !serverNames.has(entry.serverEntryId)

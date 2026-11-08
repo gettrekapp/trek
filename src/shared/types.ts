@@ -164,6 +164,8 @@ export interface LocalServerStatus {
   message: string
   /** The error offers "Reset local server" (a lock no live server answers for) */
   canReset: boolean
+  /** In the error state: what failed. Absent means a start */
+  failed?: 'start' | 'stop' | 'restart'
   /** While running */
   pid?: number
   version?: string

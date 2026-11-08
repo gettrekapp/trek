@@ -14,6 +14,7 @@ import {
   parseAppServers,
   reinsertAt,
   rejectDuplicateServer,
+  rejectLocalServerUrl,
   shouldClearToken,
   shouldRetryAfterTest,
   testTokenRefusal,
@@ -25,7 +26,7 @@ import {
 import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
-import { checkLocalServer, localEntry, localToken, onLocalServerChanged } from './localServer'
+import { checkLocalServer, localEntry, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 import { LOCAL_ENTRY_ID } from './localServerRules'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
 import type { RegisteredServer } from '../shared/client/index.ts'
@@ -164,6 +165,7 @@ async function save(input: unknown): Promise<AppServerInfo> {
   refuseLocal(id, 'edited')
   const before = isNew ? null : { ...requireKnown(id) }
   rejectDuplicateServer(loaded(), valid.url, before ? before.id : null)
+  rejectLocalServerUrl(valid.url, localServerUrl())
   const entryId = before ? before.id : randomUUID()
   const urlChanged = !!before && before.url !== valid.url
 

@@ -5,6 +5,7 @@ import {
   parseAppServers,
   reinsertAt,
   rejectDuplicateServer,
+  rejectLocalServerUrl,
   shouldClearToken,
   shouldRetryAfterTest,
   testTokenRefusal,
@@ -12,7 +13,8 @@ import {
   withRemoving,
   withToken
 } from '../src/main/appServersRules.ts'
-import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../src/shared/appServerRules.ts'
+import { LOCAL_ENTRY_ID, STATUS_LABELS, isLoopbackUrl, localErrorTitle, localStatusLabel, originOf } from '../src/shared/appServerRules.ts'
+import { LOCAL_ENTRY_ID as MAIN_LOCAL_ENTRY_ID } from '../src/main/localServerRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
   assert.deepEqual(parseAppServers([
@@ -151,4 +153,29 @@ test('localStatusLabel: one line per state; skew is said', () => {
   assert.equal(localStatusLabel({ state: 'stopping' }), 'Stopping…')
   assert.equal(localStatusLabel({ state: 'stopped' }), 'Stopped')
   assert.equal(localStatusLabel({ state: 'error' }), 'Could not start')
+  assert.equal(localStatusLabel({ state: 'error', failed: 'start' }), 'Could not start')
+  assert.equal(localStatusLabel({ state: 'error', failed: 'stop' }), 'Could not stop')
+  assert.equal(localStatusLabel({ state: 'error', failed: 'restart' }), 'Could not restart')
+})
+
+test('localErrorTitle: the error dialog says which operation failed', () => {
+  assert.equal(localErrorTitle(undefined), 'The local server could not start.')
+  assert.equal(localErrorTitle('start'), 'The local server could not start.')
+  assert.equal(localErrorTitle('stop'), 'The local server could not stop.')
+  assert.equal(localErrorTitle('restart'), 'The local server could not restart.')
+  assert.equal(LOCAL_ENTRY_ID, 'local')
+  assert.equal(MAIN_LOCAL_ENTRY_ID, LOCAL_ENTRY_ID, 'main and the renderer share the id')
+})
+
+test("rejectLocalServerUrl refuses an entry for Local's current URL, by any loopback name", () => {
+  const local = 'ws://127.0.0.1:51234'
+  const refused = /^Error: This is the Local server \(listed first\)\. Trek connects to it itself, so it needs no entry\.$/
+  assert.throws(() => rejectLocalServerUrl('ws://127.0.0.1:51234', local), refused)
+  assert.throws(() => rejectLocalServerUrl('ws://127.0.0.1:51234/', local), refused, 'a trailing slash')
+  assert.throws(() => rejectLocalServerUrl('ws://localhost:51234', local), refused, 'localhost')
+  assert.throws(() => rejectLocalServerUrl('ws://[::1]:51234', local), refused, '::1')
+  assert.doesNotThrow(() => rejectLocalServerUrl('ws://127.0.0.1:51235', local), 'another port')
+  assert.doesNotThrow(() => rejectLocalServerUrl('wss://127.0.0.1:51234', local), 'another scheme')
+  assert.doesNotThrow(() => rejectLocalServerUrl('ws://box:51234', local), 'another host')
+  assert.doesNotThrow(() => rejectLocalServerUrl('ws://127.0.0.1:51234', null), 'Local not running')
 })
