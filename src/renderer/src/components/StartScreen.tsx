@@ -144,7 +144,7 @@ export function StartScreen(): React.JSX.Element {
                       <button disabled={busy} onClick={() => void openServerRecent(entry)}>
                         <span className="recent-name">
                           {entry.name || entry.projectId}
-                          <span className="mini-chip recent-server-chip">server</span>
+                          <span className="mini-chip recent-server-chip">{entry.serverEntryId === 'local' ? 'local' : 'server'}</span>
                         </span>
                         <span className="recent-path">
                           {serverNames && !serverNames.has(entry.serverEntryId)

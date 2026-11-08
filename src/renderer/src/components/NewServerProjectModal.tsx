@@ -3,7 +3,12 @@ import { errorCode, errorText } from '../v2/errors'
 import type { RegisteredServer } from '../../../shared/client/index.ts'
 import type { RemoteRepo } from '../../../shared/protocol'
 
-/** Create a project on a trek-server from repos registered there (`server` topic `repos`). */
+/**
+ * Create a project on a trek-server from repos registered there (`server` topic `repos`).
+ * On the Local server (its welcome lists `local`) repos are added with the native folder
+ * picker instead of a typed path: the user is choosing on their own disk, and the local
+ * server takes any path.
+ */
 
 interface Props {
   registered: RegisteredServer
@@ -13,6 +18,10 @@ interface Props {
   repos: RemoteRepo[]
   onClose: () => void
   onCreated: (projectId: string, name: string) => void
+  /** The Local server: "Add a folder…" opens the folder picker */
+  local?: boolean
+  /** A folder already picked (New Project on Local picks first): added at once, and names the project */
+  initialPath?: string
 }
 
 /** How long Create waits for an added repo's `server` topic patch before it says so. */
@@ -22,8 +31,8 @@ function baseName(p: string): string {
   return p.replace(/\/+$/, '').split('/').pop() || p
 }
 
-export function NewServerProjectModal({ registered, serverName, repos, onClose, onCreated }: Props): React.JSX.Element {
-  const [name, setName] = useState('')
+export function NewServerProjectModal({ registered, serverName, repos, onClose, onCreated, local = false, initialPath }: Props): React.JSX.Element {
+  const [name, setName] = useState(() => (initialPath ? baseName(initialPath) : ''))
   const [ticked, setTicked] = useState<Set<string>>(new Set())
   /** Repos added here whose topic patch may not have arrived yet */
   const [added, setAdded] = useState<RemoteRepo[]>([])
@@ -77,8 +86,7 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
       return next
     })
 
-  const addRepo = async (): Promise<void> => {
-    const path = addPath.trim()
+  const addRepo = async (path = addPath.trim()): Promise<void> => {
     if (!path || addingRef.current) return
     addingRef.current = true
     setAdding(true)
@@ -87,7 +95,7 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
       const { repoId } = await registered.connection.request('server.addRepo', { path })
       if (!repos.some((r) => r.id === repoId)) setAdded((a) => [...a, { id: repoId, name: baseName(path), path }])
       setTicked((t) => new Set(t).add(repoId))
-      setAddPath('')
+      if (path === addPath.trim()) setAddPath('')
     } catch (err) {
       const code = errorCode(err)
       setAddError({ message: errorText(err), hint: code === 'PATH_DENIED' || code === 'NOT_A_REPO' })
@@ -95,6 +103,19 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
       addingRef.current = false
       setAdding(false)
     }
+  }
+
+  // The folder New Project on Local picked: registered (or found registered) once.
+  const initialAdded = useRef(false)
+  useEffect(() => {
+    if (!initialPath || initialAdded.current) return
+    initialAdded.current = true
+    void addRepo(initialPath)
+  })
+
+  const pickFolder = async (): Promise<void> => {
+    const path = await window.api.selectDirectory('Choose a repository')
+    if (path) await addRepo(path)
   }
 
   const create = async (): Promise<void> => {
@@ -140,7 +161,9 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
 
         <h3>Repositories</h3>
         {allRepos.length === 0 ? (
-          <p className="muted">No repositories are registered on this server yet. Add one by its path below.</p>
+          <p className="muted">
+            {local ? 'No repositories on this computer yet. Add a folder below.' : 'No repositories are registered on this server yet. Add one by its path below.'}
+          </p>
         ) : (
           <ul className="worktree-list">
             {allRepos.map((repo) => (
@@ -157,29 +180,39 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
           </ul>
         )}
 
-        <h3>
-          <label htmlFor={pathId}>Add repo by path…</label>
-        </h3>
-        <div className="create-row">
-          <input
-            id={pathId}
-            type="text"
-            placeholder="/home/dev/repos/my-app (a path on the server)"
-            spellCheck={false}
-            value={addPath}
-            onChange={(e) => setAddPath(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void addRepo()
-            }}
-          />
-          <button disabled={adding || !addPath.trim()} onClick={() => void addRepo()}>
-            {adding ? 'Adding…' : 'Add'}
-          </button>
-        </div>
+        {local ? (
+          <div className="create-row">
+            <button disabled={adding} onClick={() => void pickFolder()}>
+              {adding ? 'Adding…' : 'Add a folder…'}
+            </button>
+          </div>
+        ) : (
+          <>
+            <h3>
+              <label htmlFor={pathId}>Add repo by path…</label>
+            </h3>
+            <div className="create-row">
+              <input
+                id={pathId}
+                type="text"
+                placeholder="/home/dev/repos/my-app (a path on the server)"
+                spellCheck={false}
+                value={addPath}
+                onChange={(e) => setAddPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void addRepo()
+                }}
+              />
+              <button disabled={adding || !addPath.trim()} onClick={() => void addRepo()}>
+                {adding ? 'Adding…' : 'Add'}
+              </button>
+            </div>
+          </>
+        )}
         {addError && (
           <div className="error">
             <div>{addError.message}</div>
-            {addError.hint && (
+            {addError.hint && !local && (
               <div>
                 Run <code>trek-server add &lt;path&gt;</code> on the server.
               </div>

@@ -83,3 +83,16 @@ export function shouldReconnect(
 ): boolean {
   return link?.status === 'connected' && isStuck(connection)
 }
+
+/**
+ * The entry's URL changed (Local respawned on a new port, or an entry was edited elsewhere)
+ * while this window's connection is not up: reconnect now rather than after its back-off.
+ * The relay looks the new URL and token up on the next open.
+ */
+export function shouldReconnectOnMove(
+  previousUrl: string,
+  link: Pick<AppServerLink, 'url'>,
+  connection: Pick<ServerConnection, 'status' | 'removed'>
+): boolean {
+  return previousUrl !== link.url && connection.status !== 'connected' && !connection.removed
+}

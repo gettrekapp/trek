@@ -1,15 +1,15 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { disposeV2Terminals, retryV2Terminals } from '../terminals'
 import { backendChanged } from '../backend'
 import { connectServerEntry, dropServerEntry } from './serverClients'
-import { shouldReconnect } from './appServerLinks'
+import { shouldReconnect, shouldReconnectOnMove } from './appServerLinks'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { applyV2Project } from './applyProjection'
 import { errorText } from './errors'
 import { projectGone, watchesServerTopic } from './projectWatch'
 import { V2Workspace } from './V2Workspace'
-import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
+import { STATUS_LABELS, localStatusLabel } from '../../../shared/appServerRules.ts'
 import { SERVER_REMOVED_MESSAGE, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
 import type { AppServerLink } from '../../../shared/types'
 
@@ -66,6 +66,30 @@ export function ServerProjectWindow({ serverEntryId, projectId, onTitle }: Props
   if (listError && !servers) return <ServerWindowMessage title={listError} />
   if (!found) return <div className="server-window" />
   return <ServerProjectTree entry={found} projectId={projectId} onTitle={onTitle} onRemoved={markRemoved} />
+}
+
+/** In a Local window's banner: the server's state, and Start when it is not running. */
+function LocalServerAction({ local }: { local: NonNullable<AppServerLink['local']> }): React.JSX.Element {
+  const [error, setError] = useState<string | null>(null)
+  const canStart = local.state === 'stopped' || local.state === 'error'
+  return (
+    <span className="server-window-local">
+      {' · Local server: '}
+      {localStatusLabel(local)}
+      {canStart && (
+        <button
+          className="btn btn-ghost"
+          onClick={() => {
+            setError(null)
+            window.api.localServer.start().catch((err: unknown) => setError(errorText(err)))
+          }}
+        >
+          Start Local Server
+        </button>
+      )}
+      {error && <span className="settings-warn"> {error}</span>}
+    </span>
+  )
 }
 
 function ServerProjectTree({
@@ -162,6 +186,13 @@ function ServerProjectTree({
     if (shouldReconnect(entry, registered.connection)) registered.connection.reconnect()
   }, [entry.status, registered])
 
+  // Local respawned on a new port (a restart, a skew restart, a start from here): go there now.
+  const lastUrl = useRef(entry.url)
+  useEffect(() => {
+    if (shouldReconnectOnMove(lastUrl.current, entry, registered.connection)) registered.connection.reconnect()
+    lastUrl.current = entry.url
+  }, [entry.url, registered])
+
   // Structural (the relay's open result), never the message text.
   const removed = status.removed === true
   useEffect(() => {
@@ -187,6 +218,7 @@ function ServerProjectTree({
           <strong>{STATUS_LABELS[status.status]}</strong>
           {status.message ? ` — ${status.message}` : ''}
           {lastSeen !== null && <span className="server-window-last-seen"> · last seen {formatLastSeen(lastSeen)}</span>}
+          {entry.local && <LocalServerAction local={entry.local} />}
         </div>
       )}
       {view && 'error' in view && <div className="error">Could not load the project: {view.error}</div>}

@@ -2,10 +2,10 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '../store'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { errorText } from '../v2/errors'
-import { shouldReconnect } from '../v2/appServerLinks'
+import { shouldReconnect, shouldReconnectOnMove } from '../v2/appServerLinks'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
-import { STATUS_LABELS, isLoopbackUrl, originOf } from '../../../shared/appServerRules.ts'
+import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerLink, AppServerTest } from '../../../shared/types'
@@ -208,6 +208,11 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
       )}
 
       {servers?.map((server) => {
+        if (server.local) {
+          return (
+            <LocalServerItem key={server.id} server={server} selected={selectedId === server.id} onToggle={() => setSelectedId(selectedId === server.id ? null : server.id)} />
+          )
+        }
         const testState = tests[server.id]
         const label = server.hasToken ? (server.status ? STATUS_LABELS[server.status] : 'Not connected') : 'Needs a token'
         const message = server.hasToken ? server.message : 'Set a token to connect'
@@ -324,6 +329,62 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
   )
 }
 
+/**
+ * The Local server's row: first in the list, with no Set token, Edit or Remove (main's
+ * supervisor owns it). Its state, and Start, Restart or Reset as the state allows.
+ */
+function LocalServerItem({ server, selected, onToggle }: { server: AppServerLink; selected: boolean; onToggle: () => void }): React.JSX.Element {
+  const local = server.local!
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const running = local.state === 'running'
+  const pending = local.state === 'starting' || local.state === 'stopping'
+  const linkLabel = running && server.status && server.status !== 'connected' ? ` · ${STATUS_LABELS[server.status]}` : ''
+  const act = (action: () => Promise<void>): void => {
+    setBusy(true)
+    setError(null)
+    action()
+      .catch((err: unknown) => setError(errorText(err)))
+      .finally(() => setBusy(false))
+  }
+  const dot = running ? dotClass(server.status ?? undefined) : pending ? 'running' : 'exited'
+  return (
+    <div className={`connect-server-item connect-server-local${selected ? ' selected' : ''}`}>
+      <div className="server-row">
+        <span className={`wt-dot ${dot}`} title={localStatusLabel(local)} />
+        <span className="connect-server-name">{server.name}</span>
+        <span className="server-row-url">this computer</span>
+        <span className={`connect-server-status${local.state === 'error' || local.skew ? ' warn' : ''}`}>
+          {localStatusLabel(local)}
+          {linkLabel}
+        </span>
+        <span className="server-row-actions">
+          <button className="btn btn-ghost" disabled={!running || !server.hasToken} onClick={onToggle}>
+            Projects
+          </button>
+          {running ? (
+            <button className="btn btn-ghost" disabled={busy} onClick={() => act(() => window.api.localServer.restart())}>
+              Restart
+            </button>
+          ) : (
+            <button className="btn btn-ghost" disabled={busy || pending} onClick={() => act(() => window.api.localServer.start())}>
+              Start
+            </button>
+          )}
+          {local.state === 'error' && local.canReset && (
+            <button className="btn btn-ghost danger" disabled={busy} onClick={() => act(() => window.api.localServer.reset())}>
+              Reset
+            </button>
+          )}
+        </span>
+      </div>
+      {local.message && local.state !== 'running' && <div className={local.state === 'error' ? 'error connect-local-message' : 'muted connect-local-message'}>{local.message}</div>}
+      {error && <div className="error">{error}</div>}
+      {selected && running && server.hasToken && <ServerProjects server={server} />}
+    </div>
+  )
+}
+
 interface ServerFormProps {
   form: FormState
   setForm: (form: FormState) => void
@@ -401,7 +462,8 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
   const setServerWindow = useAppStore((s) => s.setServerWindow)
   const [status, setStatus] = useState<StatusChange>({ status: 'connecting', message: '' })
   const [topic, setTopic] = useState<TopicView>(null)
-  const [newProjectOpen, setNewProjectOpen] = useState(false)
+  /** Open: false, true, or the folder New Project on Local picked first */
+  const [newProjectOpen, setNewProjectOpen] = useState<boolean | { path: string }>(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const registered = useMemo(() => connectServerEntry(server.id), [server.id])
@@ -423,6 +485,29 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
   useEffect(() => {
     if (shouldReconnect(server, registered.connection)) registered.connection.reconnect()
   }, [server.status, registered])
+
+  // Local respawned on a new port: go there now, not after the back-off.
+  const lastUrl = useRef(server.url)
+  useEffect(() => {
+    if (shouldReconnectOnMove(lastUrl.current, server, registered.connection)) registered.connection.reconnect()
+    lastUrl.current = server.url
+  }, [server.url, registered])
+
+  // Note for 4b, 8: from the welcome, never from the URL.
+  const isLocal = !!server.capabilities?.includes('local')
+  const newProject = async (): Promise<void> => {
+    if (!isLocal) {
+      setNewProjectOpen(true)
+      return
+    }
+    setError(null)
+    try {
+      const path = await window.api.selectDirectory('Choose a repository for the new project')
+      if (path) setNewProjectOpen({ path })
+    } catch (err) {
+      setError(`Could not choose a folder: ${errorText(err)}`)
+    }
+  }
 
   const connected = status.status === 'connected'
   const serverName = registered.connection.welcome?.serverName ?? ''
@@ -466,7 +551,7 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
         </ul>
       )}
       <div className="server-form-actions">
-        <button className="btn btn-ghost" disabled={!connected || !snapshot || busy} onClick={() => setNewProjectOpen(true)}>
+        <button className="btn btn-ghost" disabled={!connected || !snapshot || busy} onClick={() => void newProject()}>
           New Project…
         </button>
       </div>
@@ -475,6 +560,8 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
           registered={registered}
           serverName={server.name}
           repos={snapshot.repos}
+          local={isLocal}
+          initialPath={typeof newProjectOpen === 'object' ? newProjectOpen.path : undefined}
           onClose={() => setNewProjectOpen(false)}
           onCreated={(projectId, name) => {
             setNewProjectOpen(false)

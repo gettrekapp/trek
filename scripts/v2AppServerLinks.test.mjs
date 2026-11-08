@@ -1,7 +1,7 @@
 // scripts/v2AppServerLinks.test.mjs — a window following main's server list broadcast.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createLinksFeed, isStuck, newerSnapshot, shouldReconnect } from '../src/renderer/src/v2/appServerLinks.ts'
+import { createLinksFeed, isStuck, newerSnapshot, shouldReconnect, shouldReconnectOnMove } from '../src/renderer/src/v2/appServerLinks.ts'
 
 const tick = () => new Promise((r) => setImmediate(r))
 const snap = (seq, ...ids) => ({ seq, servers: ids.map((id) => ({ id, name: id, url: `ws://${id}`, hasToken: true, status: 'connected', message: '' })) })
@@ -88,4 +88,15 @@ test("a stuck window reconnects only once main's connection to its entry is up",
   assert.equal(shouldReconnect({ status: 'connected' }, conn('connected')), false)
   assert.equal(shouldReconnect({ status: 'connected' }, conn('error', true)), false)
   assert.equal(shouldReconnect(undefined, conn('needs-auth')), false)
+})
+
+test('a window not connected reconnects at once when its entry moves (Local respawned on a new port)', () => {
+  const conn = (status, removed = false) => ({ status, removed })
+  const moved = { url: 'ws://127.0.0.1:50002' }
+  assert.equal(shouldReconnectOnMove('ws://127.0.0.1:50001', moved, conn('connecting')), true)
+  assert.equal(shouldReconnectOnMove('ws://127.0.0.1:50001', moved, conn('disconnected')), true)
+  assert.equal(shouldReconnectOnMove('ws://127.0.0.1:50001', moved, conn('needs-auth')), true)
+  assert.equal(shouldReconnectOnMove('ws://127.0.0.1:50001', moved, conn('connected')), false, 'already up')
+  assert.equal(shouldReconnectOnMove('ws://127.0.0.1:50002', moved, conn('connecting')), false, 'not moved')
+  assert.equal(shouldReconnectOnMove('ws://127.0.0.1:50001', moved, conn('error', true)), false, 'removed is final')
 })

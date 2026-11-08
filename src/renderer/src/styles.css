@@ -2676,6 +2676,15 @@ button:disabled {
   color: var(--attention);
 }
 
+/* The Local server's stop or failure reason: an error may carry the server log's tail. */
+.connect-local-message {
+  margin: 4px 0 0 15px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+
 .connect-server-item .server-row-actions .btn {
   height: 26px;
   padding: 0 9px;
@@ -3992,6 +4001,11 @@ body.resizing-row {
 
 .server-window-last-seen {
   color: var(--text-muted);
+}
+
+.server-window-local .btn {
+  height: 22px;
+  margin-left: 8px;
 }
 
 .server-window-loading {
