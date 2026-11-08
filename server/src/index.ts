@@ -1,12 +1,16 @@
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, rmSync, statSync } from 'node:fs'
+import type { AddressInfo } from 'node:net'
 import { basename, resolve } from 'node:path'
-import { hostname } from 'node:os'
+import { homedir, hostname } from 'node:os'
+import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { buildInfo } from './buildInfo'
-import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig } from './config'
+import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig, saveConfig } from './config'
 import type { Project } from '../../src/shared/model/types'
 import { ConfigStore } from './configStore'
 import { defaultDataDir, projectsDir } from './dataDir'
+import { acquireLock, holdsLock, releaseLock } from './localLock'
+import { localProfile, removeLocalInfo, writeLocalInfo, type LocalProfile } from './localProfile'
 import { projectsUsingRepo } from './projects/model'
 import { ProjectState } from './projects/state'
 import { ProjectStore } from './projects/store'
@@ -40,6 +44,8 @@ interface CliArgs {
   host?: string
   dataDir?: string
   insecure: boolean
+  /** `start --local`: the app's local server, with its own profile (see localProfile.ts) */
+  local: boolean
 }
 
 const USAGE = `Usage: trek-server [command] [options]
@@ -47,6 +53,7 @@ const USAGE = `Usage: trek-server [command] [options]
 
 Commands:
   start                Run the server (default)
+  start --local        Run the Trek app's local server (see --local)
   add [path]           Add the git repo at path (default: current directory)
   list                 List the configured repos
   remove [id|path]     Remove a repo by id or path (default: current directory)
@@ -63,6 +70,12 @@ Options:
   --host <host>     Interface to bind (default: config.host or 127.0.0.1)
   --insecure        Allow binding a non-loopback host without TLS
   --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
+  --local           start: the app's local server. Its own config, data and lock under
+                    ~/.config/trek-server/local and <platform data dir>/local; 127.0.0.1
+                    on a random port; a new token on every start; any path allowed.
+                    Writes the port and token to local.json there (0600) while it runs.
+                    Takes none of --config, --data-dir, --port, --host, --insecure.
+                    Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
   --id <id>         add: repo id (default: slug of the directory name)
   --name <name>     add: display name (default: the directory name)
   -h, --help        Show this help
@@ -82,7 +95,8 @@ function parseArgs(argv: string[]): CliArgs {
     command: 'start',
     configPath: defaultConfigPath(),
     configExplicit: false,
-    insecure: false
+    insecure: false,
+    local: false
   }
   const value = (i: number, flag: string): string => {
     const next = argv[i]
@@ -134,12 +148,17 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (arg === '--host') args.host = value(++i, arg)
     else if (arg === '--data-dir') args.dataDir = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
+    else if (arg === '--local') args.local = true
     else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
     else usageError(`Unknown argument: ${arg}`)
   }
   if (wantHelp || wantVersion) {
     args.command = wantHelp ? 'help' : 'version'
     return args
+  }
+  if (args.local && args.command !== 'start') usageError('--local only applies to `start`')
+  if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
+    usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
   }
   if ((args.port !== undefined || args.host !== undefined || args.insecure) && args.command !== 'start') {
     usageError('--port, --host and --insecure only apply to `start`')
@@ -184,9 +203,19 @@ if (args.command === 'version') {
   process.exit(0)
 }
 
+/** `start --local`'s profile; its config and data dir replace the defaults. */
+const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir()) : undefined
+if (local) {
+  args.configPath = local.configPath
+  // Never copy the trek-daemon config into the local profile.
+  args.configExplicit = true
+  args.dataDir = local.dataDir
+}
+
 function openStore(path: string): ConfigStore {
   try {
-    return new ConfigStore(path)
+    // The local server's guard allows any path: the user picks them on their own disk.
+    return new ConfigStore(path, { permissive: local !== undefined })
   } catch (err) {
     fail(`Cannot read ${path}: ${(err as Error).message}`)
   }
@@ -290,11 +319,28 @@ if (args.command === 'token') {
 }
 
 // start: every check runs before anything is written.
-if (listTokens(store.config).length === 0) {
+if (local) {
+  // The lock comes first: a second local server must not touch the profile.
+  const lock = acquireLock(local.lockPath)
+  if (!lock.ok) {
+    const pid = lock.holder > 0 ? ` (pid ${lock.holder})` : ''
+    console.error(`A local trek-server is already running${pid}. Its port and token are in ${local.infoPath}.`)
+    process.exit(LOCAL_ALREADY_RUNNING_EXIT)
+  }
+  if (lock.tookOver !== undefined) console.log(`Took over the lock of a local trek-server that is gone (pid ${lock.tookOver}).`)
+  // Holding the lock, any local.json is a dead server's: its port and token are stale.
+  rmSync(local.infoPath, { force: true })
+  if (!existsSync(local.configPath)) saveConfig(local.configPath, { repos: [] })
+  process.on('exit', () => {
+    removeLocalInfo(local.infoPath, process.pid)
+    releaseLock(local.lockPath)
+  })
+} else if (listTokens(store.config).length === 0) {
   fail(`No token configured. Run \`trek-server token\` first (config: ${args.configPath}).`)
 }
-const host = args.host ?? store.config.host ?? '127.0.0.1'
-const port = args.port ?? store.config.port ?? DEFAULT_DAEMON_PORT
+const host = local ? '127.0.0.1' : (args.host ?? store.config.host ?? '127.0.0.1')
+// The local server takes a port the OS picks; local.json says which.
+const port = local ? 0 : (args.port ?? store.config.port ?? DEFAULT_DAEMON_PORT)
 if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && !args.insecure) {
   fail(
     `Refusing to bind ${host} without TLS. Put a TLS-terminating reverse proxy (Caddy) in front\n` +
@@ -308,12 +354,16 @@ if (readLegacyInPlace) {
 const config = store.config
 // --data-dir is remembered, so a later plain `trek-server remove` checks the same projects.
 const dataDir = args.dataDir === undefined ? undefined : resolve(args.dataDir)
-if (!config.serverId || !config.name || config.tokenHash || (dataDir !== undefined && config.dataDir !== dataDir)) {
+/** The local server's token, for local.json. Only its hash is saved, as for any token. */
+let localToken = ''
+if (local || !config.serverId || !config.name || config.tokenHash || (dataDir !== undefined && config.dataDir !== dataDir)) {
   try {
     store.update((c) => {
       ensureIdentity(c, hostname())
       migrateLegacyToken(c)
       if (dataDir !== undefined) c.dataDir = dataDir
+      // A new token on every start, replacing the last one: a token from an old local.json stops working.
+      if (local) localToken = addToken(c, LOCAL_TOKEN_NAME)
     })
   } catch (err) {
     fail(`Cannot update ${args.configPath}: ${(err as Error).message}`)
@@ -336,7 +386,7 @@ const server = startServer(
     store: projectFiles.files
   },
   // Absolute: agents read the config file from their own worktree's directory.
-  { mcpDir: resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir(), 'mcp') }
+  { mcpDir: resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir(), 'mcp'), local: local !== undefined }
 )
 store.watch()
 server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
@@ -348,16 +398,40 @@ server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
   process.exit(1)
 })
 server.httpServer.listen(port, host, () => {
+  const bound = (server.httpServer.address() as AddressInfo).port
   console.log(
-    `trek-server ${version} (build ${build}) "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${port}`
+    `trek-server ${version} (build ${build}) "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${bound}`
   )
   console.log(
     store.config.repos.length > 0
       ? `repos: ${store.config.repos.map((r) => `${r.name} (${r.path})`).join(', ')}`
-      : 'No repos registered yet. Add one with `trek-server add <path>`.'
+      : local
+        ? 'No repos registered yet.'
+        : 'No repos registered yet. Add one with `trek-server add <path>`.'
   )
   console.log(`projects: ${projectFiles.loaded.length} in ${projectFiles.dir}`)
+  if (local) void announceLocal(local, bound)
 })
+
+/**
+ * Writes local.json, the app's cue that the local server is ready. It waits for
+ * MCP to settle, so the app's first welcome lists `mcp` if the server has it.
+ */
+async function announceLocal(profile: LocalProfile, port: number): Promise<void> {
+  await server.ready
+  if (shuttingDown) return
+  // Two starts that took over the same stale lock at once: only the one holding it goes on.
+  if (!holdsLock(profile.lockPath)) {
+    console.error(`Another local trek-server took the lock ${profile.lockPath}; exiting.`)
+    process.exit(LOCAL_ALREADY_RUNNING_EXIT)
+  }
+  try {
+    writeLocalInfo(profile.infoPath, { port, pid: process.pid, token: localToken, version, build })
+  } catch (err) {
+    fail(`Cannot write ${profile.infoPath}: ${(err as Error).message}`)
+  }
+  console.log(`local: port and token in ${profile.infoPath}`)
+}
 
 const SHUTDOWN_FLUSH_MS = 200
 let shuttingDown = false
@@ -365,6 +439,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     if (shuttingDown) return
     shuttingDown = true
+    // First, so the app stops connecting to a server that is going away.
+    if (local) removeLocalInfo(local.infoPath, process.pid)
     console.log(`\n${signal} — shutting down (all agent sessions will end)`)
     store.close()
     server.shutdown(signal)

@@ -180,6 +180,30 @@ For real use, install the systemd user unit (see comments in
 `trek-server.service`) so the server — and your Claude sessions — survive
 logout and restart on boot.
 
+### The app's local server
+
+```sh
+trek-server start --local     # or `trek-server --local`
+```
+
+The Trek app runs this itself for projects on this machine; you rarely need
+to. It keeps to its own profile, so it never shares files with a server you
+run by hand:
+
+- config `~/.config/trek-server/local/config.json`, projects and MCP files in
+  `<platform data dir>/local` (e.g. `~/Library/Application Support/trek-server/local`);
+- `127.0.0.1` on a port the OS picks;
+- a new token on every start, saved as `local` (hash only);
+- `~/.config/trek-server/local/local.json` (0600), written once it listens and
+  removed when it exits: `{port, pid, token, version, build}`;
+- `local.lock` beside it, holding the pid: a second `--local` start exits with
+  code 3 while that process lives; a dead one's lock is taken over;
+- any path is allowed (the welcome lists the `local` capability), since the
+  user picks paths on their own disk.
+
+To stop it: `kill $(jq .pid ~/.config/trek-server/local/local.json)`. Its
+sessions resume (`--resume`) the next time their worktree is loaded.
+
 ## Expose it with Caddy (TLS)
 
 The server binds loopback only and refuses public interfaces without TLS.
