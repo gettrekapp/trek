@@ -29,6 +29,7 @@
     "smoke:local-app": "npm run build && node scripts/local-app-smoke.mjs",
     "smoke:local-features": "npm run build && node scripts/local-features-smoke.mjs",
     "smoke:import": "npm run build && node scripts/import-smoke.mjs",
+    "smoke:local-window": "npm run build && node scripts/local-window-smoke.mjs",
     "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app && node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "npm run build && electron-builder --mac --arm64",
