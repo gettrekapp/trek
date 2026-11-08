@@ -3,7 +3,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  capPieces,
   declineKey,
+  MAX_REMOTE_PIECES,
+  OVER_CAP_REASON,
+  runScope,
   dropWorktree,
   importSummary,
   isAgentSessionId,
@@ -418,4 +422,66 @@ test("worktreeInError: only the path the server's message is about counts, not t
   // Paths with spaces.
   const q = project({ repo: '/r/my app', x: '/r/my app x' })
   assert.deepEqual(worktreeInError(q, 'x: worktree path /r/my app x is another repository (/r/my app) or contains one'), { repoId: 'r1', worktreeId: 'w2' })
+})
+
+test("a profileKey in the file is dropped; only the importer sets one, from the file's path and the realpath", async () => {
+  const { importProjectFile } = await import('../src/shared/model/importProject.ts')
+  let n = 0
+  const newId = () => `id${++n}`
+  const crafted = {
+    version: 3,
+    name: 'Crafted',
+    repositories: [{ id: 'a', name: 'a', path: '/var/t/app', environments: { enabled: true, cpu: 2, profileKey: '/Users/victim/other' }, worktrees: [] }]
+  }
+  const [piece] = importProjectFile(crafted, newId).projects
+  const repo = piece.project.repositories[0]
+  assert.deepEqual(repo.environments, { enabled: true, cpu: 2 })
+  assert.equal(crafted.repositories[0].environments.profileKey, '/Users/victim/other', 'the file is not changed')
+  // The importer: the path as the file had it, since the server stores its realpath.
+  const key = profileKeyFor(piece.sourcePaths[repo.id], '/private/var/t/app')
+  const keyed = withProfileKeys(piece.project, new Map([[repo.id, key]]))
+  assert.deepEqual(keyed.repositories[0].environments, { enabled: true, cpu: 2, profileKey: '/var/t/app' })
+  // A realpath file: no key at all, whatever the file said.
+  const [real] = importProjectFile({ ...crafted, repositories: [{ ...crafted.repositories[0], path: '/l/app' }] }, newId).projects
+  assert.equal(profileKeyFor(real.sourcePaths[real.project.repositories[0].id], '/l/app'), undefined)
+  assert.deepEqual(real.project.repositories[0].environments, { enabled: true, cpu: 2 })
+})
+
+test('capPieces: Local and the first 20 remote pieces are imported, the rest are over, in order', () => {
+  assert.equal(MAX_REMOTE_PIECES, 20)
+  const remote = Array.from({ length: 23 }, (_, i) => ({ target: `s${i + 1}` }))
+  const { kept, over } = capPieces([...remote.slice(0, 5), { target: 'local' }, ...remote.slice(5)])
+  assert.equal(kept.length, 21)
+  assert.equal(kept[5].target, 'local', 'Local is never counted, wherever it is')
+  assert.deepEqual(kept.filter((p) => p.target !== 'local').map((p) => p.target), remote.slice(0, 20).map((p) => p.target))
+  assert.deepEqual(over.map((p) => p.target), ['s21', 's22', 's23'])
+  assert.deepEqual(capPieces(remote.slice(0, 20)).over, [])
+  assert.deepEqual(capPieces([{ target: 'local' }, { target: 'a' }, { target: 'b' }], 1), { kept: [{ target: 'local' }, { target: 'a' }], over: [{ target: 'b' }] })
+  assert.match(OVER_CAP_REASON, /only 20 /)
+})
+
+test('runScope: a fresh scope per run unless the caller shares one; one address under many ids is one decline', () => {
+  const a = runScope()
+  const b = runScope({})
+  assert.ok(a.declined instanceof Set && a.unreachable instanceof Map)
+  assert.notEqual(a.declined, b.declined)
+  assert.notEqual(a.unreachable, b.unreachable)
+  const declined = new Set(['x'])
+  const unreachable = new Map([['e1', 'down']])
+  const shared = runScope({ declined, unreachable })
+  assert.equal(shared.declined, declined)
+  assert.equal(shared.unreachable, unreachable)
+  assert.equal(runScope({ declined }).declined, declined)
+  // Three server ids on one unsaved address: each routes to `add` with the same decline key.
+  const servers = [
+    { id: 's1', name: 'one', url: 'wss://box.example:7000' },
+    { id: 's2', name: 'two', url: 'wss://box.example:7000/' },
+    { id: 's3', name: 'three', url: 'wss://box.example:7000' }
+  ]
+  const keys = servers.map((s) => {
+    const route = routePiece(s.id, servers, [])
+    assert.equal(route.kind, 'add')
+    return declineKey(route.server)
+  })
+  assert.equal(new Set(keys).size, 1)
 })

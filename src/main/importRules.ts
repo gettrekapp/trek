@@ -73,6 +73,44 @@ export function declineKey(server: ServerConfig): string {
   return serverKey(server.url) ?? server.url
 }
 
+// ---- Per-run limits ---------------------------------------------------------------------------
+
+/**
+ * What one run of imports (one file, a retry, or the first-launch prompt's files) remembers, so a
+ * file with many server ids on one address asks about adding it once, and waits for an entry that
+ * could not be reached once: the servers declined (declineKey), and the entries unreachable, with why.
+ */
+export interface RunScope {
+  declined: Set<string>
+  unreachable: Map<string, string>
+}
+
+/** The caller's scope, or a fresh one for what it does not share. */
+export function runScope(given: Partial<RunScope> = {}): RunScope {
+  return { declined: given.declined ?? new Set(), unreachable: given.unreachable ?? new Map() }
+}
+
+/** At most this many remote pieces of one file are imported in one run; the rest are left. */
+export const MAX_REMOTE_PIECES = 20
+
+/** Why a piece over MAX_REMOTE_PIECES was left (the result dialog shows it). */
+export const OVER_CAP_REASON = `only ${MAX_REMOTE_PIECES} of a file's parts on other servers are imported at a time`
+
+/** Local's piece and the first `max` remote ones are imported; the rest are `over`, in order. */
+export function capPieces<T extends { target: string }>(pieces: readonly T[], max = MAX_REMOTE_PIECES): { kept: T[]; over: T[] } {
+  const kept: T[] = []
+  const over: T[] = []
+  let remote = 0
+  for (const p of pieces) {
+    if (p.target === LOCAL_TARGET) kept.push(p)
+    else if (remote < max) {
+      remote++
+      kept.push(p)
+    } else over.push(p)
+  }
+  return { kept, over }
+}
+
 // ---- migrated.json ----------------------------------------------------------------------------
 
 /** One piece that landed: the project it became, and the labels a recent entry shows. */

@@ -26,6 +26,7 @@ import {
   type WindowTarget
 } from './windowRules'
 import { restoreEntries } from './importRules'
+import { LOCAL_SERVER_DISABLED } from './localServer'
 import { fileKey, readMigrated } from './migrated'
 
 // icon.png is extracted from AppIcon.icns (the packaging icon) — nativeImage
@@ -468,7 +469,10 @@ export async function restoreWindows(): Promise<void> {
   const workAreas = screen.getAllDisplays().map((d) => d.workArea)
   let restored = 0
   // A window on a .trekproj that was imported comes back on its server project (Local's piece).
-  for (const { target, bounds } of restoreEntries(await readOpenWindows(), await readMigrated(), fileKey)) {
+  // Not without the Local server: nothing is imported then, and a .trekproj opens as a file window.
+  const saved = await readOpenWindows()
+  const entries = LOCAL_SERVER_DISABLED ? saved : restoreEntries(saved, await readMigrated(), fileKey)
+  for (const { target, bounds } of entries) {
     // A server window comes back even if its entry is gone: it shows "Server removed".
     if (target.kind === 'file') {
       const exists = await access(target.path).then(

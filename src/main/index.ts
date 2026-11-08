@@ -124,7 +124,7 @@ function buildMenu(): void {
         },
         {
           label: 'Import .trekproj…',
-          click: () => void importFromMenu()
+          click: () => void importFromMenu(openLegacy)
         },
         ...localServerMenu(),
         { type: 'separator' },

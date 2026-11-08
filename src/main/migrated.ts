@@ -1,8 +1,8 @@
 // userData/migrated.json: which .trekproj files were imported, into which server projects,
 // and whether the first-launch prompt has run (importRules.ts has the format).
 import { app } from 'electron'
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { readJsonStore } from './jsonFile'
 import { writeFileAtomic } from './secrets'
 import { parseMigrated, serializeMigrated, type Migrated } from './importRules'
 
@@ -12,12 +12,11 @@ function migratedPath(): string {
   return join(app.getPath('userData'), 'migrated.json')
 }
 
+const isObject = (raw: unknown): boolean => !!raw && typeof raw === 'object' && !Array.isArray(raw)
+
+/** Nothing imported yet on a first run; a corrupt file is moved aside first (readJsonStore), never just overwritten. */
 export async function readMigrated(): Promise<Migrated> {
-  try {
-    return parseMigrated(JSON.parse(await readFile(migratedPath(), 'utf8')))
-  } catch {
-    return parseMigrated(null) // first run, or unreadable: nothing imported yet
-  }
+  return parseMigrated((await readJsonStore(migratedPath(), isObject)) ?? null)
 }
 
 /** Every change is a read-modify-write; chained so two imports never lose each other's entry. */

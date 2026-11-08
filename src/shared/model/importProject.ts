@@ -165,7 +165,12 @@ function repositoryFor(
     worktrees: [main, ...others]
   }
   if (r.linkedDirs) repo.linkedDirs = [...r.linkedDirs]
-  if (r.environments) repo.environments = r.environments
+  // A profileKey in the file is never trusted: only the importer sets it (withProfileKeys),
+  // from the path the file had and the server's realpath.
+  if (r.environments) {
+    const { profileKey: _p, ...env } = r.environments
+    repo.environments = env
+  }
   sourcePaths[repo.id] = rawPath
   return repo
 }

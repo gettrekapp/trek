@@ -47,9 +47,21 @@ function askAddServer(parent: BrowserWindow | null): ImportOptions['askAddServer
     })) === 0
 }
 
-/** One import, asking about servers to add on `parent`. Throws when the file cannot be read. */
-export function runImport(path: string, parent: BrowserWindow | null, extra: Pick<ImportOptions, 'only' | 'declined' | 'unreachable'> = {}): Promise<ImportReport> {
-  return importTrekproj(path, { ...extra, askAddServer: askAddServer(parent) })
+/** The import running for each file (by fileKey). */
+const inFlight = new Map<string, Promise<ImportReport>>()
+
+/**
+ * One import, asking about servers to add on `parent`; the report rejects when the file cannot be
+ * read. A file has one import at a time: another asked for while one runs joins it (`joined`) and
+ * leaves the result dialog and the windows to the first.
+ */
+function runImport(path: string, parent: BrowserWindow | null, extra: Pick<ImportOptions, 'only' | 'declined' | 'unreachable'> = {}): { report: Promise<ImportReport>; joined: boolean } {
+  const key = fileKey(path)
+  const running = inFlight.get(key)
+  if (running) return { report: running, joined: true }
+  const report = importTrekproj(path, { ...extra, askAddServer: askAddServer(parent) }).finally(() => inFlight.delete(key))
+  inFlight.set(key, report)
+  return { report, joined: false }
 }
 
 /** The result dialog. `buttons` (with the index of the cancel one) when the caller offers a choice. */
@@ -74,8 +86,12 @@ export async function openPieces(sender: WebContents | null, pieces: readonly Mi
   }
 }
 
-/** File → Import .trekproj…: always an import (Import Again for a file imported before). */
-export async function importFromMenu(): Promise<void> {
+/**
+ * File → Import .trekproj…: always an import (Import Again for a file imported before). When no
+ * part lands, the file can still open as a file window (`legacy`, in a window of its own): a file
+ * window on it was closed for the import.
+ */
+export async function importFromMenu(legacy: LegacyOpen): Promise<void> {
   const parent = BrowserWindow.getFocusedWindow()
   const options = { title: 'Import Project', filters: PROJECT_FILTERS, properties: ['openFile' as const] }
   const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
@@ -98,10 +114,17 @@ export async function importFromMenu(): Promise<void> {
   const closed = await closeFileWindow(path)
   if (!closed.closed) return
   let report: ImportReport
+  const run = runImport(path, parent)
   try {
-    report = await runImport(path, parent)
+    report = await run.report
   } catch (err) {
-    await box(parent, { type: 'error', message: `Could not import “${basename(path)}”`, detail: errorText(err), buttons: ['OK'] })
+    if (!run.joined) await box(parent, { type: 'error', message: `Could not import “${basename(path)}”`, detail: errorText(err), buttons: ['OK'] })
+    return
+  }
+  if (run.joined) return
+  if (report.pieces.length === 0) {
+    const response = await showImportResult(parent, [report], { buttons: ['Open as File Window', 'Cancel'], cancelId: 1 })
+    if (response === 0) await legacy(null, path)
     return
   }
   await showImportResult(parent, [report])
@@ -121,7 +144,9 @@ async function offerRetry(parent: BrowserWindow | null, filePath: string, left: 
     cancelId: 1
   })
   if (response !== 0) return
-  const report = await runImport(filePath, parent, { only: left.map((l) => l.target) })
+  const run = runImport(filePath, parent, { only: left.map((l) => l.target) })
+  const report = await run.report
+  if (run.joined) return
   await showImportResult(parent, [report])
   await openPieces(null, report.pieces)
 }
@@ -143,7 +168,9 @@ export async function openTrekproj(sender: WebContents | null, filePath: string,
     if (before.left.length > 0) await offerRetry(parent, filePath, before.left)
     return null
   }
-  const report = await runImport(filePath, parent)
+  const run = runImport(filePath, parent)
+  const report = await run.report
+  if (run.joined) return null
   if (report.pieces.length === 0) {
     const response = await showImportResult(parent, [report], { buttons: ['Open as File Window', 'Cancel'], cancelId: 1 })
     return response === 0 ? legacy(sender, filePath) : null
@@ -206,7 +233,7 @@ export async function offerFirstLaunchImport(): Promise<void> {
   const outcomes: ImportOutcome[] = []
   for (const c of candidates) {
     try {
-      outcomes.push(await runImport(c.path, null, { declined, unreachable }))
+      outcomes.push(await runImport(c.path, null, { declined, unreachable }).report)
     } catch (err) {
       outcomes.push({ path: c.path, error: errorText(err) })
     }

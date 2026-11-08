@@ -23,12 +23,15 @@ import { legacyTokenFor } from './servers'
 import { fileKey, isFileKey, updateMigrated } from './migrated'
 import { rewriteRecentsForImport } from './recents'
 import {
+  capPieces,
   declineKey,
   dropWorktree,
   movedSessions,
   profileKeyFor,
+  OVER_CAP_REASON,
   recordImport,
   routePiece,
+  runScope,
   withProfileKeys,
   worktreeInError,
   type MigratedLeft,
@@ -52,9 +55,12 @@ export interface ImportOptions {
    * saved for it in this app (for that origin) comes along.
    */
   askAddServer(server: ServerConfig, tokenCarried: boolean): Promise<boolean>
-  /** Servers (declineKey: origin and path) the user declined to add, shared by the files of one run so each is asked once */
+  /**
+   * Servers (declineKey: origin and path) the user declined to add, so each is asked once. The
+   * first-launch prompt shares one across its files; otherwise each import has its own (runScope).
+   */
   declined?: Set<string>
-  /** Entries that could not be reached, with why, shared by the files of one run so each waits once */
+  /** Entries that could not be reached, with why, so each is waited for once (shared as `declined` is) */
   unreachable?: Map<string, string>
 }
 
@@ -83,7 +89,8 @@ async function readProjectFile(path: string): Promise<RawProjectFile> {
   return raw
 }
 
-export async function importTrekproj(path: string, options: ImportOptions): Promise<ImportReport> {
+export async function importTrekproj(path: string, given: ImportOptions): Promise<ImportReport> {
+  const options: ImportOptions = { ...given, ...runScope(given) }
   const key = fileKey(path)
   const raw = await readProjectFile(path)
   const { projects, warnings, servers: fileServers } = importProjectFile(raw, randomUUID)
@@ -93,15 +100,21 @@ export async function importTrekproj(path: string, options: ImportOptions): Prom
     report.warnings.push(`The Global panel's ${globals} session(s) were not imported: they belong with this machine's repositories, and the file has none.`)
   }
   const attempted: string[] = []
-  for (const piece of projects) {
-    if (options.only && !options.only.includes(piece.target)) continue
+  const labelOf = (piece: ImportedProject): string => (piece.target === LOCAL_TARGET ? LOCAL_ENTRY_NAME : (piece.serverName ?? `server ${piece.target}`))
+  // A file with many servers imports the first MAX_REMOTE_PIECES of them; a retry takes the next.
+  const { kept, over } = capPieces(projects.filter((p) => !options.only || options.only.includes(p.target)))
+  for (const piece of kept) {
     attempted.push(piece.target)
-    const label = piece.target === LOCAL_TARGET ? LOCAL_ENTRY_NAME : (piece.serverName ?? `server ${piece.target}`)
+    const label = labelOf(piece)
     try {
       report.pieces.push(await importPiece(piece, fileServers, options, report))
     } catch (err) {
       report.left.push({ target: piece.target, label, reason: errorText(err) })
     }
+  }
+  for (const piece of over) {
+    attempted.push(piece.target)
+    report.left.push({ target: piece.target, label: labelOf(piece), reason: OVER_CAP_REASON })
   }
   await updateMigrated((m) => recordImport(m, key, { attempted, pieces: report.pieces, left: report.left }))
   if (report.pieces.length > 0) {
@@ -246,19 +259,27 @@ function readProject(link: RegisteredServer, projectId: string): Promise<Project
   return new Promise((resolve, reject) => {
     let done = false
     let off: (() => void) | null = null
+    let unsubscribed = false
+    // Once only: a snapshot delivered during subscribe() settles before `off` is set, so both
+    // finish's microtask and the check after subscribe() may reach here.
+    const unsubscribe = (): void => {
+      if (unsubscribed || !off) return
+      unsubscribed = true
+      off()
+    }
     const finish = (settle: () => void): void => {
       if (done) return
       done = true
       clearTimeout(timer)
       settle()
-      queueMicrotask(() => off?.())
+      queueMicrotask(unsubscribe)
     }
     const timer = setTimeout(() => finish(() => reject(new Error('timed out'))), READ_BACK_MS)
     off = link.mirror.subscribe(projectTopic(projectId), (update) => {
       if ('error' in update) finish(() => reject(update.error))
       else finish(() => resolve(structuredClone(update.snapshot as Project)))
     })
-    if (done) off()
+    if (done) unsubscribe()
   })
 }
 
