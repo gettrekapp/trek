@@ -1,3 +1,4 @@
+import { envRepoKey } from '../../shared/environments'
 import { environmentFor, useAppStore } from './store'
 
 /**
@@ -10,7 +11,7 @@ export async function refreshEnvironments(): Promise<void> {
   const repos = project?.repositories.filter((r) => r.environments?.enabled) ?? []
   if (repos.length === 0 || !envToolCheck?.ok) return
   try {
-    const lists = await Promise.all(repos.map((r) => window.api.envList(null, r.path)))
+    const lists = await Promise.all(repos.map((r) => window.api.envList(null, envRepoKey(r))))
     setEnvironments(lists.flat())
   } catch {
     // colima hiccup — keep the last known state; the next poll retries

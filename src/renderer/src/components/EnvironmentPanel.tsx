@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ENV_DEFAULTS, deriveProfileName, parseEnvVars } from '../../../shared/environments'
+import { ENV_DEFAULTS, deriveProfileName, envRepoKey, parseEnvVars } from '../../../shared/environments'
 import type { EnvService, EnvUpStep, GitWorktreeInfo } from '../../../shared/types'
 import { refreshEnvironments } from '../environmentActions'
 import { envStartArgs } from '../environmentStart'
@@ -42,7 +42,8 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
 
   const repo = project ? repoOfInfo(project, info) : undefined
-  const repoPath = repo?.path ?? ''
+  // The path its VM names hash: the repository's, or the one an import kept (envRepoKey).
+  const repoPath = repo ? envRepoKey(repo) : ''
   const profile = info.branch ? deriveProfileName(repoPath, info.branch) : null
   const env = environmentFor(environments, repoPath, info.branch)
   const busy = profile ? envBusy[profile] : undefined

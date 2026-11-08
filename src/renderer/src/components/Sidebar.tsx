@@ -21,6 +21,7 @@ import { VoiceToggle } from './VoiceToggle'
 import { removalBlock } from '../repositoryActions'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
+import { envRepoKey } from '../../../shared/environments'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, HostStatus, Repository, TerminalStatus } from '../../../shared/types'
 
@@ -214,7 +215,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const env =
       info.serverId || !features.env
         ? undefined
-        : environmentFor(environments, repo.path, info.branch)
+        : environmentFor(environments, envRepoKey(repo), info.branch)
     const envIsBusy = env ? !!envBusy[env.profile] : false
     const isSelected =
       (selected && sameWorktree(info, selected)) ||

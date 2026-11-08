@@ -40,6 +40,7 @@ import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
 import { MoveWorktreeModal } from './MoveWorktreeModal'
+import { envRepoKey } from '../../../shared/environments'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
 import type { GitWorktreeInfo, Repository, StackStatus } from '../../../shared/types'
@@ -222,7 +223,7 @@ export function WorktreeDetail({
 
   const envEnabled = !!repo.environments?.enabled
   const showEnv = features.env && envEnabled && !isRemote && !!info.branch
-  const env = showEnv ? environmentFor(environments, repo.path, info.branch) : undefined
+  const env = showEnv ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
   const envOpBusy = env ? envBusy[env.profile] : undefined
   const envChipLabel = envOpBusy
     ? { start: 'Env starting…', stop: 'Env stopping…', destroy: 'Env resetting…' }[envOpBusy]

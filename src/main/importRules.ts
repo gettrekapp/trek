@@ -2,6 +2,8 @@
 // migrated.json records, and how recents and open-windows.json are rewritten. Pure.
 import { LOCAL_ENTRY_ID, originOf } from '../shared/appServerRules.ts'
 import { LOCAL_TARGET } from '../shared/model/importProject.ts'
+import type { Project, Session } from '../shared/model/types.ts'
+import { sessionMigrates } from '../shared/providers/selection.ts'
 import type { ServerConfig } from '../shared/types.ts'
 import { MAX_RECENTS, type RecentEntry } from './recentsRules.ts'
 import { isTargetId, sameTarget, type OpenWindowEntry, type WindowTarget } from './windowRules.ts'
@@ -244,4 +246,122 @@ export function promptCandidates(
     out.push({ path, key: k })
   }
   return out
+}
+
+// ---- Paths: the env profile key, sessions whose cwd moved, a worktree the server refused ------
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A Claude-style session id. Its .jsonl is copied by this name, so nothing else may pass. */
+export function isAgentSessionId(id: unknown): id is string {
+  return typeof id === 'string' && UUID.test(id)
+}
+
+/**
+ * The repository path a Local repository's VM names keep hashing (EnvironmentSettings.profileKey):
+ * the path as the file had it, when the server stores another (its realpath, without a
+ * trailing slash). Undefined when they are the same string.
+ */
+export function profileKeyFor(filePath: string, serverPath: string): string | undefined {
+  return filePath === serverPath ? undefined : filePath
+}
+
+/**
+ * `project` with `keys` (repository id → profile key) on each repository's environments.
+ * A repository without environments has made no VM, so it gets none; one that has a key keeps it.
+ */
+export function withProfileKeys(project: Project, keys: ReadonlyMap<string, string>): Project {
+  return {
+    ...project,
+    repositories: project.repositories.map((repo) => {
+      const key = keys.get(repo.id)
+      if (!key || !repo.environments || repo.environments.profileKey) return repo
+      return { ...repo, environments: { ...repo.environments, profileKey: key } }
+    })
+  }
+}
+
+/** Saved sessions whose working directory the server moved: their agent history is filed under `from`. */
+export interface MovedSessions {
+  /** The worktree's name, or "Global" */
+  worktree: string
+  from: string
+  to: string
+  agentSessionIds: string[]
+}
+
+/** Sessions whose history follows the cwd (Claude's kind: sessionMigration), with a usable id. */
+function resumable(sessions: readonly Session[]): string[] {
+  return sessions.filter((s) => sessionMigrates(s) && isAgentSessionId(s.agentSessionId)).map((s) => s.agentSessionId as string)
+}
+
+/**
+ * Compares the project as sent with the project as the server stored it (ids are kept):
+ * each worktree whose path changed, with its resumable sessions. Global sessions run in
+ * the first repository's main worktree.
+ */
+export function movedSessions(sent: Project, stored: Project): MovedSessions[] {
+  const out: MovedSessions[] = []
+  const storedPaths = new Map<string, string>()
+  for (const repo of stored.repositories) for (const w of repo.worktrees) storedPaths.set(w.id, w.path)
+  for (const repo of sent.repositories) {
+    for (const w of repo.worktrees) {
+      const to = storedPaths.get(w.id)
+      const ids = resumable(w.sessions)
+      if (to !== undefined && to !== w.path && ids.length > 0) out.push({ worktree: w.name, from: w.path, to, agentSessionIds: ids })
+    }
+  }
+  const firstMain = sent.repositories[0]?.worktrees.find((w) => w.isMain)
+  const globalTo = firstMain ? storedPaths.get(firstMain.id) : undefined
+  const globalIds = resumable(sent.globalSessions)
+  if (firstMain && globalTo !== undefined && globalTo !== firstMain.path && globalIds.length > 0) {
+    out.push({ worktree: 'Global', from: firstMain.path, to: globalTo, agentSessionIds: globalIds })
+  }
+  return out
+}
+
+export interface WorktreeRef {
+  repoId: string
+  worktreeId: string
+}
+
+/** Whether `message` names `path` as a whole: followed by its end, a space, a comma or a bracket. */
+function names(message: string, path: string): boolean {
+  for (let at = message.indexOf(path); at !== -1; at = message.indexOf(path, at + 1)) {
+    const next = message[at + path.length]
+    if (next === undefined || next === ' ' || next === ',' || next === ')' || next === ';') return true
+  }
+  return false
+}
+
+/**
+ * The non-main worktree a `project.import` refusal names (PATH_DENIED: "Path not under a
+ * configured root: <path>"; BAD_REQUEST: "worktree path <path> is another repository"), so
+ * the import can go on without it. The longest matching path wins. Null when none is named.
+ */
+export function worktreeInError(project: Project, message: string): WorktreeRef | null {
+  let best: (WorktreeRef & { length: number }) | null = null
+  for (const repo of project.repositories) {
+    for (const w of repo.worktrees) {
+      if (w.isMain || !names(message, w.path)) continue
+      if (!best || w.path.length > best.length) best = { repoId: repo.id, worktreeId: w.id, length: w.path.length }
+    }
+  }
+  return best ? { repoId: best.repoId, worktreeId: best.worktreeId } : null
+}
+
+/** `project` without the worktree; its path and how many saved sessions went with it. */
+export function dropWorktree(project: Project, ref: WorktreeRef): { project: Project; path: string; sessions: number } {
+  let path = ''
+  let sessions = 0
+  const repositories = project.repositories.map((repo) => {
+    if (repo.id !== ref.repoId) return repo
+    const gone = repo.worktrees.find((w) => w.id === ref.worktreeId)
+    if (gone) {
+      path = gone.path
+      sessions = gone.sessions.length
+    }
+    return { ...repo, worktrees: repo.worktrees.filter((w) => w.id !== ref.worktreeId) }
+  })
+  return { project: { ...project, repositories }, path, sessions }
 }

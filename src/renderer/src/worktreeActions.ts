@@ -9,6 +9,7 @@ import {
   useAppStore
 } from './store'
 import { destroyEnvironmentIfAny } from './environmentActions'
+import { envRepoKey } from '../../shared/environments'
 import { createTerminal, disposeTerminal } from './terminals'
 import { sameWorktree } from '../../shared/types'
 import type { GitWorktreeInfo, PersistedTerminal, WorktreeInstance } from '../../shared/types'
@@ -331,7 +332,7 @@ export async function moveWorktree(opts: {
   // The source's environment VM must not survive pointing at a deleted path
   // (environments are local-only in v1, so only a local source can have one).
   if (sourceServerId === null && environmentOf(info)) {
-    const envWarning = await destroyEnvironmentIfAny(repo.path, branch)
+    const envWarning = await destroyEnvironmentIfAny(envRepoKey(repo), branch)
     if (envWarning) warning = `${envWarning} It is listed under Orphaned environments in Settings.`
   }
   try {
@@ -360,14 +361,14 @@ export async function moveWorktree(opts: {
 function environmentOf(info: GitWorktreeInfo): { profile: string } | undefined {
   const state = useAppStore.getState()
   if (info.serverId || !state.project) return undefined
-  return environmentFor(state.environments, repoOfInfo(state.project, info).path, info.branch)
+  return environmentFor(state.environments, envRepoKey(repoOfInfo(state.project, info)), info.branch)
 }
 
 /** Tear down the worktree's environment, surfacing failures without blocking the caller. */
 async function teardownEnvironment(info: GitWorktreeInfo): Promise<void> {
   const project = useAppStore.getState().project
   if (!project) return
-  const warning = await destroyEnvironmentIfAny(repoOfInfo(project, info).path, info.branch)
+  const warning = await destroyEnvironmentIfAny(envRepoKey(repoOfInfo(project, info)), info.branch)
   if (warning) {
     await window.api.showError(
       'Environment cleanup failed',

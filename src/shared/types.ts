@@ -504,6 +504,12 @@ export interface EnvironmentSettings {
    * order (e.g. "docker-compose.yml,docker-compose.override.yml").
    */
   composeFile?: string
+  /**
+   * The repository path this repository's VM names hash, when it is not `path`: set by
+   * a .trekproj import whose file had another spelling of the path (a symlink, `/var`
+   * for `/private/var`, a trailing slash). See envRepoKey.
+   */
+  profileKey?: string
 }
 
 export type EnvVmState = 'running' | 'stopped' | 'missing'

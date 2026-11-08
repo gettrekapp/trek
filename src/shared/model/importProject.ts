@@ -29,6 +29,12 @@ export interface ImportedProject {
   /** The server's display name from the file, when it lists the server */
   serverName?: string
   project: Project
+  /**
+   * Each repository's path as the file had it, by repository id. `project` has it
+   * normalized, and the server stores its realpath; the environment VM names of a
+   * file window hashed this one (deriveProfileName).
+   */
+  sourcePaths: Record<string, string>
 }
 
 export interface ImportResult {
@@ -100,7 +106,8 @@ function repositoryFor(
   target: string,
   label: string,
   newId: () => string,
-  warnings: string[]
+  warnings: string[],
+  sourcePaths: Record<string, string>
 ): Repository | null {
   const isLocal = target === LOCAL_TARGET
   const rawPath = isLocal ? r.path : r.serverPaths?.[target]
@@ -146,6 +153,7 @@ function repositoryFor(
   }
   if (r.linkedDirs) repo.linkedDirs = [...r.linkedDirs]
   if (r.environments) repo.environments = r.environments
+  sourcePaths[repo.id] = rawPath
   return repo
 }
 
@@ -212,8 +220,9 @@ export function splitProjectByServer(file: ProjectFile, newId: () => string): Im
     const isLocal = target === LOCAL_TARGET
     const serverName = isLocal ? undefined : serverNames.get(target)
     const label = isLocal ? 'this machine' : (serverName ?? `server ${target}`)
+    const sourcePaths: Record<string, string> = {}
     const repositories = file.repositories
-      .map((r) => repositoryFor(r, target, label, newId, warnings))
+      .map((r) => repositoryFor(r, target, label, newId, warnings, sourcePaths))
       .filter((r): r is Repository => r !== null)
     if (repositories.length === 0) continue
 
@@ -230,7 +239,8 @@ export function splitProjectByServer(file: ProjectFile, newId: () => string): Im
         settings: projectSettings,
         repositories,
         globalSessions: isLocal ? (file.globalSessions ?? []).map((t) => toSession(t, newId)) : []
-      }
+      },
+      sourcePaths
     }
     if (serverName !== undefined) imported.serverName = serverName
     projects.push(structuredClone(imported))

@@ -3,17 +3,23 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  dropWorktree,
+  isAgentSessionId,
   localFirst,
   markPrompted,
   migratedFile,
+  movedSessions,
   parseMigrated,
+  profileKeyFor,
   promptCandidates,
   recordImport,
   restoreEntries,
   rewriteOpenWindows,
   rewriteRecents,
   routePiece,
-  serializeMigrated
+  serializeMigrated,
+  withProfileKeys,
+  worktreeInError
 } from '../src/main/importRules.ts'
 import { MAX_RECENTS } from '../src/main/recentsRules.ts'
 
@@ -186,4 +192,90 @@ test('promptCandidates: open windows first, then recents, once per file, none al
     { path: '/a.trekproj', key: '/a.trekproj' },
     { path: '/b.trekproj', key: '/b.trekproj' }
   ])
+})
+
+// ---- Paths: the env profile key, sessions whose cwd moved, a worktree the server refused ----
+
+const session = (id, agentSessionId, provider = 'claude') => ({ id, title: id, llm: { provider }, queue: [], status: 'idle', ...(agentSessionId ? { agentSessionId } : {}) })
+const UUID1 = '11111111-1111-4111-8111-111111111111'
+const UUID2 = '22222222-2222-4222-8222-222222222222'
+const UUID3 = '33333333-3333-4333-8333-333333333333'
+const project = (paths, extra = {}) => ({
+  id: 'p',
+  name: 'P',
+  settings: {},
+  globalSessions: extra.global ?? [],
+  repositories: [
+    {
+      id: 'r1',
+      name: 'app',
+      path: paths.repo,
+      branchData: {},
+      ...(extra.environments ? { environments: extra.environments } : {}),
+      worktrees: [
+        { id: 'w1', name: 'app', path: paths.repo, isMain: true, loaded: false, sessions: [session('s1', UUID1)] },
+        { id: 'w2', name: 'x', path: paths.x, isMain: false, loaded: false, sessions: [session('s2', UUID2), session('s3', 'codex-id', 'codex'), session('s4')] }
+      ]
+    }
+  ]
+})
+
+test('isAgentSessionId takes only a UUID, so a file cannot name a path', () => {
+  assert.equal(isAgentSessionId(UUID1), true)
+  assert.equal(isAgentSessionId('../../.ssh/id_rsa'), false)
+  assert.equal(isAgentSessionId(''), false)
+  assert.equal(isAgentSessionId(undefined), false)
+})
+
+test('profileKeyFor: the path as the file had it, only when the server stores another', () => {
+  assert.equal(profileKeyFor('/var/x/app', '/private/var/x/app'), '/var/x/app')
+  assert.equal(profileKeyFor('/Users/me/app/', '/Users/me/app'), '/Users/me/app/')
+  assert.equal(profileKeyFor('/Users/me/app', '/Users/me/app'), undefined)
+})
+
+test('withProfileKeys sets the key on repositories with environments, and keeps one already there', () => {
+  const p = project({ repo: '/l/app', x: '/l/app-x' }, { environments: { enabled: true, cpu: 4 } })
+  const keyed = withProfileKeys(p, new Map([['r1', '/l/app']]))
+  assert.deepEqual(keyed.repositories[0].environments, { enabled: true, cpu: 4, profileKey: '/l/app' })
+  assert.equal(p.repositories[0].environments.profileKey, undefined, 'the input is not changed')
+  assert.deepEqual(withProfileKeys(keyed, new Map([['r1', '/other']])).repositories[0].environments.profileKey, '/l/app')
+  // No environments: there are no VMs to keep, and none are made up.
+  const plain = project({ repo: '/l/app', x: '/l/app-x' })
+  assert.equal(withProfileKeys(plain, new Map([['r1', '/l/app']])).repositories[0].environments, undefined)
+})
+
+test("movedSessions: the sessions whose worktree the server stores at another path, Claude's kind only", () => {
+  const sent = project({ repo: '/var/t/app', x: '/var/t/app-x' })
+  const stored = project({ repo: '/private/var/t/app', x: '/private/var/t/app-x' })
+  assert.deepEqual(movedSessions(sent, stored), [
+    { worktree: 'app', from: '/var/t/app', to: '/private/var/t/app', agentSessionIds: [UUID1] },
+    { worktree: 'x', from: '/var/t/app-x', to: '/private/var/t/app-x', agentSessionIds: [UUID2] }
+  ])
+  assert.deepEqual(movedSessions(sent, sent), [])
+})
+
+test("movedSessions: the Global panel's sessions run in the first repository's main worktree", () => {
+  const sent = project({ repo: '/var/t/app', x: '/l/app-x' }, { global: [session('g', UUID3)] })
+  const stored = project({ repo: '/private/var/t/app', x: '/l/app-x' }, { global: [session('g', UUID3)] })
+  assert.deepEqual(movedSessions(sent, stored), [
+    { worktree: 'app', from: '/var/t/app', to: '/private/var/t/app', agentSessionIds: [UUID1] },
+    { worktree: 'Global', from: '/var/t/app', to: '/private/var/t/app', agentSessionIds: [UUID3] }
+  ])
+})
+
+test('worktreeInError finds the worktree a refusal names, never the main one, and the longest path wins', () => {
+  const p = project({ repo: '/r/app', x: '/r/app-x' })
+  p.repositories[0].worktrees.push({ id: 'w3', name: 'y', path: '/r/app-x2', isMain: false, loaded: false, sessions: [session('s5', UUID3)] })
+  assert.deepEqual(worktreeInError(p, 'Path not under a configured root: /r/app-x'), { repoId: 'r1', worktreeId: 'w2' })
+  assert.deepEqual(worktreeInError(p, 'project.repositories[0].worktrees[2]: worktree path /r/app-x2 is another repository (/r/z) or contains one'), { repoId: 'r1', worktreeId: 'w3' })
+  assert.equal(worktreeInError(p, 'Path not under a configured root: /r/app'), null)
+  assert.equal(worktreeInError(p, 'something else'), null)
+})
+
+test('dropWorktree takes the worktree out and says how many sessions went with it', () => {
+  const p = project({ repo: '/r/app', x: '/r/app-x' })
+  const { project: out, path, sessions } = dropWorktree(p, { repoId: 'r1', worktreeId: 'w2' })
+  assert.deepEqual(out.repositories[0].worktrees.map((w) => w.id), ['w1'])
+  assert.deepEqual([path, sessions], ['/r/app-x', 3])
+  assert.equal(p.repositories[0].worktrees.length, 2, 'the input is not changed')
 })

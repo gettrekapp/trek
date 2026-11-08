@@ -392,3 +392,23 @@ test('a server with no clone path anywhere gives only the local project and a wa
   assert.equal(warnings.length, 1)
   assert.match(warnings[0], /1 session\(s\)/)
 })
+
+test("each piece keeps its repositories' paths as the file had them (the env VM names hash them)", () => {
+  const file = {
+    version: 3,
+    name: 'P',
+    servers: [{ id: 'srv', name: 'box', url: 'wss://b' }],
+    repositories: [
+      { id: 'a', name: 'a', path: '/var/t/a/', serverPaths: { srv: '/home/a//' }, worktrees: [] },
+      { id: 'b', name: 'b', path: '/l/b', worktrees: [] }
+    ]
+  }
+  const { projects } = splitProjectByServer(file, ids())
+  const local = projects.find((p) => p.target === 'local')
+  const remote = projects.find((p) => p.target === 'srv')
+  assert.deepEqual(local.project.repositories.map((r) => [r.path, local.sourcePaths[r.id]]), [
+    ['/var/t/a', '/var/t/a/'],
+    ['/l/b', '/l/b']
+  ])
+  assert.deepEqual(remote.project.repositories.map((r) => [r.path, remote.sourcePaths[r.id]]), [['/home/a', '/home/a//']])
+})
