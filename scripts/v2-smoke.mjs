@@ -785,6 +785,19 @@ try {
   await detail.locator('.terminal-pane:visible .queue-item').first().waitFor({ state: 'detached', timeout: 5000 })
   await detail.locator('.terminal-pane:visible .queue-close').click()
 
+  // A server that is not the Local entry's (this one's paths happen to be on this disk, but the
+  // window cannot know that): none of this machine's controls (4c). Its tabs have no Docker, Env
+  // or Stack, its header no Open in VS Code or Reveal, its sessions no skill menu.
+  check('a remote server window has no machine-local controls', await detail.evaluate((el) => ({
+    actions: [...el.querySelectorAll('.detail-actions button')].map((b) => b.textContent.trim()).filter((t) => /VS Code|Reveal/.test(t)),
+    tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
+    skills: el.querySelectorAll('.skill-menu-trigger').length
+  })), { actions: [], tabs: [], skills: 0 })
+  check('and its features say so; Linear is on', await w1.evaluate(() => {
+    const f = window.__features()
+    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear]
+  }), [false, false, false, false, false, false, true])
+
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
   const sentAtRename = await sentCount()
@@ -882,6 +895,7 @@ try {
     'Appearance',
     'Notifications',
     'Local server',
+    'Linear',
     'Agents',
     'Worktree tags',
     'Custom tags',
