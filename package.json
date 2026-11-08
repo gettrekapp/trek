@@ -26,7 +26,8 @@
     "smoke:client": "npm --prefix server run build && node scripts/client-contract.mjs",
     "smoke:v2": "npm run build && node scripts/v2-smoke.mjs",
     "smoke:local": "npm --prefix server run build && node scripts/local-server-smoke.mjs",
-    "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app",
+    "smoke:local-app": "npm run build && node scripts/local-app-smoke.mjs",
+    "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app && node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app",
     "rebuild": "electron-rebuild -f -w node-pty",
     "dist": "npm run build && electron-builder --mac --arm64",
     "dist:dir": "npm run build && electron-builder --mac --arm64 --dir"
