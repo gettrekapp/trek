@@ -102,6 +102,25 @@ export function focusWindow(win: BrowserWindow): void {
   win.focus()
 }
 
+/**
+ * The focused window, for attention's notifications: its webContents id and the
+ * server project it shows (null for a file or empty window). Null when no
+ * window of the app has focus.
+ */
+export function focusedWindowTarget(): {
+  webContentsId: number
+  target: { serverEntryId: string; projectId: string } | null
+} | null {
+  const win = BrowserWindow.getFocusedWindow()
+  const state = win ? windows.get(win.webContents.id) : undefined
+  if (!state) return null
+  const target = state.target
+  return {
+    webContentsId: state.id,
+    target: target?.kind === 'server' ? { serverEntryId: target.serverEntryId, projectId: target.projectId } : null
+  }
+}
+
 export function focusWindowHoldingFile(filePath: string): void {
   const holder = windowHoldingFile(filePath)
   if (holder) focusWindow(holder.win)

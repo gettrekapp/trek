@@ -22,7 +22,8 @@ import {
 import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
-import { createServerLinks, type ServerLinks } from './serverLinks'
+import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
+import type { RegisteredServer } from '../shared/client/index.ts'
 import type { AppServerInfo, AppServersChanged, AppServerTest } from '../shared/types'
 
 const FILE_NAME = 'app-servers.json'
@@ -39,9 +40,12 @@ let servers: AppServer[] | null = null
 const removing = new Map<string, RemovingEntry>()
 /** Main's own connections, from registerAppServerHandlers on */
 let links: ServerLinks | null = null
+/** Hears every change of the list (a rename relabels the attention entries) */
+let listChanged: (() => void) | null = null
 
 /** To every window; one closing meanwhile (or failing the send) never stops the rest. */
 function broadcast(snapshot: AppServersChanged): void {
+  listChanged?.()
   for (const win of BrowserWindow.getAllWindows()) {
     try {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('appServers:changed', snapshot)
@@ -263,13 +267,24 @@ export function closeServerLinks(): void {
   links?.close()
 }
 
-export function registerAppServerHandlers(): void {
+/** Main's own connection to the entry (attention's dismiss goes on it); never handed to a window. */
+export function serverLink(id: string): RegisteredServer | undefined {
+  return links?.get(id)
+}
+
+/** `hooks`: the attention aggregator hears of each connection made and gone, and of each list change. */
+export function registerAppServerHandlers(
+  hooks: Pick<ServerLinksDeps, 'linked' | 'unlinked'> & { listChanged?: () => void } = {}
+): void {
+  listChanged = hooks.listChanged ?? null
   links = createServerLinks({
     entries: linkEntries,
     token: (id) => tokens.get(id),
     createSocket: globalSocketFactory,
     clientVersion: app.getVersion(),
-    changed: broadcast
+    changed: broadcast,
+    linked: hooks.linked,
+    unlinked: hooks.unlinked
   })
   const ready = links.sync()
   // A token added on the server, or the server upgraded, has no event here: a window coming

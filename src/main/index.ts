@@ -18,6 +18,7 @@ import { registerStackHandlers } from './stacks'
 import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
+import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
 import { registerV2Relay } from './v2relay'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
@@ -127,7 +128,10 @@ app.whenReady().then(async () => {
   registerStackHandlers()
   registerClaudeSessionHandlers()
   registerServerHandlers()
-  registerAppServerHandlers()
+  // Before the links: their first connections are linked to the aggregator as they are made.
+  registerAttentionHandlers()
+  const attention = attentionHooks()
+  registerAppServerHandlers({ linked: attention.linked, unlinked: attention.unlinked, listChanged: attention.relabel })
   registerV2Relay()
   registerMcpHandlers()
   registerBotHandlers()
@@ -156,8 +160,11 @@ app.on('window-all-closed', () => {
 
 let quitConfirmed = false
 
-// Main's own server connections live as long as the app (3d's notifications need them with no window open).
-app.on('will-quit', closeServerLinks)
+// Main's own server connections live as long as the app (notifications need them with no window open).
+app.on('will-quit', () => {
+  closeAttention()
+  closeServerLinks()
+})
 
 app.on('before-quit', (event) => {
   if (quitConfirmed) return

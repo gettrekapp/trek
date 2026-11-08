@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type {
   AppServerInfo,
   AppServersChanged,
+  AttentionChanged,
   V2SocketOpenResult,
   AppServerTest,
   ContainerAction,
@@ -215,6 +216,18 @@ const api = {
     links: (): Promise<AppServersChanged> => ipcRenderer.invoke('appServers:links'),
     onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>
       subscribe('appServers:changed', callback)
+  },
+  // Sessions on the app-wide servers that need the user, merged by main (no token, no URL).
+  attention: {
+    list: (): Promise<AttentionChanged> => ipcRenderer.invoke('attention:list'),
+    onChanged: (callback: (snapshot: AttentionChanged) => void): (() => void) =>
+      subscribe('attention:changed', callback),
+    /** Clears the entry's decision, or marks it seen, through main's connection */
+    dismiss: (key: string): Promise<void> => ipcRenderer.invoke('attention:dismiss', key),
+    /** The sessions this window shows (a worktree tab, a Global tab): main does not notify for them while it has focus */
+    viewing: (sessionIds: string[]): void => ipcRenderer.send('attention:viewing', sessionIds),
+    /** Main asks for the alert sound (a new entry in a project with audio alerts on) */
+    onAlert: (callback: () => void): (() => void) => subscribe('attention:alert', callback)
   },
   // v2 WebSockets relayed through main, by server entry id; main injects the token into hello.
   v2Socket: {
