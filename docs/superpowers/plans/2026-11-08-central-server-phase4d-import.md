@@ -10,7 +10,7 @@
 5. **Recents and the restored windows are rewritten** to `(serverEntryId, projectId)`. The original file is never written.
 6. **Legacy server tokens move with their projects, origin-bound only**: a v1 token goes to an app-server entry only when it was entered for that entry's origin.
 7. **Nothing that worked is lost on the way**: a Local repository's Colima VMs keep their names (4c Note 1), and a saved Claude session still resumes when the server runs it from its realpath (its history is copied there).
-8. **`smoke:import`** (new, 37 checks) runs all of it against the Local server and a test trek-server.
+8. **`smoke:import`** (new, 39 checks) runs all of it against the Local server and a test trek-server.
 
 **Architecture:**
 - **Pure rules, `src/main/importRules.ts`** (Tasks 1, 2, 6): where a piece goes (`routePiece`), the `migrated.json` format (`parseMigrated`, `recordImport`), the recents and window rewrites (`rewriteRecents`, `rewriteOpenWindows`, `restoreEntries`), the prompt's file list (`promptCandidates`), the path rules (`profileKeyFor`, `withProfileKeys`, `movedSessions`, `worktreeInError`, `dropWorktree`) and the result text (`importSummary`).
@@ -134,7 +134,7 @@ Out of scope here: the start screen's buttons (4e), deleting file windows (4e), 
 
   `<model trailer>` is the trailer of the model doing the work. `git commit -- <paths>` only commits tracked files: a task that creates files runs `git add <new files>` first, or the commit fails with "pathspec did not match".
 - **Diffs in this plan** are unified diffs against the tree as the previous task leaves it, context lines included. Apply them by hand or with `git apply`. New files are given whole.
-- **Provenance.** Every hunk and every new file was produced from a prototype of this plan, built on `e015701`, one commit per task. Each task's commit was checked out on its own and passed `npm run typecheck` and `npm test` with the count given. With all nine, `smoke:import` (37), `smoke:windows` (40), `smoke:local-app` (43), `smoke:v2` (170) and `smoke:local-features` (34) passed, one at a time. The prototype branch was then deleted.
+- **Provenance.** Every hunk and every new file was produced from a prototype of this plan, built on `e015701`, one commit per task. Each task's commit was checked out on its own and passed `npm run typecheck` and `npm test` with the count given. With all nine, `smoke:import` (37; 39 after the review fixes), `smoke:windows` (40), `smoke:local-app` (43), `smoke:v2` (170) and `smoke:local-features` (34) passed, one at a time. The prototype branch was then deleted.
 - **Temp paths** in expected output are shown as `<work>` (the smoke's `mkdtemp` directory, `/var/folders/…`, whose realpath is `/private/var/folders/…`).
 
 ## File map
@@ -2761,6 +2761,26 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ma
 
 ---
 
+### Review fixes (Tasks 1–3, done)
+
+Applied after the review of Tasks 1–3, in one commit before Task 9. Tests: 1540 → 1559 (1558 pass, 1 skipped; +19).
+
+1. **`routePiece` matches Save's identity, origin and path** (`serverKey`, now exported from `appServersRules.ts`). An entry with the very URL still wins among those with the same key. An entry on the same origin under another path is another server, so the file's is offered (`add`). Both bare (or `/`) is the same key, so the origin-only case needs no fallback of its own. Of two file servers with one id, the first is the one; the splitter's `serverName` now agrees (it was last-wins). A user name or password in the file's URL does not count for matching; with no entry, such a URL is `unknown` (Save refuses it). `declineKey` (origin and path) replaces the origin in `ImportOptions.declined`.
+2. **`recordImport` never leaves a target that still has a piece** (an Import Again that failed where an earlier import landed): the failure is only in that run's result dialog. `left` is deduped by target, keeping the first reason.
+3. **`adoptAppServerToken` is set-if-absent.** The secret store gains `setIfAbsent`, run as one step of its write chain. The URL check (`mayAdoptToken`, pure) and the call are made in the same synchronous step, as Save does, so a token the user set, or another adoption, queued before it is never overwritten, and a Save that re-points the entry, or a remove, queued after it clears it.
+4. **`envRepoKey`** takes `profileKey` only when it is a string starting with `/`.
+5. **Secrets are looked up as own properties** (`ownSecret`, `src/main/secretsRules.ts`, `Object.hasOwn`), so a legacy server id like `constructor` or `__proto__` finds nothing instead of throwing. Writes use `defineProperty`, so a `__proto__` key is stored as a key.
+6. **Global sessions move from the file's first repository's raw path** (`ImportedProject.globalCwd`, Local's piece only), where a file window ran them (`terminals.ts`), not from the Local piece's first repository, which may be another one when Local refused the file's first. The `to` is the stored project's first repository's main worktree, where the server runs them.
+7. **`worktreeInError` reads the server's own wording first**: the path after `configured root: ` (`server/src/paths.ts`) or between `worktree path ` and ` is another repository (` (`server/src/projects/model.ts`), matched exactly. The clash's repository path in a BAD_REQUEST is never taken for the worktree. A message in neither wording falls back to the longest path named.
+8. **`addAppServer` names the entry with `addedServerName`**: the file's name trimmed and cut to `MAX_NAME`, or the URL's host when that leaves nothing.
+9. **A file server with id `local` is its own piece.** The splitter renames it (`local-server`, or `local-server-N` when the file uses that) in `servers`, `serverPaths` and the worktrees' `serverId`, and keeps the worktree order's `local <path>` entries for both. The piece has `legacyServerId: 'local'`, which the importer uses for the v1 token lookup. `ImportResult.servers` is the file's servers as the targets name them; the importer routes with it.
+10. **`fileKey` moved to `src/main/fileKey.ts`** (no Electron, tested directly; `migrated.ts` re-exports it). It was already taken before the file is read. A file that is gone (deleted or moved) now keys on `realpath(dirname) + basename`, so `/var` and `/private/var` still map; a folder that is gone too falls back to the resolved path.
+11. **Pure decisions**: `mayAdoptToken`, `addedServerName`, `declineKey` and `ownSecret`, each tested.
+
+`smoke:import` gains two checks: a saved entry on the test server's origin under another path (`…/other`) is neither used nor given the token, and nothing of the run is written under the real HOME.
+
+---
+
 ### Task 9: `smoke:import` and the README
 
 **Files:**
@@ -2772,9 +2792,13 @@ What it builds, all under one `mkdtemp` directory (`<work>`, `/var/folders/…`)
 - **A test trek-server** (`server/dist/trek-server.cjs start --config … --port … --data-dir …`, its own HOME) with `beta` registered, and a `topic` worktree the file names under `/var`.
 - **The file:** two repositories (`app` here; `beta` on the server, its local clone gone), branch data of every kind, linked dirs, environments, a queue, the Global panel, settings and a worktree order.
 - **userData as an older Trek left it:** recents naming the file (by its `/var` spelling), `open-windows.json` with the file and bounds, and `server-tokens.json` holding the server's v1 token bound to its origin (`plain:`, the secret store's unencrypted form, so no keychain is read).
+- **A decoy entry** in `app-servers.json` on the test server's origin under another path (`…/other`): another server, so the file's is still offered and added, and the decoy gets no token.
+- **The real HOME is only read**: at the end, no Claude history folder for the run's paths exists there, and no Trek or trek-server file there names the run's temp dir.
 - **Stubs:** main's message boxes are recorded and answered with their first button; the open dialog returns `globalThis.__openPath`. The fake agent records its physical cwd, the id after `--resume`, and whether Claude's history for it is in that cwd's project folder.
 
 - [ ] **Step 1: The smoke**
+
+The committed `scripts/import-smoke.mjs` is the script below plus the review fixes' additions: the decoy entry seeded in `app-servers.json` (its check folded into "the server was added…", and "that entry got no token"), and the real-HOME check (`realHomeLeaks`) at the end of launch 2.
 
 `scripts/import-smoke.mjs`:
 
@@ -3307,7 +3331,8 @@ ok   no error dialogs: []
 ok   the window restored last time comes back on the Local project: [{"serverEntryId":"local","projectId":"<id>"}]
 ok   with its bounds: [1111,777]
 ok   recents: the two projects where the file was: [["local","<id>"],["<entry>","<id>"]]
-ok   the server was added under its name and URL: [["build-box","ws://127.0.0.1:<port>"]]
+ok   the server was added under its name and URL, beside the entry on its origin under another path: [["decoy","ws://127.0.0.1:<port>/other"],["build-box","ws://127.0.0.1:<port>"]]
+ok   that entry got no token: false
 ok   main's connection to it is up with the carried token: "connected"
 ok   Local: one repository, at its realpath: [["app","/private<work>/real/app"]]
 ok   Local: worktrees at their realpaths: [["app","/private<work>/real/app",true],["feature-x","/private<work>/real/app-feature-x",false]]
@@ -3333,7 +3358,8 @@ ok   its result says so: ["Imported “Other”"]
 ok   and its project opens in a window: true
 ok   both files are byte-identical: ["<sha256>","<sha256>"]
 ok   no console or page errors (launch 2): []
-IMPORT SMOKE PASS (37 checks)
+ok   nothing of this run was written under the real HOME: []
+IMPORT SMOKE PASS (39 checks)
 ```
 
 Then: `ps aux | grep -E "trek-import-smoke|fake-agent" | grep -v grep` prints nothing (the run stops `--local`, kills its test server and agents, and removes `<work>`).
@@ -3353,15 +3379,15 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test: s
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: `# tests 1540`, `# pass 1539`, `# fail 0` (1511 + 29); the build ends with `out/server: trek-server 0.2.0, build <hash>`.
+Expected: `# tests 1559`, `# pass 1558`, `# fail 0` (1511 + 29 in Tasks 1–8, + 19 from the review fixes); the build ends with `out/server: trek-server 0.2.0, build <hash>`.
 
 - [ ] **Step 2: The smokes, one at a time**
 
-Before each, check that it launches Electron with its own `--user-data-dir` (Conventions). Run, in order, waiting for each to exit:
+Before each, check that it launches Electron with its own `--user-data-dir` (Conventions). `windows-smoke` and `v2-smoke` do not set HOME themselves: run them with a temp one (`HOME=$(mktemp -d) node scripts/…`). Run, in order, waiting for each to exit:
 
 | Command | Expected | What it proves for 4d |
 |---|---|---|
-| `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (37 checks)` | the whole import |
+| `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (39 checks)` | the whole import |
 | `node scripts/windows-smoke.mjs` | `40/40 checks passed` | file windows open and restore as before without Local (`restoreEntries` with no `migrated.json`) |
 | `node scripts/local-app-smoke.mjs` | `LOCAL APP SMOKE PASS (43 checks)` | a Local app with no `.trekproj` history starts as before (the prompt finds nothing to offer) |
 | `node scripts/v2-smoke.mjs` | `V2 SMOKE PASS (170 checks)` | `window:openServerProject` through `openServerTarget` |
