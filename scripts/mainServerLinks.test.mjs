@@ -10,8 +10,9 @@ const SECRET = 'tok-S3CRET-never-in-a-snapshot'
  * Links over a fake list, a fake secret store and fake sockets. `hold` keeps
  * the token reads open until `release()`, to change the list meanwhile.
  * `withHooks: false` leaves out `linked` and `unlinked`, as a caller may.
+ * `onHook(kind, id)` runs inside each hook, after it is recorded (it may throw).
  */
-function setup({ entries = [], stored = {}, withHooks = true } = {}) {
+function setup({ entries = [], stored = {}, withHooks = true, onHook = () => {} } = {}) {
   const list = entries.map((e) => ({ ...e }))
   const secrets = new Map(Object.entries(stored))
   const server = fakeServer()
@@ -35,8 +36,14 @@ function setup({ entries = [], stored = {}, withHooks = true } = {}) {
     changed: (snapshot) => changes.push(snapshot),
     now: () => time,
     ...(withHooks && {
-      linked: (id, registered) => hooks.push(['linked', id, registered]),
-      unlinked: (id) => hooks.push(['unlinked', id])
+      linked: (id, registered) => {
+        hooks.push(['linked', id, registered])
+        onHook('linked', id)
+      },
+      unlinked: (id) => {
+        hooks.push(['unlinked', id])
+        onHook('unlinked', id)
+      }
     })
   })
   const hold = () => {
@@ -301,6 +308,71 @@ test('linked and unlinked follow the connections: add, a new URL, a cleared toke
   await links.sync()
   links.close()
   assert.deepEqual(kinds().slice(3), ['unlinked box', 'linked box', 'unlinked box', 'linked box', 'unlinked box'])
+})
+
+test('an entry removed from the list fires unlinked', async () => {
+  const { links, list, hooks } = setup({ entries: [box, lab], stored: { box: SECRET, lab: SECRET } })
+  const kinds = () => hooks.map(([kind, id]) => `${kind} ${id}`)
+  await links.sync()
+  assert.deepEqual(kinds(), ['linked box', 'linked lab'])
+  list.splice(0, 1)
+  await links.sync()
+  assert.deepEqual(kinds().slice(2), ['unlinked box'])
+})
+
+test('a capped entry fires no linked; once a slot frees and the links sync, it does', async () => {
+  const entries = Array.from({ length: MAX_SERVER_LINKS + 1 }, (_, i) => ({ id: `s${i}`, name: `S${i}`, url: `ws://s${i}:1` }))
+  const stored = Object.fromEntries(entries.map((e) => [e.id, SECRET]))
+  const { links, list, hooks } = setup({ entries, stored })
+  const cappedId = `s${MAX_SERVER_LINKS}`
+  const fired = (kind, id) => hooks.some(([k, i]) => k === kind && i === id)
+  await links.sync()
+  assert.equal(hooks.filter(([k]) => k === 'linked').length, MAX_SERVER_LINKS)
+  assert.equal(fired('linked', cappedId), false)
+  list.splice(0, 1)
+  await links.sync()
+  assert.equal(fired('unlinked', 's0'), true)
+  assert.equal(fired('linked', cappedId), true)
+  assert.equal(hooks.at(-1)[2], links.get(cappedId))
+})
+
+test('unlinked runs while the old connection is still open, so its close is not heard as the link going down', async () => {
+  const open = []
+  const s = setup({
+    entries: [box],
+    stored: { box: SECRET },
+    onHook: (kind, id) => {
+      if (kind !== 'unlinked') return
+      const linkedLast = s.hooks.findLast(([k, i]) => k === 'linked' && i === id)[2]
+      open.push(s.links.get(id) === linkedLast && linkedLast.connection.status !== 'closed')
+    }
+  })
+  const { links } = s
+  await links.sync()
+  s.list[0].url = 'ws://box2:8800'
+  await links.sync()
+  links.drop('box')
+  assert.deepEqual(open, [true, true])
+})
+
+test('a throwing hook is logged and the sync carries on', async (t) => {
+  const errors = t.mock.method(console, 'error', () => {})
+  const { links, list, hooks } = setup({
+    entries: [box, lab],
+    stored: { box: SECRET, lab: SECRET },
+    onHook: () => {
+      throw new Error('hook broke')
+    }
+  })
+  await links.sync()
+  assert.ok(links.get('box') && links.get('lab'), 'both connected despite the first hook throwing')
+  assert.deepEqual(hooks.map(([kind, id]) => `${kind} ${id}`), ['linked box', 'linked lab'])
+  list[0].url = 'ws://box2:8800'
+  await links.sync()
+  assert.equal(links.get('box').entry.url, 'ws://box2:8800')
+  assert.deepEqual(hooks.slice(2).map(([kind, id]) => `${kind} ${id}`), ['unlinked box', 'linked box'])
+  assert.ok(errors.mock.callCount() >= 4)
+  links.close()
 })
 
 test("the linked connection's mirror subscribes to attention once welcomed", async () => {

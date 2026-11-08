@@ -30,7 +30,9 @@ function fakeSource(status = 'connected') {
   return {
     source,
     listeners,
+    statusListeners,
     snapshot: (entries) => [...listeners].forEach((l) => l({ snapshot: { entries }, rev: 1 })),
+    payload: (snapshot) => [...listeners].forEach((l) => l({ snapshot, rev: 1 })),
     error: (code) => [...listeners].forEach((l) => l({ error: { code, message: code } })),
     setStatus: (s) => {
       source.connection.status = s
@@ -177,10 +179,92 @@ test('a topic error or a dropped connection keeps the items, marked stale, until
   assert.equal(Object.hasOwn(last().items[0], 'stale'), false)
   box.setStatus('disconnected')
   assert.equal(last().items[0].stale, true)
+  const down = changes.length
   box.setStatus('connected')
+  assert.equal(changes.length, down, 'coming back broadcasts nothing: the items stay stale until fresh data')
+  assert.equal(attention.snapshot().items[0].stale, true)
+  box.snapshot([entry('s1')])
   assert.equal(Object.hasOwn(last().items[0], 'stale'), false)
   box.error('CLOSED')
   assert.equal(Object.hasOwn(last().items[0], 'stale'), false, 'CLOSED: unlinked follows')
+})
+
+test('the first snapshot after a topic error is raised and not stale', () => {
+  const { attention, raised, last } = setup()
+  const box = fakeSource()
+  attention.linked('box', box.source)
+  box.snapshot([entry('s1')])
+  box.error('INTERNAL')
+  assert.equal(last().items[0].stale, true)
+  box.snapshot([entry('s1'), entry('s2', { status: 'done', since: 700 })])
+  assert.deepEqual(raised.map((e) => [e.kind, e.item.sessionId, Object.hasOwn(e.item, 'stale')]), [['done', 's2', false]])
+  assert.deepEqual(last().items.map((i) => Object.hasOwn(i, 'stale')), [false, false])
+})
+
+test('TOPIC_ENDED clears the server\'s entries: the topic never comes back on that connection', () => {
+  const { attention, changes, last } = setup()
+  const box = fakeSource()
+  attention.linked('box', box.source)
+  box.snapshot([entry('s1')])
+  box.error('TOPIC_ENDED')
+  assert.deepEqual(last().items, [])
+  const count = changes.length
+  box.setStatus('disconnected')
+  box.error('TOPIC_ENDED')
+  assert.equal(changes.length, count, 'nothing left to mark stale or clear')
+})
+
+test('an error before the first snapshot: the snapshot after it is still the baseline', () => {
+  const { attention, changes, raised, last } = setup()
+  const box = fakeSource()
+  attention.linked('box', box.source)
+  box.error('INTERNAL')
+  assert.equal(changes.length, 0, 'nothing listed, nothing to mark stale')
+  box.snapshot([entry('s1')])
+  assert.deepEqual(raised, [])
+  assert.deepEqual(last().items.map((i) => [i.sessionId, Object.hasOwn(i, 'stale')]), [['s1', false]])
+})
+
+test('a payload without an entries list keeps the items, stale, and what was seen', () => {
+  const { attention, raised, last } = setup()
+  const box = fakeSource()
+  attention.linked('box', box.source)
+  box.snapshot([entry('s1')])
+  box.payload({ entries: 'nope' })
+  assert.deepEqual(last().items.map((i) => [i.sessionId, i.stale]), [['s1', true]])
+  box.payload(null)
+  assert.deepEqual(attention.snapshot().items.map((i) => i.sessionId), ['s1'])
+  box.snapshot([entry('s1')])
+  assert.deepEqual(raised, [], 's1 was seen: nothing raised again')
+  assert.equal(Object.hasOwn(last().items[0], 'stale'), false)
+})
+
+test('relabel after every server is unlinked broadcasts nothing', () => {
+  const { attention, changes, names, last } = setup()
+  const box = fakeSource()
+  attention.linked('box', box.source)
+  box.snapshot([entry('s1')])
+  attention.unlinked('box')
+  assert.deepEqual(last().items, [])
+  const count = changes.length
+  names.box = 'Build box'
+  attention.relabel()
+  assert.equal(changes.length, count)
+})
+
+test('linking the same id twice with no unlinked between drops the first link', () => {
+  const { attention, raised, last } = setup()
+  const first = fakeSource()
+  attention.linked('box', first.source)
+  first.snapshot([entry('s1')])
+  const second = fakeSource()
+  attention.linked('box', second.source)
+  assert.equal(first.listeners.size, 0, 'the first mirror is unsubscribed')
+  assert.equal(first.statusListeners.size, 0, 'and its status listener is off')
+  assert.deepEqual(last().items, [])
+  second.snapshot([entry('s1'), entry('s2', { since: 999 })])
+  assert.deepEqual(raised, [], 'the second link starts from a baseline')
+  assert.deepEqual(last().items.map((i) => i.sessionId), ['s2', 's1'])
 })
 
 test('items from two servers merge newest first and stay apart by server; seq grows', () => {

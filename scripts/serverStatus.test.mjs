@@ -74,6 +74,20 @@ test('attentionEntries lists attention and done sessions, oldest first, with Glo
   assert.equal(attentionEntries(projects, new Map(), () => 999)[0].since, 999)
 })
 
+test('attentionEntries keeps the since it falls back to, so the next publish has the same one', () => {
+  const projects = [{
+    id: 'p', name: 'P', settings: {},
+    globalSessions: [{ id: 'g', title: 'g', llm: { provider: 'claude' }, queue: [], status: 'done' }],
+    repositories: []
+  }]
+  const since = new Map()
+  let clock = 500
+  assert.equal(attentionEntries(projects, since, () => clock)[0].since, 500)
+  assert.equal(since.get('g'), 500)
+  clock = 900
+  assert.equal(attentionEntries(projects, since, () => clock)[0].since, 500)
+})
+
 test('attentionEntries also lists a session with an open decision, in any status, since it was asked', () => {
   const s = (id, status, decision) => ({ id, title: id, llm: { provider: 'claude' }, queue: [], status, ...(decision ? { decision } : {}) })
   const projects = [{

@@ -830,6 +830,18 @@ test('project.rename and project.updateSettings republish the attention topic wi
   assert.equal(attention(s)[0].since, before.since, 'a relabel keeps since')
 })
 
+test('a settings change that leaves audioAlerts alone sends no attention patch', async (t) => {
+  const s = setup(t)
+  const { call } = v2(s)
+  s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  s.spawned[0].emit('esc to interrupt')
+  fireQuiet(s)
+  const sent = []
+  s.hub.subscribe('attention', { send: (topic, rev, ops) => sent.push({ topic, rev, ops }) })
+  assert.equal((await call('project.updateSettings', { projectId: s.projectId, settings: { claudeCommand: 'other-claude' } })).ok, true)
+  assert.deepEqual(sent, [])
+})
+
 test('exit, close and unload cancel the quiet timer and drop attention entries', async (t) => {
   const s = setup(t)
   const one = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })

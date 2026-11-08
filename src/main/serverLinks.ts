@@ -141,11 +141,28 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     emit()
   })
 
+  // A hook that throws must not stop the sync (or the drop) half done.
+  const hook = (name: string, call: () => void): void => {
+    try {
+      call()
+    } catch (err) {
+      console.error(`trek: the server links' ${name} hook failed`, err)
+    }
+  }
+  const unlinked = (id: string): void => {
+    if (deps.unlinked) hook('unlinked', () => deps.unlinked!(id))
+  }
+  const linked = (id: string, registered: RegisteredServer): void => {
+    if (deps.linked) hook('linked', () => deps.linked!(id, registered))
+  }
+
   const drop = (id: string): void => {
+    // Unlinked first: the aggregator lets go of the mirror before its connection closes,
+    // so the close is not heard as the link going down (a stale broadcast for nothing).
+    unlinked(id)
     registry.remove(id)
     linkTokens.delete(id)
     statuses.delete(id)
-    deps.unlinked?.(id)
   }
 
   const apply = async (): Promise<void> => {
@@ -176,16 +193,15 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
           continue
         }
         linkTokens.set(entry.id, token)
-        // Added first: an optional call skips its arguments when there is no hook.
-        const registered = registry.add({ id: entry.id, url: entry.url, token })
-        deps.linked?.(entry.id, registered)
+        linked(entry.id, registry.add({ id: entry.id, url: entry.url, token }))
       } else if (current.entry.url !== entry.url) {
         linkTokens.set(entry.id, token)
         statuses.delete(entry.id)
         // A new RegisteredServer: whatever held the old one's mirror must subscribe again.
+        // Unlinked before the old connection closes, as in drop.
+        unlinked(entry.id)
         registry.update(entry.id, { url: entry.url, token })
-        deps.unlinked?.(entry.id)
-        deps.linked?.(entry.id, registry.get(entry.id)!)
+        linked(entry.id, registry.get(entry.id)!)
       } else if (linkTokens.get(entry.id) !== token) {
         linkTokens.set(entry.id, token)
         registry.update(entry.id, { token })

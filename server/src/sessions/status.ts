@@ -72,14 +72,23 @@ export function isTerminalReply(data: string): boolean {
   return true
 }
 
-/** The `attention` topic's entries: sessions in attention or done, or with an open decision, oldest first. */
+/**
+ * The `attention` topic's entries: sessions in attention or done, or with an open decision, oldest first.
+ * A flagged session with no `since` yet gets now, stored into `since` so it stays the same on the next publish.
+ */
 export function attentionEntries(
   projects: Iterable<Project>,
-  since: ReadonlyMap<string, number>,
+  since: Map<string, number>,
   now: () => number
 ): AttentionEntry[] {
   const entries: AttentionEntry[] = []
   const fallback = now()
+  const sinceOf = (sessionId: string): number => {
+    const known = since.get(sessionId)
+    if (known !== undefined) return known
+    since.set(sessionId, fallback)
+    return fallback
+  }
   for (const project of projects) {
     const add = (worktreeId: string | null, s: Project['globalSessions'][number]): void => {
       const flagged = s.status === 'attention' || s.status === 'done'
@@ -90,7 +99,7 @@ export function attentionEntries(
         sessionId: s.id,
         title: s.title,
         status: s.status,
-        since: flagged ? since.get(s.id) ?? fallback : s.decision!.at,
+        since: flagged ? sinceOf(s.id) : s.decision!.at,
         projectName: project.name
       }
       if (s.decision) entry.decision = s.decision

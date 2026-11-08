@@ -72,8 +72,10 @@ interface Linked {
   /** The first snapshot has come: later ones may raise */
   baselined: boolean
   seen: Map<string, Seen>
-  /** A topic error since the last snapshot */
+  /** A topic error (or a malformed payload) since the last snapshot */
   failed: boolean
+  /** The connection went down since the last snapshot: shown stale until the next one */
+  down: boolean
 }
 
 export function attentionKey(serverEntryId: string, projectId: string, sessionId: string): string {
@@ -137,7 +139,7 @@ export function createAttention(deps: AttentionDeps): Attention {
       out.question = e.decision.question
       out.askedAt = e.decision.at
     }
-    if (link.failed || link.source.connection.status !== 'connected') out.stale = true
+    if (link.failed || link.down) out.stale = true
     return out
   }
 
@@ -158,6 +160,9 @@ export function createAttention(deps: AttentionDeps): Attention {
   }
 
   const update = (id: string, link: Linked, entries: AttentionEntry[]): void => {
+    // Fresh data first: the events' items are built below and must not carry the old stale flag.
+    link.failed = false
+    link.down = false
     const events: AttentionEvent[] = []
     const seen = new Map<string, Seen>()
     for (const e of entries) {
@@ -170,9 +175,14 @@ export function createAttention(deps: AttentionDeps): Attention {
     link.seen = seen
     link.entries = entries
     link.baselined = true
-    link.failed = false
     emit()
     if (events.length > 0) deps.raised(events)
+  }
+
+  const markFailed = (link: Linked): void => {
+    if (link.failed) return
+    link.failed = true
+    if (link.entries.length > 0) emit()
   }
 
   const unlinked = (id: string): void => {
@@ -188,27 +198,50 @@ export function createAttention(deps: AttentionDeps): Attention {
     linked: (id, source) => {
       if (closed) return
       unlinked(id)
-      const link: Linked = { source, off: () => {}, offStatus: () => {}, entries: [], baselined: false, seen: new Map(), failed: false }
+      const link: Linked = {
+        source,
+        off: () => {},
+        offStatus: () => {},
+        entries: [],
+        baselined: false,
+        seen: new Map(),
+        failed: false,
+        down: source.connection.status !== 'connected'
+      }
       links.set(id, link)
-      let wasConnected = source.connection.status === 'connected'
       link.offStatus = source.connection.on('status', ({ status }) => {
-        const connected = status === 'connected'
-        if (connected === wasConnected) return
-        wasConnected = connected
-        // Shown stale while down; a snapshot follows the reconnect.
+        // Shown stale from the moment it goes down. Coming back clears nothing: the
+        // resubscribe's snapshot does, so the items are never shown fresh before fresh data.
+        if (status === 'connected' || link.down) return
+        link.down = true
         if (links.get(id) === link && link.entries.length > 0) emit()
       })
       link.off = source.mirror.subscribe('attention', (u) => {
         if (links.get(id) !== link) return
         if ('error' in u) {
-          // CLOSED: the link is going (unlinked follows). Anything else: keep the last entries, stale.
-          if (u.error.code === 'CLOSED' || link.failed) return
-          link.failed = true
-          if (link.entries.length > 0) emit()
+          // CLOSED: the link is going (unlinked follows).
+          if (u.error.code === 'CLOSED') return
+          // TOPIC_ENDED is final: the topic never comes back on this connection, so its entries go.
+          if (u.error.code === 'TOPIC_ENDED') {
+            const had = link.entries.length > 0
+            link.entries = []
+            link.seen = new Map()
+            link.failed = false
+            if (had) emit()
+            return
+          }
+          // Anything else: keep the last entries, stale.
+          markFailed(link)
           return
         }
-        const raw = (u.snapshot as { entries?: unknown }).entries
-        update(id, link, Array.isArray(raw) ? raw.filter(wellFormed) : [])
+        const raw = (u.snapshot as { entries?: unknown } | null)?.entries
+        // A payload without an entries list says nothing: keep what was seen (and the seen
+        // map, so nothing is raised again), shown stale, until a well-formed snapshot.
+        if (!Array.isArray(raw)) {
+          markFailed(link)
+          return
+        }
+        update(id, link, raw.filter(wellFormed))
       })
     },
     unlinked,

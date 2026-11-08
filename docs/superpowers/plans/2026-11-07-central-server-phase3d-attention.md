@@ -2953,6 +2953,25 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ap
 
 ---
 
+### Review fixes (Tasks 0–2, done)
+
+Applied after Task 6, in one commit (`fix: review fixes for the 3d aggregator, serverLinks' hooks and the server's attention since`). 12 tests added: `npm test` → `# pass 1409`, `# fail 0`.
+
+- **`attention.ts`:**
+  - `update()` clears `failed` (and the new `down`) first, so a raised event's item is never built with the old stale flag.
+  - `TOPIC_ENDED` is final: that link's entries and seen map are cleared, with a broadcast if there were any.
+  - Stale on a connection change is a flag (`down`), set when the status leaves `connected` (broadcast then) and cleared only by the next snapshot: coming back no longer broadcasts the items as fresh before fresh data.
+  - A payload with no `entries` array no longer replaces the list with `[]` (which wiped the seen map and re-raised everything after): the link is marked failed, the items kept stale, the seen map kept.
+- **`serverLinks.ts`:** `unlinked` runs before `registry.remove` (drop) and before `registry.update` (a new URL), so the aggregator lets go before the old connection's close reaches it (no stale broadcast for nothing). Each hook call is wrapped in try/catch with `console.error`, so a throwing hook does not abort the rest of `apply()` or a drop.
+- **`server/src/sessions/status.ts`:** `attentionEntries` stores its `since` fallback into the manager's map the first time, so the entry's moment stays the same on later publishes (it no longer looks new each time).
+- **Tests:**
+  - `mainServerLinks`: a removed entry fires `unlinked box`; a capped entry fires no `linked` until a slot frees and the links sync; `unlinked` sees the old connection still open (drop and new URL); a throwing hook is logged and the sync carries on.
+  - `mainAttention`: the first snapshot after a topic error is raised and not stale; `TOPIC_ENDED` clears; an error before the first snapshot, then the baseline; a non-array payload; `relabel` after unlinking every server; linking the same id twice. The stale test now expects no broadcast on reconnect, and the snapshot to clear `stale`.
+  - `serverStatus`: the fallback `since` is kept. `serverSessions`: a settings change that leaves `audioAlerts` alone sends no attention patch.
+- **Left alone:** a decision then attention on the same session gives two notifications, as the legacy window does.
+
+---
+
 ### Task 7: `smoke:v2` for 3d
 
 **Files:**
@@ -2963,6 +2982,7 @@ A new section 7c, after the Global panel (7b); deleting the worktree becomes 7d.
 - **The focus patch moves into a helper**, `recordFocusCalls()`, used by section 4 and again here: the relaunch in section 6 starts a new app process, which no longer has section 4's patch.
 - **The server restarted in section 7**, so its MCP listener has a new port: `mcpFor(projectId)` re-reads `data/mcp/<projectId>.json` and initializes. The same restart left smoke-wt unloaded (a loaded flag is runtime only), so `s1` has no tab: the click selects its worktree (Decision 22). The second project's session is in a worktree loaded on purpose, so that click shows its tab.
 - **The second project** is made, used and deleted over the `live` SDK connection; its window is closed, and so is the file window (its unsaved-project dialog is answered "Don't Save" by the stub, button 1).
+- **Also cover the switch (Decision 15), added after the review fixes:** with "Show notifications" off (`appSettings:update`, or the settings panel), raise an attention through MCP and assert that main raised no notification (`globalThis.__notes` unchanged) while the bell still lists it; then turn the switch back on. The diff below predates this check: add it to section 7c and count it in Step 2's total.
 
 - [ ] **Step 1: The checks**
 
@@ -3154,7 +3174,7 @@ diff --git a/scripts/v2-smoke.mjs b/scripts/v2-smoke.mjs
 
 Run: `node scripts/v2-smoke.mjs 2>&1 | tail -1` (after `npm run build && npm --prefix server run build`)
 
-Expected: `V2 SMOKE PASS (162 checks)`: 145, plus 17 in section 7c:
+Expected: `V2 SMOKE PASS (163 checks)`: 145, plus 18 in section 7c (the 17 below and the switch-off check; one more for each extra assertion it makes):
 - a file window's bell counts the server's decision
 - its menu names the project, the server and the tab, and asks the question (`["Demo · Local box · Renamed","Deploy now?"]`)
 - main raised one OS notification (`[{"title":"Renamed needs a decision","body":"Demo · Local box\nDeploy now?"}]`)
@@ -3191,7 +3211,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1397`, `# fail 0`: the baseline 1363 at `4fc0d96`, plus 3 (Task 0: one each in `serverStatus`, `serverSessions` and `serverV2`; two tests changed), 12 (Task 1), 3 (Task 2), 7 (Task 3: 5 in `mainAttentionRules`, 2 in `appSettings`), 1 (Task 4), 5 (Task 5) and 3 (Task 6).
+Expected: `# pass 1409`, `# fail 0`: the baseline 1363 at `4fc0d96`, plus 3 (Task 0: one each in `serverStatus`, `serverSessions` and `serverV2`; two tests changed), 12 (Task 1), 3 (Task 2), 7 (Task 3: 5 in `mainAttentionRules`, 2 in `appSettings`), 1 (Task 4), 5 (Task 5), 3 (Task 6) and 12 (the review fixes: 4 in `mainServerLinks`, 6 in `mainAttention`, 1 each in `serverStatus` and `serverSessions`).
 
 - [ ] **Step 2: Types and build**
 
@@ -3203,7 +3223,7 @@ Run each after the previous has exited:
 
 | Command | Expected |
 |---|---|
-| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (162 checks)` |
+| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (163 checks)`, or Task 7's count with the switch-off check |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
