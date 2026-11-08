@@ -7,7 +7,7 @@ import { join } from 'node:path'
 // Environment (Colima VM) feature smoke: stub colima/docker binaries on PATH
 // so the whole env:check → env:list → panel/badge pipeline runs without a
 // real Colima install. Read-only operations only — the userData registry is
-// never written (no Start/Reset is clicked).
+// never written (no Start/Reset is clicked), and the userData is the run's own.
 
 const projectDir = process.cwd()
 const errors = []
@@ -36,6 +36,8 @@ execSync('git init -q -b master && git -c user.email=s@s -c user.name=s commit -
 execSync(`git worktree add -q -b feature-x "${worktreePath}"`, { cwd: repoPath, shell: '/bin/zsh' })
 
 const featureProfile = deriveProfileName(repoPath, 'feature-x')
+// Its own userData: the default one is shared with an installed Trek (its env registry, recents, settings).
+const userData = mkdtempSync(join(tmpdir(), 'twb-envsmoke-userdata-'))
 
 // Stub binaries: colima reports one VM for feature-x plus one crash leftover.
 const stubDir = mkdtempSync(join(tmpdir(), 'twb-envstub-'))
@@ -67,11 +69,13 @@ const cleanup = () => {
   rmSync(worktreePath, { recursive: true, force: true })
   rmSync(repoPath, { recursive: true, force: true })
   rmSync(stubDir, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
 }
 
+let pass = false
 try {
   const app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: ['out/main/index.js', `--user-data-dir=${userData}`],
     cwd: projectDir,
     env: {
       ...process.env,
@@ -159,7 +163,7 @@ try {
   for (const e of errors.slice(0, 5)) console.log(`  - ${e.slice(0, 200)}`)
 
   await app.close()
-  const pass =
+  pass =
     toolCheckOk === true &&
     envCount === 2 &&
     feature?.vmState === 'running' &&
@@ -179,7 +183,8 @@ try {
     orphanRows === 2 &&
     errors.length === 0
   console.log(pass ? 'ENV SMOKE PASS' : 'ENV SMOKE FAIL')
-  process.exit(pass ? 0 : 1)
 } finally {
   cleanup()
 }
+// After the finally: an exit inside the try would skip the cleanup.
+process.exit(pass ? 0 : 1)

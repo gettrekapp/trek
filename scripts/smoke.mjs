@@ -23,15 +23,19 @@ execSync('git init -q -b master && git add -A && git -c user.email=s@s -c user.n
   shell: '/bin/zsh'
 })
 execSync(`git worktree add -q -b feature-x "${worktreePath}"`, { cwd: repoPath, shell: '/bin/zsh' })
+// Its own userData: the default one is shared with an installed Trek (recents, open windows, settings, tokens).
+const userData = mkdtempSync(join(tmpdir(), 'twb-smoke-userdata-'))
 
 const cleanup = () => {
   rmSync(worktreePath, { recursive: true, force: true })
   rmSync(repoPath, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
 }
 
+let pass = false
 try {
   const app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: ['out/main/index.js', `--user-data-dir=${userData}`],
     cwd: projectDir,
     env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })
@@ -298,7 +302,7 @@ try {
   for (const e of errors.slice(0, 5)) console.log(`  - ${e.slice(0, 200)}`)
 
   await app.close()
-  const pass =
+  pass =
     rows === 2 &&
     primaryTags === 1 &&
     selectedRows === 1 &&
@@ -358,7 +362,8 @@ try {
     sweptDirty === 'false,false' &&
     errors.length === 0
   console.log(pass ? 'SMOKE PASS' : 'SMOKE FAIL')
-  process.exit(pass ? 0 : 1)
 } finally {
   cleanup()
 }
+// After the finally: an exit inside the try would skip the cleanup.
+process.exit(pass ? 0 : 1)

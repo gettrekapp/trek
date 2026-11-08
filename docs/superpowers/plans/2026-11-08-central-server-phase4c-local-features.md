@@ -12,7 +12,8 @@
 7. **Smokes.**
    - `smoke:local-features` (new, 31 checks) drives a Local window end to end with stub `colima`, `docker` and `code` binaries.
    - `smoke:v2` (170 checks) checks that a remote server window shows none of these controls and has Linear.
-   - `env-smoke` passes again: it gets its own userData, and its expectations name what they expect instead of counting.
+   - `env-smoke` passes again: its expectations name what they expect instead of counting.
+   - Every Electron smoke runs in its own `--user-data-dir` (Task 0), so none touches an installed Trek's userData.
 
 **Architecture:**
 - **The gate, `backendFeatures.ts`.** `V2_FEATURES` (the ceiling) turns on docker, env, stacks, skills, reveal, openInEditor and linear.
@@ -161,7 +162,7 @@ Out of scope here:
     - No real Docker, Colima or VS Code is needed, and nothing is written outside the run's directory.
 21. **`window.__features()`** is a new debug hook beside `__store` and `__terminals`, so a smoke can read the backend's features.
 22. **`env-smoke` is fixed, not retired** (the file window lives until 4e):
-    - It gets its own `--user-data-dir`. The default one is shared with an installed Trek (4b Risk 1), and the env registry lives there.
+    - It gets its own `--user-data-dir` (Task 0, with the five legacy smokes). The default one is shared with an installed Trek (4b Risk 1), and the env registry lives there.
     - Its tab and Settings-switch counts become named lists: `['Changes', 'Notes', 'Env', '⚙']` and the eight switches. A count goes stale with every new tab, as it did when Changes, Show notifications and Stop local server on quit were added.
 23. **`smoke:v2` gets two remote checks** in section 6b:
     - the window has no Open in VS Code, Reveal, Docker, Env, Stack or skill menu;
@@ -187,16 +188,15 @@ Out of scope here:
 - **Unit tests:** `scripts/*.test.mjs`, run with `npm test` (`node --test scripts/*.test.mjs`).
   - Modules a test imports must be erasable TS (no enums, parameter properties or namespaces) with `.ts` on every runtime import; `import type` lines may be extensionless.
   - `backendFeatures.ts`, `backendV2.ts` and `settingsOverrides.ts` are tested directly. `installV2.ts`, `worktreeActions.ts`, the components and the hooks import the store or `window.api`, and are covered by the smokes.
-- **Baseline:** 1487 tests pass at `55c4c7b`. Each task states the count it ends at.
+- **Baseline:** 1487 tests pass at `55c4c7b` (Task 0 adds none). Each task states the count it ends at.
 - **Checks:**
   - `npm run typecheck`
   - `npm run build` (the renderer, main and `out/server`)
   - `npm test`
   - the smokes named in each task
 - **Run Electron smokes strictly one at a time.** Overlapping windows cause focus flakes, and two supervisors must never race over one profile.
-  - `smoke:local-features`, `smoke:local-app`, `env-smoke` (from Task 3), `smoke:v2` and `windows-smoke` each use their own userData.
+  - Every Electron smoke uses its own temp `--user-data-dir` (Task 0): never launch one without it, since the default userData is an installed Trek's (4b Risk 1).
   - Every app smoke but `smoke:local-*` sets `TREK_NO_LOCAL_SERVER=1`.
-  - `smoke`, `changes-smoke`, `multi-repo-smoke`, `remote-smoke` and `providers-smoke` still use the default userData, which an installed Trek shares (4b Risk 1). Run them only with the installed Trek quit (Task 8, Risk 1).
 - **Never touch** `~/.config/trek-server/local*` or the installed `/Applications/Trek.app`. The 4c smokes use a temp HOME.
 - **Branch:** `central-server-phase4c`, at master `55c4c7b`.
 - **Commits:** there is no global git identity, so commit with:
@@ -214,6 +214,7 @@ Out of scope here:
 
 | File | Status | Task | Responsibility |
 |---|---|---|---|
+| `scripts/smoke.mjs`, `scripts/changes-smoke.mjs`, `scripts/multi-repo-smoke.mjs`, `scripts/remote-smoke.mjs`, `scripts/providers-smoke.mjs` | modify | 0 | own temp userData; `remote-smoke`'s daemon gets `--data-dir` |
 | `src/renderer/src/backendFeatures.ts` | modify | 1 | `V2_FEATURES` ceiling; `MACHINE_FEATURES`; `v2Features(caps, { localEntry })`; `settingsSections(kind, features)` |
 | `scripts/backendFeatures.test.mjs` | modify | 1 | the gate: local, remote, legacy; the sections |
 | `src/renderer/src/v2/backendV2.ts` | modify | 1, 5 | `localEntry`; `WorktreeTeardown`; teardown in `worktrees.remove` |
@@ -225,7 +226,7 @@ Out of scope here:
 | `scripts/v2SettingsOverrides.test.mjs` | modify | 2 | their requests and overlay |
 | `src/renderer/src/components/EnvironmentPanel.tsx` | modify | 2 | the variables through `SettingText` |
 | `src/renderer/src/components/SettingText.tsx` | modify | 2 | `spellCheck` |
-| `scripts/env-smoke.mjs` | modify | 3 | own userData; named tabs and switches |
+| `scripts/env-smoke.mjs` | modify | 0, 3 | own userData (0); named tabs and switches (3) |
 | `src/renderer/src/useEnvironmentPoll.ts` | create | 4 | the Colima poll, for both workspaces |
 | `src/renderer/src/components/Workspace.tsx` | modify | 4 | uses the hook |
 | `src/renderer/src/v2/V2Workspace.tsx` | modify | 4 | the hook with `features.env` |
@@ -239,6 +240,33 @@ Out of scope here:
 | `scripts/v2-smoke.mjs` | modify | 7 | a remote window's absent controls; Linear in Settings |
 
 `server/` and `src/main/` do not change (Decision 19).
+
+---
+
+### Task 0: Every Electron smoke gets its own user-data dir
+
+Added after the plan was written (user decision): the installed Trek shares the dev build's default userData (`Trek Dev`; 4b Risk 1), so no smoke may launch Electron without `--user-data-dir`.
+
+**Files:**
+- Modify: `scripts/smoke.mjs`, `scripts/changes-smoke.mjs`, `scripts/multi-repo-smoke.mjs`, `scripts/remote-smoke.mjs`, `scripts/providers-smoke.mjs`, `scripts/env-smoke.mjs`
+
+**The audit** of every Electron launch in `scripts/*.mjs` (`_electron.launch`; `local-server-smoke` runs Electron only as Node, `ELECTRON_RUN_AS_NODE=1`, with a temp HOME):
+
+| Script | Before | After |
+|---|---|---|
+| `bot-smoke`, `local-app-smoke`, `v2-smoke`, `windows-smoke` | own userData | unchanged |
+| `smoke`, `changes-smoke`, `multi-repo-smoke`, `remote-smoke`, `providers-smoke` | default userData | own userData |
+| `env-smoke` | default userData | own userData (taken from Task 3, whose diff no longer has it) |
+
+**The change**, in each of the six:
+- `const userData = mkdtempSync(join(tmpdir(), 'twb-<name>-userdata-'))` (`remote-smoke`: `join(work, 'user-data')`, inside its own temp dir), passed as `--user-data-dir=${userData}` and removed in the cleanup. `TREK_NO_LOCAL_SERVER=1` stays.
+- `smoke`, `multi-repo-smoke` and `env-smoke` called `process.exit` inside the `try`, which skipped the `finally`'s cleanup and left their temp repos behind on every run. The exit moves after the `finally`.
+- `remote-smoke`'s legacy daemon gets `--data-dir <work>/data`. Without it, it read projects from and wrote its `mcp` folder to `~/Library/Application Support/trek-server`.
+- No temp HOME: main reads HOME only for the skill list (read-only) and the stack state (no smoke here starts a stack), and the Local server is off. A temp HOME would also change `fixPath`'s login-shell PATH.
+
+- [ ] **Verify:** `npm run build`, then each of `smoke`, `changes-smoke`, `multi-repo-smoke`, `remote-smoke` and `providers-smoke`, one at a time: `SMOKE PASS`, `12/12 checks passed`, `SMOKE PASS`, `REMOTE SMOKE PASS`, `providers smoke passed`. The mtimes of the `*.json` files in `~/Library/Application Support/Trek Dev` are the same before and after (read them only). `env-smoke` still fails on its stale counts until Task 3.
+
+- [ ] **Commit:** `test: every Electron smoke gets its own user-data dir`, with the six scripts and this plan. Tests: 1487 (unchanged).
 
 ---
 
@@ -1084,7 +1112,7 @@ Tests: 1493.
 
 ---
 
-### Task 3: `env-smoke` passes again, in its own userData
+### Task 3: `env-smoke` passes again, naming what it expects
 
 **Files:**
 - Modify: `scripts/env-smoke.mjs`
@@ -1104,21 +1132,19 @@ ENV SMOKE FAIL
 
 The four tabs are Changes, Notes, Env and ⚙: Changes came after this smoke. The eight switches include Show notifications and Stop local server on quit. Nothing is wrong in the app.
 
-- [ ] **Step 2: Name what it expects, and give it its own userData**
+- [ ] **Step 2: Name what it expects** (its own userData came in Task 0)
 
 `scripts/env-smoke.mjs`:
 
 ```diff
 diff --git a/scripts/env-smoke.mjs b/scripts/env-smoke.mjs
-index 4354f54..6284b3b 100644
+index 8b880f0..e0de637 100644
 --- a/scripts/env-smoke.mjs
 +++ b/scripts/env-smoke.mjs
-@@ -7,9 +7,22 @@ import { join } from 'node:path'
- // Environment (Colima VM) feature smoke: stub colima/docker binaries on PATH
+@@ -8,8 +8,21 @@ import { join } from 'node:path'
  // so the whole env:check → env:list → panel/badge pipeline runs without a
  // real Colima install. Read-only operations only — the userData registry is
--// never written (no Start/Reset is clicked).
-+// never written (no Start/Reset is clicked), and the userData is the run's own.
+ // never written (no Start/Reset is clicked), and the userData is the run's own.
 +// The same pipeline in a Local server window: scripts/local-features-smoke.mjs.
  
  const projectDir = process.cwd()
@@ -1137,30 +1163,7 @@ index 4354f54..6284b3b 100644
  const errors = []
  
  // Mirrors deriveProfileName in src/shared/environments.ts.
-@@ -36,6 +49,8 @@ execSync('git init -q -b master && git -c user.email=s@s -c user.name=s commit -
- execSync(`git worktree add -q -b feature-x "${worktreePath}"`, { cwd: repoPath, shell: '/bin/zsh' })
- 
- const featureProfile = deriveProfileName(repoPath, 'feature-x')
-+// Its own userData: the default one is shared with an installed Trek (its env registry, recents, settings).
-+const userData = mkdtempSync(join(tmpdir(), 'twb-envsmoke-userdata-'))
- 
- // Stub binaries: colima reports one VM for feature-x plus one crash leftover.
- const stubDir = mkdtempSync(join(tmpdir(), 'twb-envstub-'))
-@@ -67,11 +82,12 @@ const cleanup = () => {
-   rmSync(worktreePath, { recursive: true, force: true })
-   rmSync(repoPath, { recursive: true, force: true })
-   rmSync(stubDir, { recursive: true, force: true })
-+  rmSync(userData, { recursive: true, force: true })
- }
- 
- try {
-   const app = await electron.launch({
--    args: ['out/main/index.js'],
-+    args: ['out/main/index.js', `--user-data-dir=${userData}`],
-     cwd: projectDir,
-     env: {
-       ...process.env,
-@@ -128,7 +144,8 @@ try {
+@@ -132,7 +145,8 @@ try {
    // Feature worktree detail: Env panel button + header chip, then the panel.
    await win.locator('.wt-row:not(.selected)').first().click()
    await win.waitForTimeout(300)
@@ -1170,7 +1173,7 @@ index 4354f54..6284b3b 100644
    const envChip = (await win.locator('.chip-env').innerText()).trim()
    await win.locator('.panel-btn', { hasText: 'Env' }).click()
    await win.waitForTimeout(1000)
-@@ -139,7 +156,7 @@ try {
+@@ -143,7 +157,7 @@ try {
    // docker stub returns [] for compose ps → empty-services message.
    const noServices = await win.locator('.env-panel:visible .muted', { hasText: 'No services' }).count()
    console.log(
@@ -1179,7 +1182,7 @@ index 4354f54..6284b3b 100644
        `profile: "${headerName}" (expect ${featureProfile}), meta: "${headerMeta}" (expect Running · 192.168.106.5), ` +
        `actions: ${actionButtons} (expect 3), no-services msg: ${noServices} (expect 1)`
    )
-@@ -147,11 +164,17 @@ try {
+@@ -151,11 +165,17 @@ try {
    // Settings: both stub VMs are unregistered → they show as orphans.
    await win.locator('.panel-btn[title="App settings"]').click()
    await win.waitForTimeout(400)
@@ -1199,7 +1202,7 @@ index 4354f54..6284b3b 100644
        `orphan rows: ${orphanRows} (expect 2)`
    )
  
-@@ -166,7 +189,7 @@ try {
+@@ -170,7 +190,7 @@ try {
      feature?.address === '192.168.106.5' &&
      envChips === 1 &&
      runningEnvChips === 1 &&
@@ -1208,7 +1211,7 @@ index 4354f54..6284b3b 100644
      envChip.includes('192.168.106.5') &&
      envPanels === 1 &&
      headerName === featureProfile &&
-@@ -174,7 +197,7 @@ try {
+@@ -178,7 +198,7 @@ try {
      headerMeta.includes('192.168.106.5') &&
      actionButtons === 3 &&
      noServices === 1 &&
@@ -1234,7 +1237,7 @@ ENV SMOKE PASS
 - [ ] **Step 4: Commit**
 
 ```bash
-git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test: env-smoke runs in its own userData and names the tabs and switches it expects" -m "Co-Authored-By: <model trailer>" -- scripts/env-smoke.mjs
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test: env-smoke names the tabs and switches it expects" -m "Co-Authored-By: <model trailer>" -- scripts/env-smoke.mjs
 ```
 
 Tests: 1493 (unchanged).
@@ -2348,7 +2351,7 @@ Run each after the previous one has exited:
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (85 checks)` (the server is unchanged; not rerun in the prototype) |
 
-Run these only with an installed Trek quit, since they use the default userData it shares (Risk 1). The prototype did not run them; the expected lines are 4b's:
+The five legacy smokes, in their own userData since Task 0:
 
 | Command | Expected |
 |---|---|
@@ -2387,9 +2390,7 @@ Found while prototyping this plan.
 
 ## Risks
 
-1. **Five legacy smokes share an installed Trek's userData.** `smoke`, `changes-smoke`, `multi-repo-smoke`, `remote-smoke` and `providers-smoke` launch without `--user-data-dir`, and a dev build's userData is the installed app's (`app.setName('Trek Dev')`; 4b Risk 1). Run alongside a running Trek, they can rewrite its recents, `open-windows.json` and app settings.
-   - Task 3 gives `env-smoke` its own; the other five are 4e's to rewrite or retire.
-   - The 4c prototype did not run them, because the installed Trek was running. The code they cover changed only in Task 4 (the hook), which `env-smoke` covers.
+1. **Resolved in Task 0: no smoke shares an installed Trek's userData.** A dev build's userData is the installed app's (`app.setName('Trek Dev')`; 4b Risk 1). `smoke`, `changes-smoke`, `multi-repo-smoke`, `remote-smoke`, `providers-smoke` and `env-smoke` used to launch without `--user-data-dir` and could rewrite its recents, `open-windows.json`, server tokens and LLM settings. A new smoke must pass its own (Conventions).
 2. **A stale env-variables draft wins.** The variables are sent with `branch.setEnv`, which has no compare-and-set. If another client edits them while you type, your draft overwrites theirs on blur, and the console shows one `commitStale` warning. A `branch.setEnv` `expected` (server change) would fix it; the variables are rarely edited from two places.
 3. **The teardown runs in the renderer**, as legacy's does. A window closed between the stack's destroy and the VM's leaves the VM. The orphan list in Settings shows it, the same as after a crash.
 4. **`smoke:local-features` depends on zsh reading the HOME's `.zshrc`** for its PATH (main's `fixPath` and the server's agents both run `zsh -ilc`). A machine whose `/etc/zshrc` resets PATH after the user's file, or one without zsh, would fail the first check, "main's PATH has the stubs first", loudly.
@@ -2398,7 +2399,7 @@ Found while prototyping this plan.
 
 ## Questions for the user
 
-None block this plan. Two are worth a look:
+None block this plan. One is worth a look:
 
 1. **The stricter gate (Decision 4).** The machine-local features need the Local entry *and* `local`, not the capability alone, so a tunnelled Local server from another machine never gets Reveal or Docker on paths that are not here. If you ever want them for a saved entry (another checkout's dev server on the same disk, say), that would need a per-entry "this machine" switch.
-2. **The five shared-userData smokes (Risk 1).** Give them their own `--user-data-dir` now (a few lines each, like Task 3's), or leave them for 4e to rewrite or retire?
+(Answered: the five shared-userData smokes get their own `--user-data-dir` now, in Task 0.)

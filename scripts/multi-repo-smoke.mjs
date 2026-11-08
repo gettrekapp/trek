@@ -22,16 +22,20 @@ const makeRepo = (prefix) => {
 
 const api = makeRepo('twb-multi-api-')
 const web = makeRepo('twb-multi-web-')
+// Its own userData: the default one is shared with an installed Trek (recents, open windows, settings, tokens).
+const userData = mkdtempSync(join(tmpdir(), 'twb-multi-userdata-'))
 const cleanup = () => {
   for (const repo of [api, web]) {
     rmSync(`${repo}-wt`, { recursive: true, force: true })
     rmSync(repo, { recursive: true, force: true })
   }
+  rmSync(userData, { recursive: true, force: true })
 }
 
+let pass = false
 try {
   const app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: ['out/main/index.js', `--user-data-dir=${userData}`],
     cwd: process.cwd(),
     env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })
@@ -206,9 +210,10 @@ try {
 
   check('page errors', errors, [])
   await app.close()
-  const pass = checks.every(Boolean)
+  pass = checks.every(Boolean)
   console.log(pass ? 'SMOKE PASS' : 'SMOKE FAIL')
-  process.exit(pass ? 0 : 1)
 } finally {
   cleanup()
 }
+// After the finally: an exit inside the try would skip the cleanup.
+process.exit(pass ? 0 : 1)

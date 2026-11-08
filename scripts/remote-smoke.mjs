@@ -56,7 +56,8 @@ writeFileSync(
     repos: [{ id: 'r', name: 'Server Repo', path: serverRepo }]
   })
 )
-const daemon = spawn('npx', ['tsx', 'src/index.ts', 'start', '--config', daemonConfig, '--port', String(PORT)], {
+// --data-dir: the default is the platform's trek-server folder in the real HOME.
+const daemon = spawn('npx', ['tsx', 'src/index.ts', 'start', '--config', daemonConfig, '--port', String(PORT), '--data-dir', join(work, 'data')], {
   cwd: join(projectDir, 'server'),
   stdio: ['ignore', 'pipe', 'inherit']
 })
@@ -81,7 +82,8 @@ const cleanup = async () => {
 
 try {
   const app = await electron.launch({
-    args: ['out/main/index.js'],
+    // Its own userData, inside work: the default one is shared with an installed Trek (server tokens, recents, settings).
+    args: ['out/main/index.js', `--user-data-dir=${join(work, 'user-data')}`],
     cwd: projectDir,
     env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })

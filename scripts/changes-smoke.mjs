@@ -26,10 +26,12 @@ writeFileSync(join(worktree, 'edited.txt'), 'one\nchanged\n')
 writeFileSync(join(worktree, 'untracked.txt'), 'x\n')
 
 const screenshot = process.env.CHANGES_SMOKE_SHOT
+// Its own userData: the default one is shared with an installed Trek (recents, open windows, settings, tokens).
+const userData = mkdtempSync(join(tmpdir(), 'twb-changes-userdata-'))
 let app
 try {
   app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: ['out/main/index.js', `--user-data-dir=${userData}`],
     cwd: process.cwd(),
     env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })
@@ -118,6 +120,7 @@ try {
   sh(`git worktree remove --force "${worktree}"`)
   rmSync(worktree, { recursive: true, force: true })
   rmSync(repo, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
 }
 
 const failed = checks.filter((ok) => !ok).length

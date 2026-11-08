@@ -31,12 +31,15 @@ for (const [name, marker] of [
   chmodSync(path, 0o755)
 }
 
+// Its own userData: the default one is shared with an installed Trek (recents, open windows, settings, tokens, the LLM settings this smoke changes).
+const userData = mkdtempSync(join(tmpdir(), 'trek-providers-userdata-'))
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 let app
 try {
   app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: ['out/main/index.js', `--user-data-dir=${userData}`],
     env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })
   const win = await app.firstWindow()
@@ -147,6 +150,7 @@ try {
   await app?.evaluate(({ app }) => app.exit(0)).catch(() => {})
   rmSync(repoPath, { recursive: true, force: true })
   rmSync(bin, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
 }
 
 if (failures.length) {
