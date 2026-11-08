@@ -16,10 +16,11 @@
 //   - a session started on it runs the fake agent, and the window shows its output;
 //   - File → Local Server → Stop: the window shows Stopped with Start Local Server; Start brings
 //     it back on a new pid, and the window reconnects;
-//   - Restart: a new pid and token; the window reconnects at once; the session is still listed;
+//   - Restart (clicked twice: one confirmation, one restart): a new pid and token; the window
+//     reconnects at once; the session is still listed;
 //   - quitting leaves the server running; the next launch reuses it (same pid, no new spawn);
 //   - skew: local.json rewritten to claim another build; the next launch asks to restart (the
-//     dialog answered Restart), and the new server is the bundled build;
+//     dialog answered Restart, with no second confirmation), and the new server is the bundled build;
 //   - with "Stop local server on quit" on, quitting stops it (local.json and the lock gone);
 //   - a lock held by a live process that is no local server: the start exits 3, the error dialog
 //     offers Reset (answered Reset), which removes the lock and starts a server;
@@ -93,7 +94,9 @@ execFileSync('git', ['init', '-q', '-b', 'main', repo])
 execFileSync('git', ['-C', repo, '-c', 'user.name=c', '-c', 'user.email=c@c', 'commit', '--allow-empty', '-q', '-m', 'init'])
 // A fake agent: its args, whether a variable from the app's env leaked to it, then it lingers.
 const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\necho "LEAK=${TREK_SMOKE_LEAK-unset}"\nexec sleep 300\n', { mode: 0o755 })
+// Each records its pid (the `sleep 300` it execs keeps it), so finish() can end any one left behind.
+const agentPids = join(work, 'agent-pids')
+writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT $*"\necho "LEAK=\${TREK_SMOKE_LEAK-unset}"\nexec sleep 300\n`, { mode: 0o755 })
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // The dialog stub, loaded before the app's main script. Every message box is recorded; the
@@ -200,8 +203,9 @@ const quit = async () => {
   }
 }
 const dialogs = () => app.evaluate(() => [...globalThis.__dialogs])
-const clickMenu = (...labels) =>
-  app.evaluate(({ Menu }, labels) => {
+/** Clicks File → … → the item; `times` clicks in one go, before anything can disable it. */
+const clickMenuTimes = (times, ...labels) =>
+  app.evaluate(({ Menu }, { labels, times }) => {
     let items = Menu.getApplicationMenu().items
     let item = null
     for (const label of labels) {
@@ -210,8 +214,9 @@ const clickMenu = (...labels) =>
       items = item.submenu?.items ?? []
     }
     if (!item.enabled) throw new Error(`menu item ${labels.at(-1)} is disabled`)
-    item.click()
-  }, labels)
+    for (let i = 0; i < times; i++) item.click()
+  }, { labels, times })
+const clickMenu = (...labels) => clickMenuTimes(1, ...labels)
 const menuLabels = () =>
   app.evaluate(({ Menu }) => {
     const file = Menu.getApplicationMenu().items.find((i) => i.label === 'File')
@@ -231,6 +236,8 @@ const windowLink = (page) => page.evaluate(() => window.__store.getState().serve
 
 let exitCode = 1
 let finished = false
+/** Section 10's lock squatter, ended by finish() whatever happens */
+let squatter = null
 const finish = async (reason) => {
   if (finished) return
   finished = true
@@ -243,6 +250,15 @@ const finish = async (reason) => {
   })
   const left = info()
   if (left && alive(left.pid)) process.kill(left.pid, 'SIGKILL')
+  // The squatter, and any fake agent (its `sleep 300`) a killed server left behind.
+  const strays = [squatter?.pid, ...(existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : [])]
+  for (const pid of strays) {
+    if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {}
+    }
+  }
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
   console.log(exitCode === 0 ? `LOCAL APP SMOKE PASS (${checks.length} checks)` : `LOCAL APP SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''}${failedNames})`)
@@ -254,7 +270,7 @@ const watchdog = setTimeout(() => void finish(`watchdog: the run took over ${WAT
 try {
   // ---- 1. The first launch spawns the Local server ---------------------------------------------
 
-  let win = await launch()
+  let win = await launch({ 'Restart the local server?': 0 })
   const first = await until(() => !!info(), true, 20_000) && info()
   check('the first launch spawns the Local server: local.json appears', !!first, true)
   if (!first) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
@@ -284,7 +300,16 @@ try {
   await item.locator('.connect-projects button', { hasText: 'New Project…' }).click()
   const modal = win.locator('.modal.new-server-project')
   await modal.waitFor({ timeout: 10_000 })
-  check('the modal is named after the picked folder', await modal.locator('input[placeholder="Project name"]').inputValue(), 'my-app')
+  // Read the name and blur its field in one renderer task, as soon as it is filled: a key typed
+  // into the focused window (another app's, the user's) can neither land before the read nor after it.
+  const named = await win.waitForFunction(() => {
+    const input = document.querySelector('.modal.new-server-project input[placeholder="Project name"]')
+    if (!input || !input.value) return false
+    const value = input.value
+    input.blur()
+    return value
+  }, null, { timeout: 10_000 })
+  check('the modal is named after the picked folder', await named.jsonValue(), 'my-app')
   await modal.locator('.new-server-project-repo', { hasText: repo }).waitFor({ timeout: 10_000 })
   check('and has it ticked, added with server.addRepo', await modal.locator('.new-server-project-repo input').first().isChecked(), true)
   check('Local offers "Add a folder…", not a typed path', [await modal.locator('button', { hasText: 'Add a folder…' }).count(), await modal.locator('input[placeholder*="a path on the server"]').count()], [1, 0])
@@ -327,9 +352,11 @@ try {
 
   // ---- 6. Restart --------------------------------------------------------------------------------
 
-  await clickMenu('File', 'Local Server', 'Restart Local Server')
+  const confirmsBefore = (await dialogs()).filter((m) => m === 'Restart the local server?').length
+  await clickMenuTimes(2, 'File', 'Local Server', 'Restart Local Server')
   const third = await until(() => (info()?.pid ?? second.pid) !== second.pid, true) && info()
   check('Restart: a new pid and a new token', !!third && third.pid !== second.pid && third.token !== second.token && !alive(second.pid), true)
+  check('Restart asked first, once for the two clicks', (await dialogs()).filter((m) => m === 'Restart the local server?').length - confirmsBefore, 1)
   const reconnectedAt = Date.now()
   check('the live window reconnects at once', await until(() => windowLink(win), 'connected', 5000), 'connected')
   check('within 5 s (not a back-off)', Date.now() - reconnectedAt < 5000, true)
@@ -362,7 +389,7 @@ try {
     writeFileSync(infoPath, JSON.stringify({ ...third, build: 'ffffffffffff' }), { mode: 0o600 })
     win = await launch({ 'local server is running': 0 })
     fourth = await until(() => (info()?.pid ?? third.pid) !== third.pid, true, 25_000) && info()
-    check('the skew question was asked', (await dialogs()).some((m) => m.includes('The local server is running a different build than this Trek.')), true)
+    check('the skew question was asked, and no second confirmation', [(await dialogs()).some((m) => m.includes('The local server is running a different build than this Trek.')), (await dialogs()).includes('Restart the local server?')], [true, false])
     check('Restart: a new server, the bundled build', !!fourth && fourth.build === bundled.build && !alive(third.pid), true)
     check('Local is running, no skew', await until(async () => {
       const l = await localLink(win)
@@ -380,7 +407,7 @@ try {
   // ---- 10. A lock held by a live process that is no local server: the error offers Reset ----------
 
   if (!packaged) {
-    const squatter = spawn('sleep', ['300'], { stdio: 'ignore' })
+    squatter = spawn('sleep', ['300'], { stdio: 'ignore' })
     writeFileSync(lockPath, `${squatter.pid}\n`)
     // Older than a start's wait, so Reset may judge it.
     const old = new Date(Date.now() - 120_000)
