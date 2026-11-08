@@ -155,7 +155,7 @@ Out of scope here:
     - Adopting a server this Trek did not just spawn (a launch's probe, a refresh, a lost race) also rotates a log over 1 MB (review fix 10). That server holds the log open, so it is copied to `server.log.old` and truncated rather than renamed; the server's descriptor is `O_APPEND`, so its next line lands at the new end. So the log is bounded at about 2 MB at each spawn or adoption; a server that runs for weeks without Trek relaunching can still grow it in between.
 12. **The waits** (Notes for 4b 9, 10, 14). No path retries a start by itself.
     - **Ready:** `local.json` holds the spawned pid and probes live, within `READY_TIMEOUT_MS` (15 s). A timeout is an error with the log's last 20 lines; the slow process is left running, and a later Start or launch finds it if it ever answers.
-    - **Exit 3** (another start holds the lock): the supervisor probes `local.json` for `LOST_RACE_WAIT_MS` (8 s), since the winner may still be starting. If nothing answers, it is an error naming the lock and its pid, with `canReset`.
+    - **Exit 3** (another start holds the lock): the supervisor probes `local.json` until `lostRaceDeadline`: the lock's mtime plus `READY_TIMEOUT_MS` (15 s), and at least `LOST_RACE_MIN_WAIT_MS` (2 s), since the winner may still be starting (it was a flat 8 s before the final review fixes). If nothing answers, it is an error naming the lock and its pid, with `canReset`.
     - **Exit 1 with `Cannot take the lock <path>: <message>`:** an error with that line and no Reset (a directory at `local.lock`, no hard links). Retrying cannot help.
     - **Any other exit:** an error with its code or signal and the log's tail.
 13. **An error is a status** (`state: 'error'`, `message`, `canReset`).
@@ -4123,7 +4123,7 @@ Tests: 1476 (unchanged).
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1482`, `# fail 0`. That is the baseline 1459 at `8325345`, plus:
+Expected: `# pass 1487`, `# fail 0` (1482 before the final review fixes). That is the baseline 1459 at `8325345`, plus:
 
 | Task | Tests added |
 |---|---|
@@ -4134,6 +4134,7 @@ Expected: `# pass 1482`, `# fail 0`. That is the baseline 1459 at `8325345`, plu
 | 5 | 1 in `appServersRules` (`localStatusLabel`); `appSettings`' 2 rewritten |
 | Review fixes (Tasks 1–3) | 6 in `localServerRules` (`TREK_LOCAL_PROFILE`, `isLocalServerCommand`, `childEnv`'s near-misses, `afterStop`'s new rows, `resetDecision`'s new rows, `sameFile`); others extended |
 | 6 | 1 in `v2AppServerLinks` |
+| Final review fixes | 5: 3 in `localServerRules` (`localServerDisabled`, `lostRaceDeadline`, `keepAfterFailure`), 2 in `appServersRules` (`localErrorTitle`, `rejectLocalServerUrl`); `localStatusLabel`'s test extended |
 
 - [ ] **Step 2: Types and build**
 
@@ -4148,7 +4149,7 @@ Run each after the previous has exited:
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
 | `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (85 checks)` |
-| `node scripts/local-app-smoke.mjs 2>&1 \| tail -1` | `LOCAL APP SMOKE PASS (42 checks)` |
+| `node scripts/local-app-smoke.mjs 2>&1 \| tail -1` | `LOCAL APP SMOKE PASS (43 checks)` (42 before the final review fixes) |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (168 checks)` |
 | `node scripts/remote-smoke.mjs 2>&1 \| tail -1` | `REMOTE SMOKE PASS` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
@@ -4156,7 +4157,7 @@ Run each after the previous has exited:
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
 | `node scripts/multi-repo-smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/providers-smoke.mjs 2>&1 \| tail -1` | `providers smoke passed` |
-| `npm run smoke:packaged 2>&1 \| grep SMOKE` | `LOCAL SMOKE PASS (43 checks)`, `LOCAL APP SMOKE PASS (36 checks)` |
+| `npm run smoke:packaged 2>&1 \| grep SMOKE` | `LOCAL SMOKE PASS (43 checks)`, `LOCAL APP SMOKE PASS (37 checks)` (36 before the final review fixes; 37 is expected, not yet run) |
 
 `env-smoke` is left out on purpose: it already fails at `8325345`, with 4 feature panel buttons where it expects 3 and 7 settings checkboxes where it expects 3. This plan's switch makes the second count 8. It needs its own fix (Risk 10). `bot-smoke` needs the bot sandbox and is not run here. Both only gain `TREK_NO_LOCAL_SERVER=1`.
 
@@ -4176,6 +4177,25 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+### Final review fixes (done)
+
+Applied after the final review of the branch. The code blocks in the tasks above show the code as first written.
+
+- `npm test` goes from 1482 to 1487 (see Task 8's table). `smoke:local-app` goes from 42 to 43 checks.
+
+1. **Quit is bounded.** `quitLocalServer` races the queued stop against 20 s (`QUIT_WAIT_MS`). If a job is still in progress then (a start can take 15 s and more), it logs and runs `stop --local` directly, for at most 10 s, and the app exits. No dialog runs inside a queued job any more: `operate(job)` queues the job, which returns the error status if it failed, and `showError(status)` runs after it, outside the queue. An open error dialog no longer holds the next job, or quit. Jobs queued after quit has begun are skipped.
+2. **The loser of the lock waits out the winner.** After an exit 3, the wait runs until `lostRaceDeadline(now, lock mtime)`: the lock's mtime plus `READY_TIMEOUT_MS`, at least `LOST_RACE_MIN_WAIT_MS` (2 s), or 15 s from now with no lock. That is also when Reset stops refusing the lock as young, so the Reset the error offers can act. `refresh()` called while a job runs sets `refreshPending`, and the refresh runs once the job is done, so a `local.json` watch event is not dropped.
+3. **Each failure says what failed.** `LocalServerStatus.failed` is `'start' | 'stop' | 'restart'`. `localStatusLabel` says "Could not stop" or "Could not restart", and the dialog's title (`localErrorTitle`) "The local server could not stop." and so on. `stopServer` no longer clears `current`; a successful stop does, and so does a restart before it spawns. `fail()` keeps it when `keepAfterFailure` says a failed stop or restart left the same server (pid, port, token) named in `local.json` and alive, so the windows stay connected.
+4. **Restart asks first.** A manual restart (the menu, the server list, a Local window, through IPC) asks "Restart the local server?" in main, since it ends every terminal on Local. The skew question is its own confirmation (`restartLocalServer({ confirm: false })`), and nothing is asked when nothing runs. A restart asked for while another is confirming or queued joins it; the smoke clicks Restart twice and sees one question and one spawn.
+5. **Small fixes.**
+   - `TREK_NO_LOCAL_SERVER` is on only as `1`, `true` or `yes` (`localServerDisabled`). The README says so.
+   - The profile watch's `error` closes it, logs, and marks it broken. `checkLocalServer` (a focus, main's link going down) re-arms it, quietly, until the directory is back.
+   - `LOCAL_ENTRY_ID` moved to `src/shared/appServerRules.ts` (re-exported by `localServerRules.ts`), so `StartScreen.tsx` uses it instead of `'local'`.
+   - Saving a server entry refuses Local's current URL, by any loopback name on its port (`rejectLocalServerUrl`): "This is the Local server (listed first). Trek connects to it itself, so it needs no entry."
+   - The smoke's `finish()` kills section 10's `sleep 300` squatter and every fake agent (each records its pid), whatever happened.
+   - The `my-appe` flake: the smoke reads the project name and blurs its field in one renderer task (`waitForFunction`), as soon as the field is filled, so a key typed into the focused window can land neither before the read nor in the field after it.
+6. **Docs.** The README has a user-facing "Local server" section. Risk 1 records the shared userData, and question 2 is resolved.
+
 ## Notes for 4c
 
 Found while prototyping this plan.
@@ -4189,6 +4209,8 @@ Found while prototyping this plan.
 ## Risks
 
 1. **A dev Trek and an installed Trek sharing the Local profile** is resolved by Decision 27: a dev build uses `local-dev`. What is left: two dev checkouts (two worktrees running `npm run dev`) still share `local-dev`, and each offers a skew restart of the other's. Declining is safe: the server keeps running and the list says it is not this Trek's version.
+
+   **Shared userData.** A dev build and the installed app also share userData: `app.setName('Trek Dev')` gives both the same directory. So a dev run can list or restore the installed app's Local recents and windows, which are keyed `local`. Those projects live on the installed app's server, not on `local-dev`, so they show "Project not found". This is not destructive, and it predates 4b. A possible future fix is to key Local by profile (`local`, `local-dev`, …), or to give dev builds their own userData.
 2. **Electron fuses.** Running the bundle relies on the `RunAsNode` fuse (on) and on Electron reading asar in Node mode.
    - Hardening the build (`electronFuses: {runAsNode: false}` or `onlyLoadAppFromAsar`) breaks the Local server. `smoke:packaged` fails loudly if so.
    - The fallback is `asarUnpack: ["out/server/**"]` with RunAsNode kept, or a separate helper binary.
@@ -4209,4 +4231,4 @@ Found while prototyping this plan.
 ## Questions for the user
 
 1. **The dev/installed clash (Risk 1).** Answered: dev runs get their own profile, `~/.config/trek-server/local-dev` (Decision 27, Task 2b).
-2. **The menu's place.** File → Local Server is used because the macOS app menu is Electron's stock role. Building the app menu by hand would put Stop and Restart in the Trek menu, next to Quit, as the spec's "app menu" may mean. Is File acceptable?
+2. **The menu's place.** Resolved: File → Local Server, a user decision. (The macOS app menu is Electron's stock role; building it by hand would have put Stop and Restart in the Trek menu, next to Quit.)

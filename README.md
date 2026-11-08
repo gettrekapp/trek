@@ -204,6 +204,34 @@ keeps their worktrees and sessions running on that machine. Server windows are
   then, the per-project servers under ⚙ Settings → Servers remain the way to run
   remote sessions from a project file.
 
+## Local server
+
+Trek runs a trek-server of its own on this machine, the **Local** server. It is
+listed first under **Connect to server…**, and Trek starts it, finds it and
+connects to it itself, so it needs no URL or token. New Project… on Local picks
+a folder on this machine.
+
+- **It keeps running after you quit Trek**, so its sessions do too, and the next
+  launch reconnects to it. To stop it whenever Trek quits, turn on **Stop local
+  server on quit** in ⚙ Settings.
+- **File → Local Server** shows its state, with **Start Local Server** (or
+  **Restart Local Server** while it runs) and **Stop Local Server**. The server
+  list and a Local window offer Start and Restart too. Restart asks first: it
+  closes every terminal on Local, and agent sessions resume when you open their
+  worktrees again.
+- **Reset Local Server** is offered when a start fails because another process
+  holds the server's lock (`local.lock`) but no Local server answers. It removes
+  that lock only when no process that could be the server holds it (a dead pid, or
+  a live one that is not a trek-server and has held it longer than a start takes),
+  and then starts the server. Otherwise it says so and leaves the lock alone.
+- **Its log** is `~/.config/trek-server/local/server.log`, or
+  `~/.config/trek-server/local-dev/server.log` for a dev build. A failed start's
+  error shows the log's last lines.
+- **After an update**, the server still running may be another version than the
+  one this Trek bundles. Trek asks once whether to restart it with its own
+  version; Keep Running carries on with it, and the list says it is not this
+  Trek's version.
+
 ## Attention indicators
 
 Each session tab shows a status badge, and each sidebar row a status dot:
@@ -256,7 +284,8 @@ from another worktree its own server too, set `TREK_LOCAL_PROFILE` to another
 name (1–32 of `a-z`, `0-9` and `-`, starting with a letter or digit), for example
 `TREK_LOCAL_PROFILE=dev-wt2 npm run dev` for `local-dev-wt2`. An invalid name is
 ignored (`dev`), and a packaged Trek ignores the variable.
-`TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it).
+`TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it);
+only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
 
 The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
 older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
