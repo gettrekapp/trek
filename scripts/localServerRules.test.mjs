@@ -4,12 +4,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  DEV_LOCAL_PROFILE,
   LOCAL_ENTRY_ID,
   LOG_ROTATE_BYTES,
   afterStop,
   childEnv,
   compareVersions,
   localPaths,
+  localProfileArgs,
+  localProfileName,
   localUrl,
   logTail,
   parseBuildJson,
@@ -31,6 +34,23 @@ test('the paths: the profile from src/shared/localServer.ts, and the log beside 
   })
   assert.equal(localUrl(51234), 'ws://127.0.0.1:51234')
   assert.equal(LOCAL_ENTRY_ID, 'local')
+})
+
+test('the profile: the default one when packaged, local-dev for a dev build, with its own files', () => {
+  assert.equal(localProfileName(true), undefined)
+  assert.equal(localProfileName(false), 'dev')
+  assert.equal(DEV_LOCAL_PROFILE, 'dev')
+  assert.deepEqual(localProfileArgs(localProfileName(true)), [])
+  assert.deepEqual(localProfileArgs(localProfileName(false)), ['--local-profile', 'dev'])
+  assert.deepEqual(localPaths('/home/u', undefined), localPaths('/home/u'))
+  assert.deepEqual(localPaths('/home/u', 'dev'), {
+    dir: '/home/u/.config/trek-server/local-dev',
+    config: '/home/u/.config/trek-server/local-dev/config.json',
+    info: '/home/u/.config/trek-server/local-dev/local.json',
+    lock: '/home/u/.config/trek-server/local-dev/local.lock',
+    log: '/home/u/.config/trek-server/local-dev/server.log'
+  })
+  assert.throws(() => localPaths('/home/u', '../x'), /Invalid local profile name/)
 })
 
 test('parseBuildJson takes the bundle stamp, nothing else', () => {

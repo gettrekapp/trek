@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { basename, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { homedir, hostname } from 'node:os'
-import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
+import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME, isLocalProfileName } from '../../src/shared/localServer'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { buildInfo } from './buildInfo'
 import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig, saveConfig } from './config'
@@ -48,6 +48,8 @@ interface CliArgs {
   insecure: boolean
   /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
   local: boolean
+  /** `--local-profile <name>`: a named local profile (local-<name>) instead of the default one */
+  localProfile?: string
 }
 
 const USAGE = `Usage: trek-server [command] [options]
@@ -79,6 +81,9 @@ Options:
                     Writes the port and token to local.json there (0600) while it runs.
                     Takes none of --config, --data-dir, --port, --host, --insecure.
                     Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
+  --local-profile <name>
+                    With --local: a separate local server, under local-<name> in both
+                    directories (a dev build of Trek uses "dev"). The name is 1-32 of a-z, 0-9, -.
   --id <id>         add: repo id (default: slug of the directory name)
   --name <name>     add: display name (default: the directory name)
   -h, --help        Show this help
@@ -152,6 +157,11 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--data-dir') args.dataDir = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
     else if (arg === '--local') args.local = true
+    else if (arg === '--local-profile') {
+      const name = value(++i, arg)
+      if (!isLocalProfileName(name)) usageError(`Invalid local profile name: ${name} (1-32 of a-z, 0-9 and -)`)
+      args.localProfile = name
+    }
     else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
     else usageError(`Unknown argument: ${arg}`)
   }
@@ -160,6 +170,7 @@ function parseArgs(argv: string[]): CliArgs {
     return args
   }
   if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
+  if (args.localProfile !== undefined && !args.local) usageError('--local-profile only applies with --local')
   if (args.command === 'stop' && !args.local) usageError('`stop` only stops the local server: `trek-server stop --local`')
   if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
     usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
@@ -208,7 +219,7 @@ if (args.command === 'version') {
 }
 
 /** `start --local`'s profile; its config and data dir replace the defaults. */
-const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir()) : undefined
+const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir(), args.localProfile) : undefined
 if (local) {
   args.configPath = local.configPath
   // Never copy the trek-daemon config into the local profile.

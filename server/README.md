@@ -209,6 +209,22 @@ run by hand:
   Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check
   still apply.
 
+A named profile runs a second, separate local server:
+
+```sh
+trek-server start --local --local-profile dev
+trek-server stop --local --local-profile dev
+```
+
+It uses `local-<name>` instead of `local` in both places
+(`~/.config/trek-server/local-dev`, `<platform data dir>/local-dev`), with its
+own config, projects, token, `local.json` and lock, so it runs beside the
+default one. A dev build of Trek (`npm run dev`) uses `dev`, so it never
+restarts the installed Trek's server; the installed Trek uses the default
+profile. The name is 1–32 of `a-z`, `0-9` and `-`; anything else is a usage
+error (exit 2), so a name cannot point outside trek-server's directories.
+`--local-profile` only applies with `--local`.
+
 To stop it:
 
 ```sh

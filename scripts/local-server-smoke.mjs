@@ -7,7 +7,8 @@
 // ELECTRON_RUN_AS_NODE under Electron), a second start
 // refused by the lock, `stop --local` and SIGTERM's cleanup, SIGHUP's cleanup, a SIGKILLed
 // server's stale lock (and its temp files) taken over with a new token, the
-// session resumed with --resume, and a lock path that cannot be taken.
+// session resumed with --resume, a lock path that cannot be taken, and a named
+// profile (`--local-profile dev`, a dev build's) running beside the default one.
 //
 // With --packaged <Trek.app>, it runs the same checks on a packaged app instead: the app's own
 // binary with ELECTRON_RUN_AS_NODE=1, on Contents/Resources/app.asar/out/server/trek-server.cjs
@@ -102,8 +103,8 @@ async function suite(rt) {
 
   const children = []
   const conns = []
-  const start = () => {
-    const child = spawn(rt.cmd, [cli, 'start', '--local'], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const start = (extra = []) => {
+    const child = spawn(rt.cmd, [cli, 'start', '--local', ...extra], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] })
     const run = { child, out: '', err: '', code: undefined }
     child.stdout.on('data', (d) => { run.out += d })
     child.stderr.on('data', (d) => { run.err += d })
@@ -121,14 +122,14 @@ async function suite(rt) {
       p.stderr.on('data', (d) => { err += d })
       p.on('exit', (code) => resolve({ code, out, err }))
     })
-  const info = () => {
+  const info = (path = infoPath) => {
     try {
-      return parseLocalInfo(JSON.parse(readFileSync(infoPath, 'utf8')))
+      return parseLocalInfo(JSON.parse(readFileSync(path, 'utf8')))
     } catch {
       return undefined
     }
   }
-  const lockPid = () => (existsSync(lockPath) ? Number(readFileSync(lockPath, 'utf8').trim()) : undefined)
+  const lockPid = (path = lockPath) => (existsSync(path) ? Number(readFileSync(path, 'utf8').trim()) : undefined)
   const connect = async (port, token, name) => {
     const conn = new ServerConnection({ url: `ws://127.0.0.1:${port}`, token, createSocket: globalSocketFactory, client: `local-smoke-${name}` })
     conns.push(conn)
@@ -261,6 +262,47 @@ async function suite(rt) {
     await e.exited
     check(e.code === 1 && e.err.includes(`Cannot take the lock ${lockPath}: `) && !e.err.includes('    at '), 'a directory at local.lock: exit 1, "Cannot take the lock"', `${e.code} ${e.err}`)
     rmSync(lockPath, { recursive: true })
+
+    // --- 12. a named profile (a dev build's) runs beside the default one, with its own files ---
+    const badName = spawnSync(rt.cmd, [cli, 'start', '--local', '--local-profile', '../x'], { env, encoding: 'utf8' })
+    const noLocal = spawnSync(rt.cmd, [cli, 'start', '--local-profile', 'dev'], { env, encoding: 'utf8' })
+    check(
+      badName.status === 2 && badName.stderr.includes('Invalid local profile name') && noLocal.status === 2 && noLocal.stderr.includes('--local-profile only applies with --local'),
+      '--local-profile ../x, and --local-profile without --local, are usage errors (exit 2)',
+      `${badName.status} ${noLocal.status} ${noLocal.stderr.slice(0, 200)}`
+    )
+    const devProfile = join(home, '.config', 'trek-server', 'local-dev')
+    const devInfo = join(devProfile, 'local.json')
+    const devLock = join(devProfile, 'local.lock')
+    const p = start()
+    const n = start(['--local-profile', 'dev'])
+    must(
+      await waitFor(() => (info()?.pid === p.child.pid && info(devInfo)?.pid === n.child.pid) || p.code !== undefined || n.code !== undefined),
+      'the default and the dev profile both start: each local.json names its own server',
+      `codes ${p.code} ${n.code}, ${p.err} ${n.err}`
+    )
+    check(lockPid() === p.child.pid && lockPid(devLock) === n.child.pid, 'each profile has its own local.lock, holding its own pid')
+    const infoP = info()
+    const infoN = info(devInfo)
+    check(infoP.port !== infoN.port && infoP.token !== infoN.token, 'they listen on different ports, with different tokens')
+    const connP = await connect(infoP.port, infoP.token, 'p')
+    const connN = await connect(infoN.port, infoN.token, 'dev')
+    check(
+      connP.status === 'connected' && connN.status === 'connected' && connN.welcome.capabilities.includes('local') && connP.welcome.serverId !== connN.welcome.serverId,
+      'both are welcomed as local servers, with different serverIds (separate configs)',
+      `${connP.status} ${connN.status} ${connP.welcome?.serverId} ${connN.welcome?.serverId}`
+    )
+    for (const x of conns.splice(0)) x.close()
+    const stopDev = await runCli(['stop', '--local', '--local-profile', 'dev'])
+    await Promise.race([n.exited, new Promise((r) => setTimeout(r, 5000))])
+    check(
+      stopDev.code === 0 && n.code === 0 && !existsSync(devInfo) && !existsSync(devLock) && p.code === undefined && info()?.pid === p.child.pid && lockPid() === p.child.pid,
+      "stop --local --local-profile dev stops only the dev server; the default one's files stay",
+      `${stopDev.code} ${n.code} ${p.code} ${stopDev.out} ${stopDev.err}`
+    )
+    const stopDefault = await runCli(['stop', '--local'])
+    await Promise.race([p.exited, new Promise((r) => setTimeout(r, 5000))])
+    check(stopDefault.code === 0 && p.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'stop --local then stops the default one', `${stopDefault.code} ${p.code}`)
   } catch (err) {
     if (!(err instanceof Abort)) fail(`${rt.name}: ${err.stack ?? err}`)
     for (const r of children) if (r.err) console.error(`[${rt.name} pid ${r.child.pid} stderr]\n${r.err}`)

@@ -1,37 +1,42 @@
 // `trek-server start --local`'s own profile: its config, local.json and lock
 // under ~/.config/trek-server/local, and its projects under <dataDir>/local, so
-// it never shares files with a hand-run `trek-server start`.
+// it never shares files with a hand-run `trek-server start`. A named profile
+// (`--local-profile <name>`) uses local-<name> in both places instead.
 import { readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   LOCAL_CONFIG_FILE,
   LOCAL_INFO_FILE,
   LOCAL_LOCK_FILE,
-  LOCAL_PROFILE_DIR,
+  localProfileDir,
+  localProfileSegment,
   parseLocalInfo,
   type LocalInfo
 } from '../../src/shared/localServer.ts'
 import { writeFileAtomic } from './atomicWrite.ts'
 
 export interface LocalProfile {
-  /** ~/.config/trek-server/local */
+  /** ~/.config/trek-server/local (or local-<name>) */
   dir: string
   configPath: string
   infoPath: string
   lockPath: string
-  /** <dataDir>/local: the local server's projects and MCP files */
+  /** <dataDir>/local (or local-<name>): the local server's projects and MCP files */
   dataDir: string
 }
 
-/** `dataDir` is the platform data dir (defaultDataDir()); the profile uses its `local` subdirectory. */
-export function localProfile(home: string, dataDir: string): LocalProfile {
-  const dir = join(home, ...LOCAL_PROFILE_DIR)
+/**
+ * `dataDir` is the platform data dir (defaultDataDir()); the profile uses its `local`
+ * subdirectory, or `local-<name>` for a named profile. Throws on an invalid name.
+ */
+export function localProfile(home: string, dataDir: string, name?: string): LocalProfile {
+  const dir = join(home, ...localProfileDir(name))
   return {
     dir,
     configPath: join(dir, LOCAL_CONFIG_FILE),
     infoPath: join(dir, LOCAL_INFO_FILE),
     lockPath: join(dir, LOCAL_LOCK_FILE),
-    dataDir: join(dataDir, 'local')
+    dataDir: join(dataDir, localProfileSegment(name))
   }
 }
 

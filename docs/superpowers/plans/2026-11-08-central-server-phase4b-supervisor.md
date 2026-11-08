@@ -9,6 +9,7 @@
    - Otherwise it spawns `start --local`: detached in its own session, with a cleaned env, and its output going to `server.log` in the profile. It waits up to 15 s for `local.json`.
    - Exit 3, exit 1 "Cannot take the lock", other exits and timeouts are each reported once, with the log's tail. A start is never retried in a loop.
 3. **Version skew.** A running server that is not the bundled build gets a Restart / Keep Running question.
+   - A dev build (`npm run dev`, not packaged) runs its own Local server, in the `local-dev` profile (`start --local --local-profile dev`), so it and the installed Trek never offer to restart each other's server.
 4. **Stop, Restart and Reset.**
    - Restart is `stop --local`, then SIGKILL only the pid that both the lock and `local.json` still name, then a spawn.
    - "Reset local server" deletes `local.lock` only under a stated safety rule.
@@ -26,8 +27,9 @@
 
 **Architecture:**
 - **The bundle.** `scripts/bundle-server.mjs` copies `server/dist/{trek-server.cjs,build.json}` into `out/server`. Main finds it from its own `__dirname` (`out/main` → `out/server`), as `windows.ts` finds the renderer.
+- **The profile name (Task 2b).** `trek-server start|stop --local --local-profile <name>` uses `local-<name>` under both `~/.config/trek-server` and the data dir. The supervisor passes `--local-profile dev` when `!app.isPackaged` (`localProfileName`).
 - **Pure rules, `src/main/localServerRules.ts`** (unit-tested):
-  - the paths;
+  - the profile (`localProfileName`, `localProfileArgs`) and its paths;
   - `probeVerdict`;
   - `skewOf` and `compareVersions`;
   - `childEnv`;
@@ -63,7 +65,7 @@
 |---|---|---|
 | **phases 1–3** (done) | protocol v2, the server registry, projects, git, sessions, status, MCP; server windows; attention across servers | Projects on servers open in their own windows. |
 | **4a server `--local`** (done, master at `8325345`) | <ul><li>`trek-server start --local`: own profile (`~/.config/trek-server/local`, `<dataDir>/local`), pid lock, `127.0.0.1` on a random port, a token per start</li><li>`trek-server stop --local`</li><li>`local.json`</li><li>the permissive guard</li><li>the `local` capability</li><li>the build stamp</li><li>`smoke:local`</li></ul> | None in the app; `trek-server --local` works by hand. |
-| **4b bundling and supervisor** (this plan) | <ul><li>`out/server` built and shipped inside `app.asar`, proven packaged</li><li>`src/main/localServer.ts`: probe, spawn detached with a clean env and a log, bounded waits, exit 3 / exit 1 / timeout reported</li><li>version skew with a restart offer</li><li>Stop, Restart and Reset local server</li><li>the synthetic `local` entry, first and non-removable, its token read from `local.json` by main</li><li>main's links, the relay and live windows follow URL changes</li><li>File → Local Server</li><li>"Stop local server on quit" (off)</li><li>New Project on Local with the folder picker</li><li>`smoke:local-app`, `smoke:packaged`</li></ul> | A Local server appears by itself, first in Connect to server; New Project on Local; the menu. |
+| **4b bundling and supervisor** (this plan) | <ul><li>`out/server` built and shipped inside `app.asar`, proven packaged</li><li>`--local-profile <name>`; a dev build's own `local-dev` profile</li><li>`src/main/localServer.ts`: probe, spawn detached with a clean env and a log, bounded waits, exit 3 / exit 1 / timeout reported</li><li>version skew with a restart offer</li><li>Stop, Restart and Reset local server</li><li>the synthetic `local` entry, first and non-removable, its token read from `local.json` by main</li><li>main's links, the relay and live windows follow URL changes</li><li>File → Local Server</li><li>"Stop local server on quit" (off)</li><li>New Project on Local with the folder picker</li><li>`smoke:local-app`, `smoke:packaged`</li></ul> | A Local server appears by itself, first in Connect to server; New Project on Local; the menu. |
 | **4c features on Local** | Docker, env, stacks, skills, VS Code/Reveal and Linear on for Local server windows; Linear on for every server | Local server windows do what file windows did. |
 | **4d import** | <ul><li>File → Import .trekproj…</li><li>opening a `.trekproj` imports it, or focuses the project if it was already imported (`migrated.json`)</li><li>a one-time first-launch prompt</li><li>recents and `open-windows.json` rewritten</li><li>legacy server tokens migrated</li></ul> | Existing projects move onto servers. |
 | **4e start screen and retirement** | <ul><li>the start screen becomes Open on server…, New Project… (with a server picker, Local first) and Import .trekproj…</li><li>file windows and the legacy code deleted</li><li>the bot stays dormant in the tree</li><li>the legacy smokes rewritten or retired</li></ul> | Every project lives on a server. |
@@ -88,12 +90,20 @@ Out of scope here:
 4. **The token** rotates on each start. The app reads it from `local.json`, never stores it, and never sends it to a renderer.
 5. **Version skew:** if the running Local server is older than, or a different build from, the bundled one, the app offers a restart. The bot stays dormant and is not touched.
 
+27. **A dev build has its own Local profile** (Task 2b; the answer to Question 1, numbered last so the others keep their numbers).
+    - A dev build (`npm run dev`, any unpackaged run) and the installed Trek would otherwise share `~/.config/trek-server/local`. Their bundles differ, so each would offer to restart the other's server, and a restart ends that server's sessions.
+    - The server takes `--local-profile <name>` with `--local`, on `start` and `stop`. The name must match `/^[a-z0-9-]{1,32}$/`: no dot, slash or uppercase, so it can never leave trek-server's directories. Anything else is a usage error (exit 2), as is `--local-profile` without `--local`.
+    - A name maps to `~/.config/trek-server/local-<name>/` and `<dataDir>/local-<name>`: its own config, serverId, token, projects, MCP files, `local.json`, `local.lock` and `server.log`. With no name the profile is `local`, unchanged.
+    - The helpers are shared: `isLocalProfileName`, `localProfileSegment` and `localProfileDir` in `src/shared/localServer.ts`, used by the server's `localProfile(home, dataDir, name?)` and main's `localPaths(home, profile?)`.
+    - The supervisor's profile is `localProfileName(app.isPackaged)`: `undefined` (the default) when packaged, `dev` otherwise. Its `local.json`, lock, log, config and watched directory are that profile's, and its `start --local` and `stop --local` carry `localProfileArgs(profile)` (`--local-profile dev`, or nothing).
+    - The two Local servers are separate: a dev run does not see the installed app's projects or sessions. That is the point.
+
 ### Decided in this plan
 
 **The bundle (Task 1)**
 
 6. **`out/server` sits inside `app.asar`, not unpacked.**
-   - Proven on a real `electron-builder --mac --arm64 --dir` build: `smoke:packaged` runs every `smoke:local` check (36) with the app's own binary (`Trek.app/Contents/MacOS/Trek`, `ELECTRON_RUN_AS_NODE=1`) on `Contents/Resources/app.asar/out/server/trek-server.cjs`. That covers a session through `node-pty`, a SIGKILL takeover and `--resume`.
+   - Proven on a real `electron-builder --mac --arm64 --dir` build: `smoke:packaged` runs every `smoke:local` check (36; 43 from Task 2b) with the app's own binary (`Trek.app/Contents/MacOS/Trek`, `ELECTRON_RUN_AS_NODE=1`) on `Contents/Resources/app.asar/out/server/trek-server.cjs`. That covers a session through `node-pty`, a SIGKILL takeover and `--resume`.
    - `smoke:local-app --packaged` then launches the packaged app itself (36 checks). Its supervisor spawns exactly that command line: Local first, New Project on Local, a session, Stop/Start, Restart, quit-and-reuse, and stop on quit.
    - Why it works:
      - Electron's Node mode reads the entry script out of the asar.
@@ -124,7 +134,7 @@ Out of scope here:
 
    Anything else means spawn: the new start's lock decides between taking over a dead holder and exit 3. So the probe never needs to judge a stale file itself.
 10. **The spawn** (Notes for 4b 1, 11, 12).
-    - The command is `spawn(process.execPath, [out/server/trek-server.cjs, 'start', '--local'], {detached: true, cwd: homedir(), env: childEnv(process.env), stdio: ['ignore', logFd, logFd]})`, then `unref()`.
+    - The command is `spawn(process.execPath, [out/server/trek-server.cjs, 'start', '--local', ...localProfileArgs(profile)], {detached: true, cwd: homedir(), env: childEnv(process.env), stdio: ['ignore', logFd, logFd]})`, then `unref()`.
     - `detached` is `setsid()` on POSIX. The smoke checks that the server leads its own process group.
     - `fixPath` has already patched `process.env.PATH` (it is awaited first in `whenReady`).
     - `childEnv` drops:
@@ -134,8 +144,8 @@ Out of scope here:
       - `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`, which would misdirect every git call.
 
       Then it sets `ELECTRON_RUN_AS_NODE=1`, which the server deletes from its own env before any pty (4a final review fix 1). The smoke checks that a session's agent sees no `TREK_` variable from the app.
-11. **The log is `~/.config/trek-server/local/server.log`**, beside `local.json` and `local.lock`, not in userData.
-    - It is the server's output, and the server belongs to the profile, not to one Trek install. A dev build and an installed Trek have different userData but share the profile and its server.
+11. **The log is `~/.config/trek-server/local/server.log`** (`local-dev/server.log` for a dev build, Decision 27), beside `local.json` and `local.lock`, not in userData.
+    - It is the server's output, and the server belongs to the profile, not to one Trek install.
     - The error dialog names `local.lock` and `local.json` in that directory, so the log is where the user is already looking.
     - It is opened `O_APPEND`, 0600 (the profile directory is 0700). Each spawn writes a header line, `--- <ISO time> Trek <version> starts the local server ---`; the smoke counts these to prove "no new spawn".
     - At a spawn, a log over 1 MB is renamed to `server.log.old` first, so it is bounded at about 2 MB.
@@ -293,8 +303,13 @@ Out of scope here:
 | `scripts/bundle-server.mjs` | create | 1 | `server/dist` → `out/server` (`trek-server.cjs`, `build.json`) |
 | `package.json` | modify | 1, 7 | `build`, `build:server`, `dev`, `dist`, `dist:dir`, `smoke:packaged`, `smoke:local-app` |
 | `scripts/local-server-smoke.mjs` | modify | 1 | `--packaged <Trek.app>`: the same checks on the packaged app's binary and asar |
-| `src/main/localServerRules.ts` | create | 2 | the supervisor's pure decisions |
-| `scripts/localServerRules.test.mjs` | create | 2 | their tests |
+| `src/main/localServerRules.ts` | create | 2, 2b | the supervisor's pure decisions; the profile (`localProfileName`, `localProfileArgs`) |
+| `scripts/localServerRules.test.mjs` | create | 2, 2b | their tests |
+| `src/shared/localServer.ts` | modify | 2b | `LOCAL_PROFILE_NAME_RE`, `isLocalProfileName`, `localProfileSegment`, `localProfileDir` |
+| `server/src/localProfile.ts`, `server/src/index.ts` | modify | 2b | `localProfile(home, dataDir, name?)`; `--local-profile <name>` on `start --local` and `stop --local` |
+| `scripts/serverLocalProfile.test.mjs` | modify | 2b | the name's validation and the path mapping |
+| `scripts/local-server-smoke.mjs` | modify | 2b | a named profile running beside the default one |
+| `server/README.md` | modify | 2b | `--local-profile` |
 | `src/main/localServer.ts` | create | 3 | the supervisor: probe, spawn, waits, stop, restart, skew, reset, refresh, the entry and token, the IPC, quit |
 | `src/main/appServerProbe.ts`, `scripts/appServerProbe.test.mjs` | modify | 3 | the probe result carries the welcome's `serverId` |
 | `src/shared/types.ts` | modify | 3 | `LocalServerStatus`, `AppServerLink.local`, `AppServerTest.serverId` |
@@ -313,7 +328,7 @@ Out of scope here:
 | `src/renderer/src/components/StartScreen.tsx`, `src/renderer/src/styles.css` | modify | 6 | the `local` recents chip; styles |
 | `scripts/local-app-smoke.mjs` | create | 7 | `smoke:local-app` (and `--packaged`) |
 
-`server/` does not change: everything 4b needs from the server was built in 4a.
+`server/` changes only in Task 2b (`--local-profile`); everything else 4b needs from the server was built in 4a.
 
 ---
 
@@ -932,6 +947,518 @@ Tests: 1459 → 1469.
 
 ---
 
+### Task 2b: A separate Local profile for dev builds
+
+**Files:**
+- Modify: `src/shared/localServer.ts`, `server/src/localProfile.ts`, `server/src/index.ts`, `server/README.md`, `src/main/localServerRules.ts`, `scripts/localServerRules.test.mjs`, `scripts/serverLocalProfile.test.mjs`, `scripts/local-server-smoke.mjs`
+
+A dev build and the installed Trek would share `~/.config/trek-server/local`, and each would offer to restart the other's server (Decision 27). The server learns a profile name; Task 3's supervisor passes `--local-profile dev` when `!app.isPackaged`.
+
+- [ ] **Step 1: The failing tests**
+
+`scripts/serverLocalProfile.test.mjs`: a named profile's paths, and the name's validation.
+
+```diff
+diff --git a/scripts/serverLocalProfile.test.mjs b/scripts/serverLocalProfile.test.mjs
+index 425e1b2..07c85f5 100644
+--- a/scripts/serverLocalProfile.test.mjs
++++ b/scripts/serverLocalProfile.test.mjs
+@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
+ import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+ import { tmpdir } from 'node:os'
+ import { join } from 'node:path'
+-import { parseLocalInfo } from '../src/shared/localServer.ts'
++import { LOCAL_PROFILE_DIR, isLocalProfileName, localProfileDir, localProfileSegment, parseLocalInfo } from '../src/shared/localServer.ts'
+ import { localProfile, readLocalInfo, removeLocalInfo, writeLocalInfo } from '../server/src/localProfile.ts'
+ 
+ // A token as addToken makes one: 32 random bytes, base64url.
+@@ -26,6 +26,33 @@ test('the local profile lives under ~/.config/trek-server/local and <dataDir>/lo
+   })
+ })
+ 
++test('a named profile lives under ~/.config/trek-server/local-<name> and <dataDir>/local-<name>', () => {
++  assert.deepEqual(localProfile('/h', '/d/trek-server', 'dev'), {
++    dir: '/h/.config/trek-server/local-dev',
++    configPath: '/h/.config/trek-server/local-dev/config.json',
++    infoPath: '/h/.config/trek-server/local-dev/local.json',
++    lockPath: '/h/.config/trek-server/local-dev/local.lock',
++    dataDir: '/d/trek-server/local-dev'
++  })
++  assert.deepEqual(localProfile('/h', '/d', undefined), localProfile('/h', '/d'), 'no name is the default profile')
++  assert.deepEqual(localProfileDir(), LOCAL_PROFILE_DIR)
++  assert.deepEqual(localProfileDir('a-1'), ['.config', 'trek-server', 'local-a-1'])
++  assert.equal(localProfileSegment(), 'local')
++  assert.equal(localProfileSegment('x'.repeat(32)), `local-${'x'.repeat(32)}`)
++  assert.throws(() => localProfile('/h', '/d', '../../etc'), /Invalid local profile name/)
++})
++
++test('a profile name is 1-32 of a-z, 0-9 and -: nothing that could leave the directory', () => {
++  for (const good of ['dev', 'a', '0', 'my-profile-2', '-', 'x'.repeat(32)]) assert.equal(isLocalProfileName(good), true, good)
++  for (const bad of [
++    '', 'x'.repeat(33), 'Dev', 'dev ', ' dev', 'de_v', 'de.v', '.', '..', '../x', 'a/b', 'a\\b', '/abs', '~', 'dev\n', 'dev\0',
++    'dév', undefined, null, 1, ['dev'], {}
++  ]) {
++    assert.equal(isLocalProfileName(bad), false, JSON.stringify(bad))
++    if (typeof bad === 'string') assert.throws(() => localProfileSegment(bad), /Invalid local profile name/, JSON.stringify(bad))
++  }
++})
++
+ test('parseLocalInfo keeps the five fields and drops anything else', () => {
+   assert.deepEqual(parseLocalInfo({ ...info, extra: 1 }), info)
+   assert.deepEqual(parseLocalInfo({ ...info, build: 'dev' }), { ...info, build: 'dev' }, 'a source run')
+```
+
+`scripts/localServerRules.test.mjs`: the profile a build uses, its CLI arguments and its paths.
+
+```diff
+diff --git a/scripts/localServerRules.test.mjs b/scripts/localServerRules.test.mjs
+index b12b5de..6b4511f 100644
+--- a/scripts/localServerRules.test.mjs
++++ b/scripts/localServerRules.test.mjs
+@@ -4,12 +4,15 @@
+ import test from 'node:test'
+ import assert from 'node:assert/strict'
+ import {
++  DEV_LOCAL_PROFILE,
+   LOCAL_ENTRY_ID,
+   LOG_ROTATE_BYTES,
+   afterStop,
+   childEnv,
+   compareVersions,
+   localPaths,
++  localProfileArgs,
++  localProfileName,
+   localUrl,
+   logTail,
+   parseBuildJson,
+@@ -33,6 +36,23 @@ test('the paths: the profile from src/shared/localServer.ts, and the log beside
+   assert.equal(LOCAL_ENTRY_ID, 'local')
+ })
+ 
++test('the profile: the default one when packaged, local-dev for a dev build, with its own files', () => {
++  assert.equal(localProfileName(true), undefined)
++  assert.equal(localProfileName(false), 'dev')
++  assert.equal(DEV_LOCAL_PROFILE, 'dev')
++  assert.deepEqual(localProfileArgs(localProfileName(true)), [])
++  assert.deepEqual(localProfileArgs(localProfileName(false)), ['--local-profile', 'dev'])
++  assert.deepEqual(localPaths('/home/u', undefined), localPaths('/home/u'))
++  assert.deepEqual(localPaths('/home/u', 'dev'), {
++    dir: '/home/u/.config/trek-server/local-dev',
++    config: '/home/u/.config/trek-server/local-dev/config.json',
++    info: '/home/u/.config/trek-server/local-dev/local.json',
++    lock: '/home/u/.config/trek-server/local-dev/local.lock',
++    log: '/home/u/.config/trek-server/local-dev/server.log'
++  })
++  assert.throws(() => localPaths('/home/u', '../x'), /Invalid local profile name/)
++})
++
+ test('parseBuildJson takes the bundle stamp, nothing else', () => {
+   assert.deepEqual(parseBuildJson({ version: '0.2.0', build: '0123456789ab', extra: 1 }), { version: '0.2.0', build: '0123456789ab' })
+   assert.deepEqual(parseBuildJson({ version: '0.2.0', build: 'dev' }), { version: '0.2.0', build: 'dev' })
+```
+
+Run: `node --test scripts/serverLocalProfile.test.mjs scripts/localServerRules.test.mjs 2>&1 | grep -E 'SyntaxError|^# (pass|fail)'`
+
+Expected:
+
+```
+# SyntaxError: The requested module '../src/main/localServerRules.ts' does not provide an export named 'DEV_LOCAL_PROFILE'
+# SyntaxError: The requested module '../src/shared/localServer.ts' does not provide an export named 'isLocalProfileName'
+# pass 0
+# fail 2
+```
+
+- [ ] **Step 2: The shared helpers**
+
+`src/shared/localServer.ts`:
+
+```diff
+diff --git a/src/shared/localServer.ts b/src/shared/localServer.ts
+index 355b4a7..c5b38a9 100644
+--- a/src/shared/localServer.ts
++++ b/src/shared/localServer.ts
+@@ -5,6 +5,33 @@
+ 
+ /** The local profile's directory, under the home directory: ~/.config/trek-server/local */
+ export const LOCAL_PROFILE_DIR = ['.config', 'trek-server', 'local'] as const
++/**
++ * A named local profile (`--local-profile <name>`): lowercase letters, digits and
++ * hyphens, at most 32. No dot or slash, so a name can never leave trek-server's
++ * directories. A dev build of Trek uses `dev`, so it never shares a server with
++ * the installed app.
++ */
++export const LOCAL_PROFILE_NAME_RE = /^[a-z0-9-]{1,32}$/
++
++export function isLocalProfileName(name: unknown): name is string {
++  return typeof name === 'string' && LOCAL_PROFILE_NAME_RE.test(name)
++}
++
++/**
++ * The profile's directory name, both under ~/.config/trek-server and under the
++ * platform data dir: `local` for the default profile, `local-<name>` for a named
++ * one. Throws on a name LOCAL_PROFILE_NAME_RE refuses.
++ */
++export function localProfileSegment(name?: string): string {
++  if (name === undefined) return 'local'
++  if (!isLocalProfileName(name)) throw new Error(`Invalid local profile name: ${JSON.stringify(name)}`)
++  return `local-${name}`
++}
++
++/** The profile's directory as segments under the home directory: LOCAL_PROFILE_DIR, or ~/.config/trek-server/local-<name> */
++export function localProfileDir(name?: string): readonly string[] {
++  return ['.config', 'trek-server', localProfileSegment(name)]
++}
+ /** The local server's config file, in the profile directory */
+ export const LOCAL_CONFIG_FILE = 'config.json'
+ /** Written (0600) once the local server listens; removed when it exits */
+```
+
+- [ ] **Step 3: The server's profile and flag**
+
+`server/src/localProfile.ts`:
+
+```diff
+diff --git a/server/src/localProfile.ts b/server/src/localProfile.ts
+index 889c356..06d4cb9 100644
+--- a/server/src/localProfile.ts
++++ b/server/src/localProfile.ts
+@@ -1,37 +1,42 @@
+ // `trek-server start --local`'s own profile: its config, local.json and lock
+ // under ~/.config/trek-server/local, and its projects under <dataDir>/local, so
+-// it never shares files with a hand-run `trek-server start`.
++// it never shares files with a hand-run `trek-server start`. A named profile
++// (`--local-profile <name>`) uses local-<name> in both places instead.
+ import { readFileSync, unlinkSync } from 'node:fs'
+ import { join } from 'node:path'
+ import {
+   LOCAL_CONFIG_FILE,
+   LOCAL_INFO_FILE,
+   LOCAL_LOCK_FILE,
+-  LOCAL_PROFILE_DIR,
++  localProfileDir,
++  localProfileSegment,
+   parseLocalInfo,
+   type LocalInfo
+ } from '../../src/shared/localServer.ts'
+ import { writeFileAtomic } from './atomicWrite.ts'
+ 
+ export interface LocalProfile {
+-  /** ~/.config/trek-server/local */
++  /** ~/.config/trek-server/local (or local-<name>) */
+   dir: string
+   configPath: string
+   infoPath: string
+   lockPath: string
+-  /** <dataDir>/local: the local server's projects and MCP files */
++  /** <dataDir>/local (or local-<name>): the local server's projects and MCP files */
+   dataDir: string
+ }
+ 
+-/** `dataDir` is the platform data dir (defaultDataDir()); the profile uses its `local` subdirectory. */
+-export function localProfile(home: string, dataDir: string): LocalProfile {
+-  const dir = join(home, ...LOCAL_PROFILE_DIR)
++/**
++ * `dataDir` is the platform data dir (defaultDataDir()); the profile uses its `local`
++ * subdirectory, or `local-<name>` for a named profile. Throws on an invalid name.
++ */
++export function localProfile(home: string, dataDir: string, name?: string): LocalProfile {
++  const dir = join(home, ...localProfileDir(name))
+   return {
+     dir,
+     configPath: join(dir, LOCAL_CONFIG_FILE),
+     infoPath: join(dir, LOCAL_INFO_FILE),
+     lockPath: join(dir, LOCAL_LOCK_FILE),
+-    dataDir: join(dataDir, 'local')
++    dataDir: join(dataDir, localProfileSegment(name))
+   }
+ }
+ 
+```
+
+`server/src/index.ts`: `--local-profile <name>`, validated as it is parsed, only with `--local`. `start` and `stop` both build their profile from it.
+
+```diff
+diff --git a/server/src/index.ts b/server/src/index.ts
+index a737ece..e899540 100644
+--- a/server/src/index.ts
++++ b/server/src/index.ts
+@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
+ import { basename, resolve } from 'node:path'
+ import { setTimeout as delay } from 'node:timers/promises'
+ import { homedir, hostname } from 'node:os'
+-import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
++import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME, isLocalProfileName } from '../../src/shared/localServer'
+ import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
+ import { buildInfo } from './buildInfo'
+ import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig, saveConfig } from './config'
+@@ -48,6 +48,8 @@ interface CliArgs {
+   insecure: boolean
+   /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
+   local: boolean
++  /** `--local-profile <name>`: a named local profile (local-<name>) instead of the default one */
++  localProfile?: string
+ }
+ 
+ const USAGE = `Usage: trek-server [command] [options]
+@@ -79,6 +81,9 @@ Options:
+                     Writes the port and token to local.json there (0600) while it runs.
+                     Takes none of --config, --data-dir, --port, --host, --insecure.
+                     Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
++  --local-profile <name>
++                    With --local: a separate local server, under local-<name> in both
++                    directories (a dev build of Trek uses "dev"). The name is 1-32 of a-z, 0-9, -.
+   --id <id>         add: repo id (default: slug of the directory name)
+   --name <name>     add: display name (default: the directory name)
+   -h, --help        Show this help
+@@ -152,6 +157,11 @@ function parseArgs(argv: string[]): CliArgs {
+     else if (arg === '--data-dir') args.dataDir = value(++i, arg)
+     else if (arg === '--insecure') args.insecure = true
+     else if (arg === '--local') args.local = true
++    else if (arg === '--local-profile') {
++      const name = value(++i, arg)
++      if (!isLocalProfileName(name)) usageError(`Invalid local profile name: ${name} (1-32 of a-z, 0-9 and -)`)
++      args.localProfile = name
++    }
+     else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
+     else usageError(`Unknown argument: ${arg}`)
+   }
+@@ -160,6 +170,7 @@ function parseArgs(argv: string[]): CliArgs {
+     return args
+   }
+   if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
++  if (args.localProfile !== undefined && !args.local) usageError('--local-profile only applies with --local')
+   if (args.command === 'stop' && !args.local) usageError('`stop` only stops the local server: `trek-server stop --local`')
+   if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
+     usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
+@@ -208,7 +219,7 @@ if (args.command === 'version') {
+ }
+ 
+ /** `start --local`'s profile; its config and data dir replace the defaults. */
+-const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir()) : undefined
++const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir(), args.localProfile) : undefined
+ if (local) {
+   args.configPath = local.configPath
+   // Never copy the trek-daemon config into the local profile.
+```
+
+`server/README.md`:
+
+````diff
+diff --git a/server/README.md b/server/README.md
+index 3658c9f..0fa47b9 100644
+--- a/server/README.md
++++ b/server/README.md
+@@ -209,6 +209,22 @@ run by hand:
+   Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check
+   still apply.
+ 
++A named profile runs a second, separate local server:
++
++```sh
++trek-server start --local --local-profile dev
++trek-server stop --local --local-profile dev
++```
++
++It uses `local-<name>` instead of `local` in both places
++(`~/.config/trek-server/local-dev`, `<platform data dir>/local-dev`), with its
++own config, projects, token, `local.json` and lock, so it runs beside the
++default one. A dev build of Trek (`npm run dev`) uses `dev`, so it never
++restarts the installed Trek's server; the installed Trek uses the default
++profile. The name is 1–32 of `a-z`, `0-9` and `-`; anything else is a usage
++error (exit 2), so a name cannot point outside trek-server's directories.
++`--local-profile` only applies with `--local`.
++
+ To stop it:
+ 
+ ```sh
+````
+
+- [ ] **Step 4: The supervisor's profile**
+
+`src/main/localServerRules.ts`: `localProfileName(isPackaged)`, `localProfileArgs(profile)` and `localPaths(home, profile?)`. Task 3 uses all three.
+
+```diff
+diff --git a/src/main/localServerRules.ts b/src/main/localServerRules.ts
+index 297716a..7d69553 100644
+--- a/src/main/localServerRules.ts
++++ b/src/main/localServerRules.ts
+@@ -1,5 +1,5 @@
+-// The Local server supervisor's decisions (localServer.ts), pure: where the profile's
+-// files are, whether what local.json names can be used, version skew against the
++// The Local server supervisor's decisions (localServer.ts), pure: which profile this
++// build uses and where its files are, whether what local.json names can be used, version skew against the
+ // bundle, the child's env, what a failed start means, what a restart does once
+ // `stop --local` has answered, and when "Reset local server" may delete the lock.
+ import { join } from 'node:path'
+@@ -7,8 +7,8 @@ import {
+   LOCAL_CONFIG_FILE,
+   LOCAL_INFO_FILE,
+   LOCAL_LOCK_FILE,
+-  LOCAL_PROFILE_DIR,
+   LOCAL_ALREADY_RUNNING_EXIT,
++  localProfileDir,
+   type LocalInfo
+ } from '../shared/localServer.ts'
+ 
+@@ -34,8 +34,27 @@ export interface LocalPaths {
+   log: string
+ }
+ 
+-export function localPaths(home: string): LocalPaths {
+-  const dir = join(home, ...LOCAL_PROFILE_DIR)
++/** The local profile a dev build (not packaged) uses, so it never restarts the installed Trek's server. */
++export const DEV_LOCAL_PROFILE = 'dev'
++
++/**
++ * The local profile this Trek uses: the default one (undefined) when packaged,
++ * `dev` (~/.config/trek-server/local-dev) for `npm run dev` and the smokes. An
++ * installed Trek and a dev build would otherwise share one server, and each would
++ * offer to restart the other's, ending its sessions.
++ */
++export function localProfileName(isPackaged: boolean): string | undefined {
++  return isPackaged ? undefined : DEV_LOCAL_PROFILE
++}
++
++/** The CLI arguments that select `profile`, after `start --local` or `stop --local`. */
++export function localProfileArgs(profile: string | undefined): string[] {
++  return profile === undefined ? [] : ['--local-profile', profile]
++}
++
++/** The profile's files; `profile` is localProfileName's (throws on an invalid name). */
++export function localPaths(home: string, profile?: string): LocalPaths {
++  const dir = join(home, ...localProfileDir(profile))
+   return {
+     dir,
+     config: join(dir, LOCAL_CONFIG_FILE),
+```
+
+Run: `node --test scripts/serverLocalProfile.test.mjs scripts/localServerRules.test.mjs 2>&1 | grep -E '^# (pass|fail)'`
+
+Expected: `# pass 20`, `# fail 0`.
+
+- [ ] **Step 5: The smoke: a named profile beside the default one**
+
+`scripts/local-server-smoke.mjs` gains scenario 12 (7 checks per runtime):
+- `--local-profile ../x`, and `--local-profile` without `--local`, exit 2;
+- the default and the `dev` profile start at the same time, each `local.json` naming its own server;
+- each has its own `local.lock` with its own pid;
+- different ports and tokens;
+- both welcomed as `local`, with different serverIds;
+- `stop --local --local-profile dev` stops only the dev one, and the default one's files stay;
+- `stop --local` then stops the default one.
+
+```diff
+diff --git a/scripts/local-server-smoke.mjs b/scripts/local-server-smoke.mjs
+index 4deb2cd..6251dc6 100644
+--- a/scripts/local-server-smoke.mjs
++++ b/scripts/local-server-smoke.mjs
+@@ -7,7 +7,8 @@
+ // ELECTRON_RUN_AS_NODE under Electron), a second start
+ // refused by the lock, `stop --local` and SIGTERM's cleanup, SIGHUP's cleanup, a SIGKILLed
+ // server's stale lock (and its temp files) taken over with a new token, the
+-// session resumed with --resume, and a lock path that cannot be taken.
++// session resumed with --resume, a lock path that cannot be taken, and a named
++// profile (`--local-profile dev`, a dev build's) running beside the default one.
+ //
+ // With --packaged <Trek.app>, it runs the same checks on a packaged app instead: the app's own
+ // binary with ELECTRON_RUN_AS_NODE=1, on Contents/Resources/app.asar/out/server/trek-server.cjs
+@@ -102,8 +103,8 @@ async function suite(rt) {
+ 
+   const children = []
+   const conns = []
+-  const start = () => {
+-    const child = spawn(rt.cmd, [cli, 'start', '--local'], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] })
++  const start = (extra = []) => {
++    const child = spawn(rt.cmd, [cli, 'start', '--local', ...extra], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] })
+     const run = { child, out: '', err: '', code: undefined }
+     child.stdout.on('data', (d) => { run.out += d })
+     child.stderr.on('data', (d) => { run.err += d })
+@@ -121,14 +122,14 @@ async function suite(rt) {
+       p.stderr.on('data', (d) => { err += d })
+       p.on('exit', (code) => resolve({ code, out, err }))
+     })
+-  const info = () => {
++  const info = (path = infoPath) => {
+     try {
+-      return parseLocalInfo(JSON.parse(readFileSync(infoPath, 'utf8')))
++      return parseLocalInfo(JSON.parse(readFileSync(path, 'utf8')))
+     } catch {
+       return undefined
+     }
+   }
+-  const lockPid = () => (existsSync(lockPath) ? Number(readFileSync(lockPath, 'utf8').trim()) : undefined)
++  const lockPid = (path = lockPath) => (existsSync(path) ? Number(readFileSync(path, 'utf8').trim()) : undefined)
+   const connect = async (port, token, name) => {
+     const conn = new ServerConnection({ url: `ws://127.0.0.1:${port}`, token, createSocket: globalSocketFactory, client: `local-smoke-${name}` })
+     conns.push(conn)
+@@ -261,6 +262,47 @@ async function suite(rt) {
+     await e.exited
+     check(e.code === 1 && e.err.includes(`Cannot take the lock ${lockPath}: `) && !e.err.includes('    at '), 'a directory at local.lock: exit 1, "Cannot take the lock"', `${e.code} ${e.err}`)
+     rmSync(lockPath, { recursive: true })
++
++    // --- 12. a named profile (a dev build's) runs beside the default one, with its own files ---
++    const badName = spawnSync(rt.cmd, [cli, 'start', '--local', '--local-profile', '../x'], { env, encoding: 'utf8' })
++    const noLocal = spawnSync(rt.cmd, [cli, 'start', '--local-profile', 'dev'], { env, encoding: 'utf8' })
++    check(
++      badName.status === 2 && badName.stderr.includes('Invalid local profile name') && noLocal.status === 2 && noLocal.stderr.includes('--local-profile only applies with --local'),
++      '--local-profile ../x, and --local-profile without --local, are usage errors (exit 2)',
++      `${badName.status} ${noLocal.status} ${noLocal.stderr.slice(0, 200)}`
++    )
++    const devProfile = join(home, '.config', 'trek-server', 'local-dev')
++    const devInfo = join(devProfile, 'local.json')
++    const devLock = join(devProfile, 'local.lock')
++    const p = start()
++    const n = start(['--local-profile', 'dev'])
++    must(
++      await waitFor(() => (info()?.pid === p.child.pid && info(devInfo)?.pid === n.child.pid) || p.code !== undefined || n.code !== undefined),
++      'the default and the dev profile both start: each local.json names its own server',
++      `codes ${p.code} ${n.code}, ${p.err} ${n.err}`
++    )
++    check(lockPid() === p.child.pid && lockPid(devLock) === n.child.pid, 'each profile has its own local.lock, holding its own pid')
++    const infoP = info()
++    const infoN = info(devInfo)
++    check(infoP.port !== infoN.port && infoP.token !== infoN.token, 'they listen on different ports, with different tokens')
++    const connP = await connect(infoP.port, infoP.token, 'p')
++    const connN = await connect(infoN.port, infoN.token, 'dev')
++    check(
++      connP.status === 'connected' && connN.status === 'connected' && connN.welcome.capabilities.includes('local') && connP.welcome.serverId !== connN.welcome.serverId,
++      'both are welcomed as local servers, with different serverIds (separate configs)',
++      `${connP.status} ${connN.status} ${connP.welcome?.serverId} ${connN.welcome?.serverId}`
++    )
++    for (const x of conns.splice(0)) x.close()
++    const stopDev = await runCli(['stop', '--local', '--local-profile', 'dev'])
++    await Promise.race([n.exited, new Promise((r) => setTimeout(r, 5000))])
++    check(
++      stopDev.code === 0 && n.code === 0 && !existsSync(devInfo) && !existsSync(devLock) && p.code === undefined && info()?.pid === p.child.pid && lockPid() === p.child.pid,
++      "stop --local --local-profile dev stops only the dev server; the default one's files stay",
++      `${stopDev.code} ${n.code} ${p.code} ${stopDev.out} ${stopDev.err}`
++    )
++    const stopDefault = await runCli(['stop', '--local'])
++    await Promise.race([p.exited, new Promise((r) => setTimeout(r, 5000))])
++    check(stopDefault.code === 0 && p.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'stop --local then stops the default one', `${stopDefault.code} ${p.code}`)
+   } catch (err) {
+     if (!(err instanceof Abort)) fail(`${rt.name}: ${err.stack ?? err}`)
+     for (const r of children) if (r.err) console.error(`[${rt.name} pid ${r.child.pid} stderr]\n${r.err}`)
+```
+
+Run: `npm --prefix server run build >/dev/null && node scripts/local-server-smoke.mjs 2>&1 | tail -1`
+
+Expected: `LOCAL SMOKE PASS (85 checks)` (71 + 7 under Node + 7 under Electron's Node). `smoke:packaged`'s server smoke is now 43 checks (36 + 7).
+
+Run: `npm run typecheck && npm --prefix server run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
+
+Expected: no type errors; `# pass 1472`, `# fail 0`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(server): --local-profile <name>; a dev build's Local server is local-dev" -m "Co-Authored-By: <model trailer>" -- src/shared/localServer.ts server/src/localProfile.ts server/src/index.ts server/README.md src/main/localServerRules.ts scripts/localServerRules.test.mjs scripts/serverLocalProfile.test.mjs scripts/local-server-smoke.mjs docs/superpowers/plans/2026-11-08-central-server-phase4b-supervisor.md
+```
+
+Tests: 1469 → 1472.
+
+---
+
 ### Task 3: The supervisor
 
 **Files:**
@@ -1041,8 +1568,10 @@ Create `src/main/localServer.ts`:
 // It holds the running server's LocalInfo for main only: the token goes to the relay
 // and main's own connection (appServers.getAppServerToken('local')), never to a
 // renderer, and never to disk here. The server keeps running when Trek quits, unless
-// the "Stop local server on quit" app setting is on. The decisions are pure, in
-// localServerRules.ts; this file does the I/O.
+// the "Stop local server on quit" app setting is on. A dev build (not packaged) uses
+// its own profile, local-dev (`--local-profile dev`), so it never restarts the
+// installed Trek's server. The decisions are pure, in localServerRules.ts; this file
+// does the I/O.
 import { app, dialog, ipcMain } from 'electron'
 import { spawn } from 'node:child_process'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs'
@@ -1062,6 +1591,8 @@ import {
   afterStop,
   childEnv,
   localPaths,
+  localProfileArgs,
+  localProfileName,
   localUrl,
   logTail,
   parseBuildJson,
@@ -1081,6 +1612,8 @@ export const LOCAL_SERVER_DISABLED = !!process.env.TREK_NO_LOCAL_SERVER
 const STOP_TIMEOUT_MS = 15_000
 const POLL_MS = 100
 
+/** The profile this Trek uses: the default one when packaged, `dev` for a dev build (Decision 27). */
+const PROFILE = localProfileName(app.isPackaged)
 let paths: LocalPaths | null = null
 /** The server main is using: from a local.json that probed live. Main only. */
 let current: LocalInfo | null = null
@@ -1095,7 +1628,7 @@ let watcher: FSWatcher | null = null
 let refreshTimer: NodeJS.Timeout | null = null
 
 function profile(): LocalPaths {
-  paths ??= localPaths(homedir())
+  paths ??= localPaths(homedir(), PROFILE)
   return paths
 }
 
@@ -1278,7 +1811,7 @@ async function spawnAndWait(): Promise<void> {
   let child
   try {
     // detached: its own session (setsid), so no SIGHUP reaches it from the terminal that ran Trek.
-    child = spawn(process.execPath, [bundle, 'start', '--local'], {
+    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE)], {
       cwd: homedir(),
       detached: true,
       env: childEnv(process.env),
@@ -1378,7 +1911,7 @@ async function stopServer(): Promise<{ code: number | null; output: string; targ
   const target = current?.pid ?? readInfo()?.pid
   current = null
   setStatus({ state: 'stopping', message: '', canReset: false })
-  const result = await runCli(['stop', '--local'])
+  const result = await runCli(['stop', '--local', ...localProfileArgs(PROFILE)])
   return { ...result, target }
 }
 
@@ -1610,12 +2143,13 @@ Points to check against the Decisions:
 - `offerSkewRestart` is started with `void` from `useServer`, so the dialog never holds the job queue. Its Restart queues a new job.
 - `showError` queues the Reset with `void`, for the same reason (Decision 13).
 - `localToken()` reads `local.json` on every call (Note 5).
+- `PROFILE` is `localProfileName(app.isPackaged)` (Task 2b). The profile's paths (`local.json`, `local.lock`, `server.log`, `config.json`, the watched directory) and the CLI's `start` and `stop` arguments all come from it, so a dev build spawns, watches and stops only `local-dev`, and the installed Trek only `local`.
 
 - [ ] **Step 4: Types, and the suite**
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: no type errors; `# pass 1469`, `# fail 0`.
+Expected: no type errors; `# pass 1472`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -1624,7 +2158,7 @@ git add src/main/localServer.ts
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(main): the Local server supervisor" -m "Co-Authored-By: <model trailer>" -- src/main/localServer.ts src/main/appServerProbe.ts scripts/appServerProbe.test.mjs src/shared/types.ts
 ```
 
-Tests: 1469 (unchanged).
+Tests: 1472 (unchanged).
 
 ---
 
@@ -1974,7 +2508,7 @@ index 4bc84df..b7c0f38 100644
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: no type errors; `# pass 1471`, `# fail 0`.
+Expected: no type errors; `# pass 1474`, `# fail 0`.
 
 - [ ] **Step 6: Commit**
 
@@ -1982,7 +2516,7 @@ Expected: no type errors; `# pass 1471`, `# fail 0`.
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(main): the synthetic Local entry: first, never saved, its token from local.json" -m "Co-Authored-By: <model trailer>" -- src/main/appServersRules.ts src/main/appServers.ts src/main/serverLinks.ts src/main/v2relay.ts scripts/appServersRules.test.mjs scripts/mainServerLinks.test.mjs
 ```
 
-Tests: 1469 → 1471.
+Tests: 1472 → 1474.
 
 ---
 
@@ -2337,7 +2871,7 @@ index dcbc787..181075c 100644
 
 - [ ] **Step 5: The existing smokes start no Local server**
 
-They launch the app with the real HOME. Without this, each would start a Local server in `~/.config/trek-server/local`, and leave it running after it quits.
+They launch the app with the real HOME. Without this, each would start a Local server in `~/.config/trek-server/local-dev` (they run unpackaged, Decision 27), and leave it running after it quits.
 
 `scripts/smoke.mjs`:
 
@@ -2459,11 +2993,11 @@ index 0d8d083..afb876f 100644
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)' && npm run build 2>&1 | tail -1`
 
-Expected: no type errors; `# pass 1472`, `# fail 0`; `out/server: trek-server 0.2.0, build <build>`.
+Expected: no type errors; `# pass 1475`, `# fail 0`; `out/server: trek-server 0.2.0, build <build>`.
 
 - [ ] **Step 7: A look by hand (optional)**
 
-`npm run dev` with your real HOME starts or reuses `~/.config/trek-server/local`. File → Local Server shows `Running 0.2.0 (pid <pid>)`, and Connect to server lists Local first. Stop it afterwards with File → Local Server → Stop Local Server.
+`npm run dev` with your real HOME starts or reuses `~/.config/trek-server/local-dev`, never the installed Trek's `local`. File → Local Server shows `Running 0.2.0 (pid <pid>)`, and Connect to server lists Local first. Stop it afterwards with File → Local Server → Stop Local Server.
 
 - [ ] **Step 8: Commit**
 
@@ -2471,7 +3005,7 @@ Expected: no type errors; `# pass 1472`, `# fail 0`; `out/server: trek-server 0.
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat: the Local server at launch, File → Local Server, Stop local server on quit" -m "Co-Authored-By: <model trailer>" -- src/shared/appSettings.ts scripts/appSettings.test.mjs src/shared/appServerRules.ts scripts/appServersRules.test.mjs src/main/index.ts src/preload/index.ts src/renderer/src/components/NotificationSettings.tsx scripts/smoke.mjs scripts/changes-smoke.mjs scripts/remote-smoke.mjs scripts/providers-smoke.mjs scripts/multi-repo-smoke.mjs scripts/env-smoke.mjs scripts/bot-smoke.mjs scripts/windows-smoke.mjs scripts/v2-smoke.mjs
 ```
 
-Tests: 1471 → 1472. `appSettings`' two tests are rewritten, not added.
+Tests: 1474 → 1475. `appSettings`' two tests are rewritten, not added.
 
 ---
 
@@ -3007,7 +3541,7 @@ index 130b99a..c0ee064 100644
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)' && npm run build 2>&1 | tail -1`
 
-Expected: no type errors; `# pass 1473`, `# fail 0`; `out/server: trek-server 0.2.0, build <build>`.
+Expected: no type errors; `# pass 1476`, `# fail 0`; `out/server: trek-server 0.2.0, build <build>`.
 
 - [ ] **Step 8: Commit**
 
@@ -3015,7 +3549,7 @@ Expected: no type errors; `# pass 1473`, `# fail 0`; `out/server: trek-server 0.
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(renderer): Local first in Connect, New Project on Local, windows follow a respawn" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/v2/appServerLinks.ts scripts/v2AppServerLinks.test.mjs src/renderer/src/components/ConnectServer.tsx src/renderer/src/components/NewServerProjectModal.tsx src/renderer/src/v2/ServerProjectWindow.tsx src/renderer/src/components/StartScreen.tsx src/renderer/src/styles.css
 ```
 
-Tests: 1472 → 1473.
+Tests: 1475 → 1476.
 
 ---
 
@@ -3035,7 +3569,8 @@ Create `scripts/local-app-smoke.mjs`:
 // Run: npm run smoke:local-app   (builds the app with out/server, then runs this script)
 //
 // The built app (out/main/index.js, out/server) is launched with a temp HOME, so the Local
-// profile (~/.config/trek-server/local) is the run's own, and a temp --user-data-dir. The
+// profile is the run's own, and a temp --user-data-dir. It is ~/.config/trek-server/local-dev,
+// a dev build's (Decision 27); with --packaged it is the default ~/.config/trek-server/local. The
 // profile's config is written first with a fake agent. Through the DOM, the menu and
 // window.api it covers:
 //   - the first launch spawns the Local server: local.json with its pid, detached in its own
@@ -3112,7 +3647,9 @@ const bundled = JSON.parse(readFileSync(join(root, 'out', 'server', 'build.json'
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-local-app-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
-const profile = join(home, '.config', 'trek-server', 'local')
+// An unpackaged app uses the dev profile, a packaged one the default (localProfileName).
+const profileArgs = packaged ? [] : ['--local-profile', 'dev']
+const profile = join(home, '.config', 'trek-server', packaged ? 'local' : 'local-dev')
 const infoPath = join(profile, 'local.json')
 const lockPath = join(profile, 'local.lock')
 const logPath = join(profile, 'server.log')
@@ -3265,7 +3802,7 @@ const finish = async (reason) => {
   if (reason) console.error(reason)
   if (app) await quit()
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
-  spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local'], {
+  spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', ...profileArgs], {
     env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
@@ -3446,7 +3983,8 @@ How it is built:
   - A packaged app ignores `-r`; the prototype's first packaged run recorded no dialog, and the real folder picker timed out the modal wait. So there the same stub is installed with `app.evaluate` right after launch.
   - The two scenarios whose dialog comes while the app starts (skew, Reset) are skipped there. They run the same main code as the dev run.
   - It adds one check: the server's command line is the packaged binary on `app.asar/out/server/trek-server.cjs`. That makes 42 − 3 − 4 + 1 = 36 checks.
-- **`finish`** runs `stop --local` in the run's HOME, and SIGKILLs anything `local.json` still names. No server outlives the run.
+- **The profile.** The dev run's app is unpackaged, so its supervisor uses `local-dev` (Decision 27). The smoke writes its config there, reads `local.json`, the lock and the log there, and stops it with `--local-profile dev`. The packaged run uses the default `local`, and its command-line check is `start --local` with no profile flag.
+- **`finish`** runs `stop --local` (with the run's profile) in the run's HOME, and SIGKILLs anything `local.json` still names. No server outlives the run.
 
 - [ ] **Step 2: The scripts**
 
@@ -3482,7 +4020,7 @@ Run: `npm run smoke:packaged 2>&1 | grep -E 'SMOKE|asar'`
 Expected:
 
 ```
-LOCAL SMOKE PASS (36 checks)
+LOCAL SMOKE PASS (43 checks)
 ok   it runs the packaged app's binary on the bundle inside app.asar: "<repo>/dist/mac-arm64/Trek.app/Contents/MacOS/Trek <repo>/dist/mac-arm64/Trek.app/Contents/Resources/app.asar/out/server/trek-server.cjs start --local"
 LOCAL APP SMOKE PASS (36 checks)
 ```
@@ -3494,7 +4032,7 @@ git add scripts/local-app-smoke.mjs
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test: smoke:local-app, the Local server supervisor end to end, dev and packaged" -m "Co-Authored-By: <model trailer>" -- scripts/local-app-smoke.mjs package.json
 ```
 
-Tests: 1473 (unchanged).
+Tests: 1476 (unchanged).
 
 ---
 
@@ -3506,11 +4044,12 @@ Tests: 1473 (unchanged).
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1473`, `# fail 0`. That is the baseline 1459 at `8325345`, plus:
+Expected: `# pass 1476`, `# fail 0`. That is the baseline 1459 at `8325345`, plus:
 
 | Task | Tests added |
 |---|---|
 | 2 | 10 in `localServerRules` |
+| 2b | 3: 1 in `localServerRules` (the profile), 2 in `serverLocalProfile` (a named profile's paths, the name's validation) |
 | 3 | 0 (one `appServerProbe` test changed) |
 | 4 | 2: 1 in `appServersRules`, 1 in `mainServerLinks` (its snapshot-keys test allows `local`) |
 | 5 | 1 in `appServersRules` (`localStatusLabel`); `appSettings`' 2 rewritten |
@@ -3528,7 +4067,7 @@ Run each after the previous has exited:
 |---|---|
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
-| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (71 checks)` |
+| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (85 checks)` |
 | `node scripts/local-app-smoke.mjs 2>&1 \| tail -1` | `LOCAL APP SMOKE PASS (42 checks)` |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (168 checks)` |
 | `node scripts/remote-smoke.mjs 2>&1 \| tail -1` | `REMOTE SMOKE PASS` |
@@ -3537,7 +4076,7 @@ Run each after the previous has exited:
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
 | `node scripts/multi-repo-smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/providers-smoke.mjs 2>&1 \| tail -1` | `providers smoke passed` |
-| `npm run smoke:packaged 2>&1 \| grep SMOKE` | `LOCAL SMOKE PASS (36 checks)`, `LOCAL APP SMOKE PASS (36 checks)` |
+| `npm run smoke:packaged 2>&1 \| grep SMOKE` | `LOCAL SMOKE PASS (43 checks)`, `LOCAL APP SMOKE PASS (36 checks)` |
 
 `env-smoke` is left out on purpose: it already fails at `8325345`, with 4 feature panel buttons where it expects 3 and 7 settings checkboxes where it expects 3. This plan's switch makes the second count 8. It needs its own fix (Risk 10). `bot-smoke` needs the bot sandbox and is not run here. Both only gain `TREK_NO_LOCAL_SERVER=1`.
 
@@ -3545,7 +4084,7 @@ Run each after the previous has exited:
 
 - [ ] **Step 4: Nothing left running, nothing in the real home**
 
-Run: `pgrep -fl 'trek-server.cjs start --local'; ls ~/.config/trek-server/local 2>/dev/null`
+Run: `pgrep -fl 'trek-server.cjs start --local'; ls ~/.config/trek-server/local ~/.config/trek-server/local-dev 2>/dev/null`
 
 Expected: neither lists anything this run started. A Local server you started yourself with `npm run dev` or an installed Trek is yours: leave it running.
 
@@ -3569,9 +4108,7 @@ Found while prototyping this plan.
 
 ## Risks
 
-1. **A dev Trek and an installed Trek share the Local profile.** Their bundles differ, so each launch of the other offers a skew restart, and accepting it ends the other's terminals.
-   - Declining is safe: the server keeps running and the list says it is not this Trek's version.
-   - A per-build profile (for example `TREK_LOCAL_PROFILE` for dev runs) would end the clash, but it needs a server change. See Questions 1.
+1. **A dev Trek and an installed Trek sharing the Local profile** is resolved by Decision 27: a dev build uses `local-dev`. What is left: two dev checkouts (two worktrees running `npm run dev`) still share `local-dev`, and each offers a skew restart of the other's. Declining is safe: the server keeps running and the list says it is not this Trek's version.
 2. **Electron fuses.** Running the bundle relies on the `RunAsNode` fuse (on) and on Electron reading asar in Node mode.
    - Hardening the build (`electronFuses: {runAsNode: false}` or `onlyLoadAppFromAsar`) breaks the Local server. `smoke:packaged` fails loudly if so.
    - The fallback is `asarUnpack: ["out/server/**"]` with RunAsNode kept, or a separate helper binary.
@@ -3591,5 +4128,5 @@ Found while prototyping this plan.
 
 ## Questions for the user
 
-1. **The dev/installed clash (Risk 1).** Keep one shared Local profile, so a dev run and the installed app see the same projects and sessions and ask about skew? Or give dev runs their own profile (`~/.config/trek-server/local-dev`)? The second needs a small server change (a profile name, for example `--local=dev`), which is cheap to add to this plan as a task before Task 3.
+1. **The dev/installed clash (Risk 1).** Answered: dev runs get their own profile, `~/.config/trek-server/local-dev` (Decision 27, Task 2b).
 2. **The menu's place.** File → Local Server is used because the macOS app menu is Electron's stock role. Building the app menu by hand would put Stop and Restart in the Trek menu, next to Quit, as the spec's "app menu" may mean. Is File acceptable?

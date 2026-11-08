@@ -1,5 +1,5 @@
-// The Local server supervisor's decisions (localServer.ts), pure: where the profile's
-// files are, whether what local.json names can be used, version skew against the
+// The Local server supervisor's decisions (localServer.ts), pure: which profile this
+// build uses and where its files are, whether what local.json names can be used, version skew against the
 // bundle, the child's env, what a failed start means, what a restart does once
 // `stop --local` has answered, and when "Reset local server" may delete the lock.
 import { join } from 'node:path'
@@ -7,8 +7,8 @@ import {
   LOCAL_CONFIG_FILE,
   LOCAL_INFO_FILE,
   LOCAL_LOCK_FILE,
-  LOCAL_PROFILE_DIR,
   LOCAL_ALREADY_RUNNING_EXIT,
+  localProfileDir,
   type LocalInfo
 } from '../shared/localServer.ts'
 
@@ -34,8 +34,27 @@ export interface LocalPaths {
   log: string
 }
 
-export function localPaths(home: string): LocalPaths {
-  const dir = join(home, ...LOCAL_PROFILE_DIR)
+/** The local profile a dev build (not packaged) uses, so it never restarts the installed Trek's server. */
+export const DEV_LOCAL_PROFILE = 'dev'
+
+/**
+ * The local profile this Trek uses: the default one (undefined) when packaged,
+ * `dev` (~/.config/trek-server/local-dev) for `npm run dev` and the smokes. An
+ * installed Trek and a dev build would otherwise share one server, and each would
+ * offer to restart the other's, ending its sessions.
+ */
+export function localProfileName(isPackaged: boolean): string | undefined {
+  return isPackaged ? undefined : DEV_LOCAL_PROFILE
+}
+
+/** The CLI arguments that select `profile`, after `start --local` or `stop --local`. */
+export function localProfileArgs(profile: string | undefined): string[] {
+  return profile === undefined ? [] : ['--local-profile', profile]
+}
+
+/** The profile's files; `profile` is localProfileName's (throws on an invalid name). */
+export function localPaths(home: string, profile?: string): LocalPaths {
+  const dir = join(home, ...localProfileDir(profile))
   return {
     dir,
     config: join(dir, LOCAL_CONFIG_FILE),

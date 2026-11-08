@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { LOCAL_PROFILE_DIR, isLocalProfileName, localProfileDir, localProfileSegment, parseLocalInfo } from '../src/shared/localServer.ts'
 import { localProfile, readLocalInfo, removeLocalInfo, writeLocalInfo } from '../server/src/localProfile.ts'
 
 // A token as addToken makes one: 32 random bytes, base64url.
@@ -24,6 +24,33 @@ test('the local profile lives under ~/.config/trek-server/local and <dataDir>/lo
     lockPath: '/h/.config/trek-server/local/local.lock',
     dataDir: '/d/trek-server/local'
   })
+})
+
+test('a named profile lives under ~/.config/trek-server/local-<name> and <dataDir>/local-<name>', () => {
+  assert.deepEqual(localProfile('/h', '/d/trek-server', 'dev'), {
+    dir: '/h/.config/trek-server/local-dev',
+    configPath: '/h/.config/trek-server/local-dev/config.json',
+    infoPath: '/h/.config/trek-server/local-dev/local.json',
+    lockPath: '/h/.config/trek-server/local-dev/local.lock',
+    dataDir: '/d/trek-server/local-dev'
+  })
+  assert.deepEqual(localProfile('/h', '/d', undefined), localProfile('/h', '/d'), 'no name is the default profile')
+  assert.deepEqual(localProfileDir(), LOCAL_PROFILE_DIR)
+  assert.deepEqual(localProfileDir('a-1'), ['.config', 'trek-server', 'local-a-1'])
+  assert.equal(localProfileSegment(), 'local')
+  assert.equal(localProfileSegment('x'.repeat(32)), `local-${'x'.repeat(32)}`)
+  assert.throws(() => localProfile('/h', '/d', '../../etc'), /Invalid local profile name/)
+})
+
+test('a profile name is 1-32 of a-z, 0-9 and -: nothing that could leave the directory', () => {
+  for (const good of ['dev', 'a', '0', 'my-profile-2', '-', 'x'.repeat(32)]) assert.equal(isLocalProfileName(good), true, good)
+  for (const bad of [
+    '', 'x'.repeat(33), 'Dev', 'dev ', ' dev', 'de_v', 'de.v', '.', '..', '../x', 'a/b', 'a\\b', '/abs', '~', 'dev\n', 'dev\0',
+    'dév', undefined, null, 1, ['dev'], {}
+  ]) {
+    assert.equal(isLocalProfileName(bad), false, JSON.stringify(bad))
+    if (typeof bad === 'string') assert.throws(() => localProfileSegment(bad), /Invalid local profile name/, JSON.stringify(bad))
+  }
 })
 
 test('parseLocalInfo keeps the five fields and drops anything else', () => {

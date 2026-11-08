@@ -5,6 +5,33 @@
 
 /** The local profile's directory, under the home directory: ~/.config/trek-server/local */
 export const LOCAL_PROFILE_DIR = ['.config', 'trek-server', 'local'] as const
+/**
+ * A named local profile (`--local-profile <name>`): lowercase letters, digits and
+ * hyphens, at most 32. No dot or slash, so a name can never leave trek-server's
+ * directories. A dev build of Trek uses `dev`, so it never shares a server with
+ * the installed app.
+ */
+export const LOCAL_PROFILE_NAME_RE = /^[a-z0-9-]{1,32}$/
+
+export function isLocalProfileName(name: unknown): name is string {
+  return typeof name === 'string' && LOCAL_PROFILE_NAME_RE.test(name)
+}
+
+/**
+ * The profile's directory name, both under ~/.config/trek-server and under the
+ * platform data dir: `local` for the default profile, `local-<name>` for a named
+ * one. Throws on a name LOCAL_PROFILE_NAME_RE refuses.
+ */
+export function localProfileSegment(name?: string): string {
+  if (name === undefined) return 'local'
+  if (!isLocalProfileName(name)) throw new Error(`Invalid local profile name: ${JSON.stringify(name)}`)
+  return `local-${name}`
+}
+
+/** The profile's directory as segments under the home directory: LOCAL_PROFILE_DIR, or ~/.config/trek-server/local-<name> */
+export function localProfileDir(name?: string): readonly string[] {
+  return ['.config', 'trek-server', localProfileSegment(name)]
+}
 /** The local server's config file, in the profile directory */
 export const LOCAL_CONFIG_FILE = 'config.json'
 /** Written (0600) once the local server listens; removed when it exits */
