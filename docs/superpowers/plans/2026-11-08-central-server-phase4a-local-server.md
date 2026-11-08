@@ -59,7 +59,7 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
 ### Recorded (user decisions)
 
 1. **The local server has its own profile and a pid lock** (user-approved default, 2026-11-08). Its config is `~/.config/trek-server/local/config.json` and its data is `<dataDir>/local`. A hand-run `trek-server start` on the default profile never shares a file with it.
-2. **The local server survives app quit by default.** An app setting, "Stop local server on quit", reverses that (4b). Nothing in 4a stops it, except a signal.
+2. **The local server survives app quit by default.** An app setting, "Stop local server on quit", reverses that (4b). Nothing in 4a stops it, except a signal (SIGINT, SIGTERM or SIGHUP clean up; SIGKILL leaves the files for the next start).
 3. **The app runs its own bundle with Electron's Node** (`ELECTRON_RUN_AS_NODE`, spec). 4a proves the bundle runs that way, `node-pty` included.
 3a. **`trek-server stop --local`** (user decision, 2026-11-08). Decision 4a, Task 6b.
 
@@ -71,7 +71,7 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
    - `--local` also works with no command, since `start` is the default; that is the spec's `trek-server --local`.
    - It is a usage error (exit 2) on any command but `start` and `stop`. It is also a usage error with `--config`, `--data-dir`, `--port`, `--host` or `--insecure`, because the profile fixes all of them.
    - The plan first had no `stop`: the 4b supervisor can SIGTERM the pid in `local.json` itself. The user asked for one (4a).
-4a. **`trek-server stop --local`** (user decision, 2026-11-08; Task 6b). It SIGTERMs the pid in `local.json` only if `local.lock` holds the same pid, so it never signals a process that reused the pid. It waits up to 10 s for both files to go. Exit 0 once stopped or if none was running; 1 on a timeout, an unverified lock or a failed signal; 2 for a usage error (`stop` without `--local`).
+4a. **`trek-server stop --local`** (user decision, 2026-11-08; Task 6b). It SIGTERMs the pid in `local.json` only if `local.lock` holds the same pid, so it never signals a process that reused the pid. It waits up to 10 s for both files to go. Exit 0 once stopped or if none was running; 1 on a timeout, an unverified lock, a live pid in `local.json` with no lock (final review fix 5) or a failed signal; 2 for a usage error (`stop` without `--local`).
 5. **Exit codes:** 0 after a signal, 1 for a failure, 2 for a usage error, and **3** (`LOCAL_ALREADY_RUNNING_EXIT`) when another local server holds the lock. 4b treats 3 as "another start won; read `local.json`".
 
 **The profile and `local.json` (Tasks 2, 6)**
@@ -116,6 +116,7 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
     - `ConfigStore` takes it in its constructor and passes it to every guard it builds (the constructor, `commit`, `swap`), so a save or a reload keeps it.
     - `server.addRepo` still passes `requireAllowedRoot: true`. On a permissive guard those checks pass, so `v2.ts:254` and `configStore.ts:105` do not change.
     - The permissive guard still resolves symlinks and paths that do not exist yet, so callers get the same realpath as before.
+    - **Its scope is every path check the store's guard makes**, not only `server.addRepo` and `project.import`: the v1 `git.*` RPCs (`rpc.ts`), `worktree.create` targets and the other worktree handlers (`worktreeHandlers.ts`), and a session's worktree, `cwd` and `addDirs` (`sessions/manager.ts`). That is acceptable: the token already grants a shell as the user (any session is one), it lives only in a 0600 `local.json` in a 0700 directory, and the server binds loopback only (final review fix 7).
     - These checks still apply on Local:
       - absolute paths (`requireAbsolutePath`);
       - `NOT_A_REPO`;
@@ -2157,6 +2158,24 @@ A review of the lock and `local.json` (Tasks 2, 3, and their use in Tasks 6 and 
 
 Tests: 1441 → 1456.
 
+### Final review fixes (done)
+
+A final review of the branch found the issues below. They are fixed after Task 8's first run; where this plan's code (Tasks 6, 6b, 7) differs from the tree, the tree wins.
+
+**Files:** `server/src/index.ts`, `server/src/localStop.ts`, `scripts/serverLocalStop.test.mjs`, `scripts/local-server-smoke.mjs`, `server/README.md`, `PROTOCOL.md`, this plan.
+
+1. **`ELECTRON_RUN_AS_NODE=1` leaked into every session's pty (Important).** `terminalHost.ts` spreads `process.env`, so an Electron app launched from a Local session (VS Code's `code`, Trek's own `npm run dev`) ran as Node. `index.ts` deletes `ELECTRON_RUN_AS_NODE` and `ELECTRON_RENDERER_URL` (dev-only, never for agents) from `process.env` as soon as the `--local` profile is set up. The smoke's fake agent prints `RUN_AS_NODE=${ELECTRON_RUN_AS_NODE-unset}`, and under Electron the smoke checks it is unset (it fails without the fix).
+2. **SIGHUP was not handled (Important).** Closing the terminal that ran `start --local` left `local.json` (with its plaintext token) and the lock behind. SIGHUP now runs the SIGINT/SIGTERM shutdown. The smoke checks a SIGHUPed server exits 0 and removes both files.
+3. **M1.** The `exit` cleanup (remove `local.json` and the lock, if ours) is registered straight after the `!lock.ok` check, so a throw between `acquireLock` and the profile writes no longer leaves the lock behind.
+4. **M2.** `announceLocal` waits for `server.ready` for at most `MCP_READY_TIMEOUT_MS` (5 s), then logs a warning and writes `local.json` anyway: a hung MCP listener costs only the `mcp` capability in the first welcome (Risk 6).
+5. **M3.** `stopDecision` gains `lockless`: no lock, but `local.json` names a live pid. `stop --local` reports that a server named in `local.json` is running without its lock, never signals it, and exits 1 (it used to call the pid "gone" and exit 0).
+6. **M4.** The `unverified` message says the server "may still be starting or stopping".
+7. **M8 (docs).** `server/README.md`, the `local` row in `PROTOCOL.md` and Decision 13 state the permissive guard's full scope (every path check, including the v1 `git.*` RPCs, `worktree.create` targets, and session `cwd`/`addDirs`) and why that is acceptable.
+8. **M9 (docs).** The questions for the user are marked resolved. The README's lock bullet says a dead one's lock, or one from before the last boot, is taken over, and that SIGKILL leaves both files for the next start.
+9. **Plan.** Notes for 4b 11–16; Risks 11 (ctime granularity) and the later fix under Risk 10; the counts in Tasks 7 and 8.
+
+Tests: 1456 → 1459. `smoke:local`: 66 → 71 checks.
+
 ---
 
 ### Task 7: `smoke:local`: the bundle under Node and under Electron's Node
@@ -2173,19 +2192,19 @@ There is no `ws`, `@xterm/headless` or `package.json` anywhere it could resolve,
 
 **The runtimes:** `process.execPath`, then `require('electron')` with `ELECTRON_RUN_AS_NODE=1`. Pass `--node-only` or `--electron-only` to run just one.
 
-**The environment:** a temp `HOME` and `XDG_DATA_HOME`. The local config is pre-seeded with a fake `claude` command that echoes its arguments and then sleeps. The repo sits at `elsewhere/deep/repo`, with nothing registered near it.
+**The environment:** a temp `HOME` and `XDG_DATA_HOME`. The local config is pre-seeded with a fake `claude` command that echoes its arguments and whether `ELECTRON_RUN_AS_NODE` is set, and then sleeps. The repo sits at `elsewhere/deep/repo`, with nothing registered near it.
 
-**What it checks, 33 times per runtime:**
+**What it checks, 35 times under Node and 36 under Electron (71 in all):**
 1. `--local --port` is a usage error, exit 2.
 2. `local.json` appears with the server's pid. It is 0600, its version and build match `dist/build.json`, the lock holds the pid, the profile directory (pre-created 0755) is 0700, and the log's port matches.
 3. A hello with its token is welcomed, and the first welcome lists `local` and `mcp` (`ready`, Decision 9).
-4. `server.addRepo` takes the out-of-root repo, and a project is created on it. A session through `node-pty` prints `--session-id`.
+4. `server.addRepo` takes the out-of-root repo, and a project is created on it. A session through `node-pty` prints `--session-id`. Under Electron, the session's pty does not have `ELECTRON_RUN_AS_NODE` (final review fix 1).
 5. A second start exits 3, "already running (pid A)", and leaves `local.json` and the lock alone.
 6. `stop --local` (Task 6b) exits 0 with `Stopped.`. The server exits 0, and `local.json` and the lock are gone. A second `stop --local` exits 0: not running.
 7. A third start, then SIGKILL: the stale `local.json` and lock stay. The smoke adds the temp files a crash mid-write would leave, `local.lock.<dead pid>.tmp` and `local.json.<dead pid>.tmp`.
 8. A fourth start takes over. It logs the dead pid, the lock holds the new pid, the dead pid's temp files are gone, and the token is new. The dead server's token gets `needs-auth`; the new one is welcomed.
 9. The session from step 4 is still listed, with its agent session id and no pty. `worktree.load` resumes it, and the agent prints `--resume <id>`.
-10. A final SIGTERM: exit 0, and both files are gone.
+10. A final SIGTERM: exit 0, and both files are gone. Then a start and SIGHUP: exit 0, and both files are gone (final review fix 2).
 11. A directory at `local.lock`: a start exits 1 with `Cannot take the lock <path>: …`, and no stack trace.
 
 A lock from before the last boot (review fix 2) cannot be simulated here, so it is covered by unit tests only.
@@ -2499,7 +2518,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit \
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1456`, `# fail 0`. That is the baseline 1412 at `6940af0`, plus:
+Expected: `# pass 1459`, `# fail 0`. That is the baseline 1412 at `6940af0`, plus:
 
 | Task | Tests added |
 |---|---|
@@ -2510,6 +2529,7 @@ Expected: `# pass 1456`, `# fail 0`. That is the baseline 1412 at `6940af0`, plu
 | 5 | 0 (one test changed) |
 | 6b | 7: 3 for `stopDecision`, 4 for `stopLocal` |
 | Review fixes | 15: 12 in `serverLocalLock`, 1 in `serverLocalProfile`, 2 in `serverLocalStop` |
+| Final review fixes | 3 in `serverLocalStop`: `stopDecision` lockless; `stopLocal` lockless (exit 1, not signalled); the unverified message |
 
 - [ ] **Step 2: Types and build**
 
@@ -2523,7 +2543,7 @@ Run each after the previous has exited:
 |---|---|
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
-| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (66 checks)` |
+| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (71 checks)` |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (168 checks)` |
 | `node scripts/remote-smoke.mjs 2>&1 \| tail -1` | `REMOTE SMOKE PASS` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
@@ -2562,6 +2582,15 @@ Found while prototyping this plan.
 9. **Exit 3 with no valid `local.json` is reported to the user, not retried in a loop.** After an exit 3, wait a few seconds for `local.json` (the winner may still be starting). If it never appears, or `parseLocalInfo` refuses it, show the error with the lock's path and offer the reset of note 6. Respawning on a timer would spin forever on a lock held by a live, unrelated process.
 10. **Exit 1 with `Cannot take the lock <path>: <message>`** means the profile's filesystem refused the lock (a directory at `local.lock`, no hard links; Risk 9). Show the message; retrying will not help.
 
+From the final review:
+
+11. **Spawn with a cleaned env.** Build the child's env from `process.env` without `ELECTRON_RENDERER_URL` and other dev-only variables, then add `ELECTRON_RUN_AS_NODE: '1'`. The server deletes `ELECTRON_RUN_AS_NODE` and `ELECTRON_RENDERER_URL` from its own env before any pty is spawned (final review fix 1), but the app should not hand it anything else agents must not see.
+12. **Spawn detached** (`detached: true`, then `unref()`), so the server is in its own process group and gets no SIGHUP when the terminal that ran the app (`npm run dev`) closes.
+13. **Restart decides what to do on `stop --local` exit 1** (a timeout, an unverified lock, or a lockless server). After a timeout, SIGKILL the pid only once the lock and `local.json` both still name it; otherwise report it and do not signal anything.
+14. **Bound the wait for `local.json`** to about 15 s. On a timeout, show the tail of the server log rather than spinning.
+15. **In a packaged run, check that `node-pty` and its `spawn-helper` resolve from `app.asar.unpacked`** (note 7). A `spawn-helper` left inside the asar, or without its execute bit, fails every session's spawn.
+16. **"Reset local server" deletes `local.lock` only after checking** that the lock's pid is not answering a hello with `local.json`'s token. If it answers, the server is live: connect to it instead.
+
 ## Risks
 
 1. **Pid reuse within a boot.** A lock from before the last boot is stale whatever its pid (Decision 11), so the common case, a reboot, is covered. Within one boot, if a SIGKILLed or crashed server's pid is reused by another live process, a `--local` start refuses: exit 3, "already running", until `local.lock` is deleted. Liveness is signal 0 only. A `ps -o command=` check was considered and left out: a source run's command line (tsx, npm) does not name trek-server, and a false "not trek-server" would take over a live server's lock, the worse failure. The message names the files, and 4b can offer a reset (Notes for 4b, 6 and 9).
@@ -2574,13 +2603,17 @@ Found while prototyping this plan.
      - the 0600 and 0700 modes mean little.
 4. **The permissive guard** lets the local server's token holder name any path as the server user. That is the same trust as the user's own shell. The token is only in a 0600 file under a 0700 directory, and only on loopback. Any process running as the user can read it, and as that user it could already do the same.
 5. **A client holding the last token gets `needs-auth` after a restart** (Decision 8), until it re-reads `local.json`.
-6. **`local.json` waits for MCP to settle.** `startMcpListener` resolves on `listen` and rejects on an error. If it ever hung, `local.json` would never be written, and 4b's ready wait needs a timeout.
+6. **`local.json` waits for MCP to settle.** `startMcpListener` resolves on `listen` and rejects on an error. The wait is bounded at 5 s (final review fix 4): if it ever hung, `local.json` is written without `mcp` in the first welcome. 4b's ready wait still needs its own timeout (Notes for 4b, 14).
 7. **The bundle grew** from 522 KB to 645 KB (esbuild's figures) with `ws`.
 8. **`trek-server version` prints the version only.** The build id is in the startup line, `local.json` and `dist/build.json`.
 9. **Hard links are not supported on some filesystems:** FAT and exFAT, some SMB and FUSE mounts. On those, `linkSync` fails and the start exits 1 with `Cannot take the lock <path>: <message>`. The profile is under `~/.config`, which is on the system disk on every machine we target.
 10. **A wall-clock step after boot** moves the computed boot time with it. If the clock jumps forward by more than the one-minute margin soon after boot, a live lock written before the jump could look older than the boot and be taken over. NTP usually steps the clock right after boot, before any server has started, so this should be rare. Recording a boot id in the lock (`kern.bootsessionuuid`, `/proc/sys/kernel/random/boot_id`) would remove it; that is left for a later phase.
+    - **The later fix:** compare the lock's mtime with the pid's start time. A lock older than its holder's process was written by a different process with that pid, so it is stale. That covers a clock step, pid reuse within a boot (Risk 1) and, with it, the weak ctime check of Risk 11.
+11. **ctime granularity on HFS+ and ext3** (1 s) weakens the double-takeover check (Decision 12). If a freed inode number is reused within the same second, a new lock can match the stale one's device, inode and ctime, and be unlinked. The lock re-check before each profile write still stops the loser from writing, and APFS and ext4 have nanosecond ctimes. The later fix under Risk 10 removes it.
 
-## Questions for the user
+## Questions for the user (resolved)
+
+Both are resolved: token rotation is kept (Decision 8), and `trek-server stop --local` was added (Task 6b).
 
 1. **A new token on every start** (Decision 8). Planned: the local token rotates on each start and lives only in `local.json` while the server runs. The alternative is a stable token, kept in plaintext in a 0600 file in the profile, so a client never sees `needs-auth` after a restart. Keep rotation?
 2. **No `trek-server stop --local`** (Decision 4). The 4b supervisor would SIGTERM the pid itself. Add the command now anyway, for people running it by hand and for a later Windows stop?

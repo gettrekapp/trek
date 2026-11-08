@@ -197,9 +197,17 @@ run by hand:
 - `~/.config/trek-server/local/local.json` (0600), written once it listens and
   removed when it exits: `{port, pid, token, version, build}`;
 - `local.lock` beside it, holding the pid: a second `--local` start exits with
-  code 3 while that process lives; a dead one's lock is taken over;
+  code 3 while that process lives; a dead one's lock, or one from before the
+  last boot, is taken over; SIGKILL leaves both files for the next start to
+  clean up (SIGINT, SIGTERM and SIGHUP remove them);
 - any path is allowed (the welcome lists the `local` capability), since the
-  user picks paths on their own disk.
+  user picks paths on their own disk. That covers every path check, not only
+  `server.addRepo` and `project.import`: the v1 `git.*` RPCs, `worktree.create`
+  targets, and a session's `cwd` and `addDirs`. This is acceptable because the
+  token already grants a shell as the user (any session is one), it lives only
+  in a 0600 file in a 0700 directory, and the server listens on loopback only.
+  Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check
+  still apply.
 
 To stop it:
 
