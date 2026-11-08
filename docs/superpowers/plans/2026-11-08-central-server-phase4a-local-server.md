@@ -44,7 +44,7 @@
 | Sub-phase | Delivers | Visible change |
 |---|---|---|
 | **phases 1–3** (done, master at `6940af0`) | protocol v2, the server registry, projects, git, sessions, status, MCP; server windows; attention across servers | Projects on servers open in their own windows. |
-| **4a server `--local`** (this plan) | <ul><li>`trek-server start --local`: own profile (`~/.config/trek-server/local`, `<dataDir>/local`), pid lock, `127.0.0.1` on a random port, a token per start</li><li>`local.json` `{port, pid, token, version, build}`, 0600, written when ready, removed at exit</li><li>the permissive guard, local only</li><li>the `local` capability</li><li>version and build baked into the bundle; `ws` bundled; the bundle runs from a bare `out/server` under Electron's Node</li><li>`smoke:local`</li></ul> | None in the app yet; `trek-server --local` works by hand. |
+| **4a server `--local`** (this plan) | <ul><li>`trek-server start --local`: own profile (`~/.config/trek-server/local`, `<dataDir>/local`), pid lock, `127.0.0.1` on a random port, a token per start</li><li>`trek-server stop --local`</li><li>`local.json` `{port, pid, token, version, build}`, 0600, written when ready, removed at exit</li><li>the permissive guard, local only</li><li>the `local` capability</li><li>version and build baked into the bundle; `ws` bundled; the bundle runs from a bare `out/server` under Electron's Node</li><li>`smoke:local`</li></ul> | None in the app yet; `trek-server --local` works by hand. |
 | **4b bundling and supervisor** | <ul><li>build `out/server`</li><li>`src/main/localServer.ts`: read `local.json`, probe, spawn detached with `ELECTRON_RUN_AS_NODE`</li><li>liveness and version-skew rules</li><li>a synthetic, non-removable `local` app-server entry whose token is read from `local.json`</li><li>`serverLinks` and the relay follow URL changes</li><li>Stop/Restart local server menu items and a skew dialog</li><li>Local listed first in ConnectServer</li><li>a native folder picker for New Project on Local</li><li>the Local server survives quit by default; an app setting, "Stop local server on quit", reverses that</li></ul> | A Local server appears by itself; New Project on Local. |
 | **4c features on Local** | Docker, env, stacks, skills, VS Code/Reveal and Linear on for Local server windows; Linear on for every server | Local server windows do what file windows did. |
 | **4d import** | <ul><li>File → Import .trekproj…</li><li>opening a `.trekproj` imports it, or focuses the project if it was already imported (tracked in `migrated.json`)</li><li>a one-time first-launch prompt</li><li>recents and `open-windows.json` rewritten</li><li>legacy server tokens migrated</li></ul> | Existing projects move onto servers. |
@@ -61,15 +61,17 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
 1. **The local server has its own profile and a pid lock** (user-approved default, 2026-11-08). Its config is `~/.config/trek-server/local/config.json` and its data is `<dataDir>/local`. A hand-run `trek-server start` on the default profile never shares a file with it.
 2. **The local server survives app quit by default.** An app setting, "Stop local server on quit", reverses that (4b). Nothing in 4a stops it, except a signal.
 3. **The app runs its own bundle with Electron's Node** (`ELECTRON_RUN_AS_NODE`, spec). 4a proves the bundle runs that way, `node-pty` included.
+3a. **`trek-server stop --local`** (user decision, 2026-11-08). Decision 4a, Task 6b.
 
 ### Decided in this plan
 
 **The CLI (Task 6)**
 
-4. **`trek-server start --local`. No `stop` command.**
+4. **`trek-server start --local`, and `stop --local`** (the stop is a user decision, 4a below).
    - `--local` also works with no command, since `start` is the default; that is the spec's `trek-server --local`.
-   - It is a usage error (exit 2) on any other command. It is also a usage error with `--config`, `--data-dir`, `--port`, `--host` or `--insecure`, because the profile fixes all of them.
-   - Why no `stop --local`: the 4b supervisor stops the server by sending SIGTERM to the pid in `local.json`. A CLI `stop` would do exactly that, and nothing needs it yet. The README gives `kill $(jq .pid …/local.json)`. It can be added later without changing anything here.
+   - It is a usage error (exit 2) on any command but `start` and `stop`. It is also a usage error with `--config`, `--data-dir`, `--port`, `--host` or `--insecure`, because the profile fixes all of them.
+   - The plan first had no `stop`: the 4b supervisor can SIGTERM the pid in `local.json` itself. The user asked for one (4a).
+4a. **`trek-server stop --local`** (user decision, 2026-11-08; Task 6b). It SIGTERMs the pid in `local.json` only if `local.lock` holds the same pid, so it never signals a process that reused the pid. It waits up to 10 s for both files to go. Exit 0 once stopped or if none was running; 1 on a timeout, an unverified lock or a failed signal; 2 for a usage error (`stop` without `--local`).
 5. **Exit codes:** 0 after a signal, 1 for a failure, 2 for a usage error, and **3** (`LOCAL_ALREADY_RUNNING_EXIT`) when another local server holds the lock. 4b treats 3 as "another start won; read `local.json`".
 
 **The profile and `local.json` (Tasks 2, 6)**
@@ -147,7 +149,7 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
 | 7 | SIGTERM keeps sessions resumable | Task 7 (Decision 17) |
 | 8 | Version and build via `define`; `ws` bundled; runs with no `server/node_modules` | Task 1 (Decisions 10, 16), Task 7 |
 | 9 | Lock: live refuses with a clear message and code, stale taken over | Tasks 3, 6 (Decisions 5, 11) |
-| 10 | CLI shape and how 4b stops it | Task 6 (Decision 4) |
+| 10 | CLI shape and how 4b stops it | Tasks 6, 6b (Decisions 4, 4a) |
 | 11 | Tests: unit tests for the pure parts; the built bundle in a temp HOME, under Node and under Electron's Node, with a session | Tasks 1–5, 7 |
 | 12 | Existing suites green | Task 8 |
 
@@ -186,17 +188,18 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
 | `server/scripts/buildStamp.mjs` | create | 1 | `BUILD_PLACEHOLDER`, `stampBuild`: the build id is a hash of the bundle |
 | `server/scripts/build.mjs` | modify | 1 | bundle `ws`; `define` the version and the placeholder; stamp; `dist/build.json` |
 | `server/src/buildInfo.ts` | create | 1 | `buildInfo()`: the baked version and build, or `package.json` and `"dev"` |
-| `server/src/index.ts` | modify | 1, 6 | `buildInfo` (1); `--local`: parsing, profile, lock, token, host and port, `announceLocal`, cleanup (6) |
+| `server/src/index.ts` | modify | 1, 6, 6b | `buildInfo` (1); `--local`: parsing, profile, lock, token, host and port, `announceLocal`, cleanup (6); `stop --local` (6b) |
 | `src/shared/localServer.ts` | create | 2 | the contract with 4b: path segments, file names, `LOCAL_TOKEN_NAME`, `LOCAL_ALREADY_RUNNING_EXIT`, `LocalInfo`, `parseLocalInfo` |
 | `server/src/localProfile.ts` | create | 2 | `localProfile`, `writeLocalInfo`, `readLocalInfo`, `removeLocalInfo` |
 | `server/src/localLock.ts` | create | 3 | `lockDecision`, `pidAlive`, `readLockPid`, `acquireLock`, `holdsLock`, `releaseLock` |
+| `server/src/localStop.ts` | create | 6b | `stopDecision`, `stopLocal`: `trek-server stop --local` |
 | `server/src/paths.ts` | modify | 4 | `PathGuardOptions.permissive` |
 | `server/src/configStore.ts` | modify | 4 | the guard options, passed to every guard it builds |
 | `src/shared/protocolV2.ts`, `server/src/capabilities.ts`, `PROTOCOL.md` | modify | 5 | the `local` capability |
 | `server/src/server.ts` | modify | 5 | `ServerOptions.local`; `TrekServer.ready` |
-| `server/README.md` | modify | 6, 7 | "The app's local server"; `smoke:local` |
+| `server/README.md` | modify | 6, 6b, 7 | "The app's local server"; `smoke:local` |
 | `scripts/local-server-smoke.mjs`, `package.json` | create, modify | 7 | `smoke:local` |
-| `scripts/serverBuildStamp.test.mjs`, `serverLocalProfile.test.mjs`, `serverLocalLock.test.mjs`, `serverPaths.test.mjs` | create | 1–4 | tests |
+| `scripts/serverBuildStamp.test.mjs`, `serverLocalProfile.test.mjs`, `serverLocalLock.test.mjs`, `serverPaths.test.mjs`, `serverLocalStop.test.mjs` | create | 1–4, 6b | tests |
 | `scripts/serverConfigStore.test.mjs`, `serverImportCheck.test.mjs`, `serverV2.test.mjs` | modify | 4, 5 | tests |
 
 `v2.ts`, `repos.ts`, the session manager and everything under `src/main`, `src/preload` and `src/renderer` do not change.
@@ -1748,6 +1751,373 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit \
 
 ---
 
+### Task 6b: `trek-server stop --local`
+
+**Files:**
+- Create: `server/src/localStop.ts`
+- Modify: `server/src/index.ts`, `server/README.md`
+- Test: create `scripts/serverLocalStop.test.mjs`
+
+Decision 4a (a user decision, added after Task 6).
+- **What it signals.** It reads `local.json` and the lock's pid. It sends SIGTERM only when the lock's pid is alive and `local.json` names that same pid. The lock is the authority, since it is taken first and released last.
+  - No live lock holder means not running (exit 0). A dead pid whose files are left is named, and the next start cleans them up. `stop` removes nothing itself, so it cannot race a start that is taking a stale lock over.
+  - A live lock holder that `local.json` does not name is **unverified** (exit 1). The server may still be starting, before `announceLocal`, or the pid was reused (Risk 1). The message names the lock file to delete if no server runs.
+  - `local.json` naming a live pid that does not hold the lock is a reused pid: not running, never signalled.
+- **The wait.** After SIGTERM it polls, every 50 ms for up to 10 s (`STOP_TIMEOUT_MS`), until neither `local.json` nor the lock holds the pid. If the process dies first, it stops waiting, since the files are then gone or never will be. Then it exits 0 with `Stopped.`. On a timeout it exits 1. The CLI has nothing else to do, so the wait is a blocking sleep (`Atomics.wait`), and `index.ts` stays synchronous.
+- **Usage.** `--local` applies to `start` and `stop`. `stop` without `--local` is a usage error (exit 2), and so is `stop --local` with any of the profile's options, as for `start`.
+- `stopDecision` is pure and unit-tested. `stopLocal` is tested against a stand-in server process that writes both files and removes them on SIGTERM. `smoke:local` (Task 7) runs `stop --local` against the real bundle under both runtimes.
+
+- [ ] **Step 1: The tests**
+
+Create `scripts/serverLocalStop.test.mjs`:
+
+```js
+// scripts/serverLocalStop.test.mjs — `trek-server stop --local`: which pid it may signal, and the stop itself.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { localProfile } from '../server/src/localProfile.ts'
+import { stopDecision, stopLocal } from '../server/src/localStop.ts'
+
+const info = (pid) => ({ port: 4000, pid, token: 't', version: '0.2.0', build: 'b' })
+const alive = () => true
+const dead = () => false
+
+test('stopDecision: signal only a live pid that local.json names and the lock holds', () => {
+  assert.deepEqual(stopDecision(info(10), 10, alive), { action: 'signal', pid: 10 })
+})
+
+test('stopDecision: no live lock holder is not running, naming a dead pid whose files are left', () => {
+  assert.deepEqual(stopDecision(undefined, undefined, alive), { action: 'not-running' })
+  assert.deepEqual(stopDecision(info(10), 10, dead), { action: 'not-running', stale: 10 })
+  assert.deepEqual(stopDecision(undefined, 10, dead), { action: 'not-running', stale: 10 })
+  assert.deepEqual(stopDecision(info(10), undefined, dead), { action: 'not-running', stale: 10 })
+  // local.json names a live pid, but no lock holds it: a reused pid, never signalled.
+  assert.deepEqual(stopDecision(info(10), undefined, alive), { action: 'not-running', stale: 10 })
+  assert.deepEqual(stopDecision(info(10), 20, (pid) => pid === 10), { action: 'not-running', stale: 20 })
+})
+
+test('stopDecision: a live lock holder that local.json does not name is unverified', () => {
+  assert.deepEqual(stopDecision(undefined, 10, alive), { action: 'unverified', pid: 10 })
+  assert.deepEqual(stopDecision(info(20), 10, alive), { action: 'unverified', pid: 10 })
+})
+
+function setup(t) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-stop-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  return localProfile(join(dir, 'home'), join(dir, 'data'))
+}
+
+/** A stand-in local server: writes the lock and local.json, and removes them on SIGTERM (unless `ignoreTerm`). */
+async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
+  const code = `
+    const fs = require('node:fs')
+    fs.mkdirSync(${JSON.stringify(profile.dir)}, { recursive: true })
+    fs.writeFileSync(${JSON.stringify(profile.lockPath)}, process.pid + '\\n')
+    fs.writeFileSync(${JSON.stringify(profile.infoPath)}, JSON.stringify({ port: 4000, pid: process.pid, token: 't', version: '0.2.0', build: 'b' }))
+    process.on('SIGTERM', () => {
+      if (${ignoreTerm}) return
+      fs.rmSync(${JSON.stringify(profile.infoPath)})
+      setTimeout(() => { fs.rmSync(${JSON.stringify(profile.lockPath)}); process.exit(0) }, 100)
+    })
+    setInterval(() => {}, 1000)
+  `
+  const child = spawn(process.execPath, ['-e', code], { stdio: 'ignore' })
+  const exited = new Promise((resolve) => child.on('exit', (c, s) => resolve(c ?? s)))
+  t.after(() => child.kill('SIGKILL'))
+  const deadline = Date.now() + 5000
+  while (!(existsSync(profile.infoPath) && existsSync(profile.lockPath)) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+  return { child, exited }
+}
+
+const capture = () => {
+  const lines = []
+  return { lines, log: (l) => lines.push(l), error: (l) => lines.push(`E: ${l}`) }
+}
+
+test('stopLocal: SIGTERMs the server and waits for local.json and the lock to go', async (t) => {
+  const profile = setup(t)
+  const { child, exited } = await fakeServer(t, profile)
+  const out = capture()
+  assert.equal(stopLocal(profile, out), 0)
+  assert.equal(await exited, 0)
+  assert.equal(existsSync(profile.infoPath) || existsSync(profile.lockPath), false)
+  assert.deepEqual(out.lines, [`Stopping the local trek-server (pid ${child.pid})…`, 'Stopped.'])
+})
+
+test('stopLocal: nothing running is exit 0', (t) => {
+  const profile = setup(t)
+  const out = capture()
+  assert.equal(stopLocal(profile, out), 0)
+  assert.deepEqual(out.lines, ['No local trek-server is running.'])
+})
+
+test('stopLocal: an unverified lock holder is never signalled', (t) => {
+  const profile = setup(t)
+  // The lock holds this test's (live) pid, and there is no local.json.
+  mkdirSync(profile.dir, { recursive: true })
+  writeFileSync(profile.lockPath, `${process.pid}\n`)
+  const kills = []
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, kill: (pid, sig) => kills.push([pid, sig]) }), 1)
+  assert.deepEqual(kills, [])
+  assert.match(out.lines[0], /^E: .*is held by pid \d+, but .* does not name it/)
+  assert.equal(existsSync(profile.lockPath), true, 'the lock is left alone')
+})
+
+test('stopLocal: a server that ignores SIGTERM times out with exit 1', async (t) => {
+  const profile = setup(t)
+  const { child } = await fakeServer(t, profile, { ignoreTerm: true })
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, timeoutMs: 300 }), 1)
+  assert.equal(out.lines.at(-1), `E: The local trek-server (pid ${child.pid}) did not stop within 0.3 s.`)
+})
+```
+
+Run: `node --test scripts/serverLocalStop.test.mjs 2>&1 | grep -E "^# (pass|fail)"` → it fails: `localStop.ts` does not exist.
+
+- [ ] **Step 2: The implementation**
+
+Create `server/src/localStop.ts`:
+
+```ts
+// `trek-server stop --local`: SIGTERM the local server named by local.json, and
+// wait for it to remove local.json and its lock. The lock is the authority on
+// which process is the server: it is taken before anything else and released
+// last. The pid is signalled only if local.json names it and the lock holds it,
+// so a pid reused by an unrelated process is never signalled.
+import type { LocalInfo } from '../../src/shared/localServer.ts'
+import { pidAlive, readLockPid } from './localLock.ts'
+import { readLocalInfo, type LocalProfile } from './localProfile.ts'
+
+export type StopDecision =
+  /** local.json names a live pid that holds the lock: the server */
+  | { action: 'signal'; pid: number }
+  /** No live lock holder. `stale` is a dead pid whose files are left (the next start cleans them up). */
+  | { action: 'not-running'; stale?: number }
+  /** A live pid holds the lock but local.json does not name it: still starting, or a reused pid */
+  | { action: 'unverified'; pid: number }
+
+/** What `stop --local` does, given local.json (or undefined), the lock's pid (or undefined), and a liveness check. */
+export function stopDecision(info: LocalInfo | undefined, lock: number | undefined, alive: (pid: number) => boolean): StopDecision {
+  if (lock !== undefined && alive(lock)) {
+    return info?.pid === lock ? { action: 'signal', pid: lock } : { action: 'unverified', pid: lock }
+  }
+  const stale = lock ?? info?.pid
+  return stale === undefined ? { action: 'not-running' } : { action: 'not-running', stale }
+}
+
+export interface StopOptions {
+  /** How long to wait for the server to clean up after SIGTERM */
+  timeoutMs?: number
+  pollMs?: number
+  alive?: (pid: number) => boolean
+  kill?: (pid: number, signal: NodeJS.Signals) => void
+  log?: (line: string) => void
+  error?: (line: string) => void
+}
+
+export const STOP_TIMEOUT_MS = 10_000
+
+/** A blocking sleep: the CLI has nothing else to do while it waits. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * Stops the local server. Returns the exit code: 0 once it stopped (or if none
+ * was running), 1 on a timeout, an unverified lock, or a failed signal.
+ */
+export function stopLocal(profile: LocalProfile, options: StopOptions = {}): number {
+  const {
+    timeoutMs = STOP_TIMEOUT_MS,
+    pollMs = 50,
+    alive = pidAlive,
+    kill = (pid, signal) => process.kill(pid, signal),
+    log = console.log,
+    error = console.error
+  } = options
+  const decision = stopDecision(readLocalInfo(profile.infoPath), readLockPid(profile.lockPath), alive)
+  if (decision.action === 'not-running') {
+    log(
+      decision.stale === undefined
+        ? 'No local trek-server is running.'
+        : `No local trek-server is running (pid ${decision.stale} is gone; it left files in ${profile.dir} that the next start cleans up).`
+    )
+    return 0
+  }
+  if (decision.action === 'unverified') {
+    error(
+      `${profile.lockPath} is held by pid ${decision.pid}, but ${profile.infoPath} does not name it: ` +
+        'the server may still be starting, or the pid now belongs to another process. Not signalling it.\n' +
+        `Try again in a moment. If no trek-server is running, delete ${profile.lockPath}.`
+    )
+    return 1
+  }
+  const { pid } = decision
+  try {
+    kill(pid, 'SIGTERM')
+  } catch (err) {
+    // ESRCH: it exited between the check and the signal; the wait below sees that.
+    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+      error(`Cannot signal the local trek-server (pid ${pid}): ${(err as Error).message}`)
+      return 1
+    }
+  }
+  log(`Stopping the local trek-server (pid ${pid})…`)
+  const filesGone = (): boolean => readLocalInfo(profile.infoPath)?.pid !== pid && readLockPid(profile.lockPath) !== pid
+  const deadline = Date.now() + timeoutMs
+  // The server removes both files on its way out, so once it is dead they are gone or never will be.
+  while (!filesGone() && alive(pid) && Date.now() < deadline) sleepSync(pollMs)
+  if (filesGone()) {
+    log('Stopped.')
+    return 0
+  }
+  if (!alive(pid)) {
+    log(`Stopped, but it left files in ${profile.dir}; the next start cleans them up.`)
+    return 0
+  }
+  error(`The local trek-server (pid ${pid}) did not stop within ${timeoutMs / 1000} s.`)
+  return 1
+}
+```
+
+````diff
+diff --git a/server/README.md b/server/README.md
+index a76bbe4..43dbd43 100644
+--- a/server/README.md
++++ b/server/README.md
+@@ -201,8 +201,18 @@ run by hand:
+ - any path is allowed (the welcome lists the `local` capability), since the
+   user picks paths on their own disk.
+ 
+-To stop it: `kill $(jq .pid ~/.config/trek-server/local/local.json)`. Its
+-sessions resume (`--resume`) the next time their worktree is loaded.
++To stop it:
++
++```sh
++trek-server stop --local
++```
++
++It sends SIGTERM to the pid in `local.json`, but only if `local.lock` holds
++that same pid, so it never signals an unrelated process that reused it. Then
++it waits up to 10 s for both files to go. It exits 0 once the server has
++stopped, or if none was running, and 1 if it timed out or could not tell
++which process is the server. The server's sessions resume (`--resume`) the
++next time their worktree is loaded.
+ 
+ ## Expose it with Caddy (TLS)
+ 
+diff --git a/server/src/index.ts b/server/src/index.ts
+index b2b3c0f..0a1d570 100644
+--- a/server/src/index.ts
++++ b/server/src/index.ts
+@@ -11,6 +11,7 @@ import { ConfigStore } from './configStore'
+ import { defaultDataDir, projectsDir } from './dataDir'
+ import { acquireLock, holdsLock, releaseLock } from './localLock'
+ import { localProfile, removeLocalInfo, writeLocalInfo, type LocalProfile } from './localProfile'
++import { stopLocal } from './localStop'
+ import { projectsUsingRepo } from './projects/model'
+ import { ProjectState } from './projects/state'
+ import { ProjectStore } from './projects/store'
+@@ -25,7 +26,7 @@ import {
+   revokeToken
+ } from './tokens'
+ 
+-const COMMANDS = ['start', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
++const COMMANDS = ['start', 'stop', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
+ const TOKEN_ACTIONS = ['add', 'list', 'revoke'] as const
+ 
+ interface CliArgs {
+@@ -44,7 +45,7 @@ interface CliArgs {
+   host?: string
+   dataDir?: string
+   insecure: boolean
+-  /** `start --local`: the app's local server, with its own profile (see localProfile.ts) */
++  /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
+   local: boolean
+ }
+ 
+@@ -54,6 +55,7 @@ const USAGE = `Usage: trek-server [command] [options]
+ Commands:
+   start                Run the server (default)
+   start --local        Run the Trek app's local server (see --local)
++  stop --local         Stop the local server: SIGTERM, then wait for it to exit
+   add [path]           Add the git repo at path (default: current directory)
+   list                 List the configured repos
+   remove [id|path]     Remove a repo by id or path (default: current directory)
+@@ -70,7 +72,7 @@ Options:
+   --host <host>     Interface to bind (default: config.host or 127.0.0.1)
+   --insecure        Allow binding a non-loopback host without TLS
+   --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
+-  --local           start: the app's local server. Its own config, data and lock under
++  --local           start/stop: the app's local server. Its own config, data and lock under
+                     ~/.config/trek-server/local and <platform data dir>/local; 127.0.0.1
+                     on a random port; a new token on every start; any path allowed.
+                     Writes the port and token to local.json there (0600) while it runs.
+@@ -156,7 +158,8 @@ function parseArgs(argv: string[]): CliArgs {
+     args.command = wantHelp ? 'help' : 'version'
+     return args
+   }
+-  if (args.local && args.command !== 'start') usageError('--local only applies to `start`')
++  if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
++  if (args.command === 'stop' && !args.local) usageError('`stop` only stops the local server: `trek-server stop --local`')
+   if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
+     usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
+   }
+@@ -212,6 +215,8 @@ if (local) {
+   args.dataDir = local.dataDir
+ }
+ 
++if (args.command === 'stop' && local) process.exit(stopLocal(local))
++
+ function openStore(path: string): ConfigStore {
+   try {
+     // The local server's guard allows any path: the user picks them on their own disk.
+````
+
+- [ ] **Step 3: Verify**
+
+Run the command from Step 1 → `# pass 7`, `# fail 0`.
+
+Run: `npm --prefix server run typecheck && npm --prefix server run build 2>&1 | tail -1` → no errors; `trek-server 0.2.0, build <build>`.
+
+Try it by hand:
+
+```bash
+H=$(mktemp -d)
+HOME=$H node server/dist/trek-server.cjs stop --local; echo "exit $?"
+HOME=$H node server/dist/trek-server.cjs stop 2>&1 | head -1
+HOME=$H node server/dist/trek-server.cjs --local > $H/server.log 2>&1 &
+sleep 2; ls $H/.config/trek-server/local
+HOME=$H node server/dist/trek-server.cjs stop --local; echo "exit $?"
+ls $H/.config/trek-server/local; tail -1 $H/server.log; rm -rf $H
+```
+
+Expected, in order:
+- `No local trek-server is running.` and `exit 0`.
+- `` `stop` only stops the local server: `trek-server stop --local` `` (exit 2).
+- `config.json`, `local.json` and `local.lock`.
+- `Stopping the local trek-server (pid <pid>)…`, `Stopped.` and `exit 0`.
+- Only `config.json` is left, and the log ends `SIGTERM — shutting down (all agent sessions will end)`.
+
+Run: `npm test 2>&1 | grep -E '^# (pass|fail)'` → `# pass 1441`, `# fail 0`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add server/src/localStop.ts scripts/serverLocalStop.test.mjs
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit \
+  -m "feat(server): trek-server stop --local" \
+  -m "Co-Authored-By: <model trailer>" \
+  -- server/src/localStop.ts server/src/index.ts server/README.md scripts/serverLocalStop.test.mjs docs/superpowers/plans/2026-11-08-central-server-phase4a-local-server.md
+```
+
+---
+
 ### Task 7: `smoke:local`: the bundle under Node and under Electron's Node
 
 **Files:**
@@ -1764,13 +2134,13 @@ There is no `ws`, `@xterm/headless` or `package.json` anywhere it could resolve,
 
 **The environment:** a temp `HOME` and `XDG_DATA_HOME`. The local config is pre-seeded with a fake `claude` command that echoes its arguments and then sleeps. The repo sits at `elsewhere/deep/repo`, with nothing registered near it.
 
-**What it checks, 28 times per runtime:**
+**What it checks, 30 times per runtime:**
 1. `--local --port` is a usage error, exit 2.
 2. `local.json` appears with the server's pid. It is 0600, its version and build match `dist/build.json`, the lock holds the pid, and the log's port matches.
 3. A hello with its token is welcomed, and the first welcome lists `local` and `mcp` (`ready`, Decision 9).
 4. `server.addRepo` takes the out-of-root repo, and a project is created on it. A session through `node-pty` prints `--session-id`.
 5. A second start exits 3, "already running (pid A)", and leaves `local.json` and the lock alone.
-6. SIGTERM: exit 0, and `local.json` and the lock are gone.
+6. `stop --local` (Task 6b) exits 0 with `Stopped.`. The server exits 0, and `local.json` and the lock are gone. A second `stop --local` exits 0: not running.
 7. A third start, then SIGKILL: the stale `local.json` and lock stay.
 8. A fourth start takes over. It logs the dead pid, the lock holds the new pid, and the token is new. The dead server's token gets `needs-auth`; the new one is welcomed.
 9. The session from step 4 is still listed, with its agent session id and no pty. `worktree.load` resumes it, and the agent prints `--resume <id>`.
@@ -1787,8 +2157,9 @@ Create `scripts/local-server-smoke.mjs`:
 // Electron's Node (ELECTRON_RUN_AS_NODE=1). For each runtime: local.json (0600,
 // its fields, the build), a welcome with `local` and `mcp`, a repo registered
 // outside any root, a session on a fake agent through node-pty, a second start
-// refused by the lock, SIGTERM's cleanup, a SIGKILLed server's stale lock taken
-// over with a new token, and the session resumed with --resume.
+// refused by the lock, `stop --local` and SIGTERM's cleanup, a SIGKILLed
+// server's stale lock taken over with a new token, and the session resumed with
+// --resume.
 //
 //   node scripts/local-server-smoke.mjs [--node-only | --electron-only]
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
@@ -1870,6 +2241,16 @@ async function suite(rt) {
     children.push(run)
     return run
   }
+  /** Runs a short CLI command to its end without blocking the event loop (the servers' output keeps flowing). */
+  const runCli = (argv) =>
+    new Promise((resolve) => {
+      const p = spawn(rt.cmd, [cli, ...argv], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] })
+      let out = ''
+      let err = ''
+      p.stdout.on('data', (d) => { out += d })
+      p.stderr.on('data', (d) => { err += d })
+      p.on('exit', (code) => resolve({ code, out, err }))
+    })
   const info = () => {
     try {
       return parseLocalInfo(JSON.parse(readFileSync(infoPath, 'utf8')))
@@ -1938,12 +2319,15 @@ async function suite(rt) {
     check(b.code === LOCAL_ALREADY_RUNNING_EXIT && b.err.includes(`already running (pid ${a.child.pid})`), `a second --local start exits ${LOCAL_ALREADY_RUNNING_EXIT}: already running`, `${b.code} ${b.err}`)
     check(info()?.pid === a.child.pid && lockPid() === a.child.pid, "the refused start leaves local.json and the lock alone")
 
-    // --- 6. SIGTERM ---
+    // --- 6. stop --local: SIGTERM, and the cleanup ---
     for (const c of conns.splice(0)) c.close()
-    a.child.kill('SIGTERM')
+    const stopped = await runCli(['stop', '--local'])
     await Promise.race([a.exited, new Promise((r) => setTimeout(r, 5000))])
+    check(stopped.code === 0 && stopped.out.includes(`Stopping the local trek-server (pid ${a.child.pid})`) && stopped.out.includes('Stopped.'), 'stop --local stops it: exit 0, "Stopped."', `${stopped.code} ${stopped.out} ${stopped.err}`)
     check(a.code === 0, 'SIGTERM: the server exits 0', String(a.code))
     check(!existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM removes local.json and local.lock')
+    const again = await runCli(['stop', '--local'])
+    check(again.code === 0 && again.out.includes('No local trek-server is running.'), 'stop --local with none running: exit 0, "not running"', `${again.code} ${again.out} ${again.err}`)
 
     // --- 7. a SIGKILLed server leaves a stale lock and local.json ---
     const c = start()
@@ -2011,10 +2395,10 @@ index 0f977fd..f246c34 100644
      "dist": "electron-vite build && electron-builder --mac --arm64"
    },
 diff --git a/server/README.md b/server/README.md
-index a76bbe4..3da2c98 100644
+index 43dbd43..14a5869 100644
 --- a/server/README.md
 +++ b/server/README.md
-@@ -244,3 +244,7 @@ npm run smoke -- --built      # against dist/trek-server.cjs (run npm run build
+@@ -254,3 +254,7 @@ npm run smoke -- --built      # against dist/trek-server.cjs (run npm run build
  
  Starts a throwaway server on loopback with a temp repo, exercises the
  handshake, git listing, and a pty spawn/echo/kill round trip.
@@ -2033,7 +2417,7 @@ Expected:
 ```
 --- node (<node path>) ---
 --- electron (<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron) ---
-LOCAL SMOKE PASS (56 checks)
+LOCAL SMOKE PASS (60 checks)
 ```
 
 The Electron half includes `ok: node-pty runs the agent under electron: it printed --session-id`. That shows Electron's Node loads the root's `node-pty` from the app's layout, which is the runtime 4b will use.
@@ -2058,7 +2442,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit \
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1434`, `# fail 0`. That is the baseline 1412 at `6940af0`, plus:
+Expected: `# pass 1441`, `# fail 0`. That is the baseline 1412 at `6940af0`, plus:
 
 | Task | Tests added |
 |---|---|
@@ -2067,6 +2451,7 @@ Expected: `# pass 1434`, `# fail 0`. That is the baseline 1412 at `6940af0`, plu
 | 3 | 7 |
 | 4 | 6: 2 in `serverPaths`, 1 each in `serverConfigStore` and `serverImportCheck`, 2 in `serverV2` |
 | 5 | 0 (one test changed) |
+| 6b | 7: 3 for `stopDecision`, 4 for `stopLocal` |
 
 - [ ] **Step 2: Types and build**
 
@@ -2080,7 +2465,7 @@ Run each after the previous has exited:
 |---|---|
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
-| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (56 checks)` |
+| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (60 checks)` |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (168 checks)` |
 | `node scripts/remote-smoke.mjs 2>&1 \| tail -1` | `REMOTE SMOKE PASS` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
@@ -2110,7 +2495,7 @@ Found while prototyping this plan.
    - A `local.json` whose pid is dead is a crash. The next start deletes it.
 3. **Skew.** Compare `local.json`'s `version` and `build` with `out/server/build.json`, which Task 1 writes as `server/dist/build.json`. 4b's build step must copy both files. A source run reports `build: "dev"`.
 4. **Stopping.**
-   - On macOS and Linux, SIGTERM the pid in `local.json`, then wait for `local.json` to go.
+   - On macOS and Linux, SIGTERM the pid in `local.json`, then wait for `local.json` to go. `trek-server stop --local` (Task 6b) does this, with the lock check; 4b can run it or do the same in main.
    - On Windows, `process.kill` terminates the process without running its handlers, so `local.json` and the lock stay behind. The next start takes them over. A Windows stop may want a `stop` RPC, or a CLI `stop` that the server handles itself.
 5. **The token changes on every start** (Decision 8). The synthetic `local` entry must re-read `local.json` before each connect, and again after `needs-auth`. It must never store the token.
 6. **A lock stuck on a reused pid** (Risk 1). If a start exits 3, but `local.json` is missing or its hello fails for some seconds, the lock's pid is not a trek-server. Offer "Reset local server", which deletes `local.lock` and starts again.

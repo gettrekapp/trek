@@ -11,6 +11,7 @@ import { ConfigStore } from './configStore'
 import { defaultDataDir, projectsDir } from './dataDir'
 import { acquireLock, holdsLock, releaseLock } from './localLock'
 import { localProfile, removeLocalInfo, writeLocalInfo, type LocalProfile } from './localProfile'
+import { stopLocal } from './localStop'
 import { projectsUsingRepo } from './projects/model'
 import { ProjectState } from './projects/state'
 import { ProjectStore } from './projects/store'
@@ -25,7 +26,7 @@ import {
   revokeToken
 } from './tokens'
 
-const COMMANDS = ['start', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
+const COMMANDS = ['start', 'stop', 'token', 'add', 'list', 'remove', 'help', 'version'] as const
 const TOKEN_ACTIONS = ['add', 'list', 'revoke'] as const
 
 interface CliArgs {
@@ -44,7 +45,7 @@ interface CliArgs {
   host?: string
   dataDir?: string
   insecure: boolean
-  /** `start --local`: the app's local server, with its own profile (see localProfile.ts) */
+  /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
   local: boolean
 }
 
@@ -54,6 +55,7 @@ const USAGE = `Usage: trek-server [command] [options]
 Commands:
   start                Run the server (default)
   start --local        Run the Trek app's local server (see --local)
+  stop --local         Stop the local server: SIGTERM, then wait for it to exit
   add [path]           Add the git repo at path (default: current directory)
   list                 List the configured repos
   remove [id|path]     Remove a repo by id or path (default: current directory)
@@ -70,7 +72,7 @@ Options:
   --host <host>     Interface to bind (default: config.host or 127.0.0.1)
   --insecure        Allow binding a non-loopback host without TLS
   --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
-  --local           start: the app's local server. Its own config, data and lock under
+  --local           start/stop: the app's local server. Its own config, data and lock under
                     ~/.config/trek-server/local and <platform data dir>/local; 127.0.0.1
                     on a random port; a new token on every start; any path allowed.
                     Writes the port and token to local.json there (0600) while it runs.
@@ -156,7 +158,8 @@ function parseArgs(argv: string[]): CliArgs {
     args.command = wantHelp ? 'help' : 'version'
     return args
   }
-  if (args.local && args.command !== 'start') usageError('--local only applies to `start`')
+  if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
+  if (args.command === 'stop' && !args.local) usageError('`stop` only stops the local server: `trek-server stop --local`')
   if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
     usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
   }
@@ -211,6 +214,8 @@ if (local) {
   args.configExplicit = true
   args.dataDir = local.dataDir
 }
+
+if (args.command === 'stop' && local) process.exit(stopLocal(local))
 
 function openStore(path: string): ConfigStore {
   try {

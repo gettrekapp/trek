@@ -201,8 +201,18 @@ run by hand:
 - any path is allowed (the welcome lists the `local` capability), since the
   user picks paths on their own disk.
 
-To stop it: `kill $(jq .pid ~/.config/trek-server/local/local.json)`. Its
-sessions resume (`--resume`) the next time their worktree is loaded.
+To stop it:
+
+```sh
+trek-server stop --local
+```
+
+It sends SIGTERM to the pid in `local.json`, but only if `local.lock` holds
+that same pid, so it never signals an unrelated process that reused it. Then
+it waits up to 10 s for both files to go. It exits 0 once the server has
+stopped, or if none was running, and 1 if it timed out or could not tell
+which process is the server. The server's sessions resume (`--resume`) the
+next time their worktree is loaded.
 
 ## Expose it with Caddy (TLS)
 
