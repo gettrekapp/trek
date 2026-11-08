@@ -5,7 +5,7 @@ import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol'
 import { broadcast } from './hosts/LocalHost'
 import { RemoteHost } from './hosts/RemoteHost'
 import { allRemoteHosts, deleteRemoteHost, getRemoteHost, setRemoteHost } from './hosts/registry'
-import { checkSetToken, decodeTokenRecord, encodeTokenRecord, tokenCheck, tokenToSend, type StoredServerToken } from './serverTokenRules'
+import { adoptableToken, checkSetToken, decodeTokenRecord, encodeTokenRecord, tokenCheck, tokenToSend, type StoredServerToken } from './serverTokenRules'
 
 /**
  * Access tokens are encrypted, keyed by server id, each with the origin it was
@@ -25,6 +25,14 @@ async function setToken(serverId: string, token: string | null, url?: string): P
   const problem = checkSetToken(token, url)
   if (problem) throw new Error(problem)
   await tokens.set(serverId, encodeTokenRecord(token, url as string))
+}
+
+/**
+ * Main-only (the importer): the v1 token stored for the legacy server `serverId`, when it was
+ * entered for `entryUrl`'s origin (adoptableToken). Never returned over IPC.
+ */
+export async function legacyTokenFor(serverId: string, entryUrl: string): Promise<string | null> {
+  return adoptableToken(entryUrl, await getStored(serverId))
 }
 
 function emitStatus(event: ServerStatusEvent): void {

@@ -84,3 +84,13 @@ export function tokenCheck(url: string, stored: StoredServerToken | null): Serve
   const decision = tokenToSend(url, stored)
   return decision.ok ? { ok: true } : decision
 }
+
+/**
+ * The v1 token an import may copy into an app-server entry at `entryUrl` (phase 4d): only one
+ * stored bound to that entry's origin. A token saved before binding, or for another origin, stays
+ * where it is, and the user enters it for the entry.
+ */
+export function adoptableToken(entryUrl: string, stored: StoredServerToken | null): string | null {
+  const decision = tokenToSend(entryUrl, stored)
+  return decision.ok ? decision.token : null
+}

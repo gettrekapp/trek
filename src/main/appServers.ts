@@ -287,6 +287,35 @@ async function test(id: unknown): Promise<AppServerTest> {
   return result
 }
 
+/** The saved entries (not Local), for the importer's matching by origin. */
+export function savedAppServers(): AppServer[] {
+  return loaded().map((s) => ({ ...s }))
+}
+
+/**
+ * Main-only (the importer): a new entry for a legacy server the user agreed to add, with the
+ * v1 token carried over when one was stored for its origin (or none). Goes through Save's checks.
+ */
+export async function addAppServer(name: string, url: string, token: string | null): Promise<AppServerInfo> {
+  return save({ name, url, token })
+}
+
+/**
+ * Main-only (the importer): stores `token` for a saved entry that has none, so a legacy server's
+ * token follows its project. `url` is the address the token was matched to (adoptableToken): an
+ * entry re-pointed meanwhile gets nothing. An entry's own token is never replaced. True when stored.
+ */
+export async function adoptAppServerToken(id: string, url: string, token: string): Promise<boolean> {
+  refuseLocal(id, 'given a token')
+  const server = requireKnown(id)
+  if (server.url !== url || (await tokens.get(server.id))) return false
+  // Read again after the await: a save in between may have re-pointed it.
+  if (getAppServer(server.id)?.url !== url) return false
+  await tokens.set(server.id, token)
+  await linksFollow()
+  return true
+}
+
 /** Quit: main's connections close for good. */
 export function closeServerLinks(): void {
   links?.close()

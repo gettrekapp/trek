@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ADDRESS_CHANGED,
+  adoptableToken,
   INVALID_URL,
   NO_TOKEN,
   TOKEN_UNBOUND,
@@ -95,4 +96,17 @@ test('checkSetToken refuses a bad token or URL from the renderer', () => {
     assert.equal(checkSetToken('tok', url), 'Server URL is required', String(url))
   }
   for (const url of ['garbage', 'file:///tmp/x', 'wss://']) assert.equal(checkSetToken('tok', url), INVALID_URL, url)
+})
+
+test("adoptableToken: an import carries a v1 token to an app-server entry on the origin it was entered for, and nowhere else", () => {
+  const stored = decodeTokenRecord(encodeTokenRecord('tok', 'wss://build.example:7777'))
+  assert.equal(adoptableToken('wss://build.example:7777', stored), 'tok')
+  assert.equal(adoptableToken('wss://build.example:7777/sub', stored), 'tok')
+  assert.equal(adoptableToken('wss://build.example:7778', stored), null)
+  assert.equal(adoptableToken('ws://build.example:7777', stored), null)
+  assert.equal(adoptableToken('wss://evil.example:7777', stored), null)
+  // Saved before tokens were bound: its origin is unknown, so it is not carried.
+  assert.equal(adoptableToken('wss://build.example:7777', decodeTokenRecord('bare-token')), null)
+  assert.equal(adoptableToken('wss://build.example:7777', null), null)
+  assert.equal(adoptableToken('not a url', stored), null)
 })
