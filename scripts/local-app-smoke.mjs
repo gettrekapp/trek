@@ -11,7 +11,7 @@
 //     session (setsid), its output in the profile's server.log (0600); its agents get no TREK_
 //     variable from the app's env;
 //   - Connect to server lists Local first, Running, with no Set token, Edit or Remove;
-//   - New Project on Local: the folder picker (stubbed) → server.addRepo → the modal named after
+//   - the start screen's New Project… lists Local first; on it: the folder picker (stubbed) → server.addRepo → the modal named after
 //     the folder with it ticked → Create; the window becomes the Local project window;
 //   - a session started on it runs the fake agent, and the window shows its output;
 //   - File → Local Server → Stop: the window shows Stopped with Start Local Server; Start brings
@@ -285,7 +285,7 @@ try {
 
   // ---- 2. Connect lists Local first ------------------------------------------------------------
 
-  await win.locator('.start-actions button', { hasText: 'Connect to server…' }).click()
+  await win.locator('.start-actions button', { hasText: 'Open on server…' }).click()
   const item = localItem(win)
   await item.locator('.connect-server-status', { hasText: /^Running/ }).waitFor({ timeout: 15_000 })
   check('Local is listed first, Running', [await item.locator('.connect-server-name').textContent(), (await item.locator('.connect-server-status').textContent()).startsWith(`Running ${bundled.version} (pid ${first.pid})`)], ['Local', true])
@@ -294,10 +294,15 @@ try {
   check('the menu shows its state, Restart and Stop', await menuLabels(), [`Running ${bundled.version} (pid ${first.pid}) (off)`, 'Restart Local Server', 'Stop Local Server'])
   check('no renderer sees the token', await tokenInRenderer(win, first.token), false)
 
-  // ---- 3. New Project on Local: the folder picker, then the modal --------------------------------
+  // ---- 3. New Project… on the start screen: Local first, the folder picker, then the modal ----------
 
-  await item.locator('button', { hasText: 'Projects' }).click()
-  await item.locator('.connect-projects button', { hasText: 'New Project…' }).click()
+  await win.locator('.connect-header button', { hasText: '← Back' }).click()
+  check('the start screen offers New Project…, Open on server… and Import .trekproj…', await win.locator('.start-actions button').allTextContents(), ['New Project…', 'Open on server…', 'Import .trekproj…'])
+  await win.locator('.start-actions button', { hasText: 'New Project…' }).click()
+  const picker = win.locator('.new-project .connect-server-item')
+  await picker.first().locator('.new-project-on:not([disabled])').waitFor({ timeout: 15_000 })
+  check('New Project… asks where: Local first, with its folder picker', [await picker.first().locator('.connect-server-name').textContent(), await picker.first().locator('.new-project-on').textContent()], ['Local', 'Choose a folder…'])
+  await picker.first().locator('.new-project-on').click()
   const modal = win.locator('.modal.new-server-project')
   await modal.waitFor({ timeout: 10_000 })
   // Read the name and blur its field in one renderer task, as soon as it is filled: a key typed

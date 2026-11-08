@@ -6,12 +6,12 @@ import { shouldReconnect, shouldReconnectOnMove } from '../v2/appServerLinks'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
 import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
-import type { ConnectionStatus, StatusChange } from '../../../shared/client/index.ts'
+import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerLink, AppServerTest } from '../../../shared/types'
 
 /**
- * The start screen's Connect to server view: the app-wide trek-server list
+ * The start screen's Open on server view: the app-wide trek-server list
  * (add, edit, token, test, remove) and, for the picked server, its projects.
  * Tokens go to main and are never read back. The list and each row's status
  * are main's broadcast (main holds a connection per server with a token), so
@@ -457,15 +457,13 @@ function ServerForm({ form, setForm, tokenRequired, hasToken, error, saving, can
 
 type TopicView = { snapshot: ServerTopic } | { error: string } | null
 
-/** The picked server's projects, from its `server` topic. */
-function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Element {
-  const setServerWindow = useAppStore((s) => s.setServerWindow)
+/**
+ * A server entry's connection from this window, its status, and its `server` topic. Never closed
+ * here: the view that lists the entries drops the connections it no longer shows.
+ */
+export function useServerTopic(server: AppServerLink): { registered: RegisteredServer; status: StatusChange; topic: TopicView } {
   const [status, setStatus] = useState<StatusChange>({ status: 'connecting', message: '' })
   const [topic, setTopic] = useState<TopicView>(null)
-  /** Open: false, true, or the folder New Project on Local picked first */
-  const [newProjectOpen, setNewProjectOpen] = useState<boolean | { path: string }>(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const registered = useMemo(() => connectServerEntry(server.id), [server.id])
 
   useEffect(() => {
@@ -493,6 +491,26 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
     lastUrl.current = server.url
   }, [server.url, registered])
 
+  return { registered, status, topic }
+}
+
+/**
+ * Opens a server project from a start screen: in this window when main gives it the project
+ * (`opened`), otherwise main focused or opened another window. Rejects for the caller to show.
+ */
+export async function openServerProjectHere(serverEntryId: string, projectId: string, name: string, serverName: string): Promise<void> {
+  const { opened } = await window.api.openServerProject(serverEntryId, projectId, name, serverName)
+  if (opened) useAppStore.getState().setServerWindow({ serverEntryId, projectId })
+}
+
+/** The picked server's projects, from its `server` topic. */
+function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Element {
+  const { registered, status, topic } = useServerTopic(server)
+  /** Open: false, true, or the folder New Project on Local picked first */
+  const [newProjectOpen, setNewProjectOpen] = useState<boolean | { path: string }>(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
   // Note for 4b, 8: from the welcome, never from the URL.
   const isLocal = !!server.capabilities?.includes('local')
   const newProject = async (): Promise<void> => {
@@ -516,8 +534,7 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
     setBusy(true)
     setError(null)
     try {
-      const { opened } = await window.api.openServerProject(server.id, projectId, name, serverName)
-      if (opened) setServerWindow({ serverEntryId: server.id, projectId })
+      await openServerProjectHere(server.id, projectId, name, serverName)
     } catch (err) {
       setError(`Could not open project: ${errorText(err)}`)
     } finally {

@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
-import { GLOBAL_WORKTREE_ID, mergedWorktrees, migrateProject, selectedWorktreeInfo, useAppStore } from './store'
+import { useEffect, useState } from 'react'
+import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore } from './store'
 import { saveProject } from './persistence'
 import { handleWindowCloseRequest, syncWindowProject, watchWindowProject } from './windowLifecycle'
-import { disposeAllTerminals, focusInGlobalPanel } from './terminals'
+import { focusInGlobalPanel } from './terminals'
 import { getBackend } from './backend'
-import { StartScreen } from './components/StartScreen'
+import { StartScreen, type StartView } from './components/StartScreen'
 import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { Workspace } from './components/Workspace'
 import { GlobalClaude } from './components/GlobalClaude'
@@ -26,6 +26,9 @@ export default function App(): React.JSX.Element {
   const [serverTitle, setServerTitle] = useState<string | null>(null)
   /** False until main says what this window shows, so the start screen never flashes first. */
   const [booted, setBooted] = useState(false)
+  /** The start screen's view, asked for by the menu (File → New Project…, Open on Server…) */
+  const [startRequest, setStartRequest] = useState<{ view: StartView; n: number } | undefined>(undefined)
+  const showStart = (view: StartView): void => setStartRequest((r) => ({ view, n: (r?.n ?? 0) + 1 }))
   useLinearSync()
 
   useEffect(() => {
@@ -34,26 +37,12 @@ export default function App(): React.JSX.Element {
     return watchLlmSettings()
   }, [])
 
-  const openProject = useCallback(async (): Promise<void> => {
-    try {
-      const opened = await window.api.openProject()
-      if (!opened) return
-      // Migrate first: an invalid file must not cost the open project its sessions.
-      const project = migrateProject(opened.project)
-      disposeAllTerminals()
-      // Worktrees open unloaded — the sidebar loads each one's saved sessions on
-      // demand, so a project with dozens of them doesn't launch dozens of claudes.
-      useAppStore.getState().setProject(project, opened.filePath)
-    } catch (err) {
-      syncWindowProject() // main claimed the file for a project that didn't load
-      await window.api.showError('Could not open project', String(err))
-    }
-  }, [])
-
   useEffect(() => {
     const unsubscribes = [
       window.api.onMenu('save-project', () => void saveProject()),
-      window.api.onMenu('open-project', () => void openProject()),
+      // Sent only to an empty window: main opens a new one otherwise.
+      window.api.onMenu('new-project', () => showStart('new')),
+      window.api.onMenu('open-on-server', () => showStart('connect')),
       window.api.onMenu('new-terminal', () => {
         const state = useAppStore.getState()
         // A server window offline: its commands wait for the connection. A missing worktree runs nothing.
@@ -94,7 +83,7 @@ export default function App(): React.JSX.Element {
       watchAttention()
     ]
     return () => unsubscribes.forEach((u) => u())
-  }, [openProject])
+  }, [])
 
   // After the listeners above: this also tells main the window can answer a close request.
   useEffect(() => {
@@ -109,15 +98,16 @@ export default function App(): React.JSX.Element {
           return
         }
         if (opened) useAppStore.getState().setProject(opened.project, opened.filePath)
+        if (menu === 'new-project') showStart('new')
+        if (menu === 'open-on-server') showStart('connect')
         setBooted(true)
-        if (menu === 'open-project') await openProject()
       })
       .catch(async (err) => {
         setBooted(true)
         syncWindowProject()
         await window.api.showError('Could not open project', String(err))
       })
-  }, [openProject])
+  }, [])
 
   const titleBarColor = project?.titleBarColor
 
@@ -159,7 +149,7 @@ export default function App(): React.JSX.Element {
           <GlobalClaude />
         </>
       ) : booted ? (
-        <StartScreen />
+        <StartScreen request={startRequest} />
       ) : null}
       <SummaryBubble />
     </div>

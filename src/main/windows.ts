@@ -256,7 +256,7 @@ function guardNavigation(contents: WebContents): void {
 }
 
 export function createWindow(
-  opts: { initialTarget?: WindowTarget; menu?: 'open-project'; bounds?: WindowBounds } = {}
+  opts: { initialTarget?: WindowTarget; menu?: InitialWindowState['menu']; bounds?: WindowBounds } = {}
 ): BrowserWindow {
   const win = new BrowserWindow({
     width: 1400,

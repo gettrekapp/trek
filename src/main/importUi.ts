@@ -1,6 +1,6 @@
 // What the user sees of an import (phase 4d): File → Import .trekproj…, the add-server question,
 // the result dialog, and opening the server windows a file became. importer.ts does the work.
-import { BrowserWindow, dialog, type MessageBoxOptions, type WebContents } from 'electron'
+import { BrowserWindow, dialog, ipcMain, type MessageBoxOptions, type WebContents } from 'electron'
 import { access } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { OpenedProject, ServerConfig } from '../shared/types'
@@ -87,12 +87,13 @@ export async function openPieces(sender: WebContents | null, pieces: readonly Mi
 }
 
 /**
- * File → Import .trekproj…: always an import (Import Again for a file imported before). When no
- * part lands, the file can still open as a file window (`legacy`, in a window of its own): a file
- * window on it was closed for the import.
+ * File → Import .trekproj…, and the start screen's Import .trekproj… (`from`: that window, the
+ * parent of the dialogs and, while empty, where the first project opens): always an import
+ * (Import Again for a file imported before). When no part lands, the file can still open as a file
+ * window (`legacy`, in a window of its own): a file window on it was closed for the import.
  */
-export async function importFromMenu(legacy: LegacyOpen): Promise<void> {
-  const parent = BrowserWindow.getFocusedWindow()
+export async function importFromMenu(legacy: LegacyOpen, from?: WebContents): Promise<void> {
+  const parent = from ? BrowserWindow.fromWebContents(from) : BrowserWindow.getFocusedWindow()
   const options = { title: 'Import Project', filters: PROJECT_FILTERS, properties: ['openFile' as const] }
   const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
   if (picked.canceled || picked.filePaths.length === 0) return
@@ -239,4 +240,9 @@ export async function offerFirstLaunchImport(): Promise<void> {
     }
   }
   await showImportResult(null, outcomes)
+}
+
+/** The start screen's Import .trekproj…: File → Import's flow, from that window. */
+export function registerImportHandlers(legacy: LegacyOpen): void {
+  ipcMain.handle('project:import', (event) => importFromMenu(legacy, event.sender))
 }

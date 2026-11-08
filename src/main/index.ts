@@ -34,7 +34,7 @@ import {
 } from './localServer'
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
-import { importFromMenu, offerFirstLaunchImport, openFromOs } from './importUi'
+import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandlers } from './importUi'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
@@ -65,16 +65,11 @@ function sendToFocused(channel: string): void {
   ;(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.webContents.send(channel)
 }
 
-function newProject(): void {
+/** File → New Project… / Open on Server…: the start screen's view, in the focused window if it is empty, else in a new one. */
+function startView(view: 'new-project' | 'open-on-server'): void {
   const focused = BrowserWindow.getFocusedWindow()
-  // An empty window is already at the start screen.
-  if (focused && !windowHasProject(focused.webContents)) focused.focus()
-  else createWindow()
-}
-
-function openProject(): void {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow({ menu: 'open-project' })
-  else sendToFocused('menu:open-project')
+  if (focused && !windowHasProject(focused.webContents)) focused.webContents.send(`menu:${view}`)
+  else createWindow({ menu: view })
 }
 
 /** File → Local Server: its state, Start or Restart, and Stop. Rebuilt on every change. */
@@ -116,12 +111,12 @@ function buildMenu(): void {
         {
           label: 'New Project…',
           accelerator: 'CmdOrCtrl+N',
-          click: newProject
+          click: () => startView('new-project')
         },
         {
-          label: 'Open Project…',
+          label: 'Open on Server…',
           accelerator: 'CmdOrCtrl+O',
-          click: openProject
+          click: () => startView('open-on-server')
         },
         {
           label: 'Import .trekproj…',
@@ -175,6 +170,7 @@ app.whenReady().then(async () => {
   registerWindowHandlers(openProjectFile)
   registerAppIpc()
   registerProjectHandlers()
+  registerImportHandlers(openLegacy)
   registerGithubHandlers()
   registerLinearHandlers()
   registerSkillHandlers()

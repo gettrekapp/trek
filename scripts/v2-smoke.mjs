@@ -349,7 +349,7 @@ const pageForServerProject = async (projectId, ms = 15_000) => {
 
 /** In a start screen: Connect to server… and the named server's project list. */
 const connectProjects = async (page, serverName) => {
-  await page.locator('.start-actions button', { hasText: 'Connect to server…' }).click()
+  await page.locator('.start-actions button', { hasText: 'Open on server…' }).click()
   const item = page.locator('.connect-server-item', { hasText: serverName })
   await item.locator('.connect-server-status', { hasText: /^Connected/ }).waitFor({ timeout: 10_000 })
   if (!(await item.locator('.connect-projects').count())) await item.locator('button', { hasText: 'Projects' }).click()
@@ -425,7 +425,7 @@ try {
 
   // ---- 1. Start and add a server ----------------------------------------------
 
-  await win.locator('.start-actions button', { hasText: 'Connect to server…' }).click()
+  await win.locator('.start-actions button', { hasText: 'Open on server…' }).click()
   await win.locator('.connect-header button', { hasText: 'Add server…' }).click()
   const form = win.locator('.server-form')
   await form.locator('.server-form-row', { hasText: 'Name' }).locator('input').fill('Local box')
@@ -1188,7 +1188,7 @@ try {
     window.__changes = []
     window.api.appServers.onChanged((snapshot) => window.__changes.push(snapshot))
   })
-  await w7.locator('.start-actions button', { hasText: 'Connect to server…' }).click()
+  await w7.locator('.start-actions button', { hasText: 'Open on server…' }).click()
   await w7.locator('.connect-server-item').first().waitFor({ timeout: 10_000 })
   await countTrustedFocus(w7)
   const added = await w5.evaluate(([url, t]) => window.api.appServers.save({ name: 'Live', url, token: t }), [`ws://127.0.0.1:${port}`, token])

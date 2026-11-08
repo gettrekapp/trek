@@ -58,6 +58,8 @@ const api = {
   openProject: (): Promise<OpenedProject | null> => ipcRenderer.invoke('project:open'),
   openProjectPath: (filePath: string): Promise<OpenedProject | null> =>
     ipcRenderer.invoke('project:openPath', filePath),
+  /** File → Import .trekproj…'s flow from this window: its projects open here while it is empty. */
+  importTrekproj: (): Promise<void> => ipcRenderer.invoke('project:import'),
   getRecentProjects: (): Promise<RecentEntry[]> => ipcRenderer.invoke('recents:get'),
   removeRecentProject: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recents:remove', entry),
   openServerProject: (
@@ -435,7 +437,8 @@ const api = {
   // Menu events
   onMenu: (
     channel:
-      | 'open-project'
+      | 'new-project'
+      | 'open-on-server'
       | 'save-project'
       | 'new-terminal'
       | 'close-tab'
