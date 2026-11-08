@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   parseAppServers,
   reinsertAt,
+  rejectDuplicateServer,
   shouldClearToken,
   shouldRetryAfterTest,
   testTokenRefusal,
@@ -119,4 +120,19 @@ test('shouldRetryAfterTest: only a connected Test of the URL the entry still has
   assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', undefined, true), false, 'a remove started during the probe')
   assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', { ...A }, true), false, 'being removed, even if still found')
   assert.equal(shouldRetryAfterTest(ok, 'ws://a:1', undefined, false), false, 'removed during the probe')
+})
+
+test('rejectDuplicateServer refuses a URL another entry has, by origin and path', () => {
+  const list = [
+    { id: 'a', name: 'Build box', url: 'wss://box:7400' },
+    { id: 'b', name: 'Lab', url: 'ws://lab:7400/trek' }
+  ]
+  assert.throws(() => rejectDuplicateServer(list, 'wss://box:7400', null), /^Error: This server is already in the list as "Build box"$/)
+  assert.throws(() => rejectDuplicateServer(list, 'wss://BOX:7400/', null), /as "Build box"/, 'host case and a trailing slash')
+  assert.throws(() => rejectDuplicateServer(list, 'ws://lab:7400/trek/', 'a'), /as "Lab"/, 'an edit onto another entry')
+  assert.doesNotThrow(() => rejectDuplicateServer(list, 'wss://box:7400', 'a'), 'an entry keeps its own URL')
+  assert.doesNotThrow(() => rejectDuplicateServer(list, 'ws://box:7400', null), 'another scheme')
+  assert.doesNotThrow(() => rejectDuplicateServer(list, 'wss://box:7401', null), 'another port')
+  assert.doesNotThrow(() => rejectDuplicateServer(list, 'ws://lab:7400/other', null), 'another path')
+  assert.throws(() => rejectDuplicateServer([{ id: 'c', name: 'Std', url: 'wss://host:443' }], 'wss://host', null), /as "Std"/, 'the default port')
 })

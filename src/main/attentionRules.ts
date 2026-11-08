@@ -3,6 +3,7 @@
 // and what dismissing an entry asks the server. notifications.ts carries them out.
 import type { AttentionKind } from './attention.ts'
 import type { AttentionItem } from '../shared/types.ts'
+import { attentionPlace } from '../shared/attentionPlace.ts'
 import { DEFAULT_APP_SETTINGS, type AppSettings } from '../shared/appSettings.ts'
 
 /** The focused window, as far as attention cares: the server project it shows, and the session in view there. */
@@ -37,10 +38,7 @@ export function shouldNotify(
 }
 
 /** "Demo · Build box", with " · Global" for a Global panel session; the server alone without a project name. */
-export function placeOf(item: AttentionItem): string {
-  const where = item.projectName ? `${item.projectName} · ${item.serverName}` : item.serverName
-  return item.worktreeId === null ? `${where} · Global` : where
-}
+export const placeOf = (item: AttentionItem): string => attentionPlace(item)
 
 /** As the legacy window words them, with the session's title for the agent's name. */
 export function notificationText(kind: AttentionKind, item: AttentionItem): { title: string; body: string } {

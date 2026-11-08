@@ -264,7 +264,11 @@ const inWindowTagged = (name, action) =>
     async ({ BrowserWindow }, [name, action]) => {
       for (const w of BrowserWindow.getAllWindows()) {
         if (w.isDestroyed()) continue
-        const t = await w.webContents.executeJavaScript('window.__smokeTag ?? null').catch(() => null)
+        // A window still closing may never answer: give up on it after 2 s.
+        const t = await Promise.race([
+          w.webContents.executeJavaScript('window.__smokeTag ?? null').catch(() => null),
+          new Promise((resolve) => setTimeout(() => resolve(null), 2000))
+        ])
         if (t !== name) continue
         if (action === 'close') w.close()
         if (action === 'focus') w.focus()
@@ -701,7 +705,13 @@ try {
   check('the new session is the active tab', await until(activeTab, s1), s1)
   check('its terminal shows the agent', (await until(async () => (await term(s1)).includes('FAKE_AGENT'), true)), true)
 
-  // Typing goes to the server's pty, and its output comes back.
+  // Typing goes to the server's pty, and its output comes back. Keys typed before the pane's
+  // attach completes are dropped, so wait for it: the terminal holds the session's pty.
+  const attachedToItsPty = async () => {
+    const pty = await w1.evaluate((id) => window.__terminals.attachedPty(id), s1)
+    return pty !== null && pty === worktreeNamed(await projectNow(), 'smoke-wt')?.sessions.find((s) => s.id === s1)?.ptyId
+  }
+  check("the new session's terminal is attached to its pty", await until(attachedToItsPty, true), true)
   await detail.locator('.terminal-pane:visible .terminal-host').click()
   await w1.keyboard.type('hello')
   await w1.keyboard.press('Enter')
@@ -1116,7 +1126,7 @@ try {
   await closeTagged('wSecond')
   // Gone before the next close: inWindowTagged asks every window for its tag, and a window still
   // closing may never answer.
-  await until(windowCount, windowsBefore)
+  check('the project window closes', await until(windowCount, windowsBefore), windowsBefore)
   await closeTagged('wf')
   check('the attention windows close', await until(windowCount, windowsBefore - 1), windowsBefore - 1)
   await live.request('project.delete', { projectId: second })

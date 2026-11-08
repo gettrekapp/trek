@@ -1,6 +1,8 @@
 // scripts/mainAttentionRules.test.mjs — when main notifies, what it says, the sound, and what a dismiss asks.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { attentionPlace } from '../src/shared/attentionPlace.ts'
+import { serverSource } from '../src/renderer/src/notificationItems.ts'
 import { dismissRequest, notificationText, placeOf, shouldNotify, wantsAlert } from '../src/main/attentionRules.ts'
 
 const item = (more = {}) => ({
@@ -39,6 +41,14 @@ test('the texts follow the legacy window, with the project and server as the pla
   assert.deepEqual(notificationText('done', item({ status: 'done' })), { title: 'Claude finished', body: 'Demo · Build box' })
   assert.equal(placeOf(item({ worktreeId: null })), 'Demo · Build box · Global')
   assert.equal(placeOf(item({ projectName: '' })), 'Build box')
+})
+
+test("the notification's place and the menu's source share one helper", () => {
+  for (const i of [item(), item({ worktreeId: null }), item({ projectName: '' }), item({ projectName: '', worktreeId: null })]) {
+    assert.equal(placeOf(i), attentionPlace(i))
+    assert.equal(serverSource(i), `${attentionPlace(i)} · ${i.title}`)
+  }
+  assert.equal(attentionPlace(item({ projectName: '', worktreeId: null })), 'Build box · Global')
 })
 
 test('one sound for a batch, if any of its projects has audio alerts on', () => {

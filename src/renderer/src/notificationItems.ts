@@ -2,6 +2,7 @@
 // window's sessions) and every app-wide server's entries from main, newest
 // first. Pure.
 import type { AttentionItem } from '../../shared/types'
+import { attentionPlace } from '../../shared/attentionPlace.ts'
 
 export interface LocalDecision {
   terminalId: string
@@ -30,9 +31,9 @@ export function statusText(status: string): string {
   return status
 }
 
+/** "Demo · Build box · Claude": the entry's place (as main's notification words it), then the session's title. */
 export function serverSource(item: AttentionItem): string {
-  const where = item.projectName ? `${item.projectName} · ${item.serverName}` : item.serverName
-  return `${where} · ${item.worktreeId === null ? `Global · ${item.title}` : item.title}`
+  return `${attentionPlace(item)} · ${item.title}`
 }
 
 /**

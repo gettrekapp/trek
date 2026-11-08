@@ -53,7 +53,13 @@ async function update(patch: unknown): Promise<AppSettings> {
       console.warn('trek: could not send appSettings:changed to a window', err)
     }
   }
-  await run
+  try {
+    await run
+  } catch (err) {
+    // Still applied in memory (above): the window says it lasts until Trek quits.
+    console.warn(`trek: could not write ${FILE_NAME}; the change applies until Trek quits`, err)
+    throw err
+  }
   return { ...next }
 }
 

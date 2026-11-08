@@ -64,7 +64,6 @@ interface Seen {
 }
 
 interface Linked {
-  source: AttentionSource
   off: () => void
   offStatus: () => void
   /** Entries as of the last snapshot */
@@ -199,7 +198,6 @@ export function createAttention(deps: AttentionDeps): Attention {
       if (closed) return
       unlinked(id)
       const link: Linked = {
-        source,
         off: () => {},
         offStatus: () => {},
         entries: [],

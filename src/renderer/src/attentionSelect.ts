@@ -5,7 +5,7 @@ import { useAppStore } from './store'
 import { focusTerminal, revealTerminal } from './terminals'
 import { playAlertSound } from './audio'
 import { v2Ids } from './v2/applyProjection'
-import { sameIds, selectStep, sessionsInView } from './v2/sessionSelect'
+import { selectStep, sessionsInView, viewReporter } from './v2/sessionSelect'
 import type { SessionSelect } from '../../shared/types'
 
 /** A select still waiting for the project (or its session) is dropped after this long. */
@@ -41,13 +41,10 @@ export function requestSessionSelect(select: SessionSelect): void {
 
 /** Follows main's select requests, reports the sessions in view, and plays main's alert. */
 export function watchAttention(): () => void {
-  let reported: string[] = []
-  const report = (): void => {
-    const now = sessionsInView(useAppStore.getState())
-    if (sameIds(now, reported)) return
-    reported = now
-    window.api.attention.viewing(now)
-  }
+  const send = viewReporter((ids) => window.api.attention.viewing(ids))
+  const report = (): void => send(sessionsInView(useAppStore.getState()))
+  // At once, so a reloaded window replaces what main kept from before the reload.
+  report()
   const offStore = useAppStore.subscribe(() => {
     tryPending()
     report()

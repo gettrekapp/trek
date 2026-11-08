@@ -13,7 +13,7 @@ import { dismissRequest, notificationText, shouldNotify, wantsAlert, type Focuse
 import { getAppServer, serverLink } from './appServers'
 import { appSettings } from './appSettings'
 import { focusedWindowTarget, showServerSession } from './windows'
-import type { AttentionChanged } from '../shared/types'
+import type { AttentionChanged, SessionSelect } from '../shared/types'
 
 let attention: Attention | null = null
 /** The sessions each window reports in view, by webContents id */
@@ -59,7 +59,12 @@ function show(title: string, body: string, onClick: () => void): void {
   live.add(notification)
   // The oldest goes first; a notification macOS still shows keeps working without the reference.
   if (live.size > MAX_LIVE) live.delete(live.values().next().value!)
-  notification.show()
+  try {
+    notification.show()
+  } catch (err) {
+    forget()
+    throw err
+  }
 }
 
 function raised(events: AttentionEvent[]): void {
@@ -68,7 +73,17 @@ function raised(events: AttentionEvent[]): void {
   for (const { kind, item } of events) {
     if (!shouldNotify(kind, item, now, settings)) continue
     const { title, body } = notificationText(kind, item)
-    show(title, body, () => openAttention(item.key))
+    // As raised: an entry gone by the click (dismissed, or its server's list redone) still opens its project.
+    const { serverEntryId, projectId } = item
+    const select: SessionSelect = { projectId, sessionId: item.sessionId, worktreeId: item.worktreeId }
+    try {
+      show(title, body, () => {
+        if (!openAttention(item.key) && getAppServer(serverEntryId)) showServerSession(serverEntryId, projectId, select)
+      })
+    } catch (err) {
+      // One that fails never drops the rest of the batch.
+      console.error('trek: could not show a notification', err)
+    }
   }
   if (wantsAlert(events)) playAlert()
 }

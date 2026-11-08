@@ -58,3 +58,17 @@ export function sessionsInView(s: ViewState): string[] {
 export function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, i) => id === b[i])
 }
+
+/**
+ * Sends the sessions in view when they change, and always the first time: a
+ * reloaded window has nothing reported yet, while main still holds what it
+ * showed before the reload.
+ */
+export function viewReporter(send: (ids: string[]) => void): (now: string[]) => void {
+  let reported: string[] | null = null
+  return (now) => {
+    if (reported && sameIds(now, reported)) return
+    reported = now
+    send(now)
+  }
+}

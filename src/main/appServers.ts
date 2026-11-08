@@ -11,6 +11,7 @@ import { createSecretStore, writeFileAtomic } from './secrets'
 import {
   parseAppServers,
   reinsertAt,
+  rejectDuplicateServer,
   shouldClearToken,
   shouldRetryAfterTest,
   testTokenRefusal,
@@ -143,6 +144,7 @@ async function save(input: unknown): Promise<AppServerInfo> {
   const tokenGiven = typeof token === 'string' && token !== ''
   const isNew = id === undefined || id === null || id === ''
   const before = isNew ? null : { ...requireKnown(id) }
+  rejectDuplicateServer(loaded(), valid.url, before ? before.id : null)
   const entryId = before ? before.id : randomUUID()
   const urlChanged = !!before && before.url !== valid.url
 

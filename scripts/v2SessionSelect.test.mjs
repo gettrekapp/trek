@@ -1,7 +1,7 @@
 // scripts/v2SessionSelect.test.mjs — main asking a server window to show a session, and what it reports in view.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { sameIds, selectStep, sessionsInView } from '../src/renderer/src/v2/sessionSelect.ts'
+import { sameIds, selectStep, sessionsInView, viewReporter } from '../src/renderer/src/v2/sessionSelect.ts'
 
 const select = { projectId: 'p1', sessionId: 's1', worktreeId: 'w1' }
 const view = (more = {}) => ({
@@ -43,4 +43,15 @@ test("in view: the selected worktree's tab, and the open Global panel's", () => 
   assert.deepEqual(sessionsInView(state({ serverWindow: null, globalPanelOpen: true })), [], 'a file window reports none')
   assert.equal(sameIds(['a', 'b'], ['a', 'b']), true)
   assert.equal(sameIds(['a'], ['a', 'b']), false)
+})
+
+test('the view is reported the first time, even empty, then only when it changes', () => {
+  const sent = []
+  const report = viewReporter((ids) => sent.push(ids))
+  report([])
+  report([])
+  report(['s1'])
+  report(['s1'])
+  report([])
+  assert.deepEqual(sent, [[], ['s1'], []], 'a reloaded window clears what main kept from before')
 })

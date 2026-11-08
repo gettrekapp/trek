@@ -69,6 +69,8 @@ interface V2Link {
   announced: string | null
   /** The pty whose output the terminal shows (the last one that sent data); null before any */
   shown: string | null
+  /** The pty whose attach last resolved: with `ptyId` the same, typed keys reach it */
+  attached: string | null
 }
 
 interface Entry {
@@ -1082,6 +1084,13 @@ export function terminalSize(id: string): { cols: number; rows: number } | null 
   return entry ? { cols: entry.term.cols, rows: entry.term.rows } : null
 }
 
+/** A server window's terminal: the pty its attach has completed for and still holds (what typed keys reach); else null. */
+export function attachedPty(id: string): string | null {
+  const link = entries.get(id)?.v2
+  if (!link?.ptyId || link.attached !== link.ptyId || !link.ptys.isAttached(link.ptyId)) return null
+  return link.ptyId
+}
+
 /**
  * Server windows (protocol v2)
  *
@@ -1126,7 +1135,7 @@ function cancelV2Sync(): void {
 
 function createV2Entry(id: string, ptys: PtyStream): Entry {
   const { term, fit } = newXterm()
-  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null }
+  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null, attached: null }
   const entry: Entry = {
     term,
     fit,
@@ -1196,6 +1205,7 @@ function attachV2(id: string, ptyId: string): void {
   if (!entry || !link) return
   link.ptyId = ptyId
   link.spent = null
+  link.attached = null
   // The replay repeats a pty's scrollback: attached again after a failure, the
   // same pty starts from a clean screen, as onReset does.
   if (link.shown === ptyId) entry.term.reset()
@@ -1251,6 +1261,7 @@ function attachV2(id: string, ptyId: string): void {
         if (!current()) return
         link.failed = null
         link.announced = null
+        link.attached = ptyId
         applyAttachSize(entry, ptys, ptyId, info)
       },
       (err: unknown) => {

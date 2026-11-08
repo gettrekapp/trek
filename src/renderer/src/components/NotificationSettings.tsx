@@ -27,10 +27,11 @@ export function NotificationSettings(): React.JSX.Element {
 
   const toggle = (showNotifications: boolean): void => {
     setError(null)
+    // main applies the change at once and only the write can fail, so a failure still leaves it on for now.
     window.api.appSettings
       .update({ showNotifications })
       .then(setSettings)
-      .catch((err: Error) => setError(`Could not save the setting: ${err.message}`))
+      .catch((err: Error) => setError(`Could not save the setting — it applies until Trek quits. (${err.message})`))
   }
 
   return (

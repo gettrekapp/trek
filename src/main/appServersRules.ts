@@ -49,6 +49,28 @@ export function validateServerInput(input: { name: unknown; url: unknown }): { n
   return { name, url }
 }
 
+/** The URL as two entries would share it: its origin (scheme, host, port) and path. Null if it does not parse. */
+function serverKey(url: string): string | null {
+  try {
+    const u = new URL(url.trim())
+    return `${u.origin}${u.pathname.replace(/\/+$/, '')}`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Refuses a URL another entry already has (two connections to one server would
+ * notify each of its sessions twice). `selfId` is the entry being edited, so it
+ * may keep its own URL.
+ */
+export function rejectDuplicateServer(list: readonly AppServer[], url: string, selfId: string | null): void {
+  const key = serverKey(url)
+  if (key === null) return
+  const other = list.find((s) => s.id !== selfId && serverKey(s.url) === key)
+  if (other) throw new Error(`This server is already in the list as "${other.name}"`)
+}
+
 /**
  * Editing an entry's URL to another origin (scheme, host or port) must not carry
  * the stored token there: a renderer could otherwise point a saved token at a host
