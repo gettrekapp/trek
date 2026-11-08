@@ -217,9 +217,30 @@ other window on that project sees them live.
   after a fresh check for uncommitted changes. A window on a remote server shows
   none of these.
 - **Not yet in server windows**: promote to primary, moving worktrees, voice and
-  the bot (phase 5), and importing a `.trekproj` (phase 4d). Until then, the
-  per-project servers under ⚙ Settings → Servers remain the way to run remote
-  sessions from a project file.
+  the bot (phase 5).
+
+## Importing a .trekproj
+
+Opening a `.trekproj` (File → Open Project…, a recent project, or the file from
+Finder) imports it: the part on this machine becomes a project on the Local
+server, and each part on a remote server becomes a project there, and their
+windows open. **File → Import .trekproj…** does the same, and can import a file
+again. On the first launch with Local, Trek offers once to import the files in
+your recent projects and the windows open at the last quit.
+
+- The `.trekproj` file is never changed. `migrated.json` in Trek's app data
+  remembers what each file became, so opening it again opens those projects.
+- A remote part goes to the server in your list at the same address (scheme,
+  host, port and path); if none is, Trek offers to add it, with the token saved
+  for that address, if any. A token is only ever carried to its own address.
+- Settings, tags, notes, tickets, pull requests, environment variables, linked
+  folders, environments, queues, session types, saved sessions and the worktree
+  order come along. Open tabs, drafts, running terminals (sessions come back idle
+  and resume when loaded) and the project bot's folder do not.
+- Paths become their realpaths on the server. Claude's saved histories are copied
+  (never moved) to them on Local, and a repository's VMs keep their names.
+- A file opens as a project file window only if none of it could be imported, or
+  when the Local server is off (`TREK_NO_LOCAL_SERVER=1`).
 
 ## Local server
 
@@ -309,7 +330,8 @@ older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit 
 `npm run smoke:multi` runs the two-repository end-to-end test, and
 `npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs, and
 `npm run smoke:local-features` drives a Local server window's Docker, environments,
-stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`. Terminal
+stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`, and
+`npm run smoke:import` imports a `.trekproj` onto Local and a test server. Terminal
 PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
 the attention heuristics and worktree load/unload live in the renderer
 (`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only
