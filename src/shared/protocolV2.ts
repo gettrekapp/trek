@@ -42,7 +42,9 @@ export const CAPABILITY = {
   /** `session.dequeue` removes one queued prompt, compare-and-set */
   dequeue: 'dequeue',
   /** `server.agents` lists the agents the server can launch */
-  agents: 'agents'
+  agents: 'agents',
+  /** This is the machine's own local server (`trek-server start --local`): it takes any path the user picks */
+  local: 'local'
 } as const
 
 /** Why a topic ended (`topic.ended`). */

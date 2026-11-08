@@ -48,12 +48,19 @@ export interface TrekServer {
   sessions: SessionManager
   /** The trek-dev MCP endpoint, once it is listening (undefined if it is off or failed to start) */
   mcp?: McpListener
+  /**
+   * Settles once the MCP listener is up or has failed to start (at once without MCP), so
+   * a welcome sent after it lists `mcp` if the server will have it. Never rejects.
+   */
+  ready: Promise<void>
   shutdown(reason: string): void
 }
 
 export interface ServerOptions {
   /** Where the MCP config files go (`<dataDir>/mcp`); without it, sessions get no MCP access */
   mcpDir?: string
+  /** `trek-server start --local`: the welcome lists the `local` capability */
+  local?: boolean
 }
 
 export interface ProjectsSetup {
@@ -244,7 +251,7 @@ export function startServer(
             daemonVersion,
             serverId: store.config.serverId ?? '',
             serverName: store.config.name ?? '',
-            capabilities: welcomeCapabilities(trek.mcp !== undefined)
+            capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true)
           })
         } else {
           sendFrame(ws, {
@@ -321,7 +328,16 @@ export function startServer(
 
   let stopped = false
   const callers = new Map<string, ToolCall>()
-  const trek: TrekServer = { httpServer, ptys, hub, projects, poller, sessions, shutdown: (reason) => shutdown(reason) }
+  const trek: TrekServer = {
+    httpServer,
+    ptys,
+    hub,
+    projects,
+    poller,
+    sessions,
+    ready: Promise.resolve(),
+    shutdown: (reason) => shutdown(reason)
+  }
   if (access) {
     const caller = createToolCaller({ store, hub, projects, poller, sessions })
     const callerFor = (projectId: string): ToolCall => {
@@ -329,7 +345,7 @@ export function startServer(
       if (!call) callers.set(projectId, (call = caller(projectId)))
       return call
     }
-    startMcpListener({
+    trek.ready = startMcpListener({
       access,
       serverVersion: daemonVersion,
       contextFor: (projectId) => ({ instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: callerFor(projectId) })

@@ -381,9 +381,12 @@ test('project.delete ends the project topic for its subscribers, before the serv
   assert.deepEqual(sent.map((m) => m.ended ? [m.topic, m.ended] : [m.topic, 'patch']), [[`project:${projectId}`, 'deleted'], ['server', 'patch']])
 })
 
-test('welcome capabilities: mcp while the listener is up, then what the server always has', () => {
+test('welcome capabilities: mcp while the listener is up, then what the server always has, then local on the local server', () => {
   assert.deepEqual(welcomeCapabilities(true), ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents'])
   assert.deepEqual(welcomeCapabilities(false), ['topicEnd', 'decisions', 'dequeue', 'agents'])
+  assert.deepEqual(welcomeCapabilities(true, false), ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents'])
+  assert.deepEqual(welcomeCapabilities(true, true), ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'local'])
+  assert.deepEqual(welcomeCapabilities(false, true), ['topicEnd', 'decisions', 'dequeue', 'agents', 'local'])
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {

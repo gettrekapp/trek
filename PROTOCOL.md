@@ -199,6 +199,7 @@ new optional field needs no capability: its absence says enough.
 | `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
 | `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
 | `agents` | `server.agents` lists the agents the server can launch (see Sessions) |
+| `local` | This is the machine's own local server (`trek-server start --local`): its path checks allow any path, so `server.addRepo` takes any repo the user picks and `project.import` any worktree path. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 
