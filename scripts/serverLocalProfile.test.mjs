@@ -42,10 +42,10 @@ test('a named profile lives under ~/.config/trek-server/local-<name> and <dataDi
   assert.throws(() => localProfile('/h', '/d', '../../etc'), /Invalid local profile name/)
 })
 
-test('a profile name is 1-32 of a-z, 0-9 and -: nothing that could leave the directory', () => {
-  for (const good of ['dev', 'a', '0', 'my-profile-2', '-', 'x'.repeat(32)]) assert.equal(isLocalProfileName(good), true, good)
+test('a profile name is 1-32 of a-z, 0-9 and -, not starting with -: nothing that could leave the directory', () => {
+  for (const good of ['dev', 'a', '0', 'my-profile-2', 'dev-wt2', 'dev-', '0-', 'x'.repeat(32)]) assert.equal(isLocalProfileName(good), true, good)
   for (const bad of [
-    '', 'x'.repeat(33), 'Dev', 'dev ', ' dev', 'de_v', 'de.v', '.', '..', '../x', 'a/b', 'a\\b', '/abs', '~', 'dev\n', 'dev\0',
+    '', '-', '-dev', '--local', 'x'.repeat(33), 'Dev', 'dev ', ' dev', 'de_v', 'de.v', '.', '..', '../x', 'a/b', 'a\\b', '/abs', '~', 'dev\n', 'dev\0',
     'dév', undefined, null, 1, ['dev'], {}
   ]) {
     assert.equal(isLocalProfileName(bad), false, JSON.stringify(bad))

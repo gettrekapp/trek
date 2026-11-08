@@ -6,10 +6,13 @@ import assert from 'node:assert/strict'
 import {
   DEV_LOCAL_PROFILE,
   LOCAL_ENTRY_ID,
+  LOCAL_PROFILE_ENV,
   LOG_ROTATE_BYTES,
+  READY_TIMEOUT_MS,
   afterStop,
   childEnv,
   compareVersions,
+  isLocalServerCommand,
   localPaths,
   localProfileArgs,
   localProfileName,
@@ -18,6 +21,7 @@ import {
   parseBuildJson,
   probeVerdict,
   resetDecision,
+  sameFile,
   skewOf,
   spawnFailure
 } from '../src/main/localServerRules.ts'
@@ -51,6 +55,35 @@ test('the profile: the default one when packaged, local-dev for a dev build, wit
     log: '/home/u/.config/trek-server/local-dev/server.log'
   })
   assert.throws(() => localPaths('/home/u', '../x'), /Invalid local profile name/)
+  // An invalid name never reaches the command line: localProfileName never returns one, and localProfileArgs throws.
+  for (const bad of ['../x', '-', '--local', 'Dev', '']) assert.throws(() => localProfileArgs(bad), /Invalid local profile name/, bad)
+})
+
+test('TREK_LOCAL_PROFILE: a dev build takes a valid name, an invalid one is dev; a packaged build ignores it', () => {
+  assert.equal(LOCAL_PROFILE_ENV, 'TREK_LOCAL_PROFILE')
+  assert.equal(localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' }), 'dev-wt2')
+  assert.deepEqual(localProfileArgs(localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' })), ['--local-profile', 'dev-wt2'])
+  assert.equal(localPaths('/home/u', localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' })).dir, '/home/u/.config/trek-server/local-dev-wt2')
+  for (const bad of ['', '../x', '-wt', 'Dev', 'a b', 'x'.repeat(33)]) assert.equal(localProfileName(false, { TREK_LOCAL_PROFILE: bad }), 'dev', bad)
+  assert.equal(localProfileName(false, {}), 'dev')
+  assert.equal(localProfileName(true, { TREK_LOCAL_PROFILE: 'dev-wt2' }), undefined)
+  // The server never inherits it: childEnv drops every TREK_ variable.
+  assert.equal('TREK_LOCAL_PROFILE' in childEnv({ TREK_LOCAL_PROFILE: 'dev-wt2', PATH: '/bin' }), false)
+})
+
+test('isLocalServerCommand: trek-server, start --local, and this profile\'s --local-profile', () => {
+  const bundle = '/Users/u/Trek.app/Contents/MacOS/Trek /Users/u/Trek.app/Contents/Resources/app.asar/out/server/trek-server.cjs'
+  assert.equal(isLocalServerCommand(`${bundle} start --local`, undefined), true)
+  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev`, 'dev'), true)
+  assert.equal(isLocalServerCommand('node /usr/local/bin/trek-server start --local', undefined), true, 'an installed CLI')
+  assert.equal(isLocalServerCommand(`${bundle} start --local`, 'dev'), false, 'the default profile is not dev')
+  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev`, undefined), false, 'dev is not the default profile')
+  assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev-wt2`, 'dev'), false, 'another named profile')
+  assert.equal(isLocalServerCommand(`${bundle} stop --local`, undefined), false, 'a stop')
+  assert.equal(isLocalServerCommand(`${bundle} start`, undefined), false, 'a remote server')
+  assert.equal(isLocalServerCommand(`${bundle} start --localx`, undefined), false)
+  assert.equal(isLocalServerCommand('sleep 300', undefined), false)
+  assert.equal(isLocalServerCommand('/bin/zsh -c start --local', undefined), false, 'no trek-server')
 })
 
 test('parseBuildJson takes the bundle stamp, nothing else', () => {
@@ -76,6 +109,10 @@ test('probeVerdict: only a live pid whose hello is welcomed as this profile\'s l
     use: false,
     why: 'the server on port 51234 is another profile (srv-1)'
   })
+  assert.deepEqual(probeVerdict({ info, alive: true, welcome: { capabilities: ['local'], serverId: '' }, expectedServerId: 'srv-1' }), {
+    use: false,
+    why: 'the server on port 51234 is another profile ()'
+  }, 'a welcome with no serverId is not this profile')
 })
 
 test('compareVersions: numeric, part by part; anything unparsable compares equal', () => {
@@ -112,6 +149,47 @@ test('childEnv: Electron\'s Node, the fixed PATH, and nothing from the app or a 
   assert.deepEqual(env, { PATH: '/usr/bin:/opt/homebrew/bin', HOME: '/home/u', SHELL: '/bin/zsh', ELECTRON_RUN_AS_NODE: '1' })
 })
 
+test('childEnv: no git location, Node path, npm or electron-vite dev variable; near-misses kept; the input unchanged', () => {
+  const input = {
+    PATH: '/bin',
+    GIT_WORK_TREE: '/x',
+    GIT_INDEX_FILE: '/x/.git/index',
+    NODE_PATH: '/x/node_modules',
+    NODE_ENV: 'development',
+    NODE_ENV_ELECTRON_VITE: 'development',
+    NO_SANDBOX: '1',
+    REMOTE_DEBUGGING_PORT: '9222',
+    INIT_CWD: '/x',
+    NODE: '/usr/local/bin/node',
+    npm_config_user_agent: 'npm/11',
+    npm_lifecycle_event: 'dev',
+    npm_package_name: 'trek-developer',
+    npm_execpath: '/x/npm-cli.js',
+    // Kept: case-sensitive, and a prefix includes its underscore.
+    ELECTRON: 'x',
+    ELECTRONIC: 'x',
+    trek_x: 'x',
+    TREKX: 'x',
+    NPM_TOKEN: 'x',
+    NODE_ENVX: 'x',
+    GIT_AUTHOR_NAME: 'u'
+  }
+  const before = structuredClone(input)
+  assert.deepEqual(childEnv(input), {
+    PATH: '/bin',
+    ELECTRON: 'x',
+    ELECTRONIC: 'x',
+    trek_x: 'x',
+    TREKX: 'x',
+    NPM_TOKEN: 'x',
+    NODE_ENVX: 'x',
+    GIT_AUTHOR_NAME: 'u',
+    ELECTRON_RUN_AS_NODE: '1'
+  })
+  assert.deepEqual(input, before, 'the input is not changed')
+  assert.equal('ELECTRON_RUN_AS_NODE' in input, false)
+})
+
 test('spawnFailure: exit 3 is a lock held elsewhere, "Cannot take the lock" is the filesystem, the rest an exit', () => {
   assert.deepEqual(spawnFailure(3, 'x'), { kind: 'lock-held' })
   assert.deepEqual(spawnFailure(1, 'line\nCannot take the lock /p/local.lock: EISDIR: illegal operation on a directory\n'), {
@@ -123,37 +201,82 @@ test('spawnFailure: exit 3 is a lock held elsewhere, "Cannot take the lock" is t
 })
 
 test('afterStop: spawn once stopped; SIGKILL only the pid that both the lock and local.json still name', () => {
-  assert.equal(afterStop({ code: 0, target: 4242, lockPid: undefined, infoPid: undefined, alive: false }), 'spawn')
-  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 4242, infoPid: 4242, alive: true }), 'sigkill', 'a timeout: still running')
-  assert.equal(afterStop({ code: 1, target: 4242, lockPid: undefined, infoPid: undefined, alive: false }), 'spawn', 'gone by the time we look')
-  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 4242, infoPid: 4242, alive: false }), 'spawn', 'dead: the next start takes its files over')
-  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 999, infoPid: 4242, alive: true }), 'refuse', 'the lock is someone else\'s')
-  assert.equal(afterStop({ code: 1, target: 4242, lockPid: undefined, infoPid: 4242, alive: true }), 'refuse', 'lockless')
-  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 4242, infoPid: 5555, alive: true }), 'refuse', 'local.json moved on')
-  assert.equal(afterStop({ code: 2, target: 4242, lockPid: 4242, infoPid: 4242, alive: true }), 'refuse', 'a usage error is a bug: never kill on it')
+  assert.equal(afterStop({ code: 0, target: 4242, lockPid: undefined, infoPid: undefined, alive: false, holderIsServer: undefined }), 'spawn')
+  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 4242, infoPid: 4242, alive: true, holderIsServer: true }), 'sigkill', 'a timeout: still running')
+  assert.equal(afterStop({ code: 1, target: 4242, lockPid: undefined, infoPid: undefined, alive: false, holderIsServer: undefined }), 'spawn', 'gone by the time we look')
+  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 4242, infoPid: 4242, alive: false, holderIsServer: undefined }), 'spawn', 'dead: the next start takes its files over')
+  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 999, infoPid: 4242, alive: true, holderIsServer: true }), 'refuse', 'the lock is someone else\'s')
+  assert.equal(afterStop({ code: 1, target: 4242, lockPid: undefined, infoPid: 4242, alive: true, holderIsServer: true }), 'refuse', 'lockless')
+  assert.equal(afterStop({ code: 1, target: 4242, lockPid: 4242, infoPid: 5555, alive: true, holderIsServer: true }), 'refuse', 'local.json moved on')
+  assert.equal(afterStop({ code: 2, target: 4242, lockPid: 4242, infoPid: 4242, alive: true, holderIsServer: true }), 'refuse', 'a usage error is a bug: never kill on it')
+})
+
+test('afterStop: a stop that timed out, a stop that answered 0, and a target that is not our server', () => {
+  const both = { target: 4242, lockPid: 4242, infoPid: 4242 }
+  assert.equal(afterStop({ ...both, code: null, alive: true, holderIsServer: true }), 'refuse', 'stop --local never answered: never kill on it')
+  assert.equal(afterStop({ ...both, code: null, alive: false, holderIsServer: undefined }), 'spawn', 'timed out, but gone')
+  assert.equal(afterStop({ ...both, code: 0, alive: true, holderIsServer: true }), 'spawn', 'exit 0: its files are gone, it is on its way out')
+  assert.equal(afterStop({ ...both, code: 1, alive: true, holderIsServer: false }), 'refuse', 'both files name it, but it is no server: a reused pid')
+  assert.equal(afterStop({ ...both, code: 1, alive: true, holderIsServer: undefined }), 'refuse', 'ps could not tell')
 })
 
 test('resetDecision: the lock goes only when nothing that could be our server holds it', () => {
   // No lock: just start.
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: undefined, lockAlive: false, info: undefined, welcomed: false, portOpen: false }), 'start')
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: undefined, lockAlive: false, info: undefined, welcomed: false, portRefused: true, holderIsServer: undefined }), 'start')
   // A server answers with local.json's token: it is live, connect to it.
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info, welcomed: true, portOpen: true }), 'connect')
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info, welcomed: true, portRefused: false, holderIsServer: false }), 'connect')
   // The lock's pid is dead: the next start would take it over anyway.
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: false, info, welcomed: false, portOpen: false }), 'reset')
-  // Alive, and local.json names another pid (or none): a reused pid.
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info: undefined, welcomed: false, portOpen: false }), 'reset')
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info: { ...info, pid: 77 }, welcomed: false, portOpen: true }), 'reset')
-  // Alive, local.json names it, and its port is closed: a SIGKILLed server's pid, reused.
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info, welcomed: false, portOpen: false }), 'reset')
-  // Alive, named by local.json, its port open, but no welcome: maybe our server, hung. Never reset.
-  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info, welcomed: false, portOpen: true }), 'refuse')
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: false, info, welcomed: false, portRefused: true, holderIsServer: undefined }), 'reset')
+  // Alive, not a server by its command line, and local.json names another pid (or none): a reused pid.
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info: undefined, welcomed: false, portRefused: true, holderIsServer: false }), 'reset')
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info: { ...info, pid: 77 }, welcomed: false, portRefused: false, holderIsServer: false }), 'reset')
+  // Alive, not a server, local.json names it, and its port refuses: a SIGKILLed server's pid, reused.
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info, welcomed: false, portRefused: true, holderIsServer: false }), 'reset')
+  // Alive, named by local.json, its port open, but no welcome: the port says it may be our server. Never reset.
+  assert.equal(resetDecision({ lockAgeMs: 60_000, lockPid: 4242, lockAlive: true, info, welcomed: false, portRefused: false, holderIsServer: false }), 'refuse')
   // A live pid's fresh lock: a start still on its way to local.json. Never reset.
-  assert.equal(resetDecision({ lockAgeMs: 2_000, lockPid: 4242, lockAlive: true, info: undefined, welcomed: false, portOpen: false }), 'refuse')
-  assert.equal(resetDecision({ lockAgeMs: 2_000, lockPid: 4242, lockAlive: false, info: undefined, welcomed: false, portOpen: false }), 'reset', 'dead: age does not matter')
+  assert.equal(resetDecision({ lockAgeMs: 2_000, lockPid: 4242, lockAlive: true, info: undefined, welcomed: false, portRefused: true, holderIsServer: false }), 'refuse')
+  assert.equal(resetDecision({ lockAgeMs: 2_000, lockPid: 4242, lockAlive: false, info: undefined, welcomed: false, portRefused: true, holderIsServer: undefined }), 'reset', 'dead: age does not matter')
+})
+
+test('resetDecision: a server, or a pid ps cannot read, keeps its lock; a timeout is not a refusal; the age boundary', () => {
+  const live = { lockPid: 4242, lockAlive: true, lockAgeMs: 60_000, welcomed: false }
+  // The holder's command line is our server: never reset, whatever local.json and the port say.
+  assert.equal(resetDecision({ ...live, info, portRefused: true, holderIsServer: true }), 'refuse', 'our server, its port refusing')
+  assert.equal(resetDecision({ ...live, info: undefined, portRefused: false, holderIsServer: true }), 'refuse', 'our server, local.json missing')
+  assert.equal(resetDecision({ ...live, info: { ...info, pid: 77 }, portRefused: true, holderIsServer: true }), 'refuse', 'our server, local.json names another pid')
+  // ps could not tell: refuse.
+  assert.equal(resetDecision({ ...live, info: undefined, portRefused: false, holderIsServer: undefined }), 'refuse', 'unknown, local.json missing')
+  assert.equal(resetDecision({ ...live, info, portRefused: true, holderIsServer: undefined }), 'refuse', 'unknown, its port refusing')
+  // Not a server: local.json missing or naming another pid resets; naming it needs the port to refuse too.
+  assert.equal(resetDecision({ ...live, info: undefined, portRefused: false, holderIsServer: false }), 'reset')
+  assert.equal(resetDecision({ ...live, info, portRefused: true, holderIsServer: false }), 'reset')
+  // A timeout (a hung server, a full backlog) counts as not refused: refuse.
+  assert.equal(resetDecision({ ...live, info, portRefused: false, holderIsServer: false }), 'refuse', 'the port timed out')
+  // A young lock whose pid local.json names, its port refusing: a start on its way. Refuse.
+  assert.equal(resetDecision({ ...live, lockAgeMs: 2_000, info, portRefused: true, holderIsServer: false }), 'refuse')
+  // The boundary: READY_TIMEOUT_MS old may be judged; a lock dated in the future (or unreadable age) may not.
+  assert.equal(READY_TIMEOUT_MS, 15_000)
+  assert.equal(resetDecision({ ...live, lockAgeMs: 15_000, info: undefined, portRefused: false, holderIsServer: false }), 'reset')
+  assert.equal(resetDecision({ ...live, lockAgeMs: 14_999, info: undefined, portRefused: false, holderIsServer: false }), 'refuse')
+  assert.equal(resetDecision({ ...live, lockAgeMs: -5_000, info: undefined, portRefused: false, holderIsServer: false }), 'refuse', 'dated in the future')
+  assert.equal(resetDecision({ ...live, lockAgeMs: Number.NaN, info: undefined, portRefused: false, holderIsServer: false }), 'refuse')
+})
+
+test('sameFile: device, inode and ctime all match', () => {
+  const a = { dev: 1, ino: 2, ctimeMs: 3 }
+  assert.equal(sameFile(a, { ...a }), true)
+  assert.equal(sameFile(a, { ...a, dev: 9 }), false)
+  assert.equal(sameFile(a, { ...a, ino: 9 }), false)
+  assert.equal(sameFile(a, { ...a, ctimeMs: 3.5 }), false, 'rewritten in place')
 })
 
 test('logTail: the last lines, trimmed; rotation past 1 MB', () => {
   assert.equal(logTail('a\nb\nc\n\n', 2), 'b\nc')
   assert.equal(logTail('', 5), '')
+  const many = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n')
+  assert.equal(logTail(many), Array.from({ length: 20 }, (_, i) => `line ${i + 10}`).join('\n'), 'the default is 20')
+  assert.equal(logTail('a\n   \n\t\nb\n \n', 5), 'a\nb', 'whitespace-only lines are dropped')
+  assert.equal(logTail('a\r\nb\r\n\r\nc\r\n', 2), 'b\nc', 'CRLF')
   assert.equal(LOG_ROTATE_BYTES, 1024 * 1024)
 })

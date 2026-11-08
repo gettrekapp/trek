@@ -6,12 +6,29 @@
 // and main's own connection (appServers.getAppServerToken('local')), never to a
 // renderer, and never to disk here. The server keeps running when Trek quits, unless
 // the "Stop local server on quit" app setting is on. A dev build (not packaged) uses
-// its own profile, local-dev (`--local-profile dev`), so it never restarts the
-// installed Trek's server. The decisions are pure, in localServerRules.ts; this file
+// its own profile, local-dev (`--local-profile dev`, or TREK_LOCAL_PROFILE's), so it
+// never restarts the installed Trek's server. The decisions are pure, in localServerRules.ts; this file
 // does the I/O.
 import { app, dialog, ipcMain } from 'electron'
-import { spawn } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, watch, writeSync, type FSWatcher } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
+import {
+  closeSync,
+  copyFileSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  statSync,
+  truncateSync,
+  unlinkSync,
+  watch,
+  writeSync,
+  type FSWatcher
+} from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -21,12 +38,14 @@ import { probeServer } from './appServerProbe'
 import {
   LOCAL_ENTRY_ID,
   LOCAL_ENTRY_NAME,
+  LOCAL_PROFILE_ENV,
   LOG_ROTATE_BYTES,
   LOST_RACE_WAIT_MS,
   PROBE_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   afterStop,
   childEnv,
+  isLocalServerCommand,
   localPaths,
   localProfileArgs,
   localProfileName,
@@ -35,9 +54,11 @@ import {
   parseBuildJson,
   probeVerdict,
   resetDecision,
+  sameFile,
   skewOf,
   spawnFailure,
   type BundledBuild,
+  type FileId,
   type LocalPaths
 } from './localServerRules'
 import type { AppServer } from './appServersRules'
@@ -49,8 +70,11 @@ export const LOCAL_SERVER_DISABLED = !!process.env.TREK_NO_LOCAL_SERVER
 const STOP_TIMEOUT_MS = 15_000
 const POLL_MS = 100
 
-/** The profile this Trek uses: the default one when packaged, `dev` for a dev build (Decision 27). */
-const PROFILE = localProfileName(app.isPackaged)
+/** The profile this Trek uses: the default one when packaged, `dev` (or TREK_LOCAL_PROFILE's) for a dev build (Decision 27). */
+const PROFILE = localProfileName(app.isPackaged, process.env)
+if (!app.isPackaged && process.env[LOCAL_PROFILE_ENV] && PROFILE !== process.env[LOCAL_PROFILE_ENV]) {
+  console.warn(`trek: ignoring ${LOCAL_PROFILE_ENV}=${JSON.stringify(process.env[LOCAL_PROFILE_ENV])} (not a valid profile name); using ${PROFILE}`)
+}
 let paths: LocalPaths | null = null
 /** The server main is using: from a local.json that probed live. Main only. */
 let current: LocalInfo | null = null
@@ -97,11 +121,19 @@ function readInfo(): LocalInfo | undefined {
   }
 }
 
-function readLock(): { pid: number; mtimeMs: number } | undefined {
+/** local.lock's pid, its mtime, and which file it is (fstat of the file read, as the server's readLock). */
+function readLock(): ({ pid: number; mtimeMs: number } & FileId) | undefined {
   try {
-    const text = readFileSync(profile().lock, 'utf8').trim()
-    if (!/^\d+$/.test(text)) return undefined
-    return { pid: Number(text), mtimeMs: statSync(profile().lock).mtimeMs }
+    const fd = openSync(profile().lock, 'r')
+    try {
+      const st = fstatSync(fd)
+      if (!st.isFile()) return undefined
+      const text = readFileSync(fd, 'utf8').trim()
+      if (!/^\d+$/.test(text)) return undefined
+      return { pid: Number(text), mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino, ctimeMs: st.ctimeMs }
+    } finally {
+      closeSync(fd)
+    }
   } catch {
     return undefined
   }
@@ -127,16 +159,33 @@ function pidAlive(pid: number): boolean {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-function portOpen(port: number): Promise<boolean> {
+/**
+ * True only if a TCP connection to the port gets ECONNREFUSED: nothing listens. A
+ * connection, a timeout (a hung server, a full backlog) or any other error is false.
+ */
+function portRefused(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection({ host: '127.0.0.1', port })
-    const done = (open: boolean): void => {
+    const done = (refused: boolean): void => {
       socket.destroy()
-      resolve(open)
+      resolve(refused)
     }
     socket.setTimeout(1000, () => done(false))
-    socket.once('connect', () => done(true))
-    socket.once('error', () => done(false))
+    socket.once('connect', () => done(false))
+    socket.once('error', (err) => done((err as NodeJS.ErrnoException).code === 'ECONNREFUSED'))
+  })
+}
+
+/**
+ * The pid's command line (`ps -o command= -p <pid>`) is this profile's local server
+ * (isLocalServerCommand); undefined if ps fails or prints nothing (unknown).
+ */
+function holderIsServer(pid: number): Promise<boolean | undefined> {
+  return new Promise((resolve) => {
+    execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: 3000, encoding: 'utf8' }, (err, stdout) => {
+      const command = String(stdout ?? '').trim()
+      resolve(err || command === '' ? undefined : isLocalServerCommand(command, PROFILE))
+    })
   })
 }
 
@@ -192,7 +241,24 @@ function setStatus(next: LocalServerStatus): void {
   notify()
 }
 
-function useServer(info: LocalInfo): void {
+/**
+ * Adopting a server this Trek did not just spawn: a log past LOG_ROTATE_BYTES is copied to
+ * server.log.old and truncated, since the running server holds it open (O_APPEND, so its
+ * next line lands at the new end). A rename would leave the server writing to .old.
+ */
+function rotateLiveLog(): void {
+  const { log } = profile()
+  try {
+    if (statSync(log).size <= LOG_ROTATE_BYTES) return
+    copyFileSync(log, `${log}.old`)
+    truncateSync(log, 0)
+  } catch {
+    // no log, or it cannot be rotated: leave it
+  }
+}
+
+function useServer(info: LocalInfo, adopted = true): void {
+  if (adopted && current?.pid !== info.pid) rotateLiveLog()
   current = info
   const skew = skewOf(bundledBuild(), info)
   setStatus({ state: 'running', message: '', canReset: false, pid: info.pid, version: info.version, build: info.build, skew: !!skew })
@@ -275,7 +341,7 @@ async function spawnAndWait(): Promise<void> {
     if (info && info.pid === pid) {
       const found = await probe(info)
       if ('info' in found) {
-        useServer(found.info)
+        useServer(found.info, false)
         return
       }
     }
@@ -363,13 +429,29 @@ async function restart(): Promise<void> {
   const { code, output, target } = await stopServer()
   if (target !== undefined) {
     const lock = readLock()
-    const next = afterStop({ code, target, lockPid: lock?.pid, infoPid: readInfo()?.pid, alive: pidAlive(target) })
+    const alive = pidAlive(target)
+    const next = afterStop({
+      code,
+      target,
+      lockPid: lock?.pid,
+      infoPid: readInfo()?.pid,
+      alive,
+      holderIsServer: alive ? await holderIsServer(target) : undefined
+    })
     if (next === 'refuse') {
       fail(`Could not stop the local server (pid ${target}), so it was not restarted.\n\n${output.trim()}`)
       return
     }
     if (next === 'sigkill') {
-      process.kill(target, 'SIGKILL')
+      try {
+        process.kill(target, 'SIGKILL')
+      } catch (err) {
+        // ESRCH: it exited meanwhile, so spawn. Anything else (EPERM) is reported.
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          fail(`Could not stop the local server (pid ${target}): SIGKILL failed (${(err as Error).message}), so it was not restarted.`)
+          return
+        }
+      }
       const until = Date.now() + 3000
       while (pidAlive(target) && Date.now() < until) await sleep(POLL_MS)
     }
@@ -381,14 +463,16 @@ async function restart(): Promise<void> {
 async function reset(): Promise<void> {
   const lock = readLock()
   const info = readInfo()
-  const welcome = info && pidAlive(info.pid) ? await hello(info) : undefined
+  const lockAlive = lock ? pidAlive(lock.pid) : false
   const decision = resetDecision({
     lockPid: lock?.pid,
-    lockAlive: lock ? pidAlive(lock.pid) : false,
+    lockAlive,
     lockAgeMs: lock ? Date.now() - lock.mtimeMs : 0,
     info,
-    welcomed: !!welcome?.capabilities.includes('local'),
-    portOpen: info ? await portOpen(info.port) : false
+    // The same rule as a launch's probe: the profile's serverId too.
+    welcomed: 'info' in (await probe(info)),
+    portRefused: info ? await portRefused(info.port) : false,
+    holderIsServer: lock && lockAlive ? await holderIsServer(lock.pid) : undefined
   })
   if (decision === 'refuse') {
     fail(
@@ -399,8 +483,15 @@ async function reset(): Promise<void> {
     return
   }
   if (decision === 'reset' && lock) {
-    // Only the lock judged above: a start that took it meanwhile keeps it.
-    if (readLock()?.pid === lock.pid) unlinkSync(profile().lock)
+    // Only the lock judged above (same device, inode and ctime): a start that took it meanwhile keeps it.
+    try {
+      if (sameFile(lock, lstatSync(profile().lock))) unlinkSync(profile().lock)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        fail(`Could not remove the lock (${profile().lock}): ${(err as Error).message}`, true)
+        return
+      }
+    }
   }
   await ensure()
 }

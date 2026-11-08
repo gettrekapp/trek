@@ -8,6 +8,7 @@ import {
   LOCAL_INFO_FILE,
   LOCAL_LOCK_FILE,
   LOCAL_ALREADY_RUNNING_EXIT,
+  isLocalProfileName,
   localProfileDir,
   type LocalInfo
 } from '../shared/localServer.ts'
@@ -17,7 +18,7 @@ export const LOCAL_ENTRY_ID = 'local'
 export const LOCAL_ENTRY_NAME = 'Local'
 /** The server's stdout and stderr, in the profile beside local.json */
 export const LOCAL_LOG_FILE = 'server.log'
-/** A spawn moves a log past this size to server.log.old first */
+/** A spawn, or adopting a running server, moves a log past this size to server.log.old first */
 export const LOG_ROTATE_BYTES = 1024 * 1024
 /** How long a spawn waits for local.json (Notes for 4b, 14) */
 export const READY_TIMEOUT_MS = 15_000
@@ -37,19 +38,47 @@ export interface LocalPaths {
 /** The local profile a dev build (not packaged) uses, so it never restarts the installed Trek's server. */
 export const DEV_LOCAL_PROFILE = 'dev'
 
+/** A dev build's own profile name instead of `dev`, e.g. `dev-wt2`, so worktrees do not share local-dev */
+export const LOCAL_PROFILE_ENV = 'TREK_LOCAL_PROFILE'
+
 /**
  * The local profile this Trek uses: the default one (undefined) when packaged,
  * `dev` (~/.config/trek-server/local-dev) for `npm run dev` and the smokes. An
  * installed Trek and a dev build would otherwise share one server, and each would
  * offer to restart the other's, ending its sessions.
+ *
+ * A dev build takes TREK_LOCAL_PROFILE instead when it is a valid profile name
+ * (`dev-wt2` is ~/.config/trek-server/local-dev-wt2), so dev runs from several
+ * worktrees each get their own server; an invalid one is ignored (`dev`). A packaged
+ * build ignores it: a stray variable must never hide the installed app's projects.
  */
-export function localProfileName(isPackaged: boolean): string | undefined {
-  return isPackaged ? undefined : DEV_LOCAL_PROFILE
+export function localProfileName(isPackaged: boolean, env: Readonly<Record<string, string | undefined>> = {}): string | undefined {
+  if (isPackaged) return undefined
+  const named = env[LOCAL_PROFILE_ENV]
+  return isLocalProfileName(named) ? named : DEV_LOCAL_PROFILE
 }
 
-/** The CLI arguments that select `profile`, after `start --local` or `stop --local`. */
+/**
+ * The CLI arguments that select `profile`, after `start --local` or `stop --local`.
+ * Throws on an invalid name, as localPaths does (localProfileName never returns one).
+ */
 export function localProfileArgs(profile: string | undefined): string[] {
-  return profile === undefined ? [] : ['--local-profile', profile]
+  if (profile === undefined) return []
+  if (!isLocalProfileName(profile)) throw new Error(`Invalid local profile name: ${JSON.stringify(profile)}`)
+  return ['--local-profile', profile]
+}
+
+/**
+ * The command line (`ps -o command=`) is a local server of `profile`: it mentions
+ * trek-server (the bundle's trek-server.cjs, or an installed trek-server bin), has
+ * `start --local`, and has `--local-profile <profile>` for a named profile or no
+ * `--local-profile` for the default one. Errs towards "a server": that only ever
+ * refuses a Reset or a SIGKILL.
+ */
+export function isLocalServerCommand(command: string, profile: string | undefined): boolean {
+  if (!command.includes('trek-server') || !/(^|\s)start\s+--local(\s|$)/.test(command)) return false
+  const named = /(^|\s)--local-profile\s+(\S+)/.exec(command)?.[2]
+  return named === profile
 }
 
 /** The profile's files; `profile` is localProfileName's (throws on an invalid name). */
@@ -146,16 +175,33 @@ export function skewOf(bundled: BundledBuild | undefined, running: Pick<LocalInf
   }
 }
 
-/** Variables the server and its agents must not inherit from the app (Notes for 4b, 11). */
-const DROPPED_PREFIXES = ['ELECTRON_', 'TREK_']
-const DROPPED = new Set(['NODE_OPTIONS', 'NODE_PATH', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'])
+/**
+ * Variables the server and its agents must not inherit from the app (Notes for 4b, 11).
+ * Matched case-sensitively, and a prefix includes its underscore: `ELECTRON`, `trek_x`
+ * and `NPM_TOKEN` are kept.
+ */
+const DROPPED_PREFIXES = ['ELECTRON_', 'TREK_', 'npm_']
+const DROPPED = new Set([
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'NODE_ENV',
+  'NODE',
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  // electron-vite dev and the npm script that ran it
+  'NODE_ENV_ELECTRON_VITE',
+  'NO_SANDBOX',
+  'REMOTE_DEBUGGING_PORT',
+  'INIT_CWD'
+])
 
 /**
  * The spawned server's env: the app's (PATH already fixed by fixPath), without
- * Electron's and the dev server's variables, a Trek session's own (a dev app run
- * from a Trek terminal carries TREK_MCP_TOKEN), Node's options, or a git
- * location; plus ELECTRON_RUN_AS_NODE, which the server deletes from its own env
- * before any pty is spawned.
+ * Electron's and the dev server's variables, npm's (`npm run dev`), a Trek
+ * session's own (a dev app run from a Trek terminal carries TREK_MCP_TOKEN),
+ * Node's options, or a git location; plus ELECTRON_RUN_AS_NODE, which the server
+ * deletes from its own env before any pty is spawned. `env` is not changed.
  */
 export function childEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   const out: Record<string, string> = {}
@@ -187,16 +233,20 @@ export interface StopFacts {
   infoPid: number | undefined
   /** `target` answers signal 0 */
   alive: boolean
+  /** `target`'s command line is this profile's server (isLocalServerCommand); undefined if `ps` could not tell */
+  holderIsServer: boolean | undefined
 }
 
 /**
- * After `stop --local` (Notes for 4b, 13): exit 0, or the target gone, means spawn.
- * Exit 1 with the target alive means SIGKILL, but only if the lock and local.json
- * both still name it; anything else is reported and nothing is signalled.
+ * After `stop --local` (Notes for 4b, 13): exit 0 (it stopped, or its files are gone
+ * and it is on its way out), or the target gone, means spawn. Exit 1 with the target
+ * alive means SIGKILL, but only if the lock and local.json both still name it and its
+ * command line is this profile's server; anything else is reported and nothing is
+ * signalled.
  */
 export function afterStop(f: StopFacts): 'spawn' | 'sigkill' | 'refuse' {
   if (f.code === 0 || !f.alive) return 'spawn'
-  if (f.code === 1 && f.lockPid === f.target && f.infoPid === f.target) return 'sigkill'
+  if (f.code === 1 && f.lockPid === f.target && f.infoPid === f.target && f.holderIsServer === true) return 'sigkill'
   return 'refuse'
 }
 
@@ -207,36 +257,57 @@ export interface ResetFacts {
   /** How long ago the lock was written (its mtime) */
   lockAgeMs: number
   info: LocalInfo | undefined
-  /** A hello with local.json's token was welcomed as a local server */
+  /** probeVerdict, with the profile's serverId, says use what local.json names */
   welcomed: boolean
-  /** local.json's port takes a TCP connection */
-  portOpen: boolean
+  /** A TCP connection to local.json's port got ECONNREFUSED; a timeout or any other error is not a refusal */
+  portRefused: boolean
+  /** The lock's pid's command line is this profile's server (isLocalServerCommand); undefined if `ps` could not tell */
+  holderIsServer: boolean | undefined
 }
 
 /**
  * "Reset local server" (Notes for 4b, 6 and 16). The lock is deleted only when no
  * process that could be our server holds it:
- * - a welcome: the server is live, connect to it;
+ * - a welcome (probeVerdict says use): the server is live, connect to it;
  * - no lock: nothing to reset, start;
- * - a live pid's lock younger than READY_TIMEOUT_MS: a start still on its way to
- *   local.json (it deletes the old one first). Refuse;
- * - the lock's pid dead, or alive but not the pid local.json names (or there is no
+ * - the lock's pid dead: reset (a start would take it over anyway);
+ * - a live pid's lock younger than READY_TIMEOUT_MS (or dated in the future): a
+ *   start still on its way to local.json (it deletes the old one first). Refuse;
+ * - a live pid whose command line is this profile's server, or that `ps` could not
+ *   read: refuse. It is our server, hung or still starting;
+ * - alive, not a server, and not the pid local.json names (or there is no
  *   local.json): a reused pid, reset;
- * - alive and named by local.json, but its port refuses connections: a SIGKILLed
- *   server's pid reused (a live server listens before it writes local.json), reset;
- * - alive, named by local.json, its port open, no welcome: possibly our server,
- *   hung. Refuse: deleting its lock would let a second server share its files.
+ * - alive, not a server, named by local.json: reset only if its port refuses
+ *   connections (a SIGKILLed server's pid reused; a live server listens before it
+ *   writes local.json). A timeout or an open port refuses: deleting a live server's
+ *   lock would let a second server share its files.
  */
 export function resetDecision(f: ResetFacts): 'start' | 'connect' | 'reset' | 'refuse' {
   if (f.welcomed) return 'connect'
   if (f.lockPid === undefined) return 'start'
   if (!f.lockAlive) return 'reset'
-  if (f.lockAgeMs < READY_TIMEOUT_MS) return 'refuse'
+  if (!(f.lockAgeMs >= READY_TIMEOUT_MS)) return 'refuse'
+  if (f.holderIsServer !== false) return 'refuse'
   if (!f.info || f.info.pid !== f.lockPid) return 'reset'
-  return f.portOpen ? 'refuse' : 'reset'
+  return f.portRefused ? 'reset' : 'refuse'
 }
 
-/** The last `lines` non-empty lines of a log, for an error dialog. */
+/** A lock file's identity, from (l)stat */
+export interface FileId {
+  dev: number
+  ino: number
+  ctimeMs: number
+}
+
+/**
+ * The same file: device, inode and ctime (as the server's localLock.ts sameFile). Reset
+ * unlinks the lock only if it is still the one it judged, not one a start wrote meanwhile.
+ */
+export function sameFile(a: FileId, b: FileId): boolean {
+  return a.dev === b.dev && a.ino === b.ino && a.ctimeMs === b.ctimeMs
+}
+
+/** The last `lines` non-empty lines of a log, for an error dialog (CRLF read as LF). */
 export function logTail(text: string, lines = 20): string {
-  return text.split('\n').filter((l) => l.trim() !== '').slice(-lines).join('\n')
+  return text.split(/\r?\n/).filter((l) => l.trim() !== '').slice(-lines).join('\n')
 }

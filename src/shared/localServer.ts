@@ -7,11 +7,12 @@
 export const LOCAL_PROFILE_DIR = ['.config', 'trek-server', 'local'] as const
 /**
  * A named local profile (`--local-profile <name>`): lowercase letters, digits and
- * hyphens, at most 32. No dot or slash, so a name can never leave trek-server's
- * directories. A dev build of Trek uses `dev`, so it never shares a server with
- * the installed app.
+ * hyphens, at most 32, starting with a letter or digit (so never a flag). No dot or
+ * slash, so a name can never leave trek-server's directories. A dev build of Trek
+ * uses `dev` (or TREK_LOCAL_PROFILE), so it never shares a server with the
+ * installed app.
  */
-export const LOCAL_PROFILE_NAME_RE = /^[a-z0-9-]{1,32}$/
+export const LOCAL_PROFILE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
 
 export function isLocalProfileName(name: unknown): name is string {
   return typeof name === 'string' && LOCAL_PROFILE_NAME_RE.test(name)

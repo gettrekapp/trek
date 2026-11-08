@@ -221,7 +221,8 @@ It uses `local-<name>` instead of `local` in both places
 own config, projects, token, `local.json` and lock, so it runs beside the
 default one. A dev build of Trek (`npm run dev`) uses `dev`, so it never
 restarts the installed Trek's server; the installed Trek uses the default
-profile. The name is 1–32 of `a-z`, `0-9` and `-`; anything else is a usage
+profile (`TREK_LOCAL_PROFILE` gives a dev build another name, such as `dev-wt2`).
+The name is 1–32 of `a-z`, `0-9` and `-`, starting with a letter or digit; anything else is a usage
 error (exit 2), so a name cannot point outside trek-server's directories.
 `--local-profile` only applies with `--local`.
 

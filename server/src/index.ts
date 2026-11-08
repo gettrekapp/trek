@@ -83,7 +83,8 @@ Options:
                     Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
   --local-profile <name>
                     With --local: a separate local server, under local-<name> in both
-                    directories (a dev build of Trek uses "dev"). The name is 1-32 of a-z, 0-9, -.
+                    directories (a dev build of Trek uses "dev"). The name is 1-32 of a-z, 0-9, -,
+                    starting with a letter or digit.
   --id <id>         add: repo id (default: slug of the directory name)
   --name <name>     add: display name (default: the directory name)
   -h, --help        Show this help
@@ -159,7 +160,7 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--local') args.local = true
     else if (arg === '--local-profile') {
       const name = value(++i, arg)
-      if (!isLocalProfileName(name)) usageError(`Invalid local profile name: ${name} (1-32 of a-z, 0-9 and -)`)
+      if (!isLocalProfileName(name)) usageError(`Invalid local profile name: ${name} (1-32 of a-z, 0-9 and -, starting with a letter or digit)`)
       args.localProfile = name
     }
     else if (positional) usageError(`Unknown command, and not a directory: ${arg}`)
