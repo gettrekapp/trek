@@ -3216,7 +3216,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1409`, `# fail 0`: the baseline 1363 at `4fc0d96`, plus 3 (Task 0: one each in `serverStatus`, `serverSessions` and `serverV2`; two tests changed), 12 (Task 1), 3 (Task 2), 7 (Task 3: 5 in `mainAttentionRules`, 2 in `appSettings`), 1 (Task 4), 5 (Task 5), 3 (Task 6) and 12 (the review fixes: 4 in `mainServerLinks`, 6 in `mainAttention`, 1 each in `serverStatus` and `serverSessions`).
+Expected: `# pass 1412`, `# fail 0`: the baseline 1363 at `4fc0d96`, plus 3 (Task 0: one each in `serverStatus`, `serverSessions` and `serverV2`; two tests changed), 12 (Task 1), 3 (Task 2), 7 (Task 3: 5 in `mainAttentionRules`, 2 in `appSettings`), 1 (Task 4), 5 (Task 5), 3 (Task 6) 12 (the review fixes: 4 in `mainServerLinks`, 6 in `mainAttention`, 1 each in `serverStatus` and `serverSessions`) and 3 (the final review fixes: 1 each in `mainAttentionRules`, `v2SessionSelect` and `appServersRules`).
 
 - [ ] **Step 2: Types and build**
 
@@ -3228,19 +3228,37 @@ Run each after the previous has exited:
 
 | Command | Expected |
 |---|---|
-| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (166 checks)` |
+| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (168 checks)` (166, plus 2 from the final review fixes) |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
 | `node scripts/multi-repo-smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
+| `node scripts/remote-smoke.mjs 2>&1 \| tail -1` | `REMOTE SMOKE PASS` |
+| `node scripts/bot-smoke.mjs 2>&1 \| tail -1` | `All 144 checks passed` |
+| `node scripts/providers-smoke.mjs 2>&1 \| tail -1` | `providers smoke passed` |
 
 - [ ] **Step 4: A clean tree**
 
 Run: `git status --short`
 
 Expected: no output. If a fix was needed during this task, commit it with its own message and explicit paths, using the commit command from Conventions.
+
+### Final review fixes (done)
+
+Applied after Task 7. 3 tests added: `npm test` → `# pass 1412`, `# fail 0`. 2 smoke checks added: `V2 SMOKE PASS (168 checks)`.
+
+- **A reloaded window reports its view at once** (`attentionSelect.ts`, `v2/sessionSelect.ts`): `viewReporter` sends the first report always, even `[]`, then only changes, and `watchAttention` reports on start. Before, `reported` started as `[]`, so a reloaded window sent nothing and main kept the ids from before the reload.
+- **A click on a notification whose entry is gone** (`notifications.ts`): the entry's server, project and select are captured when it is raised. If `openAttention` finds no entry, the click still focuses or opens the project window through `showServerSession`, as long as the server entry is still listed.
+- **One failing notification never drops the rest of its batch:** each `show` is wrapped in try/catch with `console.error`, and a failing `show()` drops its reference.
+- **Duplicate server URLs** (`appServersRules.ts`, `appServers.ts`): `rejectDuplicateServer` refuses a URL another entry has, compared by origin plus path (trailing slashes ignored), with `This server is already in the list as "<name>"`. An entry keeps its own URL. Two entries for one server would notify each session twice.
+- **The settings save warning:** a write that fails says `Could not save the setting — it applies until Trek quits. (…)`, and main logs it. The change is applied in memory before the write, so it does last until quit.
+- **Dead code and duplication:** `Linked.source` is gone (`attention.ts`). `src/shared/attentionPlace.ts` holds the place label: `placeOf` is that label, and `serverSource` is the label plus ` · <title>`. Both outputs are unchanged, and a test checks they agree.
+- **`smoke:v2`:**
+  - `inWindowTagged` races each `executeJavaScript` against 2 s, so a closing window can't hang it.
+  - The wait for the project window to close is now a check.
+  - The "typed input is echoed" flake: keys typed before the pane's attach completes are dropped. Before typing, the smoke waits until `__terminals.attachedPty(s1)` is the session's `ptyId`. It is a new export from `terminals.ts`, set when the attach resolves.
 
 ---
 
