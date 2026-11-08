@@ -25,6 +25,11 @@ async function ensureLoaded(): Promise<void> {
 /** Plays the alert if audio alerts are enabled in the project settings. */
 export function playReadyAlert(): void {
   if (!useAppStore.getState().project?.audioAlerts) return
+  playAlertSound()
+}
+
+/** Plays the alert, unconditionally: main decided (a server project with audio alerts on). */
+export function playAlertSound(): void {
   void ensureLoaded().then(() => {
     if (!audio) return
     audio.currentTime = 0

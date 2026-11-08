@@ -9,6 +9,7 @@ import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { Workspace } from './components/Workspace'
 import { GlobalClaude } from './components/GlobalClaude'
 import { handleMcpCall } from './mcpTools'
+import { requestSessionSelect, watchAttention } from './attentionSelect'
 import { watchBot } from './bot'
 import { useLinearSync } from './linear'
 import { loadVoiceSettings } from './voice'
@@ -83,7 +84,9 @@ export default function App(): React.JSX.Element {
       window.api.onWindowCloseRequest(() => void handleWindowCloseRequest()),
       watchWindowProject(),
       // Attaches null while there is no project, so a reloaded renderer stops the bot it left behind.
-      watchBot()
+      watchBot(),
+      // Before takeInitialWindowState: main sends selects once the window is listening.
+      watchAttention()
     ]
     return () => unsubscribes.forEach((u) => u())
   }, [openProject])
@@ -92,9 +95,11 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     window.api
       .takeInitialWindowState()
-      .then(async ({ opened, menu, server }) => {
+      .then(async ({ opened, menu, server, select }) => {
         if (server) {
           useAppStore.getState().setServerWindow(server)
+          // Asked for while this window was loading: shown once the project is in.
+          if (select) requestSessionSelect(select)
           setBooted(true)
           return
         }
