@@ -3,6 +3,7 @@ import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { writeFileAtomic } from './secrets'
 import { addRecentEntry, keepRecents, parseRecents, removeRecentEntry, serializeRecents, type RecentEntry } from './recentsRules'
+import { rewriteRecents, type MigratedPiece } from './importRules'
 
 function recentsFile(): string {
   return join(app.getPath('userData'), 'recent-projects.json')
@@ -60,4 +61,9 @@ export function addRecentServer(entry: Extract<RecentEntry, { kind: 'server' }>)
 
 export function removeRecent(entry: RecentEntry): Promise<void> {
   return update((list) => removeRecentEntry(list, entry))
+}
+
+/** An import: its pieces' server entries take the place of the file's (importRules.rewriteRecents). */
+export function rewriteRecentsForImport(isFile: (path: string) => boolean, pieces: readonly MigratedPiece[]): Promise<void> {
+  return update((list) => rewriteRecents(list, isFile, pieces))
 }

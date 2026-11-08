@@ -25,6 +25,8 @@ import {
   type WindowBounds,
   type WindowTarget
 } from './windowRules'
+import { restoreEntries } from './importRules'
+import { fileKey, readMigrated } from './migrated'
 
 // icon.png is extracted from AppIcon.icns (the packaging icon) — nativeImage
 // needs a PNG for the runtime dock icon.
@@ -390,6 +392,11 @@ async function readOpenWindows(): Promise<OpenWindowEntry[]> {
   }
 }
 
+/** The windows open at the last quit, as open-windows.json has them (the first-launch prompt reads their files). */
+export function readRestoreEntries(): Promise<OpenWindowEntry[]> {
+  return readOpenWindows()
+}
+
 /** Reopens the windows from last time, one at a time, or one empty window. */
 export async function restoreWindows(): Promise<void> {
   if (RESTORE_DISABLED) {
@@ -398,7 +405,8 @@ export async function restoreWindows(): Promise<void> {
   }
   const workAreas = screen.getAllDisplays().map((d) => d.workArea)
   let restored = 0
-  for (const { target, bounds } of await readOpenWindows()) {
+  // A window on a .trekproj that was imported comes back on its server project (Local's piece).
+  for (const { target, bounds } of restoreEntries(await readOpenWindows(), await readMigrated(), fileKey)) {
     // A server window comes back even if its entry is gone: it shows "Server removed".
     if (target.kind === 'file') {
       const exists = await access(target.path).then(
