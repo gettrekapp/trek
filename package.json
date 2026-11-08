@@ -6,8 +6,9 @@
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "npm run build:server && electron-vite dev",
+    "build": "electron-vite build && npm run build:server",
+    "build:server": "npm --prefix server run build && node scripts/bundle-server.mjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node --test scripts/*.test.mjs",
@@ -24,8 +25,10 @@
     "smoke:client": "npm --prefix server run build && node scripts/client-contract.mjs",
     "smoke:v2": "npm run build && npm --prefix server run build && node scripts/v2-smoke.mjs",
     "smoke:local": "npm --prefix server run build && node scripts/local-server-smoke.mjs",
+    "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "dist": "electron-vite build && electron-builder --mac --arm64"
+    "dist": "npm run build && electron-builder --mac --arm64",
+    "dist:dir": "npm run build && electron-builder --mac --arm64 --dir"
   },
   "build": {
     "appId": "com.trek.trekdev",

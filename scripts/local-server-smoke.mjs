@@ -9,11 +9,15 @@
 // server's stale lock (and its temp files) taken over with a new token, the
 // session resumed with --resume, and a lock path that cannot be taken.
 //
-//   node scripts/local-server-smoke.mjs [--node-only | --electron-only]
+// With --packaged <Trek.app>, it runs the same checks on a packaged app instead: the app's own
+// binary with ELECTRON_RUN_AS_NODE=1, on Contents/Resources/app.asar/out/server/trek-server.cjs
+// (read from inside the asar), with node-pty and its spawn-helper from app.asar.unpacked.
+//
+//   node scripts/local-server-smoke.mjs [--node-only | --electron-only | --packaged <Trek.app>]
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
@@ -23,10 +27,25 @@ const root = new URL('..', import.meta.url).pathname
 const bundle = join(root, 'server', 'dist', 'trek-server.cjs')
 const built = JSON.parse(readFileSync(join(root, 'server', 'dist', 'build.json'), 'utf8'))
 
-const runtimes = [
-  { name: 'node', cmd: process.execPath, env: {} },
-  { name: 'electron', cmd: electronPath, env: { ELECTRON_RUN_AS_NODE: '1' } }
-].filter((r) => !process.argv.includes(r.name === 'node' ? '--electron-only' : '--node-only'))
+const packagedAt = process.argv.indexOf('--packaged')
+const packaged = packagedAt >= 0 && process.argv[packagedAt + 1] ? resolve(process.argv[packagedAt + 1]) : null
+if (packagedAt >= 0 && !packaged) {
+  console.error('usage: --packaged <path to Trek.app>')
+  process.exit(2)
+}
+const runtimes = packaged
+  ? [
+      {
+        name: 'packaged',
+        cmd: join(packaged, 'Contents', 'MacOS', 'Trek'),
+        env: { ELECTRON_RUN_AS_NODE: '1' },
+        cli: join(packaged, 'Contents', 'Resources', 'app.asar', 'out', 'server', 'trek-server.cjs')
+      }
+    ]
+  : [
+      { name: 'node', cmd: process.execPath, env: {} },
+      { name: 'electron', cmd: electronPath, env: { ELECTRON_RUN_AS_NODE: '1' } }
+    ].filter((r) => !process.argv.includes(r.name === 'node' ? '--electron-only' : '--node-only'))
 
 let checks = 0
 let failed = false
@@ -56,9 +75,12 @@ async function suite(rt) {
   const app = join(work, 'app')
   mkdirSync(join(app, 'out', 'server'), { recursive: true })
   mkdirSync(join(app, 'node_modules'))
-  const cli = join(app, 'out', 'server', 'trek-server.cjs')
-  copyFileSync(bundle, cli)
-  symlinkSync(join(root, 'node_modules', 'node-pty'), join(app, 'node_modules', 'node-pty'))
+  // A packaged app brings its own: the bundle inside app.asar, node-pty in app.asar.unpacked.
+  const cli = rt.cli ?? join(app, 'out', 'server', 'trek-server.cjs')
+  if (!rt.cli) {
+    copyFileSync(bundle, cli)
+    symlinkSync(join(root, 'node_modules', 'node-pty'), join(app, 'node_modules', 'node-pty'))
+  }
   const env = { ...process.env, ...rt.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') }
   // Only the app's node_modules may resolve: no NODE_PATH fallback.
   delete env.NODE_PATH
@@ -162,7 +184,7 @@ async function suite(rt) {
     await ptys.attach(started.ptyId, { onData: (d) => { text += d }, onExit: () => {}, onReset: () => {}, onError: () => {} })
     must(await waitFor(() => /FAKE_AGENT .*--session-id (\S+)/.test(text)), `node-pty runs the agent under ${rt.name}: it printed --session-id`, JSON.stringify(text))
     const agentSessionId = /--session-id (\S+)/.exec(text)[1]
-    if (rt.name === 'electron') {
+    if (rt.name !== 'node') {
       // The server runs with ELECTRON_RUN_AS_NODE=1; an Electron app started from a session must not.
       check(await waitFor(() => /RUN_AS_NODE=\S+/.test(text)) && text.includes('RUN_AS_NODE=unset'), "the session's pty does not inherit ELECTRON_RUN_AS_NODE", JSON.stringify(text))
     }
