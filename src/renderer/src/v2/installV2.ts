@@ -17,6 +17,7 @@ import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
 import { SETTINGS_SETTERS, v2SettingsOverrides, type SettingsOverrides, type SettingsRequests } from './settingsOverrides'
 import { ClientError } from '../../../shared/client/index.ts'
+import { LOCAL_ENTRY_ID } from '../../../shared/appServerRules'
 import { createProjectionWaits, PROJECTION_WAIT_MS } from './projectionWaits'
 import { installPatch, leavePatch } from './windowState'
 import { stopAllSummaries } from '../voice'
@@ -105,6 +106,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     request,
     requestWithRev,
     capabilities: () => registered()?.connection.welcome?.capabilities,
+    localEntry: entryId === LOCAL_ENTRY_ID,
     ids: v2Ids,
     state: () => useAppStore.getState(),
     whenProjected,

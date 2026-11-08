@@ -53,6 +53,8 @@ export interface V2BackendDeps {
   requestWithRev: V2RequestWithRev
   /** The last welcome's capabilities; undefined before the first one */
   capabilities(): readonly string[] | undefined
+  /** The window's entry is the Local server's: with `local` in the welcome, its paths are this machine's (`v2Features`) */
+  localEntry: boolean
   /** The id map of the projection in the store now */
   ids(): V2IdMap | null
   state(): V2BackendState
@@ -186,7 +188,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     /** Read at the time: the capabilities arrive with the welcome (useFeatures re-reads them). */
     get features(): BackendFeatures {
       const caps = deps.capabilities()
-      if (!features || features.caps !== caps) features = { caps, value: v2Features(caps) }
+      if (!features || features.caps !== caps) features = { caps, value: v2Features(caps, { localEntry: deps.localEntry }) }
       return features.value
     },
     sessions: {

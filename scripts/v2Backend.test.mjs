@@ -28,7 +28,7 @@ class CodedError extends Error {
  * `revs` is the rev each method's response reports; `waits` records each
  * whenProjected's rev (null without one).
  */
-function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], projectedAfter = [], left = () => false, revs = {} } = {}) {
+function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], localEntry = false, projectedAfter = [], left = () => false, revs = {} } = {}) {
   const calls = []
   const ui = []
   const reports = []
@@ -59,6 +59,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     },
     // null stands for "no welcome yet" (undefined would take the default)
     capabilities: typeof capabilities === 'function' ? capabilities : () => capabilities ?? undefined,
+    localEntry,
     ids: () => idMap,
     state: () => st,
     // Each projectedAfter entry is applied to the state and ids before the check, like a patch arriving.
@@ -108,6 +109,20 @@ test('features before the welcome, then when the capabilities change', () => {
   assert.notEqual(backend.features, before)
   caps = []
   assert.equal(backend.features.globalPanel, false)
+})
+
+test("the machine-local features: only the Local entry's server, once it says `local`; Linear everywhere", () => {
+  const machine = (b) => ['docker', 'env', 'stacks', 'skills', 'reveal', 'openInEditor'].filter((name) => b.features[name])
+  assert.deepEqual(machine(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['docker', 'env', 'stacks', 'skills', 'reveal', 'openInEditor'])
+  assert.deepEqual(machine(setup({ capabilities: ['mcp', 'local'] }).backend), [])
+  assert.deepEqual(machine(setup({ capabilities: ['mcp'], localEntry: true }).backend), [])
+  assert.equal(setup().backend.features.linear, true)
+  // The Local entry before its welcome, then once it arrives.
+  let caps
+  const { backend } = setup({ capabilities: () => caps, localEntry: true })
+  assert.equal(backend.features.env, false)
+  caps = ['mcp', 'local']
+  assert.equal(backend.features.env, true)
 })
 
 test('start by instance id or by path sends session.start with the v2 worktree, a size, the type and agent', async () => {

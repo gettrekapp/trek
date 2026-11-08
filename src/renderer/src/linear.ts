@@ -27,7 +27,7 @@ export async function refreshLinearIssues(ids = linkedLinearIds()): Promise<void
 /** Keeps the store's Linear issue cache fresh for the open project's tickets. */
 export function useLinearSync(): void {
   const connected = useAppStore((s) => s.linearConnected)
-  // A server window hides Linear (phase 5); the effect re-runs when the window's kind changes.
+  // Every window has Linear (4c); the effect still re-runs when the window's features change.
   const linear = useFeatures().linear
   // Joined so the effect only re-runs when the set of linked ids changes.
   const idsKey = useAppStore((s) =>

@@ -16,6 +16,7 @@ import { LlmPicker, useServerPicker } from './LlmPicker'
 import { SettingText } from './SettingText'
 import { defaultSessionLlm } from '../llm'
 import { settingsSections } from '../backendFeatures'
+import { useFeatures } from '../useFeatures'
 import type {
   SessionType,
   EnvironmentSettings,
@@ -29,9 +30,11 @@ interface Props {
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // A server window edits the project's settings on the server: text is committed on blur (each
-  // commit is a request), this machine's sections are hidden, and a conflict's Reload remounts it.
+  // commit is a request), this machine's sections are hidden (but a Local window's environments,
+  // and Linear everywhere), and a conflict's Reload remounts it.
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
-  const sections = settingsSections(serverWindow ? 'v2' : 'legacy')
+  const features = useFeatures()
+  const sections = settingsSections(serverWindow ? 'v2' : 'legacy', features)
   const live = !serverWindow
   const reload = useAppStore((s) => s.settingsReload)
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
