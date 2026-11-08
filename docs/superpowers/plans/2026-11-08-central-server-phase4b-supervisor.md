@@ -11,7 +11,7 @@
 3. **Version skew.** A running server that is not the bundled build gets a Restart / Keep Running question.
    - A dev build (`npm run dev`, not packaged) runs its own Local server, in the `local-dev` profile (`start --local --local-profile dev`), so it and the installed Trek never offer to restart each other's server.
 4. **Stop, Restart and Reset.**
-   - Restart is `stop --local`, then SIGKILL only the pid that both the lock and `local.json` still name, then a spawn.
+   - Restart is `stop --local`, then SIGKILL only the pid that both the lock and `local.json` still name and whose command line is this profile's server, then a spawn.
    - "Reset local server" deletes `local.lock` only under a stated safety rule.
 5. **A synthetic, non-removable `Local` entry, listed first.**
    - Its URL follows the running server.
@@ -92,10 +92,10 @@ Out of scope here:
 
 27. **A dev build has its own Local profile** (Task 2b; the answer to Question 1, numbered last so the others keep their numbers).
     - A dev build (`npm run dev`, any unpackaged run) and the installed Trek would otherwise share `~/.config/trek-server/local`. Their bundles differ, so each would offer to restart the other's server, and a restart ends that server's sessions.
-    - The server takes `--local-profile <name>` with `--local`, on `start` and `stop`. The name must match `/^[a-z0-9-]{1,32}$/`: no dot, slash or uppercase, so it can never leave trek-server's directories. Anything else is a usage error (exit 2), as is `--local-profile` without `--local`.
+    - The server takes `--local-profile <name>` with `--local`, on `start` and `stop`. The name must match `/^[a-z0-9][a-z0-9-]{0,31}$/` (`/^[a-z0-9-]{1,32}$/` before the review fixes): no dot, slash or uppercase, so it can never leave trek-server's directories, and no leading `-`, so it is never read as a flag. Anything else is a usage error (exit 2), as is `--local-profile` without `--local`.
     - A name maps to `~/.config/trek-server/local-<name>/` and `<dataDir>/local-<name>`: its own config, serverId, token, projects, MCP files, `local.json`, `local.lock` and `server.log`. With no name the profile is `local`, unchanged.
     - The helpers are shared: `isLocalProfileName`, `localProfileSegment` and `localProfileDir` in `src/shared/localServer.ts`, used by the server's `localProfile(home, dataDir, name?)` and main's `localPaths(home, profile?)`.
-    - The supervisor's profile is `localProfileName(app.isPackaged)`: `undefined` (the default) when packaged, `dev` otherwise. Its `local.json`, lock, log, config and watched directory are that profile's, and its `start --local` and `stop --local` carry `localProfileArgs(profile)` (`--local-profile dev`, or nothing).
+    - The supervisor's profile is `localProfileName(app.isPackaged, process.env)`: `undefined` (the default) when packaged, `dev` otherwise. A dev build takes a valid `TREK_LOCAL_PROFILE` instead (`dev-wt2` is `local-dev-wt2`), so dev runs from several worktrees do not share `local-dev`; an invalid one is ignored with a warning. A packaged build ignores the variable: a stray one must never hide the installed app's projects (review fix 9). Its `local.json`, lock, log, config and watched directory are that profile's, and its `start --local` and `stop --local` carry `localProfileArgs(profile)` (`--local-profile dev`, or nothing).
     - The two Local servers are separate: a dev run does not see the installed app's projects or sessions. That is the point.
 
 ### Decided in this plan
@@ -141,14 +141,18 @@ Out of scope here:
       - every `ELECTRON_*` (the dev server's `ELECTRON_RENDERER_URL` included);
       - every `TREK_*`. A dev Trek started from a Trek terminal carries the outer session's `TREK_MCP_TOKEN` and `TREK_TERMINAL_ID`, and the smoke opt-outs too;
       - `NODE_OPTIONS` and `NODE_PATH`;
-      - `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`, which would misdirect every git call.
+      - `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE`, which would misdirect every git call;
+      - (review fix 3) `NODE_ENV`, `NODE`, every `npm_*`, `INIT_CWD`, and electron-vite dev's `NODE_ENV_ELECTRON_VITE`, `NO_SANDBOX` and `REMOTE_DEBUGGING_PORT`.
+
+      Names are matched case-sensitively and a prefix includes its underscore, so `ELECTRON`, `trek_x` and `NPM_TOKEN` are kept. The input is not changed.
 
       Then it sets `ELECTRON_RUN_AS_NODE=1`, which the server deletes from its own env before any pty (4a final review fix 1). The smoke checks that a session's agent sees no `TREK_` variable from the app.
 11. **The log is `~/.config/trek-server/local/server.log`** (`local-dev/server.log` for a dev build, Decision 27), beside `local.json` and `local.lock`, not in userData.
     - It is the server's output, and the server belongs to the profile, not to one Trek install.
     - The error dialog names `local.lock` and `local.json` in that directory, so the log is where the user is already looking.
     - It is opened `O_APPEND`, 0600 (the profile directory is 0700). Each spawn writes a header line, `--- <ISO time> Trek <version> starts the local server ---`; the smoke counts these to prove "no new spawn".
-    - At a spawn, a log over 1 MB is renamed to `server.log.old` first, so it is bounded at about 2 MB.
+    - At a spawn, a log over 1 MB is renamed to `server.log.old` first.
+    - Adopting a server this Trek did not just spawn (a launch's probe, a refresh, a lost race) also rotates a log over 1 MB (review fix 10). That server holds the log open, so it is copied to `server.log.old` and truncated rather than renamed; the server's descriptor is `O_APPEND`, so its next line lands at the new end. So the log is bounded at about 2 MB at each spawn or adoption; a server that runs for weeks without Trek relaunching can still grow it in between.
 12. **The waits** (Notes for 4b 9, 10, 14). No path retries a start by itself.
     - **Ready:** `local.json` holds the spawned pid and probes live, within `READY_TIMEOUT_MS` (15 s). A timeout is an error with the log's last 20 lines; the slow process is left running, and a later Start or launch finds it if it ever answers.
     - **Exit 3** (another start holds the lock): the supervisor probes `local.json` for `LOST_RACE_WAIT_MS` (8 s), since the winner may still be starting. If nothing answers, it is an error naming the lock and its pid, with `canReset`.
@@ -179,19 +183,20 @@ Out of scope here:
     - Anything else is an error with its output, and nothing is signalled.
 17. **Restart** (Note 13) is the same stop, then `afterStop`:
     - Exit 0, or the target pid gone, spawns.
-    - Exit 1 with the target alive spawns only if `local.lock` and `local.json` both still name it: then SIGKILL, wait up to 3 s for it to go, and spawn (the new start takes over the dead lock and deletes the stale `local.json`).
+    - Exit 1 with the target alive spawns only if `local.lock` and `local.json` both still name it and its command line is this profile's server (`holderIsServer`, review fix 4): then SIGKILL, wait up to 3 s for it to go, and spawn (the new start takes over the dead lock and deletes the stale `local.json`). The SIGKILL is wrapped: ESRCH means it is already gone (spawn), anything else (EPERM) is reported and nothing is spawned.
     - Anything else (the lock is someone else's, a lockless server, `local.json` moved on, or a usage error) is reported. Nothing is signalled, and nothing is spawned.
     - Sessions resume through `agentSessionId` (4a Decision 17). The smoke checks that the session is still listed after a restart, with its agent session id and no pty.
 18. **"Reset local server" (`resetDecision`, Notes 6 and 16).** It is offered only from an error with `canReset`, which only an exit 3 with no answering server sets. The lock is deleted only when nothing that could be our server holds it:
-    - A hello with `local.json`'s token is welcomed as `local`: **connect**, no reset.
+    - `probeVerdict` says use what `local.json` names (welcomed as `local`, with the profile's serverId; review fix 5): **connect**, no reset.
     - No lock: **start**.
     - The lock's pid is dead: **reset** (a start would take it over anyway).
-    - The lock's pid is alive and the lock is younger than 15 s: **refuse**. A start is still on its way to `local.json`, and it deletes the old one first.
-    - Alive, and `local.json` is missing or names another pid: **reset** (a reused pid).
-    - Alive, named by `local.json`, and its port refuses a TCP connection: **reset**. A live server listens before it writes `local.json`, so this is a SIGKILLed server's pid, reused.
-    - Alive, named by `local.json`, its port open, but no welcome: **refuse**. It may be our server, hung. Deleting its lock would let a second server share its files, so the message asks the user to wait or end that process.
+    - The lock's pid is alive and the lock is younger than 15 s, or dated in the future: **refuse**. A start is still on its way to `local.json`, and it deletes the old one first.
+    - Alive, and its command line (`ps -o command= -p <pid>`) is this profile's server, or `ps` cannot tell: **refuse** (`holderIsServer`, review fix 4). It is our server, hung or still starting.
+    - Alive, not a server, and `local.json` is missing or names another pid: **reset** (a reused pid).
+    - Alive, not a server, named by `local.json`, and its port answers ECONNREFUSED: **reset**. A live server listens before it writes `local.json`, so this is a SIGKILLed server's pid, reused.
+    - Alive, not a server, named by `local.json`, and its port connects or times out: **refuse** (`portRefused`, review fix 1). A hung server, or one whose backlog is full, times out; deleting its lock would let a second server share its files, so the message asks the user to wait or end that process.
 
-    Before the unlink the lock is read again, and it is deleted only if it still holds the judged pid.
+    Before the unlink, the lock is `lstat`ed again, and it is deleted only if it is still the file judged: same device, inode and ctime (`sameFile`, as the server's `localLock.ts`; review fix 6).
 
 **The entry (Task 4)**
 
@@ -274,7 +279,7 @@ Out of scope here:
   - `import type` lines are erased, so they may be extensionless.
   - `localServerRules.ts` imports only `node:path` and `src/shared/localServer.ts`.
   - `localServer.ts`, `appServers.ts` and `index.ts` import Electron and are covered by the smokes.
-- **Baseline:** 1459 tests pass at `8325345`. Each task states the count it ends at.
+- **Baseline:** 1459 tests pass at `8325345`. Each task states the count it ends at. After the review fixes to Tasks 1–3 (`8a4772f`, `5baf450`), 1481 pass.
 - **Checks:**
   - `npm run typecheck`
   - `npm run build`, which now builds the server and `out/server` too
@@ -3009,6 +3014,79 @@ Tests: 1474 → 1475. `appSettings`' two tests are rewritten, not added.
 
 ---
 
+### Review fixes (Tasks 1–3, done)
+
+These fixes were applied after the review of Tasks 1, 2, 2b and 3, in `8a4772f` (the code and tests) and `5baf450` (`package.json` and the README). Those tasks' code blocks above show the code as it was first written, and the Decisions describe it as it is now.
+
+- `npm test` goes from 1475 to 1481 (6 new tests in `localServerRules`, and several extended).
+- The smokes are unchanged: `smoke:local` 85, `smoke:v2` 168 and `smoke:windows` 40/40.
+- Task 6's diffs did not need regenerating. Task 7's `package.json` hunk was regenerated for the new context.
+
+**Reset and SIGKILL (`localServerRules.ts`, `localServer.ts`)**
+
+1. **A port timeout is no longer "closed".** `ResetFacts.portOpen` is now `portRefused`, which is true only on `ECONNREFUSED`. A connection, a 1 s timeout (a hung server, or a full listen backlog) or any other error is not a refusal, so Reset refuses. There is a test for the timeout row.
+4. **The holder must provably not be a server.** The new fact `holderIsServer` (`boolean | undefined`) is gathered by `ps -o command= -p <pid>` (3 s timeout). An error or empty output is `undefined`, meaning unknown. The command line is matched by `isLocalServerCommand(command, profile)`:
+   - it contains `trek-server` (the bundle's `trek-server.cjs`, or an installed `trek-server` bin);
+   - it contains `start --local` as whole words;
+   - for a named profile, it has `--local-profile <name>` for this profile's name. For the default profile, it has no `--local-profile` at all.
+
+   This was checked against the real spawned command line. The built app ran under a temp HOME, and `ps` showed `…/Electron.app/Contents/MacOS/Electron …/out/server/trek-server.cjs start --local --local-profile dev`. That matches `dev`, and does not match the default profile or `other`. The same check passed with `TREK_LOCAL_PROFILE=dev-wt2`.
+   - `resetDecision` resets a live holder only when `holderIsServer === false`. A server, or an unknown, refuses before the `local.json` checks, so the "live pid, `local.json` missing" branch also requires it.
+   - The port is still a second signal: a non-server that `local.json` names is reset only if its port refuses connections.
+   - `afterStop`'s `sigkill` also requires `holderIsServer === true`.
+5. **`welcomed` is `probeVerdict`'s `use`.** `reset()` runs `probe(info)`, which passes the profile's `expectedServerId`. Before, `welcomed` checked only the `local` capability. A test covers a welcome whose serverId is `''` while the config has one.
+6. **The re-check before the unlink is by file identity.** `readLock()` now reads the lock through an fd and keeps `fstat`'s dev, ino and ctime. Right before the unlink, the lock is `lstat`ed and compared with `sameFile`, which mirrors the server's unexported `localLock.ts` helper and is tested. An `ENOENT` is ignored; any other error is reported, with Reset still offered.
+7. **The SIGKILL is wrapped.** ESRCH means the target is already gone, so the restart goes on to spawn. Any other error (EPERM) is reported as "SIGKILL failed", and nothing is spawned.
+
+**The child's env and the profile**
+
+3. **`childEnv`** also drops:
+   - `NODE_ENV` and `NODE`;
+   - `NODE_ENV_ELECTRON_VITE`, `NO_SANDBOX` and `REMOTE_DEBUGGING_PORT`;
+   - `INIT_CWD`, and every `npm_*` variable.
+
+   The rule is pinned: names are matched case-sensitively, and each prefix includes its underscore. So `ELECTRON`, `ELECTRONIC`, `trek_x`, `TREKX`, `NPM_TOKEN` and `NODE_ENVX` are kept.
+
+   The tests also check that `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `NODE_PATH` are dropped, and that the input object is left unchanged.
+8. **The profile name regex** is now `/^[a-z0-9][a-z0-9-]{0,31}$/`, so a name never starts with `-` and is never read as a flag.
+   - `'-'`, `'-dev'` and `'--local'` are now bad cases in `serverLocalProfile.test.mjs`.
+   - The server's usage error and `--help` text say "starting with a letter or digit".
+   - `localProfileArgs` now throws on an invalid name, as `localPaths` does. `localProfileName` never returns one, so this is a guard, not a path. The test pins it.
+9. **`TREK_LOCAL_PROFILE`.**
+   - `localProfileName(isPackaged, env)` returns a valid `TREK_LOCAL_PROFILE` in a dev build (`dev-wt2` maps to `local-dev-wt2`). Otherwise it returns `dev`; for an invalid value, `localServer.ts` logs a warning.
+   - A packaged build ignores the variable, so a stray value cannot hide the installed app's projects.
+   - `childEnv` strips the variable, since it is a `TREK_*` name (tested).
+   - The README documents it, and so does `server/README.md`.
+   - Task 7's smoke deletes it from the app's env, so a developer's own setting cannot move the dev run off `local-dev`.
+
+**The log, the build, the docs**
+
+10. **Log rotation on adoption** (rather than rewording Decision 11). `useServer(info, adopted = true)` runs `rotateLiveLog()` when it picks up a server it did not just spawn. A log over 1 MB is copied to `.old` and truncated. It is not renamed, because the running server holds the log open with `O_APPEND`. A spawn still renames the log, in `openLog`. Decision 11 now says this.
+2. **A fresh checkout builds.** The root `package.json` has `"postinstall": "npm --prefix server install"`. This is safe:
+    - `server/package.json` has no lifecycle scripts, so nothing recurses.
+    - electron-builder 26's `installOrRebuild` runs `npm install` only when there is no `node_modules`. Otherwise (always, after `npm run build`) it runs `@electron/rebuild`. Running `electron-builder --mac --arm64 --dir` in a fresh export logged `executing @electron/rebuild`, with no install.
+    - `electron-builder install-app-deps` is not used. `npm run rebuild` is `electron-rebuild`, which runs no npm install.
+    - Checked from a `git archive` export with no `node_modules`: `npm install` took 3 s with a warm cache and filled `server/node_modules`. Then `npm run build` wrote `out/server` with the same build id as the working tree.
+    - The README's Development section says so. It also says that `npm run build:server`, then File → Local Server → Restart Local Server, runs edited server code in dev. It documents `TREK_LOCAL_PROFILE` and `TREK_NO_LOCAL_SERVER`.
+11. **`smoke:v2`** is `npm run build && node scripts/v2-smoke.mjs`. `build` already builds the server.
+12. **Test gaps filled.**
+    - `resetDecision`:
+      - a young lock that `local.json` names, with its port refused, refuses;
+      - `lockAgeMs` of exactly 15000 may be judged, and 14999 may not;
+      - a negative age, or NaN, refuses;
+      - a timeout refuses;
+      - the `holderIsServer` true, false and unknown rows.
+    - `afterStop`:
+      - `code: null` with the target alive refuses (when it is dead, the restart spawns);
+      - code 0 with the target alive spawns, because its files are gone and it is on its way out;
+      - `holderIsServer` false or unknown refuses.
+    - `probeVerdict`: a welcome whose serverId is `''`.
+    - `logTail`:
+      - the default of 20 lines;
+      - whitespace-only lines are dropped;
+      - CRLF is read as LF. `logTail` now splits on `/\r?\n/`.
+    - `localProfileArgs` with an invalid name throws.
+
 ### Task 6: The renderer: the Local row, New Project on Local, and following a respawn
 
 **Files:**
@@ -3541,7 +3619,7 @@ index 130b99a..c0ee064 100644
 
 Run: `npm run typecheck && npm test 2>&1 | grep -E '^# (pass|fail)' && npm run build 2>&1 | tail -1`
 
-Expected: no type errors; `# pass 1476`, `# fail 0`; `out/server: trek-server 0.2.0, build <build>`.
+Expected: no type errors; `# pass 1482`, `# fail 0`; `out/server: trek-server 0.2.0, build <build>`.
 
 - [ ] **Step 8: Commit**
 
@@ -3549,7 +3627,7 @@ Expected: no type errors; `# pass 1476`, `# fail 0`; `out/server: trek-server 0.
 git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(renderer): Local first in Connect, New Project on Local, windows follow a respawn" -m "Co-Authored-By: <model trailer>" -- src/renderer/src/v2/appServerLinks.ts scripts/v2AppServerLinks.test.mjs src/renderer/src/components/ConnectServer.tsx src/renderer/src/components/NewServerProjectModal.tsx src/renderer/src/v2/ServerProjectWindow.tsx src/renderer/src/components/StartScreen.tsx src/renderer/src/styles.css
 ```
 
-Tests: 1475 → 1476.
+Tests: 1481 → 1482 (1475 → 1476 before the review fixes to Tasks 1–3).
 
 ---
 
@@ -3720,6 +3798,7 @@ const launch = async (answers = {}) => {
     SMOKE_PICK: repo
   }
   delete env.TREK_NO_LOCAL_SERVER
+  delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch(
     packaged
@@ -3978,12 +4057,12 @@ How it is built:
 - **The Reset scenario.**
   - A live `sleep 300` holds `local.lock`, which is backdated two minutes. That is older than a start's wait, so Reset may judge it.
   - The spawned start exits 3, and after 8 s the error dialog offers Reset (answered Reset).
-  - `resetDecision` sees a live pid with no `local.json`, which means reset. The lock goes, and a server starts. The squatter is never signalled.
+  - `resetDecision` sees a live pid whose command line is no server (`holderIsServer` false) and no `local.json`, which means reset. The lock goes, and a server starts. The squatter is never signalled.
 - **`--packaged`.**
   - A packaged app ignores `-r`; the prototype's first packaged run recorded no dialog, and the real folder picker timed out the modal wait. So there the same stub is installed with `app.evaluate` right after launch.
   - The two scenarios whose dialog comes while the app starts (skew, Reset) are skipped there. They run the same main code as the dev run.
   - It adds one check: the server's command line is the packaged binary on `app.asar/out/server/trek-server.cjs`. That makes 42 − 3 − 4 + 1 = 36 checks.
-- **The profile.** The dev run's app is unpackaged, so its supervisor uses `local-dev` (Decision 27). The smoke writes its config there, reads `local.json`, the lock and the log there, and stops it with `--local-profile dev`. The packaged run uses the default `local`, and its command-line check is `start --local` with no profile flag.
+- **The profile.** The dev run's app is unpackaged, so its supervisor uses `local-dev` (Decision 27); the smoke deletes `TREK_LOCAL_PROFILE` from the app's env so a developer's own setting cannot move it. The smoke writes its config there, reads `local.json`, the lock and the log there, and stops it with `--local-profile dev`. The packaged run uses the default `local`, and its command-line check is `start --local` with no profile flag.
 - **`finish`** runs `stop --local` (with the run's profile) in the run's HOME, and SIGKILLs anything `local.json` still names. No server outlives the run.
 
 - [ ] **Step 2: The scripts**
@@ -3992,12 +4071,12 @@ How it is built:
 
 ```diff
 diff --git a/package.json b/package.json
-index 659f3a8..39e05e5 100644
+index 291b473..06f5262 100644
 --- a/package.json
 +++ b/package.json
-@@ -25,7 +25,8 @@
+@@ -26,7 +26,8 @@
      "smoke:client": "npm --prefix server run build && node scripts/client-contract.mjs",
-     "smoke:v2": "npm run build && npm --prefix server run build && node scripts/v2-smoke.mjs",
+     "smoke:v2": "npm run build && node scripts/v2-smoke.mjs",
      "smoke:local": "npm --prefix server run build && node scripts/local-server-smoke.mjs",
 -    "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app",
 +    "smoke:local-app": "npm run build && node scripts/local-app-smoke.mjs",
@@ -4044,7 +4123,7 @@ Tests: 1476 (unchanged).
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1476`, `# fail 0`. That is the baseline 1459 at `8325345`, plus:
+Expected: `# pass 1482`, `# fail 0`. That is the baseline 1459 at `8325345`, plus:
 
 | Task | Tests added |
 |---|---|
@@ -4053,6 +4132,7 @@ Expected: `# pass 1476`, `# fail 0`. That is the baseline 1459 at `8325345`, plu
 | 3 | 0 (one `appServerProbe` test changed) |
 | 4 | 2: 1 in `appServersRules`, 1 in `mainServerLinks` (its snapshot-keys test allows `local`) |
 | 5 | 1 in `appServersRules` (`localStatusLabel`); `appSettings`' 2 rewritten |
+| Review fixes (Tasks 1–3) | 6 in `localServerRules` (`TREK_LOCAL_PROFILE`, `isLocalServerCommand`, `childEnv`'s near-misses, `afterStop`'s new rows, `resetDecision`'s new rows, `sameFile`); others extended |
 | 6 | 1 in `v2AppServerLinks` |
 
 - [ ] **Step 2: Types and build**
