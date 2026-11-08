@@ -2,13 +2,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localProfile } from '../server/src/localProfile.ts'
 import { stopDecision, stopLocal } from '../server/src/localStop.ts'
 
-const info = (pid) => ({ port: 4000, pid, token: 't', version: '0.2.0', build: 'b' })
+const TOKEN = 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU'
+const info = (pid) => ({ port: 4000, pid, token: TOKEN, version: '0.2.0', build: 'abc123def456' })
 const alive = () => true
 const dead = () => false
 
@@ -24,6 +25,11 @@ test('stopDecision: no live lock holder is not running, naming a dead pid whose 
   // local.json names a live pid, but no lock holds it: a reused pid, never signalled.
   assert.deepEqual(stopDecision(info(10), undefined, alive), { action: 'not-running', stale: 10 })
   assert.deepEqual(stopDecision(info(10), 20, (pid) => pid === 10), { action: 'not-running', stale: 20 })
+})
+
+test('stopDecision: a lock from an earlier boot is dead whatever its pid', () => {
+  assert.deepEqual(stopDecision(info(10), 10, alive, true), { action: 'not-running', stale: 10 })
+  assert.deepEqual(stopDecision(undefined, 10, alive, true), { action: 'not-running', stale: 10 })
 })
 
 test('stopDecision: a live lock holder that local.json does not name is unverified', () => {
@@ -43,7 +49,7 @@ async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
     const fs = require('node:fs')
     fs.mkdirSync(${JSON.stringify(profile.dir)}, { recursive: true })
     fs.writeFileSync(${JSON.stringify(profile.lockPath)}, process.pid + '\\n')
-    fs.writeFileSync(${JSON.stringify(profile.infoPath)}, JSON.stringify({ port: 4000, pid: process.pid, token: 't', version: '0.2.0', build: 'b' }))
+    fs.writeFileSync(${JSON.stringify(profile.infoPath)}, JSON.stringify({ port: 4000, pid: process.pid, token: ${JSON.stringify(TOKEN)}, version: '0.2.0', build: 'abc123def456' }))
     process.on('SIGTERM', () => {
       if (${ignoreTerm}) return
       fs.rmSync(${JSON.stringify(profile.infoPath)})
@@ -100,4 +106,20 @@ test('stopLocal: a server that ignores SIGTERM times out with exit 1', async (t)
   const out = capture()
   assert.equal(stopLocal(profile, { ...out, timeoutMs: 300 }), 1)
   assert.equal(out.lines.at(-1), `E: The local trek-server (pid ${child.pid}) did not stop within 0.3 s.`)
+})
+
+test('stopLocal: a lock and local.json from before the last boot are never signalled, even if the pid is alive', (t) => {
+  const profile = setup(t)
+  mkdirSync(profile.dir, { recursive: true })
+  writeFileSync(profile.lockPath, `${process.pid}\n`)
+  writeFileSync(profile.infoPath, JSON.stringify(info(process.pid)))
+  const now = Date.now()
+  utimesSync(profile.lockPath, new Date(now - 3600_000), new Date(now - 3600_000))
+  const kills = []
+  const out = capture()
+  // Booted 10 minutes ago; the lock is an hour old.
+  const code = stopLocal(profile, { ...out, clock: { now: () => now, uptime: () => 600 }, kill: (pid, sig) => kills.push([pid, sig]) })
+  assert.equal(code, 0)
+  assert.deepEqual(kills, [])
+  assert.match(out.lines[0], new RegExp(`^No local trek-server is running \\(pid ${process.pid} is gone`))
 })

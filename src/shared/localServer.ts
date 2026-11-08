@@ -29,15 +29,27 @@ export interface LocalInfo {
   build: string
 }
 
+/**
+ * The largest pid accepted: pid_t is a signed 32-bit int on macOS and Linux
+ * (whose pid_max goes up to 2**22), and Windows pids are DWORDs that stay far
+ * below 2**31 in practice. A tighter bound would guard nothing: a pid in range
+ * that is not the server fails the liveness and lock checks anyway.
+ */
+export const MAX_PID = 2 ** 31 - 1
+/** A token from `addToken`: 32 random bytes in base64url (43 characters) */
+const TOKEN_RE = /^[A-Za-z0-9_-]{20,}$/
+/** A build id: 12 hex digits of the bundle's sha256, or "dev" from source */
+const BUILD_RE = /^([0-9a-f]{12}|dev)$/
+
 /** The LocalInfo in `raw`, field by field, or undefined if any field is missing or wrong. */
 export function parseLocalInfo(raw: unknown): LocalInfo | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const r = raw as Record<string, unknown>
   const { port, pid, token, version, build } = r
   if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) return undefined
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid < 1) return undefined
-  if (typeof token !== 'string' || token === '') return undefined
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid < 1 || pid > MAX_PID) return undefined
+  if (typeof token !== 'string' || !TOKEN_RE.test(token)) return undefined
   if (typeof version !== 'string' || version === '') return undefined
-  if (typeof build !== 'string' || build === '') return undefined
+  if (typeof build !== 'string' || !BUILD_RE.test(build)) return undefined
   return { port, pid, token, version, build }
 }

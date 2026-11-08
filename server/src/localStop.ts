@@ -2,9 +2,10 @@
 // wait for it to remove local.json and its lock. The lock is the authority on
 // which process is the server: it is taken before anything else and released
 // last. The pid is signalled only if local.json names it and the lock holds it,
-// so a pid reused by an unrelated process is never signalled.
+// and the lock is from this boot (the start's staleness rule), so a pid reused
+// by an unrelated process is never signalled.
 import type { LocalInfo } from '../../src/shared/localServer.ts'
-import { pidAlive, readLockPid } from './localLock.ts'
+import { beforeBoot, pidAlive, readLock, readLockPid, systemClock, type Clock } from './localLock.ts'
 import { readLocalInfo, type LocalProfile } from './localProfile.ts'
 
 export type StopDecision =
@@ -15,9 +16,18 @@ export type StopDecision =
   /** A live pid holds the lock but local.json does not name it: still starting, or a reused pid */
   | { action: 'unverified'; pid: number }
 
-/** What `stop --local` does, given local.json (or undefined), the lock's pid (or undefined), and a liveness check. */
-export function stopDecision(info: LocalInfo | undefined, lock: number | undefined, alive: (pid: number) => boolean): StopDecision {
-  if (lock !== undefined && alive(lock)) {
+/**
+ * What `stop --local` does, given local.json (or undefined), the lock's pid (or
+ * undefined), and a liveness check. A lock from an earlier boot (`lockBeforeBoot`)
+ * is dead whatever its pid, as it is to a start.
+ */
+export function stopDecision(
+  info: LocalInfo | undefined,
+  lock: number | undefined,
+  alive: (pid: number) => boolean,
+  lockBeforeBoot = false
+): StopDecision {
+  if (lock !== undefined && !lockBeforeBoot && alive(lock)) {
     return info?.pid === lock ? { action: 'signal', pid: lock } : { action: 'unverified', pid: lock }
   }
   const stale = lock ?? info?.pid
@@ -29,6 +39,8 @@ export interface StopOptions {
   timeoutMs?: number
   pollMs?: number
   alive?: (pid: number) => boolean
+  /** For the lock's boot-time check */
+  clock?: Clock
   kill?: (pid: number, signal: NodeJS.Signals) => void
   log?: (line: string) => void
   error?: (line: string) => void
@@ -50,11 +62,13 @@ export function stopLocal(profile: LocalProfile, options: StopOptions = {}): num
     timeoutMs = STOP_TIMEOUT_MS,
     pollMs = 50,
     alive = pidAlive,
+    clock = systemClock,
     kill = (pid, signal) => process.kill(pid, signal),
     log = console.log,
     error = console.error
   } = options
-  const decision = stopDecision(readLocalInfo(profile.infoPath), readLockPid(profile.lockPath), alive)
+  const lock = readLock(profile.lockPath)
+  const decision = stopDecision(readLocalInfo(profile.infoPath), lock?.pid, alive, lock !== undefined && beforeBoot(lock.mtimeMs, clock))
   if (decision.action === 'not-running') {
     log(
       decision.stale === undefined

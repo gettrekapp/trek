@@ -2,14 +2,14 @@ import { existsSync, rmSync, statSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { basename, resolve } from 'node:path'
 import { homedir, hostname } from 'node:os'
-import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
+import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
 import { buildInfo } from './buildInfo'
 import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig, saveConfig } from './config'
 import type { Project } from '../../src/shared/model/types'
 import { ConfigStore } from './configStore'
 import { defaultDataDir, projectsDir } from './dataDir'
-import { acquireLock, holdsLock, releaseLock } from './localLock'
+import { acquireLock, holdsLock, releaseLock, removeStaleTemps, type LockResult } from './localLock'
 import { localProfile, removeLocalInfo, writeLocalInfo, type LocalProfile } from './localProfile'
 import { stopLocal } from './localStop'
 import { projectsUsingRepo } from './projects/model'
@@ -326,15 +326,25 @@ if (args.command === 'token') {
 // start: every check runs before anything is written.
 if (local) {
   // The lock comes first: a second local server must not touch the profile.
-  const lock = acquireLock(local.lockPath)
+  let lock: LockResult
+  try {
+    lock = acquireLock(local.lockPath)
+  } catch (err) {
+    fail(`Cannot take the lock ${local.lockPath}: ${(err as Error).message}`)
+  }
   if (!lock.ok) {
     const pid = lock.holder > 0 ? ` (pid ${lock.holder})` : ''
     console.error(`A local trek-server is already running${pid}. Its port and token are in ${local.infoPath}.`)
     process.exit(LOCAL_ALREADY_RUNNING_EXIT)
   }
   if (lock.tookOver !== undefined) console.log(`Took over the lock of a local trek-server that is gone (pid ${lock.tookOver}).`)
+  // Each write to the profile first checks the lock is still ours (Decision 12).
+  stillHoldingLock(local)
+  removeStaleTemps(local.dir, [LOCAL_LOCK_FILE, LOCAL_INFO_FILE])
   // Holding the lock, any local.json is a dead server's: its port and token are stale.
+  stillHoldingLock(local)
   rmSync(local.infoPath, { force: true })
+  stillHoldingLock(local)
   if (!existsSync(local.configPath)) saveConfig(local.configPath, { repos: [] })
   process.on('exit', () => {
     removeLocalInfo(local.infoPath, process.pid)
@@ -362,6 +372,8 @@ const dataDir = args.dataDir === undefined ? undefined : resolve(args.dataDir)
 /** The local server's token, for local.json. Only its hash is saved, as for any token. */
 let localToken = ''
 if (local || !config.serverId || !config.name || config.tokenHash || (dataDir !== undefined && config.dataDir !== dataDir)) {
+  // The token rotation is a profile write too.
+  if (local) stillHoldingLock(local)
   try {
     store.update((c) => {
       ensureIdentity(c, hostname())
@@ -419,17 +431,23 @@ server.httpServer.listen(port, host, () => {
 })
 
 /**
+ * Exits 3 unless this process still holds the local lock. Two starts that took
+ * over the same stale lock at once: only the one holding it may write the profile.
+ */
+function stillHoldingLock(profile: LocalProfile): void {
+  if (holdsLock(profile.lockPath)) return
+  console.error(`Another local trek-server took the lock ${profile.lockPath}; exiting.`)
+  process.exit(LOCAL_ALREADY_RUNNING_EXIT)
+}
+
+/**
  * Writes local.json, the app's cue that the local server is ready. It waits for
  * MCP to settle, so the app's first welcome lists `mcp` if the server has it.
  */
 async function announceLocal(profile: LocalProfile, port: number): Promise<void> {
   await server.ready
   if (shuttingDown) return
-  // Two starts that took over the same stale lock at once: only the one holding it goes on.
-  if (!holdsLock(profile.lockPath)) {
-    console.error(`Another local trek-server took the lock ${profile.lockPath}; exiting.`)
-    process.exit(LOCAL_ALREADY_RUNNING_EXIT)
-  }
+  stillHoldingLock(profile)
   try {
     writeLocalInfo(profile.infoPath, { port, pid: process.pid, token: localToken, version, build })
   } catch (err) {

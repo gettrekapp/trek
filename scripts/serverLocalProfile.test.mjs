@@ -1,13 +1,14 @@
 // scripts/serverLocalProfile.test.mjs — the local server's profile paths and local.json.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
 import { localProfile, readLocalInfo, removeLocalInfo, writeLocalInfo } from '../server/src/localProfile.ts'
 
-const info = { port: 51234, pid: 4242, token: 'tok', version: '0.2.0', build: 'abc123def456' }
+// A token as addToken makes one: 32 random bytes, base64url.
+const info = { port: 51234, pid: 4242, token: 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU', version: '0.2.0', build: 'abc123def456' }
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-local-')))
@@ -27,15 +28,22 @@ test('the local profile lives under ~/.config/trek-server/local and <dataDir>/lo
 
 test('parseLocalInfo keeps the five fields and drops anything else', () => {
   assert.deepEqual(parseLocalInfo({ ...info, extra: 1 }), info)
+  assert.deepEqual(parseLocalInfo({ ...info, build: 'dev' }), { ...info, build: 'dev' }, 'a source run')
+  assert.deepEqual(parseLocalInfo({ ...info, pid: 2 ** 31 - 1 }), { ...info, pid: 2 ** 31 - 1 })
 })
 
 test('parseLocalInfo refuses a missing or wrong field', () => {
   for (const bad of [
     null, [], 'x', {},
     { ...info, port: 0 }, { ...info, port: 65536 }, { ...info, port: 1.5 }, { ...info, port: '51234' },
-    { ...info, pid: 0 }, { ...info, pid: -1 }, { ...info, pid: undefined },
-    { ...info, token: '' }, { ...info, token: 1 },
-    { ...info, version: '' }, { ...info, build: '' }, { ...info, build: undefined }
+    { ...info, port: NaN },
+    { ...info, pid: 0 }, { ...info, pid: -1 }, { ...info, pid: undefined }, { ...info, pid: 1.5 }, { ...info, pid: '4242' },
+    { ...info, pid: 2 ** 31 }, { ...info, pid: Number.MAX_SAFE_INTEGER },
+    { ...info, token: '' }, { ...info, token: 1 }, { ...info, token: null }, { ...info, token: 'tok' },
+    { ...info, token: 'p3Xq9vK/2mZ+8sLwYt4bR7nH1cJ6fA0dE5gU=' }, { ...info, token: `${info.token}\n` },
+    { ...info, version: '' }, { ...info, version: 1 },
+    { ...info, build: '' }, { ...info, build: undefined }, { ...info, build: 'b' }, { ...info, build: 'ABC123DEF456' },
+    { ...info, build: 'abc123def4567' }, { ...info, build: 'devx' }
   ]) assert.equal(parseLocalInfo(bad), undefined, JSON.stringify(bad))
 })
 
@@ -48,6 +56,19 @@ test('writeLocalInfo writes 0600 by rename, leaving no temp file; readLocalInfo 
   assert.deepEqual(readdirSync(dir), ['local.json'])
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), info)
   assert.deepEqual(readLocalInfo(path), info)
+})
+
+test('writeLocalInfo replaces a symlink at local.json, never writing through it', (t) => {
+  const dir = tempDir(t)
+  const target = join(dir, 'target')
+  writeFileSync(target, 'untouched')
+  const path = join(dir, 'local.json')
+  symlinkSync(target, path)
+  writeLocalInfo(path, info)
+  assert.equal(lstatSync(path).isSymbolicLink(), false)
+  assert.equal(statSync(path).mode & 0o777, 0o600)
+  assert.deepEqual(readLocalInfo(path), info)
+  assert.equal(readFileSync(target, 'utf8'), 'untouched')
 })
 
 test('readLocalInfo is undefined for a missing, garbled or malformed file', (t) => {
