@@ -85,12 +85,39 @@ test('a snapshot never carries a token, only the listed fields', async () => {
   sock.serverClose(4003, 'unauthorized')
   const all = [...changes, links.snapshot()]
   assert.ok(all.length >= 4)
-  const allowed = ['capabilities', 'hasToken', 'id', 'message', 'name', 'serverName', 'status', 'url']
+  const allowed = ['capabilities', 'hasToken', 'id', 'local', 'message', 'name', 'serverName', 'status', 'url']
   for (const snapshot of all) {
     assert.deepEqual(Object.keys(snapshot).sort(), ['seq', 'servers'])
     assert.equal(JSON.stringify(snapshot).includes(SECRET), false)
     for (const s of snapshot.servers) for (const key of Object.keys(s)) assert.ok(allowed.includes(key), key)
   }
+})
+
+test("the Local entry's status is copied field by field; a respawn's new URL and token re-link it", async () => {
+  const status = { state: 'running', message: '', canReset: false, pid: 77, version: '0.2.0', build: '0123456789ab', skew: false }
+  const local = { id: 'local', name: 'Local', url: 'ws://127.0.0.1:50001', local: { ...status, token: SECRET } }
+  const { links, list, secrets, server, hooks, last } = setup({ entries: [local, box], stored: { local: 'first-token-xxxxxxxxxxxxxxxx', box: SECRET } })
+  await links.sync()
+  assert.deepEqual(last().servers[0].local, status, 'only the status fields, never a stray token')
+  assert.equal(last().servers[1].local, undefined, 'a saved entry has none')
+  // A restart: a new port in local.json, and a new token.
+  list[0].url = 'ws://127.0.0.1:50002'
+  list[0].local = { ...status, pid: 78 }
+  secrets.set('local', 'second-token-xxxxxxxxxxxxxxx')
+  await links.sync()
+  const sock = server.last()
+  assert.equal(sock.url, 'ws://127.0.0.1:50002')
+  sock.open()
+  assert.equal(sock.sent[0].token, 'second-token-xxxxxxxxxxxxxxx')
+  assert.equal(last().servers[0].local.pid, 78)
+  assert.deepEqual(hooks.filter((h) => h[1] === 'local').map((h) => h[0]), ['linked', 'unlinked', 'linked'])
+  // Stopped: no token, so no connection.
+  secrets.delete('local')
+  list[0].local = { state: 'stopped', message: 'Stopped from the menu', canReset: false }
+  await links.sync()
+  assert.equal(last().servers[0].hasToken, false)
+  assert.equal(last().servers[0].status, null)
+  assert.equal(last().servers[0].local.state, 'stopped')
 })
 
 test('every change is a new snapshot with a higher seq', async () => {

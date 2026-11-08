@@ -1,11 +1,15 @@
 // The app-wide trek-server list, validated; and the hello-token injection the relay does. Pure.
 import { originOf } from '../shared/appServerRules.ts'
+import { LOCAL_ENTRY_ID } from './localServerRules.ts'
+import type { LocalServerStatus } from '../shared/types.ts'
 
 export interface AppServer {
   /** Client-side id */
   id: string
   name: string
   url: string
+  /** The synthetic Local entry only (localServer.ts); never in app-servers.json */
+  local?: LocalServerStatus
 }
 
 const MAX_NAME = 200
@@ -26,7 +30,8 @@ export function parseAppServers(raw: unknown): AppServer[] {
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue
     const { id, name, url } = item as Record<string, unknown>
-    if (typeof id !== 'string' || !id || ids.has(id)) continue
+    // `local` is the synthetic Local entry's: a saved entry never takes it.
+    if (typeof id !== 'string' || !id || id === LOCAL_ENTRY_ID || ids.has(id)) continue
     if (typeof name !== 'string' || !name || typeof url !== 'string' || !wsUrl(url)) continue
     ids.add(id)
     out.push({ id, name, url })

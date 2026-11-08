@@ -24,6 +24,13 @@ test('parseAppServers keeps valid entries once', () => {
   ]), [{ id: 'a', name: 'Box', url: 'wss://box.example:7400' }])
 })
 
+test("parseAppServers never takes the Local entry's id", () => {
+  assert.deepEqual(parseAppServers([
+    { id: 'local', name: 'Mine', url: 'ws://127.0.0.1:9' },
+    { id: 'b', name: 'Box', url: 'wss://box' }
+  ]), [{ id: 'b', name: 'Box', url: 'wss://box' }])
+})
+
 test('validateServerInput', () => {
   assert.deepEqual(validateServerInput({ name: ' Box ', url: ' wss://box:7400 ' }), { name: 'Box', url: 'wss://box:7400' })
   assert.throws(() => validateServerInput({ name: '', url: 'wss://x' }), /name/)

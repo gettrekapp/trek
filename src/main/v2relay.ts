@@ -6,6 +6,7 @@ import { ipcMain, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { withToken } from './appServersRules'
 import { getAppServer, getAppServerToken, isAppServerRemoving } from './appServers'
+import { LOCAL_ENTRY_ID } from './localServerRules'
 import { RelayTable, clampCloseCode, clampCloseReason, goneRefusal, relayRefusal, type RelayEntry } from './v2relayRules'
 import type { V2SocketOpenResult } from '../shared/types'
 
@@ -72,6 +73,9 @@ export function registerV2Relay(): void {
     const generation = sockets.generation(owner)
     if (sockets.atCapacity(owner)) return refuse('Too many sockets for this window')
     const token = (await getAppServerToken(serverEntryId)) ?? ''
+    // Local with no running server has no URL to open: transient, the SDK retries (and the
+    // window reconnects at once when the entry's URL changes).
+    if (serverEntryId === LOCAL_ENTRY_ID && !token) return refuse('The local server is not running')
     // While the token was read the entry may have been removed or re-pointed, or
     // the window closed, reloaded or crashed: then this token goes nowhere.
     // Removed meanwhile: final once written. Re-pointed meanwhile: transient, the next open reads

@@ -1,6 +1,8 @@
 // The app-wide trek-server (protocol v2) list: entries in userData/app-servers.json,
-// tokens in safeStorage. The renderer can set a token and ask whether one is set;
-// no IPC call ever returns one. Main reads tokens for the relay, for Test and for
+// tokens in safeStorage, and first, the synthetic Local entry (localServer.ts): never
+// persisted, never edited or removed, its URL following the running local server and
+// its token read from local.json by main. The renderer can set a token and ask whether
+// one is set; no IPC call ever returns one. Main reads tokens for the relay, for Test and for
 // its own connections (serverLinks.ts), whose statuses every window hears through
 // `appServers:changed` (a snapshot with `hasToken`, never a token).
 import { app, BrowserWindow, ipcMain } from 'electron'
@@ -23,6 +25,8 @@ import {
 import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
+import { checkLocalServer, localEntry, localToken, onLocalServerChanged } from './localServer'
+import { LOCAL_ENTRY_ID } from './localServerRules'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
 import type { RegisteredServer } from '../shared/client/index.ts'
 import type { AppServerInfo, AppServersChanged, AppServerTest } from '../shared/types'
@@ -101,8 +105,14 @@ function persist(): Promise<void> {
   return run
 }
 
+/** The list as the app shows it: Local first (unless the supervisor is off), then the saved entries. */
+function listed(): AppServer[] {
+  const local = localEntry()
+  return local ? [local, ...loaded()] : loaded()
+}
+
 export function getAppServer(id: string): AppServer | undefined {
-  const found = loaded().find((s) => s.id === id)
+  const found = listed().find((s) => s.id === id)
   return found ? { ...found } : undefined
 }
 
@@ -113,16 +123,24 @@ export function isAppServerRemoving(id: string): boolean {
 
 /** The list as main's connections and their snapshots see it: with the entries a remove has not yet written. */
 function linkEntries(): AppServer[] {
-  return withRemoving(loaded(), removing.values())
+  const local = localEntry()
+  const saved = withRemoving(loaded(), removing.values())
+  return local ? [local, ...saved] : saved
 }
 
-/** Main-only: never return this over IPC. */
+/** Main-only: never return this over IPC. Local's is read from local.json (localServer.ts). */
 export async function getAppServerToken(id: string): Promise<string | null> {
-  return tokens.get(id)
+  return id === LOCAL_ENTRY_ID ? localToken() : tokens.get(id)
 }
 
 async function info(server: AppServer): Promise<AppServerInfo> {
-  return { ...server, hasToken: !!(await tokens.get(server.id)) }
+  const { local: _local, ...entry } = server
+  return { ...entry, hasToken: !!(await getAppServerToken(server.id)) }
+}
+
+/** Save, setToken and remove refuse the Local entry: the supervisor owns it. */
+function refuseLocal(id: unknown, what: string): void {
+  if (id === LOCAL_ENTRY_ID) throw new Error(`The Local server cannot be ${what}`)
 }
 
 function requireId(id: unknown): string {
@@ -131,7 +149,7 @@ function requireId(id: unknown): string {
 }
 
 function requireKnown(id: unknown): AppServer {
-  const server = loaded().find((s) => s.id === requireId(id))
+  const server = listed().find((s) => s.id === requireId(id))
   if (!server) throw new Error('Unknown server')
   return server
 }
@@ -143,6 +161,7 @@ async function save(input: unknown): Promise<AppServerInfo> {
   if (token !== undefined && token !== null && typeof token !== 'string') throw new Error('token must be a string')
   const tokenGiven = typeof token === 'string' && token !== ''
   const isNew = id === undefined || id === null || id === ''
+  refuseLocal(id, 'edited')
   const before = isNew ? null : { ...requireKnown(id) }
   rejectDuplicateServer(loaded(), valid.url, before ? before.id : null)
   const entryId = before ? before.id : randomUUID()
@@ -209,6 +228,7 @@ async function save(input: unknown): Promise<AppServerInfo> {
 }
 
 async function setToken(id: unknown, token: unknown): Promise<void> {
+  refuseLocal(id, 'given a token')
   const server = requireKnown(id)
   if (token !== null && token !== undefined && typeof token !== 'string') throw new Error('token must be a string')
   await tokens.set(server.id, token ? token : null)
@@ -217,6 +237,7 @@ async function setToken(id: unknown, token: unknown): Promise<void> {
 
 async function remove(id: unknown): Promise<void> {
   const key = requireId(id)
+  refuseLocal(key, 'removed')
   const list = loaded()
   const index = list.findIndex((s) => s.id === key)
   const [gone] = index >= 0 ? list.splice(index, 1) : []
@@ -251,7 +272,7 @@ async function remove(id: unknown): Promise<void> {
  */
 async function test(id: unknown): Promise<AppServerTest> {
   const { id: key, url } = requireKnown(id)
-  const token = await tokens.get(key)
+  const token = await getAppServerToken(key)
   const refused = testTokenRefusal(url, getAppServer(key))
   if (refused) return refused
   if (!token) return { status: 'needs-auth', message: 'No token set' }
@@ -281,22 +302,42 @@ export function registerAppServerHandlers(
   listChanged = hooks.listChanged ?? null
   links = createServerLinks({
     entries: linkEntries,
-    token: (id) => tokens.get(id),
+    token: getAppServerToken,
     createSocket: globalSocketFactory,
     clientVersion: app.getVersion(),
     changed: broadcast,
-    linked: hooks.linked,
+    linked: (id, registered) => {
+      // main's connection to Local going down is the first sign of a restart or crash elsewhere.
+      if (id === LOCAL_ENTRY_ID) {
+        registered.connection.on('status', ({ status }) => {
+          if (status !== 'connected') checkLocalServer()
+        })
+      }
+      hooks.linked?.(id, registered)
+    },
     unlinked: hooks.unlinked
   })
   const ready = links.sync()
+  // Local's server changed (started, stopped, restarted): main's connection follows its URL and
+  // token, every window hears the new status, and relay sockets still on the old URL close.
+  let localUrl = localEntry()?.url
+  onLocalServerChanged(() => {
+    const url = localEntry()?.url
+    if (url !== localUrl) closeForServer(LOCAL_ENTRY_ID, 'local server restarted')
+    localUrl = url
+    void linksFollow()
+  })
   // A token added on the server, or the server upgraded, has no event here: a window coming
   // to the front retries the connections stuck in needs-auth or incompatible (throttled).
-  app.on('browser-window-focus', () => links?.retryStuck())
+  app.on('browser-window-focus', () => {
+    links?.retryStuck()
+    checkLocalServer()
+  })
   ipcMain.handle('appServers:links', async () => {
     await ready
     return links!.snapshot()
   })
-  ipcMain.handle('appServers:list', async () => Promise.all(loaded().map(info)))
+  ipcMain.handle('appServers:list', async () => Promise.all(listed().map(info)))
   ipcMain.handle('appServers:save', (_event, input: unknown) => save(input))
   ipcMain.handle('appServers:setToken', (_event, id: unknown, token: unknown) => setToken(id, token))
   ipcMain.handle('appServers:remove', (_event, id: unknown) => remove(id))

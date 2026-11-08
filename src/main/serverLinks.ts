@@ -119,6 +119,11 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
       out.serverName = welcome.serverName
       out.capabilities = [...welcome.capabilities]
     }
+    // Local's supervisor status, field by field (it holds no token or port).
+    if (entry.local) {
+      const { state, message, canReset, pid, version, build, skew } = entry.local
+      out.local = { state, message, canReset, pid, version, build, skew }
+    }
     return out
   }
 
