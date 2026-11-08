@@ -99,7 +99,11 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
     <div className="start-screen">
       <h1>Trek Dev</h1>
       <p className="muted">Run coding agents across git worktrees, side by side.</p>
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error" role="alert">
+          {error}
+        </div>
+      )}
       {view === 'connect' && <ConnectServer onBack={() => setView('home')} />}
       {view === 'new' && <NewProject onBack={() => setView('home')} />}
       {view === 'home' && (

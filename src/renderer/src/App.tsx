@@ -29,6 +29,10 @@ export default function App(): React.JSX.Element {
   /** The start screen's view, asked for by the menu (File → New Project…, Open on Server…) */
   const [startRequest, setStartRequest] = useState<{ view: StartView; n: number } | undefined>(undefined)
   const showStart = (view: StartView): void => setStartRequest((r) => ({ view, n: (r?.n ?? 0) + 1 }))
+  // One-shot: once the window has a project, a later start screen (Pick another project) starts fresh.
+  useEffect(() => {
+    if (project || serverWindow) setStartRequest(undefined)
+  }, [project, serverWindow])
   useLinearSync()
 
   useEffect(() => {
