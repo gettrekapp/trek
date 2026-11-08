@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
 import { focusTerminal, revealTerminal, terminalLabel } from '../terminals'
+import { useAttention } from '../useAttention'
+import { menuEntries, type MenuEntry } from '../notificationItems'
+import { errorText } from '../v2/errors'
 
 const MENU_WIDTH = 320
 
@@ -13,17 +16,24 @@ function timeAgo(at: number): string {
 }
 
 /**
- * Bell in the sidebar listing the sessions waiting on a decision. Clicking an
- * entry opens its session; clicking its flag dismisses it.
+ * Bell in the sidebar listing the sessions waiting on the user: this window's
+ * own decisions, and every app-wide server's sessions in attention, done or
+ * with a decision (main's attention list), file windows included. Clicking a
+ * local entry opens its session here; a server entry asks main to focus or
+ * open its project's window, which selects it. The flag (or ×) dismisses it:
+ * a server entry's decision is dismissed, or the session marked seen, through
+ * main's connection to that server.
  */
 export function NotificationsMenu(): React.JSX.Element {
   const decisions = useAppStore((s) => s.decisions)
+  const serverWindow = useAppStore((s) => s.serverWindow)
   // Re-render with terminal renames and closes.
   useAppStore((s) => s.terminals)
+  const items = useAttention()
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const triggerRef = useRef<HTMLButtonElement>(null)
-  const list = Object.values(decisions).sort((a, b) => b.requestedAt - a.requestedAt)
+  const list = menuEntries(Object.values(decisions), serverWindow, items, terminalLabel)
 
   useEffect(() => {
     if (!open) return
@@ -52,11 +62,25 @@ export function NotificationsMenu(): React.JSX.Element {
     setOpen(true)
   }
 
-  const openSession = (id: string): void => {
+  const openEntry = (entry: MenuEntry): void => {
     setOpen(false)
-    revealTerminal(id)
+    if (entry.kind === 'server') {
+      void window.api.attention.open(entry.id)
+      return
+    }
+    revealTerminal(entry.id)
     // The tab's pane mounts on reveal; focus once it has.
-    requestAnimationFrame(() => focusTerminal(id))
+    requestAnimationFrame(() => focusTerminal(entry.id))
+  }
+
+  const dismiss = (entry: MenuEntry): void => {
+    if (entry.kind === 'local') {
+      useAppStore.getState().clearDecision(entry.id)
+      return
+    }
+    window.api.attention.dismiss(entry.id).catch((err: unknown) => {
+      void window.api.showError(entry.decision ? 'Could not dismiss the decision' : 'Could not mark the session seen', errorText(err))
+    })
   }
 
   return (
@@ -64,7 +88,7 @@ export function NotificationsMenu(): React.JSX.Element {
       <button
         ref={triggerRef}
         className={`notif-bell ${list.length ? 'pending' : ''}`}
-        title={list.length ? `${list.length} session(s) need a decision` : 'No pending decisions'}
+        title={list.length ? `${list.length} session(s) waiting on you` : 'Nothing waiting on you'}
         onClick={toggle}
       >
         <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -78,29 +102,37 @@ export function NotificationsMenu(): React.JSX.Element {
       {open &&
         createPortal(
           <div className="notif-menu" style={{ left: pos.x, top: pos.y, width: MENU_WIDTH }}>
-            <div className="notif-menu-head">Decisions needed</div>
+            <div className="notif-menu-head">Waiting on you</div>
             {list.length === 0 && <div className="notif-empty muted">Nothing waiting on you</div>}
-            {list.map((d) => (
-              <div key={d.terminalId} className="notif-item" onClick={() => openSession(d.terminalId)}>
-                <span
-                  className="decision-icon clickable"
-                  title="Dismiss"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    useAppStore.getState().clearDecision(d.terminalId)
-                  }}
+            {list.map((entry) => {
+              const decision = entry.kind === 'local' || entry.decision
+              return (
+                <div
+                  key={`${entry.kind} ${entry.id}`}
+                  className={`notif-item ${entry.kind === 'server' ? 'notif-server' : ''} ${entry.kind === 'server' && entry.stale ? 'stale' : ''}`}
+                  title={entry.kind === 'server' && entry.stale ? 'Not connected to the server: as last seen' : undefined}
+                  onClick={() => openEntry(entry)}
                 >
-                  ⚑
-                </span>
-                <div className="notif-text">
-                  <div className="notif-source">
-                    <span>{terminalLabel(d.terminalId)}</span>
-                    <span className="notif-time">{timeAgo(d.requestedAt)}</span>
+                  <span
+                    className={`${decision ? 'decision-icon' : 'notif-seen'} clickable`}
+                    title={decision ? 'Dismiss' : 'Mark seen'}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      dismiss(entry)
+                    }}
+                  >
+                    {decision ? '⚑' : '×'}
+                  </span>
+                  <div className="notif-text">
+                    <div className="notif-source">
+                      <span>{entry.source}</span>
+                      <span className="notif-time">{timeAgo(entry.at)}</span>
+                    </div>
+                    <div className="notif-question">{entry.text}</div>
                   </div>
-                  <div className="notif-question">{d.question}</div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>,
           document.body
         )}

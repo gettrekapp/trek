@@ -3553,6 +3553,23 @@ body.resizing-row {
   margin-top: 1px;
 }
 
+/* A server entry listed for its status only: × marks the session seen. */
+.notif-seen {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.notif-seen:hover {
+  color: var(--text);
+}
+
+/* main's connection to the entry's server is down: shown as last seen. */
+.notif-item.stale {
+  opacity: 0.55;
+}
+
 .notif-text {
   flex: 1 1 auto;
   min-width: 0;
