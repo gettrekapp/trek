@@ -254,3 +254,7 @@ npm run smoke -- --built      # against dist/trek-server.cjs (run npm run build 
 
 Starts a throwaway server on loopback with a temp repo, exercises the
 handshake, git listing, and a pty spawn/echo/kill round trip.
+
+`npm run smoke:local` at the repo root builds the bundle and checks
+`start --local` from a bare copy of it, under Node and under Electron's Node
+(`ELECTRON_RUN_AS_NODE=1`), the way the app runs it.
