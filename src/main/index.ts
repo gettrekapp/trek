@@ -33,7 +33,7 @@ import {
 } from './localServer'
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
-import { importFromMenu, openFromOs } from './importUi'
+import { importFromMenu, offerFirstLaunchImport, openFromOs } from './importUi'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
@@ -198,6 +198,8 @@ app.whenReady().then(async () => {
   setDockIcon()
   // Not awaited: restored Local windows show Connecting until it answers, then follow its URL.
   void superviseLocalServer()
+  // Once, before the windows come back: those on .trekproj files then come back on their projects.
+  await offerFirstLaunchImport().catch((err) => console.error('[import] the first-launch prompt failed', err))
   await restoreWindows()
   opensReady = true
   for (const path of pendingOpens.splice(0)) await openFromOs(path, openLegacy)

@@ -1,13 +1,25 @@
 // What the user sees of an import (phase 4d): File → Import .trekproj…, the add-server question,
 // the result dialog, and opening the server windows a file became. importer.ts does the work.
 import { BrowserWindow, dialog, type MessageBoxOptions, type WebContents } from 'electron'
+import { access } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { OpenedProject, ServerConfig } from '../shared/types'
 import { LOCAL_SERVER_DISABLED } from './localServer'
 import { importTrekproj, type ImportOptions, type ImportReport } from './importer'
-import { importSummary, localFirst, migratedFile, targetOf, type ImportOutcome, type MigratedLeft, type MigratedPiece } from './importRules'
-import { fileKey, readMigrated } from './migrated'
-import { closeFileWindow, fileIsOpen, openServerTarget, windowHasProject } from './windows'
+import {
+  importSummary,
+  localFirst,
+  markPrompted,
+  migratedFile,
+  promptCandidates,
+  targetOf,
+  type ImportOutcome,
+  type MigratedLeft,
+  type MigratedPiece
+} from './importRules'
+import { fileKey, readMigrated, updateMigrated } from './migrated'
+import { getRecents } from './recents'
+import { closeFileWindow, fileIsOpen, openServerTarget, readRestoreEntries, windowHasProject } from './windows'
 import type { WindowBounds } from './windowRules'
 
 export const PROJECT_FILTERS = [{ name: 'Trek Developer Project', extensions: ['trekproj'] }]
@@ -149,4 +161,55 @@ export async function openFromOs(filePath: string, legacy: LegacyOpen): Promise<
   } catch (err) {
     await box(null, { type: 'error', message: `Could not open “${basename(filePath)}”`, detail: errorText(err), buttons: ['OK'] })
   }
+}
+
+/** The prompt lists this many files by name; the rest as a count. */
+const PROMPT_LISTED = 12
+
+/**
+ * Once (migrated.json's `prompted`), before the windows are restored: the .trekproj files of the
+ * windows open at the last quit and of the recents, still on disk and not imported yet, are
+ * imported if the user agrees. restoreWindows then brings those windows back on their projects.
+ * Asked whatever the answer, never again. Without the Local server nothing is asked.
+ */
+export async function offerFirstLaunchImport(): Promise<void> {
+  if (LOCAL_SERVER_DISABLED) return
+  const m = await readMigrated()
+  if (m.prompted) return
+  const candidates: { path: string; key: string }[] = []
+  for (const c of promptCandidates(await getRecents(), await readRestoreEntries(), m, fileKey)) {
+    if (await access(c.path).then(() => true, () => false)) candidates.push(c)
+  }
+  if (candidates.length === 0) {
+    await updateMigrated(markPrompted)
+    return
+  }
+  const listed = candidates.slice(0, PROMPT_LISTED).map((c) => `• ${basename(c.path).replace(/\.trekproj$/, '')} — ${c.path}`)
+  if (candidates.length > PROMPT_LISTED) listed.push(`• and ${candidates.length - PROMPT_LISTED} more`)
+  const response = await box(null, {
+    type: 'question',
+    message: 'Move your projects into Trek?',
+    detail:
+      'Trek now keeps each project on a server: the Local server on this Mac, or one of your servers. ' +
+      `These project files are in your recent projects or were open when Trek last quit:\n\n${listed.join('\n')}\n\n` +
+      'Importing copies each one in; the .trekproj files are not changed. Either way, opening a .trekproj later imports it, and File → Import .trekproj… is always there.',
+    buttons: ['Import', 'Skip'],
+    defaultId: 0,
+    cancelId: 1
+  })
+  // Recorded first: a crash part-way never asks again (opening a file imports it).
+  await updateMigrated(markPrompted)
+  if (response !== 0) return
+  // Asked about, and waited for, once per server across the files.
+  const declined = new Set<string>()
+  const unreachable = new Map<string, string>()
+  const outcomes: ImportOutcome[] = []
+  for (const c of candidates) {
+    try {
+      outcomes.push(await runImport(c.path, null, { declined, unreachable }))
+    } catch (err) {
+      outcomes.push({ path: c.path, error: errorText(err) })
+    }
+  }
+  await showImportResult(null, outcomes)
 }
