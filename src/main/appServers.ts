@@ -11,6 +11,8 @@ import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { createSecretStore, writeFileAtomic } from './secrets'
 import {
+  addedServerName,
+  mayAdoptToken,
   parseAppServers,
   reinsertAt,
   rejectDuplicateServer,
@@ -297,7 +299,8 @@ export function savedAppServers(): AppServer[] {
  * v1 token carried over when one was stored for its origin (or none). Goes through Save's checks.
  */
 export async function addAppServer(name: string, url: string, token: string | null): Promise<AppServerInfo> {
-  return save({ name, url, token })
+  // The file's name for the server is free text: Save's limit, or the URL's host.
+  return save({ name: addedServerName(name, url), url, token })
 }
 
 /**
@@ -307,13 +310,13 @@ export async function addAppServer(name: string, url: string, token: string | nu
  */
 export async function adoptAppServerToken(id: string, url: string, token: string): Promise<boolean> {
   refuseLocal(id, 'given a token')
-  const server = requireKnown(id)
-  if (server.url !== url || (await tokens.get(server.id))) return false
-  // Read again after the await: a save in between may have re-pointed it.
-  if (getAppServer(server.id)?.url !== url) return false
-  await tokens.set(server.id, token)
-  await linksFollow()
-  return true
+  // The URL check and the store's set-if-absent are queued in the same synchronous step, as Save
+  // does: a token the user set (or another adoption) queued before it is never overwritten, and a
+  // Save that re-points the entry or a remove queued after it clears it.
+  if (!mayAdoptToken(id, getAppServer(id), url)) return false
+  const stored = await tokens.setIfAbsent(id, token)
+  if (stored) await linksFollow()
+  return stored
 }
 
 /** Quit: main's connections close for good. */

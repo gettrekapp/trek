@@ -1,28 +1,15 @@
 // userData/migrated.json: which .trekproj files were imported, into which server projects,
 // and whether the first-launch prompt has run (importRules.ts has the format).
 import { app } from 'electron'
-import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { writeFileAtomic } from './secrets'
 import { parseMigrated, serializeMigrated, type Migrated } from './importRules'
 
+export { fileKey, isFileKey } from './fileKey'
+
 function migratedPath(): string {
   return join(app.getPath('userData'), 'migrated.json')
-}
-
-/** A .trekproj's key: its realpath, so a symlink or another spelling finds the same import. */
-export function fileKey(path: string): string {
-  try {
-    return realpathSync(path)
-  } catch {
-    return resolve(path)
-  }
-}
-
-/** Whether `path` is the file `key` names (for the recents and open-windows rewrites). */
-export function isFileKey(key: string): (path: string) => boolean {
-  return (path) => fileKey(path) === key
 }
 
 export async function readMigrated(): Promise<Migrated> {

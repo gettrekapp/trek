@@ -9,7 +9,6 @@ import { randomUUID } from 'node:crypto'
 import { constants, realpathSync } from 'node:fs'
 import { access, copyFile, mkdir, readFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
-import { originOf } from '../shared/appServerRules.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
 import type { RawProjectFile } from '../shared/migration'
 import { importProjectFile, LOCAL_TARGET, type ImportedProject } from '../shared/model/importProject.ts'
@@ -24,6 +23,7 @@ import { legacyTokenFor } from './servers'
 import { fileKey, isFileKey, updateMigrated } from './migrated'
 import { rewriteRecentsForImport } from './recents'
 import {
+  declineKey,
   dropWorktree,
   movedSessions,
   profileKeyFor,
@@ -52,7 +52,7 @@ export interface ImportOptions {
    * saved for it in this app (for that origin) comes along.
    */
   askAddServer(server: ServerConfig, tokenCarried: boolean): Promise<boolean>
-  /** Origins the user declined to add, shared by the files of one run so each is asked once */
+  /** Servers (declineKey: origin and path) the user declined to add, shared by the files of one run so each is asked once */
   declined?: Set<string>
   /** Entries that could not be reached, with why, shared by the files of one run so each waits once */
   unreachable?: Map<string, string>
@@ -73,12 +73,6 @@ export interface ImportReport {
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const codeOf = (err: unknown): string | undefined => (err as { code?: unknown } | null)?.code as string | undefined
 
-function fileServersOf(raw: RawProjectFile): ServerConfig[] {
-  return (Array.isArray(raw.servers) ? raw.servers : []).filter(
-    (s): s is ServerConfig => !!s && typeof s.id === 'string' && typeof s.name === 'string' && typeof s.url === 'string'
-  )
-}
-
 /** Reads and splits the file; throws when it is not a project file. */
 async function readProjectFile(path: string): Promise<RawProjectFile> {
   const raw = JSON.parse(await readFile(path, 'utf8')) as RawProjectFile
@@ -92,13 +86,12 @@ async function readProjectFile(path: string): Promise<RawProjectFile> {
 export async function importTrekproj(path: string, options: ImportOptions): Promise<ImportReport> {
   const key = fileKey(path)
   const raw = await readProjectFile(path)
-  const { projects, warnings } = importProjectFile(raw, randomUUID)
+  const { projects, warnings, servers: fileServers } = importProjectFile(raw, randomUUID)
   const report: ImportReport = { path, key, name: raw.name, pieces: [], left: [], warnings: [...warnings], carried: 0 }
   const globals = Array.isArray(raw.globalSessions) ? raw.globalSessions.length : 0
   if (globals > 0 && !projects.some((p) => p.target === LOCAL_TARGET)) {
     report.warnings.push(`The Global panel's ${globals} session(s) were not imported: they belong with this machine's repositories, and the file has none.`)
   }
-  const fileServers = fileServersOf(raw)
   const attempted: string[] = []
   for (const piece of projects) {
     if (options.only && !options.only.includes(piece.target)) continue
@@ -133,7 +126,7 @@ async function importPiece(piece: ImportedProject, fileServers: ServerConfig[], 
   if (isLocal) project = withProfileKeys(project, localProfileKeys(project, piece.sourcePaths))
   const { projectId, sent } = await sendImport(link, project, entry.name, report.warnings)
   try {
-    const moved = movedSessions(sent, await readProject(link, projectId))
+    const moved = movedSessions(sent, await readProject(link, projectId), piece.globalCwd)
     if (isLocal) report.carried += await carryHistories(moved, report.warnings)
     else for (const m of moved) report.warnings.push(remoteMoveWarning(m, entry.name))
   } catch (err) {
@@ -145,6 +138,8 @@ async function importPiece(piece: ImportedProject, fileServers: ServerConfig[], 
 /** The app-server entry a piece goes to: Local, a saved entry (its v1 token carried over), or one the user adds. */
 async function entryFor(piece: ImportedProject, fileServers: ServerConfig[], options: ImportOptions): Promise<{ id: string; name: string }> {
   const route = routePiece(piece.target, fileServers, savedAppServers())
+  // The v1 token was saved under the file's id for the server (a renamed `local` included).
+  const legacyId = piece.legacyServerId ?? piece.target
   switch (route.kind) {
     case 'local':
       if (LOCAL_SERVER_DISABLED) throw new Error('The Local server is turned off')
@@ -154,16 +149,16 @@ async function entryFor(piece: ImportedProject, fileServers: ServerConfig[], opt
     case 'entry': {
       const entry = getAppServer(route.entryId)
       if (!entry) throw new Error(`${route.name} was removed from your servers`)
-      const token = await legacyTokenFor(piece.target, entry.url)
+      const token = await legacyTokenFor(legacyId, entry.url)
       if (token) await adoptAppServerToken(entry.id, entry.url, token)
       return { id: entry.id, name: entry.name }
     }
     case 'add': {
-      const origin = originOf(route.server.url) ?? route.server.url
-      if (options.declined?.has(origin)) throw new Error(`${route.server.name} was not added to your servers`)
-      const token = await legacyTokenFor(route.server.id, route.server.url)
+      const declined = declineKey(route.server)
+      if (options.declined?.has(declined)) throw new Error(`${route.server.name} was not added to your servers`)
+      const token = await legacyTokenFor(legacyId, route.server.url)
       if (!(await options.askAddServer(route.server, token !== null))) {
-        options.declined?.add(origin)
+        options.declined?.add(declined)
         throw new Error(`${route.server.name} was not added to your servers`)
       }
       const added = await addAppServer(route.server.name, route.server.url, token)

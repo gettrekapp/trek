@@ -33,8 +33,10 @@ export function deriveProfileName(repoPath: string, branch: string): string {
  * (`server.addRepo`), but its file window named VMs after the path the file had,
  * so the import keeps that path here and the existing VMs stay this repository's.
  */
-export function envRepoKey(repo: { path: string; environments?: { profileKey?: string } }): string {
-  return repo.environments?.profileKey || repo.path
+export function envRepoKey(repo: { path: string; environments?: { profileKey?: unknown } }): string {
+  // Stored data a client or file could have written anything into: only an absolute path counts.
+  const key = repo.environments?.profileKey
+  return typeof key === 'string' && key.startsWith('/') ? key : repo.path
 }
 
 /** Colima registers a docker context named after the profile. */

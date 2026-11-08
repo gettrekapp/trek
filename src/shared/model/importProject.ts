@@ -8,6 +8,7 @@ import type {
   PersistedTerminal,
   ProjectFile,
   Repository as FileRepository,
+  ServerConfig,
   WorktreeInstance
 } from '../types.ts'
 import { worktreeOrderKey } from './keys.ts'
@@ -35,12 +36,24 @@ export interface ImportedProject {
    * file window hashed this one (deriveProfileName).
    */
   sourcePaths: Record<string, string>
+  /**
+   * The server's id in the file, when the target is another (a server the file called
+   * `local`, renamed so it is not taken for this machine): its saved v1 token is under this id.
+   */
+  legacyServerId?: string
+  /**
+   * Local's piece only: the path a file window ran the Global panel's sessions in, the file's
+   * first repository's path as the file had it (its Claude histories are filed there).
+   */
+  globalCwd?: string
 }
 
 export interface ImportResult {
   projects: ImportedProject[]
   /** Human-readable notes about anything that could not be imported */
   warnings: string[]
+  /** The file's servers as the targets name them: the first of each id, `local` renamed */
+  servers: ServerConfig[]
 }
 
 /**
@@ -204,9 +217,71 @@ function rekeyOrder(
   return out
 }
 
-export function splitProjectByServer(file: ProjectFile, newId: () => string): ImportResult {
+/** An id for the file's server `local` that the file does not use for anything else. */
+function freeServerId(file: ProjectFile): string {
+  const used = new Set<string>((file.servers ?? []).map((s) => s.id))
+  for (const r of file.repositories) {
+    for (const id of Object.keys(r.serverPaths ?? {})) used.add(id)
+    for (const w of r.worktrees) if (w.serverId) used.add(w.serverId)
+  }
+  for (const order of file.worktreeOrder ?? []) {
+    const at = typeof order === 'string' ? order.indexOf(' ') : -1
+    if (at > 0) used.add(order.slice(0, at))
+  }
+  let id = 'local-server'
+  for (let n = 2; used.has(id); n++) id = `local-server-${n}`
+  return id
+}
+
+/**
+ * A file whose server list, serverPaths or worktrees use the id `local` for a server would
+ * have that server's part taken for this machine's: it gets an id of its own (`renamed`).
+ * The worktree order's `local <path>` entries are kept for both, so each finds its worktrees.
+ */
+function withoutLocalServerId(file: ProjectFile): { file: ProjectFile; renamed: string | null } {
+  const named =
+    (file.servers ?? []).some((s) => s.id === LOCAL_TARGET) ||
+    file.repositories.some((r) => Object.hasOwn(r.serverPaths ?? {}, LOCAL_TARGET) || r.worktrees.some((w) => w.serverId === LOCAL_TARGET))
+  if (!named) return { file, renamed: null }
+  const renamed = freeServerId(file)
+  const prefix = `${LOCAL_TARGET} `
+  return {
+    renamed,
+    file: {
+      ...file,
+      servers: (file.servers ?? []).map((s) => (s.id === LOCAL_TARGET ? { ...s, id: renamed } : s)),
+      repositories: file.repositories.map((r) => {
+        const out = { ...r, worktrees: r.worktrees.map((w) => (w.serverId === LOCAL_TARGET ? { ...w, serverId: renamed } : w)) }
+        if (r.serverPaths && Object.hasOwn(r.serverPaths, LOCAL_TARGET)) {
+          const { [LOCAL_TARGET]: path, ...rest } = r.serverPaths
+          out.serverPaths = { ...rest, [renamed]: path }
+        }
+        return out
+      }),
+      ...(file.worktreeOrder
+        ? { worktreeOrder: file.worktreeOrder.flatMap((k) => (k.startsWith(prefix) ? [k, `${renamed} ${k.slice(prefix.length)}`] : [k])) }
+        : {})
+    }
+  }
+}
+
+/** The first server of each id (as a lookup by id finds it), with a usable id, name and URL. */
+function serversOf(file: ProjectFile): ServerConfig[] {
+  const out: ServerConfig[] = []
+  const seen = new Set<string>()
+  for (const s of Array.isArray(file.servers) ? file.servers : []) {
+    if (!s || typeof s.id !== 'string' || !s.id || typeof s.name !== 'string' || typeof s.url !== 'string' || seen.has(s.id)) continue
+    seen.add(s.id)
+    out.push({ id: s.id, name: s.name, url: s.url })
+  }
+  return out
+}
+
+export function splitProjectByServer(original: ProjectFile, newId: () => string): ImportResult {
   const warnings: string[] = []
-  const serverNames = new Map((file.servers ?? []).map((s) => [s.id, s.name]))
+  const { file, renamed } = withoutLocalServerId(original)
+  const servers = serversOf(file)
+  const serverNames = new Map(servers.map((s) => [s.id, s.name]))
 
   const targets = new Set<string>([LOCAL_TARGET])
   for (const r of file.repositories) {
@@ -243,9 +318,12 @@ export function splitProjectByServer(file: ProjectFile, newId: () => string): Im
       sourcePaths
     }
     if (serverName !== undefined) imported.serverName = serverName
+    if (renamed !== null && target === renamed) imported.legacyServerId = LOCAL_TARGET
+    const firstPath = file.repositories[0]?.path
+    if (isLocal && typeof firstPath === 'string' && firstPath) imported.globalCwd = firstPath
     projects.push(structuredClone(imported))
   }
-  return { projects, warnings }
+  return { projects, warnings, servers }
 }
 
 /** Any version of a project file, as read from disk → per-server projects. */

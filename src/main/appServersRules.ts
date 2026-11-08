@@ -12,7 +12,7 @@ export interface AppServer {
   local?: LocalServerStatus
 }
 
-const MAX_NAME = 200
+export const MAX_NAME = 200
 
 function wsUrl(value: string): boolean {
   try {
@@ -54,8 +54,11 @@ export function validateServerInput(input: { name: unknown; url: unknown }): { n
   return { name, url }
 }
 
-/** The URL as two entries would share it: its origin (scheme, host, port) and path. Null if it does not parse. */
-function serverKey(url: string): string | null {
+/**
+ * The URL as two entries would share it: its origin (scheme, host, port) and path, without
+ * trailing slashes (and without any user name, password, query or hash). Null if it does not parse.
+ */
+export function serverKey(url: string): string | null {
   try {
     const u = new URL(url.trim())
     return `${u.origin}${u.pathname.replace(/\/+$/, '')}`
@@ -136,6 +139,29 @@ export function withRemoving(list: readonly AppServer[], removing: Iterable<Remo
   const out = list.map((s) => ({ ...s }))
   for (const { entry, index } of removing) reinsertAt(out, index, { ...entry })
   return out
+}
+
+/**
+ * The name an entry added by the importer gets (addAppServer): the file's name for the server,
+ * trimmed and cut to Save's limit, or the URL's host when that leaves nothing.
+ */
+export function addedServerName(name: unknown, url: string): string {
+  const trimmed = typeof name === 'string' ? name.trim().slice(0, MAX_NAME).trim() : ''
+  if (trimmed) return trimmed
+  try {
+    return new URL(url.trim()).host || url.trim().slice(0, MAX_NAME) || 'Server'
+  } catch {
+    return url.trim().slice(0, MAX_NAME) || 'Server'
+  }
+}
+
+/**
+ * Whether the importer may store a carried token for entry `id` (adoptAppServerToken): a saved
+ * entry (never Local) that still points at `url`, the address the token was matched to. Whether
+ * the entry has a token already is the secret store's to decide, in the same step (setIfAbsent).
+ */
+export function mayAdoptToken(id: string, now: AppServer | undefined, url: string): boolean {
+  return id !== LOCAL_ENTRY_ID && !!now && now.id === id && now.url === url
 }
 
 /** Test's refusal once its token is read, if the entry was removed or re-pointed meanwhile: that token goes nowhere. */

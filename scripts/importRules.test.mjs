@@ -3,6 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  declineKey,
   dropWorktree,
   importSummary,
   isAgentSessionId,
@@ -323,4 +324,98 @@ test('importSummary: several files, and one that could not be read', () => {
   const s = importSummary([report({ pieces: [piece('local', 'p1')] }), { path: '/p/Bad.trekproj', error: 'Unexpected token' }])
   assert.deepEqual([s.type, s.message], ['warning', 'Imported 1 of 2 projects'])
   assert.match(s.detail, /“Bad\.trekproj” could not be read: Unexpected token/)
+})
+
+// ---- Review fixes (Tasks 1–3) -------------------------------------------------------------
+
+test('routePiece: an entry on the same origin under another path is another server, so the file\'s is offered', () => {
+  const srv = { id: 'srv', name: 'build-box', url: 'wss://build.example:7777/a' }
+  // The file's server has a path; the entry has another one, or none.
+  assert.deepEqual(routePiece('srv', [srv], [{ id: 'e', name: 'B', url: 'wss://build.example:7777/b' }]), { kind: 'add', server: srv })
+  assert.deepEqual(routePiece('srv', [srv], [{ id: 'e', name: 'Root', url: 'wss://build.example:7777' }]), { kind: 'add', server: srv })
+  // The entry has a path; the file's server has none.
+  const bare = { id: 'srv', name: 'build-box', url: 'wss://build.example:7777' }
+  assert.deepEqual(routePiece('srv', [bare], [{ id: 'e', name: 'Sub', url: 'wss://build.example:7777/sub' }]), { kind: 'add', server: bare })
+  // The same path (a trailing slash aside) is the same server.
+  assert.deepEqual(routePiece('srv', [srv], [{ id: 'e', name: 'A', url: 'wss://build.example:7777/a/' }]), { kind: 'entry', entryId: 'e', name: 'A' })
+  // Both bare, or "/": the origin is the server.
+  const slash = { id: 'srv', name: 'build-box', url: 'wss://build.example:7777/' }
+  assert.deepEqual(routePiece('srv', [slash], [{ id: 'e', name: 'B', url: 'wss://BUILD.example:7777' }]), { kind: 'entry', entryId: 'e', name: 'B' })
+  assert.deepEqual(routePiece('srv', [bare], [{ id: 'e', name: 'B', url: 'wss://build.example:7777/' }]), { kind: 'entry', entryId: 'e', name: 'B' })
+  // A default port is the same origin.
+  assert.deepEqual(routePiece('srv', [{ id: 'srv', name: 'x', url: 'wss://build.example:443' }], [{ id: 'e', name: 'B', url: 'wss://build.example' }]), { kind: 'entry', entryId: 'e', name: 'B' })
+})
+
+test("routePiece: of two servers with the file's id, the first is the one (as a lookup by id finds it)", () => {
+  const twice = [
+    { id: 'srv', name: 'first', url: 'wss://one.example' },
+    { id: 'srv', name: 'second', url: 'wss://two.example' }
+  ]
+  assert.deepEqual(routePiece('srv', twice, []), { kind: 'add', server: twice[0] })
+  assert.deepEqual(routePiece('srv', twice, [{ id: 'e2', name: 'Two', url: 'wss://two.example' }]), { kind: 'add', server: twice[0] })
+  assert.deepEqual(routePiece('srv', twice, [{ id: 'e1', name: 'One', url: 'wss://one.example' }]), { kind: 'entry', entryId: 'e1', name: 'One' })
+})
+
+test('routePiece: a user name or password in the file\'s URL matches the entry for that server, and is never added', () => {
+  const creds = { id: 'srv', name: 'build-box', url: 'wss://me:secret@build.example:7777' }
+  assert.deepEqual(routePiece('srv', [creds], [{ id: 'e', name: 'B', url: 'wss://build.example:7777' }]), { kind: 'entry', entryId: 'e', name: 'B' })
+  const route = routePiece('srv', [creds], [])
+  assert.equal(route.kind, 'unknown')
+  assert.match(route.why, /user name or password/)
+  assert.equal(route.label, 'build-box')
+})
+
+test('declineKey: a declined server is its origin and path', () => {
+  assert.equal(declineKey({ id: 's', name: 'n', url: 'wss://b.example:7777/' }), 'wss://b.example:7777')
+  assert.equal(declineKey({ id: 's', name: 'n', url: 'wss://b.example:7777/a' }), 'wss://b.example:7777/a')
+  assert.equal(declineKey({ id: 's', name: 'n', url: 'nope' }), 'nope')
+})
+
+test('recordImport: a target that still has a piece is never left, and a target is left once', () => {
+  let m = recordImport(parseMigrated(null), '/a', { attempted: ['local', 'srv'], pieces: [piece('local', 'p1'), piece('srv', 'p2')], left: [] })
+  // Import Again: Local fails this time. Its earlier project stays, and it is not left.
+  m = recordImport(m, '/a', { attempted: ['local', 'srv'], pieces: [piece('srv', 'p3')], left: [{ target: 'local', label: 'Local', reason: 'off' }] })
+  assert.deepEqual(migratedFile(m, '/a'), { pieces: [piece('local', 'p1'), piece('srv', 'p3')], left: [] })
+  // The same target twice in a run, and once from before: left once, the first reason kept.
+  m = recordImport(parseMigrated(null), '/b', {
+    attempted: ['local', 'srv'],
+    pieces: [piece('local', 'p1')],
+    left: [
+      { target: 'srv', label: 'build-box', reason: 'one' },
+      { target: 'srv', label: 'build-box', reason: 'two' }
+    ]
+  })
+  assert.deepEqual(migratedFile(m, '/b').left, [{ target: 'srv', label: 'build-box', reason: 'one' }])
+  m = recordImport(m, '/b', { attempted: ['other'], pieces: [], left: [{ target: 'other', label: 'o', reason: 'x' }, { target: 'srv', label: 'build-box', reason: 'three' }] })
+  assert.deepEqual(migratedFile(m, '/b').left, [{ target: 'srv', label: 'build-box', reason: 'one' }, { target: 'other', label: 'o', reason: 'x' }])
+})
+
+test("movedSessions: Global sessions move from the file's first repository's path, which Local may not have kept", () => {
+  // The file's first repository was refused on Local: the piece's first is another one.
+  const sent = project({ repo: '/var/t/web', x: '/l/web-x' }, { global: [session('g', UUID3)] })
+  const stored = project({ repo: '/private/var/t/web', x: '/l/web-x' }, { global: [session('g', UUID3)] })
+  const global = movedSessions(sent, stored, '/var/t/gone-api').find((m) => m.worktree === 'Global')
+  assert.deepEqual(global, { worktree: 'Global', from: '/var/t/gone-api', to: '/private/var/t/web', agentSessionIds: [UUID3] })
+  // The raw path, a trailing slash and all: Claude filed the history under it.
+  assert.equal(movedSessions(sent, stored, '/var/t/web/').find((m) => m.worktree === 'Global').from, '/var/t/web/')
+  // Already where the server runs them: nothing to move.
+  assert.equal(movedSessions(sent, stored, '/private/var/t/web').find((m) => m.worktree === 'Global'), undefined)
+})
+
+test("worktreeInError: only the path the server's message is about counts, not the repository it names", () => {
+  const p = project({ repo: '/r/app', x: '/r/app-x' })
+  // A worktree at another registered repository's path: the clash names /r/app-x/sub, which is longer.
+  p.repositories[0].worktrees.push({ id: 'w3', name: 'sub', path: '/r/app-x/sub', isMain: false, loaded: false, sessions: [] })
+  // As server/src/projects/model.ts words it.
+  const clash = 'project.repositories[0].worktrees[1]: worktree path /r/app-x is another repository (/r/app-x/sub) or contains one'
+  assert.deepEqual(worktreeInError(p, clash), { repoId: 'r1', worktreeId: 'w2' })
+  // As server/src/paths.ts words it.
+  assert.deepEqual(worktreeInError(p, 'Path not under a configured root: /r/app-x/sub'), { repoId: 'r1', worktreeId: 'w3' })
+  assert.deepEqual(worktreeInError(p, 'Path not under a configured root: /r/app-x'), { repoId: 'r1', worktreeId: 'w2' })
+  // A path the message is about that no worktree has: nothing is dropped.
+  assert.equal(worktreeInError(p, 'Path not under a configured root: /r/app-x/s'), null)
+  assert.equal(worktreeInError(p, 'project.repositories[0].worktrees[1]: worktree path /elsewhere is another repository (/r/app-x) or contains one'), null)
+  // Paths with spaces.
+  const q = project({ repo: '/r/my app', x: '/r/my app x' })
+  assert.deepEqual(worktreeInError(q, 'x: worktree path /r/my app x is another repository (/r/my app) or contains one'), { repoId: 'r1', worktreeId: 'w2' })
 })

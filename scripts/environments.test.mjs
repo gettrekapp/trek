@@ -16,3 +16,10 @@ test('an imported repository keeps the VM names its file window made', () => {
   assert.equal(deriveProfileName(envRepoKey(imported), 'feature-x'), legacy)
   assert.notEqual(deriveProfileName(imported.path, 'feature-x'), legacy)
 })
+
+test('envRepoKey: a profile key that is not an absolute path string is ignored', () => {
+  for (const profileKey of [42, null, {}, ['/a'], 'relative/app', '', true]) {
+    assert.equal(envRepoKey({ path: '/p', environments: { enabled: true, profileKey } }), '/p', JSON.stringify(profileKey))
+  }
+  assert.equal(envRepoKey({ path: '/p', environments: { profileKey: '/var/t/app' } }), '/var/t/app')
+})

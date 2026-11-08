@@ -412,3 +412,100 @@ test("each piece keeps its repositories' paths as the file had them (the env VM 
   ])
   assert.deepEqual(remote.project.repositories.map((r) => [r.path, remote.sourcePaths[r.id]]), [['/home/a', '/home/a//']])
 })
+
+test("a server the file calls `local` is its own piece, never this machine's, and keeps its id for its token", () => {
+  const file = {
+    version: 3,
+    name: 'P',
+    servers: [{ id: 'local', name: 'box', url: 'wss://b' }],
+    worktreeOrder: ['local /r/a-x', 'local /home/a-y', 'local /home/a'],
+    repositories: [
+      {
+        id: 'a',
+        name: 'a',
+        path: '/r/a',
+        serverPaths: { local: '/home/a' },
+        worktrees: [
+          { id: 'x', name: 'x', path: '/r/a-x', branch: 'x', terminals: [term('s1')] },
+          { id: 'y', name: 'y', path: '/home/a-y', branch: 'y', serverId: 'local', terminals: [term('s2')] }
+        ]
+      }
+    ]
+  }
+  const before = JSON.stringify(file)
+  const { projects, servers, warnings } = splitProjectByServer(file, ids())
+  assert.deepEqual(warnings, [])
+  assert.equal(JSON.stringify(file), before, 'the file is not changed')
+  assert.deepEqual(projects.map((p) => [p.target, p.serverName, p.legacyServerId]), [
+    ['local', undefined, undefined],
+    ['local-server', 'box', 'local']
+  ])
+  assert.deepEqual(servers, [{ id: 'local-server', name: 'box', url: 'wss://b' }])
+  const [here, there] = projects
+  assert.deepEqual(here.project.repositories[0].worktrees.map((w) => [w.path, w.sessions.map((s) => s.agentSessionId)]), [
+    ['/r/a', []],
+    ['/r/a-x', ['s1']]
+  ])
+  assert.deepEqual(there.project.repositories[0].worktrees.map((w) => [w.path, w.sessions.map((s) => s.agentSessionId)]), [
+    ['/home/a', []],
+    ['/home/a-y', ['s2']]
+  ])
+  // Each keeps the order entries of its own worktrees.
+  const id = (p) => p.project.repositories[0].id
+  assert.deepEqual(here.project.settings.worktreeOrder, [`${id(here)} /r/a-x`])
+  assert.deepEqual(there.project.settings.worktreeOrder, [`${id(there)} /home/a-y`, `${id(there)} /home/a`])
+})
+
+test('the id for a renamed `local` server is one the file does not use', () => {
+  const file = {
+    version: 3,
+    name: 'P',
+    servers: [
+      { id: 'local', name: 'box', url: 'wss://b' },
+      { id: 'local-server', name: 'other', url: 'wss://o' }
+    ],
+    repositories: [{ id: 'a', name: 'a', path: '/r/a', serverPaths: { local: '/home/a', 'local-server': '/o/a' }, worktrees: [] }]
+  }
+  const { projects } = splitProjectByServer(file, ids())
+  assert.deepEqual(projects.map((p) => [p.target, p.serverName, p.legacyServerId ?? null]), [
+    ['local', undefined, null],
+    ['local-server', 'other', null],
+    ['local-server-2', 'box', 'local']
+  ])
+})
+
+test("of two servers with one id, the first names the piece, as routing finds it", () => {
+  const file = {
+    version: 3,
+    name: 'P',
+    servers: [
+      { id: 'srv', name: 'first', url: 'wss://one' },
+      { id: 'srv', name: 'second', url: 'wss://two' },
+      { id: 7, name: 'bad', url: 'wss://bad' }
+    ],
+    repositories: [{ id: 'a', name: 'a', path: '/r/a', serverPaths: { srv: '/home/a' }, worktrees: [] }]
+  }
+  const { projects, servers } = splitProjectByServer(file, ids())
+  assert.equal(projects.find((p) => p.target === 'srv').serverName, 'first')
+  assert.deepEqual(servers, [{ id: 'srv', name: 'first', url: 'wss://one' }])
+})
+
+test("Local's piece knows where a file window ran the Global panel: the file's first repository's path, raw", () => {
+  const file = {
+    version: 3,
+    name: 'P',
+    servers: [{ id: 'srv', name: 'box', url: 'wss://b' }],
+    repositories: [
+      { id: 'a', name: 'a', path: '/var/t/a/', serverPaths: { srv: '/home/a' }, worktrees: [] },
+      { id: 'b', name: 'b', path: '/l/b', worktrees: [] }
+    ]
+  }
+  const { projects } = splitProjectByServer(file, ids())
+  assert.deepEqual(projects.map((p) => [p.target, p.globalCwd]), [
+    ['local', '/var/t/a/'],
+    ['srv', undefined]
+  ])
+  // A v1 file: its one repository.
+  const [v1] = importProjectFile({ version: 1, name: 'Old', repositoryPath: '/old/app', worktrees: [] }, ids()).projects
+  assert.equal(v1.globalCwd, '/old/app')
+})

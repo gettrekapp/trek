@@ -5,6 +5,7 @@ import { LOCAL_TARGET } from '../shared/model/importProject.ts'
 import type { Project, Session } from '../shared/model/types.ts'
 import { sessionMigrates } from '../shared/providers/selection.ts'
 import type { ServerConfig } from '../shared/types.ts'
+import { serverKey } from './appServersRules.ts'
 import { MAX_RECENTS, type RecentEntry } from './recentsRules.ts'
 import { isTargetId, sameTarget, type OpenWindowEntry, type WindowTarget } from './windowRules.ts'
 
@@ -30,12 +31,25 @@ function isWsUrl(url: string): boolean {
   }
 }
 
+function hasUserInfo(url: string): boolean {
+  try {
+    const u = new URL(url.trim())
+    return !!(u.username || u.password)
+  } catch {
+    return false
+  }
+}
+
 const withoutTrailingSlash = (url: string): string => url.trim().replace(/\/+$/, '')
 
 /**
- * The legacy server `target` (an id from the file's `servers`) matched to a saved entry by
- * origin (scheme, host and port). An entry with the very same URL wins over another on that
- * origin. The Local entry is never a match: it is this machine, whatever its port.
+ * The legacy server `target` (an id from the file's `servers`: the first with that id) matched
+ * to a saved entry as Save's duplicate rule tells servers apart (serverKey: origin and path, so a
+ * user name or password in the file's URL does not count). An entry with the very same URL wins
+ * over another with the same key. An entry on the same origin under another path is another
+ * server: the file's is offered to add. The Local entry is never a match: it is this machine,
+ * whatever its port. A URL with a user name or password matches an entry, but is never added
+ * (Save refuses it).
  */
 export function routePiece(
   target: string,
@@ -45,11 +59,18 @@ export function routePiece(
   if (target === LOCAL_TARGET) return { kind: 'local' }
   const server = fileServers.find((s) => s.id === target)
   if (!server) return { kind: 'unknown', label: `server ${target}`, why: "the file's server list does not name it" }
-  const origin = originOf(server.url)
-  if (!origin || !isWsUrl(server.url)) return { kind: 'unknown', label: server.name, why: 'its address is not a ws:// or wss:// URL' }
-  const same = entries.filter((e) => e.id !== LOCAL_ENTRY_ID && originOf(e.url) === origin)
+  const key = originOf(server.url) && isWsUrl(server.url) ? serverKey(server.url) : null
+  if (key === null) return { kind: 'unknown', label: server.name, why: 'its address is not a ws:// or wss:// URL' }
+  const same = entries.filter((e) => e.id !== LOCAL_ENTRY_ID && serverKey(e.url) === key)
   const hit = same.find((e) => withoutTrailingSlash(e.url) === withoutTrailingSlash(server.url)) ?? same[0]
-  return hit ? { kind: 'entry', entryId: hit.id, name: hit.name } : { kind: 'add', server }
+  if (hit) return { kind: 'entry', entryId: hit.id, name: hit.name }
+  if (hasUserInfo(server.url)) return { kind: 'unknown', label: server.name, why: 'its address has a user name or password in it, which Trek’s server list does not take' }
+  return { kind: 'add', server }
+}
+
+/** Origins the user declined to add within one run are not asked again (ImportOptions.declined). */
+export function declineKey(server: ServerConfig): string {
+  return serverKey(server.url) ?? server.url
 }
 
 // ---- migrated.json ----------------------------------------------------------------------------
@@ -129,8 +150,8 @@ export function migratedFile(m: Migrated, key: string): MigratedFile | undefined
 /**
  * One import of the file at `key`: the targets it tried, the pieces that landed (each
  * replacing an older piece of its target) and the ones left. Left pieces of targets it did
- * not try stay. Pieces are kept Local's first. A file with no piece at all is not recorded:
- * opening it imports it again.
+ * not try stay; a target with a piece is never left, and each is left once. Pieces are kept
+ * Local's first. A file with no piece at all is not recorded: opening it imports it again.
  */
 export function recordImport(
   m: Migrated,
@@ -141,7 +162,13 @@ export function recordImport(
   const landed = new Set(run.pieces.map((p) => p.target))
   const tried = new Set(run.attempted)
   const pieces = localFirst([...before.pieces.filter((p) => !landed.has(p.target)), ...run.pieces])
-  const left = [...before.left.filter((l) => !tried.has(l.target) && !landed.has(l.target)), ...run.left]
+  // A target that still has a piece (an Import Again that failed where an earlier one landed) is
+  // not left: its project is there. The failure is the result dialog's to report. Once per target.
+  const hasPiece = new Set(pieces.map((p) => p.target))
+  const left: MigratedLeft[] = []
+  for (const l of [...before.left.filter((l) => !tried.has(l.target)), ...run.left]) {
+    if (!hasPiece.has(l.target) && !left.some((x) => x.target === l.target)) left.push(l)
+  }
   const files = { ...m.files }
   if (pieces.length === 0) delete files[key]
   else files[key] = { pieces, left }
@@ -297,10 +324,12 @@ function resumable(sessions: readonly Session[]): string[] {
 
 /**
  * Compares the project as sent with the project as the server stored it (ids are kept):
- * each worktree whose path changed, with its resumable sessions. Global sessions run in
- * the first repository's main worktree.
+ * each worktree whose path changed, with its resumable sessions. The server runs Global
+ * sessions in its first repository's main worktree; a file window ran them in the file's
+ * first repository's path (`globalFrom`, raw: ImportedProject.globalCwd), which need not be
+ * the piece's first repository (one Local refused is not sent). Without it, the sent one's.
  */
-export function movedSessions(sent: Project, stored: Project): MovedSessions[] {
+export function movedSessions(sent: Project, stored: Project, globalFrom?: string): MovedSessions[] {
   const out: MovedSessions[] = []
   const storedPaths = new Map<string, string>()
   for (const repo of stored.repositories) for (const w of repo.worktrees) storedPaths.set(w.id, w.path)
@@ -311,11 +340,12 @@ export function movedSessions(sent: Project, stored: Project): MovedSessions[] {
       if (to !== undefined && to !== w.path && ids.length > 0) out.push({ worktree: w.name, from: w.path, to, agentSessionIds: ids })
     }
   }
-  const firstMain = sent.repositories[0]?.worktrees.find((w) => w.isMain)
-  const globalTo = firstMain ? storedPaths.get(firstMain.id) : undefined
+  const storedFirst = stored.repositories[0]
+  const globalTo = (storedFirst?.worktrees.find((w) => w.isMain) ?? storedFirst?.worktrees[0])?.path ?? storedFirst?.path
+  const from = globalFrom || sent.repositories[0]?.worktrees.find((w) => w.isMain)?.path
   const globalIds = resumable(sent.globalSessions)
-  if (firstMain && globalTo !== undefined && globalTo !== firstMain.path && globalIds.length > 0) {
-    out.push({ worktree: 'Global', from: firstMain.path, to: globalTo, agentSessionIds: globalIds })
+  if (from !== undefined && globalTo !== undefined && globalTo !== from && globalIds.length > 0) {
+    out.push({ worktree: 'Global', from, to: globalTo, agentSessionIds: globalIds })
   }
   return out
 }
@@ -335,11 +365,32 @@ function names(message: string, path: string): boolean {
 }
 
 /**
- * The non-main worktree a `project.import` refusal names (PATH_DENIED: "Path not under a
- * configured root: <path>"; BAD_REQUEST: "worktree path <path> is another repository"), so
- * the import can go on without it. The longest matching path wins. Null when none is named.
+ * The path a refusal is about, as the server words it: PATH_DENIED's "Path not under a configured
+ * root: <path>" (server/src/paths.ts) and BAD_REQUEST's "<where>: worktree path <path> is another
+ * repository (<repo>) or contains one" (server/src/projects/model.ts). Null for other wordings.
+ */
+function refusedPath(message: string): string | null {
+  const root = /configured root: (.+)$/s.exec(message)
+  if (root) return root[1]
+  const clash = /worktree path (.+?) is another repository \(/s.exec(message)
+  return clash ? clash[1] : null
+}
+
+/**
+ * The non-main worktree a `project.import` refusal names, so the import can go on without it.
+ * When the message has one of the server's wordings, only the worktree at the path it is about
+ * counts (a BAD_REQUEST also names the repository it clashes with, which may be another
+ * worktree's path). Otherwise, the longest path the message names. Null when none is named.
  */
 export function worktreeInError(project: Project, message: string): WorktreeRef | null {
+  const named = refusedPath(message)
+  if (named !== null) {
+    for (const repo of project.repositories) {
+      const w = repo.worktrees.find((w) => !w.isMain && w.path === named)
+      if (w) return { repoId: repo.id, worktreeId: w.id }
+    }
+    return null
+  }
   let best: (WorktreeRef & { length: number }) | null = null
   for (const repo of project.repositories) {
     for (const w of repo.worktrees) {

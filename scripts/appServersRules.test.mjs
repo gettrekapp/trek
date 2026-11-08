@@ -2,6 +2,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  MAX_NAME,
+  addedServerName,
+  mayAdoptToken,
+  serverKey,
   parseAppServers,
   reinsertAt,
   rejectDuplicateServer,
@@ -178,4 +182,34 @@ test("rejectLocalServerUrl refuses an entry for Local's current URL, by any loop
   assert.doesNotThrow(() => rejectLocalServerUrl('wss://127.0.0.1:51234', local), 'another scheme')
   assert.doesNotThrow(() => rejectLocalServerUrl('ws://box:51234', local), 'another host')
   assert.doesNotThrow(() => rejectLocalServerUrl('ws://127.0.0.1:51234', null), 'Local not running')
+})
+
+test('serverKey: origin and path, without trailing slashes, user info, query or hash', () => {
+  assert.equal(serverKey('wss://B.example:443/'), 'wss://b.example')
+  assert.equal(serverKey('wss://u:p@b.example:7/a/?q=1#h'), 'wss://b.example:7/a')
+  assert.equal(serverKey('nope'), null)
+})
+
+test("addedServerName: the file's name trimmed and cut to Save's limit, else the URL's host", () => {
+  assert.equal(addedServerName('  build-box  ', 'wss://b.example'), 'build-box')
+  assert.equal(addedServerName('x'.repeat(MAX_NAME + 50), 'wss://b.example').length, MAX_NAME)
+  assert.equal(addedServerName(`${'y'.repeat(MAX_NAME - 1)}   z`, 'wss://b.example'), 'y'.repeat(MAX_NAME - 1))
+  assert.equal(addedServerName('   ', 'wss://b.example:7777/a'), 'b.example:7777')
+  assert.equal(addedServerName(undefined, 'wss://b.example'), 'b.example')
+  assert.equal(addedServerName('', 'not a url'), 'not a url')
+  // Whatever comes out passes Save's check.
+  for (const name of ['  a ', 'x'.repeat(500), '', '\t']) {
+    assert.doesNotThrow(() => validateServerInput({ name: addedServerName(name, 'wss://b.example'), url: 'wss://b.example' }))
+  }
+})
+
+test('mayAdoptToken: a saved entry still at the URL the token was matched to; never Local', () => {
+  const entry = { id: 'e1', name: 'B', url: 'wss://b.example' }
+  assert.equal(mayAdoptToken('e1', entry, 'wss://b.example'), true)
+  // Re-pointed meanwhile, or removed.
+  assert.equal(mayAdoptToken('e1', { ...entry, url: 'wss://evil.example' }, 'wss://b.example'), false)
+  assert.equal(mayAdoptToken('e1', undefined, 'wss://b.example'), false)
+  // Another entry's record.
+  assert.equal(mayAdoptToken('e1', { ...entry, id: 'e2' }, 'wss://b.example'), false)
+  assert.equal(mayAdoptToken(LOCAL_ENTRY_ID, { id: LOCAL_ENTRY_ID, name: 'Local', url: 'wss://b.example' }, 'wss://b.example'), false)
 })
