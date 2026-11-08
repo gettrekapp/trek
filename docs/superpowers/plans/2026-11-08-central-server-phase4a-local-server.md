@@ -102,8 +102,13 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
     - It is created by writing a temp file and hard-linking it into place. The link is atomic and fails if a lock exists, and the lock never exists without its pid. A plain `wx` create could be read empty by a racing start, which would take it over.
     - A live holder (signal 0 succeeds, or `EPERM`) refuses: exit 3, naming `local.json`.
     - A dead holder, a lock with no pid, or our own pid (a dead process that had our pid) is taken over. The start unlinks it and retries, up to 3 times, and logs `Took over the lock of a local trek-server that is gone (pid N).`
+    - A lock written before the machine last booted is taken over whatever its pid (review fix 2): its mtime is more than a minute before `Date.now() - os.uptime()*1000`. `stop --local` applies the same rule, so it never signals a pid reused after a reboot.
+    - The lock is read through one open fd (`O_NOFOLLOW`), and a stale lock is unlinked only if `lstat` still shows the same device, inode and ctime (review fix 1).
     - The lock is taken before anything in the profile is written.
-12. **The double takeover.** Two starts that find the same stale lock at the same instant can both take it over: the second unlinks the first's fresh lock. So `announceLocal` re-reads the lock before writing `local.json`, and a start that no longer holds it exits 3. Only the holder ever writes `local.json`. On `exit`, the lock and `local.json` are removed only if they hold this pid.
+12. **The double takeover.** Two starts that find the same stale lock at the same instant must not both take it over, or the second would unlink the first's fresh lock.
+    - `acquireLock` unlinks a stale lock only if the path is still the file it judged (same device, inode and ctime). Otherwise it judges the new lock, which is the winner's and live, and refuses (review fix 1).
+    - A small window is left between that `lstat` and the `unlink`. So the start re-reads the lock before each profile write: removing old temp files, removing `local.json`, `saveConfig`, the token rotation (`store.update`) and `writeLocalInfo` in `announceLocal`. A start that no longer holds it exits 3 before writing.
+    - On `exit`, the lock and `local.json` are removed only if they hold this pid.
 
 **The guard (Task 4)**
 
@@ -191,7 +196,7 @@ Out of scope here: everything in 4b–4e. Nothing under `src/main`, `src/preload
 | `server/src/index.ts` | modify | 1, 6, 6b | `buildInfo` (1); `--local`: parsing, profile, lock, token, host and port, `announceLocal`, cleanup (6); `stop --local` (6b) |
 | `src/shared/localServer.ts` | create | 2 | the contract with 4b: path segments, file names, `LOCAL_TOKEN_NAME`, `LOCAL_ALREADY_RUNNING_EXIT`, `LocalInfo`, `parseLocalInfo` |
 | `server/src/localProfile.ts` | create | 2 | `localProfile`, `writeLocalInfo`, `readLocalInfo`, `removeLocalInfo` |
-| `server/src/localLock.ts` | create | 3 | `lockDecision`, `pidAlive`, `readLockPid`, `acquireLock`, `holdsLock`, `releaseLock` |
+| `server/src/localLock.ts` | create | 3, review fixes | `lockDecision`, `beforeBoot`, `pidAlive`, `readLock`, `readLockPid`, `acquireLock`, `holdsLock`, `releaseLock`, `removeStaleTemps` |
 | `server/src/localStop.ts` | create | 6b | `stopDecision`, `stopLocal`: `trek-server stop --local` |
 | `server/src/paths.ts` | modify | 4 | `PathGuardOptions.permissive` |
 | `server/src/configStore.ts` | modify | 4 | the guard options, passed to every guard it builds |
@@ -2118,6 +2123,42 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit \
 
 ---
 
+### Review fixes (Tasks 1–3, done)
+
+A review of the lock and `local.json` (Tasks 2, 3, and their use in Tasks 6 and 6b) found the issues below. They are fixed in one commit, `fix(server): the local lock's review fixes: …`, after Task 6b. Where this plan's Task 2, 3 and 6 code differs from the tree, the tree wins.
+
+**Files:** `server/src/localLock.ts`, `server/src/localStop.ts`, `server/src/index.ts`, `src/shared/localServer.ts`; tests in `scripts/serverLocalLock.test.mjs`, `serverLocalProfile.test.mjs`, `serverLocalStop.test.mjs`.
+
+1. **Two starts could both take over the same stale lock (Important).** The loser could then rotate the winner's token.
+   - `readLock(path)` opens the lock once (`O_NOFOLLOW`) and reads its pid and its `fstat` (device, inode, ctime) from the same fd.
+   - Before the `unlinkSync`, `acquireLock` `lstat`s the path again and unlinks only if it is the same file. Otherwise it loops and judges the new lock. The ctime is compared as well as the inode, because a freed inode number can be reused at once by the next file.
+   - `index.ts` re-checks `holdsLock` before each profile write, through `stillHoldingLock(local)`: removing old temp files, the `rmSync` of `local.json`, `saveConfig`, the token rotation (`store.update`) and `writeLocalInfo`. It exits 3 if the lock was lost.
+   - Test: a second `acquireLock` runs inside the first one's `alive` callback. The inner one takes over; the outer one refuses with the inner one's pid, does not hold the lock, and leaves no file behind.
+2. **Pid reuse after a reboot made a stale lock look live (Important).**
+   - `beforeBoot(mtimeMs, clock)`: a lock whose mtime is more than `BOOT_MARGIN_MS` (60 s) before `now - uptime*1000` is from an earlier boot. `lockDecision` takes it over whatever its pid.
+   - `stopDecision` gains `lockBeforeBoot`, and `stopLocal` computes it from the lock's mtime, so `stop --local` never signals a pid reused after a reboot.
+   - The `Clock` (`now`, `uptime`) is injectable into `acquireLock` and `stopLocal` for tests.
+   - **No `ps` check within a boot.** A source run's command line (tsx, npm) does not name trek-server, `ps` may be missing in minimal containers, and a false negative would take over a live server's lock. See Risk 1.
+3. **Minor.**
+   - `chmodSync(profileDir, 0o700)` after `mkdirSync`: a directory that already existed looser is tightened.
+   - A directory (or anything else the filesystem refuses) at `local.lock`: `acquireLock` throws, and `index.ts` prints `Cannot take the lock <path>: <message>` and exits 1, with no stack trace.
+   - Once the lock is held, `removeStaleTemps(dir, ['local.lock', 'local.json'])` removes `local.lock.<pid>.tmp` and `local.json.<pid>.tmp` left by dead pids. A live pid's temp file may be a racing start's lock in the making, so it is left.
+   - `readLockPid` requires `/^\d+$/` (after trimming).
+   - `parseLocalInfo`:
+     - `pid` is an integer in `1..MAX_PID`, `2**31 - 1`. `pid_t` is a signed 32-bit int on macOS and Linux (Linux's `pid_max` goes up to `2**22`), and Windows pids are DWORDs that stay far below `2**31` in practice. A tighter bound would guard nothing: a pid in range that is not the server fails the liveness and lock checks anyway.
+     - `token` matches `/^[A-Za-z0-9_-]{20,}$/`. `addToken` makes 32 random bytes in base64url: 43 characters of that alphabet.
+     - `build` matches `/^([0-9a-f]{12}|dev)$/`: `stampBuild`'s 12 hex digits, or `buildInfo`'s `"dev"` from source.
+   - When the takeover retries run out, the holder is the last lock's pid only if it is alive (and not ours), else 0.
+   - Risks 9 (hard links) and 10 (clock steps), and Notes for 4b 9 and 10.
+4. **Tests added (15):**
+   - `serverLocalLock` (12): `pidAlive(1)` is true through `EPERM` (skipped as root); digits-only lock pids; the directory tightened to 0700; a lock holding our own pid; the double takeover; a lock from before the boot taken over though its pid is alive; one from this boot still refusing; `beforeBoot` and its margin; a lock that is a directory; a lock that is a symlink (not followed, replaced, its target untouched); running out of retries (holder 0, or the live pid); `removeStaleTemps`. `lockDecision`'s test gains the boot case.
+   - `serverLocalProfile` (1): `writeLocalInfo` replaces a symlink at `local.json` rather than writing through it. The `parseLocalInfo` tests gain `pid: 1.5`, `pid: '4242'`, `port: NaN`, `version: 1`, `token: null`, a pid over `MAX_PID`, bad tokens and bad builds, and accept `build: "dev"`. The fixture's token is now a real-looking one.
+   - `serverLocalStop` (2): `stopDecision` with a lock from an earlier boot; `stopLocal` never signalling a live pid whose lock is from before the boot. The fixtures' token and build are now valid.
+
+Tests: 1441 → 1456.
+
+---
+
 ### Task 7: `smoke:local`: the bundle under Node and under Electron's Node
 
 **Files:**
@@ -2134,17 +2175,20 @@ There is no `ws`, `@xterm/headless` or `package.json` anywhere it could resolve,
 
 **The environment:** a temp `HOME` and `XDG_DATA_HOME`. The local config is pre-seeded with a fake `claude` command that echoes its arguments and then sleeps. The repo sits at `elsewhere/deep/repo`, with nothing registered near it.
 
-**What it checks, 30 times per runtime:**
+**What it checks, 33 times per runtime:**
 1. `--local --port` is a usage error, exit 2.
-2. `local.json` appears with the server's pid. It is 0600, its version and build match `dist/build.json`, the lock holds the pid, and the log's port matches.
+2. `local.json` appears with the server's pid. It is 0600, its version and build match `dist/build.json`, the lock holds the pid, the profile directory (pre-created 0755) is 0700, and the log's port matches.
 3. A hello with its token is welcomed, and the first welcome lists `local` and `mcp` (`ready`, Decision 9).
 4. `server.addRepo` takes the out-of-root repo, and a project is created on it. A session through `node-pty` prints `--session-id`.
 5. A second start exits 3, "already running (pid A)", and leaves `local.json` and the lock alone.
 6. `stop --local` (Task 6b) exits 0 with `Stopped.`. The server exits 0, and `local.json` and the lock are gone. A second `stop --local` exits 0: not running.
-7. A third start, then SIGKILL: the stale `local.json` and lock stay.
-8. A fourth start takes over. It logs the dead pid, the lock holds the new pid, and the token is new. The dead server's token gets `needs-auth`; the new one is welcomed.
+7. A third start, then SIGKILL: the stale `local.json` and lock stay. The smoke adds the temp files a crash mid-write would leave, `local.lock.<dead pid>.tmp` and `local.json.<dead pid>.tmp`.
+8. A fourth start takes over. It logs the dead pid, the lock holds the new pid, the dead pid's temp files are gone, and the token is new. The dead server's token gets `needs-auth`; the new one is welcomed.
 9. The session from step 4 is still listed, with its agent session id and no pty. `worktree.load` resumes it, and the agent prints `--resume <id>`.
 10. A final SIGTERM: exit 0, and both files are gone.
+11. A directory at `local.lock`: a start exits 1 with `Cannot take the lock <path>: …`, and no stack trace.
+
+A lock from before the last boot (review fix 2) cannot be simulated here, so it is covered by unit tests only.
 
 - [ ] **Step 1: The smoke**
 
@@ -2158,8 +2202,8 @@ Create `scripts/local-server-smoke.mjs`:
 // its fields, the build), a welcome with `local` and `mcp`, a repo registered
 // outside any root, a session on a fake agent through node-pty, a second start
 // refused by the lock, `stop --local` and SIGTERM's cleanup, a SIGKILLed
-// server's stale lock taken over with a new token, and the session resumed with
-// --resume.
+// server's stale lock (and its temp files) taken over with a new token, the
+// session resumed with --resume, and a lock path that cannot be taken.
 //
 //   node scripts/local-server-smoke.mjs [--node-only | --electron-only]
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
@@ -2284,6 +2328,8 @@ async function suite(rt) {
     check((statSync(infoPath).mode & 0o777) === 0o600, 'local.json is 0600', (statSync(infoPath).mode & 0o777).toString(8))
     check(infoA.version === built.version && infoA.build === built.build, `local.json has the bundle's version and build (${infoA.version}, ${infoA.build})`, JSON.stringify(infoA))
     check(lockPid() === a.child.pid, 'local.lock holds the pid')
+    // The smoke made the profile directory 0755; the lock tightens it.
+    check((statSync(profile).mode & 0o777) === 0o700, 'the profile directory is 0700', (statSync(profile).mode & 0o777).toString(8))
     check(a.out.includes(`listening on ws://127.0.0.1:${infoA.port}`), 'it listens on 127.0.0.1 at the port in local.json', a.out)
 
     // --- 3. the welcome ---
@@ -2336,6 +2382,9 @@ async function suite(rt) {
     c.child.kill('SIGKILL')
     await c.exited
     check(info()?.pid === c.child.pid && lockPid() === c.child.pid, 'SIGKILL leaves local.json and local.lock behind')
+    // Temp files a crash could leave mid-write, under the dead pid.
+    const temps = [`local.lock.${c.child.pid}.tmp`, `local.json.${c.child.pid}.tmp`].map((n) => join(profile, n))
+    for (const tmp of temps) writeFileSync(tmp, '')
 
     // --- 8. the next start takes the stale lock over, with a new token ---
     const d = start()
@@ -2343,6 +2392,7 @@ async function suite(rt) {
     const infoD = info()
     check(d.out.includes(`Took over the lock of a local trek-server that is gone (pid ${c.child.pid})`), 'it reports the dead pid it took over', d.out)
     check(lockPid() === d.child.pid, 'local.lock now holds the new pid')
+    check(temps.every((tmp) => !existsSync(tmp)), "the dead pid's temp files are removed")
     check(infoD.token !== infoC.token, 'a new token on every start')
     const stale = await connect(infoD.port, infoC.token, 'stale')
     check(stale.status === 'needs-auth', "the dead server's token is refused", stale.status)
@@ -2367,6 +2417,13 @@ async function suite(rt) {
     d.child.kill('SIGTERM')
     await d.exited
     check(d.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM again: exit 0, local.json and local.lock gone')
+
+    // --- 11. a lock path that cannot be taken is a clear error, not a stack trace ---
+    mkdirSync(lockPath)
+    const e = start()
+    await e.exited
+    check(e.code === 1 && e.err.includes(`Cannot take the lock ${lockPath}: `) && !e.err.includes('    at '), 'a directory at local.lock: exit 1, "Cannot take the lock"', `${e.code} ${e.err}`)
+    rmSync(lockPath, { recursive: true })
   } catch (err) {
     if (!(err instanceof Abort)) fail(`${rt.name}: ${err.stack ?? err}`)
     for (const r of children) if (r.err) console.error(`[${rt.name} pid ${r.child.pid} stderr]\n${r.err}`)
@@ -2417,7 +2474,7 @@ Expected:
 ```
 --- node (<node path>) ---
 --- electron (<repo>/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron) ---
-LOCAL SMOKE PASS (60 checks)
+LOCAL SMOKE PASS (66 checks)
 ```
 
 The Electron half includes `ok: node-pty runs the agent under electron: it printed --session-id`. That shows Electron's Node loads the root's `node-pty` from the app's layout, which is the runtime 4b will use.
@@ -2442,7 +2499,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit \
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1441`, `# fail 0`. That is the baseline 1412 at `6940af0`, plus:
+Expected: `# pass 1456`, `# fail 0`. That is the baseline 1412 at `6940af0`, plus:
 
 | Task | Tests added |
 |---|---|
@@ -2452,6 +2509,7 @@ Expected: `# pass 1441`, `# fail 0`. That is the baseline 1412 at `6940af0`, plu
 | 4 | 6: 2 in `serverPaths`, 1 each in `serverConfigStore` and `serverImportCheck`, 2 in `serverV2` |
 | 5 | 0 (one test changed) |
 | 6b | 7: 3 for `stopDecision`, 4 for `stopLocal` |
+| Review fixes | 15: 12 in `serverLocalLock`, 1 in `serverLocalProfile`, 2 in `serverLocalStop` |
 
 - [ ] **Step 2: Types and build**
 
@@ -2465,7 +2523,7 @@ Run each after the previous has exited:
 |---|---|
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
-| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (60 checks)` |
+| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (66 checks)` |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (168 checks)` |
 | `node scripts/remote-smoke.mjs 2>&1 \| tail -1` | `REMOTE SMOKE PASS` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
@@ -2501,11 +2559,13 @@ Found while prototyping this plan.
 6. **A lock stuck on a reused pid** (Risk 1). If a start exits 3, but `local.json` is missing or its hello fails for some seconds, the lock's pid is not a trek-server. Offer "Reset local server", which deletes `local.lock` and starts again.
 7. **Packaged runs.** This plan ran the bundle unpacked. In a packaged app `out/server` sits inside `app.asar`. Electron's Node reads asar in `ELECTRON_RUN_AS_NODE` mode, and `node-pty` is already unpacked, but check it in a `dist` build, or add `out/server/**` to `asarUnpack`.
 8. **`capabilities` includes `local`.** The renderer can show the folder picker on it. Don't infer it from the URL (Decision 14).
+9. **Exit 3 with no valid `local.json` is reported to the user, not retried in a loop.** After an exit 3, wait a few seconds for `local.json` (the winner may still be starting). If it never appears, or `parseLocalInfo` refuses it, show the error with the lock's path and offer the reset of note 6. Respawning on a timer would spin forever on a lock held by a live, unrelated process.
+10. **Exit 1 with `Cannot take the lock <path>: <message>`** means the profile's filesystem refused the lock (a directory at `local.lock`, no hard links; Risk 9). Show the message; retrying will not help.
 
 ## Risks
 
-1. **Pid reuse.** If a SIGKILLed or crashed server's pid is later reused by another live process, a `--local` start refuses: exit 3, "already running", until `local.lock` is deleted. Liveness is signal 0 only. There is no portable way to check what process holds a pid. The message names the files, and 4b can offer a reset (Notes for 4b, 6).
-2. **Two starts taking over the same stale lock at the same instant** both go on until `announceLocal`. There the one that lost exits 3 before writing `local.json` (Decision 12). Until then, both have rotated the token and opened the profile's config, and the last token written wins. The app's single-instance lock makes this a CLI-versus-app race, at a moment when no server was running.
+1. **Pid reuse within a boot.** A lock from before the last boot is stale whatever its pid (Decision 11), so the common case, a reboot, is covered. Within one boot, if a SIGKILLed or crashed server's pid is reused by another live process, a `--local` start refuses: exit 3, "already running", until `local.lock` is deleted. Liveness is signal 0 only. A `ps -o command=` check was considered and left out: a source run's command line (tsx, npm) does not name trek-server, and a false "not trek-server" would take over a live server's lock, the worse failure. The message names the files, and 4b can offer a reset (Notes for 4b, 6 and 9).
+2. **Two starts taking over the same stale lock at the same instant.** The inode check makes the loser refuse, and the window left between its `lstat` and `unlink` is covered by the lock re-check before each profile write (Decision 12). The app's single-instance lock makes this a CLI-versus-app race, at a moment when no server was running.
 3. **Only macOS was prototyped.**
    - Linux uses the same code paths, with `XDG_DATA_HOME` for the data dir.
    - On Windows:
@@ -2517,6 +2577,8 @@ Found while prototyping this plan.
 6. **`local.json` waits for MCP to settle.** `startMcpListener` resolves on `listen` and rejects on an error. If it ever hung, `local.json` would never be written, and 4b's ready wait needs a timeout.
 7. **The bundle grew** from 522 KB to 645 KB (esbuild's figures) with `ws`.
 8. **`trek-server version` prints the version only.** The build id is in the startup line, `local.json` and `dist/build.json`.
+9. **Hard links are not supported on some filesystems:** FAT and exFAT, some SMB and FUSE mounts. On those, `linkSync` fails and the start exits 1 with `Cannot take the lock <path>: <message>`. The profile is under `~/.config`, which is on the system disk on every machine we target.
+10. **A wall-clock step after boot** moves the computed boot time with it. If the clock jumps forward by more than the one-minute margin soon after boot, a live lock written before the jump could look older than the boot and be taken over. NTP usually steps the clock right after boot, before any server has started, so this should be rare. Recording a boot id in the lock (`kern.bootsessionuuid`, `/proc/sys/kernel/random/boot_id`) would remove it; that is left for a later phase.
 
 ## Questions for the user
 
