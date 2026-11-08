@@ -228,19 +228,33 @@ windows open. **File → Import .trekproj…** does the same, and can import a f
 again. On the first launch with Local, Trek offers once to import the files in
 your recent projects and the windows open at the last quit.
 
+**Opening a `.trekproj` imports it without asking**, from Finder, a recent
+project or File → Open Project…: its part on this machine goes to Local, and
+each remote part goes to a server you have already saved at that address. Only
+a server you have not saved is asked about. The project's settings come with
+it, so its agent command (`claudeCommand`, `llmDefault`) and the rest then apply
+on those servers too: open a `.trekproj` only if you trust where it came from.
+
 - The `.trekproj` file is never changed. `migrated.json` in Trek's app data
   remembers what each file became, so opening it again opens those projects.
 - A remote part goes to the server in your list at the same address (scheme,
   host, port and path); if none is, Trek offers to add it, with the token saved
-  for that address, if any. A token is only ever carried to its own address.
+  for that address, if any. A token is only ever carried to its own origin
+  (scheme, host and port).
 - Settings, tags, notes, tickets, pull requests, environment variables, linked
   folders, environments, queues, session types, saved sessions and the worktree
   order come along. Open tabs, drafts, running terminals (sessions come back idle
   and resume when loaded) and the project bot's folder do not.
 - Paths become their realpaths on the server. Claude's saved histories are copied
   (never moved) to them on Local, and a repository's VMs keep their names.
-- A file opens as a project file window only if none of it could be imported, or
-  when the Local server is off (`TREK_NO_LOCAL_SERVER=1`).
+- A file already open in a file window is just focused there, not imported.
+- A file opens as a project file window only if none of it could be imported
+  (the result offers **Open as File Window**, from File → Import too), or when
+  the Local server is off (`TREK_NO_LOCAL_SERVER=1`).
+- Each import asks about adding a server once, however many of the file's
+  server ids share its address, and imports at most 20 remote parts of a file;
+  the rest are listed as not imported, and once any part of the file has landed,
+  opening it again offers to import them.
 
 ## Local server
 

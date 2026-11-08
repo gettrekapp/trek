@@ -10,7 +10,7 @@
 5. **Recents and the restored windows are rewritten** to `(serverEntryId, projectId)`. The original file is never written.
 6. **Legacy server tokens move with their projects, origin-bound only**: a v1 token goes to an app-server entry only when it was entered for that entry's origin.
 7. **Nothing that worked is lost on the way**: a Local repository's Colima VMs keep their names (4c Note 1), and a saved Claude session still resumes when the server runs it from its realpath (its history is copied there).
-8. **`smoke:import`** (new, 39 checks) runs all of it against the Local server and a test trek-server.
+8. **`smoke:import`** (new, 51 checks) runs all of it against the Local server and a test trek-server.
 
 **Architecture:**
 - **Pure rules, `src/main/importRules.ts`** (Tasks 1, 2, 6): where a piece goes (`routePiece`), the `migrated.json` format (`parseMigrated`, `recordImport`), the recents and window rewrites (`rewriteRecents`, `rewriteOpenWindows`, `restoreEntries`), the prompt's file list (`promptCandidates`), the path rules (`profileKeyFor`, `withProfileKeys`, `movedSessions`, `worktreeInError`, `dropWorktree`) and the result text (`importSummary`).
@@ -3379,7 +3379,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test: s
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: `# tests 1559`, `# pass 1558`, `# fail 0` (1511 + 29 in Tasks 1–8, + 19 from the review fixes); the build ends with `out/server: trek-server 0.2.0, build <hash>`.
+Expected: `# tests 1566`, `# pass 1565`, `# fail 0` (1511 + 29 in Tasks 1–8, + 19 from the review fixes, + 7 from the final review fixes); the build ends with `out/server: trek-server 0.2.0, build <hash>`.
 
 - [ ] **Step 2: The smokes, one at a time**
 
@@ -3387,7 +3387,7 @@ Before each, check that it launches Electron with its own `--user-data-dir` (Con
 
 | Command | Expected | What it proves for 4d |
 |---|---|---|
-| `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (39 checks)` | the whole import |
+| `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (51 checks)` | the whole import (39 from Task 9, 12 from the final review fixes) |
 | `node scripts/windows-smoke.mjs` | `40/40 checks passed` | file windows open and restore as before without Local (`restoreEntries` with no `migrated.json`) |
 | `node scripts/local-app-smoke.mjs` | `LOCAL APP SMOKE PASS (43 checks)` | a Local app with no `.trekproj` history starts as before (the prompt finds nothing to offer) |
 | `node scripts/v2-smoke.mjs` | `V2 SMOKE PASS (170 checks)` | `window:openServerProject` through `openServerTarget` |
@@ -3407,6 +3407,22 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+### Final review fixes (done)
+
+Applied after the final review of the branch. Tests: 1559 → 1566 (1565 pass, 1 skipped; +7). `smoke:import`: 39 → 51 checks.
+
+1. **I-2: a `profileKey` in the file is never trusted.** `repositoryFor` copies `environments` without it; only the importer sets one (`withProfileKeys`, from `profileKeyFor`: the path the file had, when the server stores its realpath). Test: a crafted file's key is dropped, and the importer's is the right one.
+2. **I-3: per-run limits, as pure rules** (`importRules.ts`). `runScope` gives each import its own `declined` and `unreachable` unless the caller shares them (the first-launch prompt does, across its files); `importTrekproj` always runs with one, so a file with many server ids on one unsaved address asks once, and an unreachable entry is waited for once. `capPieces` imports Local's piece and the first `MAX_REMOTE_PIECES` (20) remote ones; the rest are left with `OVER_CAP_REASON`, which the result dialog lists, and a retry of the parts left takes the next 20. Tests for both.
+3. **M-1: one import per file at a time.** `importUi.ts` keeps the running import by `fileKey`; another one asked for meanwhile joins it and leaves the result dialog and the windows to the first.
+4. **M-2: a corrupt `migrated.json` is set aside, not overwritten.** `readJsonStore` (`src/main/jsonFile.ts`, no Electron, tested): a file that does not parse, or is not an object, is renamed `migrated.json.corrupt-<time>` with a `console.warn`, as `app-servers.json` is, and reads as empty.
+5. **M-3: File → Import offers Open as File Window when nothing lands**, as `openTrekproj` does (`importFromMenu(openLegacy)`, in a window of its own): the file window on it was closed for the import.
+6. **M-5: `restoreWindows` maps no window with `TREK_NO_LOCAL_SERVER`**: nothing is imported then, and a `.trekproj` opens as a file window.
+7. **M-7: `readProject` unsubscribes once**, whether the snapshot arrives during `subscribe()` or after.
+8. **M-4 (recorded only):** Notes for 4e, item 9.
+9. **M-9 docs.** The README's import section: a token goes only to its own origin (scheme, host and port); a file already open in a file window is just focused; opening a `.trekproj` imports its remote parts onto servers already saved, without asking, and its settings (the agent command among them) then apply there (the user's decision); the add-server question once per address, and the cap. Risk 5 now covers remote servers.
+10. **M-10: the `serverLocalStop` flake.** The stand-in server sets its SIGTERM handler first and writes `local.json` last, whole (a rename); the test waits until it parses and names the child. Ten runs alongside `npm test`, and ten at once, all pass.
+11. **M-8: `smoke:import` gains 12 checks** (launch 2): a file landing in part says what was left; opening it again offers the retry, which runs and reports; a file with 22 server ids on one unsaved address and nothing that can land asks to add the server once, lists the 21st and 22nd as over the cap and the other 20 for one reason, is not recorded, and offers Open as File Window, which opens one; File → Import on it closes that window, offers the same, and opens a new one; both new files are byte-identical. Finder's `open-file` is not covered (it needs the OS).
+
 ## Notes for 4e
 
 Found while prototyping this plan.
@@ -3419,6 +3435,10 @@ Found while prototyping this plan.
 6. **`server-tokens.json`** is still read by the importer for files imported later. It can go when the import is retired, not with file windows.
 7. **The splitter's known gaps remain** (memory: `rekeyOrder` writes raw paths; no dedupe of `agentSessionId` after same-path worktrees are folded into the main one). Neither showed in the smoke; both are small fixes in `importProject.ts` if 4e touches it.
 8. **4c Note 4 still stands**: if Local is ever keyed by profile, `routePiece`'s `LOCAL_ENTRY_ID` exclusion and `importer.ts`'s Local checks follow `isLocalEntryId`.
+9. **Strip `bot` settings from imported pieces before the bot returns (phase 5)** (final review M-4). A file's `bot` settings are copied into each piece's project settings; they are dormant while server windows have no bot, but a crafted file must not configure one once they do.
+10. **`smoke:import` gaps left** (final review M-8): Finder's `open-file` (it needs the OS, so it is untested end to end, as is M-6 below); a declined add-server question across several ids (the stub answers every dialog with its first button, so only `runScope`'s tests cover a decline); the M-1 join of two concurrent imports of one file.
+11. **An extra empty window on a launch `open-file`** (final review M-6). A `.trekproj` that launches the app is opened after `restoreWindows`, which makes an empty window when there is nothing to restore; the imported projects then open in windows of their own beside it. `openFromOs` takes the focused window only if it is empty and focused, which it may not be yet at launch.
+12. **The cap and a file of which nothing lands.** Such a file is not recorded in `migrated.json`, so opening it again imports Local's piece and the first 20 remote ones again, never the rest; the retry of the next 20 needs a part to have landed. Harmless while the fallback opens a file window; 4e's OK-only result could say so.
 
 ## Risks
 
@@ -3426,7 +3446,7 @@ Found while prototyping this plan.
 2. **Duplicates, not loss.** A crash between `project.import` and `recordImport`, or Import Again, leaves an extra project on the server; nothing is deleted. A user who imports, keeps working in the new project, then picks Import Again gets a fresh copy of the file's (older) state beside it.
 3. **The import changes the servers' registries.** `server.addRepo` writes the server's config (on a remote server too, under its allowed roots). That is the same call New Project makes, and it is what `project.import` requires.
 4. **Unsaved changes in a file window.** File → Import closes the window first and its save prompt runs (Decision 3). Opening the file, or the first-launch prompt, never imports a file a window has open: the former focuses it, the latter runs before any window exists.
-5. **A `.trekproj` opened from Finder is imported without a question**, as decided. A crafted file can register any git repository on Local and set project settings such as `claudeCommand`, which runs when a session in it starts. That was already true of opening it in a file window (and then starting a session). It cannot move a token: a v1 token goes only to an entry on its own origin, and a new server is only added on a yes.
+5. **A `.trekproj` opened from Finder (or a recent, or File → Open Project…) is imported without a question**, as the user decided (2026-11-08), onto Local and onto every remote server already saved at the file's addresses. A crafted file can register any git repository under a server's roots (Local's, or a saved remote server's) and set project settings such as `claudeCommand` or `llmDefault`, which then apply on that server when a session in the project starts. That was already true of opening it in a file window (and then starting a session), but a file window ran sessions only on servers it connected to itself. It cannot move a token: a v1 token goes only to an entry on its own origin (scheme, host and port), and a server not yet saved is only added on a yes. It cannot pick the VM names either: a `profileKey` in the file is dropped (final review fix 1). The README says all of this plainly.
 6. **The first-launch prompt has no window behind it.** On a first launch, Import may wait up to a minute for Local to come up with only the dialog on screen; the windows appear after.
 7. **`smoke:import` stores an app-server token through safeStorage**, as `smoke:v2` does, under the "Trek Dev Safe Storage" keychain item. The legacy token it seeds is `plain:`, so no keychain item is read for it.
 8. **The read-back is one snapshot within 10 s.** If it times out, the import still lands, with a warning that sessions whose path changed may start fresh (their histories are not copied).
@@ -3435,5 +3455,5 @@ Found while prototyping this plan.
 
 None block this plan.
 
-1. **Ask before importing a file opened from Finder?** Risk 5. A one-line "Import “X.trekproj” into Trek?" would make a double-click on a file from elsewhere a choice. The recorded decision is to import; say if you want the question.
+1. ~~**Ask before importing a file opened from Finder?**~~ Answered (2026-11-08): no question, onto Local and onto saved remote servers alike. Risk 5 and the README say so.
 2. **Registering repositories on a remote server** (Decision 16, Risk 3) saves a `trek-server add` for a clone under an allowed root. If you would rather an import never change a remote server's registry, those repositories would be left with a "run `trek-server add`" warning instead.
