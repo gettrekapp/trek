@@ -10,6 +10,7 @@ import type { RawProjectFile } from '../shared/migration'
 import { addRecent, getRecents, removeRecent } from './recents'
 import { parseRecentRef } from './recentsRules'
 import { decideOpen } from './windowRules'
+import { openTrekproj, PROJECT_FILTERS } from './importUi'
 import {
   claimProject,
   createWindow,
@@ -22,7 +23,6 @@ import {
 
 const execFileAsync = promisify(execFile)
 
-const PROJECT_FILTERS = [{ name: 'Trek Developer Project', extensions: ['trekproj'] }]
 
 /** Null when the project ended up in another window: the sender has nothing to load. */
 async function openForSender(sender: WebContents, filePath: string): Promise<OpenedProject | null> {
@@ -43,6 +43,22 @@ async function openForSender(sender: WebContents, filePath: string): Promise<Ope
   }
 }
 
+/**
+ * A .trekproj as a file window (phase 4d: only as the fallback, or without the Local server):
+ * the sender takes it, or (no sender: macOS opened it) a window of its own does.
+ */
+export async function openLegacy(sender: WebContents | null, filePath: string): Promise<OpenedProject | null> {
+  if (sender) return openForSender(sender, filePath)
+  if (fileIsOpen(filePath)) {
+    focusWindowHoldingFile(filePath)
+    return null
+  }
+  const opened = await openProjectFile(filePath)
+  createWindow({ initialTarget: { kind: 'file', path: filePath } })
+  await addRecent(opened.filePath)
+  return null
+}
+
 export function registerProjectHandlers(): void {
   ipcMain.handle('dialog:selectDirectory', async (event, title: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
@@ -61,10 +77,10 @@ export function registerProjectHandlers(): void {
       properties: ['openFile']
     })
     if (result.canceled || result.filePaths.length === 0) return null
-    return openForSender(event.sender, result.filePaths[0])
+    return openTrekproj(event.sender, result.filePaths[0], openLegacy)
   })
 
-  ipcMain.handle('project:openPath', (event, filePath: string) => openForSender(event.sender, filePath))
+  ipcMain.handle('project:openPath', (event, filePath: string) => openTrekproj(event.sender, filePath, openLegacy))
 
   ipcMain.handle('recents:get', async (): Promise<RecentEntry[]> => {
     return getRecents()

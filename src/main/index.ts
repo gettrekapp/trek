@@ -8,7 +8,7 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon)
 }
 import { registerPtyHandlers, disposeAllPtys } from './pty'
-import { openProjectFile, registerProjectHandlers } from './project'
+import { openLegacy, openProjectFile, registerProjectHandlers } from './project'
 import { registerGithubHandlers } from './github'
 import { registerLinearHandlers } from './linear'
 import { registerSkillHandlers } from './skills'
@@ -33,7 +33,7 @@ import {
 } from './localServer'
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
-import { importFromMenu } from './importUi'
+import { importFromMenu, openFromOs } from './importUi'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
@@ -49,6 +49,16 @@ import {
   restoreWindows,
   windowHasProject
 } from './windows'
+
+/** .trekproj files macOS asked to open (Finder, the Dock) before the windows were restored: opened after. */
+const pendingOpens: string[] = []
+let opensReady = false
+// Registered before ready: a file that launches the app arrives before it.
+app.on('open-file', (event, path) => {
+  event.preventDefault()
+  if (opensReady) void openFromOs(path, openLegacy)
+  else pendingOpens.push(path)
+})
 
 function sendToFocused(channel: string): void {
   ;(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0])?.webContents.send(channel)
@@ -189,6 +199,8 @@ app.whenReady().then(async () => {
   // Not awaited: restored Local windows show Connecting until it answers, then follow its URL.
   void superviseLocalServer()
   await restoreWindows()
+  opensReady = true
+  for (const path of pendingOpens.splice(0)) await openFromOs(path, openLegacy)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

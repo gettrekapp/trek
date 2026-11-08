@@ -26,6 +26,10 @@ export function StartScreen(): React.JSX.Element {
     window.api.getRecentProjects().then(setRecents).catch(() => setRecents([]))
   }, [view])
 
+  const refreshRecents = (): void => {
+    window.api.getRecentProjects().then(setRecents).catch(() => undefined)
+  }
+
   const removeRecent = async (entry: RecentEntry): Promise<void> => {
     setError(null)
     try {
@@ -69,7 +73,8 @@ export function StartScreen(): React.JSX.Element {
     setError(null)
     try {
       const opened = await window.api.openProject()
-      if (!opened) return
+      // A .trekproj is imported now: its server project opened (here, or in a window of its own).
+      if (!opened) return refreshRecents()
       loadOpened(opened)
     } catch (err) {
       syncWindowProject() // main claimed the file for a project that didn't load
@@ -85,6 +90,8 @@ export function StartScreen(): React.JSX.Element {
     try {
       const opened = await window.api.openProjectPath(filePath)
       if (opened) loadOpened(opened)
+      // Imported: the file's entry became its server projects'.
+      else refreshRecents()
     } catch (err) {
       syncWindowProject() // main claimed the file for a project that didn't load
       setError(`Could not open project: ${String(err)}`)
