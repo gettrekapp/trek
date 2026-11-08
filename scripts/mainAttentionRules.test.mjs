@@ -51,3 +51,13 @@ test('a dismiss clears the decision if there is one, else marks the session seen
   assert.deepEqual(dismissRequest(item({ question: 'Q?', askedAt: 2 })), { method: 'session.dismissDecision', params: { projectId: 'p1', sessionId: 's1' } })
   assert.deepEqual(dismissRequest(item({ status: 'done' })), { method: 'session.seen', params: { projectId: 'p1', sessionId: 's1' } })
 })
+
+test('the app-wide "Show notifications" switch off: nothing is notified, focus or not', () => {
+  const off = { showNotifications: false }
+  for (const kind of ['decision', 'attention', 'done']) {
+    assert.equal(shouldNotify(kind, item(), null, off), false, `${kind}: no window focused`)
+    assert.equal(shouldNotify(kind, item(), { target: null, viewing: [] }, off), false, `${kind}: a file window focused`)
+    assert.equal(shouldNotify(kind, item(), null, { showNotifications: true }), true, `${kind}: on`)
+  }
+  assert.equal(wantsAlert([{ audioAlerts: true }]), true, 'the sound does not follow the switch')
+})

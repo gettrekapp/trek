@@ -65,7 +65,7 @@ Out of scope here: the last two rows. Desktop-UI MCP tools stay dropped for v2 (
 12. **Main raises them, with Electron's `Notification`**, worded as the legacy window does, with the session's title for the agent's name: "*Tab* needs a decision" (body: "*Project* · *Server*", then the question), "*Tab* needs your attention", "*Tab* finished"; " · Global" for a Global panel session.
 13. **In view (legacy parity).** `done` is not notified while that project's window has focus (legacy: `!document.hasFocus()`); attention and a decision are not notified while that session is in view in the focused window (legacy: `isTerminalInView`). A server window reports the sessions it shows (`attention:viewing`: the selected worktree's tab and the open Global panel's, so up to two), and main reads `BrowserWindow.getFocusedWindow()` when it raises. No window focused (another app frontmost) or another window focused: notified.
 14. **The sound.** One alert per batch of new entries if any of their projects has audio alerts on, played whether or not the notification shows (the legacy window plays it for a session in view too). Main has no audio: it asks the focused window, else any, to play it (`attention:alert` → `playAlertSound`). With no window open (macOS), there is no alert sound; the OS notification still shows. Not kept from the legacy rules: a bell sounds only after `working` there; main never sees `working` (it is not on the `attention` list), so every new attention sounds.
-15. **Notification preferences.** There are none beyond each project's audio alerts: the legacy app always notifies (subject to the OS). Kept as is; see Questions.
+15. **An app-wide "Show notifications" switch** (user request, Task 3 Step 7b), on by default, in userData's `app-settings.json`, toggled in the settings panel of every window. Off, main raises no OS notification for server sessions. It governs OS notifications only: the bell lists the entries either way, and the alert sound follows each project's audio alerts (Decision 14), since that is the project's own opt-in. A file window's notifications for its own local sessions (`terminals.ts`) do not follow it (they go with the file windows in phase 4).
 16. **No duplicates with legacy notifications, by construction.** A server window raises none (its terminals have no bell or status wiring; the status comes from the server), and the projector never calls the legacy notify path. A file window notifies only for its own local sessions (`terminals.ts`), which are never on main's list. Main notifies only for server sessions. The smoke replaces `window.Notification` in both windows and checks that neither raised one.
 
 **The menu (Task 5)**
@@ -147,7 +147,8 @@ Out of scope here: the last two rows. Desktop-UI MCP tools stay dropped for v2 (
 | `src/shared/types.ts` | modify | 1, 4 | `AttentionItem`, `AttentionChanged`, `SessionSelect`; `InitialWindowState.select` |
 | `src/main/attention.ts` | create | 1 | `createAttention`, `attentionKey`, `newMoment`: the merged list, the baseline, notify once |
 | `src/main/serverLinks.ts` | modify | 2 | the `linked` / `unlinked` hooks |
-| `src/main/attentionRules.ts` | create | 3 | `shouldNotify`, `notificationText`, `placeOf`, `wantsAlert`, `dismissRequest` |
+| `src/main/attentionRules.ts` | create | 3 | `shouldNotify` (with the switch), `notificationText`, `placeOf`, `wantsAlert`, `dismissRequest` |
+| `src/shared/appSettings.ts`, `src/main/appSettings.ts`, `src/renderer/src/components/NotificationSettings.tsx`, `src/renderer/src/components/SettingsPanel.tsx` | create, modify | 3 | the app-wide "Show notifications" switch (`app-settings.json`, `appSettings:get` / `:update` / `:changed`) |
 | `src/main/notifications.ts` | create | 3, 4 | the aggregator wired up: broadcast, OS notifications, sound, IPC; `openAttention` (4) |
 | `src/main/appServers.ts` | modify | 3 | the hooks and `listChanged` passed through; `serverLink(id)` |
 | `src/main/windows.ts` | modify | 3, 4 | `focusedWindowTarget` (3); `showServerSession`, `pendingSelect`, `takeInitial`'s `select` (4) |
@@ -160,7 +161,7 @@ Out of scope here: the last two rows. Desktop-UI MCP tools stay dropped for v2 (
 | `src/renderer/src/v2/sessionSelect.ts` | create | 6 | `selectStep`, `sessionsInView`, `sameIds` |
 | `src/renderer/src/attentionSelect.ts` | create | 6 | `requestSessionSelect`, `watchAttention` |
 | `src/renderer/src/audio.ts`, `src/renderer/src/App.tsx` | modify | 6 | `playAlertSound`; `watchAttention` and the initial select |
-| `scripts/mainAttention.test.mjs`, `mainAttentionRules.test.mjs`, `attentionMenu.test.mjs`, `v2SessionSelect.test.mjs` | create | 1, 3, 5, 6 | tests |
+| `scripts/mainAttention.test.mjs`, `mainAttentionRules.test.mjs`, `appSettings.test.mjs`, `attentionMenu.test.mjs`, `v2SessionSelect.test.mjs` | create | 1, 3, 5, 6 | tests |
 | `scripts/mainServerLinks.test.mjs`, `windowRules.test.mjs` | modify | 2, 4 | tests |
 | `scripts/v2-smoke.mjs` | modify | 7 | the 3d checks; `recordFocusCalls` |
 
@@ -1003,7 +1004,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ma
 - Modify: `src/main/serverLinks.ts`
 - Test: `scripts/mainServerLinks.test.mjs`
 
-Decision 7. Two optional deps, called where the registry adds, re-points and drops a connection. The second test checks, over the real SDK with fake sockets, that the mirror handed to `linked` subscribes to `attention` at the welcome.
+Decision 7. Two optional deps, called where the registry adds, re-points and drops a connection. The second test checks, over the real SDK with fake sockets, that the mirror handed to `linked` subscribes to `attention` at the welcome. The third (`setup({ withHooks: false })`) checks a caller without the hooks still gets its connection: `registry.add` runs before the optional call, since `deps.linked?.(id, registry.add(…))` would skip the add along with its arguments.
 
 - [ ] **Step 1: The tests**
 
@@ -1011,7 +1012,16 @@ Decision 7. Two optional deps, called where the registry adds, re-points and dro
 diff --git a/scripts/mainServerLinks.test.mjs b/scripts/mainServerLinks.test.mjs
 --- a/scripts/mainServerLinks.test.mjs
 +++ b/scripts/mainServerLinks.test.mjs
-@@ -16,6 +16,8 @@ function setup({ entries = [], stored = {} } = {}) {
+@@ -9,13 +9,16 @@ const SECRET = 'tok-S3CRET-never-in-a-snapshot'
+ /**
+  * Links over a fake list, a fake secret store and fake sockets. `hold` keeps
+  * the token reads open until `release()`, to change the list meanwhile.
++ * `withHooks: false` leaves out `linked` and `unlinked`, as a caller may.
+  */
+-function setup({ entries = [], stored = {} } = {}) {
++function setup({ entries = [], stored = {}, withHooks = true } = {}) {
+   const list = entries.map((e) => ({ ...e }))
+   const secrets = new Map(Object.entries(stored))
    const server = fakeServer()
    const clock = fakeTimers()
    const changes = []
@@ -1020,18 +1030,20 @@ diff --git a/scripts/mainServerLinks.test.mjs b/scripts/mainServerLinks.test.mjs
    let held = null
    let time = 0
    const links = createServerLinks({
-@@ -30,7 +32,9 @@ function setup({ entries = [], stored = {} } = {}) {
+@@ -30,7 +33,11 @@ function setup({ entries = [], stored = {} } = {}) {
      timers: clock.timers,
      clientVersion: '9.9.9',
      changed: (snapshot) => changes.push(snapshot),
 -    now: () => time
 +    now: () => time,
-+    linked: (id, registered) => hooks.push(['linked', id, registered]),
-+    unlinked: (id) => hooks.push(['unlinked', id])
++    ...(withHooks && {
++      linked: (id, registered) => hooks.push(['linked', id, registered]),
++      unlinked: (id) => hooks.push(['unlinked', id])
++    })
    })
    const hold = () => {
      let release
-@@ -41,7 +45,7 @@ function setup({ entries = [], stored = {} } = {}) {
+@@ -41,7 +48,7 @@ function setup({ entries = [], stored = {} } = {}) {
      }
    }
    const sockFor = (url) => server.sockets.filter((s) => s.url === url).at(-1)
@@ -1040,7 +1052,7 @@ diff --git a/scripts/mainServerLinks.test.mjs b/scripts/mainServerLinks.test.mjs
  }
  
  const box = { id: 'box', name: 'Box', url: 'ws://box:8800' }
-@@ -271,3 +275,42 @@ test('drop(id) during a sync\'s token reads: that sync leaves the entry to the n
+@@ -271,3 +278,55 @@ test('drop(id) during a sync\'s token reads: that sync leaves the entry to the n
    assert.equal(server.sockets.length, 1, 'the token read before the drop never reconnects')
    assert.equal(links.get('box'), undefined)
  })
@@ -1083,13 +1095,26 @@ diff --git a/scripts/mainServerLinks.test.mjs b/scripts/mainServerLinks.test.mjs
 +  await new Promise((r) => setImmediate(r))
 +  assert.deepEqual(updates, [{ snapshot: { entries: [] }, rev: 0 }])
 +})
++
++test('without the linked and unlinked hooks, an entry with a token is still connected', async () => {
++  const { links, server, sockFor, last, hooks } = setup({ entries: [box], stored: { box: SECRET }, withHooks: false })
++  await links.sync()
++  assert.ok(links.get('box'), 'the registry added the entry')
++  assert.deepEqual(server.sockets.map((s) => s.url), ['ws://box:8800'])
++  const sock = sockFor('ws://box:8800')
++  sock.open()
++  sock.welcome()
++  assert.equal(last().servers[0].status, 'connected')
++  links.close()
++  assert.deepEqual(hooks, [])
++})
 ```
 
 - [ ] **Step 2: Run them and see them fail**
 
 Run: `node --test scripts/mainServerLinks.test.mjs 2>&1 | grep -E "^# (pass|fail)|^not ok"`
 
-Expected: `# pass 14`, `# fail 2`, failing:
+Expected: `# pass 15`, `# fail 2`, failing:
 - linked and unlinked follow the connections: add, a new URL, a cleared token, drop and close; not a new token
 - the linked connection's mirror subscribes to attention once welcomed
 
@@ -1141,12 +1166,14 @@ diff --git a/src/main/serverLinks.ts b/src/main/serverLinks.ts
    }
  
    const apply = async (): Promise<void> => {
-@@ -166,11 +176,14 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
+@@ -166,11 +176,16 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
            continue
          }
          linkTokens.set(entry.id, token)
 -        registry.add({ id: entry.id, url: entry.url, token })
-+        deps.linked?.(entry.id, registry.add({ id: entry.id, url: entry.url, token }))
++        // Added first: an optional call skips its arguments when there is no hook.
++        const registered = registry.add({ id: entry.id, url: entry.url, token })
++        deps.linked?.(entry.id, registered)
        } else if (current.entry.url !== entry.url) {
          linkTokens.set(entry.id, token)
          statuses.delete(entry.id)
@@ -1161,7 +1188,7 @@ diff --git a/src/main/serverLinks.ts b/src/main/serverLinks.ts
 
 - [ ] **Step 4: Run the tests again**
 
-Run the Step 2 command → `# pass 16`, `# fail 0`. `npm run typecheck` → no errors. `npm test` → `# pass 1380`, `# fail 0`.
+Run the Step 2 command → `# pass 17`, `# fail 0`. `npm run typecheck` → no errors. `npm test` → `# pass 1381`, `# fail 0`.
 
 - [ ] **Step 5: Commit**
 
@@ -1174,9 +1201,9 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(ma
 ### Task 3: Notifications, the broadcast and dismiss, in main
 
 **Files:**
-- Create: `src/main/attentionRules.ts`, `src/main/notifications.ts`
-- Modify: `src/main/appServers.ts`, `src/main/windows.ts`, `src/main/index.ts`, `src/preload/index.ts`
-- Test: `scripts/mainAttentionRules.test.mjs` (create)
+- Create: `src/main/attentionRules.ts`, `src/main/notifications.ts`; the switch (Step 7b): `src/shared/appSettings.ts`, `src/main/appSettings.ts`, `src/renderer/src/components/NotificationSettings.tsx`
+- Modify: `src/main/appServers.ts`, `src/main/windows.ts`, `src/main/index.ts`, `src/preload/index.ts`; `src/renderer/src/components/SettingsPanel.tsx` (Step 7b)
+- Test: `scripts/mainAttentionRules.test.mjs`, `scripts/appSettings.test.mjs` (create); `scripts/v2-smoke.mjs` (Step 7b)
 
 Decisions 12–16 and 23. The rules are pure and tested; `notifications.ts` carries them out with Electron and is covered by `smoke:v2` (Task 7). `registerAttentionHandlers` runs before `registerAppServerHandlers`, whose first sync links the existing servers. A notification's click does nothing yet besides closing it: Task 4 wires it to the session.
 
@@ -1236,6 +1263,16 @@ test('a dismiss clears the decision if there is one, else marks the session seen
   assert.deepEqual(dismissRequest(item({ question: 'Q?', askedAt: 2 })), { method: 'session.dismissDecision', params: { projectId: 'p1', sessionId: 's1' } })
   assert.deepEqual(dismissRequest(item({ status: 'done' })), { method: 'session.seen', params: { projectId: 'p1', sessionId: 's1' } })
 })
+
+test('the app-wide "Show notifications" switch off: nothing is notified, focus or not', () => {
+  const off = { showNotifications: false }
+  for (const kind of ['decision', 'attention', 'done']) {
+    assert.equal(shouldNotify(kind, item(), null, off), false, `${kind}: no window focused`)
+    assert.equal(shouldNotify(kind, item(), { target: null, viewing: [] }, off), false, `${kind}: a file window focused`)
+    assert.equal(shouldNotify(kind, item(), null, { showNotifications: true }), true, `${kind}: on`)
+  }
+  assert.equal(wantsAlert([{ audioAlerts: true }]), true, 'the sound does not follow the switch')
+})
 ```
 
 - [ ] **Step 2: Run it and see it fail**
@@ -1254,6 +1291,7 @@ Create `src/main/attentionRules.ts`:
 // and what dismissing an entry asks the server. notifications.ts carries them out.
 import type { AttentionKind } from './attention.ts'
 import type { AttentionItem } from '../shared/types.ts'
+import { DEFAULT_APP_SETTINGS, type AppSettings } from '../shared/appSettings.ts'
 
 /** The focused window, as far as attention cares: the server project it shows, and the session in view there. */
 export interface FocusedWindow {
@@ -1268,9 +1306,17 @@ export interface FocusedWindow {
  * the session's project window has focus (legacy: `!document.hasFocus()`);
  * attention and a decision are not notified while that session is in view in
  * the focused window (legacy: `isTerminalInView`). No window focused (another
- * app is frontmost), or another window focused: notified.
+ * app is frontmost), or another window focused: notified. Nothing is notified
+ * while the app-wide "Show notifications" switch is off (`showNotifications`);
+ * the bell and the alert sound do not follow it.
  */
-export function shouldNotify(kind: AttentionKind, item: AttentionItem, focused: FocusedWindow | null): boolean {
+export function shouldNotify(
+  kind: AttentionKind,
+  item: AttentionItem,
+  focused: FocusedWindow | null,
+  settings: Pick<AppSettings, 'showNotifications'> = DEFAULT_APP_SETTINGS
+): boolean {
+  if (!settings.showNotifications) return false
   if (!focused?.target) return true
   const { target } = focused
   if (target.serverEntryId !== item.serverEntryId || target.projectId !== item.projectId) return true
@@ -1317,7 +1363,7 @@ export function dismissRequest(item: AttentionItem): {
 
 - [ ] **Step 4: Run the test again**
 
-Run: `node --test scripts/mainAttentionRules.test.mjs 2>&1 | grep -E "^# (pass|fail)"` → `# pass 4`, `# fail 0`.
+Run: `node --test scripts/mainAttentionRules.test.mjs 2>&1 | grep -E "^# (pass|fail)"` → `# pass 5`, `# fail 0` once Step 7b's `src/shared/appSettings.ts` exists (until then the import fails).
 
 - [ ] **Step 5: The focused window's target, the hooks through `appServers`, and `serverLink`**
 
@@ -1424,6 +1470,7 @@ import { BrowserWindow, Notification, ipcMain, type WebContents } from 'electron
 import { createAttention, type Attention, type AttentionEvent } from './attention'
 import { dismissRequest, notificationText, shouldNotify, wantsAlert, type FocusedWindow } from './attentionRules'
 import { getAppServer, serverLink } from './appServers'
+import { appSettings } from './appSettings'
 import { focusedWindowTarget } from './windows'
 import type { AttentionChanged } from '../shared/types'
 
@@ -1473,8 +1520,9 @@ function show(title: string, body: string): void {
 
 function raised(events: AttentionEvent[]): void {
   const now = focused()
+  const settings = appSettings()
   for (const { kind, item } of events) {
-    if (!shouldNotify(kind, item, now)) continue
+    if (!shouldNotify(kind, item, now, settings)) continue
     const { title, body } = notificationText(kind, item)
     show(title, body)
   }
@@ -1531,19 +1579,21 @@ export function registerAttentionHandlers(): void {
 diff --git a/src/main/index.ts b/src/main/index.ts
 --- a/src/main/index.ts
 +++ b/src/main/index.ts
-@@ -18,6 +18,7 @@ import { registerStackHandlers } from './stacks'
+@@ -18,6 +18,8 @@ import { registerStackHandlers } from './stacks'
  import { registerClaudeSessionHandlers } from './claudeSessions'
  import { registerServerHandlers, disconnectAllServers } from './servers'
  import { closeServerLinks, registerAppServerHandlers } from './appServers'
 +import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
++import { registerAppSettingsHandlers } from './appSettings'
  import { registerV2Relay } from './v2relay'
  import { registerMcpHandlers } from './mcp'
  import { registerBotHandlers, stopAllBots } from './bot'
-@@ -127,7 +128,10 @@ app.whenReady().then(async () => {
+@@ -127,7 +129,11 @@ app.whenReady().then(async () => {
    registerStackHandlers()
    registerClaudeSessionHandlers()
    registerServerHandlers()
 -  registerAppServerHandlers()
++  registerAppSettingsHandlers()
 +  // Before the links: their first connections are linked to the aggregator as they are made.
 +  registerAttentionHandlers()
 +  const attention = attentionHooks()
@@ -1551,7 +1601,7 @@ diff --git a/src/main/index.ts b/src/main/index.ts
    registerV2Relay()
    registerMcpHandlers()
    registerBotHandlers()
-@@ -156,8 +160,11 @@ app.on('window-all-closed', () => {
+@@ -156,8 +162,11 @@ app.on('window-all-closed', () => {
  
  let quitConfirmed = false
  
@@ -1568,7 +1618,9 @@ diff --git a/src/main/index.ts b/src/main/index.ts
 diff --git a/src/preload/index.ts b/src/preload/index.ts
 --- a/src/preload/index.ts
 +++ b/src/preload/index.ts
-@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
+@@ -1,7 +1,9 @@
+ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
++import type { AppSettings } from '../shared/appSettings'
  import type {
    AppServerInfo,
    AppServersChanged,
@@ -1576,10 +1628,16 @@ diff --git a/src/preload/index.ts b/src/preload/index.ts
    V2SocketOpenResult,
    AppServerTest,
    ContainerAction,
-@@ -216,6 +217,18 @@ const api = {
+@@ -216,6 +218,24 @@ const api = {
      onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>
        subscribe('appServers:changed', callback)
    },
++  // App-wide preferences (app-settings.json), shared by every window.
++  appSettings: {
++    get: (): Promise<AppSettings> => ipcRenderer.invoke('appSettings:get'),
++    update: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke('appSettings:update', patch),
++    onChanged: (callback: (settings: AppSettings) => void): (() => void) => subscribe('appSettings:changed', callback)
++  },
 +  // Sessions on the app-wide servers that need the user, merged by main (no token, no URL).
 +  attention: {
 +    list: (): Promise<AttentionChanged> => ipcRenderer.invoke('attention:list'),
@@ -1597,15 +1655,261 @@ diff --git a/src/preload/index.ts b/src/preload/index.ts
      open: (serverEntryId: string): Promise<V2SocketOpenResult> => ipcRenderer.invoke('v2socket:open', serverEntryId),
 ```
 
+- [ ] **Step 7b: The app-wide "Show notifications" switch (Decision 15)**
+
+On by default, in userData's `app-settings.json` (written 0600 and atomically, as `app-servers.json`; a corrupt file is set aside). Off: main raises no OS notification for server attention (`shouldNotify` returns false); the bell and each project's alert sound do not follow it. The toggle is in the settings panel, which file and server windows both show. Step 7's diff already registers `registerAppSettingsHandlers` and adds `window.api.appSettings`. Not in `BOT_SECRET_FILES`: one boolean, nothing secret (the bot's sandbox hides userData anyway).
+
+Create `src/shared/appSettings.ts`:
+
+```ts
+// App-wide preferences, kept by main in userData's app-settings.json and shared by
+// every window (file and server windows alike). Pure: read and patch, field by field.
+
+export interface AppSettings {
+  /** OS notifications for sessions on the app-wide servers (main's attention); on by default */
+  showNotifications: boolean
+}
+
+export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({ showNotifications: true })
+
+/** A stored file (or a patch): known fields of the right type are kept, the rest fall back to `base`. */
+export function parseAppSettings(raw: unknown, base: Readonly<AppSettings> = DEFAULT_APP_SETTINGS): AppSettings {
+  const from = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+  return {
+    showNotifications: typeof from.showNotifications === 'boolean' ? from.showNotifications : base.showNotifications
+  }
+}
+```
+
+Create `src/main/appSettings.ts`:
+
+```ts
+// App-wide preferences (src/shared/appSettings.ts) in userData's app-settings.json,
+// written owner-only and atomically, as app-servers.json is. Read once and cached:
+// main's notifications read it synchronously as they raise. Every window hears a
+// change through `appSettings:changed`.
+import { app, BrowserWindow, ipcMain } from 'electron'
+import { readFileSync, renameSync } from 'node:fs'
+import { join } from 'node:path'
+import { writeFileAtomic } from './secrets'
+import { DEFAULT_APP_SETTINGS, parseAppSettings, type AppSettings } from '../shared/appSettings.ts'
+
+const FILE_NAME = 'app-settings.json'
+
+let settings: AppSettings | null = null
+
+function filePath(): string {
+  return join(app.getPath('userData'), FILE_NAME)
+}
+
+/** A missing file is the defaults; an unreadable or corrupt one is set aside (not overwritten). */
+export function appSettings(): AppSettings {
+  if (settings) return settings
+  const path = filePath()
+  try {
+    settings = parseAppSettings(JSON.parse(readFileSync(path, 'utf8')))
+  } catch (err) {
+    settings = { ...DEFAULT_APP_SETTINGS }
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      const aside = `${path}.corrupt-${Date.now()}`
+      try {
+        renameSync(path, aside)
+        console.warn(`trek: ${FILE_NAME} could not be read (${err instanceof Error ? err.message : String(err)}); moved it to ${aside}`)
+      } catch (renameErr) {
+        console.warn(`trek: ${FILE_NAME} could not be read, nor moved aside`, err, renameErr)
+      }
+    }
+  }
+  return settings
+}
+
+/** Every write goes through this chain, so concurrent patches never interleave. */
+let writeChain: Promise<unknown> = Promise.resolve()
+
+async function update(patch: unknown): Promise<AppSettings> {
+  // Applied at once (the next notification follows it), written in order.
+  const next = parseAppSettings(patch, appSettings())
+  settings = next
+  const run = writeChain.then(() => writeFileAtomic(filePath(), JSON.stringify(next, null, 2)))
+  writeChain = run.catch(() => undefined)
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('appSettings:changed', next)
+    } catch (err) {
+      console.warn('trek: could not send appSettings:changed to a window', err)
+    }
+  }
+  await run
+  return { ...next }
+}
+
+export function registerAppSettingsHandlers(): void {
+  ipcMain.handle('appSettings:get', () => ({ ...appSettings() }))
+  ipcMain.handle('appSettings:update', (_event, patch: unknown) => update(patch))
+}
+```
+
+Create `src/renderer/src/components/NotificationSettings.tsx`:
+
+```tsx
+import { useEffect, useState } from 'react'
+import type { AppSettings } from '../../../shared/appSettings'
+
+/**
+ * The app-wide "Show notifications" switch (app-settings.json on this machine), in
+ * every window's settings. Off: main raises no OS notifications for the servers'
+ * sessions. The bell still lists them, and each project's audio alerts still sound.
+ */
+export function NotificationSettings(): React.JSX.Element {
+  const [settings, setSettings] = useState<AppSettings | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let live = true
+    const off = window.api.appSettings.onChanged((next) => setSettings(next))
+    window.api.appSettings
+      .get()
+      .then((s) => {
+        if (live) setSettings((had) => had ?? s)
+      })
+      .catch((err: Error) => live && setError(err.message))
+    return () => {
+      live = false
+      off()
+    }
+  }, [])
+
+  const toggle = (showNotifications: boolean): void => {
+    setError(null)
+    window.api.appSettings
+      .update({ showNotifications })
+      .then(setSettings)
+      .catch((err: Error) => setError(`Could not save the setting: ${err.message}`))
+  }
+
+  return (
+    <>
+      <h3>Notifications</h3>
+      <label className="settings-row">
+        <input
+          type="checkbox"
+          aria-label="Show notifications"
+          checked={settings?.showNotifications ?? true}
+          disabled={settings === null}
+          onChange={(e) => toggle(e.target.checked)}
+        />
+        <span className="settings-label">
+          <span className="settings-name">Show notifications</span>
+          <span className="settings-desc">
+            On this computer, for every project: a system notification when a session on a server
+            needs a decision, needs your attention or finishes. The bell lists them either way, and
+            each project&apos;s audio alerts still play.
+          </span>
+          {error && <span className="settings-desc settings-warn">{error}</span>}
+        </span>
+      </label>
+    </>
+  )
+}
+```
+
+```diff
+diff --git a/src/renderer/src/components/SettingsPanel.tsx b/src/renderer/src/components/SettingsPanel.tsx
+--- a/src/renderer/src/components/SettingsPanel.tsx
++++ b/src/renderer/src/components/SettingsPanel.tsx
+@@ -8,6 +8,7 @@ import { ENV_DEFAULTS } from '../../../shared/environments'
+ import { ServersPanel } from './ServersPanel'
+ import { LinearSettings } from './LinearSettings'
+ import { VoiceSettings } from './VoiceSettings'
++import { NotificationSettings } from './NotificationSettings'
+ import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
+ import { AppearanceSettings } from './AppearanceSettings'
+ import { LlmSettings } from './LlmSettings'
+@@ -229,6 +230,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
+           )}
+         </div>
+         <AppearanceSettings />
++        <NotificationSettings />
+         {sections.linear !== 'hidden' && <LinearSettings />}
+         {sections.voice !== 'hidden' && <VoiceSettings />}
+         <LlmSettings projectOnly={sections.agents === 'project'} />
+```
+
+`smoke:v2`'s settings check lists the new section, and the switch round-trips through main (3 checks; 145 in all):
+
+```diff
+diff --git a/scripts/v2-smoke.mjs b/scripts/v2-smoke.mjs
+--- a/scripts/v2-smoke.mjs
++++ b/scripts/v2-smoke.mjs
+@@ -33,7 +33,8 @@
+ //     a dismiss clears it on the server, and so does typing an answer; the New session menu lists
+ //     the server's agents (server.agents, asked by the window), greys out the ones not installed,
+ //     and "Choose…" offers them; the Global bar names the agent the server would start.
+-//   - 3c-3b-2 settings: the Settings panel shows the project's sections only; a prompt typed and
++//   - 3c-3b-2 settings: the Settings panel shows the project's sections only (and the app-wide
++//     "Show notifications" switch, which main saves and reports back); a prompt typed and
+ //     blurred is saved with project.updateSettings and its expected value; a session type added
+ //     and named at once builds on the pending add; a CONFLICT (another client's edit the window
+ //     has not seen yet, its patches held in main) asks, and Reload shows the server's value.
+@@ -854,6 +855,7 @@ try {
+   check("a server window's Settings show the project's sections only", await settings.locator('h3').allTextContents(), [
+     'Settings',
+     'Appearance',
++    'Notifications',
+     'Agents',
+     'Worktree tags',
+     'Custom tags',
+@@ -864,6 +866,15 @@ try {
+     'Session types'
+   ])
+   check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
++  // The app-wide "Show notifications" switch, the one machine setting a server window shows: on by
++  // default, saved by main (app-settings.json), and back on for the checks after this one.
++  const notifySwitch = settings.locator('input[aria-label="Show notifications"]')
++  const appSettingsNow = () => w1.evaluate(() => window.api.appSettings.get())
++  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true }])
++  await notifySwitch.click()
++  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false }), { showNotifications: false })
++  await notifySwitch.click()
++  check('and on again', await until(appSettingsNow, { showNotifications: true }), { showNotifications: true })
+   const prompt = settings.locator('.session-prompt-input')
+   const settingsNow = async () => (await projectNow()).settings
+   let sentAt = await sentCount()
+```
+
+Create `scripts/appSettings.test.mjs`:
+
+```js
+// scripts/appSettings.test.mjs — the app-wide settings file and its patches, field by field.
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { DEFAULT_APP_SETTINGS, parseAppSettings } from '../src/shared/appSettings.ts'
+
+test('notifications are on by default; a missing, corrupt or mistyped file reads as the defaults', () => {
+  assert.deepEqual(DEFAULT_APP_SETTINGS, { showNotifications: true })
+  for (const raw of [undefined, null, 'x', 1, [], {}, { showNotifications: 'no' }]) {
+    assert.deepEqual(parseAppSettings(raw), { showNotifications: true }, JSON.stringify(raw))
+  }
+  assert.deepEqual(parseAppSettings({ showNotifications: false, other: 1 }), { showNotifications: false }, 'unknown keys are dropped')
+})
+
+test('a patch changes only the fields it carries, over the current settings', () => {
+  const current = { showNotifications: false }
+  assert.deepEqual(parseAppSettings({}, current), { showNotifications: false })
+  assert.deepEqual(parseAppSettings({ showNotifications: true }, current), { showNotifications: true })
+  assert.deepEqual(parseAppSettings({ showNotifications: 0 }, current), { showNotifications: false })
+})
+```
+
 - [ ] **Step 8: Verify**
 
-Run: `npm run typecheck` → no errors. `npm run build` → succeeds. `npm test` → `# pass 1384`, `# fail 0`.
+Run: `npm run typecheck` → no errors. `npm run build` → succeeds. `npm test` → `# pass 1388`, `# fail 0`.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/main/attentionRules.ts src/main/notifications.ts scripts/mainAttentionRules.test.mjs
-git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(main): attention notifications, the broadcast and dismiss through main's connections" -m "Co-Authored-By: <model trailer>" -- src/main/attentionRules.ts src/main/notifications.ts scripts/mainAttentionRules.test.mjs src/main/windows.ts src/main/appServers.ts src/main/index.ts src/preload/index.ts
+git add src/main/attentionRules.ts src/main/notifications.ts scripts/mainAttentionRules.test.mjs src/shared/appSettings.ts src/main/appSettings.ts src/renderer/src/components/NotificationSettings.tsx scripts/appSettings.test.mjs
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(main): attention notifications, the broadcast and dismiss through main's connections" -m "Co-Authored-By: <model trailer>" -- src/main/attentionRules.ts src/main/notifications.ts scripts/mainAttentionRules.test.mjs src/main/windows.ts src/main/appServers.ts src/main/index.ts src/preload/index.ts src/shared/appSettings.ts src/main/appSettings.ts src/renderer/src/components/NotificationSettings.tsx src/renderer/src/components/SettingsPanel.tsx scripts/appSettings.test.mjs scripts/v2-smoke.mjs
 ```
 
 ---
@@ -1807,16 +2111,16 @@ diff --git a/src/shared/types.ts b/src/shared/types.ts
 diff --git a/src/main/notifications.ts b/src/main/notifications.ts
 --- a/src/main/notifications.ts
 +++ b/src/main/notifications.ts
-@@ -11,7 +11,7 @@ import { BrowserWindow, Notification, ipcMain, type WebContents } from 'electron
- import { createAttention, type Attention, type AttentionEvent } from './attention'
+@@ -12,7 +12,7 @@ import { createAttention, type Attention, type AttentionEvent } from './attentio
  import { dismissRequest, notificationText, shouldNotify, wantsAlert, type FocusedWindow } from './attentionRules'
  import { getAppServer, serverLink } from './appServers'
+ import { appSettings } from './appSettings'
 -import { focusedWindowTarget } from './windows'
 +import { focusedWindowTarget, showServerSession } from './windows'
  import type { AttentionChanged } from '../shared/types'
  
  let attention: Attention | null = null
-@@ -44,13 +44,16 @@ function playAlert(): void {
+@@ -45,13 +45,16 @@ function playAlert(): void {
    if (win && !win.webContents.isDestroyed()) win.webContents.send('attention:alert')
  }
  
@@ -1835,9 +2139,9 @@ diff --git a/src/main/notifications.ts b/src/main/notifications.ts
    notification.on('close', forget)
    live.add(notification)
    // The oldest goes first; a notification macOS still shows keeps working without the reference.
-@@ -63,11 +66,23 @@ function raised(events: AttentionEvent[]): void {
+@@ -65,11 +68,23 @@ function raised(events: AttentionEvent[]): void {
    for (const { kind, item } of events) {
-     if (!shouldNotify(kind, item, now)) continue
+     if (!shouldNotify(kind, item, now, settings)) continue
      const { title, body } = notificationText(kind, item)
 -    show(title, body)
 +    show(title, body, () => openAttention(item.key))
@@ -1860,7 +2164,7 @@ diff --git a/src/main/notifications.ts b/src/main/notifications.ts
  /** The aggregator's hooks for serverLinks, and the relabel for the list's broadcast. */
  export function attentionHooks(): Pick<Attention, 'linked' | 'unlinked' | 'relabel'> {
    return {
-@@ -94,6 +109,7 @@ export function registerAttentionHandlers(): void {
+@@ -96,6 +111,7 @@ export function registerAttentionHandlers(): void {
      raised
    })
    ipcMain.handle('attention:list', () => attention!.snapshot())
@@ -1894,7 +2198,7 @@ diff --git a/src/preload/index.ts b/src/preload/index.ts
 
 - [ ] **Step 7: Verify**
 
-Run: `npm run typecheck` → no errors (App.tsx destructures `{ opened, menu, server }`, which still type-checks; Task 6 reads `select`). `npm test` → `# pass 1385`, `# fail 0`.
+Run: `npm run typecheck` → no errors (App.tsx destructures `{ opened, menu, server }`, which still type-checks; Task 6 reads `select`). `npm test` → `# pass 1389`, `# fail 0`.
 
 - [ ] **Step 8: Commit**
 
@@ -2364,7 +2668,7 @@ diff --git a/src/renderer/src/styles.css b/src/renderer/src/styles.css
 
 - [ ] **Step 7: Verify**
 
-Run: `npm run typecheck` → no errors. `npm test` → `# pass 1390`, `# fail 0`.
+Run: `npm run typecheck` → no errors. `npm test` → `# pass 1394`, `# fail 0`.
 
 - [ ] **Step 8: Commit**
 
@@ -2636,9 +2940,9 @@ diff --git a/src/renderer/src/audio.ts b/src/renderer/src/audio.ts
 
 - [ ] **Step 6: Verify**
 
-Run: `npm run typecheck` → no errors. `npm run build && npm --prefix server run build` → both succeed. `npm test` → `# pass 1393`, `# fail 0`.
+Run: `npm run typecheck` → no errors. `npm run build && npm --prefix server run build` → both succeed. `npm test` → `# pass 1397`, `# fail 0`.
 
-Run: `node scripts/v2-smoke.mjs 2>&1 | tail -1` → `V2 SMOKE PASS (142 checks)`: the old smoke passes on the new tree (its "and in the bell" checks see the window's own decision first, Decision 18).
+Run: `node scripts/v2-smoke.mjs 2>&1 | tail -1` → `V2 SMOKE PASS (145 checks)`: the old smoke passes on the new tree (its "and in the bell" checks see the window's own decision first, Decision 18).
 
 - [ ] **Step 7: Commit**
 
@@ -2850,7 +3154,7 @@ diff --git a/scripts/v2-smoke.mjs b/scripts/v2-smoke.mjs
 
 Run: `node scripts/v2-smoke.mjs 2>&1 | tail -1` (after `npm run build && npm --prefix server run build`)
 
-Expected: `V2 SMOKE PASS (159 checks)`: 142, plus 17 in section 7c:
+Expected: `V2 SMOKE PASS (162 checks)`: 145, plus 17 in section 7c:
 - a file window's bell counts the server's decision
 - its menu names the project, the server and the tab, and asks the question (`["Demo · Local box · Renamed","Deploy now?"]`)
 - main raised one OS notification (`[{"title":"Renamed needs a decision","body":"Demo · Local box\nDeploy now?"}]`)
@@ -2869,7 +3173,7 @@ Expected: `V2 SMOKE PASS (159 checks)`: 142, plus 17 in section 7c:
 - and is not recorded as a recent
 - the attention windows close
 
-On the tree before Task 6 (no `watchAttention`), the run ends `V2 SMOKE FAIL (1 of 134 checks failed, aborted: which selects the session's worktree)`: the window never acts on main's select, and the run stops there.
+On the tree before Task 6 (no `watchAttention`), the run ends `V2 SMOKE FAIL (1 of 137 checks failed, aborted: which selects the session's worktree)`: the window never acts on main's select, and the run stops there.
 
 - [ ] **Step 3: Commit**
 
@@ -2887,7 +3191,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(sm
 
 Run: `npm test 2>&1 | grep -E '^# (pass|fail)'`
 
-Expected: `# pass 1393`, `# fail 0`: the baseline 1363 at `4fc0d96`, plus 3 (Task 0: one each in `serverStatus`, `serverSessions` and `serverV2`; two tests changed), 12 (Task 1), 2 (Task 2), 4 (Task 3), 1 (Task 4), 5 (Task 5) and 3 (Task 6).
+Expected: `# pass 1397`, `# fail 0`: the baseline 1363 at `4fc0d96`, plus 3 (Task 0: one each in `serverStatus`, `serverSessions` and `serverV2`; two tests changed), 12 (Task 1), 3 (Task 2), 7 (Task 3: 5 in `mainAttentionRules`, 2 in `appSettings`), 1 (Task 4), 5 (Task 5) and 3 (Task 6).
 
 - [ ] **Step 2: Types and build**
 
@@ -2899,7 +3203,7 @@ Run each after the previous has exited:
 
 | Command | Expected |
 |---|---|
-| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (159 checks)` |
+| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (162 checks)` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
@@ -2942,5 +3246,5 @@ Found while prototyping this plan.
 
 ## Questions for the user
 
-1. **Notification preferences.** The app has no switch for OS notifications: the legacy window always notifies, and only the sound is per project (Audio alerts). This plan keeps that for server sessions. Do you want an app-wide "Show notifications" setting (or one per server) in 3d, or later?
+1. **Notification preferences.** Answered: an app-wide "Show notifications" switch, in 3d (Decision 15). A per-server switch is not planned.
 2. **`done` in the bell.** The plan lists and counts every server's sessions in `done` (and notifies "finished" when the project's window is not focused, as the legacy window does). If that is too noisy across several servers, the bell could count decisions and attention only and list `done` below them. Keep as planned?

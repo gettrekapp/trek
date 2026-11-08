@@ -33,7 +33,8 @@
 //     a dismiss clears it on the server, and so does typing an answer; the New session menu lists
 //     the server's agents (server.agents, asked by the window), greys out the ones not installed,
 //     and "Choose…" offers them; the Global bar names the agent the server would start.
-//   - 3c-3b-2 settings: the Settings panel shows the project's sections only; a prompt typed and
+//   - 3c-3b-2 settings: the Settings panel shows the project's sections only (and the app-wide
+//     "Show notifications" switch, which main saves and reports back); a prompt typed and
 //     blurred is saved with project.updateSettings and its expected value; a session type added
 //     and named at once builds on the pending add; a CONFLICT (another client's edit the window
 //     has not seen yet, its patches held in main) asks, and Reload shows the server's value.
@@ -854,6 +855,7 @@ try {
   check("a server window's Settings show the project's sections only", await settings.locator('h3').allTextContents(), [
     'Settings',
     'Appearance',
+    'Notifications',
     'Agents',
     'Worktree tags',
     'Custom tags',
@@ -864,6 +866,15 @@ try {
     'Session types'
   ])
   check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
+  // The app-wide "Show notifications" switch, the one machine setting a server window shows: on by
+  // default, saved by main (app-settings.json), and back on for the checks after this one.
+  const notifySwitch = settings.locator('input[aria-label="Show notifications"]')
+  const appSettingsNow = () => w1.evaluate(() => window.api.appSettings.get())
+  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true }])
+  await notifySwitch.click()
+  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false }), { showNotifications: false })
+  await notifySwitch.click()
+  check('and on again', await until(appSettingsNow, { showNotifications: true }), { showNotifications: true })
   const prompt = settings.locator('.session-prompt-input')
   const settingsNow = async () => (await projectNow()).settings
   let sentAt = await sentCount()

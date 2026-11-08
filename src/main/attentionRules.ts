@@ -3,6 +3,7 @@
 // and what dismissing an entry asks the server. notifications.ts carries them out.
 import type { AttentionKind } from './attention.ts'
 import type { AttentionItem } from '../shared/types.ts'
+import { DEFAULT_APP_SETTINGS, type AppSettings } from '../shared/appSettings.ts'
 
 /** The focused window, as far as attention cares: the server project it shows, and the session in view there. */
 export interface FocusedWindow {
@@ -17,9 +18,17 @@ export interface FocusedWindow {
  * the session's project window has focus (legacy: `!document.hasFocus()`);
  * attention and a decision are not notified while that session is in view in
  * the focused window (legacy: `isTerminalInView`). No window focused (another
- * app is frontmost), or another window focused: notified.
+ * app is frontmost), or another window focused: notified. Nothing is notified
+ * while the app-wide "Show notifications" switch is off (`showNotifications`);
+ * the bell and the alert sound do not follow it.
  */
-export function shouldNotify(kind: AttentionKind, item: AttentionItem, focused: FocusedWindow | null): boolean {
+export function shouldNotify(
+  kind: AttentionKind,
+  item: AttentionItem,
+  focused: FocusedWindow | null,
+  settings: Pick<AppSettings, 'showNotifications'> = DEFAULT_APP_SETTINGS
+): boolean {
+  if (!settings.showNotifications) return false
   if (!focused?.target) return true
   const { target } = focused
   if (target.serverEntryId !== item.serverEntryId || target.projectId !== item.projectId) return true

@@ -8,6 +8,7 @@ import { ENV_DEFAULTS } from '../../../shared/environments'
 import { ServersPanel } from './ServersPanel'
 import { LinearSettings } from './LinearSettings'
 import { VoiceSettings } from './VoiceSettings'
+import { NotificationSettings } from './NotificationSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
 import { AppearanceSettings } from './AppearanceSettings'
 import { LlmSettings } from './LlmSettings'
@@ -229,6 +230,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           )}
         </div>
         <AppearanceSettings />
+        <NotificationSettings />
         {sections.linear !== 'hidden' && <LinearSettings />}
         {sections.voice !== 'hidden' && <VoiceSettings />}
         <LlmSettings projectOnly={sections.agents === 'project'} />

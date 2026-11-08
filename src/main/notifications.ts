@@ -11,6 +11,7 @@ import { BrowserWindow, Notification, ipcMain, type WebContents } from 'electron
 import { createAttention, type Attention, type AttentionEvent } from './attention'
 import { dismissRequest, notificationText, shouldNotify, wantsAlert, type FocusedWindow } from './attentionRules'
 import { getAppServer, serverLink } from './appServers'
+import { appSettings } from './appSettings'
 import { focusedWindowTarget } from './windows'
 import type { AttentionChanged } from '../shared/types'
 
@@ -60,8 +61,9 @@ function show(title: string, body: string): void {
 
 function raised(events: AttentionEvent[]): void {
   const now = focused()
+  const settings = appSettings()
   for (const { kind, item } of events) {
-    if (!shouldNotify(kind, item, now)) continue
+    if (!shouldNotify(kind, item, now, settings)) continue
     const { title, body } = notificationText(kind, item)
     show(title, body)
   }

@@ -9,8 +9,9 @@ const SECRET = 'tok-S3CRET-never-in-a-snapshot'
 /**
  * Links over a fake list, a fake secret store and fake sockets. `hold` keeps
  * the token reads open until `release()`, to change the list meanwhile.
+ * `withHooks: false` leaves out `linked` and `unlinked`, as a caller may.
  */
-function setup({ entries = [], stored = {} } = {}) {
+function setup({ entries = [], stored = {}, withHooks = true } = {}) {
   const list = entries.map((e) => ({ ...e }))
   const secrets = new Map(Object.entries(stored))
   const server = fakeServer()
@@ -33,8 +34,10 @@ function setup({ entries = [], stored = {} } = {}) {
     clientVersion: '9.9.9',
     changed: (snapshot) => changes.push(snapshot),
     now: () => time,
-    linked: (id, registered) => hooks.push(['linked', id, registered]),
-    unlinked: (id) => hooks.push(['unlinked', id])
+    ...(withHooks && {
+      linked: (id, registered) => hooks.push(['linked', id, registered]),
+      unlinked: (id) => hooks.push(['unlinked', id])
+    })
   })
   const hold = () => {
     let release
@@ -313,4 +316,17 @@ test("the linked connection's mirror subscribes to attention once welcomed", asy
   sock.reply(req, { snapshot: { entries: [] }, rev: 0 })
   await new Promise((r) => setImmediate(r))
   assert.deepEqual(updates, [{ snapshot: { entries: [] }, rev: 0 }])
+})
+
+test('without the linked and unlinked hooks, an entry with a token is still connected', async () => {
+  const { links, server, sockFor, last, hooks } = setup({ entries: [box], stored: { box: SECRET }, withHooks: false })
+  await links.sync()
+  assert.ok(links.get('box'), 'the registry added the entry')
+  assert.deepEqual(server.sockets.map((s) => s.url), ['ws://box:8800'])
+  const sock = sockFor('ws://box:8800')
+  sock.open()
+  sock.welcome()
+  assert.equal(last().servers[0].status, 'connected')
+  links.close()
+  assert.deepEqual(hooks, [])
 })

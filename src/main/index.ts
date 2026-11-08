@@ -19,6 +19,7 @@ import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
+import { registerAppSettingsHandlers } from './appSettings'
 import { registerV2Relay } from './v2relay'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
@@ -128,6 +129,7 @@ app.whenReady().then(async () => {
   registerStackHandlers()
   registerClaudeSessionHandlers()
   registerServerHandlers()
+  registerAppSettingsHandlers()
   // Before the links: their first connections are linked to the aggregator as they are made.
   registerAttentionHandlers()
   const attention = attentionHooks()
