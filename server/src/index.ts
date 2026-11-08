@@ -1,7 +1,8 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { existsSync, statSync } from 'node:fs'
+import { basename, resolve } from 'node:path'
 import { hostname } from 'node:os'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
+import { buildInfo } from './buildInfo'
 import { defaultConfigPath, ensureIdentity, legacyConfigPath, migrateLegacyConfig } from './config'
 import type { Project } from '../../src/shared/model/types'
 import { ConfigStore } from './configStore'
@@ -163,15 +164,6 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function serverVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'))
-    return pkg.version ?? '0.0.0'
-  } catch {
-    return '0.0.0'
-  }
-}
-
 function fail(message: string): never {
   console.error(message)
   process.exit(1)
@@ -188,7 +180,7 @@ if (args.command === 'help') {
   process.exit(0)
 }
 if (args.command === 'version') {
-  console.log(serverVersion())
+  console.log(buildInfo().version)
   process.exit(0)
 }
 
@@ -334,9 +326,10 @@ try {
 } catch (err) {
   fail(`Cannot read projects from ${projectsDir(args.dataDir ?? store.config.dataDir ?? defaultDataDir())}: ${(err as Error).message}`)
 }
+const { version, build } = buildInfo()
 const server = startServer(
   store,
-  serverVersion(),
+  version,
   {
     create: (hub, onSummariesChange) =>
       new ProjectState({ hub, store: projectFiles.files, onSummariesChange }, projectFiles.loaded),
@@ -356,7 +349,7 @@ server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
 })
 server.httpServer.listen(port, host, () => {
   console.log(
-    `trek-server ${serverVersion()} "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${port}`
+    `trek-server ${version} (build ${build}) "${store.config.name}" (${store.config.serverId}) listening on ws://${host}:${port}`
   )
   console.log(
     store.config.repos.length > 0
