@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, screen, type WebContents } from 'e
 import { realpathSync } from 'node:fs'
 import { access, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { InitialWindowState, OpenedProject } from '../shared/types'
+import type { InitialWindowState, OpenedProject, SessionSelect } from '../shared/types'
 import { releaseBotWindow } from './bot'
 import { releaseMcpWindow } from './mcp'
 import { isAppUrl, isExternalUrl } from './navigationRules'
@@ -18,6 +18,7 @@ import {
   isTargetId,
   MAX_TARGET_ID,
   parseOpenWindows,
+  routeSelect,
   sameTarget,
   serializeOpenWindow,
   type OpenWindowEntry,
@@ -51,6 +52,8 @@ interface WindowState {
   initial: (ReturnType<typeof initialFromTarget> & { menu: InitialWindowState['menu'] }) | null
   /** The renderer is listening, so closing has to ask it first. */
   rendererReady: boolean
+  /** A session to show, asked for while the renderer was still loading: handed over by window:takeInitial */
+  pendingSelect: SessionSelect | null
   /** Dialogs open on this window's behalf, during which the close timer is paused. */
   prompts: number
   closing: PendingClose | null
@@ -118,6 +121,31 @@ export function focusedWindowTarget(): {
   return {
     webContentsId: state.id,
     target: target?.kind === 'server' ? { serverEntryId: target.serverEntryId, projectId: target.projectId } : null
+  }
+}
+
+/**
+ * Shows a session of a server project (attention: a notification or a menu
+ * entry was clicked): the window holding the project is focused and told to
+ * select it, or a new window opens on the project and selects it once loaded.
+ * Not recorded as a recent: the user did not pick the project.
+ */
+export function showServerSession(serverEntryId: string, projectId: string, select: SessionSelect): void {
+  const target: WindowTarget = { kind: 'server', serverEntryId, projectId }
+  const holder = windowHolding(target)
+  switch (routeSelect(holder)) {
+    case 'send':
+      focusWindow(holder!.win)
+      if (!holder!.win.webContents.isDestroyed()) holder!.win.webContents.send('attention:select', select)
+      return
+    case 'queue':
+      focusWindow(holder!.win)
+      holder!.pendingSelect = select
+      return
+    case 'open': {
+      const win = createWindow({ initialTarget: target })
+      windows.get(win.webContents.id)!.pendingSelect = select
+    }
   }
 }
 
@@ -192,6 +220,7 @@ export function createWindow(
     // The file is read by the path as given, as before; only the claim is normalized.
     initial: { ...initialFromTarget(opts.initialTarget ?? null), menu: opts.menu ?? null },
     rendererReady: false,
+    pendingSelect: null,
     prompts: 0,
     closing: null,
     taken,
@@ -397,15 +426,17 @@ export async function restoreWindows(): Promise<void> {
 export function registerWindowHandlers(readProject: (path: string) => Promise<OpenedProject>): void {
   ipcMain.handle('window:takeInitial', async (event): Promise<InitialWindowState> => {
     const state = windows.get(event.sender.id)
-    if (!state) return { opened: null, menu: null, server: null }
+    if (!state) return { opened: null, menu: null, server: null, select: null }
     state.rendererReady = true
     const initial = state.initial
     state.initial = null
+    const select = state.pendingSelect
+    state.pendingSelect = null
     // A server window keeps its target across a reload: its state lives on the server.
     const server = initial ? initial.server : state.target?.kind === 'server' ? initialFromTarget(state.target).server : null
     if (server) {
       state.markTaken()
-      return { opened: null, menu: initial?.menu ?? null, server }
+      return { opened: null, menu: initial?.menu ?? null, server, select }
     }
     // A reload of a file window lands here too, with an empty store: forget the old claim.
     if (!initial?.filePath) {
@@ -413,10 +444,10 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
       state.unsavedProject = false
       state.markTaken()
       schedulePersist()
-      return { opened: null, menu: initial?.menu ?? null, server: null }
+      return { opened: null, menu: initial?.menu ?? null, server: null, select: null }
     }
     try {
-      return { opened: await readProject(initial.filePath), menu: initial.menu, server: null }
+      return { opened: await readProject(initial.filePath), menu: initial.menu, server: null, select: null }
     } catch (err) {
       state.target = null
       state.unsavedProject = false

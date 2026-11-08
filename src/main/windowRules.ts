@@ -99,6 +99,18 @@ export function initialFromTarget(target: WindowTarget | null): {
     : { filePath: null, server: { serverEntryId: target.serverEntryId, projectId: target.projectId } }
 }
 
+/**
+ * Where a "show this session" request (a click on a notification or a menu
+ * entry) goes: to the window holding the project if its renderer is listening
+ * (`send`), kept for that window's `window:takeInitial` while it is still
+ * loading (`queue`), or to a new window for the project, which takes it with
+ * its initial state (`open`).
+ */
+export function routeSelect(holder: { rendererReady: boolean } | undefined): 'send' | 'queue' | 'open' {
+  if (!holder) return 'open'
+  return holder.rendererReady ? 'send' : 'queue'
+}
+
 export const MAX_LABEL_LENGTH = 200
 
 /** A display label from IPC: anything becomes a string, capped in length. */

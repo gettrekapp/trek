@@ -1,7 +1,7 @@
 // scripts/windowRules.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_LABEL_LENGTH, MAX_TARGET_ID, boundsOnScreen, isTargetId, capLabel, decideOpen, initialFromTarget, parseOpenWindows, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
+import { MAX_LABEL_LENGTH, MAX_TARGET_ID, boundsOnScreen, isTargetId, capLabel, decideOpen, initialFromTarget, parseOpenWindows, routeSelect, sameTarget, serializeOpenWindow } from '../src/main/windowRules.ts'
 
 test('an open project is focused, whatever the sender holds', () => {
   assert.equal(decideOpen(true, true), 'focus-existing')
@@ -104,4 +104,10 @@ test('parseOpenWindows drops server entries with over-long ids', () => {
     { kind: 'server', serverEntryId: 's', projectId: long },
     { kind: 'server', serverEntryId: 'x'.repeat(200), projectId: 'p' }
   ]), [{ target: { kind: 'server', serverEntryId: 'x'.repeat(200), projectId: 'p' } }])
+})
+
+test('a session select goes to a listening window, waits for a loading one, or opens one', () => {
+  assert.equal(routeSelect({ rendererReady: true }), 'send')
+  assert.equal(routeSelect({ rendererReady: false }), 'queue')
+  assert.equal(routeSelect(undefined), 'open')
 })

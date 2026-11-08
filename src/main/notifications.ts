@@ -12,7 +12,7 @@ import { createAttention, type Attention, type AttentionEvent } from './attentio
 import { dismissRequest, notificationText, shouldNotify, wantsAlert, type FocusedWindow } from './attentionRules'
 import { getAppServer, serverLink } from './appServers'
 import { appSettings } from './appSettings'
-import { focusedWindowTarget } from './windows'
+import { focusedWindowTarget, showServerSession } from './windows'
 import type { AttentionChanged } from '../shared/types'
 
 let attention: Attention | null = null
@@ -45,13 +45,16 @@ function playAlert(): void {
   if (win && !win.webContents.isDestroyed()) win.webContents.send('attention:alert')
 }
 
-function show(title: string, body: string): void {
+function show(title: string, body: string, onClick: () => void): void {
   if (!Notification.isSupported()) return
   const notification = new Notification({ title, body })
   const forget = (): void => {
     live.delete(notification)
   }
-  notification.on('click', forget)
+  notification.on('click', () => {
+    forget()
+    onClick()
+  })
   notification.on('close', forget)
   live.add(notification)
   // The oldest goes first; a notification macOS still shows keeps working without the reference.
@@ -65,9 +68,21 @@ function raised(events: AttentionEvent[]): void {
   for (const { kind, item } of events) {
     if (!shouldNotify(kind, item, now, settings)) continue
     const { title, body } = notificationText(kind, item)
-    show(title, body)
+    show(title, body, () => openAttention(item.key))
   }
   if (wantsAlert(events)) playAlert()
+}
+
+/** Focuses (or opens) the window for the entry's project and selects its session; false for an entry no longer listed. */
+function openAttention(key: unknown): boolean {
+  const item = typeof key === 'string' ? attention?.find(key) : undefined
+  if (!item) return false
+  showServerSession(item.serverEntryId, item.projectId, {
+    projectId: item.projectId,
+    sessionId: item.sessionId,
+    worktreeId: item.worktreeId
+  })
+  return true
 }
 
 /** The aggregator's hooks for serverLinks, and the relabel for the list's broadcast. */
@@ -96,6 +111,7 @@ export function registerAttentionHandlers(): void {
     raised
   })
   ipcMain.handle('attention:list', () => attention!.snapshot())
+  ipcMain.handle('attention:open', (_event, key: unknown): boolean => openAttention(key))
   // The window sends the key of an entry main listed; main picks the request, so a window
   // cannot ask a server anything through this but to dismiss what it was shown.
   ipcMain.handle('attention:dismiss', async (_event, key: unknown): Promise<void> => {

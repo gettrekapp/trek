@@ -349,6 +349,8 @@ export interface InitialWindowState {
   menu: 'open-project' | null
   /** Set when the window holds a server project; `opened` is then null. */
   server: { serverEntryId: string; projectId: string } | null
+  /** A session to show once the project is in (asked for before the window was listening) */
+  select: SessionSelect | null
 }
 
 /** One entry in recent-projects.json: a project file, or a project on an app-wide trek-server. */

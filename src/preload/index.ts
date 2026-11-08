@@ -4,6 +4,7 @@ import type {
   AppServerInfo,
   AppServersChanged,
   AttentionChanged,
+  SessionSelect,
   V2SocketOpenResult,
   AppServerTest,
   ContainerAction,
@@ -229,6 +230,10 @@ const api = {
     list: (): Promise<AttentionChanged> => ipcRenderer.invoke('attention:list'),
     onChanged: (callback: (snapshot: AttentionChanged) => void): (() => void) =>
       subscribe('attention:changed', callback),
+    /** Focuses or opens the entry's project window, which then selects the session; false if it is no longer listed */
+    open: (key: string): Promise<boolean> => ipcRenderer.invoke('attention:open', key),
+    /** Main asks this window to show one of its sessions */
+    onSelect: (callback: (select: SessionSelect) => void): (() => void) => subscribe('attention:select', callback),
     /** Clears the entry's decision, or marks it seen, through main's connection */
     dismiss: (key: string): Promise<void> => ipcRenderer.invoke('attention:dismiss', key),
     /** The sessions this window shows (a worktree tab, a Global tab): main does not notify for them while it has focus */
