@@ -15,6 +15,10 @@
 //     was copied; recents and migrated.json are rewritten; the .trekproj is byte-identical.
 //   Launch 2: no prompt; open-windows.json brings the Local window back; opening the file again
 //     imports nothing and opens the projects; File → Import .trekproj… imports a second file.
+//     A third file lands in part: opening it again offers to retry the part left, and does. A
+//     fourth, with 22 server ids on one unsaved address and nothing that can land, asks to add the
+//     server once, leaves the 21st and 22nd as over the per-file cap, and offers Open as File
+//     Window, which opens one; File → Import .trekproj… on it offers the same.
 // A saved entry on the server's origin under another path is another server: it is not used, and
 // gets no token. Both .trekproj files are byte-identical at the end, and nothing of this run is
 // written under the real HOME.
@@ -110,6 +114,9 @@ const fileTopic = join(work, 'remote', 'beta-topic')
 // A second file, for File → Import .trekproj…
 const otherRepo = join(real, 'real', 'other')
 gitRepo(otherRepo)
+// A third, landing in part: its server's address is not a ws:// URL.
+const thirdRepo = join(real, 'real', 'third')
+gitRepo(thirdRepo)
 
 const S_MAIN = '11111111-1111-4111-8111-111111111111'
 const S_X = '22222222-2222-4222-8222-222222222222'
@@ -180,8 +187,34 @@ writeFileSync(
 )
 const fileB = join(real, 'files', 'Other.trekproj')
 writeFileSync(fileB, JSON.stringify({ version: 3, name: 'Other', repositories: [{ id: 'o', name: 'other', path: otherRepo, worktrees: [] }] }, null, 2))
+// A fourth, of which nothing lands: 22 server ids on one unsaved address (no token saved for it),
+// and a clone this machine does not have.
+const deadUrl = `ws://127.0.0.1:${await freePort()}`
+const farm = Array.from({ length: 22 }, (_, i) => `f${i + 1}`)
+const fileC = join(real, 'files', 'Third.trekproj')
+writeFileSync(
+  fileC,
+  JSON.stringify({
+    version: 3,
+    name: 'Third',
+    servers: [{ id: 'web', name: 'web-box', url: 'https://web.example' }],
+    repositories: [{ id: 't', name: 'third', path: thirdRepo, serverPaths: { web: '/srv/third' }, worktrees: [] }]
+  }, null, 2)
+)
+const fileD = join(real, 'files', 'Farm.trekproj')
+writeFileSync(
+  fileD,
+  JSON.stringify({
+    version: 3,
+    name: 'Farm',
+    servers: farm.map((id) => ({ id, name: `farm-${id}`, url: deadUrl })),
+    repositories: [{ id: 'd', name: 'farm', path: join(real, 'missing-farm'), serverPaths: Object.fromEntries(farm.map((id) => [id, '/srv/farm'])), worktrees: [] }]
+  }, null, 2)
+)
 const shaA = sha(fileA)
 const shaB = sha(fileB)
+const shaC = sha(fileC)
+const shaD = sha(fileD)
 
 // Nothing of this run may land under the real HOME: no Claude history folder for its paths, and
 // no Trek or trek-server file there naming its temp dir. Only read, never written.
@@ -465,6 +498,44 @@ try {
   check('and its project opens in a window', await until(async () => (await windowTargets()).some((t) => t.projectId === otherId), true), true)
   check('both files are byte-identical', [sha(fileA), sha(fileB)], [shaA, shaB])
   check('no console or page errors (launch 2)', pageErrors, [])
+
+  // A part left, retried. Dialogs from here on are this section's.
+  const since = (n) => async () => (await dialogs()).slice(n)
+  let mark = (await dialogs()).length
+  await win2.evaluate((f) => window.api.openProjectPath(f), fileC)
+  check('a file landing in part says so, naming the part left', (await until(async () => (await since(mark)()).map((d) => [d.message, /^Not imported: web-box — .*its address is not a ws:\/\/ or wss:\/\/ URL\. Open the file again to retry\.$/m.test(d.detail ?? '')]), [['“Third” was imported in part', true]])), [['“Third” was imported in part', true]])
+  mark = (await dialogs()).length
+  await win2.evaluate((f) => window.api.openProjectPath(f), fileC)
+  const retried = await until(async () => (await since(mark)()).map((d) => [d.message, d.buttons]), [['Part of “Third.trekproj” was not imported', ['Import', 'Not Now']], ['“Third” could not be imported', ['OK']]])
+  check('opening it again offers to retry the part left; the retry runs and reports', retried, [['Part of “Third.trekproj” was not imported', ['Import', 'Not Now']], ['“Third” could not be imported', ['OK']]])
+  check('migrated.json still has the part that landed and the part left', ((f) => [f?.pieces?.map((p) => p.target), f?.left?.map((l) => l.target)])(readJson(join(userData, 'migrated.json'))?.files?.[fileC]), [['local'], ['web']])
+
+  // Nothing lands: one add question for 22 ids on one address, the cap, and the file-window fallback.
+  // A file window on fileD: its path, and whether it was marked as the first one (`__smokeOld`).
+  const fileWindows = async () =>
+    (await Promise.all(app.windows().map((w) => w.evaluate(() => [window.__store?.getState().filePath ?? null, !!window.__smokeOld]).catch(() => [null, false])))).filter(([f]) => f === fileD)
+  mark = (await dialogs()).length
+  await win2.evaluate((f) => window.api.openProjectPath(f), fileD)
+  check('the fallback opens a file window on it', await until(fileWindows, [[fileD, false]], 30_000), [[fileD, false]])
+  await Promise.all(app.windows().map((w) => w.evaluate((f) => { if (window.__store?.getState().filePath === f) window.__smokeOld = true }, fileD).catch(() => {})))
+  const farmAsked = await since(mark)()
+  check('22 server ids on one unsaved address: asked to add it once', farmAsked.filter((d) => d.message?.startsWith('Add the server')).map((d) => d.message), ['Add the server “farm-f1”?'])
+  const farmResult = farmAsked.find((d) => d.message === '“Farm” could not be imported')
+  check('nothing landed: the result offers Open as File Window or Cancel', farmResult?.buttons, ['Open as File Window', 'Cancel'])
+  check('the 21st and 22nd parts are left as over the cap, in the result', (farmResult?.detail ?? '').split('\n').filter((l) => l.includes("only 20 of a file's parts on other servers are imported at a time")).map((l) => l.split(' — ')[0]), ['Not imported: farm-f21', 'Not imported: farm-f22'])
+  const farmLeft = (farmResult?.detail ?? '').split('\n').filter((l) => /^Not imported: farm-f\d+ — /.test(l) && !l.includes('only 20'))
+  check('the other 20 are left, each for want of a token for the address', [farmLeft.length, farmLeft.every((l) => l.includes('has no access token here'))], [20, true])
+  check('a file of which nothing landed is not recorded', readJson(join(userData, 'migrated.json'))?.files?.[fileD] ?? null, null)
+  mark = (await dialogs()).length
+  await app.evaluate(({ Menu }, path) => {
+    globalThis.__openPath = path
+    const file = Menu.getApplicationMenu().items.find((i) => i.label === 'File')
+    file.submenu.items.find((i) => i.label === 'Import .trekproj…').click()
+  }, fileD)
+  const menuResult = await first(async () => (await since(mark)()).find((d) => d.message === '“Farm” could not be imported'), 30_000)
+  check('File → Import: when nothing lands, Open as File Window is offered too', menuResult?.buttons, ['Open as File Window', 'Cancel'])
+  check('it closed the file window for the import, and opens a new one', await until(fileWindows, [[fileD, false]], 30_000), [[fileD, false]])
+  check('the third and fourth files are byte-identical', [sha(fileC), sha(fileD)], [shaC, shaD])
   check('nothing of this run was written under the real HOME', realHomeLeaks(), [])
   exitCode = failedChecks.length ? 1 : 0
 } catch (err) {

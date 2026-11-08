@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localProfile } from '../server/src/localProfile.ts'
@@ -45,25 +45,42 @@ function setup(t) {
   return localProfile(join(dir, 'home'), join(dir, 'data'))
 }
 
-/** A stand-in local server: writes the lock and local.json, and removes them on SIGTERM (unless `ignoreTerm`). */
+/**
+ * A stand-in local server: writes the lock and local.json, and removes them on SIGTERM (unless
+ * `ignoreTerm`). Ready once local.json is there and parses: its SIGTERM handler is set before
+ * either file is written, and local.json is written last, whole (a rename), so a stop under load
+ * never sees a half-written file or a server that a SIGTERM would still kill.
+ */
 async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
   const code = `
     const fs = require('node:fs')
-    fs.mkdirSync(${JSON.stringify(profile.dir)}, { recursive: true })
-    fs.writeFileSync(${JSON.stringify(profile.lockPath)}, process.pid + '\\n')
-    fs.writeFileSync(${JSON.stringify(profile.infoPath)}, JSON.stringify({ port: 4000, pid: process.pid, token: ${JSON.stringify(TOKEN)}, version: '0.2.0', build: 'abc123def456' }))
     process.on('SIGTERM', () => {
       if (${ignoreTerm}) return
       fs.rmSync(${JSON.stringify(profile.infoPath)})
       setTimeout(() => { fs.rmSync(${JSON.stringify(profile.lockPath)}); process.exit(0) }, 100)
     })
+    fs.mkdirSync(${JSON.stringify(profile.dir)}, { recursive: true })
+    fs.writeFileSync(${JSON.stringify(profile.lockPath)}, process.pid + '\\n')
+    const tmp = ${JSON.stringify(profile.infoPath)} + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify({ port: 4000, pid: process.pid, token: ${JSON.stringify(TOKEN)}, version: '0.2.0', build: 'abc123def456' }))
+    fs.renameSync(tmp, ${JSON.stringify(profile.infoPath)})
     setInterval(() => {}, 1000)
   `
   const child = spawn(process.execPath, ['-e', code], { stdio: 'ignore' })
   const exited = new Promise((resolve) => child.on('exit', (c, s) => resolve(c ?? s)))
   t.after(() => child.kill('SIGKILL'))
-  const deadline = Date.now() + 5000
-  while (!(existsSync(profile.infoPath) && existsSync(profile.lockPath)) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20))
+  const ready = () => {
+    try {
+      return JSON.parse(readFileSync(profile.infoPath, 'utf8')).pid === child.pid && existsSync(profile.lockPath)
+    } catch {
+      return false
+    }
+  }
+  const deadline = Date.now() + 30_000
+  while (!ready()) {
+    if (Date.now() > deadline || child.exitCode !== null) throw new Error('the stand-in server did not write local.json')
+    await new Promise((r) => setTimeout(r, 20))
+  }
   return { child, exited }
 }
 
