@@ -3,8 +3,9 @@
 // beside it (no server/node_modules), in a temp HOME, under Node and then under
 // Electron's Node (ELECTRON_RUN_AS_NODE=1). For each runtime: local.json (0600,
 // its fields, the build), a welcome with `local` and `mcp`, a repo registered
-// outside any root, a session on a fake agent through node-pty, a second start
-// refused by the lock, `stop --local` and SIGTERM's cleanup, a SIGKILLed
+// outside any root, a session on a fake agent through node-pty (without
+// ELECTRON_RUN_AS_NODE under Electron), a second start
+// refused by the lock, `stop --local` and SIGTERM's cleanup, SIGHUP's cleanup, a SIGKILLed
 // server's stale lock (and its temp files) taken over with a new token, the
 // session resumed with --resume, and a lock path that cannot be taken.
 //
@@ -65,9 +66,9 @@ async function suite(rt) {
   const infoPath = join(profile, 'local.json')
   const lockPath = join(profile, 'local.lock')
 
-  // A fake agent that prints its arguments and lingers until it is killed.
+  // A fake agent that prints its arguments and ELECTRON_RUN_AS_NODE, and lingers until it is killed.
   const fakeAgent = join(work, 'fake-agent.sh')
-  writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nexec sleep 300\n', { mode: 0o755 })
+  writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\necho "RUN_AS_NODE=${ELECTRON_RUN_AS_NODE-unset}"\nexec sleep 300\n', { mode: 0o755 })
   mkdirSync(profile, { recursive: true })
   writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
   // A repo with no registered repo anywhere near it.
@@ -161,6 +162,10 @@ async function suite(rt) {
     await ptys.attach(started.ptyId, { onData: (d) => { text += d }, onExit: () => {}, onReset: () => {}, onError: () => {} })
     must(await waitFor(() => /FAKE_AGENT .*--session-id (\S+)/.test(text)), `node-pty runs the agent under ${rt.name}: it printed --session-id`, JSON.stringify(text))
     const agentSessionId = /--session-id (\S+)/.exec(text)[1]
+    if (rt.name === 'electron') {
+      // The server runs with ELECTRON_RUN_AS_NODE=1; an Electron app started from a session must not.
+      check(await waitFor(() => /RUN_AS_NODE=\S+/.test(text)) && text.includes('RUN_AS_NODE=unset'), "the session's pty does not inherit ELECTRON_RUN_AS_NODE", JSON.stringify(text))
+    }
 
     // --- 5. a second start is refused by the lock ---
     const b = start()
@@ -220,6 +225,13 @@ async function suite(rt) {
     d.child.kill('SIGTERM')
     await d.exited
     check(d.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM again: exit 0, local.json and local.lock gone')
+
+    // --- 10. SIGHUP (the terminal that ran it closed) cleans up too ---
+    const h = start()
+    must(await waitFor(() => info()?.pid === h.child.pid || h.code !== undefined), 'a start for SIGHUP writes local.json', `code ${h.code}, ${h.err}`)
+    h.child.kill('SIGHUP')
+    await h.exited
+    check(h.code === 0 && !existsSync(infoPath) && !existsSync(lockPath), 'SIGHUP: exit 0, local.json and local.lock gone', `${h.code} ${existsSync(infoPath)} ${existsSync(lockPath)}`)
 
     // --- 11. a lock path that cannot be taken is a clear error, not a stack trace ---
     mkdirSync(lockPath)

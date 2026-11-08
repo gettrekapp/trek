@@ -22,9 +22,11 @@ test('stopDecision: no live lock holder is not running, naming a dead pid whose 
   assert.deepEqual(stopDecision(info(10), 10, dead), { action: 'not-running', stale: 10 })
   assert.deepEqual(stopDecision(undefined, 10, dead), { action: 'not-running', stale: 10 })
   assert.deepEqual(stopDecision(info(10), undefined, dead), { action: 'not-running', stale: 10 })
-  // local.json names a live pid, but no lock holds it: a reused pid, never signalled.
-  assert.deepEqual(stopDecision(info(10), undefined, alive), { action: 'not-running', stale: 10 })
   assert.deepEqual(stopDecision(info(10), 20, (pid) => pid === 10), { action: 'not-running', stale: 20 })
+})
+
+test('stopDecision: no lock, but local.json names a live pid, is lockless (never signalled)', () => {
+  assert.deepEqual(stopDecision(info(10), undefined, alive), { action: 'lockless', pid: 10 })
 })
 
 test('stopDecision: a lock from an earlier boot is dead whatever its pid', () => {
@@ -98,6 +100,27 @@ test('stopLocal: an unverified lock holder is never signalled', (t) => {
   assert.deepEqual(kills, [])
   assert.match(out.lines[0], /^E: .*is held by pid \d+, but .* does not name it/)
   assert.equal(existsSync(profile.lockPath), true, 'the lock is left alone')
+})
+
+test('stopLocal: a live pid named by local.json with no lock is exit 1, never signalled', (t) => {
+  const profile = setup(t)
+  mkdirSync(profile.dir, { recursive: true })
+  writeFileSync(profile.infoPath, JSON.stringify(info(process.pid)))
+  const kills = []
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, kill: (pid, sig) => kills.push([pid, sig]) }), 1)
+  assert.deepEqual(kills, [])
+  assert.match(out.lines[0], new RegExp(`^E: .*names pid ${process.pid}, which is running, but there is no .*local\\.lock: a local trek-server is running without its lock`))
+  assert.equal(existsSync(profile.infoPath), true, 'local.json is left alone')
+})
+
+test('stopLocal: an unverified lock holder says it may still be starting or stopping', (t) => {
+  const profile = setup(t)
+  mkdirSync(profile.dir, { recursive: true })
+  writeFileSync(profile.lockPath, `${process.pid}\n`)
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, kill: () => {} }), 1)
+  assert.match(out.lines[0], /may still be starting or stopping/)
 })
 
 test('stopLocal: a server that ignores SIGTERM times out with exit 1', async (t) => {

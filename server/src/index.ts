@@ -1,6 +1,7 @@
 import { existsSync, rmSync, statSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { basename, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { homedir, hostname } from 'node:os'
 import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocol'
@@ -213,6 +214,12 @@ if (local) {
   // Never copy the trek-daemon config into the local profile.
   args.configExplicit = true
   args.dataDir = local.dataDir
+  // The app runs this bundle with Electron's Node (ELECTRON_RUN_AS_NODE=1). Every
+  // session's pty inherits this env, so an Electron app started from one (VS Code's
+  // `code`, Trek's own `npm run dev`) would run as Node. ELECTRON_RENDERER_URL is
+  // the app's dev server, and no agent should see it.
+  delete process.env.ELECTRON_RUN_AS_NODE
+  delete process.env.ELECTRON_RENDERER_URL
 }
 
 if (args.command === 'stop' && local) process.exit(stopLocal(local))
@@ -337,6 +344,11 @@ if (local) {
     console.error(`A local trek-server is already running${pid}. Its port and token are in ${local.infoPath}.`)
     process.exit(LOCAL_ALREADY_RUNNING_EXIT)
   }
+  // Right after the lock is ours, so a throw from here on still releases it.
+  process.on('exit', () => {
+    removeLocalInfo(local.infoPath, process.pid)
+    releaseLock(local.lockPath)
+  })
   if (lock.tookOver !== undefined) console.log(`Took over the lock of a local trek-server that is gone (pid ${lock.tookOver}).`)
   // Each write to the profile first checks the lock is still ours (Decision 12).
   stillHoldingLock(local)
@@ -346,10 +358,6 @@ if (local) {
   rmSync(local.infoPath, { force: true })
   stillHoldingLock(local)
   if (!existsSync(local.configPath)) saveConfig(local.configPath, { repos: [] })
-  process.on('exit', () => {
-    removeLocalInfo(local.infoPath, process.pid)
-    releaseLock(local.lockPath)
-  })
 } else if (listTokens(store.config).length === 0) {
   fail(`No token configured. Run \`trek-server token\` first (config: ${args.configPath}).`)
 }
@@ -444,8 +452,12 @@ function stillHoldingLock(profile: LocalProfile): void {
  * Writes local.json, the app's cue that the local server is ready. It waits for
  * MCP to settle, so the app's first welcome lists `mcp` if the server has it.
  */
+const MCP_READY_TIMEOUT_MS = 5000
+
 async function announceLocal(profile: LocalProfile, port: number): Promise<void> {
-  await server.ready
+  // Bounded: a hung MCP listener costs only the `mcp` capability, not the start.
+  const ready = await Promise.race([server.ready.then(() => true), delay(MCP_READY_TIMEOUT_MS).then(() => false)])
+  if (!ready) console.warn(`MCP is not ready after ${MCP_READY_TIMEOUT_MS / 1000} s; announcing without it.`)
   if (shuttingDown) return
   stillHoldingLock(profile)
   try {
@@ -458,7 +470,9 @@ async function announceLocal(profile: LocalProfile, port: number): Promise<void>
 
 const SHUTDOWN_FLUSH_MS = 200
 let shuttingDown = false
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+// SIGHUP: the terminal that ran `start --local` closed. Without a handler the
+// process dies with local.json (and its token) and the lock left behind.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (shuttingDown) return
     shuttingDown = true

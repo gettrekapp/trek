@@ -13,8 +13,10 @@ export type StopDecision =
   | { action: 'signal'; pid: number }
   /** No live lock holder. `stale` is a dead pid whose files are left (the next start cleans them up). */
   | { action: 'not-running'; stale?: number }
-  /** A live pid holds the lock but local.json does not name it: still starting, or a reused pid */
+  /** A live pid holds the lock but local.json does not name it: still starting or stopping, or a reused pid */
   | { action: 'unverified'; pid: number }
+  /** No lock, but local.json names a live pid: a server running without its lock, or a reused pid */
+  | { action: 'lockless'; pid: number }
 
 /**
  * What `stop --local` does, given local.json (or undefined), the lock's pid (or
@@ -30,6 +32,7 @@ export function stopDecision(
   if (lock !== undefined && !lockBeforeBoot && alive(lock)) {
     return info?.pid === lock ? { action: 'signal', pid: lock } : { action: 'unverified', pid: lock }
   }
+  if (lock === undefined && info !== undefined && alive(info.pid)) return { action: 'lockless', pid: info.pid }
   const stale = lock ?? info?.pid
   return stale === undefined ? { action: 'not-running' } : { action: 'not-running', stale }
 }
@@ -55,7 +58,7 @@ function sleepSync(ms: number): void {
 
 /**
  * Stops the local server. Returns the exit code: 0 once it stopped (or if none
- * was running), 1 on a timeout, an unverified lock, or a failed signal.
+ * was running), 1 on a timeout, an unverified lock, a server without its lock, or a failed signal.
  */
 export function stopLocal(profile: LocalProfile, options: StopOptions = {}): number {
   const {
@@ -80,8 +83,16 @@ export function stopLocal(profile: LocalProfile, options: StopOptions = {}): num
   if (decision.action === 'unverified') {
     error(
       `${profile.lockPath} is held by pid ${decision.pid}, but ${profile.infoPath} does not name it: ` +
-        'the server may still be starting, or the pid now belongs to another process. Not signalling it.\n' +
+        'the server may still be starting or stopping, or the pid now belongs to another process. Not signalling it.\n' +
         `Try again in a moment. If no trek-server is running, delete ${profile.lockPath}.`
+    )
+    return 1
+  }
+  if (decision.action === 'lockless') {
+    error(
+      `${profile.infoPath} names pid ${decision.pid}, which is running, but there is no ${profile.lockPath}: ` +
+        'a local trek-server is running without its lock, or the pid now belongs to another process. Not signalling it.\n' +
+        `If it is a trek-server, stop it yourself (kill ${decision.pid}).`
     )
     return 1
   }
