@@ -151,6 +151,25 @@ export interface AppServerLink {
   /** From the connection's last welcome */
   serverName?: string
   capabilities?: string[]
+  /** The Local entry only: what the supervisor (src/main/localServer.ts) knows of the server */
+  local?: LocalServerStatus
+}
+
+export type LocalServerState = 'starting' | 'running' | 'stopping' | 'stopped' | 'error'
+
+/** The Local server as main's supervisor sees it; never a token or a port. */
+export interface LocalServerStatus {
+  state: LocalServerState
+  /** Why it is stopped or failed; '' when running */
+  message: string
+  /** The error offers "Reset local server" (a lock no live server answers for) */
+  canReset: boolean
+  /** While running */
+  pid?: number
+  version?: string
+  build?: string
+  /** While running: it is not the build this Trek bundles */
+  skew?: boolean
 }
 
 /** `appServers:changed`, and `appServers:links`' answer. `seq` grows with each one: a window keeps the highest. */
@@ -216,6 +235,8 @@ export interface AppServerTest {
   serverName?: string
   daemonVersion?: string
   capabilities?: string[]
+  /** The welcome's serverId (the Local supervisor checks it against the profile's config) */
+  serverId?: string
 }
 
 /** Identifies a worktree across machines — path alone is ambiguous. */

@@ -44,6 +44,7 @@ export function probeServer(opts: ProbeOptions): Promise<AppServerTest> {
         result.serverName = conn.welcome.serverName
         result.daemonVersion = conn.welcome.daemonVersion
         result.capabilities = conn.welcome.capabilities
+        result.serverId = conn.welcome.serverId
       }
       conn.close()
       resolve(result)

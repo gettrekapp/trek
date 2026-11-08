@@ -38,7 +38,7 @@ test('connected carries the welcome fields and closes the socket', async () => {
   sock.open()
   assert.equal(sock.sent[0].token, 't0k')
   sock.welcome({ serverName: 'Box', daemonVersion: '0.3.0', capabilities: ['mcp', 'pty'] })
-  assert.deepEqual(await result, { status: 'connected', message: '', serverName: 'Box', daemonVersion: '0.3.0', capabilities: ['mcp', 'pty'] })
+  assert.deepEqual(await result, { status: 'connected', message: '', serverName: 'Box', daemonVersion: '0.3.0', capabilities: ['mcp', 'pty'], serverId: 'sid' })
   assert.equal(closes(), 1)
   assert.equal(sock.readyState, 3)
   assert.equal(connCloses(), 1)
