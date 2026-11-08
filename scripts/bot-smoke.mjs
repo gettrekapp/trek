@@ -55,6 +55,7 @@ const startElectron = async ({ restore = false, dataDir = userData, argLog = log
   }
   if (restore) delete env.TREK_NO_WINDOW_RESTORE
   else env.TREK_NO_WINDOW_RESTORE = '1'
+  env.TREK_NO_LOCAL_SERVER = '1'
   const started = await electron.launch({ args: ['out/main/index.js', `--user-data-dir=${dataDir}`], cwd: process.cwd(), env })
   const win = await started.firstWindow()
   const errors = []

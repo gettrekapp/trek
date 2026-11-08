@@ -219,6 +219,12 @@ const api = {
     onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>
       subscribe('appServers:changed', callback)
   },
+  // The Local server (main's supervisor): its status comes with appServers' `local` field.
+  localServer: {
+    start: (): Promise<void> => ipcRenderer.invoke('localServer:start'),
+    restart: (): Promise<void> => ipcRenderer.invoke('localServer:restart'),
+    reset: (): Promise<void> => ipcRenderer.invoke('localServer:reset')
+  },
   // App-wide preferences (app-settings.json), shared by every window.
   appSettings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('appSettings:get'),

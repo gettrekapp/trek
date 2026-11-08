@@ -19,7 +19,19 @@ import { registerClaudeSessionHandlers } from './claudeSessions'
 import { registerServerHandlers, disconnectAllServers } from './servers'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
-import { registerAppSettingsHandlers } from './appSettings'
+import { appSettings, registerAppSettingsHandlers } from './appSettings'
+import {
+  LOCAL_SERVER_DISABLED,
+  localServerStatus,
+  onLocalServerChanged,
+  quitLocalServer,
+  registerLocalServerHandlers,
+  restartLocalServer,
+  startLocalServer,
+  stopLocalServer,
+  superviseLocalServer
+} from './localServer'
+import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
@@ -53,6 +65,30 @@ function openProject(): void {
   else sendToFocused('menu:open-project')
 }
 
+/** File → Local Server: its state, Start or Restart, and Stop. Rebuilt on every change. */
+function localServerMenu(): Electron.MenuItemConstructorOptions[] {
+  if (LOCAL_SERVER_DISABLED) return []
+  const local = localServerStatus()
+  const running = local.state === 'running'
+  const busy = local.state === 'starting' || local.state === 'stopping'
+  return [
+    { type: 'separator' },
+    {
+      label: 'Local Server',
+      submenu: [
+        { label: localStatusLabel(local), enabled: false },
+        { type: 'separator' },
+        {
+          label: running ? 'Restart Local Server' : 'Start Local Server',
+          enabled: !busy,
+          click: () => void (running ? restartLocalServer() : startLocalServer())
+        },
+        { label: 'Stop Local Server', enabled: running, click: () => void stopLocalServer() }
+      ]
+    }
+  ]
+}
+
 function buildMenu(): void {
   const isMac = process.platform === 'darwin'
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -75,6 +111,7 @@ function buildMenu(): void {
           accelerator: 'CmdOrCtrl+O',
           click: openProject
         },
+        ...localServerMenu(),
         { type: 'separator' },
         {
           label: 'Save Project',
@@ -135,13 +172,17 @@ app.whenReady().then(async () => {
   const attention = attentionHooks()
   registerAppServerHandlers({ linked: attention.linked, unlinked: attention.unlinked, listChanged: attention.relabel })
   registerV2Relay()
+  registerLocalServerHandlers()
   registerMcpHandlers()
   registerBotHandlers()
   registerVoiceHandlers()
   registerAgentHandlers()
   registerLlmHandlers()
   buildMenu()
+  onLocalServerChanged(buildMenu)
   setDockIcon()
+  // Not awaited: restored Local windows show Connecting until it answers, then follow its URL.
+  void superviseLocalServer()
   await restoreWindows()
 
   app.on('activate', () => {
@@ -176,6 +217,8 @@ app.on('before-quit', (event) => {
     if (!closed) return
     // After every window has agreed to close, so that a cancelled quit leaves the other bots running.
     await stopAllBots().catch((err) => console.error(err))
+    // Keeps running by default; "Stop local server on quit" stops it here.
+    await quitLocalServer(appSettings().stopLocalServerOnQuit)
     cleanUp()
     quitConfirmed = true
     app.quit()

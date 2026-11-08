@@ -12,7 +12,7 @@ import {
   withRemoving,
   withToken
 } from '../src/main/appServersRules.ts'
-import { STATUS_LABELS, isLoopbackUrl, originOf } from '../src/shared/appServerRules.ts'
+import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../src/shared/appServerRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
   assert.deepEqual(parseAppServers([
@@ -142,4 +142,13 @@ test('rejectDuplicateServer refuses a URL another entry has, by origin and path'
   assert.doesNotThrow(() => rejectDuplicateServer(list, 'wss://box:7401', null), 'another port')
   assert.doesNotThrow(() => rejectDuplicateServer(list, 'ws://lab:7400/other', null), 'another path')
   assert.throws(() => rejectDuplicateServer([{ id: 'c', name: 'Std', url: 'wss://host:443' }], 'wss://host', null), /as "Std"/, 'the default port')
+})
+
+test('localStatusLabel: one line per state; skew is said', () => {
+  assert.equal(localStatusLabel({ state: 'running', pid: 77, version: '0.2.0', skew: false }), 'Running 0.2.0 (pid 77)')
+  assert.equal(localStatusLabel({ state: 'running', pid: 77, version: '0.1.0', skew: true }), "Running 0.1.0 (pid 77) · not this Trek's version")
+  assert.equal(localStatusLabel({ state: 'starting' }), 'Starting…')
+  assert.equal(localStatusLabel({ state: 'stopping' }), 'Stopping…')
+  assert.equal(localStatusLabel({ state: 'stopped' }), 'Stopped')
+  assert.equal(localStatusLabel({ state: 'error' }), 'Could not start')
 })

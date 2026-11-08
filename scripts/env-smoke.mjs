@@ -76,6 +76,7 @@ try {
     env: {
       ...process.env,
       TREK_NO_WINDOW_RESTORE: '1',
+      TREK_NO_LOCAL_SERVER: '1',
       PATH: `${stubDir}:${process.env.PATH}`,
       // A failing SHELL makes fixPath() keep process.env.PATH (with the stubs
       // first) instead of re-resolving PATH from a login shell.

@@ -198,7 +198,8 @@ const stopDaemon = async () => {
 // ---- The app ---------------------------------------------------------------
 
 const userData = join(work, 'user-data')
-const env = { ...process.env }
+// No Local server: this smoke is about a remote one, and must not start one in the real home.
+const env = { ...process.env, TREK_NO_LOCAL_SERVER: '1' }
 delete env.TREK_NO_WINDOW_RESTORE // the restore step needs it on
 let app = null
 const pageErrors = []
@@ -880,6 +881,7 @@ try {
     'Settings',
     'Appearance',
     'Notifications',
+    'Local server',
     'Agents',
     'Worktree tags',
     'Custom tags',
@@ -894,11 +896,11 @@ try {
   // default, saved by main (app-settings.json), and back on for the checks after this one.
   const notifySwitch = settings.locator('input[aria-label="Show notifications"]')
   const appSettingsNow = () => w1.evaluate(() => window.api.appSettings.get())
-  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true }])
+  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true, stopLocalServerOnQuit: false }])
   await notifySwitch.click()
-  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false }), { showNotifications: false })
+  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false, stopLocalServerOnQuit: false }), { showNotifications: false, stopLocalServerOnQuit: false })
   await notifySwitch.click()
-  check('and on again', await until(appSettingsNow, { showNotifications: true }), { showNotifications: true })
+  check('and on again', await until(appSettingsNow, { showNotifications: true, stopLocalServerOnQuit: false }), { showNotifications: true, stopLocalServerOnQuit: false })
   const prompt = settings.locator('.session-prompt-input')
   const settingsNow = async () => (await projectNow()).settings
   let sentAt = await sentCount()

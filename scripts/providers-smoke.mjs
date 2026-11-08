@@ -37,7 +37,7 @@ let app
 try {
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1' }
+    env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })
   const win = await app.firstWindow()
   await win.waitForLoadState('domcontentloaded')

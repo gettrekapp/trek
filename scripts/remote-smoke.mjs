@@ -83,7 +83,7 @@ try {
   const app = await electron.launch({
     args: ['out/main/index.js'],
     cwd: projectDir,
-    env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1' }
+    env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
   })
   const win = await app.firstWindow()
   win.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()) })

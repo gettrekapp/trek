@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import type { AppSettings } from '../../../shared/appSettings'
 
 /**
- * The app-wide "Show notifications" switch (app-settings.json on this machine), in
- * every window's settings. Off: main raises no OS notifications for the servers'
- * sessions. The bell still lists them, and each project's audio alerts still sound.
+ * The app-wide switches (app-settings.json on this machine), in every window's settings:
+ * - "Show notifications". Off: main raises no OS notifications for the servers'
+ *   sessions. The bell still lists them, and each project's audio alerts still sound.
+ * - "Stop local server on quit". Off (the default): the Local server keeps running
+ *   after Trek quits, and its sessions with it.
  */
 export function NotificationSettings(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
@@ -25,11 +27,11 @@ export function NotificationSettings(): React.JSX.Element {
     }
   }, [])
 
-  const toggle = (showNotifications: boolean): void => {
+  const toggle = (patch: Partial<AppSettings>): void => {
     setError(null)
     // main applies the change at once and only the write can fail, so a failure still leaves it on for now.
     window.api.appSettings
-      .update({ showNotifications })
+      .update(patch)
       .then(setSettings)
       .catch((err: Error) => setError(`Could not save the setting — it applies until Trek quits. (${err.message})`))
   }
@@ -43,7 +45,7 @@ export function NotificationSettings(): React.JSX.Element {
           aria-label="Show notifications"
           checked={settings?.showNotifications ?? true}
           disabled={settings === null}
-          onChange={(e) => toggle(e.target.checked)}
+          onChange={(e) => toggle({ showNotifications: e.target.checked })}
         />
         <span className="settings-label">
           <span className="settings-name">Show notifications</span>
@@ -52,9 +54,27 @@ export function NotificationSettings(): React.JSX.Element {
             needs a decision, needs your attention or finishes. The bell lists them either way, and
             each project&apos;s audio alerts still play.
           </span>
-          {error && <span className="settings-desc settings-warn">{error}</span>}
         </span>
       </label>
+      <h3>Local server</h3>
+      <label className="settings-row">
+        <input
+          type="checkbox"
+          aria-label="Stop local server on quit"
+          checked={settings?.stopLocalServerOnQuit ?? false}
+          disabled={settings === null}
+          onChange={(e) => toggle({ stopLocalServerOnQuit: e.target.checked })}
+        />
+        <span className="settings-label">
+          <span className="settings-name">Stop local server on quit</span>
+          <span className="settings-desc">
+            Off: the Local server keeps running after Trek quits, so its agent sessions carry on and
+            Trek finds them again at the next launch. On: quitting Trek stops it, and its sessions
+            resume when their worktrees are opened again.
+          </span>
+        </span>
+      </label>
+      {error && <p className="settings-desc settings-warn">{error}</p>}
     </>
   )
 }

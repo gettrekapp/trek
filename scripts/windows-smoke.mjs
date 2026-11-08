@@ -39,7 +39,7 @@ const beta = makeProject('beta')
 const gamma = makeProject('gamma')
 
 const launch = () =>
-  electron.launch({ args: ['out/main/index.js', `--user-data-dir=${userData}`], cwd: process.cwd() })
+  electron.launch({ args: ['out/main/index.js', `--user-data-dir=${userData}`], cwd: process.cwd(), env: { ...process.env, TREK_NO_LOCAL_SERVER: '1' } })
 
 const projectName = (page) => page.evaluate(() => window.__store.getState().project?.name ?? null)
 
