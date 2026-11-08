@@ -10,13 +10,14 @@ import type { LlmSettings } from '../../src/shared/providers/types'
 import { isRecord } from './validate.ts'
 import { saveConfig, type TrekServerConfig } from './config.ts'
 import { codedError } from './errors.ts'
-import { PathGuard } from './paths.ts'
+import { PathGuard, type PathGuardOptions } from './paths.ts'
 import { addRepo, removeRepo, resolveRepoRoot, type AddRepoOptions } from './repos.ts'
 
 export interface AddRepoRequest extends AddRepoOptions {
   /**
    * RPC callers may only add repos under an already-allowed root (a registered
    * repo's parent or a worktreeRoot). The CLI runs on the box and may add anywhere.
+   * A permissive store's guard allows every root, so there RPC callers may too.
    */
   requireAllowedRoot: boolean
 }
@@ -61,18 +62,23 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   private usage: RepoUsage = () => []
   private current: TrekServerConfig
   private currentGuard: PathGuard
+  private readonly guardOptions: PathGuardOptions
   private watcher?: FSWatcher
   private reloadTimer?: NodeJS.Timeout
 
   private warnedMissing = false
   private warnedServerId = false
 
-  /** Throws if the file exists but is not valid JSON or has the wrong shape. A missing file is an empty config. */
-  constructor(path: string) {
+  /**
+   * Throws if the file exists but is not valid JSON or has the wrong shape. A missing file is an empty config.
+   * `guardOptions` applies to every guard the store builds (`permissive` for the local server).
+   */
+  constructor(path: string, guardOptions: PathGuardOptions = {}) {
     super()
     this.path = path
+    this.guardOptions = guardOptions
     this.current = existsSync(path) ? validateConfig(JSON.parse(readFileSync(path, 'utf8'))) : { repos: [] }
-    this.currentGuard = new PathGuard(this.current)
+    this.currentGuard = new PathGuard(this.current, guardOptions)
   }
 
   /** Treat as read-only; change it through update(). */
@@ -216,7 +222,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
 
   private commit(next: TrekServerConfig): void {
     // Build the guard first: if it throws, neither disk nor memory has changed.
-    const guard = new PathGuard(next)
+    const guard = new PathGuard(next, this.guardOptions)
     saveConfig(this.path, next)
     this.current = next
     this.currentGuard = guard
@@ -224,7 +230,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
   }
 
   private swap(next: TrekServerConfig): void {
-    const guard = new PathGuard(next)
+    const guard = new PathGuard(next, this.guardOptions)
     this.current = next
     this.currentGuard = guard
     this.emit('change')

@@ -86,6 +86,20 @@ test('repository paths must be registered; worktree paths must be allowed', (t) 
   assert.equal(code(() => checkImport(b, ctx)), 'PATH_DENIED')
 })
 
+test('the permissive guard (the local server) allows a worktree anywhere, but repos must still be registered', (t) => {
+  const { registry, project } = setup(t)
+  const ctx = { registry, guard: new PathGuard({ repos: registry }, { permissive: true }), existingIds: new Set(), projectId: 'pid' }
+  const b = project()
+  b.repositories[0].worktrees[1].path = '/elsewhere/wt'
+  assert.equal(checkImport(b, ctx).repositories[0].worktrees[1].path, '/elsewhere/wt')
+  const a = project()
+  a.repositories[0].path = '/elsewhere/repo'
+  assert.equal(code(() => checkImport(a, ctx)), 'PATH_DENIED')
+  const c = project()
+  c.repositories[0].worktrees[1].path = registry[0].path
+  assert.equal(code(() => checkImport(c, ctx)), 'BAD_REQUEST', 'a worktree at a registered repo is still refused')
+})
+
 test('shape, settings and branch keys are checked', (t) => {
   const { registry, guard, project } = setup(t)
   const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }

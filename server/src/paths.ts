@@ -2,17 +2,27 @@ import { realpathSync } from 'node:fs'
 import { dirname, resolve, sep } from 'node:path'
 import type { TrekServerConfig } from './config'
 
+export interface PathGuardOptions {
+  /** Every path is allowed (`trek-server start --local` only) */
+  permissive?: boolean
+}
+
 /**
  * Every client-supplied filesystem path must resolve under one of the
  * configured roots: a repo, a repo's parent directory (worktrees live as
  * siblings of the repo checkout), or an explicit worktreeRoot. This guards
  * against path typos and confused-deputy bugs — it is not a sandbox; the
  * token already grants shell access as the daemon user.
+ *
+ * The local server's guard is permissive: the user picks paths on their own
+ * disk, so every path is allowed, and check() only resolves it.
  */
 export class PathGuard {
   private roots: string[]
+  private readonly permissive: boolean
 
-  constructor(config: TrekServerConfig) {
+  constructor(config: TrekServerConfig, options: PathGuardOptions = {}) {
+    this.permissive = options.permissive === true
     const roots = new Set<string>()
     const addRoot = (path: string): void => {
       // realpath so symlinked configs (e.g. /var → /private/var) match the
@@ -31,7 +41,7 @@ export class PathGuard {
     this.roots = [...roots]
   }
 
-  /** Returns the resolved path, or throws { code: 'PATH_DENIED' }. */
+  /** Returns the resolved path, or throws { code: 'PATH_DENIED' } (never when permissive). */
   check(path: string): string {
     let resolved: string
     try {
@@ -51,6 +61,7 @@ export class PathGuard {
         }
       }
     }
+    if (this.permissive) return resolved
     const allowed = this.roots.some(
       (root) => resolved === root || resolved.startsWith(root + sep)
     )

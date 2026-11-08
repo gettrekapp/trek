@@ -14,14 +14,15 @@ import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2, responseRev } from '../server/src/v2.ts'
 import { applyStatePatch } from '../src/shared/sync/topicState.ts'
 
-function setup(t) {
+/** `guardOptions` go to the ConfigStore: `{ permissive: true }` is the local server. */
+function setup(t, guardOptions = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-v2-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', a])
   const configPath = join(dir, 'config.json')
   saveConfig(configPath, { serverId: 'sid-1', name: 'box', repos: [{ id: 'a', name: 'a', path: a }] })
-  const store = new ConfigStore(configPath)
+  const store = new ConfigStore(configPath, guardOptions)
   const hub = new TopicHub()
   const holder = {}
   const server = publishServerState(store, hub, '0.2.0', {
@@ -106,6 +107,39 @@ test('server.addRepo errors: missing path, outside roots, not a repo', async (t)
   mkdirSync(join(dir, 'repos', 'plain'))
   assert.equal((await call('server.addRepo', { path: join(dir, 'repos', 'plain') })).error.code, 'NOT_A_REPO')
   assert.equal(store.config.repos.length, 1)
+})
+
+test('on the local server (a permissive store) server.addRepo takes a repo anywhere; a remote one still refuses', async (t) => {
+  const remote = setup(t)
+  const local = setup(t, { permissive: true })
+  for (const { dir } of [remote, local]) execFileSync('git', ['init', '-q', join(dir, 'outside', 'c')])
+  assert.equal((await remote.call('server.addRepo', { path: join(remote.dir, 'outside', 'c') })).error.code, 'PATH_DENIED')
+  assert.deepEqual(await local.call('server.addRepo', { path: join(local.dir, 'outside', 'c') }), { ok: true, result: { repoId: 'c' } })
+  mkdirSync(join(local.dir, 'outside', 'plain'))
+  assert.equal((await local.call('server.addRepo', { path: join(local.dir, 'outside', 'plain') })).error.code, 'NOT_A_REPO')
+  assert.equal((await local.call('server.addRepo', { path: 'outside/c' })).error.code, 'BAD_REQUEST')
+  assert.deepEqual(remote.store.config.repos.map((r) => r.id), ['a'])
+})
+
+test("project.import of a worktree outside its repo's parent: allowed on the local server, PATH_DENIED on a remote one", async (t) => {
+  const { importProjectFile } = await import('../src/shared/model/importProject.ts')
+  for (const [guardOptions, allowed] of [[{}, false], [{ permissive: true }, true]]) {
+    const { dir, a, call } = setup(t, guardOptions)
+    const elsewhere = join(dir, 'elsewhere', 'a-feature')
+    mkdirSync(elsewhere, { recursive: true })
+    let n = 0
+    const { projects } = importProjectFile({ version: 3, name: 'File', repositories: [{ id: 'x', name: 'a', path: a, worktrees: [
+      { name: 'main', path: a },
+      { name: 'feature', path: elsewhere, branch: 'feature' }
+    ] }] }, () => `imp-${++n}`)
+    const res = await call('project.import', { project: projects[0].project })
+    if (allowed) {
+      assert.equal(res.ok, true, JSON.stringify(res))
+      assert.deepEqual((await call('project.list', {})).result.map((p) => p.name), ['File'])
+    } else {
+      assert.equal(res.error.code, 'PATH_DENIED')
+    }
+  }
 })
 
 test('server.addRepo rejects an empty or whitespace-only name', async (t) => {

@@ -64,6 +64,24 @@ test('addRepo outside the allowed roots is PATH_DENIED for RPC callers, allowed 
   assert.equal(store.addRepo(c, { requireAllowedRoot: false }).added, true)
 })
 
+test('a permissive store (the local server) lets RPC callers add anywhere, also after a save and a reload', (t) => {
+  const { dir, configPath } = setup(t)
+  const store = new ConfigStore(configPath, { permissive: true })
+  t.after(() => store.close())
+  const c = gitInit(join(dir, 'outside', 'c'))
+  assert.equal(store.addRepo(c, { requireAllowedRoot: true }).added, true)
+  assert.equal(store.guard.check(join(dir, 'elsewhere', 'wt')), join(dir, 'elsewhere', 'wt'))
+  saveConfig(configPath, { repos: [] })
+  assert.equal(store.reload(), true)
+  const d = gitInit(join(dir, 'outside', 'd'))
+  assert.equal(store.addRepo(d, { requireAllowedRoot: true }).added, true)
+  assert.equal(codeOf(() => store.addRepo(join(dir, 'outside'), { requireAllowedRoot: true })), 'NOT_A_REPO')
+  // The same file under a default store is still guarded.
+  const remote = new ConfigStore(configPath)
+  t.after(() => remote.close())
+  assert.equal(codeOf(() => remote.addRepo(gitInit(join(dir, 'far', 'e')), { requireAllowedRoot: true })), 'PATH_DENIED')
+})
+
 test('a path in an allowed root whose git root is outside it is PATH_DENIED', (t) => {
   const { dir, store } = setup(t)
   // dir itself becomes a repo; dir/repos/plain is allowed but resolves up to dir.
