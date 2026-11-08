@@ -16,6 +16,11 @@
 //   Keep Mine (sent again over the newer value). One dialog at a time. Keep
 //   Mine does nothing when the field was written again since the conflict was
 //   raised (a per-field write count): that edit is newer, finished or not.
+// - A field with `rebase` (an operation, not a value: a favourite toggled, an
+//   environment sub-field set) is not asked about: its change is re-applied
+//   to the newer value and sent again, once, silently. Only a clash (the other
+//   client changed the same part) asks, and Keep Mine then sends the rebased
+//   value, so the other client's other changes stay.
 // - A text field's draft whose value changed elsewhere while it was being
 //   typed (`textCommit` says 'stale', SettingText commits it through
 //   `commitStale`) is not sent over the newer value: it asks the same dialog.
@@ -38,6 +43,17 @@ export interface SettingsField {
   apply(project: Project, value: unknown): Project
   /** Sends the edit; resolves once the window's mirror holds the result */
   send(value: unknown, expected: unknown): Promise<void>
+  /**
+   * The user's change (`base` to `wanted`) re-applied to `latest`, the newer
+   * value another client wrote. `clash`: that client changed the same part,
+   * so the user is asked. Without it, a CONFLICT asks Reload or Keep Mine.
+   */
+  rebase?(latest: unknown, wanted: unknown, base: unknown): Rebased
+}
+
+export interface Rebased {
+  value: unknown
+  clash: boolean
 }
 
 export type ConflictChoice = 'reload' | 'keep'
@@ -75,6 +91,10 @@ interface Pending {
   field: SettingsField
   /** In flight */
   sent: unknown
+  /** The `expected` it went with: the value the user's change was built on */
+  base: unknown
+  /** A silent rebase's resend: its own CONFLICT asks */
+  rebased: boolean
   /** The latest edit made meanwhile, sent next */
   next: { value: unknown } | null
 }
@@ -132,6 +152,7 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
 
   const send = (p: Pending, value: unknown, expected: unknown): void => {
     p.sent = value
+    p.base = expected
     p.next = null
     p.field.send(value, expected).then(
       () => sent(p, value),
@@ -139,9 +160,9 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
     )
   }
 
-  const start = (field: SettingsField, value: unknown, expected: unknown): void => {
+  const start = (field: SettingsField, value: unknown, expected: unknown, rebased = false): void => {
     if (sameSetting(value, expected)) return
-    const p: Pending = { field, sent: value, next: null }
+    const p: Pending = { field, sent: value, base: expected, rebased, next: null }
     pending.set(field.key, p)
     deps.changed()
     send(p, value, expected)
@@ -161,20 +182,33 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
     pending.delete(field.key)
     deps.changed()
     if (errorCode(err) !== 'CONFLICT') return deps.reportEdit(field.title, err)
-    conflict(field, wanted)
+    // An operation is re-applied to the newer value and sent again, once, without a dialog.
+    const now = deps.project()
+    if (field.rebase && !p.rebased && now) {
+      const latest = field.current(now)
+      const { value, clash } = field.rebase(latest, wanted, p.base)
+      if (!clash) return start(field, value, latest, true)
+    }
+    conflict(field, wanted, field.rebase ? p.base : undefined)
   }
 
-  /** Another client changed `field` under `wanted`: Reload, or Keep Mine unless a newer write came since. */
-  const conflict = (field: SettingsField, wanted: unknown): void => {
+  /**
+   * Another client changed `field` under `wanted`: Reload, or Keep Mine unless a newer write came
+   * since. With `base` (a field with `rebase`), Keep Mine sends the change rebased on the newer value.
+   */
+  const conflict = (field: SettingsField, wanted: unknown, base?: unknown): void => {
     // No project (the window left, or no snapshot yet): nothing to ask about.
+    const mine = (latest: unknown): unknown =>
+      field.rebase && base !== undefined ? field.rebase(latest, wanted, base).value : wanted
+    const holds = (project: Project): boolean => sameSetting(field.current(project), mine(field.current(project)))
     const now = deps.project()
-    if (!now || sameSetting(field.current(now), wanted)) return
+    if (!now || holds(now)) return
     const count = writeCount(field.key)
     asking = asking
       .then(() => {
         // Queued behind another dialog: the field may hold the wanted value by now.
         const at = deps.project()
-        return at && !sameSetting(field.current(at), wanted) ? deps.askConflict(field.label) : null
+        return at && !holds(at) ? deps.askConflict(field.label) : null
       })
       .then((choice) => {
         if (choice === null) return
@@ -185,8 +219,8 @@ export function createSettingsWriter(deps: SettingsWriterDeps): SettingsWriter {
         // One is still in flight on this field (an earlier Keep Mine, or an edit sent before a stale
         // draft's commit): this one goes after it.
         const p = pending.get(field.key)
-        if (!p) return start(field, wanted, field.current(latest))
-        p.next = { value: wanted }
+        if (!p) return start(field, mine(field.current(latest)), field.current(latest))
+        p.next = { value: mine(p.sent) }
         deps.changed()
       })
       .catch(() => undefined)

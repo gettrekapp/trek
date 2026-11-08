@@ -31,7 +31,6 @@ export const OVERRIDDEN_SETTERS = [
   'setBranchNote',
   'setBranchTicket',
   'setBranchPullRequest',
-  'setBranchEnvVars',
   'setWorktreeOrder',
   'setTerminalStatus',
   'setTerminalSession',
@@ -124,8 +123,6 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
       send('Could not link the ticket', backend.branch.setTicket(repoId, branch, ticketId)),
     setBranchPullRequest: (repoId, branch, url) =>
       send('Could not link the pull request', backend.branch.setPullRequest(repoId, branch, url)),
-    setBranchEnvVars: (repoId, branch, text) =>
-      send('Could not save the environment', backend.branch.setEnvVars(repoId, branch, text)),
     setWorktreeOrder: (keys) => send('Could not save the worktree order', backend.worktrees.setOrder(keys)),
     setTerminalStatus: noop,
     setTerminalSession: noop,

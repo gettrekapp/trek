@@ -1,7 +1,7 @@
 // scripts/v2SettingsOverrides.test.mjs — the settings setters a server window sends to its server.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SETTINGS_SETTERS, v2SettingsOverrides } from '../src/renderer/src/v2/settingsOverrides.ts'
+import { SETTINGS_SETTERS, rebaseObject, rebaseSet, v2SettingsOverrides } from '../src/renderer/src/v2/settingsOverrides.ts'
 import { OVERRIDDEN_SETTERS } from '../src/renderer/src/v2/setterOverrides.ts'
 import { createSettingsWriter } from '../src/renderer/src/v2/settingsWriter.ts'
 
@@ -23,7 +23,8 @@ function setup() {
     updateSettings: async (settings, expected) => void calls.push(['updateSettings', settings, expected]),
     rename: async (name, expected) => void calls.push(['rename', name, expected]),
     setLinkedDirs: async (repoId, dirs, expected) => void calls.push(['setLinkedDirs', repoId, dirs, expected]),
-    setEnvironments: async (repoId, environments, expected) => void calls.push(['setEnvironments', repoId, environments, expected])
+    setEnvironments: async (repoId, environments, expected) => void calls.push(['setEnvironments', repoId, environments, expected]),
+    setBranchEnv: async (repoId, branch, env, expected) => void calls.push(['setBranchEnv', repoId, branch, env, expected])
   }
   const mirror = project()
   const writer = createSettingsWriter({
@@ -127,4 +128,161 @@ test('a Docker favourite toggles in the dockerFavorites setting, sorted, and the
   const off = setup()
   off.o.toggleDockerFavorite('db')
   assert.deepEqual(off.calls, [['updateSettings', { dockerFavorites: null }, { dockerFavorites: ['db'] }]])
+})
+
+class CodedError extends Error {
+  constructor(code) {
+    super(code)
+    this.code = code
+  }
+}
+const tick = () => new Promise((r) => setImmediate(r))
+
+/**
+ * Overrides over a real writer whose sends stay open: `ok()` writes the value
+ * into the mirror (as its patch would), `conflict(edit)` first lets another
+ * client's edit land, then answers CONFLICT.
+ */
+function pendingSetup() {
+  const sends = []
+  const asked = []
+  const mirror = project()
+  const open = (name, args, write) =>
+    new Promise((resolve, reject) => {
+      sends.push({
+        name,
+        args,
+        ok: () => {
+          write()
+          resolve()
+        },
+        conflict: (other) => {
+          other(mirror)
+          reject(new CodedError('CONFLICT'))
+        }
+      })
+    })
+  const requests = {
+    updateSettings: (settings, expected) =>
+      open('updateSettings', [settings, expected], () => {
+        for (const [k, v] of Object.entries(settings)) {
+          if (v === null) delete mirror.settings[k]
+          else mirror.settings[k] = v
+        }
+      }),
+    rename: async () => {},
+    setLinkedDirs: async () => {},
+    setEnvironments: (repoId, environments, expected) =>
+      open('setEnvironments', [repoId, environments, expected], () => {
+        mirror.repositories.find((r) => r.id === repoId).environments = environments ?? undefined
+      }),
+    setBranchEnv: (repoId, branch, env, expected) =>
+      open('setBranchEnv', [repoId, branch, env, expected], () => {
+        const repo = mirror.repositories.find((r) => r.id === repoId)
+        repo.branchData[branch] = { ...repo.branchData[branch], env: env ?? undefined }
+      })
+  }
+  const choices = []
+  const writer = createSettingsWriter({
+    project: () => mirror,
+    changed: () => {},
+    askConflict: async (label) => {
+      asked.push(label)
+      return choices.shift() ?? 'reload'
+    },
+    reload: () => {},
+    reportEdit: () => {}
+  })
+  return { o: v2SettingsOverrides(writer, requests, () => mirror), sends, asked, choices, writer, mirror }
+}
+
+test('rebaseSet: the items added and removed are applied to the newer set, never a clash', () => {
+  assert.deepEqual(rebaseSet(['db', 'web'], ['api', 'db'], ['db']), { value: ['api', 'db', 'web'], clash: false })
+  assert.deepEqual(rebaseSet(['db', 'web'], null, ['db']), { value: ['web'], clash: false })
+  assert.deepEqual(rebaseSet(null, null, ['db']), { value: null, clash: false })
+})
+
+test('rebaseObject: the keys changed go over the newer object; a clash only when it changed the same key differently', () => {
+  assert.deepEqual(rebaseObject({ enabled: true, cpu: 8 }, { enabled: true, cpu: 4, memory: 16 }, { enabled: true, cpu: 4 }), {
+    value: { enabled: true, cpu: 8, memory: 16 },
+    clash: false
+  })
+  assert.deepEqual(rebaseObject({ enabled: true, cpu: 8 }, { enabled: true, cpu: 2 }, { enabled: true, cpu: 4 }), {
+    value: { enabled: true, cpu: 2 },
+    clash: true
+  })
+  // The same change made by both is no clash.
+  assert.deepEqual(rebaseObject({ cpu: 2 }, { cpu: 2 }, { cpu: 4 }).clash, false)
+})
+
+test('a Docker favourite toggle that meets a CONFLICT is toggled again on the newer list, silently, once', async () => {
+  const { o, sends, asked, mirror } = pendingSetup()
+  o.toggleDockerFavorite('api')
+  assert.deepEqual(sends[0].args, [{ dockerFavorites: ['api', 'db'] }, { dockerFavorites: ['db'] }])
+  // Another client adds "web" first.
+  sends[0].conflict((m) => (m.settings.dockerFavorites = ['db', 'web']))
+  await tick()
+  assert.deepEqual(asked, [])
+  assert.deepEqual(sends[1].args, [{ dockerFavorites: ['api', 'db', 'web'] }, { dockerFavorites: ['db', 'web'] }])
+  // A second CONFLICT asks (once is enough silently); Reload drops it.
+  sends[1].conflict((m) => (m.settings.dockerFavorites = ['web']))
+  await tick()
+  await tick()
+  assert.deepEqual(asked, ['Docker favourites'])
+  assert.equal(sends.length, 2)
+  assert.deepEqual(mirror.settings.dockerFavorites, ['web'])
+})
+
+test('a toggle whose rebase leaves the newer list as it is sends nothing more', async () => {
+  const { o, sends, asked } = pendingSetup()
+  o.toggleDockerFavorite('api')
+  sends[0].conflict((m) => (m.settings.dockerFavorites = ['api', 'db']))
+  await tick()
+  assert.deepEqual([sends.length, asked], [1, []])
+})
+
+test("an environment sub-field set meets a CONFLICT: it goes over the other client's other sub-fields, silently", async () => {
+  const { o, sends, asked } = pendingSetup()
+  o.setEnvironmentSettings('r2', { memory: 16 })
+  sends[0].conflict((m) => (m.repositories[1].environments = { enabled: true, cpu: 8, disk: 100 }))
+  await tick()
+  assert.deepEqual(asked, [])
+  assert.deepEqual(sends[1].args, ['r2', { enabled: true, cpu: 8, disk: 100, memory: 16 }, { enabled: true, cpu: 8, disk: 100 }])
+})
+
+test('an environment sub-field the other client changed too asks; Keep Mine keeps its other sub-fields', async () => {
+  const { o, sends, asked, choices } = pendingSetup()
+  choices.push('keep')
+  o.setEnvironmentSettings('r2', { cpu: 2 })
+  sends[0].conflict((m) => (m.repositories[1].environments = { enabled: true, cpu: 8, disk: 100 }))
+  await tick()
+  await tick()
+  assert.deepEqual(asked, ['Docker environments'])
+  assert.deepEqual(sends[1].args, ['r2', { enabled: true, cpu: 2, disk: 100 }, { enabled: true, cpu: 8, disk: 100 }])
+})
+
+test("a branch's environment variables: branch.setEnv with expected, and shown pending in the overlay", async () => {
+  const { o, sends, writer, mirror } = pendingSetup()
+  o.setBranchEnvVars('r1', 'feat', 'A=1')
+  assert.deepEqual(sends[0].args, ['r1', 'feat', 'A=1', null])
+  // What the panel's Start reads before the server has answered.
+  assert.equal(writer.overlay(mirror).repositories[0].branchData.feat.env, 'A=1')
+  assert.equal(mirror.repositories[0].branchData.feat, undefined)
+  // An edit made meanwhile goes next, expecting the first.
+  o.setBranchEnvVars('r1', 'feat', '')
+  assert.equal('feat' in writer.overlay(mirror).repositories[0].branchData, false, 'cleared, and the empty entry goes')
+  sends[0].ok()
+  await tick()
+  assert.deepEqual(sends[1].args, ['r1', 'feat', null, 'A=1'])
+})
+
+test("a branch's environment variables changed elsewhere: the CONFLICT asks Reload or Keep Mine", async () => {
+  const { o, sends, asked, choices } = pendingSetup()
+  choices.push('keep')
+  o.setBranchEnvVars('r1', 'feat', 'A=1')
+  sends[0].conflict((m) => (m.repositories[0].branchData.feat = { env: 'B=2' }))
+  await tick()
+  await tick()
+  assert.deepEqual(asked, ['Environment variables of feat'])
+  assert.deepEqual(sends[1].args, ['r1', 'feat', 'A=1', 'B=2'])
 })

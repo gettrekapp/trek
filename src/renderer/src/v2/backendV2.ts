@@ -61,6 +61,16 @@ export interface WorktreeTeardown {
   destroyStack(info: GitWorktreeInfo, stackName: string): Promise<void>
   /** Deletes the VM; shows its own failure and never rejects */
   destroyEnvironment(info: GitWorktreeInfo): Promise<void>
+  /** A fresh `git status` of the worktree on this disk; the cached flag if it can't be read */
+  isDirty(info: GitWorktreeInfo): Promise<boolean>
+}
+
+/** Added to a failed removal's error once its stack or VM is already gone. */
+export function tornDownNote(stack: boolean, vm: boolean): string {
+  if (stack && vm) return ' Its dev stack and its VM were already removed.'
+  if (stack) return ' Its dev stack was already removed.'
+  if (vm) return ' Its VM was already removed.'
+  return ''
 }
 
 export interface V2BackendDeps {
@@ -340,8 +350,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           return
         }
         const { worktreeId } = ref
-        // The server's status poll; a stale "clean" is caught by git below.
-        const dirty = info.dirty ?? false
+        // The server's status poll; a stale "clean" is caught by git below, unless the teardown
+        // would destroy something first: that is checked afresh below, after the confirm.
+        let dirty = info.dirty ?? false
         const loaded = deps.state().loadedWorktrees[legacyId] === true
         const name = info.branch ?? info.path
         const machine = currentFeatures()
@@ -363,14 +374,28 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           ? await deps.teardown.confirm(info, prompt)
           : { confirmed: await deps.confirm(prompt), stackName: undefined }
         if (!confirmed) return
+        const askDiscard = (): Promise<boolean> =>
+          deps.confirm({
+            title: 'Delete Uncommitted Changes',
+            message: `“${name}” has uncommitted changes.`,
+            detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
+            confirmLabel: 'Delete Changes & Worktree'
+          })
+        // The stack and the VM can't come back: git's refusal after them would be too late to ask
+        // (legacy runs worktreeIsDirty first). Asked before anything is unloaded or destroyed.
+        if ((stackName || env) && !dirty && (await deps.teardown.isDirty(info))) {
+          if (!(await askDiscard())) return
+          dirty = true
+        }
         let wasLoaded = false
+        let tornDown = { stack: false, vm: false }
         // Best effort: the removal's own error is the one to show.
         const reload = async (): Promise<void> => {
           if (wasLoaded) await request('worktree.load', { projectId, worktreeId }).catch(() => {})
         }
         const fail = async (err: unknown): Promise<void> => {
           await reload()
-          await deps.showError(REMOVE_FAILED, errorText(err))
+          await deps.showError(REMOVE_FAILED, errorText(err) + tornDownNote(tornDown.stack, tornDown.vm))
         }
         try {
           if (loaded) {
@@ -381,6 +406,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           // containers hold bind-mount handles into it. Neither rejects.
           if (stackName) await deps.teardown.destroyStack(info, stackName)
           if (env) await deps.teardown.destroyEnvironment(info)
+          tornDown = { stack: !!stackName, vm: !!env }
           await removeWorktree(worktreeId, dirty)
           return
         } catch (err) {
@@ -390,13 +416,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             return
           }
         }
-        const discard = await deps.confirm({
-          title: 'Delete Uncommitted Changes',
-          message: `“${name}” has uncommitted changes.`,
-          detail: 'Deleting this worktree will permanently discard them. This cannot be undone.',
-          confirmLabel: 'Delete Changes & Worktree'
-        })
-        if (!discard) {
+        if (!(await askDiscard())) {
           await reload()
           return
         }

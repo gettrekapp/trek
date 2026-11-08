@@ -10,6 +10,8 @@ import { commitStale, textCommit } from '../v2/settingsWriter'
  * committed draft does not flash the old text). A draft whose value changed
  * elsewhere while it was typed is committed as stale: the server window's
  * writer asks Reload or Keep Mine rather than send it over the newer value.
+ * A field unmounted while edited (its panel re-keyed for another worktree,
+ * or hidden) commits its draft then, as a blur would: no blur comes.
  */
 export function SettingText({
   value,
@@ -39,6 +41,23 @@ export function SettingText({
   useEffect(() => {
     if (!editing) setDraft(value)
   }, [value, editing])
+  // The latest of each, for the unmount below; `editing` set synchronously, so a blur that does
+  // come first leaves nothing to commit.
+  const latest = useRef({ value, draft, editing, onCommit })
+  latest.current = { value, draft, editing: latest.current.editing, onCommit }
+  useEffect(
+    () => () => {
+      const { value: now, draft: typed, editing: open, onCommit: save } = latest.current
+      if (live || !open || cancelled.current) return
+      latest.current.editing = false
+      const action = textCommit(base.current, now, typed)
+      if (action === 'write') save(typed)
+      else if (action === 'stale') commitStale(() => save(typed))
+    },
+    // Once, at unmount: `live` never changes for a mounted field.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
 
   const common = { className, placeholder, title, spellCheck }
   if (live) {
@@ -50,6 +69,7 @@ export function SettingText({
   }
 
   const commit = (): void => {
+    latest.current.editing = false
     setEditing(false)
     if (cancelled.current) {
       cancelled.current = false
@@ -65,6 +85,7 @@ export function SettingText({
     onFocus: () => {
       cancelled.current = false
       base.current = value
+      latest.current.editing = true
       setEditing(true)
     },
     onBlur: commit
@@ -79,5 +100,53 @@ export function SettingText({
     <textarea {...common} {...handlers} rows={rows} onChange={(e) => setDraft(e.target.value)} onKeyDown={onKeyDown} />
   ) : (
     <input {...common} {...handlers} type="text" onChange={(e) => setDraft(e.target.value)} onKeyDown={onKeyDown} />
+  )
+}
+
+/**
+ * A Settings number field. `live` (a file window): every change commits.
+ * Otherwise the typed text is a draft, committed on blur or Enter (Escape puts
+ * the value back), so a server window sends one request, not one per digit.
+ * A blank or non-positive entry commits `fallback`.
+ */
+export function SettingNumber({
+  value,
+  onCommit,
+  live,
+  min,
+  fallback
+}: {
+  value: number
+  onCommit: (value: number) => void
+  live: boolean
+  min?: number
+  fallback: number
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<string | null>(null)
+  const cancelled = useRef(false)
+  const parse = (text: string): number => Number(text) || fallback
+  if (live) {
+    return <input type="number" min={min} value={value} onChange={(e) => onCommit(parse(e.target.value))} />
+  }
+  return (
+    <input
+      type="number"
+      min={min}
+      value={draft ?? String(value)}
+      onFocus={() => {
+        cancelled.current = false
+        setDraft(String(value))
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (!cancelled.current && draft !== null && parse(draft) !== value) onCommit(parse(draft))
+        cancelled.current = false
+        setDraft(null)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') cancelled.current = true
+        if (e.key === 'Escape' || e.key === 'Enter') e.currentTarget.blur()
+      }}
+    />
   )
 }

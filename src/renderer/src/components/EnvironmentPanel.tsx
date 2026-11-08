@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import { ENV_DEFAULTS, deriveProfileName, parseEnvVars } from '../../../shared/environments'
 import type { EnvService, EnvUpStep, GitWorktreeInfo } from '../../../shared/types'
 import { refreshEnvironments } from '../environmentActions'
+import { envStartArgs } from '../environmentStart'
 import { scheduleAutoSave } from '../persistence'
 import { SettingText } from './SettingText'
-import { environmentFor, repoOfInfo, useAppStore } from '../store'
+import { environmentFor, repoById, repoOfInfo, useAppStore } from '../store'
 
 interface Props {
   visible: boolean
@@ -194,19 +195,11 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     setError(null)
     setSteps({ vm: 'active' })
     try {
-      const envVars = parseEnvVars(varsText)
-      const result = await window.api.envUp(
-        null,
-        repoPath,
-        info.branch!,
-        info.path,
-        {
-          enabled: true,
-          ...repo?.environments,
-          composeFile
-        },
-        Object.keys(envVars).length > 0 ? envVars : undefined
-      )
+      // The store's project now, not this render's: a variables draft this click's blur just
+      // committed is in it (a server window shows the pending edit at once).
+      const now = useAppStore.getState().project
+      const { settings, envVars } = envStartArgs(now ? repoById(now, info.repoId) : repo, info.branch!, composeFile)
+      const result = await window.api.envUp(null, repoPath, info.branch!, info.path, settings, envVars)
       if (result.code === 0) {
         setSteps({ vm: 'done', compose: 'done', ready: 'done' })
       } else {

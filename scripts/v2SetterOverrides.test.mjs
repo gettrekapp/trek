@@ -49,7 +49,6 @@ test('data edits go to the backend, with legacy ids', async () => {
   o.setBranchNote('r1', 'feat', '')
   o.setBranchTicket('r1', 'feat', null)
   o.setBranchPullRequest('r1', 'feat', 'u')
-  o.setBranchEnvVars('r1', 'feat', 'A=1')
   o.setWorktreeOrder(['local /r'])
   await tick()
   assert.deepEqual(calls, [
@@ -62,7 +61,6 @@ test('data edits go to the backend, with legacy ids', async () => {
     ['branch.setNote', 'r1', 'feat', ''],
     ['branch.setTicket', 'r1', 'feat', null],
     ['branch.setPullRequest', 'r1', 'feat', 'u'],
-    ['branch.setEnvVars', 'r1', 'feat', 'A=1'],
     ['worktrees.setOrder', ['local /r']]
   ])
 })

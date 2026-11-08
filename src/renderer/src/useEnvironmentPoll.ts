@@ -8,7 +8,7 @@ import { useAppStore } from './store'
 import { refreshEnvironments } from './environmentActions'
 
 // colima list is heavier than git worktree list — poll it less often.
-export const ENV_POLL_MS = 10_000
+const ENV_POLL_MS = 10_000
 
 /** `allowed`: the window may run things on this machine for the project (`features.env`). */
 export function useEnvironmentPoll(allowed: boolean): void {

@@ -13,7 +13,7 @@ import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
 import { AppearanceSettings } from './AppearanceSettings'
 import { LlmSettings } from './LlmSettings'
 import { LlmPicker, useServerPicker } from './LlmPicker'
-import { SettingText } from './SettingText'
+import { SettingNumber, SettingText } from './SettingText'
 import { defaultSessionLlm } from '../llm'
 import { settingsSections } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
@@ -452,33 +452,32 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                   <span className="env-size-inputs">
                     <label>
                       CPUs
-                      <input
-                        type="number"
+                      <SettingNumber
                         min={1}
+                        live={live}
                         value={envSettings.cpu ?? ENV_DEFAULTS.cpu}
-                        onChange={(e) => updateEnv({ cpu: Number(e.target.value) || ENV_DEFAULTS.cpu })}
+                        fallback={ENV_DEFAULTS.cpu}
+                        onCommit={(cpu) => updateEnv({ cpu })}
                       />
                     </label>
                     <label>
                       Memory GiB
-                      <input
-                        type="number"
+                      <SettingNumber
                         min={1}
+                        live={live}
                         value={envSettings.memory ?? ENV_DEFAULTS.memory}
-                        onChange={(e) =>
-                          updateEnv({ memory: Number(e.target.value) || ENV_DEFAULTS.memory })
-                        }
+                        fallback={ENV_DEFAULTS.memory}
+                        onCommit={(memory) => updateEnv({ memory })}
                       />
                     </label>
                     <label>
                       Disk GiB
-                      <input
-                        type="number"
+                      <SettingNumber
                         min={5}
+                        live={live}
                         value={envSettings.disk ?? ENV_DEFAULTS.disk}
-                        onChange={(e) =>
-                          updateEnv({ disk: Number(e.target.value) || ENV_DEFAULTS.disk })
-                        }
+                        fallback={ENV_DEFAULTS.disk}
+                        onCommit={(disk) => updateEnv({ disk })}
                       />
                     </label>
                   </span>

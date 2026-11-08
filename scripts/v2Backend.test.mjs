@@ -1,7 +1,7 @@
 // scripts/v2Backend.test.mjs — a server window's backend: each action as the v2 request it sends.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createV2Backend, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
+import { createV2Backend, tornDownNote, V2_START_SIZE } from '../src/renderer/src/v2/backendV2.ts'
 import { PROMPT_NOT_CONFIRMED, withPromptText } from '../src/renderer/src/v2/errors.ts'
 
 const PRIMARY = '__primary__:r1'
@@ -86,7 +86,8 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     report: (title, err) => void (left() || reports.push([title, err.code])),
     reportEdit: (title, err, notConfirmed) => void (left() || reports.push([title, err.code, notConfirmed ?? 'edit'])),
     // This machine's teardown: `machine.env` is the branch's VM, `machine.stack` its dev stack's name
-    // (offered as the confirm's checkbox), `machine.ticked` the checkbox's answer.
+    // (offered as the confirm's checkbox), `machine.ticked` the checkbox's answer, `machine.dirty`
+    // what a fresh git status of the worktree on this disk says.
     teardown: {
       environment: (info) => {
         ui.push(['env?', info.path])
@@ -98,7 +99,11 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
         return { confirmed, ...(machine.stack && machine.ticked !== false ? { stackName: machine.stack } : {}) }
       },
       destroyStack: async (info, name) => void calls.push(['stack.sh destroy', info.path, name]),
-      destroyEnvironment: async (info) => void calls.push(['colima delete', info.path])
+      destroyEnvironment: async (info) => void calls.push(['colima delete', info.path]),
+      isDirty: async (info) => {
+        ui.push(['git status', info.path])
+        return machine.dirty === true
+      }
     },
     left
   })
@@ -422,6 +427,47 @@ test('remove in a Local window: declined tears nothing down; the stack box untic
   const bare = setup({ ...LOCAL, confirms: [true] })
   await bare.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(bare.calls.map(([m]) => m), ['worktree.remove'])
+})
+
+test('remove in a Local window: a fresh check finds changes the poll missed, and asks before anything is destroyed', async () => {
+  // Declined: nothing is unloaded, destroyed or removed.
+  const declined = setup({ ...LOCAL, confirms: [true, false], state: LOADED, machine: { env: 'twb-x', stack: 'r-feat', dirty: true } })
+  await declined.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(declined.calls, [])
+  assert.deepEqual(declined.ui.slice(2), [['git status', '/r-feat'], ['confirm', 'Delete Uncommitted Changes', 'Delete Changes & Worktree']])
+  // Accepted: the teardown, then a forced removal (no second ask).
+  const accepted = setup({ ...LOCAL, confirms: [true, true], machine: { env: 'twb-x', dirty: true } })
+  await accepted.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(accepted.calls.map(([m, p]) => [m, p?.force]), [['colima delete', undefined], ['worktree.remove', true]])
+  assert.equal(accepted.ui.filter(([kind]) => kind === 'confirm').length, 1)
+})
+
+test('remove in a Local window: no fresh check when nothing would be destroyed, or the poll already said dirty', async () => {
+  const bare = setup({ ...LOCAL, confirms: [true], machine: { dirty: true } })
+  await bare.backend.worktrees.remove(feat, undefined)
+  assert.ok(!bare.ui.some(([kind]) => kind === 'git status'))
+  const polled = setup({ ...LOCAL, confirms: [true], machine: { env: 'twb-x', dirty: true } })
+  await polled.backend.worktrees.remove({ ...feat, dirty: true }, undefined)
+  assert.ok(!polled.ui.some(([kind]) => kind === 'git status'))
+  assert.deepEqual(polled.calls.map(([m, p]) => [m, p?.force]), [['colima delete', undefined], ['worktree.remove', true]])
+})
+
+test('remove in a Local window that fails after the teardown: loaded again, and the error says the stack and VM are gone', async () => {
+  const replies = { 'worktree.remove': new CodedError('GIT_ERROR', "fatal: '/r-feat' is locked") }
+  const { backend, calls, ui } = setup({ ...LOCAL, confirms: [true], state: LOADED, replies, machine: { env: 'twb-x', stack: 'r-feat' } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls.map(([m]) => m), ['worktree.unload', 'stack.sh destroy', 'colima delete', 'worktree.remove', 'worktree.load'])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', "fatal: '/r-feat' is locked Its dev stack and its VM were already removed."])
+  // A failed unload comes before any teardown: nothing to add.
+  const unload = setup({ ...LOCAL, confirms: [true], state: LOADED, replies: { 'worktree.unload': new CodedError('IN_USE', 'busy') }, machine: { env: 'twb-x' } })
+  await unload.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(unload.ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
+})
+
+test('tornDownNote names what is already gone', () => {
+  assert.equal(tornDownNote(false, false), '')
+  assert.equal(tornDownNote(true, false), ' Its dev stack was already removed.')
+  assert.equal(tornDownNote(false, true), ' Its VM was already removed.')
 })
 
 test("remove in any other server window never looks at this machine's environments or stacks", async () => {

@@ -424,7 +424,9 @@ export const localWorktreeTeardown: WorktreeTeardown = {
   environment: environmentOf,
   confirm: confirmRemoval,
   destroyStack: teardownStack,
-  destroyEnvironment: teardownEnvironment
+  destroyEnvironment: teardownEnvironment,
+  // A Local server window's worktree is on this disk.
+  isDirty: (info) => worktreeIsDirty({ ...info, serverId: undefined })
 }
 
 function removeInstance(instanceId: string): void {
