@@ -147,7 +147,7 @@ export interface MethodParamsV2 {
   'branch.setNote': BranchRef & { note: string | null; expected?: string | null }
   'branch.setTicket': BranchRef & { ticket: string | null }
   'branch.setPr': BranchRef & { pr: string | null }
-  'branch.setEnv': BranchRef & { env: string | null }
+  'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
   // Sessions
   /** `worktreeId: null` starts a Global panel session */
   'session.start': ProjectRef & {

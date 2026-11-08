@@ -285,8 +285,8 @@ reading the message (which may be git's own, localised text). Today the only key
 is `reason`, and the only reason is `dirty` (see `worktree.remove`). Clients
 ignore keys and reasons they don't know.
 
-`project.rename`, `project.updateSettings`, `branch.setNote`, `session.rename`,
-`session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
+`project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
+`session.rename`, `session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
 field has now. The server fails with `CONFLICT` only if that field's current
 value differs (deep equality, null means absent). For `project.updateSettings`
 and `repo.update`, only the keys listed in `expected` are compared. A

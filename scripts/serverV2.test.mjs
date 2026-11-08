@@ -485,6 +485,12 @@ test('branch.* set and clear branch data; an empty entry disappears', async (t) 
     tag: 'review', customTags: ['ui'], note: 'hello', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/1', env: 'A=1'
   })
   assert.equal((await call('branch.setNote', { ...ref, note: 'x', expected: 'stale' })).error.code, 'CONFLICT')
+  // branch.setEnv is a compare-and-set too: a stale guard changes nothing, a current one writes.
+  assert.equal((await call('branch.setEnv', { ...ref, env: 'B=2', expected: 'stale' })).error.code, 'CONFLICT')
+  assert.equal((await call('branch.setEnv', { ...ref, env: 'B=2', expected: null })).error.code, 'CONFLICT')
+  assert.equal((await snap()).repositories[0].branchData['feature/x'].env, 'A=1')
+  assert.equal((await call('branch.setEnv', { ...ref, env: 'B=2', expected: 'A=1' })).ok, true)
+  assert.equal((await snap()).repositories[0].branchData['feature/x'].env, 'B=2')
   for (const [method, field] of [['branch.setTag', 'tag'], ['branch.setNote', 'note'], ['branch.setTicket', 'ticket'], ['branch.setPr', 'pr'], ['branch.setEnv', 'env']]) {
     await call(method, { ...ref, [field]: null })
   }
