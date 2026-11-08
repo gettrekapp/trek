@@ -12,6 +12,7 @@ import { destroyEnvironmentIfAny } from './environmentActions'
 import { createTerminal, disposeTerminal } from './terminals'
 import { sameWorktree } from '../../shared/types'
 import type { GitWorktreeInfo, PersistedTerminal, WorktreeInstance } from '../../shared/types'
+import type { WorktreeTeardown } from './v2/backendV2'
 import { persistedLlm, sessionMigrates, sessionsAfterMove } from '../../shared/providers/selection'
 
 /**
@@ -412,6 +413,18 @@ async function confirmRemoval(
     checkboxChecked: true
   })
   return { confirmed: result.confirmed, stackName: result.checked ? stackName : undefined }
+}
+
+/**
+ * The same teardown for a Local server window's worktree delete (backendV2's
+ * `worktrees.remove`): its paths are this machine's, and its rows have no
+ * serverId, so these helpers see it as a local worktree.
+ */
+export const localWorktreeTeardown: WorktreeTeardown = {
+  environment: environmentOf,
+  confirm: confirmRemoval,
+  destroyStack: teardownStack,
+  destroyEnvironment: teardownEnvironment
 }
 
 function removeInstance(instanceId: string): void {

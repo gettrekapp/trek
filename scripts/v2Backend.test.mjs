@@ -28,7 +28,7 @@ class CodedError extends Error {
  * `revs` is the rev each method's response reports; `waits` records each
  * whenProjected's rev (null without one).
  */
-function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], localEntry = false, projectedAfter = [], left = () => false, revs = {} } = {}) {
+function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], localEntry = false, machine = {}, projectedAfter = [], left = () => false, revs = {} } = {}) {
   const calls = []
   const ui = []
   const reports = []
@@ -85,6 +85,21 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null),
     report: (title, err) => void (left() || reports.push([title, err.code])),
     reportEdit: (title, err, notConfirmed) => void (left() || reports.push([title, err.code, notConfirmed ?? 'edit'])),
+    // This machine's teardown: `machine.env` is the branch's VM, `machine.stack` its dev stack's name
+    // (offered as the confirm's checkbox), `machine.ticked` the checkbox's answer.
+    teardown: {
+      environment: (info) => {
+        ui.push(['env?', info.path])
+        return machine.env ? { profile: machine.env } : undefined
+      },
+      confirm: async (info, prompt) => {
+        ui.push(['confirm+stack', prompt.title, prompt.detail])
+        const confirmed = answers.shift() ?? false
+        return { confirmed, ...(machine.stack && machine.ticked !== false ? { stackName: machine.stack } : {}) }
+      },
+      destroyStack: async (info, name) => void calls.push(['stack.sh destroy', info.path, name]),
+      destroyEnvironment: async (info) => void calls.push(['colima delete', info.path])
+    },
     left
   })
   return { backend, calls, ui, st, reports, waits }
@@ -378,6 +393,44 @@ test('remove: a failed unload is shown, and nothing is loaded again', async () =
   await backend.worktrees.remove(feat, undefined)
   assert.deepEqual(calls.map(([m]) => m), ['worktree.unload'])
   assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
+})
+
+const LOCAL = { capabilities: ['mcp', 'local'], localEntry: true }
+
+test("remove in a Local window: the stack and the VM go after the unload, before git's removal (legacy's order)", async () => {
+  const { backend, calls, ui } = setup({ ...LOCAL, confirms: [true], state: LOADED, machine: { env: 'twb-feat-abc123', stack: 'r-feat' } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(ui[0], ['env?', '/r-feat'])
+  assert.equal(ui[1][0], 'confirm+stack')
+  assert.match(ui[1][2], /Its Docker environment \(Colima VM “twb-feat-abc123”\) and all its data will also be deleted\./)
+  assert.deepEqual(calls, [
+    ['worktree.unload', { projectId: 'p1', worktreeId: 'w2' }],
+    ['stack.sh destroy', '/r-feat', 'r-feat'],
+    ['colima delete', '/r-feat'],
+    ['worktree.remove', { projectId: 'p1', worktreeId: 'w2', force: false }]
+  ])
+})
+
+test('remove in a Local window: declined tears nothing down; the stack box unticked keeps the stack', async () => {
+  const declined = setup({ ...LOCAL, confirms: [false], machine: { env: 'twb-x', stack: 'r-feat' } })
+  await declined.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(declined.calls, [])
+  const unticked = setup({ ...LOCAL, confirms: [true], machine: { env: 'twb-x', stack: 'r-feat', ticked: false } })
+  await unticked.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(unticked.calls.map(([m]) => m), ['colima delete', 'worktree.remove'])
+  // No VM and no stack: only git's removal.
+  const bare = setup({ ...LOCAL, confirms: [true] })
+  await bare.backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(bare.calls.map(([m]) => m), ['worktree.remove'])
+})
+
+test("remove in any other server window never looks at this machine's environments or stacks", async () => {
+  for (const options of [{ capabilities: ['mcp', 'local'] }, { capabilities: ['mcp'], localEntry: true }, {}]) {
+    const { backend, calls, ui } = setup({ ...options, confirms: [true], machine: { env: 'twb-x', stack: 'r-feat' } })
+    await backend.worktrees.remove(feat, undefined)
+    assert.deepEqual(ui, [['confirm', 'Delete Worktree', 'Delete Worktree']])
+    assert.deepEqual(calls.map(([m]) => m), ['worktree.remove'])
+  }
 })
 
 test('remove and repos show the NOT_CONNECTED hint and resolve', async () => {

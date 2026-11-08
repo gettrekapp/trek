@@ -47,6 +47,22 @@ export interface ConfirmPrompt {
   confirmLabel: string
 }
 
+/**
+ * A Local server window's teardown on this machine before a worktree is
+ * removed (worktreeActions.ts's, as a file window does it). Used only with
+ * the features: `env` for the VM, `stacks` for the dev stack.
+ */
+export interface WorktreeTeardown {
+  /** The branch's Colima VM, if the environments poll lists one */
+  environment(info: GitWorktreeInfo): { profile: string } | undefined
+  /** The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when that is ticked */
+  confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt): Promise<{ confirmed: boolean; stackName?: string }>
+  /** `stack.sh destroy`; shows its own failure and never rejects */
+  destroyStack(info: GitWorktreeInfo, stackName: string): Promise<void>
+  /** Deletes the VM; shows its own failure and never rejects */
+  destroyEnvironment(info: GitWorktreeInfo): Promise<void>
+}
+
 export interface V2BackendDeps {
   projectId: string
   request: V2Request
@@ -77,6 +93,8 @@ export interface V2BackendDeps {
   registeredRepoPath(repoId: string): Promise<string | null>
   /** Why the repository can't be removed now, or null */
   removalBlock(repo: Repository): string | null
+  /** This machine's teardown for a removed worktree; only a Local window's features reach it */
+  teardown: WorktreeTeardown
   /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
   report(title: string, err: unknown): void
   /** Shows a failed edit or prompt send; NOT_CONNECTED says it may not have gone through (`editReporter`) */
@@ -182,14 +200,17 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
 
   let features: { caps: readonly string[] | undefined; value: BackendFeatures } | null = null
   const can = (capability: string): boolean => deps.capabilities()?.includes(capability) ?? false
+  const currentFeatures = (): BackendFeatures => {
+    const caps = deps.capabilities()
+    if (!features || features.caps !== caps) features = { caps, value: v2Features(caps, { localEntry: deps.localEntry }) }
+    return features.value
+  }
 
   return {
     kind: 'v2',
     /** Read at the time: the capabilities arrive with the welcome (useFeatures re-reads them). */
     get features(): BackendFeatures {
-      const caps = deps.capabilities()
-      if (!features || features.caps !== caps) features = { caps, value: v2Features(caps, { localEntry: deps.localEntry }) }
-      return features.value
+      return currentFeatures()
     },
     sessions: {
       start: (target: SessionTarget, sessionType, llm) =>
@@ -308,7 +329,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       // Legacy's dialogs and order (worktreeActions.deleteWorktree), with the
       // server's rules: a loaded worktree is IN_USE, so it is unloaded first,
-      // and loaded again when the removal doesn't go through.
+      // and loaded again when the removal doesn't go through. A Local window
+      // also tears down the worktree's dev stack (if ticked) and its VM on this
+      // machine, after the unload and before git's removal, as legacy does.
       remove: async (info, instance) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
@@ -321,7 +344,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const dirty = info.dirty ?? false
         const loaded = deps.state().loadedWorktrees[legacyId] === true
         const name = info.branch ?? info.path
-        const confirmed = await deps.confirm({
+        const machine = currentFeatures()
+        const env = machine.env ? deps.teardown.environment(info) : undefined
+        const prompt: ConfirmPrompt = {
           title: 'Delete Worktree',
           message: `Delete worktree “${name}”?`,
           detail:
@@ -330,9 +355,13 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             (loaded ? 'Its running sessions will be stopped. ' : '') +
             (dirty
               ? 'This worktree has uncommitted changes — they will be permanently deleted.'
-              : 'Uncommitted changes will block the deletion.'),
+              : 'Uncommitted changes will block the deletion.') +
+            (env ? ` Its Docker environment (Colima VM “${env.profile}”) and all its data will also be deleted.` : ''),
           confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
-        })
+        }
+        const { confirmed, stackName } = machine.stacks
+          ? await deps.teardown.confirm(info, prompt)
+          : { confirmed: await deps.confirm(prompt), stackName: undefined }
         if (!confirmed) return
         let wasLoaded = false
         // Best effort: the removal's own error is the one to show.
@@ -348,6 +377,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             await request('worktree.unload', { projectId, worktreeId })
             wasLoaded = true
           }
+          // Stack and environment first: they need the worktree's files, and their
+          // containers hold bind-mount handles into it. Neither rejects.
+          if (stackName) await deps.teardown.destroyStack(info, stackName)
+          if (env) await deps.teardown.destroyEnvironment(info)
           await removeWorktree(worktreeId, dirty)
           return
         } catch (err) {
