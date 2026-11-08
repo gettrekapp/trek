@@ -147,6 +147,10 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     setLinkedDirs: async (repoId, linkedDirs, expected) => {
       const { rev } = await requestWithRev('repo.update', { projectId, repoId, linkedDirs, expected: { linkedDirs: expected } })
       if (rev) await whenProjected(() => true, rev)
+    },
+    setEnvironments: async (repoId, environments, expected) => {
+      const { rev } = await requestWithRev('repo.update', { projectId, repoId, environments, expected: { environments: expected } })
+      if (rev) await whenProjected(() => true, rev)
     }
   }
   const askConflict = async (label: string): Promise<ConflictChoice> => {
@@ -246,7 +250,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   useAppStore.setState(
     installPatch({
       ...v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit }),
-      ...v2SettingsOverrides(settingsWriter, settingsRequests)
+      ...v2SettingsOverrides(settingsWriter, settingsRequests, mirrorProject)
     })
   )
 

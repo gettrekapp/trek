@@ -3,6 +3,7 @@ import { ENV_DEFAULTS, deriveProfileName, parseEnvVars } from '../../../shared/e
 import type { EnvService, EnvUpStep, GitWorktreeInfo } from '../../../shared/types'
 import { refreshEnvironments } from '../environmentActions'
 import { scheduleAutoSave } from '../persistence'
+import { SettingText } from './SettingText'
 import { environmentFor, repoOfInfo, useAppStore } from '../store'
 
 interface Props {
@@ -37,6 +38,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const toolCheck = useAppStore((s) => s.envToolCheck)
   const setEnvBusy = useAppStore((s) => s.setEnvBusy)
   const setBranchEnvVars = useAppStore((s) => s.setBranchEnvVars)
+  const serverWindow = useAppStore((s) => s.serverWindow !== null)
 
   const repo = project ? repoOfInfo(project, info) : undefined
   const repoPath = repo?.path ?? ''
@@ -353,14 +355,17 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
           </button>
           {showVars && (
             <>
-              <textarea
+              {/* A server window (Local) saves each commit on the server: on blur, not per keystroke. */}
+              <SettingText
+                key={`${repo!.id} ${info.branch}`}
                 className="env-vars-editor"
                 placeholder={'KEY=value — one per line'}
                 value={varsText}
-                spellCheck={false}
                 rows={6}
-                onChange={(e) => {
-                  setBranchEnvVars(repo!.id, info.branch!, e.target.value)
+                spellCheck={false}
+                live={!serverWindow}
+                onCommit={(text) => {
+                  setBranchEnvVars(repo!.id, info.branch!, text)
                   scheduleAutoSave()
                 }}
               />

@@ -18,7 +18,8 @@ export function SettingText({
   rows,
   className,
   placeholder,
-  title
+  title,
+  spellCheck
 }: {
   value: string
   onCommit: (value: string) => void
@@ -28,6 +29,7 @@ export function SettingText({
   className?: string
   placeholder?: string
   title?: string
+  spellCheck?: boolean
 }): React.JSX.Element {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
@@ -38,7 +40,7 @@ export function SettingText({
     if (!editing) setDraft(value)
   }, [value, editing])
 
-  const common = { className, placeholder, title }
+  const common = { className, placeholder, title, spellCheck }
   if (live) {
     return rows ? (
       <textarea {...common} rows={rows} value={value} onChange={(e) => onCommit(e.target.value)} />

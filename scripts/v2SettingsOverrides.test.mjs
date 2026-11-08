@@ -8,8 +8,11 @@ import { createSettingsWriter } from '../src/renderer/src/v2/settingsWriter.ts'
 const project = () => ({
   id: 'p',
   name: 'Demo',
-  settings: { audioAlerts: false, sessionSystemPrompt: 'Run the tests', worktreeTags: [{ id: 'todo', name: 'To do', color: '#fff' }] },
-  repositories: [{ id: 'r1', name: 'alpha', path: '/a', linkedDirs: ['.trek'], branchData: {}, worktrees: [] }],
+  settings: { audioAlerts: false, sessionSystemPrompt: 'Run the tests', worktreeTags: [{ id: 'todo', name: 'To do', color: '#fff' }], dockerFavorites: ['db'] },
+  repositories: [
+    { id: 'r1', name: 'alpha', path: '/a', linkedDirs: ['.trek'], branchData: {}, worktrees: [] },
+    { id: 'r2', name: 'beta', path: '/b', environments: { enabled: true, cpu: 4 }, branchData: {}, worktrees: [] }
+  ],
   globalSessions: []
 })
 
@@ -19,7 +22,8 @@ function setup() {
   const requests = {
     updateSettings: async (settings, expected) => void calls.push(['updateSettings', settings, expected]),
     rename: async (name, expected) => void calls.push(['rename', name, expected]),
-    setLinkedDirs: async (repoId, dirs, expected) => void calls.push(['setLinkedDirs', repoId, dirs, expected])
+    setLinkedDirs: async (repoId, dirs, expected) => void calls.push(['setLinkedDirs', repoId, dirs, expected]),
+    setEnvironments: async (repoId, environments, expected) => void calls.push(['setEnvironments', repoId, environments, expected])
   }
   const mirror = project()
   const writer = createSettingsWriter({
@@ -29,7 +33,7 @@ function setup() {
     reload: () => {},
     reportEdit: () => {}
   })
-  return { o: v2SettingsOverrides(writer, requests), calls, writer, mirror }
+  return { o: v2SettingsOverrides(writer, requests, () => mirror), calls, writer, mirror }
 }
 
 test('overrides exactly the listed settings setters, none of them already overridden', () => {
@@ -96,4 +100,31 @@ test('a pending edit shows in the overlaid project: settings, name and linked di
   assert.equal(shown.name, 'Renamed')
   assert.equal('linkedDirs' in shown.repositories[0], false)
   assert.equal(mirror.settings.audioAlerts, false, 'the mirror itself is untouched')
+})
+
+test("a Local window's environment settings: the repository's whole setting through repo.update, built on what is shown", () => {
+  const { o, calls, writer, mirror } = setup()
+  o.setEnvironmentSettings('r1', { enabled: true })
+  // The second edit builds on the first, still pending: the overlay is what the panel shows.
+  o.setEnvironmentSettings('r1', { cpu: 2 })
+  o.setEnvironmentSettings('r2', { memory: 16 })
+  assert.deepEqual(calls, [
+    ['setEnvironments', 'r1', { enabled: true }, null],
+    ['setEnvironments', 'r2', { enabled: true, cpu: 4, memory: 16 }, { enabled: true, cpu: 4 }]
+  ])
+  // r1's second edit waits for the first (one request per field) and shows meanwhile.
+  assert.deepEqual(writer.overlay(mirror).repositories[0].environments, { enabled: true, cpu: 2 })
+  // An unknown repository sends nothing.
+  o.setEnvironmentSettings('nope', { enabled: true })
+  assert.equal(calls.length, 2)
+})
+
+test('a Docker favourite toggles in the dockerFavorites setting, sorted, and the last one off removes the key', () => {
+  const { o, calls, writer, mirror } = setup()
+  o.toggleDockerFavorite('api')
+  assert.deepEqual(calls, [['updateSettings', { dockerFavorites: ['api', 'db'] }, { dockerFavorites: ['db'] }]])
+  assert.deepEqual(writer.overlay(mirror).settings.dockerFavorites, ['api', 'db'])
+  const off = setup()
+  off.o.toggleDockerFavorite('db')
+  assert.deepEqual(off.calls, [['updateSettings', { dockerFavorites: null }, { dockerFavorites: ['db'] }]])
 })

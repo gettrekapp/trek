@@ -516,12 +516,13 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                     <span className="settings-name">Compose file</span>
                     <span className="settings-desc">Path relative to each worktree</span>
                   </span>
-                  <input
+                  <SettingText
+                    key={settingsRepo?.id}
+                    live={live}
                     className="settings-select"
-                    type="text"
                     placeholder={ENV_DEFAULTS.composeFile}
                     value={envSettings.composeFile ?? ''}
-                    onChange={(e) => updateEnv({ composeFile: e.target.value || undefined })}
+                    onCommit={(text) => updateEnv({ composeFile: text || undefined })}
                   />
                 </div>
                 {orphans.length > 0 && (
