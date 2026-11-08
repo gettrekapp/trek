@@ -86,8 +86,9 @@ const cleanup = () => {
 }
 
 let pass = false
+let app
 try {
-  const app = await electron.launch({
+  app = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${userData}`],
     cwd: projectDir,
     env: {
@@ -204,6 +205,8 @@ try {
     errors.length === 0
   console.log(pass ? 'ENV SMOKE PASS' : 'ENV SMOKE FAIL')
 } finally {
+  // A throw above skips the close: the app must be gone before its userData is.
+  await app?.close().catch(() => {})
   cleanup()
 }
 // After the finally: an exit inside the try would skip the cleanup.

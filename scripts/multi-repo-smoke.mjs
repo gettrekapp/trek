@@ -33,8 +33,9 @@ const cleanup = () => {
 }
 
 let pass = false
+let app
 try {
-  const app = await electron.launch({
+  app = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${userData}`],
     cwd: process.cwd(),
     env: { ...process.env, TREK_NO_WINDOW_RESTORE: '1', TREK_NO_LOCAL_SERVER: '1' }
@@ -213,6 +214,8 @@ try {
   pass = checks.every(Boolean)
   console.log(pass ? 'SMOKE PASS' : 'SMOKE FAIL')
 } finally {
+  // A throw above skips the close: the app must be gone before its userData is.
+  await app?.close().catch(() => {})
   cleanup()
 }
 // After the finally: an exit inside the try would skip the cleanup.

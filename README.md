@@ -164,8 +164,9 @@ which closes the "files that run later" gap, is the planned follow-up.
 ## Servers and server projects
 
 Trek can also open projects that live on a [trek-server](server/README.md), which
-keeps their worktrees and sessions running on that machine. Server windows are
-**read-only for now**: they show a live tree but you can't yet work in them.
+keeps their worktrees and sessions running on that machine. A server window is a
+working window: its terminals, sessions and edits all go to the server, and every
+other window on that project sees them live.
 
 - **Server list**: **Connect to server…** on the start screen opens the app-wide
   list of servers. **Add server** takes a name, a `ws://` or `wss://` URL and a token;
@@ -199,10 +200,26 @@ keeps their worktrees and sessions running on that machine. Server windows are
   another window takes. Closing the window asks
   nothing, since the sessions keep running on the server. Server windows appear in
   recents and come back on launch like file windows.
-- **Still to come**: a working server window with terminals and sessions (phase 3c),
-  then attention badges and notifications for server sessions (phase 3d). Until
-  then, the per-project servers under ⚙ Settings → Servers remain the way to run
-  remote sessions from a project file.
+- **Working in a server window**: start, rename, close and restart sessions in
+  the server's terminals; queue prompts; answer and dismiss decisions; create,
+  delete, load and unload worktrees; pull, push and view changes; set tags,
+  notes, tickets and pull request links; and edit the project's Settings. Each
+  edit is saved on the server, a text field on blur. If another client changed a
+  setting first, you pick **Reload** or **Keep Mine**; a Docker favourite or an
+  environment setting is re-applied over the other client's change without
+  asking. Attention badges and the notifications menu cover server sessions.
+  Linear ticket chips work in every server window, with the app-wide API key.
+- **Machine-local features, in Local windows only**: a window on the [Local
+  server](#local-server) also has Docker, the per-worktree Colima environments
+  (and their variables), dev stacks, skills, Open in VS Code and Reveal in
+  Finder, as a project file window does, since its paths are this machine's.
+  Deleting a worktree there also destroys its dev stack (if ticked) and its VM,
+  after a fresh check for uncommitted changes. A window on a remote server shows
+  none of these.
+- **Not yet in server windows**: promote to primary, moving worktrees, voice and
+  the bot (phase 5), and importing a `.trekproj` (phase 4d). Until then, the
+  per-project servers under ⚙ Settings → Servers remain the way to run remote
+  sessions from a project file.
 
 ## Local server
 
@@ -290,7 +307,9 @@ only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
 The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
 older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
 `npm run smoke:multi` runs the two-repository end-to-end test, and
-`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs. Terminal
+`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs, and
+`npm run smoke:local-features` drives a Local server window's Docker, environments,
+stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`. Terminal
 PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
 the attention heuristics and worktree load/unload live in the renderer
 (`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only

@@ -80,8 +80,9 @@ const cleanup = async () => {
   rmSync(work, { recursive: true, force: true })
 }
 
+let app
 try {
-  const app = await electron.launch({
+  app = await electron.launch({
     // Its own userData, inside work: the default one is shared with an installed Trek (server tokens, recents, settings).
     args: ['out/main/index.js', `--user-data-dir=${join(work, 'user-data')}`],
     cwd: projectDir,
@@ -237,6 +238,8 @@ try {
 
   await app.close()
 } finally {
+  // A throw above skips the close: the app must be gone before its userData (in work) is.
+  await app?.close().catch(() => {})
   await cleanup()
 }
 

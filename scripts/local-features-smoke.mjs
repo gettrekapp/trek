@@ -78,10 +78,22 @@ mkdirSync(profile, { recursive: true })
 // stack's state dir there must not make the worktree dirty).
 const repo = join(work, 'repos', 'app')
 const calls = (name) => join(work, `${name}-calls`)
-const callsOf = (name) => (existsSync(calls(name)) ? readFileSync(calls(name), 'utf8').split('\n').filter(Boolean) : [])
+// Each call line starts with a sequence number shared by every stub ("<n>#<call>"), for the order.
+const seqLines = (name) =>
+  (existsSync(calls(name)) ? readFileSync(calls(name), 'utf8').split('\n').filter(Boolean) : []).map((line) => {
+    const at = line.indexOf('#')
+    return { seq: Number(line.slice(0, at)), call: line.slice(at + 1) }
+  })
+const callsOf = (name) => seqLines(name).map(({ call }) => call)
+/** The sequence number of `name`'s first call matching `match`, or null */
+const seqOf = (name, match) => seqLines(name).find(({ call }) => match(call))?.seq ?? null
+// The next number, under a mkdir lock: the polls' stubs can run at the same time.
+const seqFile = join(work, 'seq')
+const seqLock = join(work, 'seq.lock')
+const NEXT_SEQ = `next_seq() { while ! mkdir '${seqLock}' 2>/dev/null; do sleep 0.01; done; n=$(( $(cat '${seqFile}' 2>/dev/null || echo 0) + 1 )); echo $n > '${seqFile}'; rmdir '${seqLock}'; echo $n; }`
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 mkdirSync(join(repo, 'docker', 'stack'), { recursive: true })
-writeFileSync(join(repo, 'docker', 'stack', 'stack.sh'), `#!/bin/bash\necho "$PWD|$*" >> '${calls('stack')}'\n`, { mode: 0o755 })
+writeFileSync(join(repo, 'docker', 'stack', 'stack.sh'), `#!/bin/bash\n${NEXT_SEQ}\necho "$(next_seq)#$PWD|$*" >> '${calls('stack')}'\n`, { mode: 0o755 })
 mkdirSync(join(repo, '.claude', 'skills', 'smoke-skill'), { recursive: true })
 writeFileSync(join(repo, '.claude', 'skills', 'smoke-skill', 'SKILL.md'), '---\nname: smoke-skill\ndescription: A skill from the worktree\n---\nSay hi.\n')
 writeFileSync(join(repo, '.gitignore'), '.trek/\n')
@@ -95,21 +107,23 @@ const featureProfile = deriveProfileName(repo, 'feature-x')
 const stubs = join(work, 'stubs')
 mkdirSync(stubs)
 const stub = (name, body) => {
-  writeFileSync(join(stubs, name), `#!/bin/bash\n${body}\n`)
+  writeFileSync(join(stubs, name), `#!/bin/bash\n${NEXT_SEQ}\n${body}\n`)
   chmodSync(join(stubs, name), 0o755)
 }
 stub('colima', `if [ "$1" = "--version" ]; then echo "colima version 0.0.0-stub"; exit 0; fi
-echo "$*" >> '${calls('colima')}'
+echo "$(next_seq)#$*" >> '${calls('colima')}'
+# Whether the worktree was still on disk when its VM went: the server's removal must come after.
+if [ "$1" = "delete" ]; then [ -d '${worktree}' ] && echo yes >> '${calls('delete-saw-worktree')}'; fi
 if [ "$1" = "list" ]; then
   echo '${JSON.stringify({ name: featureProfile, status: 'Running', address: '192.168.106.5' })}'
   echo '${JSON.stringify({ name: 'twb-leftover-000000', status: 'Stopped' })}'
 fi
 exit 0`)
 stub('docker', `if [ "$1" = "--version" ]; then echo "Docker version 0.0.0-stub"; exit 0; fi
-echo "$PWD|$*" >> '${calls('docker')}'
+echo "$(next_seq)#$PWD|$*" >> '${calls('docker')}'
 case " $* " in *" compose "*" ps "*) echo "[]" ;; esac
 exit 0`)
-stub('code', `echo "$*" >> '${calls('code')}'`)
+stub('code', `echo "$(next_seq)#$*" >> '${calls('code')}'`)
 // fixPath reads PATH from the login shell (zsh -ilc), and so do the server's agents.
 writeFileSync(join(home, '.zshrc'), `export PATH='${stubs}':"$PATH"\n`)
 // The Local server's agent: it lingers, so the tty echoes what is typed into it.
@@ -129,7 +143,7 @@ globalThis.__revealed = []
 const opts = (args) => args.find((a) => a && typeof a === 'object' && 'message' in a) ?? {}
 dialog.showMessageBox = async (...args) => {
   const o = opts(args)
-  globalThis.__dialogs.push({ message: o.message, detail: o.detail ?? null, checkbox: o.checkboxLabel ?? null })
+  globalThis.__dialogs.push({ type: o.type ?? null, message: o.message, detail: o.detail ?? null, checkbox: o.checkboxLabel ?? null })
   return { response: o.type === 'error' ? 0 : 1, checkboxChecked: true }
 }
 shell.showItemInFolder = (path) => void globalThis.__revealed.push(path)
@@ -335,6 +349,12 @@ try {
   check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
   check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])
   check('the worktree directory is gone', existsSync(worktree), false)
+  const stackAt = seqOf('stack', (c) => c.endsWith('|destroy'))
+  const colimaAt = seqOf('colima', (c) => c.startsWith('delete'))
+  check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
+  check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
+  const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
+  check('no error dialogs', errorBoxes, [])
 
   check('no console or page errors', pageErrors, [])
   exitCode = failedChecks.length ? 1 : 0

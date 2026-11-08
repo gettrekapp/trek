@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process'
 import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { once } from 'node:events'
 
 const failures = []
 const check = (label, ok, detail = '') => {
@@ -146,8 +147,13 @@ try {
     }
   }
 } finally {
-  // Quitting asks to confirm while sessions are running, so exit the app directly.
+  // Quitting asks to confirm while sessions are running, so exit the app directly, and wait
+  // for its process to go: it must not still be writing to its userData when that is removed.
+  const proc = app?.process()
+  const exited =
+    proc && proc.exitCode === null && proc.signalCode === null ? once(proc, 'exit') : Promise.resolve()
   await app?.evaluate(({ app }) => app.exit(0)).catch(() => {})
+  await Promise.race([exited, new Promise((done) => setTimeout(done, 10000))])
   rmSync(repoPath, { recursive: true, force: true })
   rmSync(bin, { recursive: true, force: true })
   rmSync(userData, { recursive: true, force: true })

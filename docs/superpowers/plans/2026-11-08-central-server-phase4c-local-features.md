@@ -10,7 +10,7 @@
 5. **The pollers run.** A Local window polls `colima list` for the env badges, chips and panel, as a file window's Workspace does. The stack status poll already lives in WorktreeDetail.
 6. **Deleting a worktree cleans up after it.** In a Local window, Delete worktree… offers to destroy the worktree's dev stack, names its VM, and runs `stack.sh destroy` and `colima delete` before the server removes the worktree, as the file window's delete does.
 7. **Smokes.**
-   - `smoke:local-features` (new, 31 checks) drives a Local window end to end with stub `colima`, `docker` and `code` binaries.
+   - `smoke:local-features` (new, 34 checks after the review fixes) drives a Local window end to end with stub `colima`, `docker` and `code` binaries.
    - `smoke:v2` (170 checks) checks that a remote server window shows none of these controls and has Linear.
    - `env-smoke` passes again: its expectations name what they expect instead of counting.
    - Every Electron smoke runs in its own `--user-data-dir` (Task 0), so none touches an installed Trek's userData.
@@ -238,8 +238,17 @@ Out of scope here:
 | `scripts/local-features-smoke.mjs` | create | 6 | `smoke:local-features` |
 | `package.json` | modify | 6 | `smoke:local-features` |
 | `scripts/v2-smoke.mjs` | modify | 7 | a remote window's absent controls; Linear in Settings |
+| `server/src/v2.ts`, `src/shared/protocolV2.ts`, `PROTOCOL.md`, `scripts/serverV2.test.mjs` | modify | review | `branch.setEnv` takes `expected` (compare-and-set) |
+| `src/renderer/src/v2/settingsWriter.ts` | modify | review | `SettingsField.rebase`: an operation re-applied on a CONFLICT |
+| `src/renderer/src/v2/settingsOverrides.ts`, `src/renderer/src/v2/setterOverrides.ts`, `src/renderer/src/v2/installV2.ts` | modify | review | `branchEnvField` (`setBranchEnvVars` moves to the settings writer); `rebaseSet`, `rebaseObject` |
+| `src/renderer/src/environmentStart.ts`, `scripts/environmentStart.test.mjs` | create | review | what Start / Apply passes to `envUp`, read at click time |
+| `src/renderer/src/v2/backendV2.ts`, `src/renderer/src/worktreeActions.ts` | modify | review | `WorktreeTeardown.isDirty`; `tornDownNote` |
+| `src/renderer/src/components/SettingText.tsx`, `SettingsPanel.tsx`, `EnvironmentPanel.tsx` | modify | review | commit on unmount; `SettingNumber`; Start reads the store |
+| `src/renderer/src/v2/windowState.ts`, `src/renderer/src/useEnvironmentPoll.ts` | modify | review | `envToolCheck` in `VIEW_RESET`; `ENV_POLL_MS` not exported |
+| `scripts/smoke.mjs`, `multi-repo-smoke.mjs`, `env-smoke.mjs`, `remote-smoke.mjs`, `providers-smoke.mjs`, `local-features-smoke.mjs` | modify | review | close the app before removing its userData; the teardown's order and no error boxes |
+| `README.md` | modify | review | what server windows do now; 4c's Local features; `smoke:local-features` |
 
-`server/` and `src/main/` do not change (Decision 19).
+`src/main/` does not change (Decision 19). `server/` was planned unchanged too; the review fixes change one line of `server/src/v2.ts` (`branch.setEnv` passes `p.expected` to `setBranchField`, as `branch.setNote` does).
 
 ---
 
@@ -2331,6 +2340,7 @@ Expected: `# pass 1496`, `# fail 0`. That is the baseline 1487 at `55c4c7b`, plu
 | 1 | 4: 3 in `backendFeatures` (the Local entry's features; entry and capability both needed; a Local window's sections), 1 in `v2Backend` (the backend's machine-local features); 3 `backendFeatures` tests rewritten |
 | 2 | 2 in `v2SettingsOverrides` (the environments setting; the Docker favourites) |
 | 5 | 3 in `v2Backend` (the teardown order; declined and unticked; any other window) |
+| review | 14, to `# pass 1510`: 8 in `v2SettingsOverrides` (`rebaseSet`, `rebaseObject`, a favourite's silent rebase and its no-op, an environment sub-field's silent rebase and its clash, the variables' overlay and their CONFLICT), 2 in `environmentStart`, 4 in `v2Backend` (the fresh dirty check and its decline, no check when nothing is destroyed, a failure after the teardown, `tornDownNote`); `serverV2`'s branch test gains the `branch.setEnv` CONFLICT |
 
 - [ ] **Step 2: Types and build**
 
@@ -2344,12 +2354,12 @@ Run each after the previous one has exited:
 |---|---|
 | `(cd server && npm run smoke -- --built) 2>&1 \| tail -1` | `SERVER SMOKE PASS` |
 | `node scripts/client-contract.mjs 2>&1 \| tail -1` | `CLIENT CONTRACT PASS` |
-| `node scripts/local-features-smoke.mjs 2>&1 \| tail -1` | `LOCAL FEATURES SMOKE PASS (31 checks)` |
+| `node scripts/local-features-smoke.mjs 2>&1 \| tail -1` | `LOCAL FEATURES SMOKE PASS (34 checks)` (31 before the review fixes) |
 | `node scripts/local-app-smoke.mjs 2>&1 \| tail -1` | `LOCAL APP SMOKE PASS (43 checks)` |
 | `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (170 checks)` |
 | `node scripts/env-smoke.mjs 2>&1 \| tail -1` | `ENV SMOKE PASS` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
-| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (85 checks)` (the server is unchanged; not rerun in the prototype) |
+| `node scripts/local-server-smoke.mjs 2>&1 \| tail -1` | `LOCAL SMOKE PASS (85 checks)` (not rerun: the review fixes change only `branch.setEnv`, which `serverV2.test.mjs` and the server smoke cover) |
 
 The five legacy smokes, in their own userData since Task 0:
 
@@ -2377,6 +2387,26 @@ Expected: no output. If a fix was needed during this task, commit it with its ow
 
 ---
 
+## Review fixes (done)
+
+Applied after the combined review of the branch, at `60a7e75`.
+
+1. **A delete checks for changes afresh before it destroys anything.** `worktrees.remove` used the server poll's cached `dirty`. When the teardown will destroy a stack or a VM, it now runs `WorktreeTeardown.isDirty` (legacy's `worktreeIsDirty`, on this disk) after the confirm. If the worktree is dirty, it asks "Delete Uncommitted Changes" before anything is unloaded or destroyed, as `promoteToPrimary` does. Declined, nothing happens. Accepted, the removal is forced.
+2. **The env variables are a settings-writer field.**
+   - Server: `branch.setEnv` passes `p.expected` to `setBranchField`. `setBranchField` already took it for `branch.setNote`. `PROTOCOL.md` and `MethodParamsV2` list it, and `serverV2.test.mjs` checks the CONFLICT.
+   - App: `branchEnvField(repoId, branch)` is keyed `branch:<repoId>/<branch>.env`, on `branchData[branch].env`, and sends `branch.setEnv` with `expected`. `setBranchEnvVars` moves from `OVERRIDDEN_SETTERS` to `SETTINGS_SETTERS`.
+   - The overlay shows the pending value. Start and Apply compose read the store's project at click time (`envStartArgs`), not the render's, so a draft committed by the click's own blur is used.
+3. **A Docker favourite's CONFLICT rebases silently.** A field may have an optional `rebase(latest, wanted, base)`, which the writer's CONFLICT handling uses instead of `askConflict`. `base` is the `expected` the failed request went with (the review suggested `rebase(latest, wanted)`; without the base, a toggle can't be told from a value). The change from base to wanted is re-applied to the newer value and sent again, once, with no dialog. `rebaseSet` re-applies the added and removed items. A second CONFLICT asks. A rebase that leaves the value as it already is sends nothing.
+4. **The environments setting rebases too** (`rebaseObject`). The sub-fields the user changed go over the other client's value, silently. Only a clash (the other client changed one of those same sub-fields to something else) asks, and Keep Mine then sends the rebased value, so the other client's other sub-fields stay.
+5. **Smoke cleanup.** `smoke`, `multi-repo-smoke`, `env-smoke` and `remote-smoke` hoist `app` and close it first in `finally`. `providers-smoke` waits for the process to exit before it removes its userData.
+6. **A variables draft survives a remount.** `SettingText` commits an edited, changed draft when it unmounts (a re-key for another worktree, or the section closed), since no blur comes.
+7. **A removal that fails after the teardown says so.** The error ends with "Its dev stack and its VM were already removed." (or the one that was), from `tornDownNote`. The worktree is loaded again first, as before.
+8. **`smoke:local-features`** records each message box's `type` and checks that no `error` box appeared. Each stub's call line starts with a sequence number shared by all stubs, and the smoke checks the stack's destroy came before `colima delete`, and that the worktree was still on disk when the VM went, so the server's removal came last. It now has 34 checks.
+9. **`envToolCheck` is in `VIEW_RESET`.**
+10. **`ENV_POLL_MS` is no longer exported.**
+11. **CPUs, Memory and Disk are drafts in a server window** (`SettingNumber`): committed on blur or Enter, Escape puts the value back. A file window still commits each change.
+12. **README**: it now says what server windows do (sessions, worktrees, edits with Reload / Keep Mine, attention, Linear everywhere), and what Local windows add. "Read-only for now" and the "Still to come… phase 3c" lines are gone, and `smoke:local-features` is listed.
+
 ## Notes for 4d
 
 Found while prototyping this plan.
@@ -2391,7 +2421,7 @@ Found while prototyping this plan.
 ## Risks
 
 1. **Resolved in Task 0: no smoke shares an installed Trek's userData.** A dev build's userData is the installed app's (`app.setName('Trek Dev')`; 4b Risk 1). `smoke`, `changes-smoke`, `multi-repo-smoke`, `remote-smoke`, `providers-smoke` and `env-smoke` used to launch without `--user-data-dir` and could rewrite its recents, `open-windows.json`, server tokens and LLM settings. A new smoke must pass its own (Conventions).
-2. **A stale env-variables draft wins.** The variables are sent with `branch.setEnv`, which has no compare-and-set. If another client edits them while you type, your draft overwrites theirs on blur, and the console shows one `commitStale` warning. A `branch.setEnv` `expected` (server change) would fix it; the variables are rarely edited from two places.
+2. **Fixed in the review fixes: a stale env-variables draft no longer wins.** `branch.setEnv` takes `expected` now, and the variables are a settings-writer field: a stale draft asks Reload or Keep Mine, a CONFLICT does too, and there is no `commitStale` warning.
 3. **The teardown runs in the renderer**, as legacy's does. A window closed between the stack's destroy and the VM's leaves the VM. The orphan list in Settings shows it, the same as after a crash.
 4. **`smoke:local-features` depends on zsh reading the HOME's `.zshrc`** for its PATH (main's `fixPath` and the server's agents both run `zsh -ilc`). A machine whose `/etc/zshrc` resets PATH after the user's file, or one without zsh, would fail the first check, "main's PATH has the stubs first", loudly.
 5. **Linear in a remote window sends that server's ticket ids to Linear** with this machine's key. The server chooses which issues are fetched, and the titles show only in that window. This is read-only and it was the recorded choice, but a hostile server could use it to make the app look up issue ids of its choosing.
