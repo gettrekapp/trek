@@ -138,7 +138,8 @@ export function WorktreeDetail({
 
   const features = useFeatures()
   const path = info?.path
-  // A server window's paths are on the server: nothing here may poll them locally.
+  // A remote host's or a remote server's paths are not on this disk: nothing here may poll them
+  // locally. A Local server window's are (`features.stacks`).
   const [stack, refreshStack] = useStackStatus(path, !!info?.serverId || !features.stacks)
   const changesPaused = (!!info?.serverId && serverStatus[info.serverId] !== 'connected') || offline
   const changesState = useWorktreeChanges(path, info?.serverId, changesPaused, panel === 'changes')

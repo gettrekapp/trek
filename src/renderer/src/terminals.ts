@@ -961,6 +961,11 @@ function writeToPty(id: string, data: string): void {
   if (link.ptyId) void link.ptys.write(link.ptyId, data).catch(() => {})
 }
 
+/** Raw input for a terminal (the skill menu's slash command): legacy pty IPC, or its server's pty. */
+export function writeTerminal(id: string, data: string): void {
+  writeToPty(id, data)
+}
+
 /** Send named keys (see shared/keys) or literal text, as if typed. */
 export function sendKeysToTerminal(id: string, keys: string[]): boolean {
   if (!entries.has(id)) return false

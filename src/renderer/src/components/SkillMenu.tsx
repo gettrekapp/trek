@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
-import { focusTerminal } from '../terminals'
+import { focusTerminal, writeTerminal } from '../terminals'
 import type { SkillInfo, WorktreeInstance } from '../../../shared/types'
 
 const MENU_WIDTH = 340
@@ -63,9 +63,10 @@ export function SkillMenu({ worktree, terminalId }: Props): React.JSX.Element {
     setOpen(false)
     setActiveTerminal(worktree.id, terminalId)
     // Type the slash command, then submit after a beat so Claude Code's
-    // command menu has caught up with the typed text.
-    window.api.writePty(terminalId, `/${name}`)
-    setTimeout(() => window.api.writePty(terminalId, '\r'), 200)
+    // command menu has caught up with the typed text. A server window's
+    // terminal is the server's pty: writeTerminal sends it there.
+    writeTerminal(terminalId, `/${name}`)
+    setTimeout(() => writeTerminal(terminalId, '\r'), 200)
     focusTerminal(terminalId)
   }
 

@@ -6,7 +6,7 @@ import {
   selectedWorktreeInfo,
   useAppStore
 } from '../store'
-import { refreshEnvironments } from '../environmentActions'
+import { useEnvironmentPoll } from '../useEnvironmentPoll'
 import { Sidebar } from './Sidebar'
 import { WorktreeDetail } from './WorktreeDetail'
 import { AddWorktreeModal } from './AddWorktreeModal'
@@ -23,8 +23,6 @@ const POLL_MS = 5000
  * gated on window focus entirely — see the sweep effect below.
  */
 const STATUS_POLL_MS = 30_000
-// colima list is heavier than git worktree list — poll it less often.
-const ENV_POLL_MS = 10_000
 
 /** A new/removed worktree or a moved HEAD makes the cached status stale. */
 function identityChanged(before: GitWorktreeInfo[] | undefined, after: GitWorktreeInfo[]): boolean {
@@ -197,23 +195,8 @@ export function Workspace(): React.JSX.Element {
     if (selectedPath) void refreshStatuses(selectedServerId, [selectedPath])
   }, [selectedPath, selectedServerId, refreshStatuses])
 
-  // Environment (Colima VM) status for badges. refreshEnvironments no-ops
-  // until the feature is enabled and the toolchain check has passed.
-  const envEnabled = !!project?.repositories.some((r) => r.environments?.enabled)
-  useEffect(() => {
-    if (!envEnabled) return
-    let cancelled = false
-    void window.api.envCheck().then((result) => {
-      if (cancelled) return
-      useAppStore.getState().setEnvToolCheck(result)
-      void refreshEnvironments()
-    })
-    const interval = setInterval(() => void refreshEnvironments(), ENV_POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [envEnabled])
+  // Environment (Colima VM) status for badges.
+  useEnvironmentPoll(true)
 
   const worktrees = project ? mergedWorktrees(project, hostWorktrees) : []
   const selectedInfo = project

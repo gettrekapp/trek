@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore } from '../store'
 import { globalPanelMode } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
+import { useEnvironmentPoll } from '../useEnvironmentPoll'
 import { Sidebar } from '../components/Sidebar'
 import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
@@ -11,8 +12,9 @@ import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPr
 /**
  * A server project's workspace: the legacy Sidebar, WorktreeDetail and Global
  * panel over the projected slice (applyV2Project fills the store). Unlike the
- * legacy Workspace it polls nothing: the server's mirror patches carry every
- * worktree, git status and session.
+ * legacy Workspace it polls no git: the server's mirror patches carry every
+ * worktree, git status and session. A Local server window (`features.env`)
+ * polls this machine's Colima environments, as a file window does.
  */
 export function V2Workspace(): React.JSX.Element {
   const project = useAppStore((s) => s.project)
@@ -24,6 +26,7 @@ export function V2Workspace(): React.JSX.Element {
   const offline = useAppStore((s) => s.serverOffline)
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
+  useEnvironmentPoll(features.env)
 
   // The link dropped: a focused field or button must not take Enter or typing meanwhile.
   useEffect(() => {
