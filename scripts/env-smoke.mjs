@@ -8,8 +8,21 @@ import { join } from 'node:path'
 // so the whole env:check → env:list → panel/badge pipeline runs without a
 // real Colima install. Read-only operations only — the userData registry is
 // never written (no Start/Reset is clicked), and the userData is the run's own.
+// The same pipeline in a Local server window: scripts/local-features-smoke.mjs.
 
 const projectDir = process.cwd()
+// The feature worktree's tabs, and the Settings switches with environments on.
+const PANEL_BUTTONS = ['Changes', 'Notes', 'Env', '⚙']
+const SETTINGS_SWITCHES = [
+  'Audio alerts',
+  'Show notifications',
+  'Stop local server on quit',
+  'Override the default for this project',
+  'Same as the session default',
+  'Per-worktree Docker environments',
+  'Rosetta (x86_64 emulation)',
+  'Per-VM IP address'
+]
 const errors = []
 
 // Mirrors deriveProfileName in src/shared/environments.ts.
@@ -132,7 +145,8 @@ try {
   // Feature worktree detail: Env panel button + header chip, then the panel.
   await win.locator('.wt-row:not(.selected)').first().click()
   await win.waitForTimeout(300)
-  const panelBtns = await win.locator('.panel-btn').count()
+  // Named, not counted: a count goes stale with every new tab (Changes came after this smoke).
+  const panelBtns = await win.locator('.panel-btn').evaluateAll((els) => els.map((e) => e.textContent.trim()))
   const envChip = (await win.locator('.chip-env').innerText()).trim()
   await win.locator('.panel-btn', { hasText: 'Env' }).click()
   await win.waitForTimeout(1000)
@@ -143,7 +157,7 @@ try {
   // docker stub returns [] for compose ps → empty-services message.
   const noServices = await win.locator('.env-panel:visible .muted', { hasText: 'No services' }).count()
   console.log(
-    `feature panel buttons: ${panelBtns} (expect 3), header chip: "${envChip}", env panel: ${envPanels} (expect 1), ` +
+    `feature panel buttons: ${JSON.stringify(panelBtns)} (expect ${JSON.stringify(PANEL_BUTTONS)}), header chip: "${envChip}", env panel: ${envPanels} (expect 1), ` +
       `profile: "${headerName}" (expect ${featureProfile}), meta: "${headerMeta}" (expect Running · 192.168.106.5), ` +
       `actions: ${actionButtons} (expect 3), no-services msg: ${noServices} (expect 1)`
   )
@@ -151,11 +165,17 @@ try {
   // Settings: both stub VMs are unregistered → they show as orphans.
   await win.locator('.panel-btn[title="App settings"]').click()
   await win.waitForTimeout(400)
-  const settingsCheckboxes = await win.locator('.settings-panel:visible input[type="checkbox"]').count()
+  // Each switch by its name: the aria-label, its row's name, else its label's text.
+  const settingsCheckboxes = await win.locator('.settings-panel:visible input[type="checkbox"]').evaluateAll((els) =>
+    els.map((e) => {
+      const label = e.closest('label')
+      return e.getAttribute('aria-label') ?? label?.querySelector('.settings-name')?.textContent ?? label?.textContent.trim() ?? '?'
+    })
+  )
   const sizeInputs = await win.locator('.env-size-inputs input').count()
   const orphanRows = await win.locator('.env-orphan-row').count()
   console.log(
-    `settings checkboxes: ${settingsCheckboxes} (expect 3), vm size inputs: ${sizeInputs} (expect 3), ` +
+    `settings checkboxes: ${JSON.stringify(settingsCheckboxes)} (expect ${JSON.stringify(SETTINGS_SWITCHES)}), vm size inputs: ${sizeInputs} (expect 3), ` +
       `orphan rows: ${orphanRows} (expect 2)`
   )
 
@@ -170,7 +190,7 @@ try {
     feature?.address === '192.168.106.5' &&
     envChips === 1 &&
     runningEnvChips === 1 &&
-    panelBtns === 3 &&
+    JSON.stringify(panelBtns) === JSON.stringify(PANEL_BUTTONS) &&
     envChip.includes('192.168.106.5') &&
     envPanels === 1 &&
     headerName === featureProfile &&
@@ -178,7 +198,7 @@ try {
     headerMeta.includes('192.168.106.5') &&
     actionButtons === 3 &&
     noServices === 1 &&
-    settingsCheckboxes === 3 &&
+    JSON.stringify(settingsCheckboxes) === JSON.stringify(SETTINGS_SWITCHES) &&
     sizeInputs === 3 &&
     orphanRows === 2 &&
     errors.length === 0
