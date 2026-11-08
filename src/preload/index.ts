@@ -67,6 +67,9 @@ const api = {
     serverName: string
   ): Promise<{ opened: boolean }> =>
     ipcRenderer.invoke('window:openServerProject', serverEntryId, projectId, name, serverName),
+  /** Main opened a server project in this (empty) window: an import, from the menu or a .trekproj. */
+  onShowServer: (callback: (server: { serverEntryId: string; projectId: string }) => void): (() => void) =>
+    subscribe('window:showServer', callback),
   reportTitle: (name: string | null): void => ipcRenderer.send('window:reportTitle', name),
   /** A server window gives up its target and becomes an empty window. */
   releaseTarget: (): Promise<void> => ipcRenderer.invoke('window:releaseTarget'),

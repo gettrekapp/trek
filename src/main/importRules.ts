@@ -365,3 +365,45 @@ export function dropWorktree(project: Project, ref: WorktreeRef): { project: Pro
   })
   return { project: { ...project, repositories }, path, sessions }
 }
+
+// ---- The result dialog --------------------------------------------------------------------
+
+/** One file's import, as the result dialog reads it (importer.ts's ImportReport, or a file that could not be read). */
+export type ImportOutcome =
+  | { name: string; pieces: readonly MigratedPiece[]; left: readonly MigratedLeft[]; warnings: readonly string[]; carried: number }
+  | { path: string; error: string }
+
+/** What a file window had that no server project holds. */
+export const NOT_CARRIED =
+  "Not carried over: open tabs, the selection and drafts; running terminals (sessions come back idle and resume when loaded); the project bot's folder and consent; the file's own server list."
+
+const quoted = (name: string): string => `“${name}”`
+
+function fileSection(o: ImportOutcome): string {
+  if ('error' in o) return `${quoted(o.path.split('/').pop() ?? o.path)} could not be read: ${o.error}`
+  const lines: string[] = []
+  const places = localFirst(o.pieces).map((p) => p.serverName)
+  if (places.length === 1) lines.push(`${quoted(o.name)} is now a project on ${places[0]}.`)
+  else if (places.length > 1) lines.push(`${quoted(o.name)} is now ${places.length} projects: ${places.map((p) => `on ${p}`).join(' and ')}.`)
+  for (const l of o.left) lines.push(`Not imported: ${l.label} — ${l.reason.replace(/\.$/, '')}.${o.pieces.length > 0 ? ' Open the file again to retry.' : ''}`)
+  if (o.carried > 0) lines.push(`${o.carried} session${o.carried === 1 ? "'s" : "s'"} history was copied to the path the server runs them in.`)
+  for (const w of o.warnings) lines.push(`• ${w}`)
+  return lines.join('\n')
+}
+
+/** The result dialog for one import or a first-launch run of several. */
+export function importSummary(outcomes: readonly ImportOutcome[]): { type: 'info' | 'warning' | 'error'; message: string; detail: string } {
+  const landed = outcomes.filter((o) => !('error' in o) && o.pieces.length > 0)
+  const clean = landed.filter((o) => !('error' in o) && o.left.length === 0 && o.warnings.length === 0)
+  const type = landed.length === 0 ? 'error' : clean.length === outcomes.length ? 'info' : 'warning'
+  let message: string
+  if (outcomes.length === 1 && !('error' in outcomes[0])) {
+    const o = outcomes[0]
+    message = o.pieces.length === 0 ? `${quoted(o.name)} could not be imported` : o.left.length > 0 ? `${quoted(o.name)} was imported in part` : `Imported ${quoted(o.name)}`
+  } else {
+    message = `Imported ${landed.length} of ${outcomes.length} project${outcomes.length === 1 ? '' : 's'}`
+  }
+  const sections = outcomes.map(fileSection)
+  if (landed.length > 0) sections.push(NOT_CARRIED, outcomes.length === 1 ? 'The .trekproj file was not changed.' : 'The .trekproj files were not changed.')
+  return { type, message, detail: sections.join('\n\n') }
+}

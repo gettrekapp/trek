@@ -80,6 +80,11 @@ export default function App(): React.JSX.Element {
         const state = useAppStore.getState()
         if (state.project) state.setGlobalPanelOpen(!state.globalPanelOpen)
       }),
+      // An import main opened here: only ever sent to an empty window.
+      window.api.onShowServer((server) => {
+        const state = useAppStore.getState()
+        if (!state.project && !state.serverWindow) state.setServerWindow(server)
+      }),
       window.api.onMcpCall((request) => void handleMcpCall(request)),
       window.api.onWindowCloseRequest(() => void handleWindowCloseRequest()),
       watchWindowProject(),

@@ -4,6 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   dropWorktree,
+  importSummary,
   isAgentSessionId,
   localFirst,
   markPrompted,
@@ -278,4 +279,48 @@ test('dropWorktree takes the worktree out and says how many sessions went with i
   assert.deepEqual(out.repositories[0].worktrees.map((w) => w.id), ['w1'])
   assert.deepEqual([path, sessions], ['/r/app-x', 3])
   assert.equal(p.repositories[0].worktrees.length, 2, 'the input is not changed')
+})
+
+// ---- The result dialog ----------------------------------------------------------------------
+
+const report = (extra = {}) => ({
+  path: '/p/Proj.trekproj',
+  key: '/p/Proj.trekproj',
+  name: 'Proj',
+  pieces: [],
+  left: [],
+  warnings: [],
+  carried: 0,
+  ...extra
+})
+
+test('importSummary: every piece landed', () => {
+  const s = importSummary([report({ pieces: [piece('local', 'p1'), piece('srv', 'p2')], carried: 2 })])
+  assert.equal(s.type, 'info')
+  assert.equal(s.message, 'Imported “Proj”')
+  assert.match(s.detail, /^“Proj” is now 2 projects: on Local and on Build\./)
+  assert.match(s.detail, /2 sessions' history was copied to the path the server runs them in\./)
+  assert.match(s.detail, /Not carried over: /)
+  assert.match(s.detail, /The \.trekproj file was not changed\./)
+})
+
+test('importSummary: a part left, with its reason, and the warnings', () => {
+  const s = importSummary([report({ pieces: [piece('local', 'p1')], left: [{ target: 'srv', label: 'build-box', reason: 'not added' }], warnings: ['w1'] })])
+  assert.equal(s.type, 'warning')
+  assert.equal(s.message, '“Proj” was imported in part')
+  assert.match(s.detail, /“Proj” is now a project on Local\./)
+  assert.match(s.detail, /Not imported: build-box — not added\. Open the file again to retry\./)
+  assert.match(s.detail, /• w1/)
+})
+
+test('importSummary: nothing landed', () => {
+  const s = importSummary([report({ left: [{ target: 'local', label: 'Local', reason: 'off' }] })])
+  assert.deepEqual([s.type, s.message], ['error', '“Proj” could not be imported'])
+  assert.doesNotMatch(s.detail, /Not carried over/)
+})
+
+test('importSummary: several files, and one that could not be read', () => {
+  const s = importSummary([report({ pieces: [piece('local', 'p1')] }), { path: '/p/Bad.trekproj', error: 'Unexpected token' }])
+  assert.deepEqual([s.type, s.message], ['warning', 'Imported 1 of 2 projects'])
+  assert.match(s.detail, /“Bad\.trekproj” could not be read: Unexpected token/)
 })

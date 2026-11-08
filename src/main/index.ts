@@ -33,6 +33,7 @@ import {
 } from './localServer'
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
+import { importFromMenu } from './importUi'
 import { registerMcpHandlers } from './mcp'
 import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
@@ -110,6 +111,10 @@ function buildMenu(): void {
           label: 'Open Project…',
           accelerator: 'CmdOrCtrl+O',
           click: openProject
+        },
+        {
+          label: 'Import .trekproj…',
+          click: () => void importFromMenu()
         },
         ...localServerMenu(),
         { type: 'separator' },
