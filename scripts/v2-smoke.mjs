@@ -41,6 +41,13 @@
 //   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
 //     with the reconnecting overlay and disables the commands; restarting clears all three. A note
 //     typed as the link drops is kept with no dialog and saved once it is back.
+//   - 3d attention: a decision asked through the server's MCP shows in a file window's bell with its
+//     project, server and tab; main raises exactly one OS notification (its Notification is
+//     recorded) and no window raises one; the server window's bell shows it once; a click in the
+//     file window's menu focuses the server window and selects the session's worktree; dismissing
+//     it there goes through main's connection (no window sends it); with "Show notifications" off,
+//     a decision is listed in the bell and main raises no notification; a decision in a project with
+//     no window opens one on a click, which shows the session's tab once loaded, and is no recent.
 //   - Closing a server window shows no prompt; its recent reopens it in an empty window.
 //   - main's broadcast: another window's Connect list shows a server added elsewhere, with main's
 //     connection status, and no focus event; no broadcast carries a token.
@@ -282,6 +289,29 @@ const focusedTag = () =>
   app.evaluate(async ({ BrowserWindow }) => {
     const w = BrowserWindow.getFocusedWindow()
     return w ? await w.webContents.executeJavaScript('window.__smokeTag ?? null').catch(() => null) : null
+  })
+
+/**
+ * Records main's focus() calls by window title in globalThis.__focusCalls (reset here), which
+ * does not depend on the OS. Again after a relaunch: the patch lives in the app's process.
+ */
+const recordFocusCalls = () =>
+  app.evaluate(({ app: electronApp, BrowserWindow }) => {
+    electronApp.focus({ steal: true })
+    globalThis.__focusCalls = []
+    // Electron internals: focus lives on BrowserWindow's prototype chain (BaseWindow today).
+    let proto = BrowserWindow.prototype
+    while (proto && !Object.prototype.hasOwnProperty.call(proto, 'focus')) proto = Object.getPrototypeOf(proto)
+    if (!proto || typeof proto.focus !== 'function') {
+      throw new Error('v2-smoke: no focus() on the BrowserWindow prototype chain; Electron internals changed, update the focus patch')
+    }
+    if (proto.__smokeWrapped) return
+    const original = proto.focus
+    proto.focus = function (...args) {
+      globalThis.__focusCalls?.push(this.getTitle())
+      return original.apply(this, args)
+    }
+    proto.__smokeWrapped = true
   })
 
 /** File → New Window; resolves with the new window's page once its start screen shows. */
@@ -539,23 +569,7 @@ try {
   // window (BrowserWindow.getFocusedWindow) is checked too, but macOS reports none while
   // another app is frontmost and may refuse app.focus({ steal: true }) then, so a null
   // there (Trek not the active app) is accepted and logged, never a wrong window.
-  await app.evaluate(({ app: electronApp, BrowserWindow }) => {
-    electronApp.focus({ steal: true })
-    globalThis.__focusCalls = []
-    // Electron internals: focus lives on BrowserWindow's prototype chain (BaseWindow today).
-    let proto = BrowserWindow.prototype
-    while (proto && !Object.prototype.hasOwnProperty.call(proto, 'focus')) proto = Object.getPrototypeOf(proto)
-    if (!proto || typeof proto.focus !== 'function') {
-      throw new Error('v2-smoke: no focus() on the BrowserWindow prototype chain; Electron internals changed, update the focus patch')
-    }
-    if (proto.__smokeWrapped) return
-    const original = proto.focus
-    proto.focus = function (...args) {
-      globalThis.__focusCalls?.push(this.getTitle())
-      return original.apply(this, args)
-    }
-    proto.__smokeWrapped = true
-  })
+  await recordFocusCalls()
   const osFocus = async (expected) => {
     const focused = await until(focusedTag, expected, 5000)
     if (focused === null) console.log('   (the OS reports no focused window: Trek is not the active app)')
@@ -991,7 +1005,123 @@ try {
   check("the Global session runs with the server's MCP tools", await until(async () => (await term(globals[0].id)).includes('--mcp-config'), true), true)
   await w1.locator('.server-window .global-bar').click()
 
-  // ---- 7c. Delete the worktree: confirmed, unloaded, removed on the server.
+  // ---- 7c. Attention across windows (3d): main's list in a file window's bell, one OS
+  // notification raised by main and none by a window, a click focuses the project's window and
+  // selects the session, a dismiss goes through main; a click on a project with no window opens
+  // one, which selects the session once loaded. main's Notification is recorded, not shown.
+  await app.evaluate(({ Notification }) => {
+    globalThis.__notes = []
+    Notification.prototype.show = function () {
+      globalThis.__notes.push({ title: this.title, body: this.body })
+    }
+  })
+  const osNotes = () => app.evaluate(() => globalThis.__notes)
+  /** Records any notification a window would raise itself (a web Notification). */
+  const stubWebNotifications = (page) =>
+    page.evaluate(() => {
+      window.__webNotes = []
+      window.Notification = function (title) {
+        window.__webNotes.push(title)
+      }
+    })
+  const wf = await newWindow()
+  await tag(wf, 'wf')
+  await wf.evaluate((repoPath) => window.__store.getState().setProject({ version: 1, name: 'Legacy', repositoryPath: repoPath, worktrees: [] }, null), repoB)
+  const wfBell = wf.locator('.sidebar .notif-bell')
+  await wfBell.waitFor({ timeout: 10_000 })
+  await stubWebNotifications(wf)
+  await stubWebNotifications(w1)
+  // w1 shows another worktree, so the session is not in view there; the file window has focus.
+  await sidebar.locator('.wt-row', { hasText: 'main' }).first().click()
+  await inWindowTagged('wf', 'focus')
+  // The server restarted in section 7: its MCP listener's port is read again, per project.
+  const mcpFor = async (projectId) => {
+    const config = JSON.parse(readFileSync(join(work, 'data', 'mcp', `${projectId}.json`), 'utf8')).mcpServers['trek-dev']
+    const rpc = async (method, params) => {
+      const res = await fetch(config.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...config.headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params })
+      })
+      return res.json()
+    }
+    await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'v2-smoke', version: '0' } })
+    return (terminalId, question) => rpc('tools/call', { name: 'request_decision', arguments: { terminalId, question } })
+  }
+  const askDemo = await mcpFor(target.projectId)
+  const notesAtAsk = (await osNotes()).length
+  const sessionTitle = worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].title
+  await askDemo(s1, 'Deploy now?')
+  const bellCount = (page) => page.locator('.notif-bell .notif-count').textContent({ timeout: 500 }).catch(() => null)
+  check("a file window's bell counts the server's decision", await until(() => bellCount(wf), '1'), '1')
+  await wfBell.click()
+  const wfEntry = wf.locator('.notif-menu .notif-item')
+  check('its menu names the project, the server and the tab, and asks the question', [
+    await wfEntry.locator('.notif-source span').first().textContent(),
+    await wfEntry.locator('.notif-question').textContent()
+  ], [`Demo · Local box · ${sessionTitle}`, 'Deploy now?'])
+  check('main raised one OS notification', await until(async () => (await osNotes()).slice(notesAtAsk), [{ title: `${sessionTitle} needs a decision`, body: 'Demo · Local box\nDeploy now?' }]), [{ title: `${sessionTitle} needs a decision`, body: 'Demo · Local box\nDeploy now?' }])
+  check("the server window's own bell shows it once", await until(() => bellCount(w1), '1'), '1')
+  await sleep(1000)
+  check('and no second notification, from main or a window', [(await osNotes()).length - notesAtAsk, await wf.evaluate(() => window.__webNotes), await w1.evaluate(() => window.__webNotes)], [1, [], []])
+  // A click asks main to focus the window holding the project, which selects the session: its
+  // worktree here, as the server's restart in section 7 left smoke-wt unloaded (no tab to show).
+  await recordFocusCalls()
+  await wfEntry.click()
+  check('a click focuses the window holding the project', await until(() => app.evaluate(() => globalThis.__focusCalls), ['Demo'], 5000), ['Demo'])
+  check("which selects the session's worktree", await until(() => sidebar.locator('.wt-row.selected .wt-name').textContent(), 'smoke-wt'), 'smoke-wt')
+  // Dismissed from the file window's menu: through main's connection, not a window's.
+  const sentAtMainDismiss = await sentCount()
+  await wfBell.click()
+  await wfEntry.locator('.decision-icon').click()
+  check('dismissing it in the file window clears it on the server', await until(decisionNow, null), null)
+  check('through main: no window sent it', (await sentSince(sentAtMainDismiss)).filter((f) => f.method === 'session.dismissDecision'), [])
+  check('and both bells empty', [await until(() => bellCount(wf), null), await until(() => bellCount(w1), null)], [null, null])
+  await wf.keyboard.press('Escape')
+  // The app-wide "Show notifications" switch off (Decision 15): main raises no OS notification,
+  // and the bell still lists the entry. The file window has focus, so the session is not in view.
+  // main emits the list and raises in the same tick, so once the bell shows it nothing more comes.
+  await wf.evaluate(() => window.api.appSettings.update({ showNotifications: false }))
+  await inWindowTagged('wf', 'focus')
+  const notesAtOff = (await osNotes()).length
+  await askDemo(s1, 'Quietly?')
+  check('with "Show notifications" off, the bell still lists the decision', await until(() => bellCount(wf), '1'), '1')
+  check('and main raises no OS notification for it', [(await osNotes()).length - notesAtOff, await wf.evaluate(() => window.__webNotes), await w1.evaluate(() => window.__webNotes)], [0, [], []])
+  await live.request('session.dismissDecision', { projectId: target.projectId, sessionId: s1 })
+  check('the switch turns back on', (await wf.evaluate(() => window.api.appSettings.update({ showNotifications: true }))).showNotifications, true)
+  check('and the quiet decision clears from both bells', [await until(() => bellCount(wf), null), await until(() => bellCount(w1), null)], [null, null])
+  // A project with no window: a click opens one, which selects the session once it has loaded.
+  const second = (await live.request('project.create', { name: 'Second', repositories: [{ path: repoB }] })).projectId
+  const secondTopic = `project:${second}`
+  const mainOfSecond = (await live.request('sub.subscribe', { topic: secondTopic })).snapshot.repositories[0].worktrees[0]
+  await live.request('sub.unsubscribe', { topic: secondTopic })
+  await live.request('worktree.load', { projectId: second, worktreeId: mainOfSecond.id })
+  const { sessionId: g2 } = await live.request('session.start', { projectId: second, worktreeId: mainOfSecond.id, cols: 80, rows: 24 })
+  const askSecond = await mcpFor(second)
+  const notesAtSecond = (await osNotes()).length
+  check('a decision in a project with no window', (await askSecond(g2, 'Second?')).result?.isError, false)
+  check('shows in the bell', await until(() => bellCount(wf), '1'), '1')
+  check('and raises its notification', await until(async () => (await osNotes()).slice(notesAtSecond).map((n) => n.body), ['Second · Local box\nSecond?']), ['Second · Local box\nSecond?'])
+  const windowsBefore = await windowCount()
+  await wfBell.click()
+  await wfEntry.click()
+  check('a click opens a window for the project', await until(windowCount, windowsBefore + 1), windowsBefore + 1)
+  const wSecond = await pageForServerProject(second)
+  await tag(wSecond, 'wSecond')
+  check("which shows the session's tab once loaded", await until(() => wSecond.evaluate(() => {
+    const s = window.__store.getState()
+    return s.activeWorktreeId ? (s.activeTerminal[s.activeWorktreeId] ?? null) : null
+  }), g2, 15_000), g2)
+  check('and is not recorded as a recent', (await wSecond.evaluate(() => window.api.getRecentProjects())).some((r) => r.kind === 'server' && r.projectId === second), false)
+  await closeTagged('wSecond')
+  // Gone before the next close: inWindowTagged asks every window for its tag, and a window still
+  // closing may never answer.
+  await until(windowCount, windowsBefore)
+  await closeTagged('wf')
+  check('the attention windows close', await until(windowCount, windowsBefore - 1), windowsBefore - 1)
+  await live.request('project.delete', { projectId: second })
+
+  // ---- 7d. Delete the worktree: confirmed, unloaded, removed on the server.
   await sidebar.locator('.wt-row', { hasText: 'smoke-wt' }).click()
   const dialogsAtDelete = (await dialogs()).length
   await detail.locator('.btn-icon[title="Worktree actions"]').click()

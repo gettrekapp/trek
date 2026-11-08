@@ -2983,6 +2983,7 @@ A new section 7c, after the Global panel (7b); deleting the worktree becomes 7d.
 - **The server restarted in section 7**, so its MCP listener has a new port: `mcpFor(projectId)` re-reads `data/mcp/<projectId>.json` and initializes. The same restart left smoke-wt unloaded (a loaded flag is runtime only), so `s1` has no tab: the click selects its worktree (Decision 22). The second project's session is in a worktree loaded on purpose, so that click shows its tab.
 - **The second project** is made, used and deleted over the `live` SDK connection; its window is closed, and so is the file window (its unsaved-project dialog is answered "Don't Save" by the stub, button 1).
 - **Also cover the switch (Decision 15), added after the review fixes:** with "Show notifications" off (`appSettings:update`, or the settings panel), raise an attention through MCP and assert that main raised no notification (`globalThis.__notes` unchanged) while the bell still lists it; then turn the switch back on. The diff below predates this check: add it to section 7c and count it in Step 2's total.
+- **Close one window at a time** (found running Task 7): after `closeTagged('wSecond')`, wait for the window count to drop before `closeTagged('wf')`. `inWindowTagged` asks every window for its tag, and one still closing may never answer: without the wait, about one run in three hung there until the watchdog fired.
 
 - [ ] **Step 1: The checks**
 
@@ -3174,7 +3175,7 @@ diff --git a/scripts/v2-smoke.mjs b/scripts/v2-smoke.mjs
 
 Run: `node scripts/v2-smoke.mjs 2>&1 | tail -1` (after `npm run build && npm --prefix server run build`)
 
-Expected: `V2 SMOKE PASS (163 checks)`: 145, plus 18 in section 7c (the 17 below and the switch-off check; one more for each extra assertion it makes):
+Expected: `V2 SMOKE PASS (166 checks)`: 145, plus 21 in section 7c (the 17 below and 4 for the switch, listed after them):
 - a file window's bell counts the server's decision
 - its menu names the project, the server and the tab, and asks the question (`["Demo · Local box · Renamed","Deploy now?"]`)
 - main raised one OS notification (`[{"title":"Renamed needs a decision","body":"Demo · Local box\nDeploy now?"}]`)
@@ -3192,6 +3193,10 @@ Expected: `V2 SMOKE PASS (163 checks)`: 145, plus 18 in section 7c (the 17 below
 - which shows the session's tab once loaded
 - and is not recorded as a recent
 - the attention windows close
+- with "Show notifications" off, the bell still lists the decision (`"1"`; after the dismiss, before the second project)
+- and main raises no OS notification for it (`[0,[],[]]`)
+- the switch turns back on
+- and the quiet decision clears from both bells (`[null,null]`)
 
 On the tree before Task 6 (no `watchAttention`), the run ends `V2 SMOKE FAIL (1 of 137 checks failed, aborted: which selects the session's worktree)`: the window never acts on main's select, and the run stops there.
 
@@ -3223,7 +3228,7 @@ Run each after the previous has exited:
 
 | Command | Expected |
 |---|---|
-| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (163 checks)`, or Task 7's count with the switch-off check |
+| `node scripts/v2-smoke.mjs 2>&1 \| tail -1` | `V2 SMOKE PASS (166 checks)` |
 | `node scripts/windows-smoke.mjs 2>&1 \| tail -1` | `40/40 checks passed` |
 | `node scripts/smoke.mjs 2>&1 \| tail -1` | `SMOKE PASS` |
 | `node scripts/changes-smoke.mjs 2>&1 \| tail -1` | `12/12 checks passed` |
