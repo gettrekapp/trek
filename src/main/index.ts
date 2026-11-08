@@ -9,6 +9,7 @@ function setDockIcon(): void {
 }
 import { registerPtyHandlers, disposeAllPtys } from './pty'
 import { openLegacy, openProjectFile, registerProjectHandlers } from './project'
+import { registerAppIpc } from './appIpc'
 import { registerGithubHandlers } from './github'
 import { registerLinearHandlers } from './linear'
 import { registerSkillHandlers } from './skills'
@@ -172,6 +173,7 @@ app.whenReady().then(async () => {
   await fixPath()
   registerPtyHandlers()
   registerWindowHandlers(openProjectFile)
+  registerAppIpc()
   registerProjectHandlers()
   registerGithubHandlers()
   registerLinearHandlers()

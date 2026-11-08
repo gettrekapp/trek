@@ -1,14 +1,10 @@
-import { BrowserWindow, dialog, ipcMain, shell, type WebContents } from 'electron'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { BrowserWindow, dialog, ipcMain, type WebContents } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
-import { app } from 'electron'
-import type { GitWorktreeInfo, OpenedProject, ProjectFile, RecentEntry, WorktreeChanges, WorktreeStatus } from '../shared/types'
+import { basename } from 'node:path'
+import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeChanges, WorktreeStatus } from '../shared/types'
 import { getHost } from './hosts/registry'
 import type { RawProjectFile } from '../shared/migration'
-import { addRecent, getRecents, removeRecent } from './recents'
-import { parseRecentRef } from './recentsRules'
+import { addRecent } from './recents'
 import { decideOpen } from './windowRules'
 import { openTrekproj, PROJECT_FILTERS } from './importUi'
 import {
@@ -20,9 +16,6 @@ import {
   whileWindowPrompts,
   windowHasProject
 } from './windows'
-
-const execFileAsync = promisify(execFile)
-
 
 /** Null when the project ended up in another window: the sender has nothing to load. */
 async function openForSender(sender: WebContents, filePath: string): Promise<OpenedProject | null> {
@@ -60,15 +53,6 @@ export async function openLegacy(sender: WebContents | null, filePath: string): 
 }
 
 export function registerProjectHandlers(): void {
-  ipcMain.handle('dialog:selectDirectory', async (event, title: string) => {
-    const win = BrowserWindow.fromWebContents(event.sender)!
-    const result = await dialog.showOpenDialog(win, {
-      title,
-      properties: ['openDirectory', 'createDirectory']
-    })
-    return result.canceled ? null : result.filePaths[0]
-  })
-
   ipcMain.handle('project:open', async (event): Promise<OpenedProject | null> => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     const result = await dialog.showOpenDialog(win, {
@@ -81,27 +65,6 @@ export function registerProjectHandlers(): void {
   })
 
   ipcMain.handle('project:openPath', (event, filePath: string) => openTrekproj(event.sender, filePath, openLegacy))
-
-  ipcMain.handle('recents:get', async (): Promise<RecentEntry[]> => {
-    return getRecents()
-  })
-
-  // Removes one recent (either kind) and returns the list as `recents:get` would.
-  ipcMain.handle('recents:remove', async (_event, raw: unknown): Promise<RecentEntry[]> => {
-    const entry = parseRecentRef(raw)
-    if (!entry) throw new Error('not a recent entry')
-    await removeRecent(entry)
-    return getRecents()
-  })
-
-  ipcMain.handle('window:focus', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-    }
-  })
 
   ipcMain.handle(
     'project:save',
@@ -137,68 +100,6 @@ export function registerProjectHandlers(): void {
       return target
     }
   )
-
-  ipcMain.handle(
-    'dialog:confirm',
-    async (
-      event,
-      opts: {
-        title: string
-        message: string
-        detail?: string
-        confirmLabel: string
-        cancelLabel?: string
-        defaultCancel?: boolean
-      }
-    ): Promise<boolean> => {
-      const win = BrowserWindow.fromWebContents(event.sender)!
-      // From a renderer: anything but text is made text, so a bad call never throws in the dialog.
-      const result = await dialog.showMessageBox(win, {
-        type: 'warning',
-        title: String(opts.title ?? ''),
-        message: String(opts.message ?? ''),
-        detail: typeof opts.detail === 'string' ? opts.detail : undefined,
-        buttons: [typeof opts.cancelLabel === 'string' && opts.cancelLabel ? opts.cancelLabel : 'Cancel', String(opts.confirmLabel ?? 'OK')],
-        defaultId: opts.defaultCancel === true ? 0 : 1,
-        cancelId: 0
-      })
-      return result.response === 1
-    }
-  )
-
-  ipcMain.handle(
-    'dialog:confirmWithCheckbox',
-    async (
-      event,
-      opts: {
-        title: string
-        message: string
-        detail?: string
-        confirmLabel: string
-        checkboxLabel: string
-        checkboxChecked: boolean
-      }
-    ): Promise<{ confirmed: boolean; checked: boolean }> => {
-      const win = BrowserWindow.fromWebContents(event.sender)!
-      const result = await dialog.showMessageBox(win, {
-        type: 'warning',
-        title: opts.title,
-        message: opts.message,
-        detail: opts.detail,
-        buttons: ['Cancel', opts.confirmLabel],
-        defaultId: 1,
-        cancelId: 0,
-        checkboxLabel: opts.checkboxLabel,
-        checkboxChecked: opts.checkboxChecked
-      })
-      return { confirmed: result.response === 1, checked: result.checkboxChecked }
-    }
-  )
-
-  ipcMain.handle('dialog:error', async (event, title: string, message: string): Promise<void> => {
-    const win = BrowserWindow.fromWebContents(event.sender)!
-    await dialog.showMessageBox(win, { type: 'error', title, message: title, detail: message })
-  })
 
   ipcMain.handle(
     'git:listWorktrees',
@@ -368,27 +269,6 @@ export function registerProjectHandlers(): void {
     }
   )
 
-  ipcMain.handle('app:getAlertSound', async (): Promise<Uint8Array | null> => {
-    try {
-      const path = join(app.getAppPath(), 'resources', 'mixkit-message-pop-alert-2354.mp3')
-      return new Uint8Array(await readFile(path))
-    } catch {
-      return null // sound file missing — alerts just stay silent
-    }
-  })
-
-  ipcMain.handle('app:revealInFinder', (_event, dirPath: string): void => {
-    shell.showItemInFolder(dirPath)
-  })
-
-  ipcMain.handle('app:openInVSCode', async (_event, dirPath: string): Promise<void> => {
-    try {
-      await execFileAsync('code', [dirPath])
-    } catch {
-      // `code` shell command not installed — launch the app bundle directly.
-      await execFileAsync('open', ['-a', 'Visual Studio Code', dirPath])
-    }
-  })
 }
 
 export async function openProjectFile(filePath: string): Promise<OpenedProject> {
