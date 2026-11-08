@@ -6,6 +6,7 @@
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
+    "postinstall": "npm --prefix server install",
     "dev": "npm run build:server && electron-vite dev",
     "build": "electron-vite build && npm run build:server",
     "build:server": "npm --prefix server run build && node scripts/bundle-server.mjs",
@@ -23,7 +24,7 @@
     "smoke:env": "npm run build && node scripts/env-smoke.mjs",
     "smoke:providers": "npm run build && node scripts/providers-smoke.mjs",
     "smoke:client": "npm --prefix server run build && node scripts/client-contract.mjs",
-    "smoke:v2": "npm run build && npm --prefix server run build && node scripts/v2-smoke.mjs",
+    "smoke:v2": "npm run build && node scripts/v2-smoke.mjs",
     "smoke:local": "npm --prefix server run build && node scripts/local-server-smoke.mjs",
     "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app",
     "rebuild": "electron-rebuild -f -w node-pty",

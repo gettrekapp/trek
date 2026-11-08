@@ -237,12 +237,26 @@ notification focuses the app and jumps to that worktree + terminal.
 ## Development
 
 ```bash
-npm install
+npm install       # also installs server/ (postinstall: npm --prefix server install)
 npm run rebuild   # rebuild node-pty against Electron's Node headers
 npm run dev       # launch in dev mode with HMR
 npm run build     # production build into out/
 npm run typecheck
 ```
+
+`npm run dev` and `npm run build` bundle the server too (`npm run build:server`
+writes `out/server`), so they need `server/node_modules`; the root `postinstall`
+installs it. The app runs that bundle as its Local server. Electron's HMR does not
+reach it: after editing `server/src`, run `npm run build:server` and then
+File → Local Server → Restart Local Server to run the new build.
+
+A dev build uses its own Local server profile, `~/.config/trek-server/local-dev`
+(`--local-profile dev`), never the installed Trek's `local`. To give a dev run
+from another worktree its own server too, set `TREK_LOCAL_PROFILE` to another
+name (1–32 of `a-z`, `0-9` and `-`, starting with a letter or digit), for example
+`TREK_LOCAL_PROFILE=dev-wt2 npm run dev` for `local-dev-wt2`. An invalid name is
+ignored (`dev`), and a packaged Trek ignores the variable.
+`TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it).
 
 The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
 older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
