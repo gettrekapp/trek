@@ -1,6 +1,6 @@
 import { existsSync, rmSync, statSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
-import { basename, resolve } from 'node:path'
+import { basename, isAbsolute, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { homedir, hostname } from 'node:os'
 import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME, isLocalProfileName } from '../../src/shared/localServer'
@@ -19,6 +19,7 @@ import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
 import { createMachine } from './integrations/machine'
+import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -51,6 +52,8 @@ interface CliArgs {
   local: boolean
   /** `--local-profile <name>`: a named local profile (local-<name>) instead of the default one */
   localProfile?: string
+  /** `start --local --import-env-from <dir>`: the app's userData, whose environments the local server takes over once */
+  importEnvFrom?: string
 }
 
 const USAGE = `Usage: trek-server [command] [options]
@@ -86,6 +89,10 @@ Options:
                     With --local: a separate local server, under local-<name> in both
                     directories (a dev build of Trek uses "dev"). The name is 1-32 of a-z, 0-9, -,
                     starting with a letter or digit.
+  --import-env-from <dir>
+                    With start --local: the Trek app's data dir. Once, while the local data dir
+                    has no environments.json, its Colima environments registry and dev stack files
+                    are copied in (the app ran them itself before; the files there are kept).
   --id <id>         add: repo id (default: slug of the directory name)
   --name <name>     add: display name (default: the directory name)
   -h, --help        Show this help
@@ -159,6 +166,11 @@ function parseArgs(argv: string[]): CliArgs {
     else if (arg === '--data-dir') args.dataDir = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
     else if (arg === '--local') args.local = true
+    else if (arg === '--import-env-from') {
+      const dir = value(++i, arg)
+      if (!isAbsolute(dir)) usageError(`--import-env-from needs an absolute path: ${dir}`)
+      args.importEnvFrom = dir
+    }
     else if (arg === '--local-profile') {
       const name = value(++i, arg)
       if (!isLocalProfileName(name)) usageError(`Invalid local profile name: ${name} (1-32 of a-z, 0-9 and -, starting with a letter or digit)`)
@@ -173,6 +185,7 @@ function parseArgs(argv: string[]): CliArgs {
   }
   if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
   if (args.localProfile !== undefined && !args.local) usageError('--local-profile only applies with --local')
+  if (args.importEnvFrom !== undefined && !(args.local && args.command === 'start')) usageError('--import-env-from only applies to `start --local`')
   if (args.command === 'stop' && !args.local) usageError('`stop` only stops the local server: `trek-server stop --local`')
   if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
     usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
@@ -416,6 +429,16 @@ try {
 }
 const { version, build } = buildInfo()
 const serverDataDir = resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir())
+if (args.importEnvFrom !== undefined) {
+  try {
+    const seed = seedEnvironmentsFromApp(args.importEnvFrom, serverDataDir)
+    if (seed.seeded) console.log(`environments: took over ${seed.environments} environment(s) and ${seed.stackFiles} stack file(s) from ${args.importEnvFrom}`)
+    if (seed.skipped.length > 0) console.warn(`environments: left out ${seed.skipped.join('; ')}`)
+  } catch (err) {
+    // The VMs are still there; the next start tries again (nothing was written).
+    console.warn(`environments: could not take over ${args.importEnvFrom}: ${(err as Error).message}`)
+  }
+}
 const server = startServer(
   store,
   version,

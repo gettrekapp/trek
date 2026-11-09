@@ -277,7 +277,8 @@ try {
   check("with the bundle's version and build", [first.version, first.build], [bundled.version, bundled.build])
   if (packaged) {
     const command = execFileSync('ps', ['-o', 'command=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
-    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${join(packaged, 'Contents', 'MacOS', 'Trek')} ${join(packaged, 'Contents', 'Resources', 'app.asar', 'out', 'server', 'trek-server.cjs')} start --local`)
+    // --import-env-from: the app's userData, whose environments the Local server takes over once (5a).
+    check("it runs the packaged app's binary on the bundle inside app.asar", command, `${join(packaged, 'Contents', 'MacOS', 'Trek')} ${join(packaged, 'Contents', 'Resources', 'app.asar', 'out', 'server', 'trek-server.cjs')} start --local --import-env-from ${userData}`)
   }
   const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(first.pid)], { encoding: 'utf8' }).trim()
   check('it runs detached, leading its own process group (setsid)', Number(pgid), first.pid)

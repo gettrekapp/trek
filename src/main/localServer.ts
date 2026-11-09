@@ -352,7 +352,9 @@ async function spawnAndWait(): Promise<void> {
   let child
   try {
     // detached: its own session (setsid), so no SIGHUP reaches it from the terminal that ran Trek.
-    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE)], {
+    // --import-env-from: the Colima environments and dev stacks this app ran itself before 5a; the
+    // server takes them over once (server/src/integrations/envSeed.ts).
+    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', app.getPath('userData')], {
       cwd: homedir(),
       detached: true,
       env: childEnv(process.env),

@@ -684,6 +684,19 @@ else ok('bad token rejected with 4003')
     if (err.status !== 2) fail(`\`list --port\` exit ${err.status}`)
     else ok('`--port` outside `start` is a usage error (exit 2)')
   }
+  // The Local server's one-time take-over of the app's environments: `start --local` only, an absolute path.
+  for (const [argv, name] of [
+    [['start', '--import-env-from', work, '--config', configPath], 'without --local'],
+    [['start', '--local', '--import-env-from', 'relative/dir'], 'with a relative path']
+  ]) {
+    try {
+      execFileSync(cmd, [...cmdPrefix, ...argv], { cwd: serverDir, stdio: 'pipe', env: { ...process.env, HOME: work } })
+      fail(`\`--import-env-from\` ${name} was accepted`)
+    } catch (err) {
+      if (err.status !== 2) fail(`\`--import-env-from\` ${name} exit ${err.status}`)
+      else ok(`\`--import-env-from\` ${name} is a usage error (exit 2)`)
+    }
+  }
 }
 
 console.log(failed ? 'SERVER SMOKE FAIL' : 'SERVER SMOKE PASS')
