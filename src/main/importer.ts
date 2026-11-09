@@ -19,7 +19,7 @@ import { projectDir } from '../host/claudeSessionService'
 import { addAppServer, adoptAppServerToken, getAppServer, getAppServerToken, savedAppServers, serverLink } from './appServers'
 import { LOCAL_SERVER_DISABLED } from './localServer'
 import { LOCAL_ENTRY_ID, LOCAL_ENTRY_NAME } from './localServerRules'
-import { legacyTokenFor } from './servers'
+import { legacyTokenFor } from './legacyTokens'
 import { fileKey, isFileKey, updateMigrated } from './migrated'
 import { rewriteRecentsForImport } from './recents'
 import {

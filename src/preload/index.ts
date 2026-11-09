@@ -94,6 +94,8 @@ const api = {
   // Git — serverId null/undefined = the local machine
   listWorktrees: (serverId: string | null, repoPath: string): Promise<GitWorktreeInfo[]> =>
     ipcRenderer.invoke('git:listWorktrees', serverId, repoPath),
+  /** `git status` of a worktree on this disk (a Local window's delete); null when it can't be read. */
+  localWorktreeDirty: (path: string): Promise<boolean | null> => ipcRenderer.invoke('git:localDirty', path),
   /** Dirty/ahead/behind for specific worktrees — polled apart from the list. */
   worktreeStatuses: (serverId: string | null, worktreePaths: string[]): Promise<WorktreeStatus[]> =>
     ipcRenderer.invoke('git:worktreeStatuses', serverId, worktreePaths),

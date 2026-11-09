@@ -1,7 +1,7 @@
-// The JSON-RPC side of Trek's MCP server, and the bot's gate on every tools/call. Pure: the
-// server (mcp.ts) passes in the tools, the bot's handlers and the way to reach the renderer.
+// The JSON-RPC side of the desktop's MCP server, and the bot's gate on every tools/call (dormant
+// until phase 5 ports the bot onto trek-server's MCP; the desktop's server, mcp.ts, is gone). Pure.
 
-import type { BotMcpHandlers } from '../host/bot/mcpHandlers.ts'
+import type { BotMcpHandlers } from './mcpHandlers.ts'
 
 export type { BotMcpHandlers }
 

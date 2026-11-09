@@ -16,7 +16,8 @@
 //   - the feature row's env badge; its tabs: Changes, Notes, Env, Stack, Settings; its header's
 //     env chip; VS Code with the worktree's path; the Env panel's VM; its variables, saved on blur;
 //   - a session's skill menu lists the worktree's skill and types it into the server's pty;
-//   - Delete worktree asks with the stack checkbox and the VM named, then runs `stack.sh destroy`
+//   - Delete worktree asks with the stack checkbox and the VM named, and (a file written just
+//     before) about its uncommitted changes, from a fresh git status here; then runs `stack.sh destroy`
 //     and `colima delete <profile> --force` before the server removes the worktree;
 //   - no console or page errors.
 // The same window on a remote server (no `local`) is smoke:v2's: no machine-local controls, Linear on.
@@ -341,10 +342,13 @@ try {
 
   // ---- 6. Delete the worktree: the stack and the VM go first ----------------------------------------
 
+  // Written just now, so only a fresh `git status` on this disk sees it (main's git:localDirty).
+  writeFileSync(join(worktree, 'scratch.txt'), 'unsaved\n')
   await actions.locator('.btn-icon').click()
   await detail.locator('.detail-menu-item', { hasText: 'Delete worktree…' }).click()
   check('the worktree is removed on the server', await until(async () => (await project()).repositories[0].worktrees.length, 1, 30_000), 1)
   const asked = (await app.evaluate(() => globalThis.__dialogs)).find((d) => d.message === 'Delete worktree “feature-x”?')
+  check('a fresh dirty check asks before the stack and the VM go', (await app.evaluate(() => globalThis.__dialogs)).some((d) => d.message === '“feature-x” has uncommitted changes.'), true)
   check('the confirm names the VM and offers the stack', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.detail ?? ''), asked?.checkbox?.startsWith('Also destroy its dev stack') ?? false], [true, true])
   check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
   check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])

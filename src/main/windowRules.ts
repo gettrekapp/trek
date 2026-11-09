@@ -19,9 +19,16 @@ function isBounds(value: unknown): value is WindowBounds {
   return [b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n))
 }
 
+/**
+ * What open-windows.json names. A window holds a server project; a `file` entry is what an older
+ * Trek left (a window on a .trekproj): read so the import can map it, never reopened as one.
+ */
 export type WindowTarget =
   | { kind: 'file'; path: string }
   | { kind: 'server'; serverEntryId: string; projectId: string }
+
+/** A window's project: a server entry's. */
+export type ServerTarget = Extract<WindowTarget, { kind: 'server' }>
 
 /** File paths are compared as given; callers normalize them (realpath) first. */
 export function sameTarget(a: WindowTarget, b: WindowTarget): boolean {
@@ -30,8 +37,8 @@ export function sameTarget(a: WindowTarget, b: WindowTarget): boolean {
   return false
 }
 
-export interface OpenWindowEntry {
-  target: WindowTarget
+export interface OpenWindowEntry<T extends WindowTarget = WindowTarget> {
+  target: T
   bounds?: WindowBounds
 }
 
@@ -70,12 +77,10 @@ export function parseOpenWindows(raw: unknown): OpenWindowEntry[] {
   return [...entries.values()]
 }
 
-/** File windows keep the legacy shape so an older Trek can still read the file. */
-export function serializeOpenWindow(entry: OpenWindowEntry): Record<string, unknown> {
+/** A window as open-windows.json stores it. */
+export function serializeOpenWindow(entry: OpenWindowEntry<ServerTarget>): Record<string, unknown> {
   const bounds = entry.bounds ? { bounds: entry.bounds } : {}
-  return entry.target.kind === 'file'
-    ? { filePath: entry.target.path, ...bounds }
-    : { kind: 'server', serverEntryId: entry.target.serverEntryId, projectId: entry.target.projectId, ...bounds }
+  return { kind: 'server', serverEntryId: entry.target.serverEntryId, projectId: entry.target.projectId, ...bounds }
 }
 
 export function boundsOnScreen(bounds: WindowBounds, workAreas: WindowBounds[]): boolean {
@@ -88,15 +93,9 @@ export function boundsOnScreen(bounds: WindowBounds, workAreas: WindowBounds[]):
   )
 }
 
-/** What `window:takeInitial` hands a new window: a file to read, or a server project to show. */
-export function initialFromTarget(target: WindowTarget | null): {
-  filePath: string | null
-  server: { serverEntryId: string; projectId: string } | null
-} {
-  if (!target) return { filePath: null, server: null }
-  return target.kind === 'file'
-    ? { filePath: target.path, server: null }
-    : { filePath: null, server: { serverEntryId: target.serverEntryId, projectId: target.projectId } }
+/** What `window:takeInitial` hands a window: the server project to show, if any. */
+export function initialFromTarget(target: ServerTarget | null): { serverEntryId: string; projectId: string } | null {
+  return target ? { serverEntryId: target.serverEntryId, projectId: target.projectId } : null
 }
 
 /**

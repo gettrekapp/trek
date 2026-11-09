@@ -65,18 +65,14 @@ test('parseOpenWindows reads legacy file entries and server entries', () => {
   ])
 })
 
-test('serializeOpenWindow writes file entries in the legacy shape', () => {
-  assert.deepEqual(serializeOpenWindow({ target: { kind: 'file', path: '/a' } }), { filePath: '/a' })
+test('serializeOpenWindow writes a server window, with its bounds', () => {
   assert.deepEqual(serializeOpenWindow({ target: { kind: 'server', serverEntryId: 's', projectId: 'p' }, bounds: { x: 0, y: 0, width: 1, height: 1 } }), { kind: 'server', serverEntryId: 's', projectId: 'p', bounds: { x: 0, y: 0, width: 1, height: 1 } })
+  assert.deepEqual(serializeOpenWindow({ target: { kind: 'server', serverEntryId: 's', projectId: 'p' } }), { kind: 'server', serverEntryId: 's', projectId: 'p' })
 })
 
-test('initialFromTarget hands a file path or the server ids, never both', () => {
-  assert.deepEqual(initialFromTarget(null), { filePath: null, server: null })
-  assert.deepEqual(initialFromTarget({ kind: 'file', path: '/a.trekproj' }), { filePath: '/a.trekproj', server: null })
-  assert.deepEqual(initialFromTarget({ kind: 'server', serverEntryId: 's', projectId: 'p' }), {
-    filePath: null,
-    server: { serverEntryId: 's', projectId: 'p' }
-  })
+test('initialFromTarget hands the server ids, or null for an empty window', () => {
+  assert.equal(initialFromTarget(null), null)
+  assert.deepEqual(initialFromTarget({ kind: 'server', serverEntryId: 's', projectId: 'p' }), { serverEntryId: 's', projectId: 'p' })
 })
 
 test('capLabel coerces to a string and caps its length', () => {

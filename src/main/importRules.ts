@@ -7,7 +7,7 @@ import { sessionMigrates } from '../shared/providers/selection.ts'
 import type { ServerConfig } from '../shared/types.ts'
 import { serverKey } from './appServersRules.ts'
 import { MAX_RECENTS, type RecentEntry } from './recentsRules.ts'
-import { isTargetId, sameTarget, type OpenWindowEntry, type WindowTarget } from './windowRules.ts'
+import { isTargetId, sameTarget, type OpenWindowEntry, type ServerTarget, type WindowTarget } from './windowRules.ts'
 
 // ---- Where a piece goes -----------------------------------------------------------------------
 
@@ -291,11 +291,11 @@ export function restoreEntries(entries: readonly OpenWindowEntry[], m: Migrated,
  * What `restoreWindows` reopens (4e): the server windows. A window still on a .trekproj (never
  * imported, or Local off) has no window to come back in; its file is kept in the recents instead.
  */
-export function splitRestore(entries: readonly OpenWindowEntry[]): { windows: OpenWindowEntry[]; files: string[] } {
-  const windows: OpenWindowEntry[] = []
+export function splitRestore(entries: readonly OpenWindowEntry[]): { windows: OpenWindowEntry<ServerTarget>[]; files: string[] } {
+  const windows: OpenWindowEntry<ServerTarget>[] = []
   const files: string[] = []
   for (const e of entries) {
-    if (e.target.kind === 'server') windows.push(e)
+    if (e.target.kind === 'server') windows.push({ ...e, target: e.target })
     else files.push(e.target.path)
   }
   return { windows, files }

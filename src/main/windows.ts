@@ -1,13 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, screen, type WebContents } from 'electron'
-import { realpathSync } from 'node:fs'
 import { access, readFile, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import type { InitialWindowState, OpenedProject, SessionSelect } from '../shared/types'
-import { releaseBotWindow } from './bot'
-import { releaseMcpWindow } from './mcp'
+import { join } from 'node:path'
+import type { InitialWindowState, SessionSelect } from '../shared/types'
 import { isAppUrl, isExternalUrl } from './navigationRules'
 import { openUrl } from './openUrl'
-import { releaseWindowPtys } from './pty'
 import { getAppServer } from './appServers'
 import { addRecentServer, keepRecentFiles } from './recents'
 import {
@@ -22,8 +18,8 @@ import {
   sameTarget,
   serializeOpenWindow,
   type OpenWindowEntry,
-  type WindowBounds,
-  type WindowTarget
+  type ServerTarget,
+  type WindowBounds
 } from './windowRules'
 import { restoreEntries, splitRestore } from './importRules'
 import { LOCAL_SERVER_DISABLED } from './localServer'
@@ -48,11 +44,9 @@ interface PendingClose {
 interface WindowState {
   win: BrowserWindow
   id: number
-  /** What the window holds. File paths are normalized; a target is claimed by at most one window. */
-  target: WindowTarget | null
-  /** A file project that has never been saved: it has no target, but the window is not empty. */
-  unsavedProject: boolean
-  initial: (ReturnType<typeof initialFromTarget> & { menu: InitialWindowState['menu'] }) | null
+  /** The server project the window holds; a target is claimed by at most one window. */
+  target: ServerTarget | null
+  initial: { server: ReturnType<typeof initialFromTarget>; menu: InitialWindowState['menu'] } | null
   /** The renderer is listening, so closing has to ask it first. */
   rendererReady: boolean
   /** A session to show, asked for while the renderer was still loading: handed over by window:takeInitial */
@@ -66,22 +60,8 @@ interface WindowState {
 
 const windows = new Map<number, WindowState>()
 
-/** Compared after realpath so a symlink can't open a project twice. */
-function normalizeProjectPath(filePath: string): string {
-  try {
-    return realpathSync(filePath)
-  } catch {
-    return resolve(filePath) // not on disk yet: a Save As target
-  }
-}
-
-function normalizeTarget(target: WindowTarget): WindowTarget {
-  return target.kind === 'file' ? { kind: 'file', path: normalizeProjectPath(target.path) } : target
-}
-
 export function windowHasProject(contents: WebContents): boolean {
-  const state = windows.get(contents.id)
-  return !!state && (state.target !== null || state.unsavedProject)
+  return windows.get(contents.id)?.target != null
 }
 
 /**
@@ -92,26 +72,11 @@ export function showStartView(contents: WebContents, view: NonNullable<InitialWi
   const state = windows.get(contents.id)
   if (!state) return
   if (state.rendererReady) contents.send(`menu:${view}`)
-  else state.initial = { ...(state.initial ?? initialFromTarget(null)), menu: view }
+  else state.initial = { server: null, ...state.initial, menu: view }
 }
 
-/** Whether a file window holds `filePath`. 4e-2 deletes it with the file windows. */
-export function fileIsOpen(filePath: string): boolean {
-  return windowHoldingFile(filePath) !== undefined
-}
-
-function windowHolding(target: WindowTarget): WindowState | undefined {
-  const wanted = normalizeTarget(target)
-  return [...windows.values()].find((state) => state.target !== null && sameTarget(state.target, wanted))
-}
-
-function windowHoldingFile(filePath: string): WindowState | undefined {
-  return windowHolding({ kind: 'file', path: filePath })
-}
-
-export function fileOpenInOtherWindow(contents: WebContents, filePath: string): boolean {
-  const holder = windowHoldingFile(filePath)
-  return holder !== undefined && holder.id !== contents.id
+function windowHolding(target: ServerTarget): WindowState | undefined {
+  return [...windows.values()].find((state) => state.target !== null && sameTarget(state.target, target))
 }
 
 export function focusWindow(win: BrowserWindow): void {
@@ -122,8 +87,8 @@ export function focusWindow(win: BrowserWindow): void {
 
 /**
  * The focused window, for attention's notifications: its webContents id and the
- * server project it shows (null for a file or empty window). Null when no
- * window of the app has focus.
+ * server project it shows (null for an empty window). Null when no window of the
+ * app has focus.
  */
 export function focusedWindowTarget(): {
   webContentsId: number
@@ -135,7 +100,7 @@ export function focusedWindowTarget(): {
   const target = state.target
   return {
     webContentsId: state.id,
-    target: target?.kind === 'server' ? { serverEntryId: target.serverEntryId, projectId: target.projectId } : null
+    target: target ? { serverEntryId: target.serverEntryId, projectId: target.projectId } : null
   }
 }
 
@@ -146,7 +111,7 @@ export function focusedWindowTarget(): {
  * Not recorded as a recent: the user did not pick the project.
  */
 export function showServerSession(serverEntryId: string, projectId: string, select: SessionSelect): void {
-  const target: WindowTarget = { kind: 'server', serverEntryId, projectId }
+  const target: ServerTarget = { kind: 'server', serverEntryId, projectId }
   const holder = windowHolding(target)
   switch (routeSelect(holder)) {
     case 'send':
@@ -172,7 +137,7 @@ export function showServerSession(serverEntryId: string, projectId: string, sele
  */
 export async function openServerTarget(
   sender: WebContents | null,
-  target: Extract<WindowTarget, { kind: 'server' }>,
+  target: ServerTarget,
   name: unknown,
   serverName: unknown,
   opts: { bounds?: WindowBounds; announce?: boolean } = {}
@@ -214,35 +179,11 @@ export async function openServerTarget(
   }
 }
 
-/**
- * Asks the file window holding `filePath`, if any, to close (its renderer offers to save first).
- * `closed` false: the user kept it open. `bounds` are its own. Unused since 4e-1: an import no
- * longer closes a file window first (none opens), and 4e-2 deletes this with the file windows.
- */
-export async function closeFileWindow(filePath: string): Promise<{ closed: boolean; bounds?: WindowBounds }> {
-  const holder = windowHoldingFile(filePath)
-  if (!holder) return { closed: true }
-  const bounds = holder.win.getNormalBounds()
-  if (holder.rendererReady) focusWindow(holder.win)
-  return { closed: await requestClose(holder), bounds }
-}
-
-/** Unused since 4e-1 (a .trekproj only imports); 4e-2 deletes it with the file windows. */
-export function focusWindowHoldingFile(filePath: string): void {
-  const holder = windowHoldingFile(filePath)
-  if (holder) focusWindow(holder.win)
-}
-
-function claimTarget(contents: WebContents, target: WindowTarget): void {
+function claimTarget(contents: WebContents, target: ServerTarget): void {
   const state = windows.get(contents.id)
   if (!state) return
-  state.target = normalizeTarget(target)
-  state.unsavedProject = false
+  state.target = target
   schedulePersist()
-}
-
-export function claimProject(contents: WebContents, filePath: string): void {
-  claimTarget(contents, { kind: 'file', path: filePath })
 }
 
 const RENDERER_DIR = join(__dirname, '../renderer')
@@ -270,7 +211,7 @@ function guardNavigation(contents: WebContents): void {
 }
 
 export function createWindow(
-  opts: { initialTarget?: WindowTarget; menu?: InitialWindowState['menu']; bounds?: WindowBounds } = {}
+  opts: { initialTarget?: ServerTarget; menu?: InitialWindowState['menu']; bounds?: WindowBounds } = {}
 ): BrowserWindow {
   const win = new BrowserWindow({
     width: 1400,
@@ -294,10 +235,8 @@ export function createWindow(
   const state: WindowState = {
     win,
     id: win.webContents.id,
-    target: opts.initialTarget ? normalizeTarget(opts.initialTarget) : null,
-    unsavedProject: false,
-    // The file is read by the path as given, as before; only the claim is normalized.
-    initial: { ...initialFromTarget(opts.initialTarget ?? null), menu: opts.menu ?? null },
+    target: opts.initialTarget ?? null,
+    initial: { server: initialFromTarget(opts.initialTarget ?? null), menu: opts.menu ?? null },
     rendererReady: false,
     pendingSelect: null,
     prompts: 0,
@@ -313,9 +252,6 @@ export function createWindow(
   })
   win.on('closed', () => {
     windows.delete(state.id)
-    releaseWindowPtys(state.id)
-    releaseBotWindow(state.id)
-    releaseMcpWindow(state.id)
     clearCloseTimer(state)
     state.closing?.settle(true)
     state.closing = null
@@ -405,7 +341,7 @@ function requestClose(state: WindowState): Promise<boolean> {
 // ---- Quitting --------------------------------------------------------------
 
 /** While set, closing a window keeps its entry: the file describes the windows open at quit. */
-let quit: { entries: OpenWindowEntry[] } | null = null
+let quit: { entries: OpenWindowEntry<ServerTarget>[] } | null = null
 
 export function isQuitting(): boolean {
   return quit !== null
@@ -437,15 +373,15 @@ const openWindowsFile = (): string => join(app.getPath('userData'), 'open-window
 
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
-function entryFor(state: WindowState, target: WindowTarget): OpenWindowEntry {
+function entryFor(state: WindowState, target: ServerTarget): OpenWindowEntry<ServerTarget> {
   return { target, bounds: state.win.getNormalBounds() }
 }
 
-function currentEntries(): OpenWindowEntry[] {
+function currentEntries(): OpenWindowEntry<ServerTarget>[] {
   return [...windows.values()].flatMap((s) => (s.target ? [entryFor(s, s.target)] : []))
 }
 
-async function writeOpenWindows(entries: OpenWindowEntry[]): Promise<void> {
+async function writeOpenWindows(entries: OpenWindowEntry<ServerTarget>[]): Promise<void> {
   if (RESTORE_DISABLED) return
   await writeFile(openWindowsFile(), JSON.stringify(entries.map(serializeOpenWindow), null, 2), 'utf8').catch((err) =>
     console.error('Could not record open windows', err)
@@ -508,53 +444,20 @@ export async function restoreWindows(): Promise<number> {
 
 // ---- IPC -------------------------------------------------------------------
 
-export function registerWindowHandlers(readProject: (path: string) => Promise<OpenedProject>): void {
-  ipcMain.handle('window:takeInitial', async (event): Promise<InitialWindowState> => {
+export function registerWindowHandlers(): void {
+  ipcMain.handle('window:takeInitial', (event): InitialWindowState => {
     const state = windows.get(event.sender.id)
-    if (!state) return { opened: null, menu: null, server: null, select: null }
+    if (!state) return { menu: null, server: null, select: null }
     state.rendererReady = true
     const initial = state.initial
     state.initial = null
     const select = state.pendingSelect
     state.pendingSelect = null
+    state.markTaken()
     // A server window keeps its target across a reload: its state lives on the server.
-    const server = initial ? initial.server : state.target?.kind === 'server' ? initialFromTarget(state.target).server : null
-    if (server) {
-      state.markTaken()
-      return { opened: null, menu: initial?.menu ?? null, server, select }
-    }
-    // A reload of a file window lands here too, with an empty store: forget the old claim.
-    if (!initial?.filePath) {
-      state.target = null
-      state.unsavedProject = false
-      state.markTaken()
-      schedulePersist()
-      return { opened: null, menu: initial?.menu ?? null, server: null, select: null }
-    }
-    try {
-      return { opened: await readProject(initial.filePath), menu: initial.menu, server: null, select: null }
-    } catch (err) {
-      state.target = null
-      state.unsavedProject = false
-      schedulePersist()
-      throw err
-    } finally {
-      state.markTaken()
-    }
+    const server = initial ? initial.server : initialFromTarget(state.target)
+    return { menu: initial?.menu ?? null, server, select: server ? select : null }
   })
-
-  ipcMain.on(
-    'window:projectChanged',
-    (event, hasProject: boolean, filePath: string | null, name: string | null) => {
-      const state = windows.get(event.sender.id)
-      // A server window has no file project in its store; it reports its title through window:reportTitle.
-      if (!state || state.target?.kind === 'server') return
-      state.target = hasProject && filePath ? { kind: 'file', path: normalizeProjectPath(filePath) } : null
-      state.unsavedProject = hasProject && !filePath
-      if (!state.win.isDestroyed()) state.win.setTitle(name ?? 'Trek Dev')
-      schedulePersist()
-    }
-  )
 
   ipcMain.on('window:reportTitle', (event, name: unknown) => {
     const state = windows.get(event.sender.id)
@@ -564,9 +467,8 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
   // A server window gives up its project (Pick another project): it is an empty window again.
   ipcMain.handle('window:releaseTarget', (event): void => {
     const state = windows.get(event.sender.id)
-    if (!state || state.target?.kind !== 'server') return
+    if (!state?.target) return
     state.target = null
-    state.unsavedProject = false
     if (!state.win.isDestroyed()) state.win.setTitle('Trek Dev')
     schedulePersist()
   })
@@ -592,38 +494,4 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
     state.closing.settle(false)
     state.closing = null
   })
-
-  ipcMain.handle(
-    'dialog:closeUnsaved',
-    (event, name: string): Promise<'save' | 'discard' | 'cancel'> =>
-      whileWindowPrompts(event.sender, async () => {
-        const win = BrowserWindow.fromWebContents(event.sender)!
-        const { response } = await dialog.showMessageBox(win, {
-          type: 'warning',
-          message: `Save "${name}" before closing?`,
-          detail: 'This project has never been saved. Without saving, its setup and sessions are lost.',
-          buttons: ['Save…', "Don't Save", 'Cancel'],
-          defaultId: 0,
-          cancelId: 2
-        })
-        return (['save', 'discard', 'cancel'] as const)[response]
-      })
-  )
-
-  ipcMain.handle(
-    'dialog:closeSaveFailed',
-    (event, error: string): Promise<boolean> =>
-      whileWindowPrompts(event.sender, async () => {
-        const win = BrowserWindow.fromWebContents(event.sender)!
-        const { response } = await dialog.showMessageBox(win, {
-          type: 'error',
-          message: 'Could not save the project',
-          detail: error,
-          buttons: ['Cancel', 'Close Anyway'],
-          defaultId: 0,
-          cancelId: 0
-        })
-        return response === 1
-      })
-  )
 }

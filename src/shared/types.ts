@@ -368,10 +368,9 @@ export interface GlobalSession {
 
 /** What a new window starts with. */
 export interface InitialWindowState {
-  opened: OpenedProject | null
   /** The start screen's view to show first (File → New Project… or Open on Server… with no empty window) */
   menu: 'new-project' | 'open-on-server' | null
-  /** Set when the window holds a server project; `opened` is then null. */
+  /** Set when the window holds a server project. */
   server: { serverEntryId: string; projectId: string } | null
   /** A session to show once the project is in (asked for before the window was listening) */
   select: SessionSelect | null

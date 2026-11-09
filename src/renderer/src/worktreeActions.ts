@@ -491,13 +491,13 @@ function isLoaded(instanceId: string | undefined): boolean {
   return !!instanceId && !!useAppStore.getState().loadedWorktrees[instanceId]
 }
 
-/** Fresh dirty check for one worktree; falls back to the cached flag if the check fails. */
+/** Fresh dirty check for a worktree on this disk; falls back to the cached flag if the check fails. */
 async function worktreeIsDirty(info: GitWorktreeInfo): Promise<boolean> {
   try {
-    const [status] = await window.api.worktreeStatuses(info.serverId ?? null, [info.path])
-    if (status?.dirty !== undefined) return status.dirty
+    const dirty = await window.api.localWorktreeDirty(info.path)
+    if (dirty !== null) return dirty
   } catch {
-    // host unreachable — use the cached flag
+    // unreadable — use the cached flag
   }
   return info.dirty ?? false
 }

@@ -9,11 +9,9 @@ import {
 } from '../terminals'
 import { globalSessionLlm } from '../llm'
 import { getBackend } from '../backend'
-import { useFeatures } from '../useFeatures'
 import { getProvider } from '../../../shared/providers/registry'
 import { v2GlobalLabel } from '../v2/sessionChoices'
 import { describeLlm } from '../../../shared/providers/selection'
-import { BotPanel } from './BotPanel'
 import { StatusBadge } from './StatusBadge'
 import { DecisionIcon } from './DecisionIcon'
 import { TerminalPane } from './TerminalPane'
@@ -77,7 +75,6 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   /** The title the rename started from: a server window refuses it if the title changed meanwhile */
   const [editFrom, setEditFrom] = useState('')
   const hasTabs = order.length > 0
-  const hasBot = useFeatures().bot
   const attention = order.some((id) => terminals[id]?.status === 'attention')
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
 
@@ -221,17 +218,6 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
               </div>
             )
           })}
-          {hasBot && (
-            <div
-              className={`global-tab bot-tab ${view === 'bot' ? 'active' : ''} ${
-                decisions[BOT_DECISION_ID] ? 'has-decision' : ''
-              }`}
-              onClick={() => useAppStore.getState().setGlobalView('bot')}
-            >
-              <DecisionIcon terminalId={BOT_DECISION_ID} />
-              <span className="global-tab-title">Bot</span>
-            </div>
-          )}
           <button
             className="global-tab-add"
             onClick={newTab}
@@ -253,7 +239,6 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
           ))}
           {error && <div className="global-error">Couldn't start the session: {error}</div>}
         </div>
-        {hasBot && <BotPanel visible={view === 'bot'} />}
       </div>
       <div
         className={`global-bar ${open ? 'open' : ''} ${attention ? 'attention' : ''}`}

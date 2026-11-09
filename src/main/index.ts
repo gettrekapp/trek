@@ -7,8 +7,6 @@ function setDockIcon(): void {
   const icon = nativeImage.createFromPath(APP_ICON)
   if (!icon.isEmpty()) app.dock.setIcon(icon)
 }
-import { registerPtyHandlers, disposeAllPtys } from './pty'
-import { openProjectFile, registerProjectHandlers } from './project'
 import { registerAppIpc } from './appIpc'
 import { registerGithubHandlers } from './github'
 import { registerLinearHandlers } from './linear'
@@ -16,8 +14,6 @@ import { registerSkillHandlers } from './skills'
 import { registerDockerHandlers } from './docker'
 import { registerEnvironmentHandlers } from './environments'
 import { registerStackHandlers } from './stacks'
-import { registerClaudeSessionHandlers } from './claudeSessions'
-import { registerServerHandlers, disconnectAllServers } from './servers'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
 import { appSettings, registerAppSettingsHandlers } from './appSettings'
@@ -35,10 +31,7 @@ import {
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
 import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandlers } from './importUi'
-import { registerMcpHandlers } from './mcp'
-import { registerBotHandlers, stopAllBots } from './bot'
 import { registerVoiceHandlers } from './voice'
-import { registerAgentHandlers } from './agents'
 import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
 import {
@@ -126,12 +119,6 @@ function buildMenu(): void {
         ...localServerMenu(),
         { type: 'separator' },
         {
-          label: 'Save Project',
-          accelerator: 'CmdOrCtrl+S',
-          click: () => sendToFocused('menu:save-project')
-        },
-        { type: 'separator' },
-        {
           label: 'New Terminal Tab',
           accelerator: 'CmdOrCtrl+T',
           click: () => sendToFocused('menu:new-terminal')
@@ -167,10 +154,8 @@ function buildMenu(): void {
 app.whenReady().then(async () => {
   // Must complete before anything spawns child processes (docker, git, ptys).
   await fixPath()
-  registerPtyHandlers()
-  registerWindowHandlers(openProjectFile)
+  registerWindowHandlers()
   registerAppIpc()
-  registerProjectHandlers()
   registerImportHandlers()
   registerGithubHandlers()
   registerLinearHandlers()
@@ -178,8 +163,6 @@ app.whenReady().then(async () => {
   registerDockerHandlers()
   registerEnvironmentHandlers()
   registerStackHandlers()
-  registerClaudeSessionHandlers()
-  registerServerHandlers()
   registerAppSettingsHandlers()
   // Before the links: their first connections are linked to the aggregator as they are made.
   registerAttentionHandlers()
@@ -187,10 +170,7 @@ app.whenReady().then(async () => {
   registerAppServerHandlers({ linked: attention.linked, unlinked: attention.unlinked, listChanged: attention.relabel })
   registerV2Relay()
   registerLocalServerHandlers()
-  registerMcpHandlers()
-  registerBotHandlers()
   registerVoiceHandlers()
-  registerAgentHandlers()
   registerLlmHandlers()
   buildMenu()
   onLocalServerChanged(buildMenu)
@@ -213,13 +193,7 @@ app.whenReady().then(async () => {
   })
 })
 
-function cleanUp(): void {
-  disposeAllPtys()
-  disconnectAllServers()
-}
-
 app.on('window-all-closed', () => {
-  cleanUp()
   // A quit in progress finishes on its own once closeAllForQuit returns.
   if (process.platform !== 'darwin' && !isQuitting()) app.quit()
 })
@@ -238,11 +212,8 @@ app.on('before-quit', (event) => {
   if (isQuitting()) return
   void closeAllForQuit().then(async (closed) => {
     if (!closed) return
-    // After every window has agreed to close, so that a cancelled quit leaves the other bots running.
-    await stopAllBots().catch((err) => console.error(err))
     // Keeps running by default; "Stop local server on quit" stops it here.
     await quitLocalServer(appSettings().stopLocalServerOnQuit)
-    cleanUp()
     quitConfirmed = true
     app.quit()
   })
