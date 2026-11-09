@@ -19,6 +19,8 @@ import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
 import { createMachine } from './integrations/machine'
+import { createIntegrations } from './integrations/integrations'
+import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import {
   addToken,
@@ -448,7 +450,15 @@ const server = startServer(
     store: projectFiles.files
   },
   // Absolute: agents read the config file from their own worktree's directory.
-  { mcpDir: resolve(serverDataDir, 'mcp'), local: local !== undefined, machine: createMachine(serverDataDir, { local: local !== undefined }) }
+  {
+    mcpDir: resolve(serverDataDir, 'mcp'),
+    local: local !== undefined,
+    machine: createMachine(serverDataDir, { local: local !== undefined }),
+    integrations: createIntegrations({
+      secretsFile: secretsPathFor(resolve(args.configPath)),
+      linearEndpoint: process.env.TREK_SERVER_LINEAR_URL || undefined
+    })
+  }
 )
 store.watch()
 server.httpServer.on('error', (err: NodeJS.ErrnoException) => {

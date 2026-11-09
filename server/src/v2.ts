@@ -1,6 +1,7 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
-// the v2 pty.* stream, and docker, env and stack on the server's machine (machineHandlers.ts).
+// the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
+// Linear with the server's key (integrationHandlers.ts).
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
@@ -12,6 +13,8 @@ import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
 import { machineHandlers, type EventSink, type Machine } from './integrations/machineHandlers.ts'
+import { integrationHandlers } from './integrations/integrationHandlers.ts'
+import type { Integrations } from './integrations/integrations.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
@@ -50,6 +53,8 @@ export interface V2Context {
   machine?: Machine
   /** This connection, as a receiver of the `docker.log` and `env.log` its own requests stream */
   events?: EventSink
+  /** Linear with the server's own key (phase 5b) */
+  integrations?: Integrations
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -269,7 +274,8 @@ const handlers: Record<string, Handler> = {
 
   ...worktreeHandlers,
   ...sessionHandlers,
-  ...machineHandlers
+  ...machineHandlers,
+  ...integrationHandlers
 }
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */

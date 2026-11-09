@@ -665,7 +665,8 @@ export interface LinearIssue {
   statusColor: string
 }
 
-export type LinearKeyResult = { ok: true; user: string } | { ok: false; error: string }
+/** `present`: a set-if-absent (the app's hand-over) found a key already stored, and kept it. */
+export type LinearKeyResult = { ok: true; user: string } | { ok: false; error: string; present?: true }
 
 /** Machine-wide ElevenLabs voice summary settings (not per project). */
 export interface VoiceConfig {

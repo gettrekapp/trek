@@ -24,6 +24,8 @@ import type {
   EnvUpResult,
   EnvironmentInfo,
   EnvironmentSettings,
+  LinearIssue,
+  LinearKeyResult,
   StackLogChunk,
   StackStatus,
   WorktreeChanges
@@ -173,7 +175,9 @@ export const CAPABILITY = {
   /** `env.*` run the per-worktree Colima environments on the server's machine, and `env.log` streams their output */
   env: 'env',
   /** `stack.*` run the worktrees' docker/stack/stack.sh dev stacks on the server's machine */
-  stacks: 'stacks'
+  stacks: 'stacks',
+  /** `linear.*` look up Linear issues with the server's own API key (set from any client, never read back) */
+  linear: 'linear'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -356,6 +360,18 @@ export interface MethodParamsV2 {
   /** The stack's log from `offset` of the file `fileId` names, or its last 64 KiB when that file is gone */
   'stack.log': WorktreeRef & { fileId: number; offset: number }
 
+  // Linear, with the server's API key (capability `linear`)
+  /** Whether the server has a Linear key */
+  'linear.status': Record<string, never>
+  /**
+   * Checks the key with Linear and stores it on the server (0600, never sent back). `ifAbsent`: only
+   * while the server has none (the app's hand-over); a stored key is kept and the result says `present`.
+   */
+  'linear.setKey': { apiKey: string; ifAbsent?: boolean }
+  'linear.clearKey': Record<string, never>
+  /** The issues with these ids (e.g. TOW-123) that exist and the key can see; none without a key */
+  'linear.issues': { ids: string[] }
+
   // Subscriptions
   'sub.subscribe': { topic: Topic }
   'sub.unsubscribe': { topic: Topic }
@@ -451,6 +467,10 @@ export interface MethodResultsV2 {
   'stack.down': number
   'stack.destroy': number
   'stack.log': StackLogChunk
+  'linear.status': { hasKey: boolean }
+  'linear.setKey': LinearKeyResult
+  'linear.clearKey': null
+  'linear.issues': LinearIssue[]
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }

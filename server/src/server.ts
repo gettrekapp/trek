@@ -27,6 +27,7 @@ import { McpAccessStore } from './mcp/access'
 import { startMcpListener, type McpListener } from './mcp/listener'
 import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
 import { createEventSink, type Machine } from './integrations/machineHandlers'
+import type { Integrations } from './integrations/integrations'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -58,6 +59,8 @@ export interface ServerOptions {
   local?: boolean
   /** Docker, the environments and the dev stacks on this machine, with their files in the data dir (machine.ts) */
   machine?: Machine
+  /** Linear with the server's own key, in its secrets file (integrations.ts) */
+  integrations?: Integrations
 }
 
 export interface ProjectsSetup {
@@ -273,6 +276,7 @@ export function startServer(
         terminal,
         events,
         machine: options.machine,
+        integrations: options.integrations,
         mcpAccess: access
           ? {
               revoke: (id) => {
