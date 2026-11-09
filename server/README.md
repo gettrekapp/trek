@@ -259,9 +259,11 @@ Then configure the app with `wss://dev.example.com`.
 
 ## Security notes
 
-- **The token grants shell access as the server user.** `pty.spawn` starts a
-  login shell. Treat the token like an SSH key; run the server as a dedicated
-  user if the box is shared.
+- **The token grants shell access as the server user.** Every agent and terminal
+  session runs in a login shell (`$SHELL -ilc '<command>'`) on a pty the client
+  types into, and the client picks the command (a session type's, an agent's
+  settings), so the token runs anything the server user can. Treat the token like an
+  SSH key; run the server as a dedicated user if the box is shared.
 - The path allowlist (repos + their parent dirs + `worktreeRoots`) protects
   against path typos and confused-deputy bugs, not against a stolen token.
 - Auth failures are logged with the peer address; bad tokens get a delayed

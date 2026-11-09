@@ -10,7 +10,8 @@ Protocol v1 (per-call `git.*`, `pty.spawn` and `claude.*` methods, which the des
 project file windows used) was retired in phase 4e, with those windows. A v1 `hello`
 is closed with `4002` and the reason `UPGRADE_CLIENT`, whatever its token: the version
 is checked before the token, so a stale one gets no bad-token delay, and no frame is
-sent before the close.
+sent before the close. An old v1 Trek desktop does not stop on `4002`: it keeps
+reconnecting with backoff, so it must be updated to talk to this server.
 
 - **Transport:** WebSocket, JSON **text frames only**.
 - **TLS:** the server itself binds loopback; a reverse proxy (Caddy) terminates
@@ -189,7 +190,7 @@ change, so it would almost always fail. Everything else is last-write-wins.
 
 A `project.updateSettings` that sets or removes `worktreeTags` or `customTags`
 also clears deleted tags from the branches, in the same change (one patch, one
-rev), as a file window does: every branch whose `tag` is not in the new
+rev): every branch whose `tag` is not in the new
 `worktreeTags` (the default tags when the key is removed) loses its `tag`, and
 every branch keeps only the `customTags` ids still in the new `customTags`
 (none when the key is removed), dropping an emptied list. A branch left with no
@@ -416,7 +417,7 @@ a new `ptyId`.
 **Statuses.** A spawned session is `idle`. A session whose process ended is `exited`.
 `session.markComplete {complete}` sets or clears `complete` (the user opted out of
 tracking). `session.seen` turns `attention` or `done` into `idle`. The rest follow
-the desktop's rules, applied to live output only; replay never changes a status.
+these rules, applied to live output only; replay never changes a status.
 
 - **Output.** While the session is not `complete`, each chunk of live output makes
   it `working`, unless it is `attention` or `exited`, and restarts a 2500 ms quiet
@@ -439,8 +440,8 @@ the desktop's rules, applied to live output only; replay never changes a status.
   (`ESC [ n n`), mode reports (`ESC [ ? m ; v $ y`), DECRQSS replies (`ESC P 0|1 $ r
   ... ST`), window reports (`ESC [ 4|6|8 ; n ; m t`), focus in and out (`ESC [ I`,
   `ESC [ O`), OSC color replies (`ESC ] n ; ... BEL|ST`), and mouse reports
-  (`ESC [ < ... M|m`, `ESC [ M` and three bytes). The desktop never counted mouse
-  reports as keys either, and pointer motion must not clear `attention`.
+  (`ESC [ < ... M|m`, `ESC [ M` and three bytes). Mouse reports are not keys:
+  pointer motion must not clear `attention`.
   `session.sendPrompt` always counts as input.
 - **`since`.** The server records when a session entered `attention` or `done`
   (epoch ms, kept in memory only). A session that leaves those states loses it.
@@ -477,18 +478,17 @@ and tabs included) becomes one space and the result is trimmed. It must then be
 1 to 1000 characters with no other control character, else `BAD_REQUEST`, so a
 client can display it as-is.
 
-Known gaps, the same as on the desktop unless noted:
+Known gaps:
 
 - Any repaint clears `done`. A repaint counts as output, so `done` becomes `working`
   and then `idle`. A resize from any client makes the agent repaint, so it does this
   too.
 - Shift, Ctrl or Alt+F3 sends `ESC [ 1 ; <mod> R`, which is byte for byte a cursor
-  report, so that key does not count as input. (The desktop sees it as a key; the
-  server cannot.)
+  report, so that key does not count as input. (The server sees only the bytes, so
+  it cannot tell the key from the report.)
 - A slow client that keeps a pty paused for more than 2.5 s (see Terminal stream)
   can make `done` flicker: the agent's output stops while the pty is paused, the
   quiet timer fires, and the output that resumes turns the session `working` again.
-  (Server only.)
 - Memory per pty is bounded but not small: the headless screen holds about
   2000 + rows lines of cols cells, and the ring buffer up to 2 Mi UTF-16 code units.
   `maxSessions` bounds the total, and the size cap (500 columns, 200 rows) bounds one
@@ -588,8 +588,7 @@ meanwhile the pty counts as gone. Every pty is a session's: there is no bare
 ## MCP (trek-dev) on the server
 
 Every agent session the server runs gets the `trek-dev` MCP tools, served by the
-server itself. The desktop has its own MCP server for its own sessions; this is
-the server's, and it is separate from the WebSocket port.
+server itself, on a port separate from the WebSocket port.
 
 **Scope.** A session's tools see only its own project. A token belongs to one
 project, and every tool resolves worktrees and sessions inside that project;
@@ -711,10 +710,10 @@ unknown `id` is `NOT_FOUND`), else the one with the same name, else creates one,
 and needs a `name` to create. A name already used by another type is `BAD_REQUEST`.
 `start_session` opens the pty with 120 columns and 32 rows.
 
-**Left out.** These tools exist on the desktop and are not on the server; they are
-not listed, and calling one is `-32602`.
+**Left out.** The server does not serve these `trek-dev` tools: they are not
+listed, and calling one is `-32602`.
 
-- Desktop UI only: `get_selected_worktree` and `focus_session` (selection lives in
+- Client UI only: `get_selected_worktree` and `focus_session` (selection lives in
   clients), and `promote_to_primary` (it needs a confirmation dialog).
 - Phase 5: `speak_summary` (voice) and `get_stack`, `start_stack`, `stop_stack`,
   `read_stack_log` (Docker).
