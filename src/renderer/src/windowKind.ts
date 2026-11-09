@@ -12,9 +12,9 @@ type ServerWindowTarget = ReturnType<typeof useAppStore.getState>['serverWindow'
 let v2: V2Window | null = null
 
 /**
- * A server target gets the v2 backend and the store-setter overrides; leaving
- * it (no target, or another project) takes both away again, with the
- * projected slice and the terminals.
+ * A server target gets the v2 backend and the store's project setters
+ * (setProjectSetters); leaving it (no target, or another project) takes both
+ * away again, with the projected slice and the terminals.
  */
 function backendFor(target: ServerWindowTarget): WindowBackend {
   if (v2 && target && v2.entryId === target.serverEntryId && v2.projectId === target.projectId) return v2.backend

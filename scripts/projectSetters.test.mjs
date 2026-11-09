@@ -1,7 +1,7 @@
 // scripts/projectSetters.test.mjs — the store's project setters call the server window's, or nothing.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { setProjectSetters, viaServer } from '../src/renderer/src/projectSetters.ts'
+import { setProjectSetters, viaServer, viaServerAll } from '../src/renderer/src/projectSetters.ts'
 
 test('with no project setters, a store setter does nothing', () => {
   setProjectSetters(null)
@@ -34,5 +34,19 @@ test('each store setter reaches only its own name', () => {
   assert.deepEqual(calls, [
     ['note', 'r1', 'main', 'hi'],
     ['audio', false]
+  ])
+})
+
+test('viaServerAll makes one store setter per name, each reaching its own name', () => {
+  const calls = []
+  const setters = viaServerAll(['setLogoImage', 'setBannerImage'])
+  assert.deepEqual(Object.keys(setters), ['setLogoImage', 'setBannerImage'])
+  setProjectSetters({ setLogoImage: (v) => calls.push(['logo', v]), setBannerImage: (v) => calls.push(['banner', v]) })
+  setters.setLogoImage('l.png')
+  setters.setBannerImage('b.png')
+  setProjectSetters(null)
+  assert.deepEqual(calls, [
+    ['logo', 'l.png'],
+    ['banner', 'b.png']
   ])
 })

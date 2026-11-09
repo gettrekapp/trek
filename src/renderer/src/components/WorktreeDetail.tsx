@@ -207,7 +207,7 @@ export function WorktreeDetail({
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
 
   const envEnabled = !!repo.environments?.enabled
-  const showEnv = features.env && envEnabled  && !!info.branch
+  const showEnv = features.env && envEnabled && !!info.branch
   const env = showEnv ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
   const envOpBusy = env ? envBusy[env.profile] : undefined
   const envChipLabel = envOpBusy
@@ -216,7 +216,7 @@ export function WorktreeDetail({
       ? `Env${env.address ? ` · ${env.address}` : ''}`
       : 'Env stopped'
 
-  const showStack = features.stacks  && !!stack?.available
+  const showStack = features.stacks && !!stack?.available
   const showDocker = features.docker && info.isMain
   const stackStateNow = stack ? stackState(stack) : 'stopped'
   const stackAppUrl = stack ? stackUrls(stack)[0]?.url : undefined
@@ -561,19 +561,15 @@ export function WorktreeDetail({
             <div className="detail-menu-divider" />
             {/* Promote and Move to another server come back with phase 5's server commands. */}
             {!info.isMain && (
-              <>
-                {!info.isMain && (
-                  <div
-                    className={`detail-menu-item danger ${busy || offline ? 'disabled' : ''}`}
-                    onClick={() => {
-                      if (!offline) void runAction(() => getBackend().worktrees.remove(info, instance))
-                    }}
-                  >
-                    <div className="detail-menu-name">Delete worktree…</div>
-                    <div className="detail-menu-desc">git worktree remove — deletes the folder</div>
-                  </div>
-                )}
-              </>
+              <div
+                className={`detail-menu-item danger ${busy || offline ? 'disabled' : ''}`}
+                onClick={() => {
+                  if (!offline) void runAction(() => getBackend().worktrees.remove(info, instance))
+                }}
+              >
+                <div className="detail-menu-name">Delete worktree…</div>
+                <div className="detail-menu-desc">git worktree remove — deletes the folder</div>
+              </div>
             )}
           </div>
         </>

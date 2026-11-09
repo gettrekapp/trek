@@ -147,7 +147,7 @@ async function importPiece(piece: ImportedProject, fileServers: ServerConfig[], 
     if (isLocal) report.carried += await carryHistories(moved, report.warnings)
     else for (const m of moved) report.warnings.push(remoteMoveWarning(m, entry.name))
   } catch (err) {
-    report.warnings.push(`Could not read the imported project back from ${entry.name} (${errorText(err)}): sessions whose path changed may start fresh.`)
+    report.warnings.push(`Could not read the imported project back from ${entry.name} (${errorText(err)}): sessions whose path changed may start fresh, and worktrees it stores at another path may fall back to the default order.`)
   }
   if (stored) await keepWorktreeOrder(link, projectId, sent, stored, entry.name, report.warnings)
   return { target: piece.target, serverEntryId: entry.id, projectId, name: piece.project.name, serverName: entry.name }

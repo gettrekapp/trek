@@ -386,7 +386,20 @@ test("the main checkout's changes, diff and pull: its own repository's path is n
   s.projects.apply(s.projectId, (d) => {
     d.repositories[0].worktrees.find((w) => w.isMain).path = join(s.dir, 'repos')
   })
-  assert.equal((await s.call('worktree.changes', ids)).error?.code, 'BAD_REQUEST')
+  const other = (await s.call('worktree.changes', ids)).error
+  assert.equal(other?.code, 'BAD_REQUEST')
+  assert.match(other?.message ?? '', /is not the checkout of/)
+  // Nor one that names a second registered repository's checkout.
+  const b = join(s.dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', '-b', 'main', b], { env: gitEnv })
+  git(b, 'commit', '--allow-empty', '-q', '-m', 'init')
+  s.store.addRepo(b, {})
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.isMain).path = b
+  })
+  const registered = (await s.call('worktree.changes', ids)).error
+  assert.equal(registered?.code, 'BAD_REQUEST')
+  assert.match(registered?.message ?? '', /is not the checkout of/)
 })
 
 test('worktree.pull, push and diff refuse a missing worktree', async (t) => {

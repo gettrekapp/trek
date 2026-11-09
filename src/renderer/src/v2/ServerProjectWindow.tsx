@@ -17,8 +17,8 @@ import type { AppServerLink } from '../../../shared/types'
  * A v2 server project: the `project:<id>` topic projected into the store and
  * shown by the reused Sidebar, WorktreeDetail and Global panel (V2Workspace),
  * a banner while the connection is down, and the "Server removed" and
- * "Project not found" states. The backend and the store-setter overrides
- * come and go with `serverWindow` (windowKind.ts).
+ * "Project not found" states. The backend and the store's project setters
+ * (setProjectSetters) come and go with `serverWindow` (windowKind.ts).
  */
 
 interface Props {
@@ -175,7 +175,7 @@ function ServerProjectTree({
       offStatus()
       offTopic()
       offServer?.()
-      // The slice and the overrides go with serverWindow (windowKind.ts); the streams go now.
+      // The slice and the project setters (setProjectSetters) go with serverWindow (windowKind.ts); the streams go now.
       disposeV2Terminals()
     }
   }, [registered, entry.id, projectId])

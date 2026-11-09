@@ -19,3 +19,8 @@ export function viaServer<K extends ProjectSetter>(name: K): AppState[K] {
     setter?.(...args)
   }) as AppState[K]
 }
+
+/** The store setters for `names`: each calls the project setter of its own name (viaServer). */
+export function viaServerAll<K extends ProjectSetter>(names: readonly K[]): Pick<AppState, K> {
+  return Object.fromEntries(names.map((name) => [name, viaServer(name)])) as Pick<AppState, K>
+}

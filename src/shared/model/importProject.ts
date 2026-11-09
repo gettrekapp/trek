@@ -61,7 +61,7 @@ export interface ImportResult {
  * Symlinked paths are not resolved here; the server reconciles them against
  * git on import.
  */
-function normalizePath(p: string): string {
+export function normalizePath(p: string): string {
   const collapsed = p.replace(/\/{2,}/g, '/')
   return collapsed.length > 1 ? collapsed.replace(/\/+$/, '') : collapsed
 }

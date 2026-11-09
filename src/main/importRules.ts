@@ -1,7 +1,7 @@
 // Importing a .trekproj (phase 4d): where each piece of a split file goes, what
 // migrated.json records, and how recents and open-windows.json are rewritten. Pure.
 import { isLocalEntryId, originOf } from '../shared/appServerRules.ts'
-import { LOCAL_TARGET } from '../shared/model/importProject.ts'
+import { LOCAL_TARGET, normalizePath } from '../shared/model/importProject.ts'
 import { worktreeOrderKey } from '../shared/model/keys.ts'
 import type { Project, Session } from '../shared/model/types.ts'
 import { sessionMigrates } from '../shared/providers/selection.ts'
@@ -420,8 +420,10 @@ export function rekeyStoredOrder(sent: Project, stored: Project): string[] | nul
   const moved = new Map<string, string>()
   for (const repo of sent.repositories) {
     for (const w of repo.worktrees) {
+      // The order's keys name the normalized path (rekeyOrder), whatever slashes the file had.
+      const from = normalizePath(w.path)
       const to = storedPaths.get(w.id)
-      if (to !== undefined && to !== w.path) moved.set(worktreeOrderKey(repo.id, w.path), worktreeOrderKey(repo.id, to))
+      if (to !== undefined && to !== from) moved.set(worktreeOrderKey(repo.id, from), worktreeOrderKey(repo.id, to))
     }
   }
   if (moved.size === 0) return null

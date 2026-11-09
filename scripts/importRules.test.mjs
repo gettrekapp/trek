@@ -304,6 +304,16 @@ test('rekeyStoredOrder: null when nothing moved, or there is no order to keep', 
   assert.equal(rekeyStoredOrder(sent, { ...stored, settings: { worktreeOrder: ['r9 /elsewhere'] } }), null)
 })
 
+test("rekeyStoredOrder: a sent path with a trailing or doubled slash matches the order's normalized key", () => {
+  // The order's keys are normalized (rekeyOrder); the file's worktree paths may not be.
+  const sent = project({ repo: '/var/t//app/', x: '/var/t/app-x/' })
+  const stored = { ...project({ repo: '/private/var/t/app', x: '/private/var/t/app-x' }), settings: { worktreeOrder: ['r1 /var/t/app-x', 'r1 /var/t/app'] } }
+  assert.deepEqual(rekeyStoredOrder(sent, stored), ['r1 /private/var/t/app-x', 'r1 /private/var/t/app'])
+  // Stored at the normalized sent path: nothing moved.
+  const same = { ...project({ repo: '/var/t/app', x: '/var/t/app-x' }), settings: { worktreeOrder: ['r1 /var/t/app-x', 'r1 /var/t/app'] } }
+  assert.equal(rekeyStoredOrder(sent, same), null)
+})
+
 test('rekeyStoredOrder: a key two worktrees would now share is kept once, in its first place', () => {
   const sent = project({ repo: '/var/t/app', x: '/var/t/app-x' })
   const stored = { ...project({ repo: '/private/var/t/app', x: '/private/var/t/app-x' }), settings: { worktreeOrder: ['r1 /var/t/app-x', 'r1 /private/var/t/app-x', 'r1 /var/t/app'] } }

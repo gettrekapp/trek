@@ -6,7 +6,7 @@ import { deriveProfileName } from '../../shared/environments'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
-import { viaServer } from './projectSetters.ts'
+import { viaServerAll } from './projectSetters.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   EnvCheckResult,
@@ -310,44 +310,48 @@ export interface AppState {
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
 
 /** The setters that edit the project's sessions, branch data and worktree order on its server. */
-export type SessionSetter =
-  | 'renameTerminal'
-  | 'toggleTerminalComplete'
-  | 'clearTerminalAttention'
-  | 'setTerminalQueue'
-  | 'enqueueTerminalText'
-  | 'removeQueuedText'
-  | 'setBranchTag'
-  | 'setBranchCustomTag'
-  | 'setBranchNote'
-  | 'setBranchTicket'
-  | 'setBranchPullRequest'
-  | 'setWorktreeOrder'
-  | 'clearDecision'
+const SESSION_SETTERS = [
+  'renameTerminal',
+  'toggleTerminalComplete',
+  'clearTerminalAttention',
+  'setTerminalQueue',
+  'enqueueTerminalText',
+  'removeQueuedText',
+  'setBranchTag',
+  'setBranchCustomTag',
+  'setBranchNote',
+  'setBranchTicket',
+  'setBranchPullRequest',
+  'setWorktreeOrder',
+  'clearDecision'
+] as const
+export type SessionSetter = (typeof SESSION_SETTERS)[number]
 
 /** The setters that edit the project's settings on its server (Settings, the title bar, TicketModal, the Env and Docker panels). */
-export type SettingsSetter =
-  | 'setClaudePermissionMode'
-  | 'setAudioAlerts'
-  | 'setTitleBarColor'
-  | 'setLogoImage'
-  | 'setBannerImage'
-  | 'setWorktreeTags'
-  | 'setCustomTags'
-  | 'setTerminalButtons'
-  | 'setGlobalTerminalButtons'
-  | 'setSessionSystemPrompt'
-  | 'setGlobalSystemPrompt'
-  | 'setSessionTypes'
-  | 'setProjectLlmDefault'
-  | 'setGlobalLlm'
-  | 'setLinearWorkspace'
-  | 'setAzureDevOpsBaseUrl'
-  | 'setProjectName'
-  | 'setLinkedDirs'
-  | 'setEnvironmentSettings'
-  | 'toggleDockerFavorite'
-  | 'setBranchEnvVars'
+const SETTINGS_SETTERS = [
+  'setClaudePermissionMode',
+  'setAudioAlerts',
+  'setTitleBarColor',
+  'setLogoImage',
+  'setBannerImage',
+  'setWorktreeTags',
+  'setCustomTags',
+  'setTerminalButtons',
+  'setGlobalTerminalButtons',
+  'setSessionSystemPrompt',
+  'setGlobalSystemPrompt',
+  'setSessionTypes',
+  'setProjectLlmDefault',
+  'setGlobalLlm',
+  'setLinearWorkspace',
+  'setAzureDevOpsBaseUrl',
+  'setProjectName',
+  'setLinkedDirs',
+  'setEnvironmentSettings',
+  'toggleDockerFavorite',
+  'setBranchEnvVars'
+] as const
+export type SettingsSetter = (typeof SETTINGS_SETTERS)[number]
 
 export type ProjectSetter = SessionSetter | SettingsSetter
 export type ProjectSetters = Pick<AppState, ProjectSetter>
@@ -423,26 +427,6 @@ export const useAppStore = create<AppState>((set) => ({
       activeTerminal: { ...state.activeTerminal, [worktreeId]: terminalId }
     })),
 
-  renameTerminal: viaServer('renameTerminal'),
-  clearTerminalAttention: viaServer('clearTerminalAttention'),
-  clearDecision: viaServer('clearDecision'),
-  toggleTerminalComplete: viaServer('toggleTerminalComplete'),
-  toggleDockerFavorite: viaServer('toggleDockerFavorite'),
-  setAzureDevOpsBaseUrl: viaServer('setAzureDevOpsBaseUrl'),
-  setLinearWorkspace: viaServer('setLinearWorkspace'),
-  setAudioAlerts: viaServer('setAudioAlerts'),
-  setProjectName: viaServer('setProjectName'),
-  setTitleBarColor: viaServer('setTitleBarColor'),
-  setLogoImage: viaServer('setLogoImage'),
-  setBannerImage: viaServer('setBannerImage'),
-  setTerminalButtons: viaServer('setTerminalButtons'),
-  setGlobalTerminalButtons: viaServer('setGlobalTerminalButtons'),
-  setGlobalSystemPrompt: viaServer('setGlobalSystemPrompt'),
-  setSessionSystemPrompt: viaServer('setSessionSystemPrompt'),
-  setSessionTypes: viaServer('setSessionTypes'),
-  setWorktreeOrder: viaServer('setWorktreeOrder'),
-  setClaudePermissionMode: viaServer('setClaudePermissionMode'),
-
   setEnvironments: (infos) =>
     set((state) => {
       const next: Record<string, EnvironmentInfo> = {}
@@ -486,9 +470,6 @@ export const useAppStore = create<AppState>((set) => ({
 
   setLlmSettings: (llmSettings) => set({ llmSettings }),
 
-  setProjectLlmDefault: viaServer('setProjectLlmDefault'),
-  setGlobalLlm: viaServer('setGlobalLlm'),
-
   setVoicePlayback: (playing, queued) => set({ voicePlaying: playing, voiceQueued: queued }),
 
   setLinearIssues: (issues) =>
@@ -498,19 +479,8 @@ export const useAppStore = create<AppState>((set) => ({
       return { linearIssues }
     }),
 
-  setTerminalQueue: viaServer('setTerminalQueue'),
-  enqueueTerminalText: viaServer('enqueueTerminalText'),
-  removeQueuedText: viaServer('removeQueuedText'),
-  setBranchTicket: viaServer('setBranchTicket'),
-  setBranchPullRequest: viaServer('setBranchPullRequest'),
-  setLinkedDirs: viaServer('setLinkedDirs'),
-  setEnvironmentSettings: viaServer('setEnvironmentSettings'),
-  setBranchNote: viaServer('setBranchNote'),
-  setBranchEnvVars: viaServer('setBranchEnvVars'),
-  setBranchTag: viaServer('setBranchTag'),
-  setWorktreeTags: viaServer('setWorktreeTags'),
-  setBranchCustomTag: viaServer('setBranchCustomTag'),
-  setCustomTags: viaServer('setCustomTags')
+  // The project setters call the server window's (projectSetters.ts), each by its own name.
+  ...viaServerAll([...SESSION_SETTERS, ...SETTINGS_SETTERS])
 }))
 
 /** The live environment for a branch's worktree, if one is known. */

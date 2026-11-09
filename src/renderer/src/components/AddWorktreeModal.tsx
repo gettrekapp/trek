@@ -30,7 +30,6 @@ function parsePullRequestUrl(input: string): ParsedPullRequest | null {
 }
 
 export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element {
-  // A server project lists every worktree already: there are no "existing" ones to add.
   const project = useAppStore((s) => s.project)!
 
   const [branches, setBranches] = useState<string[]>([])
@@ -73,7 +72,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
    * already lists the worktree (`create` waited for it), so it is selected
    * and started by path.
    */
-  const addInstance = async (info: { path: string; branch?: string; name?: string }) => {
+  const addInstance = async (info: { path: string }) => {
     useAppStore.getState().selectWorktree({ path: info.path })
     await getBackend().sessions.start({ path: info.path })
     onClose()
@@ -90,7 +89,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
         branch,
         createBranch: !baseExisting
       })
-      await addInstance({ path, branch })
+      await addInstance({ path })
     } catch (err) {
       setError(errorText(err))
       setCreating(false)
@@ -121,7 +120,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
         fromPr: pr.number
       })
       linkPr()
-      await addInstance({ path, branch })
+      await addInstance({ path })
     } catch (err) {
       setError(errorText(err))
       setAddingPr(false)
@@ -134,7 +133,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
         <h2>Add Worktree — {repo.name}</h2>
         {error && <div className="error">{error}</div>}
         {loading ? (
-          <p className="muted">Loading worktrees…</p>
+          <p className="muted">Loading branches…</p>
         ) : (
           <>
             <h3>Create new worktree</h3>
