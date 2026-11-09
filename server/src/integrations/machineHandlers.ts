@@ -16,6 +16,7 @@ import type { StackService } from '../../../src/host/stackService.ts'
 import { deriveProfileName } from '../../../src/shared/environments.ts'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
+import { SINK_HIGH_WATER, SINK_LOW_WATER } from '../sessions/terminalHost.ts'
 import { findRegistered, repoIn } from '../projects/model.ts'
 import { requireBoolean } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
@@ -44,14 +45,44 @@ export interface EventSink {
   send<E extends keyof EventPayloadsV2>(event: E, payload: EventPayloadsV2[E]): void
 }
 
+const DROPPED = '[output dropped: the connection fell behind]\n'
+
+/**
+ * A connection's event sink with the terminal sink's backpressure: past SINK_HIGH_WATER unsent
+ * bytes a log chunk is dropped (a step or a `done` never is), and the next chunk sent for that run
+ * (its event and, for env.log, its profile) follows one DROPPED chunk. Sending resumes below
+ * SINK_LOW_WATER.
+ */
+export function createEventSink(send: (event: string, payload: unknown) => void, bufferedAmount: () => number): EventSink {
+  const dropped = new Set<string>()
+  let congested = false
+  return {
+    send(event, payload) {
+      const p = payload as { done?: boolean; step?: unknown; profile?: string }
+      const key = `${event}\0${p.profile ?? ''}`
+      const buffered = bufferedAmount()
+      congested = congested ? buffered > SINK_LOW_WATER : buffered > SINK_HIGH_WATER
+      if (congested && p.done !== true && p.step === undefined) {
+        dropped.add(key)
+        return
+      }
+      if (p.step === undefined && dropped.delete(key)) send(event, p.profile !== undefined ? { profile: p.profile, data: DROPPED } : { data: DROPPED })
+      send(event, payload)
+    }
+  }
+}
+
 type Handler = (params: any, ctx: V2Context) => unknown
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
-/** The program a failed execFile or spawn ran, when it was not found on PATH. */
+/**
+ * The program a failed execFile or spawn ran, when it was not found on PATH. Only a spawn's ENOENT:
+ * a file's (a log removed between its stat and its open) is an ordinary failure.
+ */
 function missingTool(err: unknown): string | null {
   const e = err as { code?: unknown; path?: unknown; syscall?: unknown } | null
-  if (e?.code !== 'ENOENT') return null
+  if (e?.code !== 'ENOENT' || typeof e.syscall !== 'string' || !e.syscall.startsWith('spawn')) return null
   if (typeof e.path === 'string' && e.path !== '') return e.path
   return typeof e.syscall === 'string' && e.syscall.startsWith('spawn ') ? e.syscall.slice('spawn '.length) : 'the tool'
 }
@@ -129,9 +160,19 @@ export const machineHandlers: Record<string, Handler> = {
     return machine(ctx).env.stop(profile, (event) => ctx.events?.send('env.log', event))
   },
 
+  // The registry's worktree path (an import may have brought it) is checked like any other before
+  // docker compose runs in it; outside the allowlist, or gone, only the VM is deleted.
   'env.destroy': (p, ctx) => {
     const profile = requireProfile(p.profile)
-    return machine(ctx).env.destroy(profile, (event) => ctx.events?.send('env.log', event))
+    const allowed = (path: string): boolean => {
+      try {
+        ctx.store.guard.check(path)
+        return true
+      } catch {
+        return false
+      }
+    }
+    return machine(ctx).env.destroy(profile, (event) => ctx.events?.send('env.log', event), allowed)
   },
 
   'env.ps': (p, ctx) => {

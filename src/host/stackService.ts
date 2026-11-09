@@ -5,7 +5,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { access, mkdir, open, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import type { StackLogChunk, StackStatus } from '../shared/types'
 
@@ -85,9 +85,13 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<void> {
   while (alive(pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 250))
 }
 
+/** The worktree's real path, once its stack.sh is there and stays inside it when its symlinks are followed. */
 async function workspace(worktreePath: string): Promise<string> {
   const ws = await physicalPath(worktreePath)
   if (!(await exists(join(ws, STACK_SCRIPT)))) throw new Error(`No ${STACK_SCRIPT} in ${ws}`)
+  const script = await realpath(join(ws, STACK_SCRIPT))
+  const inside = relative(ws, script)
+  if (inside === '' || inside.startsWith('..') || isAbsolute(inside)) throw new Error(`${STACK_SCRIPT} in ${ws} leads outside the worktree (${script})`)
   return ws
 }
 
@@ -108,6 +112,8 @@ export function createStackService({ stateDir }: StackServiceOptions): StackServ
   const logFile = (slug: string): string => join(stateDir, `${slug}.log`)
   const pidFile = (slug: string): string => join(stateDir, `${slug}.pid`)
   const stopping = new Set<string>()
+  /** Stacks whose `up` is between its running check and its pid file: a second `up` must not pass the check too. */
+  const starting = new Set<string>()
 
   const upPid = async (slug: string): Promise<number | undefined> => {
     const pid = Number(await readFile(pidFile(slug), 'utf8').catch(() => ''))
@@ -201,11 +207,22 @@ export function createStackService({ stateDir }: StackServiceOptions): StackServ
       const ws = await workspace(worktreePath)
       const { slug } = await resolveStack(ws)
       if (stopping.has(slug)) throw new Error(`Stack '${slug}' is stopping`)
-      if (await upPid(slug)) throw new Error(`Stack '${slug}' is already running`)
-      const { pid, exit } = await runScript(ws, slug, starter ? ['up', '--starter'] : ['up'], { fresh: true, detached: true })
-      if (pid == null) throw new Error('Could not start stack.sh')
-      await writeFile(pidFile(slug), String(pid))
-      void exit.then(() => rm(pidFile(slug), { force: true }))
+      if (starting.has(slug)) throw new Error(`Stack '${slug}' is already starting`)
+      starting.add(slug)
+      try {
+        if (await upPid(slug)) throw new Error(`Stack '${slug}' is already running`)
+        const { pid, exit } = await runScript(ws, slug, starter ? ['up', '--starter'] : ['up'], { fresh: true, detached: true })
+        if (pid == null) throw new Error('Could not start stack.sh')
+        await writeFile(pidFile(slug), String(pid))
+        // Only this run's pid file: a later run may have written its own since.
+        void exit
+          .then(async () => {
+            if ((await readFile(pidFile(slug), 'utf8').catch(() => '')) === String(pid)) await rm(pidFile(slug), { force: true })
+          })
+          .catch(() => {})
+      } finally {
+        starting.delete(slug)
+      }
     },
 
     down: (worktreePath) => stopThenRun(worktreePath, 'down'),

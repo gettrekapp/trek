@@ -26,7 +26,7 @@ import type { TerminalSink } from './sessions/terminalHost'
 import { McpAccessStore } from './mcp/access'
 import { startMcpListener, type McpListener } from './mcp/listener'
 import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
-import type { Machine } from './integrations/machineHandlers'
+import { createEventSink, type Machine } from './integrations/machineHandlers'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -147,8 +147,11 @@ export function startServer(
       send: (event, payload) => sendFrame(ws, { type: 'event', event, payload }),
       bufferedAmount: () => ws.bufferedAmount
     }
-    /** This connection, for the docker.log and env.log of the requests it sends */
-    const events = { send: (event: string, payload: unknown) => sendFrame(ws, { type: 'event', event, payload }) }
+    /** This connection, for the docker.log and env.log of the requests it sends (dropping log chunks while it is congested) */
+    const events = createEventSink(
+      (event, payload) => sendFrame(ws, { type: 'event', event, payload }),
+      () => ws.bufferedAmount
+    )
     const subscriber: Subscriber = {
       send(topic, rev, ops) {
         sendFrame(ws, { type: 'event', event: 'state.patch', payload: { topic, rev, ops } })

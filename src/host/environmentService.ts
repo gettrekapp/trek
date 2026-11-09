@@ -2,9 +2,9 @@
 // registry that maps each VM back to its repository, branch and worktree, and the operations on
 // it. Electron-free: the registry's file is the caller's (the server's data dir), and the server
 // checks every argument before it calls these.
-import { access, readFile, readdir, rename, writeFile } from 'node:fs/promises'
+import { access, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join, relative } from 'node:path'
 import {
   checkTools,
   composeDownVolumes,
@@ -62,7 +62,8 @@ export interface EnvironmentService {
   list(repoKey: string): Promise<EnvironmentInfo[]>
   up(request: EnvUpRequest, onLog: EnvLog): Promise<EnvUpResult>
   stop(profile: string, onLog: EnvLog): Promise<number>
-  destroy(profile: string, onLog: EnvLog): Promise<number>
+  /** `composeAllowed` says whether docker compose may run in the registry's worktree path (the server's allowlist); if not, only the VM is deleted */
+  destroy(profile: string, onLog: EnvLog, composeAllowed: (worktreePath: string) => boolean): Promise<number>
   ps(profile: string, worktreePath: string, composeFile: string | undefined): Promise<EnvService[]>
   composeFiles(worktreePath: string): Promise<string[]>
   logs(profile: string, worktreePath: string, composeFile: string | undefined, service: string, tail: number): Promise<string>
@@ -93,30 +94,41 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
   const { registryFile } = options
   const home = options.home ?? homedir()
 
-  const readRegistry = async (): Promise<Registry> => {
+  /**
+   * No file is an empty registry. Any other failure to read or parse it throws when `strict` (a
+   * change, which must not write an empty registry over the entries it could not read); the reads
+   * that change nothing take it as empty, as before.
+   */
+  const readRegistry = async (strict = false): Promise<Registry> => {
+    let parsed: unknown
     try {
-      const parsed = JSON.parse(await readFile(registryFile, 'utf8'))
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Registry) : {}
-    } catch {
-      return {}
+      parsed = JSON.parse(await readFile(registryFile, 'utf8'))
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || !strict) return {}
+      throw new Error(`The environments registry ${registryFile} cannot be read (${(err as Error).message}); it was left as it is`)
     }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Registry
+    if (!strict) return {}
+    throw new Error(`The environments registry ${registryFile} cannot be read (it is not a JSON object); it was left as it is`)
   }
   // Write-then-rename: a crash mid-write must not leave a torn file, which would read as no VMs.
   const writeRegistry = async (registry: Registry): Promise<void> => {
     const tmp = `${registryFile}.${process.pid}.tmp`
-    // 0600: a branch's variables may hold secrets.
+    // 0600: a branch's variables may hold secrets. writeFile keeps the mode of a temp file a crash
+    // left behind, so that one goes first.
+    await rm(tmp, { force: true })
     await writeFile(tmp, JSON.stringify(registry, null, 2), { encoding: 'utf8', mode: 0o600 })
     await rename(tmp, registryFile)
   }
   /**
    * Every change goes through here, one at a time: read, change, write. Operations on two
    * profiles run at once (several clients), and each must not write back a registry read
-   * before the other's change.
+   * before the other's change. The lock is in-process: one server per data dir.
    */
   let registryLock: Promise<unknown> = Promise.resolve()
   const updateRegistry = <T>(change: (registry: Registry) => T): Promise<T> => {
     const next = registryLock.then(async () => {
-      const registry = await readRegistry()
+      const registry = await readRegistry(true)
       const result = change(registry)
       await writeRegistry(registry)
       return result
@@ -207,21 +219,26 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
           const composePath = join(worktreePath, file)
           if (!(await exists(composePath))) return fail(`No compose file at ${composePath}`)
         }
-        if (!worktreePath.startsWith(home)) {
+        const inHome = relative(home, worktreePath)
+        if (inHome.startsWith('..') || isAbsolute(inHome)) {
           return fail(`Worktree is outside the home directory (${worktreePath}) — Colima only mounts $HOME by default`)
         }
 
         // Registered before starting so a crash mid-boot still leaves a trail.
-        await updateRegistry((registry) => {
-          registry[profile] = {
-            repoPath: repoKey,
-            branch,
-            worktreePath,
-            composeFile,
-            envVars: envVars && Object.keys(envVars).length > 0 ? envVars : undefined,
-            createdAt: entryOf(registry, profile)?.createdAt ?? new Date().toISOString()
-          }
-        })
+        try {
+          await updateRegistry((registry) => {
+            registry[profile] = {
+              repoPath: repoKey,
+              branch,
+              worktreePath,
+              composeFile,
+              envVars: envVars && Object.keys(envVars).length > 0 ? envVars : undefined,
+              createdAt: entryOf(registry, profile)?.createdAt ?? new Date().toISOString()
+            }
+          })
+        } catch (err) {
+          return fail((err as Error).message)
+        }
 
         const networkAddress = settings?.networkAddress ?? ENV_DEFAULTS.networkAddress
         log.step('vm')
@@ -270,13 +287,15 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
       })
     },
 
-    destroy(profile, onLog) {
+    destroy(profile, onLog, composeAllowed) {
       const log = logSender(profile, onLog)
       return enqueue(profile, async () => {
         // Belt-and-braces for bind-mount cleanup; the volumes die with the VM anyway, so a
         // failure (VM stopped, compose file gone) is fine.
         const entry = entryOf(await readRegistry(), profile)
-        if (entry && (await exists(entry.worktreePath))) {
+        if (entry && !composeAllowed(entry.worktreePath)) {
+          log.onData(`skipping docker compose down: ${entry.worktreePath} is outside the server's allowed paths\n`)
+        } else if (entry && (await exists(entry.worktreePath))) {
           const composeFile = entry.composeFile || ENV_DEFAULTS.composeFile
           await Promise.race([
             composeDownVolumes(profile, entry.worktreePath, composeFile, log.onData, entry.envVars),
@@ -284,9 +303,14 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
           ]).catch(() => -1)
         }
         const code = await deleteVm(profile, log.onData)
-        await updateRegistry((registry) => {
-          delete registry[profile]
-        })
+        try {
+          await updateRegistry((registry) => {
+            delete registry[profile]
+          })
+        } catch (err) {
+          log.finish(`error: ${(err as Error).message}\n`)
+          return -1
+        }
         log.finish(`[environment destroyed]\n`)
         return code
       })

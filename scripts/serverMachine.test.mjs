@@ -7,7 +7,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -16,6 +16,7 @@ import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
 import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
@@ -81,12 +82,18 @@ async function setup(t, options = {}) {
   const events = []
   const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, sessions: { blockPath: () => () => {}, refreshAttention: () => {} }, machine, events: { send: (event, payload) => events.push([event, payload]) } }
   const call = (method, params) => dispatchV2(method, params, ctx)
+  /** Another connection to the same server: its own event sink, the same machine. */
+  const connection = () => {
+    const own = []
+    const other = { ...ctx, events: { send: (event, payload) => own.push([event, payload]) } }
+    return { events: own, call: (method, params) => dispatchV2(method, params, other) }
+  }
   const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
   const projectId = created.result.projectId
   await poller.refresh(a)
   const repo = () => projects.require(projectId).repositories[0]
   const worktreeAt = (path) => repo().worktrees.find((w) => w.path === path)
-  return { dir, a, feature: `${a}-feature-x`, data, store, projects, call, events, projectId, repoId: repo().id, repo, worktreeAt, ctx }
+  return { dir, a, feature: `${a}-feature-x`, data, store, projects, call, connection, events, projectId, repoId: repo().id, repo, worktreeAt, ctx }
 }
 
 const refused = (res, code, reason) => {
@@ -135,6 +142,9 @@ test('a machine without docker or colima: TOOL_ERROR with reason missing, and en
   // A compose run with no docker ends with -1 and says why in its output; nothing crashes.
   assert.equal((await s.call('docker.compose', { projectId: s.projectId, repoId: s.repoId, action: 'up' })).result, -1)
   assert.match(s.events.map(([, e]) => e.data).join(''), /error: spawn docker ENOENT/)
+  // Exactly one done event, though the child reports both error and close.
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(s.events.filter(([, e]) => e.done).length, 1)
 })
 
 test("env.up starts the branch's VM under the repository's envRepoKey, with the checked settings and variables", async (t) => {
@@ -187,6 +197,27 @@ test('env.up refuses settings, compose files and variables that would steer the 
   for (const envVars of [{ PATH: '/tmp' }, { LD_PRELOAD: 'x.so' }, { DYLD_INSERT_LIBRARIES: 'x' }, { DOCKER_HOST: 'tcp://x' }, { 'A B': '1' }, { '1X': '1' }, { X: 1 }, { X: 'a\0b' }, ['X=1']]) {
     refused(await up({ envVars }), 'BAD_REQUEST')
   }
+  // The names that steer docker compose or the server's own files, by family and in any case.
+  for (const name of ['HOME', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'COMPOSE_PROJECT_NAME', 'COMPOSE_ENV_FILES', 'BUILDKIT_X', 'XDG_CONFIG_HOME', 'path', 'Docker_Host', 'ld_preload']) {
+    const res = await up({ envVars: { API_URL: 'http://x', [name]: 'x' } })
+    refused(res, 'BAD_REQUEST')
+    assert.match(res.error.message, new RegExp(`envVars: ${name} cannot be set`))
+  }
+  // A symlink in the worktree that leads outside it is refused like a ".." path.
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
+  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  writeFileSync(join(outside, 'evil.yml'), 'services: {}\n')
+  symlinkSync(join(outside, 'evil.yml'), join(s.feature, 'evil.yml'))
+  symlinkSync(outside, join(s.feature, 'outdir'))
+  for (const composeFile of ['evil.yml', 'outdir/evil.yml', 'docker-compose.yml,evil.yml']) {
+    refused(await up({ settings: { enabled: true, composeFile } }), 'BAD_REQUEST')
+    refused(await s.call('env.ps', { projectId: s.projectId, worktreeId, composeFile }), 'BAD_REQUEST')
+    refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', composeFile }), 'BAD_REQUEST')
+  }
+  for (const composeFile of ['../outside.yml', '/etc/passwd', '-f']) {
+    refused(await s.call('env.ps', { projectId: s.projectId, worktreeId, composeFile }), 'BAD_REQUEST')
+    refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', composeFile }), 'BAD_REQUEST')
+  }
   refused(await s.call('env.up', { projectId: s.projectId, worktreeId: 'nope', settings: { enabled: true } }), 'NOT_FOUND')
   for (const profile of ['../x', 'twb-', '-rf', 'other-vm', 'twb-A', 'twb-a b']) {
     refused(await s.call('env.stop', { profile }), 'BAD_REQUEST')
@@ -196,6 +227,9 @@ test('env.up refuses settings, compose files and variables that would steer the 
   refused(await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web', tail: 1e9 }), 'BAD_REQUEST')
   assert.deepEqual(calls(), [])
   assert.equal(existsSync(join(s.data, 'environments.json')), false)
+  // An ordinary name still passes, and a symlink that stays inside the worktree is fine.
+  symlinkSync(join(s.feature, 'docker-compose.yml'), join(s.feature, 'linked.yml'))
+  assert.equal((await up({ settings: { enabled: true, networkAddress: false, composeFile: 'linked.yml' }, envVars: { API_URL: 'http://x' } })).result.code, 0)
 })
 
 test('env.destroy deletes the VM and its registry entry; two environments started at once both stay registered', async (t) => {
@@ -250,8 +284,139 @@ test('worktree.dirty reads git afresh; a worktree outside the allowlist is PATH_
     d.repositories[0].worktrees.push({ id: 'out', name: 'out', path: outside, branch: 'feature-x', isMain: false, loaded: false, sessions: [] })
   })
   const out = { projectId: s.projectId, worktreeId: 'out' }
-  for (const [method, extra] of [['worktree.dirty', {}], ['stack.status', {}], ['stack.up', { starter: false }], ['stack.destroy', {}], ['stack.log', { fileId: 0, offset: 0 }], ['env.ps', {}], ['env.composeFiles', {}], ['env.logs', { service: 'web' }], ['env.up', { settings: { enabled: true } }]]) {
+  for (const [method, extra] of [['worktree.dirty', {}], ['stack.status', {}], ['stack.up', { starter: false }], ['stack.down', {}], ['stack.destroy', {}], ['stack.log', { fileId: 0, offset: 0 }], ['env.ps', {}], ['env.composeFiles', {}], ['env.logs', { service: 'web' }], ['env.up', { settings: { enabled: true } }]]) {
     refused(await s.call(method, { ...out, ...extra }), 'PATH_DENIED')
   }
   assert.deepEqual(calls(), [])
+})
+
+test('a filesystem ENOENT is a TOOL_ERROR, not a missing tool; only a failed spawn is', async (t) => {
+  const s = await setup(t)
+  const fsError = Object.assign(new Error("ENOENT: no such file or directory, open '/data/stacks/a.log'"), { code: 'ENOENT', syscall: 'open', path: '/data/stacks/a.log' })
+  s.ctx.machine = { ...s.ctx.machine, stacks: { ...s.ctx.machine.stacks, log: () => Promise.reject(fsError) } }
+  const res = await s.call('stack.log', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, fileId: 0, offset: 0 })
+  refused(res, 'TOOL_ERROR')
+  assert.equal(res.error.details?.reason, undefined)
+  assert.match(res.error.message, /ENOENT: no such file/)
+})
+
+test('stack.sh is refused when its real path leaves the worktree; the outside script never runs', async (t) => {
+  const s = await setup(t)
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
+  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  const outsideScript = `#!/bin/bash\necho "outside|$*" >> '${callsFile}'\n`
+  writeFileSync(join(outside, 'stack.sh'), outsideScript, { mode: 0o755 })
+  const script = join(s.feature, 'docker', 'stack', 'stack.sh')
+  unlinkSync(script)
+  symlinkSync(join(outside, 'stack.sh'), script)
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  for (const [method, extra] of [['stack.up', { starter: false }], ['stack.down', {}], ['stack.destroy', {}]]) {
+    const res = await s.call(method, { ...ref, ...extra })
+    refused(res, 'TOOL_ERROR')
+    assert.match(res.error.message, /outside the worktree/)
+  }
+  // A directory symlink that leads outside is refused too.
+  rmSync(join(s.feature, 'docker'), { recursive: true, force: true })
+  mkdirSync(join(outside, 'docker', 'stack'), { recursive: true })
+  writeFileSync(join(outside, 'docker', 'stack', 'stack.sh'), outsideScript, { mode: 0o755 })
+  symlinkSync(join(outside, 'docker'), join(s.feature, 'docker'))
+  refused(await s.call('stack.up', { ...ref, starter: false }), 'TOOL_ERROR')
+  await new Promise((r) => setTimeout(r, 100))
+  assert.deepEqual(calls(), [])
+})
+
+test("stack.up: a second up while one is starting is refused; a run that exits leaves a later run's pid file alone", async (t) => {
+  const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 0.5; fi' })
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  const results = await Promise.all([s.call('stack.up', { ...ref, starter: false }), s.call('stack.up', { ...ref, starter: false })])
+  assert.deepEqual(results.map((r) => r.ok).sort(), [false, true])
+  refused(results.find((r) => !r.ok), 'TOOL_ERROR')
+  // A later run's pid (this process, which is alive) replaced the file before the first run exits.
+  const pidPath = join(s.data, 'stacks', 'a-feature-x.pid')
+  writeFileSync(pidPath, String(process.pid))
+  await new Promise((r) => setTimeout(r, 1200))
+  assert.equal(readFileSync(pidPath, 'utf8'), String(process.pid))
+  rmSync(pidPath)
+  assert.equal(calls().filter((c) => c.startsWith('stack|')).length, 1)
+})
+
+test('the registry: a file that cannot be read is never overwritten; a leftover temp file does not loosen 0600', async (t) => {
+  const s = await setup(t)
+  const registryFile = join(s.data, 'environments.json')
+  const worktreeId = s.worktreeAt(s.feature).id
+  const up = () => s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
+  const torn = '{"twb-kept-000000": {"repoPath": "/x"'
+  writeFileSync(registryFile, torn)
+  const res = await up()
+  assert.equal(res.result.code, -1)
+  assert.match(res.result.error, /environments registry .* cannot be read/)
+  assert.equal(readFileSync(registryFile, 'utf8'), torn)
+  assert.deepEqual(calls(), [])
+  // A leftover temp file from a crashed write, world-readable.
+  rmSync(registryFile)
+  writeFileSync(`${registryFile}.${process.pid}.tmp`, 'stale')
+  chmodSync(`${registryFile}.${process.pid}.tmp`, 0o644)
+  assert.equal((await up()).result.code, 0)
+  assert.equal(statSync(registryFile).mode & 0o777, 0o600)
+})
+
+test('env.destroy skips docker compose for a registry entry outside the allowlist, and still deletes the VM', async (t) => {
+  const s = await setup(t)
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
+  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  writeFileSync(join(outside, 'docker-compose.yml'), 'services: {}\n')
+  const profile = 'twb-imported-000000'
+  writeFileSync(join(s.data, 'environments.json'), JSON.stringify({ [profile]: { repoPath: s.a, branch: 'x', worktreePath: outside, createdAt: 'then' } }))
+  assert.equal((await s.call('env.destroy', { profile })).result, 0)
+  assert.deepEqual(calls(), [`colima|${process.cwd()}|delete ${profile} --force|FOO=`])
+  assert.match(s.events.map(([, e]) => e.data).join(''), /skipping docker compose down/)
+  assert.deepEqual(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8')), {})
+})
+
+test("env.up refuses a worktree outside Colima's home on a path boundary (/x/rep is not /x/repos)", async (t) => {
+  const s = await setup(t)
+  // A home that is a string prefix of the worktree's path but not one of its directories.
+  s.ctx.machine = { ...s.ctx.machine, env: createEnvironmentService({ registryFile: join(s.data, 'environments.json'), home: join(s.dir, 'rep') }) }
+  const res = await s.call('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true } })
+  assert.equal(res.result.code, -1)
+  assert.match(res.result.error, /outside the home directory/)
+  assert.deepEqual(calls(), [])
+})
+
+test("a run's events reach only the connection that asked for it", async (t) => {
+  const s = await setup(t)
+  const other = s.connection()
+  const worktreeId = s.worktreeAt(s.feature).id
+  await Promise.all([
+    other.call('docker.compose', { projectId: s.projectId, repoId: s.repoId, action: 'pull' }),
+    s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
+  ])
+  assert.ok(other.events.length > 0 && s.events.length > 0)
+  assert.equal(other.events.every(([event]) => event === 'docker.log'), true)
+  assert.equal(s.events.every(([event]) => event === 'env.log'), true)
+})
+
+test('the event sink drops log chunks past the high-water mark, says so once it drains, and never drops a step or done', () => {
+  const sent = []
+  let buffered = 0
+  const sink = createEventSink((event, payload) => sent.push([event, payload]), () => buffered)
+  sink.send('docker.log', { data: 'a' })
+  buffered = 64 * 1024 * 1024
+  sink.send('docker.log', { data: 'lost' })
+  sink.send('env.log', { profile: 'twb-p', data: 'lost' })
+  sink.send('env.log', { profile: 'twb-p', data: '', step: 'compose' })
+  sink.send('docker.log', { data: 'end', done: true })
+  buffered = 0
+  sink.send('env.log', { profile: 'twb-p', data: 'b' })
+  sink.send('docker.log', { data: 'c' })
+  const dropped = '[output dropped: the connection fell behind]\n'
+  assert.deepEqual(sent, [
+    ['docker.log', { data: 'a' }],
+    ['env.log', { profile: 'twb-p', data: '', step: 'compose' }],
+    ['docker.log', { data: dropped }],
+    ['docker.log', { data: 'end', done: true }],
+    ['env.log', { profile: 'twb-p', data: dropped }],
+    ['env.log', { profile: 'twb-p', data: 'b' }],
+    ['docker.log', { data: 'c' }]
+  ])
 })

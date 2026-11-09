@@ -52,13 +52,15 @@ export function compose(action: ComposeAction, cwd: string, onLog: (event: Docke
     const child = spawn('docker', ['compose', ...args], { cwd, env: process.env })
     child.stdout.on('data', (chunk: Buffer) => onLog({ data: chunk.toString() }))
     child.stderr.on('data', (chunk: Buffer) => onLog({ data: chunk.toString() }))
-    child.on('error', (err) => {
-      onLog({ data: `error: ${err.message}\n`, done: true })
-      resolve(-1)
-    })
-    child.on('close', (code) => {
-      onLog({ data: `[docker compose exited with code ${code ?? -1}]\n\n`, done: true })
-      resolve(code ?? -1)
-    })
+    // A spawn that fails reports error and then close: one done event, the first.
+    let settled = false
+    const finish = (data: string, code: number): void => {
+      if (settled) return
+      settled = true
+      onLog({ data, done: true })
+      resolve(code)
+    }
+    child.on('error', (err) => finish(`error: ${err.message}\n`, -1))
+    child.on('close', (code) => finish(`[docker compose exited with code ${code ?? -1}]\n\n`, code ?? -1))
   })
 }

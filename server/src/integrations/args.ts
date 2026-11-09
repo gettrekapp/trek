@@ -2,6 +2,7 @@
 // call these, so every value that reaches a command line or a process environment is checked here:
 // nothing goes through a shell (every command is execFile or spawn with an argument list), and each
 // value is limited to what the method needs. Every failure is BAD_REQUEST.
+import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { ENV_PROFILE_PREFIX } from '../../../src/shared/environments.ts'
 import type { ComposeAction, ContainerAction, EnvironmentSettings } from '../../../src/shared/types'
@@ -19,10 +20,13 @@ const SERVICE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
 /** A variable name, as parseEnvVars reads them. */
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 /**
- * Variables a branch's list may not set: they would change which programs docker compose runs or
- * where it connects (the run is pinned to the VM's own context), not what the compose file reads.
+ * Variables a branch's list may not set, in any case: they would change which programs docker
+ * compose runs, where it connects or which files it reads as its own configuration (the run is
+ * pinned to the VM's own context), not what the compose file reads. PATH, HOME, XDG_CONFIG_HOME
+ * and the DOCKER_*, COMPOSE_*, BUILDKIT_*, LD_* and DYLD_* families.
  */
-const DENIED_ENV = /^(PATH|DOCKER_HOST|DOCKER_CONTEXT|DOCKER_CONFIG|LD_.*|DYLD_.*)$/
+const DENIED_ENV = /^(PATH|HOME|XDG_CONFIG_HOME|DOCKER_.*|COMPOSE_.*|BUILDKIT_.*|LD_.*|DYLD_.*)$/i
+const DENIED_ENV_NAMES = 'PATH, HOME, XDG_CONFIG_HOME, DOCKER_*, COMPOSE_*, BUILDKIT_*, LD_* and DYLD_*'
 const MAX_ENV_VARS = 200
 const MAX_ENV_VALUE = 32 * 1024
 const MAX_COMPOSE_FILE = 1024
@@ -71,7 +75,8 @@ export function requireInt(value: unknown, field: string, min: number, max: numb
 /**
  * A compose file setting: one or more comma-separated paths relative to the worktree, each inside
  * it. Not absolute, no "..", no leading "-" (it follows `-f`, but compose must never read a flag),
- * no NUL. Undefined when absent or blank (the default file).
+ * no NUL; and a file that exists must stay inside the worktree's real path once its symlinks are
+ * followed. Undefined when absent or blank (the default file).
  */
 export function optionalComposeFile(value: unknown, worktreePath: string): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
@@ -81,6 +86,7 @@ export function optionalComposeFile(value: unknown, worktreePath: string): strin
     .map((f) => f.trim())
     .filter(Boolean)
   if (files.length === 0) return undefined
+  const realWorktree = realOrNull(worktreePath) ?? worktreePath
   for (const file of files) {
     const inside = relative(worktreePath, resolve(worktreePath, file))
     if (
@@ -94,8 +100,23 @@ export function optionalComposeFile(value: unknown, worktreePath: string): strin
     ) {
       throw bad(`composeFile: ${JSON.stringify(file)} must be a file inside the worktree`)
     }
+    const real = realOrNull(resolve(worktreePath, file))
+    if (real !== null && !within(realWorktree, real)) throw bad(`composeFile: ${JSON.stringify(file)} leads outside the worktree (a symlink)`)
   }
   return files.join(',')
+}
+
+function realOrNull(path: string): string | null {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+
+function within(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
 const SETTINGS_KEYS = ['enabled', 'cpu', 'memory', 'disk', 'networkAddress', 'rosetta', 'composeFile', 'profileKey'] as const
@@ -138,7 +159,7 @@ export function optionalEnvVars(value: unknown): Record<string, string> | undefi
   const out: Record<string, string> = {}
   for (const key of keys) {
     if (!ENV_KEY_RE.test(key)) throw bad(`envVars: ${JSON.stringify(key)} is not a variable name`)
-    if (DENIED_ENV.test(key)) throw bad(`envVars: ${key} cannot be set for docker compose`)
+    if (DENIED_ENV.test(key)) throw bad(`envVars: ${key} cannot be set for docker compose (${DENIED_ENV_NAMES} are the server's)`)
     const v = value[key]
     if (typeof v !== 'string' || v.includes('\0') || v.length > MAX_ENV_VALUE) throw bad(`envVars.${key} must be a string`)
     out[key] = v
