@@ -10,7 +10,8 @@
 // dialogs stubbed through -r; the server is added as an app server, and the window opens a project
 // made through the SDK (a repository with a compose file and a stack.sh, a worktree on feature-x).
 // Through the DOM it checks:
-//   - the window's features: docker, env and stacks on; this machine's (skills, Reveal, VS Code) off;
+//   - the window's features: docker, env and stacks on (and the skills, the server's since 5b); this
+//     machine's (Reveal, VS Code) off;
 //   - the main checkout's Docker tab lists the server's containers, restarts one, and its compose
 //     menu runs `docker compose up -d` in the repository on the server, the output streamed back;
 //     a docker that fails shows in the panel, and the panel recovers;
@@ -272,10 +273,10 @@ try {
   }, [entry.id, projectId])
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
-  check("the window's features: the server machine's on, this machine's off", await until(() => win.evaluate(() => {
+  check("the window's features: the server machine's on (the skills too, 5b), this machine's off", await until(() => win.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor]
-  }), [true, true, true, false, false, false]), [true, true, true, false, false, false])
+  }), [true, true, true, true, false, false]), [true, true, true, true, false, false])
 
   // ---- 3. The main checkout: Docker on the server -----------------------------------------------------
 

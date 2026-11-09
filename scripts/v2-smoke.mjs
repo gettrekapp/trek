@@ -794,18 +794,19 @@ try {
 
   // A server that is not the Local entry's (this one's paths happen to be on this disk, but the
   // window cannot know that): none of this machine's controls (4c). Its header has no Open in VS
-  // Code or Reveal, its sessions no skill menu. Docker, the environments and the stacks are the
-  // server's (5a), on: this worktree shows no Env or Stack tab only because its repository has
-  // environments off and no stack.sh, and Docker is the main checkout's tab (smoke:server-env).
-  check("a remote server window has none of this machine's controls", await detail.evaluate((el) => ({
+  // Code or Reveal. Docker, the environments and the stacks are the server's (5a), on: this
+  // worktree shows no Env or Stack tab only because its repository has environments off and no
+  // stack.sh, and Docker is the main checkout's tab (smoke:server-env). Linear, voice and the
+  // skills are the server's too (5b): its sessions have the skill menu (smoke:server-integrations).
+  check("a remote server window has none of this machine's controls, and the server's skill menu", await detail.evaluate((el) => ({
     actions: [...el.querySelectorAll('.detail-actions button')].map((b) => b.textContent.trim()).filter((t) => /VS Code|Reveal/.test(t)),
     tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
     skills: el.querySelectorAll('.skill-menu-trigger').length
-  })), { actions: [], tabs: [], skills: 0 })
-  check("and its features say so; the server machine's docker, env and stacks, and Linear, are on", await w1.evaluate(() => {
+  })), { actions: [], tabs: [], skills: 1 })
+  check("and its features say so; the server's docker, env, stacks, skills, Linear and voice are on", await w1.evaluate(() => {
     const f = window.__features()
-    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear]
-  }), [true, true, true, false, false, false, true])
+    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear, f.voice]
+  }), [true, true, true, true, false, false, true, true])
 
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
@@ -906,6 +907,7 @@ try {
     'Notifications',
     'Local server',
     'Linear',
+    'Voice summaries',
     'Agents',
     'Worktree tags',
     'Custom tags',
@@ -921,11 +923,11 @@ try {
   // default, saved by main (app-settings.json), and back on for the checks after this one.
   const notifySwitch = settings.locator('input[aria-label="Show notifications"]')
   const appSettingsNow = () => w1.evaluate(() => window.api.appSettings.get())
-  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true, stopLocalServerOnQuit: false }])
+  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true, stopLocalServerOnQuit: false, voiceActive: true }])
   await notifySwitch.click()
-  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false, stopLocalServerOnQuit: false }), { showNotifications: false, stopLocalServerOnQuit: false })
+  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false, stopLocalServerOnQuit: false, voiceActive: true }), { showNotifications: false, stopLocalServerOnQuit: false, voiceActive: true })
   await notifySwitch.click()
-  check('and on again', await until(appSettingsNow, { showNotifications: true, stopLocalServerOnQuit: false }), { showNotifications: true, stopLocalServerOnQuit: false })
+  check('and on again', await until(appSettingsNow, { showNotifications: true, stopLocalServerOnQuit: false, voiceActive: true }), { showNotifications: true, stopLocalServerOnQuit: false, voiceActive: true })
   const prompt = settings.locator('.session-prompt-input')
   const settingsNow = async () => (await projectNow()).settings
   let sentAt = await sentCount()

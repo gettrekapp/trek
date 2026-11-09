@@ -14,7 +14,9 @@
 // it, and through the DOM it checks:
 //   - main's row: Open in VS Code and Reveal call main with the repository's path; the Docker tab
 //     is there, and its compose menu runs `docker compose up -d` in the repository;
-//   - Settings show Linear and Environments; the environments switch is saved on the server
+//   - the hand-over (5b): the app's Linear and ElevenLabs keys and voice settings are the Local
+//     server's (its secrets file and voice.json), asked of neither service; Busy is an app setting;
+//   - Settings show Linear, Voice and Environments; the environments switch is saved on the server
 //     (repo.update), and the environments poll starts (the tool check, colima list);
 //   - the feature row's env badge; its tabs: Changes, Notes, Env, Stack, Settings; its header's
 //     env chip; VS Code with the worktree's path; the Env panel's VM; its variables, saved on blur;
@@ -33,6 +35,7 @@
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer as createHttpServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import electronPath from 'electron'
@@ -178,6 +181,24 @@ legacyUp.once('exit', () => {
 })
 writeFileSync(join(userData, 'stacks', 'app-feature-x.pid'), String(legacyUp.pid))
 writeFileSync(join(userData, 'stacks', 'app-feature-x.log'), '$ stack.sh up\nstarted by the app before 5a\n')
+// 5b: the app's Linear and ElevenLabs keys (main's safeStorage files; `plain:` is how they read where
+// encryption is off, and reads the same where it is on) and its voice settings, handed to the Local
+// server once. A stub of both services, which the Local server inherits through main's env
+// (TREK_SERVER_LINEAR_URL, TREK_SERVER_ELEVENLABS_URL): the hand-over itself asks neither.
+const plain = (value) => `plain:${Buffer.from(value, 'utf8').toString('base64')}`
+writeFileSync(join(userData, 'linear.json'), JSON.stringify({ apiKey: plain('lin_api_from_app') }))
+writeFileSync(join(userData, 'elevenlabs.json'), JSON.stringify({ apiKey: plain('sk_from_app') }))
+const legacyVoice = { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', active: false, promptSessions: true }
+writeFileSync(join(userData, 'voice-settings.json'), JSON.stringify(legacyVoice))
+const serviceRequests = []
+const services = createHttpServer((req, res) => {
+  serviceRequests.push(`${req.method} ${req.url}`)
+  res.writeHead(req.url === '/v1/voices' ? 200 : 404, { 'content-type': 'application/json' })
+  res.end(JSON.stringify(req.url === '/v1/voices' ? { voices: [{ voice_id: 'v9', name: 'Nine' }] } : {}))
+})
+await new Promise((r) => services.listen(0, '127.0.0.1', r))
+const servicesUrl = `http://127.0.0.1:${services.address().port}`
+
 // The Local profile's data dir, where the server keeps them from now on (server/src/dataDir.ts).
 const localData = join(defaultDataDir(process.platform, { HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') }, home), 'local-dev')
 
@@ -249,6 +270,7 @@ const finish = async (reason) => {
   if (reason) console.error(reason)
   sdk?.close()
   await closeApp(app)
+  services.close()
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
     env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
@@ -277,7 +299,9 @@ try {
     XDG_DATA_HOME: join(home, '.local', 'share'),
     XDG_STATE_HOME: join(home, '.local', 'state'),
     SHELL: '/bin/zsh',
-    TREK_NO_WINDOW_RESTORE: '1'
+    TREK_NO_WINDOW_RESTORE: '1',
+    TREK_SERVER_LINEAR_URL: `${servicesUrl}/graphql`,
+    TREK_SERVER_ELEVENLABS_URL: `${servicesUrl}/v1`
   }
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
@@ -305,6 +329,15 @@ try {
   const inode = (p) => (existsSync(p) ? statSync(p).ino : null)
   check("and its log, the app's own file", [inode(join(localData, 'stacks', 'app-feature-x.log')) !== null, inode(join(localData, 'stacks', 'app-feature-x.log')) === inode(join(userData, 'stacks', 'app-feature-x.log'))], [true, true])
   check("the app's own files are left as they were", JSON.parse(readFileSync(join(userData, 'environments.json'), 'utf8')), legacyRegistry)
+  // 5b: the hand-over, through main's own connection, before the window asks anything.
+  const handover = join(userData, 'integrations-handover.json')
+  check('main handed the Linear and ElevenLabs settings to this Local profile once', await until(() => (existsSync(handover) ? JSON.parse(readFileSync(handover, 'utf8')) : null), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true }), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true })
+  const serverSecrets = join(profile, 'secrets.json')
+  check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? statSync(serverSecrets).mode & 0o777 : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, 0o600])
+  check('and the voice and model, with Summarize automatically', existsSync(join(localData, 'voice.json')) ? JSON.parse(readFileSync(join(localData, 'voice.json'), 'utf8')) : null, { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true })
+  check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).voiceActive, false)
+  check('the hand-over asked neither Linear nor ElevenLabs', serviceRequests, [])
+  check("the app's key files are left as they were", [readFileSync(join(userData, 'linear.json'), 'utf8').includes(plain('lin_api_from_app')), JSON.parse(readFileSync(join(userData, 'voice-settings.json'), 'utf8'))], [true, legacyVoice])
   await sdk.request('server.addRepo', { path: repo })
   const { projectId } = await sdk.request('project.create', { name: 'features', repositories: [{ path: repo }] })
   const topic = `project:${projectId}`
@@ -327,10 +360,11 @@ try {
   }, projectId)
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
-  check("the window's features: the machine-local ones and Linear", await until(() => win.evaluate(() => {
+  check("the window's features: the machine-local ones, and the server's Linear, voice and skills", await until(() => win.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear, f.bot, f.voice, f.promote, f.moveWorktree]
-  }), [true, true, true, true, true, true, true, false, false, false, false]), [true, true, true, true, true, true, true, false, false, false, false])
+  }), [true, true, true, true, true, true, true, false, true, false, false]), [true, true, true, true, true, true, true, false, true, false, false])
+  check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
   const mainRow = rows.filter({ hasNotText: 'feature-x' })
   await mainRow.click()
@@ -356,7 +390,8 @@ try {
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   const headings = await settings.locator('h3').allTextContents()
-  check('Settings show Linear and Environments, not Voice or Servers', [headings.includes('Linear'), headings.includes('Environments'), headings.includes('Voice'), headings.includes('Servers')], [true, true, false, false])
+  check('Settings show Linear, Voice summaries and Environments, not Servers', [headings.includes('Linear'), headings.includes('Voice summaries'), headings.includes('Environments'), headings.includes('Servers')], [true, true, true, false])
+  check("its Voice section lists the handed-over key's voices, from the server", await until(() => settings.locator('.settings-row', { hasText: /^Voice/ }).locator('select option').allTextContents().catch(() => []), ['Nine']), ['Nine'])
   await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check('the environments poll runs: the tool check passes', await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
