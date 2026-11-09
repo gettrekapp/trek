@@ -34,22 +34,8 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'globalPanel'
 ]
 
-/** A project file window runs everything on this machine: every feature. */
-export const LEGACY_FEATURES: BackendFeatures = {
-  docker: true,
-  env: true,
-  stacks: true,
-  bot: true,
-  linear: true,
-  voice: true,
-  skills: true,
-  moveWorktree: true,
-  reveal: true,
-  openInEditor: true,
-  promote: true,
-  settingsEdit: true,
-  globalPanel: true
-}
+/** An empty window: no project, so nothing to do. */
+export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map((name) => [name, false])) as Record<FeatureName, boolean>
 
 /**
  * A server window (3c-2, 4c). The ceiling: the v2 backend's features are these
@@ -163,14 +149,13 @@ export const SETTINGS_SECTIONS = [
   'globalPrompt',
   'globalButtons',
   'sessionTypes',
-  'environments',
-  'remoteHosts'
+  'environments'
 ] as const
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
 
 /**
- * How a section shows: `edit` as in a file window; `project` only the
+ * How a section shows: `edit`, the whole section; `project` only the
  * project's part, with a hint that the rest is the server's config (the
  * agents: the server's default and its provider commands are its `llm`
  * section, which the protocol does not edit); `hidden`.
@@ -180,22 +165,16 @@ export type SectionMode = 'edit' | 'project' | 'hidden'
 /**
  * Which Settings sections a window shows. A server window edits the project's
  * settings on the server and hides what belongs to this machine: the voice API
- * keys and the legacy remote hosts. Linear (its key is app-wide, in main)
+ * keys. Linear (its key is app-wide, in main)
  * shows where the window has the feature (every server), and the Docker
  * environments where it has `env` (the Local server: they run here).
  */
-export function settingsSections(
-  kind: 'legacy' | 'v2',
-  features: BackendFeatures
-): Readonly<Record<SettingsSection, SectionMode>> {
+export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
   const out = {} as Record<SettingsSection, SectionMode>
   for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
-  if (kind === 'v2') {
-    if (!features.linear) out.linear = 'hidden'
-    out.voice = 'hidden'
-    if (!features.env) out.environments = 'hidden'
-    out.remoteHosts = 'hidden'
-    out.agents = 'project'
-  }
+  if (!features.linear) out.linear = 'hidden'
+  out.voice = 'hidden'
+  if (!features.env) out.environments = 'hidden'
+  out.agents = 'project'
   return out
 }

@@ -1,4 +1,3 @@
-import { scheduleAutoSave } from '../persistence'
 import { useAppStore } from '../store'
 import { DEFAULT_TITLE_BAR_COLOR, resolveProjectName } from '../../../shared/appearance'
 import { ImagePicker, type ImageLimits } from './ImagePicker'
@@ -62,7 +61,6 @@ export function AppearanceSettings(): React.JSX.Element {
             e.target.value = name
             if (name !== projectName) {
               setProjectName(name)
-              scheduleAutoSave()
             }
           }}
         />
@@ -82,7 +80,6 @@ export function AppearanceSettings(): React.JSX.Element {
             value={titleBarColor ?? DEFAULT_TITLE_BAR_COLOR}
             onChange={(e) => {
               setTitleBarColor(e.target.value)
-              scheduleAutoSave()
             }}
           />
           {titleBarColor && (
@@ -90,7 +87,6 @@ export function AppearanceSettings(): React.JSX.Element {
               className="btn btn-ghost"
               onClick={() => {
                 setTitleBarColor(undefined)
-                scheduleAutoSave()
               }}
             >
               Reset
@@ -107,7 +103,6 @@ export function AppearanceSettings(): React.JSX.Element {
           image={logoImage}
           onChange={(image) => {
             setLogoImage(image)
-            scheduleAutoSave()
           }}
           limits={LOGO_LIMITS}
           title="Choose a logo image"
@@ -124,7 +119,6 @@ export function AppearanceSettings(): React.JSX.Element {
           image={bannerImage}
           onChange={(image) => {
             setBannerImage(image)
-            scheduleAutoSave()
           }}
           limits={BANNER_LIMITS}
           title="Choose a banner image"

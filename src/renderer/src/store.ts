@@ -199,7 +199,6 @@ export interface PendingDecision {
 }
 
 export interface AppState {
-  filePath: string | null
   /** A v2 server project shown in this window; separate from the legacy `project`. A window is one or the other. */
   serverWindow: { serverEntryId: string; projectId: string } | null
   setServerWindow: (target: { serverEntryId: string; projectId: string } | null) => void
@@ -217,7 +216,6 @@ export interface AppState {
   connectServerId: string | null
   setConnectServerId: (id: string | null) => void
   project: ProjectFile | null
-  dirty: boolean
   activeWorktreeId: string | null
   /**
    * Worktree selected in the sidebar (host + path — path alone is ambiguous
@@ -276,11 +274,6 @@ export interface AppState {
   voicePlaying: SpokenSummary | null
   voiceQueued: number
 
-  setProject: (project: RawProjectFile, filePath: string | null) => void
-  addRepository: (repo: Repository) => void
-  /** Drops the repository and its cached rows. Callers check repositoryRemovalBlock first. */
-  removeRepository: (repoId: string) => void
-  markSaved: (filePath: string) => void
   setActiveWorktree: (id: string) => void
   /**
    * instanceId pins the selection to a known instance (e.g. the primary,
@@ -290,15 +283,9 @@ export interface AppState {
   addWorktreeInstance: (repoId: string, worktree: WorktreeInstance) => void
   removeWorktreeInstance: (id: string) => void
   updateWorktreeInstance: (id: string, patch: Partial<WorktreeInstance>) => void
-  setServers: (servers: ServerConfig[]) => void
   setHostWorktrees: (key: string, infos: GitWorktreeInfo[]) => void
   /** Merge a status sweep's dirty/ahead/behind into the host's cached rows, in every repository. */
   setWorktreeStatuses: (host: string, statuses: WorktreeStatus[]) => void
-  setServerRepoPaths: (serverId: string, pathsByRepo: Record<string, string>) => void
-  setServerStatus: (serverId: string, status: HostStatus, error?: string) => void
-  setWorktreeLoaded: (worktreeId: string, loaded: boolean) => void
-  /** Store a worktree's dormant session list (primary included) in the project. */
-  setWorktreeSessions: (worktreeId: string, sessions: PersistedTerminal[]) => void
   registerTerminal: (meta: TerminalMeta) => void
   removeTerminal: (id: string) => void
   setActiveTerminal: (worktreeId: string, terminalId: string) => void
@@ -372,7 +359,6 @@ export function migrateProject(raw: RawProjectFile): ProjectFile {
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  filePath: null,
   serverWindow: null,
   setServerWindow: (serverWindow) => set({ serverWindow }),
   serverOffline: false,
@@ -387,7 +373,6 @@ export const useAppStore = create<AppState>((set) => ({
   connectServerId: null,
   setConnectServerId: (connectServerId) => set({ connectServerId }),
   project: null,
-  dirty: false,
   activeWorktreeId: null,
   selected: null,
   terminals: {},
@@ -414,68 +399,6 @@ export const useAppStore = create<AppState>((set) => ({
   llmSettings: null,
   voicePlaying: null,
   voiceQueued: 0,
-
-  setProject: (raw, filePath) => {
-    const project = migrateProject(raw)
-    const [first] = project.repositories
-    set({
-      project,
-      filePath,
-      dirty: filePath === null,
-      activeWorktreeId: primaryWorktreeId(first.id),
-      selected: { path: first.path },
-      terminals: {},
-      terminalOrder: {},
-      activeTerminal: {},
-      loadedWorktrees: {},
-      hostWorktrees: {},
-      serverStatus: {},
-      serverErrors: {},
-      environments: {},
-      envBusy: {},
-      terminalQueues: {},
-      decisions: {}
-    })
-  },
-
-  addRepository: (repo) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: { ...state.project, repositories: [...state.project.repositories, repo] },
-        dirty: true
-      }
-    }),
-
-  removeRepository: (repoId) =>
-    set((state) => {
-      if (!state.project) return state
-      const removed = repoById(state.project, repoId)
-      if (!removed) return state
-      const repositories = state.project.repositories.filter((r) => r.id !== repoId)
-      const hostWorktrees = Object.fromEntries(
-        Object.entries(state.hostWorktrees).filter(([key]) => !key.startsWith(`${repoId} `))
-      )
-      const removedIds = new Set(repoWorktrees(removed).map((w) => w.id))
-      const viewingRemoved = !!state.activeWorktreeId && removedIds.has(state.activeWorktreeId)
-      const selectionRemoved =
-        viewingRemoved ||
-        state.selected?.repoId === repoId ||
-        Object.values(state.hostWorktrees)
-          .flat()
-          .some((w) => w.repoId === repoId && !!state.selected && sameWorktree(w, state.selected))
-      return {
-        project: { ...state.project, repositories },
-        hostWorktrees,
-        activeWorktreeId: selectionRemoved
-          ? primaryWorktreeId(repositories[0].id)
-          : state.activeWorktreeId,
-        selected: selectionRemoved ? { path: repositories[0].path } : state.selected,
-        dirty: true
-      }
-    }),
-
-  markSaved: (filePath) => set({ filePath, dirty: false }),
 
   setActiveWorktree: (id) =>
     set((state) => {
@@ -512,7 +435,6 @@ export const useAppStore = create<AppState>((set) => ({
         })),
         activeWorktreeId: worktree.id,
         selected: { serverId: worktree.serverId, path: worktree.path },
-        dirty: true
       }
     }),
 
@@ -545,7 +467,6 @@ export const useAppStore = create<AppState>((set) => ({
         activeWorktreeId:
           state.activeWorktreeId === id ? primaryWorktreeId(repo.id) : state.activeWorktreeId,
         selected: state.activeWorktreeId === id ? { path: repo.path } : state.selected,
-        dirty: true
       }
     }),
 
@@ -562,29 +483,7 @@ export const useAppStore = create<AppState>((set) => ({
           state.activeWorktreeId === id && updated
             ? { serverId: updated.serverId, path: updated.path }
             : state.selected,
-        dirty: true
       }
-    }),
-
-  setServerRepoPaths: (serverId, pathsByRepo) =>
-    set((state) => {
-      if (!state.project) return state
-      // A repository with no path on the server has no way to refresh its rows.
-      const hostWorktrees = { ...state.hostWorktrees }
-      const repositories = state.project.repositories.map((r) => {
-        const { [serverId]: _old, ...serverPaths } = r.serverPaths ?? {}
-        const path = pathsByRepo[r.id]?.trim()
-        if (path) serverPaths[serverId] = path
-        else delete hostWorktrees[repoHostKey(r.id, serverId)]
-        return { ...r, serverPaths }
-      })
-      return { project: { ...state.project, repositories }, hostWorktrees, dirty: true }
-    }),
-
-  setServers: (servers) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, servers }, dirty: true }
     }),
 
   setHostWorktrees: (key, infos) =>
@@ -627,43 +526,6 @@ export const useAppStore = create<AppState>((set) => ({
         changed = true
       }
       return changed ? { hostWorktrees } : state
-    }),
-
-  setServerStatus: (serverId, status, error) =>
-    set((state) => {
-      if (state.serverStatus[serverId] === status && state.serverErrors[serverId] === error) return state
-      const serverErrors = { ...state.serverErrors }
-      if (error) serverErrors[serverId] = error
-      else delete serverErrors[serverId]
-      return { serverStatus: { ...state.serverStatus, [serverId]: status }, serverErrors }
-    }),
-
-  setWorktreeLoaded: (worktreeId, loaded) =>
-    set((state) => {
-      if (loaded === !!state.loadedWorktrees[worktreeId]) return state
-      const loadedWorktrees = { ...state.loadedWorktrees }
-      if (loaded) loadedWorktrees[worktreeId] = true
-      else delete loadedWorktrees[worktreeId]
-      return { loadedWorktrees }
-    }),
-
-  setWorktreeSessions: (worktreeId, sessions) =>
-    set((state) => {
-      if (!state.project) return state
-      const repo = repoOfWorktreeId(state.project, worktreeId)
-      if (!repo) return state
-      return {
-        project: patchRepo(state.project, repo.id, (r) =>
-          isPrimaryWorktreeId(worktreeId)
-            ? { primaryTerminals: sessions }
-            : {
-                worktrees: r.worktrees.map((w) =>
-                  w.id === worktreeId ? { ...w, terminals: sessions } : w
-                )
-              }
-        ),
-        dirty: true
-      }
     }),
 
   registerTerminal: (meta) =>
@@ -768,50 +630,49 @@ export const useAppStore = create<AppState>((set) => ({
       else favorites.add(containerName)
       return {
         project: { ...state.project, dockerFavorites: [...favorites].sort() },
-        dirty: true
       }
     }),
 
   setAzureDevOpsBaseUrl: (url) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, azureDevOpsBaseUrl: url }, dirty: true }
+      return { project: { ...state.project, azureDevOpsBaseUrl: url } }
     }),
 
   setLinearWorkspace: (slug) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, linearWorkspace: slug }, dirty: true }
+      return { project: { ...state.project, linearWorkspace: slug } }
     }),
 
   setAudioAlerts: (enabled) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, audioAlerts: enabled }, dirty: true }
+      return { project: { ...state.project, audioAlerts: enabled } }
     }),
 
   setProjectName: (name) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, name }, dirty: true }
+      return { project: { ...state.project, name } }
     }),
 
   setTitleBarColor: (color) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, titleBarColor: color }, dirty: true }
+      return { project: { ...state.project, titleBarColor: color } }
     }),
 
   setLogoImage: (image) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, logoImage: image }, dirty: true }
+      return { project: { ...state.project, logoImage: image } }
     }),
 
   setBannerImage: (image) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, bannerImage: image }, dirty: true }
+      return { project: { ...state.project, bannerImage: image } }
     }),
 
   setTerminalButtons: (buttons) =>
@@ -819,47 +680,47 @@ export const useAppStore = create<AppState>((set) => ({
       if (!state.project) return state
       // An emptied list drops the key so it doesn't clutter the project file.
       const terminalButtons = buttons.length > 0 ? buttons : undefined
-      return { project: { ...state.project, terminalButtons }, dirty: true }
+      return { project: { ...state.project, terminalButtons } }
     }),
 
   setGlobalTerminalButtons: (buttons) =>
     set((state) => {
       if (!state.project) return state
       const globalTerminalButtons = buttons.length > 0 ? buttons : undefined
-      return { project: { ...state.project, globalTerminalButtons }, dirty: true }
+      return { project: { ...state.project, globalTerminalButtons } }
     }),
 
   setGlobalSystemPrompt: (prompt) =>
     set((state) => {
       if (!state.project) return state
       const globalSystemPrompt = prompt.trim() ? prompt : undefined
-      return { project: { ...state.project, globalSystemPrompt }, dirty: true }
+      return { project: { ...state.project, globalSystemPrompt } }
     }),
 
   setSessionSystemPrompt: (prompt) =>
     set((state) => {
       if (!state.project) return state
       const sessionSystemPrompt = prompt.trim() ? prompt : undefined
-      return { project: { ...state.project, sessionSystemPrompt }, dirty: true }
+      return { project: { ...state.project, sessionSystemPrompt } }
     }),
 
   setSessionTypes: (types) =>
     set((state) => {
       if (!state.project) return state
       const sessionTypes = types.length > 0 ? types : undefined
-      return { project: { ...state.project, sessionTypes }, dirty: true }
+      return { project: { ...state.project, sessionTypes } }
     }),
 
   setWorktreeOrder: (keys) =>
     set((state) =>
-      state.project ? { project: { ...state.project, worktreeOrder: keys }, dirty: true } : state
+      state.project ? { project: { ...state.project, worktreeOrder: keys } } : state
     ),
 
   setClaudePermissionMode: (mode) =>
     set((state) => {
       if (!state.project) return state
       const { claudePermissionMode: _previous, ...rest } = state.project
-      return { project: mode ? { ...rest, claudePermissionMode: mode } : rest, dirty: true }
+      return { project: mode ? { ...rest, claudePermissionMode: mode } : rest }
     }),
 
   setEnvironments: (infos) =>
@@ -897,7 +758,7 @@ export const useAppStore = create<AppState>((set) => ({
       return { decisions }
     }),
   setBotSettings: (bot) =>
-    set((state) => (state.project ? { project: { ...state.project, bot }, dirty: true } : state)),
+    set((state) => (state.project ? { project: { ...state.project, bot } } : state)),
 
   setLinearConnected: (connected) =>
     set(connected ? { linearConnected: true } : { linearConnected: false, linearIssues: {} }),
@@ -907,12 +768,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   setProjectLlmDefault: (llmDefault) =>
     set((state) =>
-      state.project ? { project: { ...state.project, llmDefault }, dirty: true } : state
+      state.project ? { project: { ...state.project, llmDefault } } : state
     ),
 
   setGlobalLlm: (globalLlm) =>
     set((state) =>
-      state.project ? { project: { ...state.project, globalLlm }, dirty: true } : state
+      state.project ? { project: { ...state.project, globalLlm } } : state
     ),
 
   setTerminalSession: (id, sessionId) =>
@@ -936,7 +797,7 @@ export const useAppStore = create<AppState>((set) => ({
   setGlobalSessions: (sessions) =>
     set((state) => {
       if (!state.project) return state
-      return { project: { ...state.project, globalSessions: sessions }, dirty: true }
+      return { project: { ...state.project, globalSessions: sessions } }
     }),
 
   setTerminalQueue: (id, texts) =>
@@ -971,7 +832,6 @@ export const useAppStore = create<AppState>((set) => ({
           else delete branchTickets[branch]
           return { branchTickets }
         }),
-        dirty: true
       }
     }),
 
@@ -985,7 +845,6 @@ export const useAppStore = create<AppState>((set) => ({
           else delete branchPullRequests[branch]
           return { branchPullRequests }
         }),
-        dirty: true
       }
     }),
 
@@ -994,7 +853,7 @@ export const useAppStore = create<AppState>((set) => ({
       if (!state.project) return state
       // An emptied list drops the key so it doesn't clutter the project file.
       const linkedDirs = dirs.length > 0 ? dirs : undefined
-      return { project: patchRepo(state.project, repoId, () => ({ linkedDirs })), dirty: true }
+      return { project: patchRepo(state.project, repoId, () => ({ linkedDirs })) }
     }),
 
   setEnvironmentSettings: (repoId, patch) =>
@@ -1004,7 +863,6 @@ export const useAppStore = create<AppState>((set) => ({
         project: patchRepo(state.project, repoId, (r) => ({
           environments: { enabled: false, ...r.environments, ...patch }
         })),
-        dirty: true
       }
     }),
 
@@ -1018,7 +876,6 @@ export const useAppStore = create<AppState>((set) => ({
           else delete branchNotes[branch] // empty notes don't clutter the file
           return { branchNotes }
         }),
-        dirty: true
       }
     }),
 
@@ -1032,7 +889,6 @@ export const useAppStore = create<AppState>((set) => ({
           else delete branchEnvVars[branch] // empty editors don't clutter the file
           return { branchEnvVars }
         }),
-        dirty: true
       }
     }),
 
@@ -1046,7 +902,6 @@ export const useAppStore = create<AppState>((set) => ({
           else delete branchTags[branch] // untagged branches don't clutter the file
           return { branchTags }
         }),
-        dirty: true
       }
     }),
 
@@ -1061,7 +916,7 @@ export const useAppStore = create<AppState>((set) => ({
           Object.entries(r.branchTags ?? {}).filter(([, id]) => ids.has(id))
         )
       }))
-      return { project: { ...state.project, worktreeTags: tags, repositories }, dirty: true }
+      return { project: { ...state.project, worktreeTags: tags, repositories } }
     }),
 
   setBranchCustomTag: (repoId, branch, tagId, enabled) =>
@@ -1076,7 +931,6 @@ export const useAppStore = create<AppState>((set) => ({
           else delete branchCustomTags[branch]
           return { branchCustomTags }
         }),
-        dirty: true
       }
     }),
 
@@ -1093,7 +947,7 @@ export const useAppStore = create<AppState>((set) => ({
         }
         return { ...r, branchCustomTags }
       })
-      return { project: { ...state.project, customTags: tags, repositories }, dirty: true }
+      return { project: { ...state.project, customTags: tags, repositories } }
     }),
 
   toggleWorktreeComplete: (worktreeId) =>

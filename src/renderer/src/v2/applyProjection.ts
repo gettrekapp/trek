@@ -37,8 +37,7 @@ export function applyV2Project(project: Project, ptys: PtyStream): void {
     { slice, ids }
   )
   currentIds = ids
-  // filePath stays null, so scheduleAutoSave never writes a server project to disk.
-  useAppStore.setState({ ...slice, ...view, filePath: null, dirty: false })
+  useAppStore.setState({ ...slice, ...view })
 }
 
 /** The server window went away: forget the ids (the caller disposes the terminals). */

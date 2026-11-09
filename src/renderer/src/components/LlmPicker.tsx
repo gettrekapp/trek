@@ -96,19 +96,10 @@ export function LlmPicker({ value, onChange, filter, serverId = null, remote }: 
     (provider.id === 'claude' ? project?.claudeCommand?.trim() : undefined) ||
     settings.providers[provider.id]?.command?.trim() ||
     provider.defaultCommand
+  // Without a server's answer (`remote`), whether the agent is installed is not known here: the
+  // server that runs it says (server.agents). Shown as unknown.
   useEffect(() => {
-    let cancelled = false
     setInstalled(null)
-    if (remote) return
-    // Only the binary name is checked; a command with arguments is assumed present.
-    const binary = command.split(/\s+/)[0]
-    window.api
-      .agentCommandExists(serverId, binary)
-      .then((exists) => !cancelled && setInstalled(exists))
-      .catch(() => !cancelled && setInstalled(null))
-    return () => {
-      cancelled = true
-    }
   }, [command, serverId, !remote])
 
   const models = isLocal ? (localModels ?? []) : provider.models

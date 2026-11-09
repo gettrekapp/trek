@@ -4,7 +4,6 @@ import {
   cycleTab,
   focusInGlobalPanel,
   focusTerminal,
-  saveGlobalSessions,
   tabCycleStep
 } from '../terminals'
 import { globalSessionLlm } from '../llm'
@@ -126,7 +125,6 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   const commitRename = (): void => {
     if (editingId) {
       useAppStore.getState().renameTerminal(editingId, draft, editFrom)
-      saveGlobalSessions()
     }
     setEditingId(null)
   }

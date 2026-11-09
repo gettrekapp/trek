@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { scheduleAutoSave } from '../persistence'
 import { instanceForInfo, useAppStore } from '../store'
 import type { GitWorktreeInfo } from '../../../shared/types'
 
@@ -36,7 +35,6 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
     }
     setConfirming(null)
     setBranchNote(repoId, branch, '') // empty notes are dropped from the project file
-    scheduleAutoSave()
   }
 
   return (

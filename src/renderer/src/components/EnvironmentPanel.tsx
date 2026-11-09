@@ -3,7 +3,6 @@ import { ENV_DEFAULTS, deriveProfileName, envRepoKey, parseEnvVars } from '../..
 import type { EnvService, EnvUpStep, GitWorktreeInfo } from '../../../shared/types'
 import { refreshEnvironments } from '../environmentActions'
 import { envStartArgs } from '../environmentStart'
-import { scheduleAutoSave } from '../persistence'
 import { SettingText } from './SettingText'
 import { environmentFor, repoById, repoOfInfo, useAppStore } from '../store'
 
@@ -360,7 +359,6 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
                 live={!serverWindow}
                 onCommit={(text) => {
                   setBranchEnvVars(repo!.id, info.branch!, text)
-                  scheduleAutoSave()
                 }}
               />
               <p className="muted env-vars-hint">

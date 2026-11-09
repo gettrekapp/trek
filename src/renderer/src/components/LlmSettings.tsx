@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
-import { scheduleAutoSave } from '../persistence'
 import { defaultSessionLlm, updateLlmSettings } from '../llm'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 import { PROVIDER_LIST } from '../../../shared/providers/registry'
@@ -97,11 +96,9 @@ export function LlmSettings({ projectOnly = false }: { projectOnly?: boolean }):
     save({ providers: { [id]: patch } })
   const setProjectDefault = (llm: LlmSelection | undefined): void => {
     setProjectLlmDefault(llm)
-    scheduleAutoSave()
   }
   const setGlobal = (llm: LlmSelection | undefined): void => {
     setGlobalLlm(llm)
-    scheduleAutoSave()
   }
 
   const local = settings.providers.local ?? {}

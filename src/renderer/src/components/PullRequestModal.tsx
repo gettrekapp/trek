@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { scheduleAutoSave } from '../persistence'
 import { useAppStore } from '../store'
 
 interface Props {
@@ -26,13 +25,11 @@ export function PullRequestModal({ repoId, branch, onClose }: Props): React.JSX.
       return
     }
     setBranchPullRequest(repoId, branch, url)
-    scheduleAutoSave()
     onClose()
   }
 
   const unlink = (): void => {
     setBranchPullRequest(repoId, branch, null)
-    scheduleAutoSave()
     onClose()
   }
 

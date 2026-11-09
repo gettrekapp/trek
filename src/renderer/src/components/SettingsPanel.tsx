@@ -1,11 +1,9 @@
 import { useState } from 'react'
-import { scheduleAutoSave } from '../persistence'
 import { DEFAULT_PERMISSION_MODE } from '../terminals'
 import { CLAUDE_PERMISSION_MODES } from '../../../shared/providers/claude'
 import { useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { ENV_DEFAULTS } from '../../../shared/environments'
-import { ServersPanel } from './ServersPanel'
 import { LinearSettings } from './LinearSettings'
 import { VoiceSettings } from './VoiceSettings'
 import { NotificationSettings } from './NotificationSettings'
@@ -34,7 +32,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // and Linear everywhere), and a conflict's Reload remounts it.
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
   const features = useFeatures()
-  const sections = settingsSections(serverWindow ? 'v2' : 'legacy', features)
+  const sections = settingsSections(features)
   const live = !serverWindow
   const reload = useAppStore((s) => s.settingsReload)
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
@@ -101,22 +99,18 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
 
   const updateEnv = (patch: Partial<EnvironmentSettings>): void => {
     setEnvironmentSettings(settingsRepo.id, patch)
-    scheduleAutoSave()
   }
 
   const updateButtons = (buttons: TerminalQuickButton[]): void => {
     setTerminalButtons(buttons)
-    scheduleAutoSave()
   }
 
   const updateGlobalButtons = (buttons: TerminalQuickButton[]): void => {
     setGlobalTerminalButtons(buttons)
-    scheduleAutoSave()
   }
 
   const updateSessionTypes = (types: SessionType[]): void => {
     setSessionTypes(types)
-    scheduleAutoSave()
   }
 
   const patchSessionType = (id: string, patch: Partial<SessionType>): void => {
@@ -172,7 +166,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             value={permissionMode}
             onChange={(e) => {
               setClaudePermissionMode(e.target.value || undefined)
-              scheduleAutoSave()
             }}
           >
             <option value="">{serverWindow ? 'Server default' : `App default (${appPermissionLabel})`}</option>
@@ -189,7 +182,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             checked={audioAlerts}
             onChange={(e) => {
               setAudioAlerts(e.target.checked)
-              scheduleAutoSave()
             }}
           />
           <span className="settings-label">
@@ -218,7 +210,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               defaultValue={linkedDirs.join(', ')}
               onBlur={(e) => {
                 setLinkedDirs(settingsRepo.id, parseDirs(e.target.value))
-                scheduleAutoSave()
               }}
             />
           ) : (
@@ -285,7 +276,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               defaultValue={sessionSystemPrompt}
               onBlur={(e) => {
                 setSessionSystemPrompt(e.target.value)
-                scheduleAutoSave()
               }}
             />
           ) : (
@@ -318,7 +308,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               defaultValue={globalSystemPrompt}
               onBlur={(e) => {
                 setGlobalSystemPrompt(e.target.value)
-                scheduleAutoSave()
               }}
             />
           ) : (
@@ -551,7 +540,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             )}
           </>
         )}
-        {sections.remoteHosts !== 'hidden' && <ServersPanel />}
       </div>
     </div>
   )
@@ -662,7 +650,6 @@ function WorktreeTagsEditor({
 }): React.JSX.Element {
   const update = (next: WorktreeTag[]): void => {
     onChange(next)
-    scheduleAutoSave()
   }
 
   const patchTag = (id: string, patch: Partial<WorktreeTag>): void => {

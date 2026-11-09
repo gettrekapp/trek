@@ -1,9 +1,9 @@
 // Keeps this window's backend in step with what the window shows. Not in
-// store.ts: backend.ts imports the store (directly and through terminals.ts,
-// worktreeActions.ts and the rest), so the store importing backend.ts back would
+// store.ts: backend.ts imports the store (directly and through terminals.ts
+// and the rest), so the store importing backend.ts back would
 // make a cycle in which those modules run before the store exists.
 import { useAppStore } from './store'
-import { legacyBackend, setBackend, type WindowBackend } from './backend'
+import { idleBackend, setBackend, type WindowBackend } from './backend'
 import { installV2Window, type V2Window } from './v2/installV2'
 
 type ServerWindowTarget = ReturnType<typeof useAppStore.getState>['serverWindow']
@@ -20,7 +20,7 @@ function backendFor(target: ServerWindowTarget): WindowBackend {
   if (v2 && target && v2.entryId === target.serverEntryId && v2.projectId === target.projectId) return v2.backend
   v2?.leave()
   v2 = null
-  if (!target) return legacyBackend
+  if (!target) return idleBackend
   v2 = installV2Window(target.serverEntryId, target.projectId)
   return v2.backend
 }

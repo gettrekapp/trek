@@ -1,14 +1,9 @@
 import { useEffect, useState } from 'react'
 import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore } from './store'
-import { saveProject } from './persistence'
-import { handleWindowCloseRequest, syncWindowProject, watchWindowProject } from './windowLifecycle'
 import { focusInGlobalPanel } from './terminals'
 import { getBackend } from './backend'
 import { StartScreen, type StartView } from './components/StartScreen'
 import { ServerProjectWindow } from './v2/ServerProjectWindow'
-import { Workspace } from './components/Workspace'
-import { GlobalClaude } from './components/GlobalClaude'
-import { handleMcpCall } from './mcpTools'
 import { requestSessionSelect, watchAttention } from './attentionSelect'
 import { useLinearSync } from './linear'
 import { loadVoiceSettings } from './voice'
@@ -17,9 +12,6 @@ import { SummaryBubble } from './components/SummaryBubble'
 import { titleBarForeground } from '../../shared/appearance'
 
 export default function App(): React.JSX.Element {
-  const project = useAppStore((s) => s.project)
-  const filePath = useAppStore((s) => s.filePath)
-  const dirty = useAppStore((s) => s.dirty)
   const serverWindow = useAppStore((s) => s.serverWindow)
   /** The server project's name, reported by ServerProjectWindow. */
   const [serverTitle, setServerTitle] = useState<string | null>(null)
@@ -30,8 +22,8 @@ export default function App(): React.JSX.Element {
   const showStart = (view: StartView): void => setStartRequest((r) => ({ view, n: (r?.n ?? 0) + 1 }))
   // One-shot: once the window has a project, a later start screen (Pick another project) starts fresh.
   useEffect(() => {
-    if (project || serverWindow) setStartRequest(undefined)
-  }, [project, serverWindow])
+    if (serverWindow) setStartRequest(undefined)
+  }, [serverWindow])
   useLinearSync()
 
   useEffect(() => {
@@ -42,7 +34,6 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     const unsubscribes = [
-      window.api.onMenu('save-project', () => void saveProject()),
       // Sent only to an empty window: main opens a new one otherwise.
       window.api.onMenu('new-project', () => showStart('new')),
       window.api.onMenu('open-on-server', () => showStart('connect')),
@@ -50,10 +41,8 @@ export default function App(): React.JSX.Element {
         const state = useAppStore.getState()
         // A server window offline: its commands wait for the connection. A missing worktree runs nothing.
         if (!state.project || !state.selected || state.serverOffline) return
-        if (state.serverWindow) {
-          const worktrees = mergedWorktrees(state.project, state.hostWorktrees)
-          if (selectedWorktreeInfo(state.project, worktrees, state.selected, state.activeWorktreeId)?.prunable) return
-        }
+        const worktrees = mergedWorktrees(state.project, state.hostWorktrees)
+        if (selectedWorktreeInfo(state.project, worktrees, state.selected, state.activeWorktreeId)?.prunable) return
         void getBackend().sessions.start(state.selected)
       }),
       window.api.onMenu('close-tab', () => {
@@ -77,9 +66,8 @@ export default function App(): React.JSX.Element {
         const state = useAppStore.getState()
         if (!state.project && !state.serverWindow) state.setServerWindow(server)
       }),
-      window.api.onMcpCall((request) => void handleMcpCall(request)),
-      window.api.onWindowCloseRequest(() => void handleWindowCloseRequest()),
-      watchWindowProject(),
+      // A server window has nothing to save, and its sessions run on the server: it closes at once.
+      window.api.onWindowCloseRequest(() => window.api.windowCloseReady()),
       // Before takeInitialWindowState: main sends selects once the window is listening.
       watchAttention()
     ]
@@ -104,12 +92,12 @@ export default function App(): React.JSX.Element {
       })
       .catch(async (err) => {
         setBooted(true)
-        syncWindowProject()
         await window.api.showError('Could not open project', String(err))
       })
   }, [])
 
-  const titleBarColor = project?.titleBarColor
+  // The server project's appearance setting, once projected.
+  const titleBarColor = useAppStore((s) => (s.serverWindow ? s.project?.titleBarColor : undefined))
 
   return (
     <div className="app">
@@ -119,20 +107,7 @@ export default function App(): React.JSX.Element {
       >
         <div className="title-side" />
         <span className="title-text">
-          {serverWindow ? (
-            serverTitle ?? 'Trek Dev'
-          ) : project ? (
-            <>
-              {project.logoImage && <img className="title-logo" src={project.logoImage} alt="" />}
-              {project.name}
-              {dirty && <span className="dirty-dot" title="Unsaved changes" />}
-              <span className="title-path">
-                · {filePath ?? 'not saved yet — ⌘S to save'}
-              </span>
-            </>
-          ) : (
-            'Trek Dev'
-          )}
+          {serverWindow ? (serverTitle ?? 'Trek Dev') : 'Trek Dev'}
         </span>
         <div className="title-side" />
       </header>
@@ -143,11 +118,6 @@ export default function App(): React.JSX.Element {
           projectId={serverWindow.projectId}
           onTitle={setServerTitle}
         />
-      ) : project ? (
-        <>
-          <Workspace />
-          <GlobalClaude />
-        </>
       ) : booted ? (
         <StartScreen request={startRequest} />
       ) : null}

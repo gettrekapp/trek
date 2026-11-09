@@ -7,7 +7,7 @@ function assertType<T extends true>(): T | void {}
 type Returns<F extends (...args: never[]) => unknown, R> = Equal<ReturnType<F>, R>
 
 export function checks(backend: WindowBackend): void {
-  assertType<Equal<WindowBackend['kind'], 'legacy' | 'v2'>>()
+  assertType<Equal<WindowBackend['kind'], 'idle' | 'v2'>>()
   assertType<Equal<WindowBackend['features'], BackendFeatures>>()
   // A session goes to a known instance, or to a worktree by host and path.
   const byInstance: SessionTarget = { worktreeId: 'w1' }

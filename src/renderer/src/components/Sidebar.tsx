@@ -18,7 +18,7 @@ import {
 } from '../store'
 import { NotificationsMenu } from './NotificationsMenu'
 import { VoiceToggle } from './VoiceToggle'
-import { removalBlock } from '../repositoryActions'
+import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { envRepoKey } from '../../../shared/environments'

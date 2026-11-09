@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { scheduleAutoSave } from '../persistence'
 import { isLinearTicket, parseTicket, repoById, ticketLabel, useAppStore } from '../store'
 
 interface Props {
@@ -49,13 +48,11 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
     if (ws && ws !== project.linearWorkspace) setLinearWorkspace(ws)
     if (base && base !== project.azureDevOpsBaseUrl) setAzureDevOpsBaseUrl(base)
     setBranchTicket(repoId, branch, parsed.ticketId)
-    scheduleAutoSave()
     onClose()
   }
 
   const unlink = (): void => {
     setBranchTicket(repoId, branch, null)
-    scheduleAutoSave()
     onClose()
   }
 

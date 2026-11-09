@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useAppStore } from '../store'
 import { getBackend } from '../backend'
-import { scheduleAutoSave } from '../persistence'
 
 interface Props {
   terminalId: string
@@ -38,14 +37,12 @@ export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Ele
     const text = draft.trim()
     if (!text) return
     enqueue(terminalId, text)
-    scheduleAutoSave() // queues persist in the project file
     setDraft('')
   }
 
   const send = (index: number): void => {
     const text = queue[index]
     removeAt(terminalId, index)
-    scheduleAutoSave()
     const backend = getBackend()
     backend.sessions
       .sendPrompt(terminalId, text)
@@ -54,7 +51,6 @@ export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Ele
 
   const remove = (index: number): void => {
     removeAt(terminalId, index)
-    scheduleAutoSave()
   }
 
   return (

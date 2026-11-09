@@ -1,46 +1,18 @@
-// What a window does to its project, behind one seam. A project file window
-// (legacy) runs sessions and git itself, through IPC to main; a server window
-// (3c-2) sends the same actions to its trek-server. Every method speaks the
-// legacy store's ids (terminal ids, worktree instance ids, WorktreeLocator); a
-// v2 backend maps them to v2 with the projector's V2IdMap.
+// What a window does to its project, behind one seam: a server window (3c-2) sends each action
+// to its trek-server. Every method speaks the store's ids (terminal ids, worktree instance ids,
+// WorktreeLocator); the v2 backend maps them to v2 with the projector's V2IdMap. An empty window
+// has the idle backend, which has no features and does nothing.
 //
-// Terminal streams are not here: a server window attaches to its server's
-// PtyStream directly (syncV2Terminals in terminals.ts), and a legacy window
-// keeps its pty IPC.
+// Terminal streams are not here: a server window attaches to its server's PtyStream directly
+// (syncV2Terminals in terminals.ts).
 //
-// Errors: every method returns a promise, so a v2 backend can reject with the
-// server's ClientError. `worktrees.create` rejects for its caller (the Add
-// Worktree dialog) to show; `worktrees.remove` and `repos.*` report failures
-// through their own dialogs and resolve, as legacy does today. The methods
-// callers fire and forget (`sessions.start`, `restart`, `close`,
-// `worktrees.load`, `unload`, `unloadAll`) report a refusal in a dialog and
-// resolve (`start` with null), never reject; a v2 backend skips the dialog for
-// NOT_CONNECTED, which the offline window already shows.
-import { GLOBAL_WORKTREE_ID, allWorktrees, hostRepoPath, repoById, useAppStore } from './store'
-import {
-  closeGlobalTerminal,
-  createTerminal,
-  disposeTerminal,
-  loadWorktree,
-  openGlobalTerminals,
-  pasteToTerminal,
-  restartTerminal,
-  saveGlobalSessions,
-  startClaudeSession,
-  startGlobalTerminal,
-  unloadAllWorktrees,
-  unloadWorktree
-} from './terminals'
-import { scheduleAutoSave } from './persistence'
-import {
-  createBranchWorktree,
-  deleteWorktree,
-  linkProjectDirs,
-  tagNewBranch,
-  worktreePathFor
-} from './worktreeActions'
-import { addRepository, removeRepository } from './repositoryActions'
-import { LEGACY_FEATURES, type BackendFeatures } from './backendFeatures'
+// Errors: every method returns a promise, so the v2 backend can reject with the server's
+// ClientError. `worktrees.create` rejects for its caller (the Add Worktree dialog) to show;
+// `worktrees.remove` and `repos.*` report failures through their own dialogs and resolve. The
+// methods callers fire and forget (`sessions.start`, `restart`, `close`, `worktrees.load`,
+// `unload`, `unloadAll`) report a refusal in a dialog and resolve (`start` with null), never
+// reject; the v2 backend skips the dialog for NOT_CONNECTED, which the offline window already shows.
+import { NO_FEATURES, type BackendFeatures } from './backendFeatures'
 import { errorText } from './v2/errors'
 import type { LlmSelection } from '../../shared/providers/types'
 import type {
@@ -63,8 +35,6 @@ export type SessionTarget = { worktreeId: string } | WorktreeLocator
 
 export interface CreateWorktreeRequest {
   repoId: string
-  /** The host, in a legacy window (undefined = this machine). A server window ignores it. */
-  serverId?: string
   branch: string
   /** true cuts a new branch from the default branch; false checks out an existing one */
   createBranch: boolean
@@ -73,7 +43,7 @@ export interface CreateWorktreeRequest {
 }
 
 export interface WindowBackend {
-  readonly kind: 'legacy' | 'v2'
+  readonly kind: 'idle' | 'v2'
   readonly features: BackendFeatures
   readonly sessions: {
     /** Resolves the new terminal id, or null when the target is unknown */
@@ -169,119 +139,34 @@ export interface WindowBackend {
   }
 }
 
-/** The repository's root on the host, or the error the Add Worktree dialog shows. */
-function hostRepoPathOf(repoId: string, serverId: string | undefined): string {
-  const project = useAppStore.getState().project
-  const repo = project ? repoById(project, repoId) : undefined
-  const path = repo ? hostRepoPath(repo, serverId) : null
-  if (!path) throw new Error('This server has no repository path configured.')
-  return path
-}
+const noProject = (): Promise<never> => Promise.reject(new Error('No project is open in this window'))
 
-const isGlobal = (terminalId: string): boolean =>
-  useAppStore.getState().terminals[terminalId]?.worktreeId === GLOBAL_WORKTREE_ID
-
-/** Today's behaviour, unchanged: each method is the call its UI made before the seam. */
-export const legacyBackend: WindowBackend = {
-  kind: 'legacy',
-  features: LEGACY_FEATURES,
+/**
+ * An empty window's backend (the start screen): no features, and every action refuses. Nothing
+ * calls it: the components that act on a project render only in a server window.
+ */
+export const idleBackend: WindowBackend = {
+  kind: 'idle',
+  features: NO_FEATURES,
   sessions: {
-    start: async (target, sessionType, llm) => {
-      if (!('worktreeId' in target)) return startClaudeSession(target, sessionType, llm)
-      const project = useAppStore.getState().project
-      const instance = project ? allWorktrees(project).find((w) => w.id === target.worktreeId) : undefined
-      return instance ? createTerminal(instance.id, instance.path, undefined, sessionType, llm) : null
-    },
-    startGlobal: async () => (await startGlobalTerminal()) ?? null,
-    openGlobal: () => openGlobalTerminals(),
-    restart: (terminalId) => restartTerminal(terminalId),
-    close: async (terminalId) => {
-      if (isGlobal(terminalId)) closeGlobalTerminal(terminalId)
-      else disposeTerminal(terminalId)
-    },
-    rename: async (terminalId, title) => {
-      const global = isGlobal(terminalId)
-      useAppStore.getState().renameTerminal(terminalId, title)
-      if (global) saveGlobalSessions()
-      else scheduleAutoSave()
-    },
-    sendPrompt: async (terminalId, text, focus = true) => pasteToTerminal(terminalId, text, focus),
-    enqueue: async (terminalId, text) => {
-      useAppStore.getState().enqueueTerminalText(terminalId, text)
-      scheduleAutoSave()
-    },
-    setQueue: async (terminalId, queue) => {
-      useAppStore.getState().setTerminalQueue(terminalId, queue)
-      scheduleAutoSave()
-    },
-    // dequeue and dismissDecision: no legacy caller (components use the store setters, which a
-    // server window overrides to call its backend's); kept so both backends fill the same seam.
-    dequeue: async (terminalId, index) => {
-      useAppStore.getState().removeQueuedText(terminalId, index)
-      scheduleAutoSave()
-    },
-    markComplete: async (terminalId, complete) => {
-      const state = useAppStore.getState()
-      const status = state.terminals[terminalId]?.status
-      if (status && (status === 'complete') !== complete) state.toggleTerminalComplete(terminalId)
-    },
-    seen: async (terminalId) => useAppStore.getState().clearTerminalAttention(terminalId),
-    dismissDecision: async (terminalId) => useAppStore.getState().clearDecision(terminalId)
+    start: noProject,
+    startGlobal: noProject,
+    openGlobal: noProject,
+    restart: noProject,
+    close: noProject,
+    rename: noProject,
+    sendPrompt: noProject,
+    enqueue: noProject,
+    setQueue: noProject,
+    dequeue: noProject,
+    markComplete: noProject,
+    seen: noProject,
+    dismissDecision: noProject
   },
-  worktrees: {
-    load: (worktreeId) => loadWorktree(worktreeId),
-    unload: async (worktreeId) => unloadWorktree(worktreeId),
-    unloadAll: async () => unloadAllWorktrees(),
-    create: async ({ repoId, serverId, branch, createBranch, fromPr }) => {
-      const repoPath = hostRepoPathOf(repoId, serverId)
-      if (fromPr === undefined) {
-        return { path: await createBranchWorktree(repoId, serverId, repoPath, branch, createBranch) }
-      }
-      try {
-        await window.api.fetchPullRequestHead(serverId ?? null, repoPath, fromPr, branch)
-      } catch (err) {
-        // A local branch that can't fast-forward to the PR head is still
-        // checkout-able — the user reconciles inside the worktree. A branch
-        // we don't have at all is a real failure.
-        if (!(await window.api.listBranches(serverId ?? null, repoPath)).includes(branch)) throw err
-      }
-      const path = worktreePathFor(repoPath, branch)
-      await window.api.addWorktreeAt(serverId ?? null, repoPath, path, branch)
-      await linkProjectDirs(repoId, serverId ?? null, repoPath, path)
-      tagNewBranch(repoId, branch)
-      return { path }
-    },
-    remove: (info, instance) => deleteWorktree(info, instance),
-    setOrder: async (keys) => useAppStore.getState().setWorktreeOrder(keys)
-  },
-  git: {
-    listWorktrees: async (repoId, serverId) =>
-      window.api.listWorktrees(serverId ?? null, hostRepoPathOf(repoId, serverId)),
-    listBranches: async (repoId, serverId) =>
-      window.api.listBranches(serverId ?? null, hostRepoPathOf(repoId, serverId)),
-    changes: (loc) => window.api.worktreeChanges(loc.serverId ?? null, loc.path),
-    diff: (loc) => window.api.worktreeDiff(loc.serverId ?? null, loc.path),
-    pull: (loc, branch) => window.api.pullBranch(loc.serverId ?? null, loc.path, branch),
-    push: (loc, branch) => window.api.pushBranch(loc.serverId ?? null, loc.path, branch)
-  },
-  branch: {
-    setTag: async (repoId, branch, tagId) => useAppStore.getState().setBranchTag(repoId, branch, tagId),
-    setCustomTag: async (repoId, branch, tagId, enabled) =>
-      useAppStore.getState().setBranchCustomTag(repoId, branch, tagId, enabled),
-    // A project file has one writer, this window: nothing to compare against.
-    setNote: async (repoId, branch, text) => useAppStore.getState().setBranchNote(repoId, branch, text),
-    setTicket: async (repoId, branch, ticketId) =>
-      useAppStore.getState().setBranchTicket(repoId, branch, ticketId),
-    setPullRequest: async (repoId, branch, url) =>
-      useAppStore.getState().setBranchPullRequest(repoId, branch, url),
-    setEnvVars: async (repoId, branch, text) =>
-      useAppStore.getState().setBranchEnvVars(repoId, branch, text)
-  },
-  repos: {
-    add: () => addRepository(),
-    remove: (repo) => removeRepository(repo)
-  },
-  // The text each caller showed before the seam.
+  worktrees: { load: noProject, unload: noProject, unloadAll: noProject, create: noProject, remove: noProject, setOrder: noProject },
+  git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, pull: noProject, push: noProject },
+  branch: { setTag: noProject, setCustomTag: noProject, setNote: noProject, setTicket: noProject, setPullRequest: noProject, setEnvVars: noProject },
+  repos: { add: noProject, remove: noProject },
   errors: {
     show: (title, message) => void window.api.showError(title, message),
     report: (title, err) => void window.api.showError(title, String(err)),
@@ -290,13 +175,13 @@ export const legacyBackend: WindowBackend = {
   }
 }
 
-let current: WindowBackend = legacyBackend
+let current: WindowBackend = idleBackend
 const listeners = new Set<() => void>()
 
 /**
- * The backend for the window's current kind. A window can change kind (a
- * project file window opens a server project, a server window goes back to
- * pick another), so read it at the time of the action, not once.
+ * The backend for the window's current kind. A window can change kind (an
+ * empty window opens a server project, a server window goes back to pick
+ * another), so read it at the time of the action, not once.
  */
 export function getBackend(): WindowBackend {
   return current

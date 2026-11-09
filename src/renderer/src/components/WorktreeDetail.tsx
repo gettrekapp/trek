@@ -5,7 +5,6 @@ import {
   branchTag,
   dormantSessions,
   environmentFor,
-  hostRepoPath,
   instanceForInfo,
   pullRequestLabel,
   repoOfInfo,
@@ -17,10 +16,8 @@ import {
   useAppStore
 } from '../store'
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
-import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
-import { promoteBranchToWorktree, promoteToPrimary } from '../worktreeActions'
 import { branchLabel, gitStatusLabel, splitBranch } from './Sidebar'
 import { StatusBadge } from './StatusBadge'
 import { DecisionIcon } from './DecisionIcon'
@@ -39,7 +36,6 @@ import { SettingsPanel } from './SettingsPanel'
 import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
-import { MoveWorktreeModal } from './MoveWorktreeModal'
 import { envRepoKey } from '../../../shared/environments'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
@@ -125,7 +121,6 @@ export function WorktreeDetail({
   const [showTicket, setShowTicket] = useState(false)
   const [showPR, setShowPR] = useState(false)
   // Move target: 'local' or a server id — null when no move is in progress
-  const [moveTarget, setMoveTarget] = useState<string | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   /** The title the rename started from: a server window refuses it if the title changed meanwhile */
@@ -245,7 +240,6 @@ export function WorktreeDetail({
   const commitRename = (): void => {
     if (editingId) {
       renameTerminal(editingId, draft, editFrom)
-      scheduleAutoSave() // session titles persist in the project file
     }
     setEditingId(null)
   }
@@ -327,7 +321,6 @@ export function WorktreeDetail({
                           className={`tag-menu-item ${t.id === tag?.id ? 'active' : ''}`}
                           onClick={() => {
                             setBranchTag(repo.id, info.branch!, t.id)
-                            scheduleAutoSave()
                             setTagMenuOpen(false)
                           }}
                         >
@@ -343,7 +336,6 @@ export function WorktreeDetail({
                             className="tag-menu-item clear"
                             onClick={() => {
                               setBranchTag(repo.id, info.branch!, null)
-                              scheduleAutoSave()
                               setTagMenuOpen(false)
                             }}
                           >
@@ -391,7 +383,6 @@ export function WorktreeDetail({
                             className={`tag-menu-item ${on ? 'active' : ''}`}
                             onClick={() => {
                               setBranchCustomTag(repo.id, info.branch!, t.id, !on)
-                              scheduleAutoSave()
                             }}
                           >
                             <span className="tag-dot" style={{ color: t.color }} />
@@ -603,67 +594,9 @@ export function WorktreeDetail({
               </>
             )}
             <div className="detail-menu-divider" />
-            {isLocalMain ? (
-              features.promote && (
-                <div
-                  className={`detail-menu-item ${busy ? 'disabled' : ''}`}
-                  onClick={() => void runAction(() => promoteBranchToWorktree(repo.id, info.branch))}
-                >
-                  <div className="detail-menu-name">Promote branch to worktree…</div>
-                  <div className="detail-menu-desc">
-                    Move {info.branch ?? 'the current branch'} to its own worktree; main repo
-                    returns to the default branch
-                  </div>
-                </div>
-              )
-            ) : (
+            {/* Promote and Move to another server come back with phase 5's server commands. */}
+            {!isLocalMain && (
               <>
-                {features.promote && !isRemote && !info.isMain && (
-                  <div
-                    className={`detail-menu-item ${busy ? 'disabled' : ''}`}
-                    onClick={() => void runAction(() => promoteToPrimary(info, instance))}
-                  >
-                    <div className="detail-menu-name">Promote to primary…</div>
-                    <div className="detail-menu-desc">
-                      Check out {info.branch ?? 'this branch'} in the main repo
-                    </div>
-                  </div>
-                )}
-                {features.moveWorktree &&
-                  !info.isMain &&
-                  info.branch &&
-                  (() => {
-                    // Every other host with a clone is a move target: local (if this
-                    // row is remote) plus each server except its own.
-                    const targets: { key: string; name: string; down: boolean }[] = [
-                      ...(isRemote ? [{ key: 'local', name: 'this machine', down: false }] : []),
-                      ...(project.servers ?? [])
-                        .filter((s) => s.id !== info.serverId && hostRepoPath(repo, s.id))
-                        .map((s) => ({
-                          key: s.id,
-                          name: s.name,
-                          down: serverStatus[s.id] !== 'connected'
-                        }))
-                    ]
-                    return targets.map((target) => (
-                      <div
-                        key={target.key}
-                        className={`detail-menu-item ${busy || hostDown || target.down ? 'disabled' : ''}`}
-                        onClick={() => {
-                          if (busy || hostDown || target.down) return
-                          setMenuOpen(false)
-                          setMoveTarget(target.key)
-                        }}
-                      >
-                        <div className="detail-menu-name">Move to {target.name}…</div>
-                        <div className="detail-menu-desc">
-                          {target.down
-                            ? `${target.name} is disconnected`
-                            : `Recreate this worktree and its sessions on ${target.name}`}
-                        </div>
-                      </div>
-                    ))
-                  })()}
                 {!info.isMain && (
                   <div
                     className={`detail-menu-item danger ${busy || hostDown ? 'disabled' : ''}`}
@@ -935,15 +868,6 @@ export function WorktreeDetail({
       )}
       {showPR && info.branch && (
         <PullRequestModal repoId={repo.id} branch={info.branch} onClose={() => setShowPR(false)} />
-      )}
-      {moveTarget && (
-        <MoveWorktreeModal
-          info={info}
-          instance={instance}
-          targetServerId={moveTarget === 'local' ? undefined : moveTarget}
-          onClose={() => setMoveTarget(null)}
-          onMoved={onWorktreesChanged}
-        />
       )}
     </main>
   )

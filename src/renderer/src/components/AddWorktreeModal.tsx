@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { hostRepoPath, repoById, useAppStore } from '../store'
-import { scheduleAutoSave } from '../persistence'
 import { getBackend } from '../backend'
 import { errorText } from '../v2/errors'
 import { worktreeKey } from '../../../shared/types'
@@ -35,14 +34,11 @@ function parsePullRequestUrl(input: string): ParsedPullRequest | null {
 export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const addWorktreeInstance = useAppStore((s) => s.addWorktreeInstance)
-  const serverStatus = useAppStore((s) => s.serverStatus)
   // A server project lists every worktree already: there are no "existing" ones to add.
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
   // A server's ClientError reads "code: message" through String(); a project file keeps its text as it was.
   const shown = (err: unknown): string => (serverWindow ? errorText(err) : String(err))
 
-  // undefined = the local machine
-  const [serverId, setServerId] = useState<string | undefined>(undefined)
   const [existing, setExisting] = useState<GitWorktreeInfo[]>([])
   const [branches, setBranches] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -56,9 +52,8 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
   const [addingPr, setAddingPr] = useState(false)
   const pr = parsePullRequestUrl(prUrl)
 
-  const servers = project.servers ?? []
   const repo = repoById(project, repoId)!
-  const repoPath = hostRepoPath(repo, serverId)
+  const repoPath = hostRepoPath(repo, undefined)
 
   const addedKeys = useMemo(
     () => new Set([worktreeKey({ path: repo.path }), ...repo.worktrees.map((w) => worktreeKey(w))]),
@@ -75,12 +70,12 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     setLoading(true)
     setError(null)
     Promise.all([
-      getBackend().git.listWorktrees(repoId, serverId),
-      getBackend().git.listBranches(repoId, serverId)
+      getBackend().git.listWorktrees(repoId),
+      getBackend().git.listBranches(repoId)
     ])
       .then(([worktrees, branchList]) => {
         if (cancelled) return
-        setExisting(worktrees.map((w) => ({ ...w, serverId })))
+        setExisting(worktrees)
         setBranches(branchList)
         setLoading(false)
       })
@@ -92,7 +87,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     return () => {
       cancelled = true
     }
-  }, [repoId, serverId, repoPath])
+  }, [repoId, repoPath])
 
   /**
    * Opens the worktree with a first session. A project file gets a new
@@ -110,7 +105,6 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       id: crypto.randomUUID(),
       name: info.name ?? info.branch ?? baseName(info.path),
       path: info.path,
-      serverId,
       branch: info.branch
     }
     addWorktreeInstance(repoId, worktree)
@@ -126,7 +120,6 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     try {
       const { path } = await getBackend().worktrees.create({
         repoId,
-        serverId,
         branch,
         createBranch: !baseExisting
       })
@@ -146,7 +139,6 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
         (await window.api.githubPrHeadBranch(pr.owner, pr.repo, pr.number)) ?? `pr/${pr.number}`
       const linkPr = (): void => {
         useAppStore.getState().setBranchPullRequest(repoId, branch, pr.url)
-        scheduleAutoSave()
       }
       // The PR's branch may already be checked out — reuse that worktree.
       const checkedOut = existing.find((w) => w.branch === branch)
@@ -158,7 +150,6 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       }
       const { path } = await getBackend().worktrees.create({
         repoId,
-        serverId,
         branch,
         createBranch: false,
         fromPr: pr.number
@@ -177,27 +168,6 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Add Worktree — {repo.name}</h2>
-        {servers.length > 0 && (
-          <div className="location-row">
-            <span className="location-label">Location</span>
-            <select
-              className="settings-select"
-              value={serverId ?? ''}
-              onChange={(e) => setServerId(e.target.value || undefined)}
-            >
-              <option value="">Local machine</option>
-              {servers.map((s) => {
-                const down = serverStatus[s.id] !== 'connected'
-                return (
-                  <option key={s.id} value={s.id} disabled={down}>
-                    {s.name}
-                    {down ? ' (disconnected)' : ''}
-                  </option>
-                )
-              })}
-            </select>
-          </div>
-        )}
         {error && <div className="error">{error}</div>}
         {loading ? (
           <p className="muted">Loading worktrees…</p>

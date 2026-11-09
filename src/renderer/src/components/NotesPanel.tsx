@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
-import { scheduleAutoSave } from '../persistence'
 import { useAppStore } from '../store'
 import { v2NoteDrafts, type NoteDrafts } from '../v2/noteDrafts'
 
@@ -70,7 +69,6 @@ export function NotesPanel({ visible, repoId, noteKey }: Props): React.JSX.Eleme
         onChange={(e) => {
           if (!drafts) {
             setBranchNote(repoId, noteKey, e.target.value)
-            scheduleAutoSave()
             return
           }
           drafts.edit(repoId, noteKey, e.target.value)

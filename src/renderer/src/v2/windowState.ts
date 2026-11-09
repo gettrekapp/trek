@@ -6,8 +6,6 @@ import type { AppState } from '../store'
 /** The projected slice and the window's server-mode state, emptied. */
 export const EMPTY: Partial<AppState> = {
   project: null,
-  filePath: null,
-  dirty: false,
   activeWorktreeId: null,
   selected: null,
   terminals: {},
