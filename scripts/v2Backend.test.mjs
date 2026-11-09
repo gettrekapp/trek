@@ -36,6 +36,8 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   const waits = []
   const timeouts = []
   const listeners = {}
+  // The backend each teardown step was handed (the remove's own, never another window's).
+  const owners = []
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
@@ -103,21 +105,30 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
         ui.push(['env?', info.path])
         return machine.env ? { profile: machine.env } : undefined
       },
-      confirm: async (info, prompt) => {
+      confirm: async (info, prompt, owner) => {
+        owners.push(owner)
         ui.push(['confirm+stack', prompt.title, prompt.detail])
         const confirmed = answers.shift() ?? false
         return { confirmed, ...(machine.stack && machine.ticked !== false ? { stackName: machine.stack } : {}) }
       },
-      destroyStack: async (info, name) => void calls.push(['stack.sh destroy', info.path, name]),
-      destroyEnvironment: async (info) => void calls.push(['colima delete', info.path]),
-      isDirty: async (info) => {
+      destroyStack: async (info, name, owner) => {
+        owners.push(owner)
+        calls.push(['stack.sh destroy', info.path, name])
+      },
+      destroyEnvironment: async (info, owner) => {
+        owners.push(owner)
+        calls.push(['colima delete', info.path])
+      },
+      isDirty: async (info, owner) => {
+        owners.push(owner)
         ui.push(['git status', info.path])
+        if (machine.dirty instanceof Error) throw machine.dirty
         return machine.dirty === true
       }
     },
     left
   })
-  return { backend, calls, ui, st, reports, waits, timeouts, listeners }
+  return { backend, calls, ui, st, reports, waits, timeouts, listeners, owners }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -554,6 +565,21 @@ test('remove on a server with env and stacks that fails after the teardown: load
   const unload = setup({ ...MACHINE_CAPS, confirms: [true], state: LOADED, replies: { 'worktree.unload': new CodedError('IN_USE', 'busy') }, machine: { env: 'twb-x' } })
   await unload.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(unload.ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
+})
+
+test('remove on a server with env and stacks: every teardown step gets the backend doing the remove', async () => {
+  const { backend, owners } = setup({ ...MACHINE_CAPS, confirms: [true], machine: { env: 'twb-x', stack: 'r-feat' } })
+  await backend.worktrees.remove(feat, undefined)
+  assert.equal(owners.length, 4)
+  for (const owner of owners) assert.equal(owner, backend)
+})
+
+test('remove on a server with env and stacks: a fresh dirty check that fails (a timeout) deletes nothing and says why', async () => {
+  const machine = { env: 'twb-x', stack: 'r-feat', dirty: new Error('The server did not answer in time.') }
+  const { backend, calls, ui } = setup({ ...MACHINE_CAPS, confirms: [true], state: LOADED, machine })
+  await backend.worktrees.remove(feat, undefined)
+  assert.deepEqual(calls, [])
+  assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'The server did not answer in time.'])
 })
 
 test('tornDownNote names what is already gone', () => {

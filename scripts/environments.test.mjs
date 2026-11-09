@@ -24,16 +24,17 @@ test('envRepoKey: a profile key that is not an absolute path string is ignored',
   assert.equal(envRepoKey({ path: '/p', environments: { profileKey: '/var/t/app' } }), '/var/t/app')
 })
 
-test("envListProblem: the server's unreadable registry is shown; a colima hiccup or a dropped link is not", () => {
-  const coded = (code, message) => Object.assign(new Error(message), { code })
+test("envListProblem: the server's unreadable registry (TOOL_ERROR, reason registry) is shown; a colima hiccup or a dropped link is not", () => {
+  const coded = (code, message, details) => Object.assign(new Error(message), { code, details })
   const unreadable = registryUnreadableMessage('/data/environments.json', 'it is not a JSON object')
   assert.match(unreadable, /\/data\/environments\.json/)
-  assert.equal(envListProblem(coded('TOOL_ERROR', unreadable)), unreadable)
+  assert.equal(envListProblem(coded('TOOL_ERROR', unreadable, { reason: 'registry' })), unreadable)
   // Transient: kept quiet, the last known list stays and the next poll retries.
   assert.equal(envListProblem(coded('TOOL_ERROR', 'colima list exited with code 1')), null)
+  assert.equal(envListProblem(coded('TOOL_ERROR', 'colima is not installed', { reason: 'missing' })), null)
   assert.equal(envListProblem(coded('NOT_CONNECTED', 'not connected to the server')), null)
-  // The registry's words from anything but the server's TOOL_ERROR are not the server's verdict.
-  assert.equal(envListProblem(coded('INTERNAL', unreadable)), null)
-  assert.equal(envListProblem(new Error(unreadable)), null)
+  // The reason decides, not the words: the same message without it, or on another code, is not it.
+  assert.equal(envListProblem(coded('TOOL_ERROR', unreadable)), null)
+  assert.equal(envListProblem(coded('INTERNAL', unreadable, { reason: 'registry' })), null)
   assert.equal(envListProblem(undefined), null)
 })

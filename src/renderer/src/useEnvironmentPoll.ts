@@ -2,8 +2,8 @@
 // Settings' orphan list: a server window's V2Workspace runs it, with the `env`
 // feature (the server runs them on its machine). It starts once a repository
 // has environments on: the tool check first (colima and docker on the server's
-// PATH), then `colima list` every ENV_POLL_MS. refreshEnvironments no-ops until
-// the check has passed.
+// PATH), asked again each ENV_POLL_MS until it answers, then `colima list`
+// every ENV_POLL_MS. refreshEnvironments no-ops until the check has passed.
 import { useEffect } from 'react'
 import { useAppStore } from './store'
 import { getBackend } from './backend'
@@ -19,17 +19,31 @@ export function useEnvironmentPoll(allowed: boolean): void {
   useEffect(() => {
     if (!envEnabled) return
     let cancelled = false
-    getBackend()
-      .env.check()
-      .then((result) => {
-        if (cancelled) return
-        useAppStore.getState().setEnvToolCheck(result)
-        void refreshEnvironments()
-      })
-      .catch(() => {
-        // the link dropped: asked again when it is back (serverOffline above)
-      })
-    const interval = setInterval(() => void refreshEnvironments(), ENV_POLL_MS)
+    let checking = false
+    // The tool check; until one answers (a request that timed out or failed), each tick asks again.
+    const check = (): void => {
+      if (checking) return
+      checking = true
+      const backend = getBackend()
+      backend.env
+        .check()
+        .then((result) => {
+          if (cancelled || getBackend() !== backend) return
+          useAppStore.getState().setEnvToolCheck(result)
+          void refreshEnvironments(backend)
+        })
+        .catch(() => {
+          // no answer: the next tick asks again (and the link coming back reruns this effect)
+        })
+        .finally(() => {
+          checking = false
+        })
+    }
+    check()
+    const interval = setInterval(() => {
+      if (useAppStore.getState().envToolCheck === null) check()
+      else void refreshEnvironments()
+    }, ENV_POLL_MS)
     return () => {
       cancelled = true
       clearInterval(interval)

@@ -48,7 +48,7 @@ See 5a-1's "Roadmap: phase 5": this plan is **5a-2**. 5b is Linear, voice (on th
 10. **What is checked** (`server/src/integrations/args.ts`): a container id or name `[A-Za-z0-9][A-Za-z0-9_.-]{0,254}`; a profile `twb-[a-z0-9][a-z0-9-]{0,62}`; a service `[A-Za-z0-9][A-Za-z0-9_.-]{0,127}`; a compose file, each comma-separated part relative, inside the worktree, no `..`, not `-…`, no NUL, and, when it exists, still inside the worktree's real path once its symlinks are followed (as `stack.sh` must be, for `stack.*`); the settings' keys and ranges (`cpu` 1–256, `memory` 1–1024, `disk` 1–10000, booleans); the variables' names (`[A-Za-z_][A-Za-z0-9_]*`, as `parseEnvVars` reads them), at most 200, string values without NUL, and, in any case, none of `PATH`, `HOME`, `XDG_CONFIG_HOME` or the `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`, `LD_*` and `DYLD_*` families (the user's decision), which would steer which programs compose runs, which daemon it reaches or which files it reads as its own configuration, instead of what the compose file reads; `tail` 1–5000; `fileId` and `offset` non-negative integers. Every command is `execFile` or `spawn` with an argument list. The compose-file check limits the client's `composeFile` argument only: the repository's compose content (`include`, `extends`, `env_file`, bind mounts, a symlinked default `docker-compose.yml`) is the repository's and is not confined.
 11. **Long runs keep request/response**, with long client timeouts (30 min for `env.up` and `docker.compose`, 10 for `env.stop`, `env.destroy`, `stack.down`, `stack.destroy`, 3 for `docker.container`) and their output as events. A run outlives its connection: a dropped link fails the request with `NOT_CONNECTED` on the client while the server finishes the run, and the next `env.list` or `stack.status` shows the result. A server-side operations topic (every client seeing every run) is more than 5a needs.
 12. **The events go to the requesting connection only**, as main's `env:log` went to the window that asked. Another window on the same project sees the result through the polls, not the log.
-13. **`worktree.dirty`** is a new method rather than `worktree.changes` (which compares with the base branch, so a committed branch is "changed") or a poller refresh (which would wait on a whole status sweep). It answers `git status --porcelain` now, `null` when git cannot read it; a client of an older server falls back to the poll's flag, as `localWorktreeDirty` did for an unreadable path.
+13. **`worktree.dirty`** is a new method rather than `worktree.changes` (which compares with the base branch, so a committed branch is "changed") or a poller refresh (which would wait on a whole status sweep). It answers `git status --porcelain` now, `null` when git cannot read it; a client of an older server (or one whose check fails) falls back to the poll's flag, as `localWorktreeDirty` did for an unreadable path. A check that times out is the exception: it says nothing about the worktree, so the delete stops there ("Nothing was deleted; try again") instead of guessing "clean" before the stack and the VM go (Task 3 review).
 
 **The server (Task 1)**
 
@@ -4775,8 +4775,9 @@ index e274fef..c70a72d 100644
  reading the message (which may be git's own, localised text). Today the only key
 -is `reason`, and the only reason is `dirty` (see `worktree.remove`). Clients
 -ignore keys and reasons they don't know.
-+is `reason`: `dirty` (see `worktree.remove`), or `missing` on a `TOOL_ERROR` (the
-+tool is not installed on the server). Clients ignore keys and reasons they don't know.
++is `reason`: `dirty` (see `worktree.remove`), or, on a `TOOL_ERROR`, `missing` (the
++tool is not installed on the server) or `registry` (the server's environments registry
++cannot be read; nothing was written). Clients ignore keys and reasons they don't know.
  
  `project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
  `session.rename`, `session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
@@ -4828,6 +4829,10 @@ index e274fef..c70a72d 100644
 +  `details.reason: missing` (`docker.list`, `env.list`, …), and `env.check` reports which one is
 +  missing; a compose or Colima run that cannot start ends with code `-1` and says so in its
 +  output. Any other failure of the tool is `TOOL_ERROR` with its message.
++- **An unreadable registry is not an empty one.** When the server cannot read or parse
++  `environments.json`, `env.list` and every environment change fail with `TOOL_ERROR`,
++  `details.reason: registry`, naming the file, and nothing is written: an empty list would
++  show every VM as an orphan to delete. The app shows the message until the file is fixed.
 +- **Long runs.** `env.up` (a VM's first boot), `docker.compose` (an image build) and
 +  `stack.down`/`stack.destroy` (each Ctrl-C's a running `up` and waits up to a minute) can take
 +  minutes; clients give them a long request timeout. A run outlives the connection that asked
@@ -5117,6 +5122,7 @@ Expected: no output. No smoke wrote under the real HOME (`~/.config/trek-server/
 5. **Docker and Colima run as the server user, for any client with a token.** That is the token's existing power (a shell), not a new one, but it is now a click away in every remote window; a shared server with several users' tokens should not be one where that is unwanted.
 6. **`TOOL_ERROR` is a new error code.** An older client shows it as a plain error message (clients pass unknown codes through), which is what it is.
 7. **No smoke reaches a real machine without docker.** `TOOL_ERROR` `missing` is covered by `serverMachine.test.mjs` (an empty PATH) and the panel's error state by `smoke:server-env` (a docker that fails).
+8. **The teardown does not retry a stack that is busy.** A delete whose `stack.destroy` is refused because the stack "is starting" or "is already stopping" (another window's run) shows "Dev stack cleanup failed" with the command to run by hand, and the worktree is deleted anyway, as 4c's teardown did for any stack failure. Waiting for the other run and retrying is left out (Task 3 review, Minor 3).
 
 ## Questions for the user
 

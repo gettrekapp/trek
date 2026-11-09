@@ -13,7 +13,8 @@ import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPr
  * A server project's workspace: the Sidebar, WorktreeDetail and Global panel
  * over the projected slice (applyV2Project fills the store). It polls no git:
  * the server's mirror patches carry every worktree, git status and session. A
- * Local server window (`features.env`) polls this machine's Colima environments.
+ * window whose server runs the environments (`features.env`, any 5a server)
+ * polls them, on the server's machine.
  */
 export function V2Workspace(): React.JSX.Element {
   const project = useAppStore((s) => s.project)

@@ -69,11 +69,12 @@ export const ENV_DEFAULTS = {
   composeFile: 'docker-compose.yml'
 } as const
 
-const REGISTRY_UNREADABLE = 'The environments registry '
+/** The `details.reason` of the TOOL_ERROR for an environments registry the server cannot read. */
+export const REGISTRY_REASON = 'registry'
 
 /** The server's env.list (and every change) refuses an unreadable registry with this message, naming the file. */
 export function registryUnreadableMessage(registryFile: string, reason: string): string {
-  return `${REGISTRY_UNREADABLE}${registryFile} cannot be read (${reason}); it was left as it is`
+  return `The environments registry ${registryFile} cannot be read (${reason}); it was left as it is`
 }
 
 /**
@@ -82,7 +83,7 @@ export function registryUnreadableMessage(registryFile: string, reason: string):
  * the poll keeps quiet and retries.
  */
 export function envListProblem(err: unknown): string | null {
-  const e = err as { code?: unknown; message?: unknown } | null | undefined
-  if (e?.code !== 'TOOL_ERROR' || typeof e.message !== 'string') return null
-  return e.message.startsWith(REGISTRY_UNREADABLE) ? e.message : null
+  const e = err as { code?: unknown; message?: unknown; details?: { reason?: unknown } } | null | undefined
+  if (e?.code !== 'TOOL_ERROR' || e.details?.reason !== REGISTRY_REASON || typeof e.message !== 'string') return null
+  return e.message
 }

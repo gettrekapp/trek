@@ -57,11 +57,15 @@ export function DockerMenu({ repoId }: { repoId: string }): React.JSX.Element {
     setOpen(false)
     if (running) return
     setRunning(action.label)
+    const backend = getBackend()
     try {
-      // Output streams into the Docker panel's log as the server's docker.log events.
-      await getBackend().docker.compose(repoId, action.action)
-    } catch {
-      // A failure the server could not even start (offline): the panel's poll shows docker's state.
+      // Output streams into the Docker panel's log as the server's docker.log events; a run that
+      // fails resolves its exit code there.
+      await backend.docker.compose(repoId, action.action)
+    } catch (err) {
+      // A request the server refused or never answered is shown. report says nothing for a link
+      // that is down (NOT_CONNECTED: the window shows it offline) or a window that left.
+      backend.errors.report(`docker ${action.label} failed`, err)
     } finally {
       setRunning(null)
     }

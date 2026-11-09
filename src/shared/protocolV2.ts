@@ -69,7 +69,8 @@ export type WireErrorCode =
   | 'CONGESTED'
   /**
    * A docker, colima or stack.sh command on the server's machine failed. `details.reason`
-   * `missing`: the tool is not on the server's PATH (not installed there).
+   * `missing`: the tool is not on the server's PATH (not installed there); `registry`: the
+   * server's environments registry cannot be read (env.list and the env changes; nothing written).
    */
   | 'TOOL_ERROR'
 
@@ -85,6 +86,7 @@ export interface WireErrorDetails {
   /**
    * `dirty`: `worktree.remove` refused a worktree with modified or untracked files.
    * `missing`: a TOOL_ERROR's tool is not installed on the server.
+   * `registry`: a TOOL_ERROR's environments registry cannot be read on the server.
    * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
    */
   reason?: string

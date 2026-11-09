@@ -21,6 +21,13 @@ test('envStartArgs sends only the keys env.up takes: not a profileKey, nor what 
   assert.deepEqual(envStartArgs(repo, 'feat', 'compose.yml').settings, { enabled: true, memory: 8, rosetta: true, composeFile: 'compose.yml' })
 })
 
+test('envStartArgs copies only stored values of the right type: booleans for the flags, finite numbers for the sizes', () => {
+  const environments = { enabled: 'yes', cpu: '4', memory: Number.NaN, disk: Infinity, networkAddress: 1, rosetta: false }
+  assert.deepEqual(envStartArgs({ id: 'r', name: 'r', path: '/r', environments }, 'feat', 'c.yml').settings, { enabled: true, rosetta: false, composeFile: 'c.yml' })
+  const good = { enabled: false, cpu: 2, memory: 6, disk: 40, networkAddress: true }
+  assert.deepEqual(envStartArgs({ id: 'r', name: 'r', path: '/r', environments: good }, 'feat', 'c.yml').settings, { ...good, composeFile: 'c.yml' })
+})
+
 test("a server window's Start right after typing uses the variables still pending on the server", () => {
   const mirror = {
     id: 'p',

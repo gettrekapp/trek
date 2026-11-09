@@ -50,19 +50,23 @@ export interface ConfirmPrompt {
 
 /**
  * The teardown on the server's machine before a worktree is removed (worktreeTeardown.ts). Used
- * only with the features: `env` for the VM, `stacks` for the dev stack.
+ * only with the features: `env` for the VM, `stacks` for the dev stack. Each call that reaches the
+ * server gets `backend`, the one doing the remove, and sends through it alone.
  */
 export interface WorktreeTeardown {
   /** The branch's Colima VM, if the environments poll lists one */
   environment(info: GitWorktreeInfo): { profile: string } | undefined
   /** The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when that is ticked */
-  confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt): Promise<{ confirmed: boolean; stackName?: string }>
+  confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt, backend: WindowBackend): Promise<{ confirmed: boolean; stackName?: string }>
   /** `stack.sh destroy`; shows its own failure and never rejects */
-  destroyStack(info: GitWorktreeInfo, stackName: string): Promise<void>
+  destroyStack(info: GitWorktreeInfo, stackName: string, backend: WindowBackend): Promise<void>
   /** Deletes the VM; shows its own failure and never rejects */
-  destroyEnvironment(info: GitWorktreeInfo): Promise<void>
-  /** A fresh `git status` of the worktree on its server (`worktree.dirty`); the cached flag if it can't be read */
-  isDirty(info: GitWorktreeInfo): Promise<boolean>
+  destroyEnvironment(info: GitWorktreeInfo, backend: WindowBackend): Promise<void>
+  /**
+   * A fresh `git status` of the worktree on its server (`worktree.dirty`); the cached flag if it
+   * can't be read. Rejects, with the text to show, when the server did not answer in time.
+   */
+  isDirty(info: GitWorktreeInfo, backend: WindowBackend): Promise<boolean>
 }
 
 /** Added to a failed removal's error once its stack or VM is already gone. */
@@ -225,7 +229,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     return features.value
   }
 
-  return {
+  const backend: WindowBackend = {
     kind: 'v2',
     /** Read at the time: the capabilities arrive with the welcome (useFeatures re-reads them). */
     get features(): BackendFeatures {
@@ -380,7 +384,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           confirmLabel: dirty ? 'Delete Worktree & Changes' : 'Delete Worktree'
         }
         const { confirmed, stackName } = machine.stacks
-          ? await deps.teardown.confirm(info, prompt)
+          ? await deps.teardown.confirm(info, prompt, backend)
           : { confirmed: await deps.confirm(prompt), stackName: undefined }
         if (!confirmed) return
         const askDiscard = (): Promise<boolean> =>
@@ -392,9 +396,19 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           })
         // The stack and the VM can't come back: git's refusal after them would be too late to ask
         // (legacy runs worktreeIsDirty first). Asked before anything is unloaded or destroyed.
-        if ((stackName || env) && !dirty && (await deps.teardown.isDirty(info))) {
-          if (!(await askDiscard())) return
-          dirty = true
+        if ((stackName || env) && !dirty) {
+          let fresh: boolean
+          try {
+            fresh = await deps.teardown.isDirty(info, backend)
+          } catch (err) {
+            // No answer in time: nothing is unloaded or destroyed on a guess.
+            await deps.showError(REMOVE_FAILED, errorText(err))
+            return
+          }
+          if (fresh) {
+            if (!(await askDiscard())) return
+            dirty = true
+          }
         }
         let wasLoaded = false
         let tornDown = { stack: false, vm: false }
@@ -413,8 +427,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           }
           // Stack and environment first: they need the worktree's files, and their
           // containers hold bind-mount handles into it. Neither rejects.
-          if (stackName) await deps.teardown.destroyStack(info, stackName)
-          if (env) await deps.teardown.destroyEnvironment(info)
+          if (stackName) await deps.teardown.destroyStack(info, stackName, backend)
+          if (env) await deps.teardown.destroyEnvironment(info, backend)
           tornDown = { stack: !!stackName, vm: !!env }
           await removeWorktree(worktreeId, dirty)
           return
@@ -570,4 +584,5 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       inline: (err) => (deps.left() || errorCode(err) === 'NOT_CONNECTED' ? null : errorText(err))
     }
   }
+  return backend
 }

@@ -3,11 +3,14 @@
 // backend, the store's project setters and the projected slice always change
 // together: a window that goes back to the start screen never keeps this
 // project's setters on the idle backend, nor a projected project.
-import { useAppStore } from '../store'
+import { environmentFor, repoOfInfo, useAppStore } from '../store'
 import { setProjectSetters } from '../projectSetters'
 import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repoRemoval'
-import { worktreeTeardown } from '../worktreeTeardown'
+import { createWorktreeTeardown } from '../worktreeTeardown'
+import { destroyEnvironmentIfAny } from '../environmentActions'
+import { envRepoKey } from '../../../shared/environments'
+import { windowEventSubscriber } from './windowEvents'
 import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
 import { v2SetterOverrides } from './setterOverrides'
 import { applyV2Project, clearV2Projection, setV2ProjectOverlay, v2Ids } from './applyProjection'
@@ -103,20 +106,30 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
   // An edit the link dropped under says so (Notes for 3c-3 #13); one dialog at a time.
   const reportEdit = editReporter(showError, report)
 
+  // The delete's teardown: the store's environments and the dialogs (none once the window left);
+  // each step's server calls go through the backend doing the remove.
+  const teardown = createWorktreeTeardown({
+    environment: (info) => {
+      const state = useAppStore.getState()
+      return state.project ? environmentFor(state.environments, envRepoKey(repoOfInfo(state.project, info)), info.branch) : undefined
+    },
+    destroyEnvironment: async (owner, info) => {
+      const project = useAppStore.getState().project
+      return project ? destroyEnvironmentIfAny(envRepoKey(repoOfInfo(project, info)), info.branch, owner) : undefined
+    },
+    showError,
+    confirm: (prompt) => (left ? Promise.resolve(false) : window.api.confirm(prompt)),
+    confirmWithCheckbox: (options) =>
+      left ? Promise.resolve({ confirmed: false, checked: false }) : window.api.confirmWithCheckbox(options)
+  })
+
   const backend = createV2Backend({
     projectId,
     request,
     requestWithRev,
     capabilities: () => registered()?.connection.welcome?.capabilities,
     localEntry: isLocalEntryId(entryId),
-    // The window's own connection: a reconnect keeps it, and so its listeners.
-    onEvent: (event, listener) => {
-      const server = left ? undefined : registered()
-      if (!server) return () => {}
-      return server.connection.on('event', (frame) => {
-        if (!left && frame.event === event) listener(frame.payload as Parameters<typeof listener>[0])
-      })
-    },
+    onEvent: windowEventSubscriber(() => registered()?.connection, () => left),
     ids: v2Ids,
     state: () => useAppStore.getState(),
     whenProjected,
@@ -128,7 +141,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     promptRepoPath: requestRepoPath,
     registeredRepoPath,
     removalBlock,
-    teardown: worktreeTeardown,
+    teardown,
     report,
     reportEdit,
     left: () => left

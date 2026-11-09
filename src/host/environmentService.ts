@@ -17,7 +17,7 @@ import {
   startVm,
   stopVm
 } from './colimaService.ts'
-import { ENV_DEFAULTS, ENV_PROFILE_PREFIX, deriveProfileName, registryUnreadableMessage } from '../shared/environments.ts'
+import { ENV_DEFAULTS, ENV_PROFILE_PREFIX, REGISTRY_REASON, deriveProfileName, registryUnreadableMessage } from '../shared/environments.ts'
 import type {
   EnvCheckResult,
   EnvLogEvent,
@@ -90,6 +90,11 @@ export interface EnvironmentServiceOptions {
   home?: string
 }
 
+/** Tagged `reason: 'registry'`: the server's TOOL_ERROR carries it as `details.reason`, which the client shows. */
+function registryUnreadable(registryFile: string, why: string): Error {
+  return Object.assign(new Error(registryUnreadableMessage(registryFile, why)), { reason: REGISTRY_REASON })
+}
+
 export function createEnvironmentService(options: EnvironmentServiceOptions): EnvironmentService {
   const { registryFile } = options
   const home = options.home ?? homedir()
@@ -105,11 +110,11 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
       parsed = JSON.parse(await readFile(registryFile, 'utf8'))
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' || !strict) return {}
-      throw new Error(registryUnreadableMessage(registryFile, (err as Error).message))
+      throw registryUnreadable(registryFile, (err as Error).message)
     }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Registry
     if (!strict) return {}
-    throw new Error(registryUnreadableMessage(registryFile, 'it is not a JSON object'))
+    throw registryUnreadable(registryFile, 'it is not a JSON object')
   }
   // Write-then-rename: a crash mid-write must not leave a torn file, which would read as no VMs.
   const writeRegistry = async (registry: Registry): Promise<void> => {

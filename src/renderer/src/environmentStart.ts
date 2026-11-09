@@ -14,16 +14,20 @@ export interface EnvStartArgs {
 }
 
 /**
- * The settings `env.up` takes: the server refuses any other key (its args.ts), and a repository's
- * stored `environments` can hold others (another client's, an old file's) and `profileKey`, which
- * the server reads from its own copy of the repository.
+ * The settings `env.up` takes, by type: the server refuses any other key or a value of the wrong
+ * type (its args.ts), and a repository's stored `environments` can hold others (another client's,
+ * an old file's) and `profileKey`, which the server reads from its own copy of the repository.
+ * A stored value of the wrong type is left out, so the server's default applies.
  */
-const ENV_UP_KEYS = ['enabled', 'cpu', 'memory', 'disk', 'networkAddress', 'rosetta'] as const
+const ENV_UP_FLAGS = ['enabled', 'networkAddress', 'rosetta'] as const
+const ENV_UP_SIZES = ['cpu', 'memory', 'disk'] as const
 
 export function envStartArgs(repo: Repository | undefined, branch: string, composeFile: string): EnvStartArgs {
   const envVars = parseEnvVars(repo?.branchEnvVars?.[branch] ?? '')
   const stored = (repo?.environments ?? {}) as Partial<Record<string, unknown>>
-  const picked = Object.fromEntries(ENV_UP_KEYS.filter((key) => stored[key] !== undefined).map((key) => [key, stored[key]]))
+  const picked: Record<string, unknown> = {}
+  for (const key of ENV_UP_FLAGS) if (typeof stored[key] === 'boolean') picked[key] = stored[key]
+  for (const key of ENV_UP_SIZES) if (Number.isFinite(stored[key])) picked[key] = stored[key]
   return {
     settings: { enabled: true, ...picked, composeFile } as EnvironmentSettings,
     envVars: Object.keys(envVars).length > 0 ? envVars : undefined

@@ -13,7 +13,7 @@ import { envRepoKey } from '../../../src/shared/environments.ts'
 import * as docker from '../../../src/host/dockerService.ts'
 import type { EnvironmentService } from '../../../src/host/environmentService.ts'
 import type { StackService } from '../../../src/host/stackService.ts'
-import { deriveProfileName } from '../../../src/shared/environments.ts'
+import { REGISTRY_REASON, deriveProfileName } from '../../../src/shared/environments.ts'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { SINK_HIGH_WATER, SINK_LOW_WATER } from '../sessions/terminalHost.ts'
@@ -87,7 +87,10 @@ function missingTool(err: unknown): string | null {
   return typeof e.syscall === 'string' && e.syscall.startsWith('spawn ') ? e.syscall.slice('spawn '.length) : 'the tool'
 }
 
-/** Runs a tool: a failure is TOOL_ERROR (`missing` when the program is not installed), never INTERNAL. */
+/**
+ * Runs a tool: a failure is TOOL_ERROR (`missing` when the program is not installed, `registry`
+ * when the environments registry cannot be read), never INTERNAL.
+ */
 async function viaTool<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
@@ -96,7 +99,8 @@ async function viaTool<T>(operation: () => Promise<T>): Promise<T> {
     const tool = missingTool(err)
     if (tool) throw codedError('TOOL_ERROR', `${tool} is not installed on the server (it is not on the server's PATH)`, { reason: 'missing' })
     const message = (err as Error).message ?? String(err)
-    throw codedError('TOOL_ERROR', message.length > 4000 ? `${message.slice(0, 4000)}…` : message)
+    const details = (err as { reason?: unknown }).reason === REGISTRY_REASON ? { reason: REGISTRY_REASON } : undefined
+    throw codedError('TOOL_ERROR', message.length > 4000 ? `${message.slice(0, 4000)}…` : message, details)
   }
 }
 

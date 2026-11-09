@@ -19,7 +19,8 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
 import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
-import { deriveProfileName } from '../src/shared/environments.ts'
+import { deriveProfileName, envListProblem } from '../src/shared/environments.ts'
+import { ClientError } from '../src/shared/client/connection.ts'
 
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -445,8 +446,10 @@ test('env.list: a registry file that cannot be read is a TOOL_ERROR naming it, n
   for (const text of ['{"twb-real-000000": {', '[]']) {
     writeFileSync(registryFile, text)
     const res = await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })
-    refused(res, 'TOOL_ERROR')
+    refused(res, 'TOOL_ERROR', 'registry')
     assert.ok(res.error.message.includes(registryFile), res.error.message)
+    // The client shows it (the Env panel, Settings) rather than keeping the last list quietly.
+    assert.equal(envListProblem(new ClientError(res.error.code, res.error.message, res.error.details)), res.error.message)
     assert.equal(readFileSync(registryFile, 'utf8'), text)
   }
   // No file is an empty registry: the VM is a leftover.
