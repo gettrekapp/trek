@@ -471,6 +471,9 @@ export interface ContainerInfo {
 
 export type ContainerAction = 'start' | 'stop' | 'restart'
 
+/** The docker compose runs the Docker tab's menu offers (`docker.compose`); the server owns their arguments. */
+export type ComposeAction = 'up' | 'upBuild' | 'restart' | 'stop' | 'down' | 'pull'
+
 export interface DockerLogEvent {
   data: string
   /** true on the final event of a compose run */

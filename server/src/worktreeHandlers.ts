@@ -89,7 +89,7 @@ function locate(project: Project, worktreeId: unknown): { repo: Repository; work
  * import may not be). The main worktree is its repository's own checkout;
  * any other row must not be, nor contain, a registered repository.
  */
-function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree } {
+export function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree } {
   const found = locate(ctx.projects.require(p.projectId), p.worktreeId)
   findRegistered(ctx.store.config.repos, found.repo.path)
   if (found.worktree.missing) {
@@ -106,7 +106,7 @@ function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree
  * `git checkout` by a poll, so the repo is re-read first. The branch must be a
  * real branch name, since it goes on a git command line.
  */
-async function checkedOut(ctx: V2Context, p: any): Promise<{ repo: Repository; worktree: Worktree; branch: string }> {
+export async function checkedOut(ctx: V2Context, p: any): Promise<{ repo: Repository; worktree: Worktree; branch: string }> {
   const { repo } = present(ctx, p)
   if (!(await ctx.poller.refresh(repo.path))) {
     throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
@@ -240,5 +240,11 @@ export const worktreeHandlers: Record<string, Handler> = {
   'worktree.diff': async (p, ctx) => {
     const { worktree } = present(ctx, p)
     return viaGit(() => gitService.worktreeDiff(worktree.path))
+  },
+
+  // A delete's fresh check before it destroys a worktree's dev stack or VM (the poll's `dirty` can be 30 s old).
+  'worktree.dirty': async (p, ctx) => {
+    const { worktree } = present(ctx, p)
+    return gitService.worktreeDirty(worktree.path)
   }
 }

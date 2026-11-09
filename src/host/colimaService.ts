@@ -1,7 +1,7 @@
-// Electron-free: shared by the Electron main process and (later) the daemon.
+// Colima and docker compose for the environments (environmentService.ts), on trek-server's machine. Electron-free.
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
-import { dockerContextFor } from '../shared/environments'
+import { dockerContextFor } from '../shared/environments.ts'
 import type { EnvCheckResult, EnvService, EnvServicePort } from '../shared/types'
 
 const execFileAsync = promisify(execFile)
@@ -61,7 +61,7 @@ export async function listColimaProfiles(): Promise<ColimaProfile[]> {
 
 export type EnvVars = Record<string, string>
 
-/** Extra vars layered over the app's own env (compose reads them for ${VAR} substitution). */
+/** Extra vars layered over the server's own env (compose reads them for ${VAR} substitution). */
 const mergedEnv = (extra?: EnvVars): NodeJS.ProcessEnv =>
   extra && Object.keys(extra).length > 0 ? { ...process.env, ...extra } : process.env
 

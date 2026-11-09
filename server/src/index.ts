@@ -18,6 +18,7 @@ import { ProjectState } from './projects/state'
 import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
+import { createMachine } from './integrations/machine'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -414,6 +415,7 @@ try {
   fail(`Cannot read projects from ${projectsDir(args.dataDir ?? store.config.dataDir ?? defaultDataDir())}: ${(err as Error).message}`)
 }
 const { version, build } = buildInfo()
+const serverDataDir = resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir())
 const server = startServer(
   store,
   version,
@@ -423,7 +425,7 @@ const server = startServer(
     store: projectFiles.files
   },
   // Absolute: agents read the config file from their own worktree's directory.
-  { mcpDir: resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir(), 'mcp'), local: local !== undefined }
+  { mcpDir: resolve(serverDataDir, 'mcp'), local: local !== undefined, machine: createMachine(serverDataDir) }
 )
 store.watch()
 server.httpServer.on('error', (err: NodeJS.ErrnoException) => {

@@ -1,6 +1,6 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
-// projects, repositories and branch data, worktree commands, session.*, worktree.load/unload
-// and the v2 pty.* stream. Attention (working/done) arrives in 2d-2.
+// projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
+// the v2 pty.* stream, and docker, env and stack on the server's machine (machineHandlers.ts).
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
@@ -11,6 +11,7 @@ import type { BranchData, Repository } from '../../src/shared/model/types'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
+import { machineHandlers, type EventSink, type Machine } from './integrations/machineHandlers.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
@@ -45,6 +46,10 @@ export interface V2Context {
   terminal: TerminalSink
   /** The projects' MCP tokens and config files; a deleted project's are revoked */
   mcpAccess?: { revoke(projectId: string): void }
+  /** Docker, the environments and the dev stacks on this machine */
+  machine?: Machine
+  /** This connection, as a receiver of the `docker.log` and `env.log` its own requests stream */
+  events?: EventSink
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -263,7 +268,8 @@ const handlers: Record<string, Handler> = {
   },
 
   ...worktreeHandlers,
-  ...sessionHandlers
+  ...sessionHandlers,
+  ...machineHandlers
 }
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */

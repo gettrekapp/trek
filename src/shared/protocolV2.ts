@@ -13,7 +13,21 @@ import type {
 import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
-import type { EnvironmentSettings, WorktreeChanges } from './types.ts'
+import type {
+  ComposeAction,
+  ContainerAction,
+  ContainerInfo,
+  DockerLogEvent,
+  EnvCheckResult,
+  EnvLogEvent,
+  EnvService,
+  EnvUpResult,
+  EnvironmentInfo,
+  EnvironmentSettings,
+  StackLogChunk,
+  StackStatus,
+  WorktreeChanges
+} from './types.ts'
 
 export const PROTOCOL_VERSION_V2 = 2
 
@@ -53,6 +67,11 @@ export type WireErrorCode =
    * (over 4 MiB). Nothing was replayed or attached; retry once the backlog drains.
    */
   | 'CONGESTED'
+  /**
+   * A docker, colima or stack.sh command on the server's machine failed. `details.reason`
+   * `missing`: the tool is not on the server's PATH (not installed there).
+   */
+  | 'TOOL_ERROR'
 
 export interface WireError {
   code: WireErrorCode
@@ -65,6 +84,7 @@ export interface WireError {
 export interface WireErrorDetails {
   /**
    * `dirty`: `worktree.remove` refused a worktree with modified or untracked files.
+   * `missing`: a TOOL_ERROR's tool is not installed on the server.
    * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
    */
   reason?: string
@@ -145,7 +165,13 @@ export const CAPABILITY = {
   /** `server.agents` lists the agents the server can launch */
   agents: 'agents',
   /** This is the machine's own local server (`trek-server start --local`): it takes any path the user picks */
-  local: 'local'
+  local: 'local',
+  /** `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine */
+  docker: 'docker',
+  /** `env.*` run the per-worktree Colima environments on the server's machine, and `env.log` streams their output */
+  env: 'env',
+  /** `stack.*` run the worktrees' docker/stack/stack.sh dev stacks on the server's machine */
+  stacks: 'stacks'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -242,6 +268,8 @@ export interface MethodParamsV2 {
   'worktree.push': WorktreeRef & { setUpstream: boolean }
   'worktree.changes': WorktreeRef
   'worktree.diff': WorktreeRef
+  /** A fresh `git status --porcelain` of the worktree (the status poll's `dirty` may be up to 30 s old) */
+  'worktree.dirty': WorktreeRef
   // Branch data (null clears)
   'branch.setTag': BranchRef & { tag: string | null }
   'branch.setCustomTags': BranchRef & { customTags: string[] | null }
@@ -288,6 +316,43 @@ export interface MethodParamsV2 {
   'server.removeRepo': { repoId: string }
   /** The agents the server can launch; with `projectId`, Claude's command is that project's `claudeCommand` when it has one */
   'server.agents': { projectId?: string }
+  // Docker on the server's machine (capability `docker`)
+  /** `docker ps -a` */
+  'docker.list': Record<string, never>
+  /** `id`: a container id or name, as `docker.list` gave it */
+  'docker.container': { action: ContainerAction; id: string }
+  /** `docker compose <action's args>` in the repository's main checkout; its output streams to this connection as `docker.log` */
+  'docker.compose': RepoRef & { action: ComposeAction }
+  // The worktrees' Colima environments on the server's machine (capability `env`)
+  /** colima and docker on the server's PATH (an `ok` answer is kept) */
+  'env.check': Record<string, never>
+  /** The repository's environments (by its envRepoKey), and the twb- VMs no registry entry names */
+  'env.list': RepoRef
+  /**
+   * Starts (or creates) the worktree's branch's VM and runs `docker compose up -d` in the worktree,
+   * with `settings` (the repository's, with the compose file picked) and the branch's variables as
+   * parsed `envVars`. Its output streams to this connection as `env.log`. Long: minutes on a first boot.
+   */
+  'env.up': WorktreeRef & { settings: EnvironmentSettings; envVars?: Record<string, string> }
+  /** `profile`: a twb- profile name */
+  'env.stop': { profile: string }
+  /** Deletes the VM (and, if its worktree is still there, `compose down -v` first) and its registry entry */
+  'env.destroy': { profile: string }
+  'env.ps': WorktreeRef & { composeFile?: string }
+  /** The compose files in the worktree's root */
+  'env.composeFiles': WorktreeRef
+  /** The last `tail` lines (default 300, at most 5000) of one compose service */
+  'env.logs': WorktreeRef & { composeFile?: string; service: string; tail?: number }
+  // The worktrees' dev stacks on the server's machine (capability `stacks`)
+  'stack.status': WorktreeRef
+  /** Starts `stack.sh up` (detached; it outlives the request and the server) */
+  'stack.up': WorktreeRef & { starter: boolean }
+  /** `stack.sh down`, after Ctrl-C'ing a running `up`; resolves its exit code */
+  'stack.down': WorktreeRef
+  /** `stack.sh destroy`, after Ctrl-C'ing a running `up`; resolves its exit code */
+  'stack.destroy': WorktreeRef
+  /** The stack's log from `offset` of the file `fileId` names, or its last 64 KiB when that file is gone */
+  'stack.log': WorktreeRef & { fileId: number; offset: number }
 
   // Subscriptions
   'sub.subscribe': { topic: Topic }
@@ -339,6 +404,8 @@ export interface MethodResultsV2 {
   'worktree.changes': WorktreeChanges
   /** Patch text per changed file (gitService's limits: no entry for binary or too-large files, 8 MiB in all) */
   'worktree.diff': Record<string, string>
+  /** null when git cannot read the worktree's status */
+  'worktree.dirty': boolean | null
   'branch.setTag': null
   'branch.setCustomTags': null
   'branch.setNote': null
@@ -364,6 +431,24 @@ export interface MethodResultsV2 {
   'server.addRepo': { repoId: string }
   'server.removeRepo': null
   'server.agents': ServerAgents
+  'docker.list': ContainerInfo[]
+  'docker.container': null
+  /** docker compose's exit code; -1 when docker could not run */
+  'docker.compose': number
+  'env.check': EnvCheckResult
+  'env.list': EnvironmentInfo[]
+  'env.up': EnvUpResult
+  /** colima's exit code */
+  'env.stop': number
+  'env.destroy': number
+  'env.ps': EnvService[]
+  'env.composeFiles': string[]
+  'env.logs': string
+  'stack.status': StackStatus
+  'stack.up': null
+  'stack.down': number
+  'stack.destroy': number
+  'stack.log': StackLogChunk
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }
@@ -403,4 +488,8 @@ export interface EventPayloadsV2 {
   'state.patch': StatePatchPayload
   /** Sent to a topic's subscribers just before it stops; nothing more comes for it */
   'topic.ended': TopicEndedPayload
+  /** A `docker.compose` run's output, to the connection that asked for it only */
+  'docker.log': DockerLogEvent
+  /** An `env.up`, `env.stop` or `env.destroy`'s output and steps, to the connection that asked for it only */
+  'env.log': EnvLogEvent
 }

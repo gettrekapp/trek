@@ -26,6 +26,7 @@ import type { TerminalSink } from './sessions/terminalHost'
 import { McpAccessStore } from './mcp/access'
 import { startMcpListener, type McpListener } from './mcp/listener'
 import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
+import type { Machine } from './integrations/machineHandlers'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -55,6 +56,8 @@ export interface ServerOptions {
   mcpDir?: string
   /** `trek-server start --local`: the welcome lists the `local` capability */
   local?: boolean
+  /** Docker, the environments and the dev stacks on this machine, with their files in the data dir (machine.ts) */
+  machine?: Machine
 }
 
 export interface ProjectsSetup {
@@ -144,6 +147,8 @@ export function startServer(
       send: (event, payload) => sendFrame(ws, { type: 'event', event, payload }),
       bufferedAmount: () => ws.bufferedAmount
     }
+    /** This connection, for the docker.log and env.log of the requests it sends */
+    const events = { send: (event: string, payload: unknown) => sendFrame(ws, { type: 'event', event, payload }) }
     const subscriber: Subscriber = {
       send(topic, rev, ops) {
         sendFrame(ws, { type: 'event', event: 'state.patch', payload: { topic, rev, ops } })
@@ -263,6 +268,8 @@ export function startServer(
         poller,
         sessions,
         terminal,
+        events,
+        machine: options.machine,
         mcpAccess: access
           ? {
               revoke: (id) => {
