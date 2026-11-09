@@ -512,11 +512,31 @@ test('the event sink drops log chunks past the high-water mark, says so once it 
 test('stack.down and stack.destroy are refused while an up is starting, so the start cannot bring containers up after them', async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 30; fi' })
   const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  // Hold each up inside its start window (marked starting, no pid yet) until the stop has been refused.
+  let entered, release
+  s.ctx.machine = {
+    ...s.ctx.machine,
+    stacks: createStackService({
+      stateDir: join(s.data, 'stacks'),
+      beforeStart: () => {
+        entered()
+        return new Promise((r) => (release = r))
+      }
+    })
+  }
   for (const method of ['stack.down', 'stack.destroy']) {
-    const [up, stop] = await Promise.all([s.call('stack.up', { ...ref, starter: false }), s.call(method, ref)])
-    assert.equal(up.ok, true, JSON.stringify(up))
+    resetCalls()
+    const inWindow = new Promise((r) => (entered = r))
+    const upping = s.call('stack.up', { ...ref, starter: false })
+    await inWindow
+    const stop = await s.call(method, ref)
     refused(stop, 'TOOL_ERROR')
     assert.match(stop.error.message, /is starting/)
+    // Neither stack.sh ran: the up is still held before its spawn, and the stop never started.
+    assert.deepEqual(calls(), [])
+    release()
+    const up = await upping
+    assert.equal(up.ok, true, JSON.stringify(up))
     // Once started, down stops it.
     assert.equal((await s.call('stack.down', ref)).result, 0)
   }

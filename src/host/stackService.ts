@@ -106,9 +106,14 @@ export interface StackService {
 export interface StackServiceOptions {
   /** Where each stack's log and `up` pid go (the server's `<dataDir>/stacks`) */
   stateDir: string
+  /**
+   * Test-only: awaited by `up` inside its start window (the stack marked starting, its pid not yet
+   * written), so a test can hold `up` there and call `down`/`destroy` against it without a race.
+   */
+  beforeStart?: (slug: string) => Promise<void>
 }
 
-export function createStackService({ stateDir }: StackServiceOptions): StackService {
+export function createStackService({ stateDir, beforeStart }: StackServiceOptions): StackService {
   const logFile = (slug: string): string => join(stateDir, `${slug}.log`)
   const pidFile = (slug: string): string => join(stateDir, `${slug}.pid`)
   const stopping = new Set<string>()
@@ -208,11 +213,15 @@ export function createStackService({ stateDir }: StackServiceOptions): StackServ
     async up(worktreePath, starter) {
       const ws = await workspace(worktreePath)
       const { slug } = await resolveStack(ws)
+      // The slug is known only here, so the claim below is as early as it can be, with no await
+      // between the checks and the add. A down/destroy that reaches its own checks before this
+      // runs entirely before the claim: that is a down followed by an up, which is fine.
       if (stopping.has(slug)) throw new Error(`Stack '${slug}' is stopping`)
       if (starting.has(slug)) throw new Error(`Stack '${slug}' is already starting`)
       starting.add(slug)
       try {
         if (await upPid(slug)) throw new Error(`Stack '${slug}' is already running`)
+        if (beforeStart) await beforeStart(slug)
         const { pid, exit } = await runScript(ws, slug, starter ? ['up', '--starter'] : ['up'], { fresh: true, detached: true })
         if (pid == null) throw new Error('Could not start stack.sh')
         await writeFile(pidFile(slug), String(pid))
