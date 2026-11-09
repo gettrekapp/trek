@@ -11,6 +11,8 @@ export interface Subscriber {
   send(topic: Topic, rev: number, ops: PatchOp[]): void
   /** The topic stopped for good (see `drop`); without it the subscriber is just forgotten */
   ended?(topic: Topic, reason: TopicEndReason): void
+  /** An event for the topic's subscribers (`voice.summary`); false when it was not sent (a congested connection) */
+  event?(event: string, payload: unknown): boolean
 }
 
 interface TopicEntry {
@@ -101,6 +103,25 @@ export class TopicHub {
         console.warn(`topic ${topic}: telling a subscriber it ended failed`, err)
       }
     }
+  }
+
+  /**
+   * Sends an event to each of the topic's subscribers that takes events (a connection: not an MCP
+   * tool call's no-op subscriber). Returns how many it went to. One that throws is logged and skipped.
+   */
+  emit(topic: Topic, event: string, payload: unknown): number {
+    const entry = this.topics.get(topic)
+    if (!entry) return 0
+    let sent = 0
+    for (const subscriber of [...entry.subscribers]) {
+      if (!subscriber.event) continue
+      try {
+        if (subscriber.event(event, payload)) sent += 1
+      } catch (err) {
+        console.warn(`topic ${topic}: sending ${event} to a subscriber failed`, err)
+      }
+    }
+    return sent
   }
 
   unsubscribe(topic: Topic, subscriber: Subscriber): void {

@@ -22,11 +22,12 @@ import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2, responseRev } from './v2'
 import { GitPoller } from './git/poller'
 import { SessionManager } from './sessions/manager'
-import type { TerminalSink } from './sessions/terminalHost'
+import { SINK_HIGH_WATER, type TerminalSink } from './sessions/terminalHost'
 import { McpAccessStore } from './mcp/access'
 import { startMcpListener, type McpListener } from './mcp/listener'
 import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
 import { createEventSink, type Machine } from './integrations/machineHandlers'
+import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
 
 const HELLO_TIMEOUT_MS = 5000
@@ -99,7 +100,8 @@ export function startServer(
     projects,
     store,
     hub,
-    mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined
+    mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined,
+    voicePrompt: () => (options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined)
   })
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
@@ -161,6 +163,12 @@ export function startServer(
       },
       ended(topic, reason) {
         sendFrame(ws, { type: 'event', event: 'topic.ended', payload: { topic, reason } })
+      },
+      // A spoken summary to a connection that has fallen behind is dropped: it would play late.
+      event(event, payload) {
+        if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > SINK_HIGH_WATER) return false
+        sendFrame(ws, { type: 'event', event, payload })
+        return true
       }
     }
 
@@ -329,7 +337,7 @@ export function startServer(
     shutdown: (reason) => shutdown(reason)
   }
   if (access) {
-    const caller = createToolCaller({ store, hub, projects, poller, sessions })
+    const caller = createToolCaller({ store, hub, projects, poller, sessions, voice: options.integrations?.voice })
     const callerFor = (projectId: string): ToolCall => {
       let call = callers.get(projectId)
       if (!call) callers.set(projectId, (call = caller(projectId)))

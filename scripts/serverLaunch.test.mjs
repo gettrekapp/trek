@@ -41,6 +41,17 @@ test('global sessions get the global prompt and addDirs; the role prompt only wi
   assert.match(withMcp.command, /--mcp-config '\/c.json'/)
 })
 
+test('the voice prompt goes first for a worktree session, after the role for a Global one, and only with MCP', () => {
+  const mcp = { configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }
+  const worktree = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', voicePrompt: 'VOICE', mcp }, { sessionSystemPrompt: 'SHARED' }, DEFAULT_LLM_SETTINGS)
+  assert.match(worktree.command, /--append-system-prompt 'VOICE\n\nTYPE\n\nSHARED'/)
+  const global = agentCommand({ ...base, global: true, llm: { provider: 'claude' }, voicePrompt: 'VOICE', mcp }, { globalSystemPrompt: 'G' }, DEFAULT_LLM_SETTINGS)
+  assert.match(global.command, /global Claude session[^']*\n\nVOICE\n\nG'/)
+  // Without the MCP tools there is no speak_summary to call.
+  const noMcp = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', voicePrompt: 'VOICE' }, {}, DEFAULT_LLM_SETTINGS)
+  assert.match(noMcp.command, /--append-system-prompt 'TYPE'/)
+})
+
 test('other providers, local backend env and an invalid selection', () => {
   assert.match(agentCommand({ ...base, llm: { provider: 'codex' } }, {}, DEFAULT_LLM_SETTINGS).command, /^codex --full-auto/)
   const local = agentCommand({ ...base, llm: { provider: 'local' } }, {}, { llmDefault: { provider: 'claude' }, providers: { local: { backend: 'lmstudio' } } })

@@ -27,6 +27,10 @@ import type {
   LinearIssue,
   LinearKeyResult,
   StackLogChunk,
+  VoiceInfo,
+  VoiceKeyResult,
+  VoiceServerConfig,
+  VoiceServerSettings,
   StackStatus,
   WorktreeChanges
 } from './types.ts'
@@ -177,7 +181,12 @@ export const CAPABILITY = {
   /** `stack.*` run the worktrees' docker/stack/stack.sh dev stacks on the server's machine */
   stacks: 'stacks',
   /** `linear.*` look up Linear issues with the server's own API key (set from any client, never read back) */
-  linear: 'linear'
+  linear: 'linear',
+  /**
+   * `voice.*` keep the server's ElevenLabs key and voice; its speak_summary tool sends each spoken
+   * summary to the project's subscribers as `voice.summary`
+   */
+  voice: 'voice'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -372,6 +381,21 @@ export interface MethodParamsV2 {
   /** The issues with these ids (e.g. TOW-123) that exist and the key can see; none without a key */
   'linear.issues': { ids: string[] }
 
+  // ElevenLabs voice summaries, with the server's API key (capability `voice`)
+  /** The server's voice, model and "Summarize automatically", and whether it has a key */
+  'voice.settings': Record<string, never>
+  /**
+   * Checks the key by listing its voices and stores it on the server (0600, never sent back); picks
+   * the first voice if none is chosen. `ifAbsent` as `linear.setKey`'s.
+   */
+  'voice.setKey': { apiKey: string; ifAbsent?: boolean }
+  'voice.clearKey': Record<string, never>
+  /** The key's voices */
+  'voice.voices': Record<string, never>
+  'voice.setConfig': Partial<VoiceServerConfig>
+  /** An mp3 of `text` (at most 400 characters), for this connection only: Settings' Test */
+  'voice.synthesize': { text: string }
+
   // Subscriptions
   'sub.subscribe': { topic: Topic }
   'sub.unsubscribe': { topic: Topic }
@@ -471,6 +495,13 @@ export interface MethodResultsV2 {
   'linear.setKey': LinearKeyResult
   'linear.clearKey': null
   'linear.issues': LinearIssue[]
+  'voice.settings': VoiceServerSettings
+  'voice.setKey': VoiceKeyResult
+  'voice.clearKey': null
+  'voice.voices': VoiceInfo[]
+  'voice.setConfig': VoiceServerConfig
+  /** The mp3, base64 */
+  'voice.synthesize': { audio: string }
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }
@@ -514,4 +545,18 @@ export interface EventPayloadsV2 {
   'docker.log': DockerLogEvent
   /** An `env.up`, `env.stop` or `env.destroy`'s output and steps, to the connection that asked for it only */
   'env.log': EnvLogEvent
+  /**
+   * A session's spoken summary (the speak_summary tool), to every connection subscribed to its
+   * project's topic; a client plays it unless its user is Busy
+   */
+  'voice.summary': VoiceSummaryEvent
+}
+
+export interface VoiceSummaryEvent {
+  projectId: string
+  /** The session that spoke (its terminalId) */
+  sessionId: string
+  text: string
+  /** The mp3, base64 */
+  audio: string
 }

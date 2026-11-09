@@ -687,4 +687,17 @@ export interface VoiceInfo {
   name: string
 }
 
-export type VoiceKeyResult = { ok: true; voices: VoiceInfo[] } | { ok: false; error: string }
+/** `present`: a set-if-absent (the app's hand-over) found a key already stored, and kept it. */
+export type VoiceKeyResult = { ok: true; voices: VoiceInfo[] } | { ok: false; error: string; present?: true }
+
+/** A server's ElevenLabs settings (phase 5b): its voice and model, and whether sessions are told to speak. */
+export interface VoiceServerConfig {
+  voiceId: string
+  modelId: string
+  /** Tell agent sessions to call speak_summary on their own when they finish or need the user. */
+  promptSessions: boolean
+}
+
+export interface VoiceServerSettings extends VoiceServerConfig {
+  hasKey: boolean
+}

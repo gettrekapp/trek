@@ -4,7 +4,8 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
 /**
  * What this server always has. `docker`, `env` and `stacks` say it serves those methods; whether
  * the machine has docker or colima installed is each call's answer (`env.check`, TOOL_ERROR).
- * `linear` says it serves `linear.*`; whether it has a key is `linear.status`'s answer.
+ * `linear` and `voice` say it serves `linear.*` and `voice.*`; whether it has a key is
+ * `linear.status`'s and `voice.settings`' answer.
  */
 export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.topicEnd,
@@ -14,7 +15,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.docker,
   CAPABILITY.env,
   CAPABILITY.stacks,
-  CAPABILITY.linear
+  CAPABILITY.linear,
+  CAPABILITY.voice
 ]
 
 /** `mcp` while the MCP listener is up, then the features this server always has, then `local` on the local server. */

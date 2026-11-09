@@ -21,6 +21,9 @@ import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
 import { describeWorktree, resolveWorktree } from './describe.ts'
 import type { ToolDefinition } from './protocol.ts'
+import { projectTopic } from '../../../src/shared/model/topics.ts'
+import type { VoiceService } from '../../../src/host/voiceService.ts'
+import { requireSpokenText } from '../integrations/integrationHandlers.ts'
 
 const WORKTREE_PARAM = {
   type: 'string',
@@ -74,6 +77,19 @@ export const MCP_TOOLS: ToolDefinition[] = [
         }
       },
       required: ['terminalId', 'question']
+    }
+  },
+  {
+    name: 'speak_summary',
+    description:
+      "Read a short spoken summary aloud to the user through the Trek server's ElevenLabs voice. Keep it SHORT: one to three plain sentences (max 400 characters), written to be heard — no markdown, code, file paths, URLs or lists. Use it only when your instructions or the user ask for spoken summaries. It plays in every Trek window that has this project open, one summary at a time, and is skipped where the user is set to Busy, so never repeat it. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
+        summary: { type: 'string', description: 'One to three short spoken sentences, at most 400 characters' }
+      },
+      required: ['terminalId', 'summary']
     }
   },
   {
@@ -302,6 +318,8 @@ export interface ToolDeps {
   projects: ProjectState
   poller: GitPoller
   sessions: SessionManager
+  /** ElevenLabs with the server's key, for speak_summary; without it the tool says voice is not set up */
+  voice?: VoiceService
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -786,6 +804,26 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const { session } = sessionIn(args.terminalId)
         deps.sessions.requestDecision({ projectId, sessionId: session.id, question: args.question })
         return { notified: true }
+      },
+
+      speak_summary: async (args) => {
+        // Global sessions may speak too, so this does not go through targetIn.
+        const { session } = sessionIn(args.terminalId)
+        const summary = requireSpokenText(args.summary, 'summary')
+        const notSetUp = { played: false, reason: 'Voice summaries are not set up on this Trek server — do not call speak_summary again' }
+        let ready = false
+        try {
+          ready = deps.voice?.settings().hasKey === true
+        } catch {
+          // An unreadable secrets file: not set up.
+        }
+        if (!ready) return notSetUp
+        const topic = projectTopic(projectId)
+        const nobody = { played: false, reason: 'No Trek window has this project open, so nobody would hear it' }
+        if (deps.hub.subscriberCount(topic) === 0) return nobody
+        const audio = Buffer.from(await deps.voice!.synthesize(summary)).toString('base64')
+        const windows = deps.hub.emit(topic, 'voice.summary', { projectId, sessionId: session.id, text: summary, audio })
+        return windows > 0 ? { played: true, windows } : nobody
       },
 
       close_session: async (args) => {

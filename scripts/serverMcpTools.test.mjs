@@ -104,7 +104,7 @@ async function toolSetup(t, opts = {}) {
     job.fired = true
     job.fn()
   }
-  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir }
+  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub }
 }
 
 test('the tool list matches decision 5', () => {
@@ -112,7 +112,7 @@ test('the tool list matches decision 5', () => {
     'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session',
     'list_session_types', 'list_worktrees', 'load_worktree', 'read_terminal', 'remove_queued_prompt',
     'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
-    'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'unload_worktree',
+    'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'speak_summary', 'start_session', 'unload_worktree',
     'wait_for_sessions'
   ])
 })
@@ -625,4 +625,49 @@ test('read_terminal clamps lines', async (t) => {
   assert.equal(await read(-1), 'three')
   assert.equal(await read(2.5), 'two\nthree')
   assert.equal(await read(1e9), 'one\ntwo\nthree')
+})
+
+/** A voice service stub: `hasKey`, and an mp3 that is the text's bytes. */
+const voiceStub = (hasKey = true) => {
+  const spoken = []
+  return {
+    spoken,
+    settings: () => ({ hasKey, voiceId: 'v1', modelId: 'm', promptSessions: false }),
+    synthesize: async (text) => {
+      spoken.push(text)
+      return new TextEncoder().encode(`mp3:${text}`)
+    }
+  }
+}
+
+test('speak_summary sends the clip to every window that has the project open', async (t) => {
+  const voice = voiceStub()
+  const s = await toolSetup(t, { voice })
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const topic = `project:${s.projectId}`
+  const windows = [[], [], []]
+  const subscribers = windows.map((got, i) => ({ send() {}, event: (event, payload) => (i === 2 ? false : (got.push([event, payload]), true)) }))
+  // Nobody listening: nothing synthesized.
+  assert.deepEqual(await s.call('speak_summary', { terminalId, summary: 'Done.' }), { played: false, reason: 'No Trek window has this project open, so nobody would hear it' })
+  assert.deepEqual(voice.spoken, [])
+  for (const sub of subscribers) s.hub.subscribe(topic, sub)
+  // The third window is congested: it does not count.
+  assert.deepEqual(await s.call('speak_summary', { terminalId, summary: '  The tests pass.  ' }), { played: true, windows: 2 })
+  const audio = Buffer.from('mp3:The tests pass.').toString('base64')
+  for (const got of windows.slice(0, 2)) assert.deepEqual(got, [['voice.summary', { projectId: s.projectId, sessionId: terminalId, text: 'The tests pass.', audio }]])
+  await assert.rejects(s.call('speak_summary', { terminalId, summary: 'x'.repeat(401) }), /401 characters/)
+  await assert.rejects(s.call('speak_summary', { terminalId, summary: ' ' }), /summary is required/)
+  await assert.rejects(s.call('speak_summary', { terminalId: 'nope', summary: 'Hi' }), /No session/)
+  assert.deepEqual(voice.spoken, ['The tests pass.'])
+})
+
+test('speak_summary without a key (or without voice) says it is not set up', async (t) => {
+  for (const voice of [voiceStub(false), undefined]) {
+    const s = await toolSetup(t, voice ? { voice } : {})
+    const { terminalId } = await s.call('start_session', { worktree: 'main' })
+    s.hub.subscribe(`project:${s.projectId}`, { send() {}, event: () => true })
+    const result = await s.call('speak_summary', { terminalId, summary: 'Hi' })
+    assert.equal(result.played, false)
+    assert.match(result.reason, /not set up/)
+  }
 })

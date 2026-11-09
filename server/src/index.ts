@@ -19,7 +19,7 @@ import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
 import { createMachine } from './integrations/machine'
-import { createIntegrations } from './integrations/integrations'
+import { createIntegrations, VOICE_CONFIG_FILE } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import {
@@ -456,7 +456,9 @@ const server = startServer(
     machine: createMachine(serverDataDir, { local: local !== undefined }),
     integrations: createIntegrations({
       secretsFile: secretsPathFor(resolve(args.configPath)),
-      linearEndpoint: process.env.TREK_SERVER_LINEAR_URL || undefined
+      linearEndpoint: process.env.TREK_SERVER_LINEAR_URL || undefined,
+      voiceConfigFile: resolve(serverDataDir, VOICE_CONFIG_FILE),
+      elevenLabsApi: process.env.TREK_SERVER_ELEVENLABS_URL || undefined
     })
   }
 )
