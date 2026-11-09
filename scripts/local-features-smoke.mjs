@@ -38,6 +38,8 @@ import { join } from 'node:path'
 import electronPath from 'electron'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { isLocalServerCommand } from '../src/main/localServerRules.ts'
+import { alive, closeApp, killIfOurs } from './smokeTeardown.mjs'
 import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 
@@ -100,6 +102,25 @@ const seqOf = (name, match) => seqLines(name).find(({ call }) => match(call))?.s
 const seqFile = join(work, 'seq')
 const seqLock = join(work, 'seq.lock')
 const NEXT_SEQ = `next_seq() { while ! mkdir '${seqLock}' 2>/dev/null; do sleep 0.01; done; n=$(( $(cat '${seqFile}' 2>/dev/null || echo 0) + 1 )); echo $n > '${seqFile}'; rmdir '${seqLock}'; echo $n; }`
+const seqPause = new Int32Array(new SharedArrayBuffer(4))
+/** The stubs' next sequence number, from this process (under the same lock) */
+const nextSeqSync = () => {
+  for (;;) {
+    try {
+      mkdirSync(seqLock)
+      break
+    } catch {
+      Atomics.wait(seqPause, 0, 0, 10)
+    }
+  }
+  let n = 0
+  try {
+    n = Number(readFileSync(seqFile, 'utf8')) || 0
+  } catch {}
+  writeFileSync(seqFile, `${n + 1}\n`)
+  rmSync(seqLock, { recursive: true, force: true })
+  return n + 1
+}
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 mkdirSync(join(repo, 'docker', 'stack'), { recursive: true })
 writeFileSync(join(repo, 'docker', 'stack', 'stack.sh'), `#!/bin/bash\n${NEXT_SEQ}\necho "$(next_seq)#$PWD|$*" >> '${calls('stack')}'\n`, { mode: 0o755 })
@@ -147,8 +168,14 @@ writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { p
 const legacyRegistry = { [featureProfile]: { repoPath: repo, branch: 'feature-x', worktreePath: worktree, composeFile: 'docker-compose.yml', createdAt: '2026-11-01T00:00:00.000Z' } }
 mkdirSync(join(userData, 'stacks'), { recursive: true })
 writeFileSync(join(userData, 'environments.json'), JSON.stringify(legacyRegistry, null, 2))
-const legacyUp = spawn('sleep', ['120'], { detached: true, stdio: 'ignore' })
+// It outlives the run (the watchdog's 180 s): only the destroy's Ctrl-C ends it before the cleanup.
+const legacyUp = spawn('sleep', ['600'], { detached: true, stdio: 'ignore' })
 legacyUp.unref()
+// When it ended, on the stubs' sequence (the exit event can only come after its death, never before).
+let legacyUpEndedAt = null
+legacyUp.once('exit', () => {
+  legacyUpEndedAt = nextSeqSync()
+})
 writeFileSync(join(userData, 'stacks', 'app-feature-x.pid'), String(legacyUp.pid))
 writeFileSync(join(userData, 'stacks', 'app-feature-x.log'), '$ stack.sh up\nstarted by the app before 5a\n')
 // The Local profile's data dir, where the server keeps them from now on (server/src/dataDir.ts).
@@ -203,14 +230,6 @@ const info = () => {
     return undefined
   }
 }
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
 
 let app = null
 let sdk = null
@@ -229,21 +248,17 @@ const finish = async (reason) => {
   finished = true
   if (reason) console.error(reason)
   sdk?.close()
-  if (app) await app.close().catch(() => {})
+  await closeApp(app)
   // Leave no server behind: stop --local in the run's HOME, then SIGKILL whatever local.json names.
   spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
     env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
     timeout: 15_000
   })
+  // Each only when its command line is still the one this run started (a reused pid is left alone).
   const left = info()
-  if (left && alive(left.pid)) process.kill(left.pid, 'SIGKILL')
-  for (const pid of [legacyUp.pid, ...(existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : [])]) {
-    if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch {}
-    }
-  }
+  if (left) killIfOurs(left.pid, (command) => isLocalServerCommand(command, 'dev'), 'the Local server')
+  killIfOurs(legacyUp.pid, (command) => command === 'sleep 600', "the app's legacy up")
+  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -423,7 +438,13 @@ try {
     [true, true, true]
   )
   check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
-  check("the destroy stopped the app's running up first", alive(legacyUp.pid), false)
+  // Ctrl-C'd by the destroy (its process group), and dead before stack.sh destroy ran (seq).
+  await until(() => legacyUp.signalCode, 'SIGINT', 5000)
+  check(
+    "the destroy Ctrl-C'd the app's running up before stack.sh destroy (seq)",
+    [alive(legacyUp.pid), legacyUp.signalCode, legacyUpEndedAt !== null && stackAt !== null && legacyUpEndedAt < stackAt],
+    [false, 'SIGINT', true]
+  )
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])
 

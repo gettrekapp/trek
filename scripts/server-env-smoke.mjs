@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
+import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 
 const WATCHDOG_MS = 180_000
 const DAEMON_READY_MS = 15_000
@@ -188,18 +189,14 @@ const finish = async (reason) => {
   finished = true
   if (reason) console.error(reason)
   sdk?.close()
-  if (app) await app.close().catch(() => {})
+  await closeApp(app)
   if (daemon && daemon.exitCode === null && daemon.signalCode === null) {
     daemon.kill()
     await Promise.race([new Promise((r) => daemon.once('exit', r)), sleep(5000).then(() => daemon.kill('SIGKILL'))])
   }
   // A stack's `up` the run left behind (its sleep, exec'd by the stub): only this run's, by the pids it recorded.
-  for (const pid of existsSync(upPids) ? readFileSync(upPids, 'utf8').split('\n').map(Number) : []) {
-    if (!Number.isInteger(pid) || pid <= 0) continue
-    try {
-      process.kill(pid, 'SIGKILL')
-    } catch {}
-  }
+  // Only when its command line is still the stub's sleep (a reused pid is left alone).
+  for (const pid of existsSync(upPids) ? readFileSync(upPids, 'utf8').split('\n').map(Number) : []) killIfOurs(pid, (command) => command === 'sleep 60', "a stack's up")
   spawnSync('git', ['-C', repo, 'worktree', 'prune'])
   rmSync(work, { recursive: true, force: true })
   const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
@@ -238,6 +235,11 @@ try {
   })
   const url = `ws://127.0.0.1:${port}`
   sdk = new ServerConnection({ url, token, createSocket: globalSocketFactory, client: 'server-env-smoke' })
+  // The runs' output goes to the connection that asked (the window's), never to this one.
+  const sdkRunEvents = []
+  sdk.on('event', (ev) => {
+    if (ev.event === 'docker.log' || ev.event === 'env.log') sdkRunEvents.push(ev.event)
+  })
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
   check('the server says docker, env and stacks, and is not a local one', ['docker', 'env', 'stacks', 'local'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, false])
@@ -354,6 +356,7 @@ try {
   check("then the server's removal: the worktree was still there when the VM went", existsSync(join(work, 'delete-saw-worktree')), true)
   check('no error dialogs', dialogs.filter((d) => d.type === 'error'), [])
 
+  check('another connection heard none of the runs (no docker.log or env.log)', sdkRunEvents, [])
   check('the renderer never holds the token', await win.evaluate((t) => JSON.stringify(window.__store.getState()).includes(t) || document.documentElement.outerHTML.includes(t), token), false)
   check('no console or page errors', pageErrors, [])
   exitCode = failedChecks.length ? 1 : 0
