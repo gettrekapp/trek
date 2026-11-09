@@ -4092,9 +4092,10 @@ Expected: no output.
 
 ## Notes for 5a-2
 
-1. **5a-2 builds on this plan's tree** (`…-phase5a2-machine.md`): its baseline is Task 6's commit, 1597 tests.
+1. **5a-2 builds on this plan's tree** (`…-phase5a2-machine.md`): its baseline is 5a-1's last commit. As built, 5a-1 ends with review follow-ups after Task 6 (11d9374: `viaServerAll` over `SESSION_SETTERS`/`SETTINGS_SETTERS`, `normalizePath` in `rekeyStoredOrder`, the read-back warning, AddWorktreeModal and WorktreeDetail tidy-ups; then a PROTOCOL.md fix and dead-code removal), 1599 tests; 5a-2's hunks were written against Task 6's tree and may need `git apply -3` or a hand merge where those files overlap.
 2. **`present()` (Task 5) is what the machine methods use**: a main checkout's stack and environment resolve through it.
-3. **`localTeardown.ts`** still runs the Local teardown on this machine; 5a-2 moves it onto the server as `worktreeTeardown.ts`.
+3. **The project setters resolve at call time** (`viaServer`): a call made after the window moved on goes to whatever project is current. Today a window only goes from no project to a project or back, so a late call lands on null and is dropped; a later change that switches a window straight from project A to B must clear or flush A's drafts first, or A's last edit is written into B.
+4. **`localTeardown.ts`** still runs the Local teardown on this machine; 5a-2 moves it onto the server as `worktreeTeardown.ts`.
 
 ## Notes for 5b and later
 

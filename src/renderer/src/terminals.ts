@@ -83,8 +83,6 @@ const THEME = {
   brightWhite: '#a6adc8'
 }
 
-export { DEFAULT_PERMISSION_MODE } from '../../shared/providers/claude'
-
 /** A fresh xterm with the fit addon, not yet in the DOM. */
 function newXterm(): { term: Terminal; fit: FitAddon } {
   const term = new Terminal({

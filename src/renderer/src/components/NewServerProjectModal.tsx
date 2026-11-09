@@ -142,7 +142,10 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
         return
       }
       // The caller shows a failed open itself.
-      await onCreated(projectId, projectName).catch(() => {})
+      // Promise.resolve().then: a synchronous throw is caught too.
+      await Promise.resolve()
+        .then(() => onCreated(projectId, projectName))
+        .catch(() => {})
     })
   }
 

@@ -1,5 +1,5 @@
 import { useAppStore } from './store'
-import { resolveGlobalLlm, resolveNewSessionLlm } from '../../shared/providers/selection'
+import { resolveNewSessionLlm } from '../../shared/providers/selection'
 import { mergeLlmSettings } from '../../shared/providers/settings'
 import { DEFAULT_LLM_SETTINGS } from '../../shared/providers/types'
 import type { LlmSelection, LlmSettings, LlmSettingsPatch } from '../../shared/providers/types'
@@ -50,9 +50,4 @@ export function defaultSessionLlm(): LlmSelection {
     projectDefault: useAppStore.getState().project?.llmDefault,
     appDefault: llmSettings().llmDefault
   })
-}
-
-/** What a new Global panel tab runs. */
-export function globalSessionLlm(): LlmSelection {
-  return resolveGlobalLlm(useAppStore.getState().project?.globalLlm, defaultSessionLlm())
 }
