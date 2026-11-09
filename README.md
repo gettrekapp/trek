@@ -168,7 +168,8 @@ keeps their worktrees and sessions running on that machine. A server window is a
 working window: its terminals, sessions and edits all go to the server, and every
 other window on that project sees them live.
 
-- **Server list**: **Connect to server…** on the start screen opens the app-wide
+- **Server list**: **Open on server…** on the start screen (File → Open on Server…,
+  ⌘O) opens the app-wide
   list of servers. **Add server** takes a name, a `ws://` or `wss://` URL and a token;
   each server then has **Set token**, **Test**, **Edit** and **Remove**, and a dot
   for its connection status. Plain `ws://` to anything but this machine is allowed
@@ -199,7 +200,7 @@ other window on that project sees them live.
   token or an incompatible server tries again when you focus it, so a token set in
   another window takes. Closing the window asks
   nothing, since the sessions keep running on the server. Server windows appear in
-  recents and come back on launch like file windows.
+  recents and come back on launch.
 - **Working in a server window**: start, rename, close and restart sessions in
   the server's terminals; queue prompts; answer and dismiss decisions; create,
   delete, load and unload worktrees; pull, push and view changes; set tags,
@@ -212,7 +213,7 @@ other window on that project sees them live.
 - **Machine-local features, in Local windows only**: a window on the [Local
   server](#local-server) also has Docker, the per-worktree Colima environments
   (and their variables), dev stacks, skills, Open in VS Code and Reveal in
-  Finder, as a project file window does, since its paths are this machine's.
+  Finder, since its paths are this machine's.
   Deleting a worktree there also destroys its dev stack (if ticked) and its VM,
   after a fresh check for uncommitted changes. A window on a remote server shows
   none of these.
@@ -221,15 +222,15 @@ other window on that project sees them live.
 
 ## Importing a .trekproj
 
-Opening a `.trekproj` (File → Open Project…, a recent project, or the file from
+Opening a `.trekproj` (a recent project on the start screen, or the file from
 Finder) imports it: the part on this machine becomes a project on the Local
 server, and each part on a remote server becomes a project there, and their
 windows open. **File → Import .trekproj…** does the same, and can import a file
 again. On the first launch with Local, Trek offers once to import the files in
 your recent projects and the windows open at the last quit.
 
-**Opening a `.trekproj` imports it without asking**, from Finder, a recent
-project or File → Open Project…: its part on this machine goes to Local, and
+**Opening a `.trekproj` imports it without asking**, from Finder or a recent
+project: its part on this machine goes to Local, and
 each remote part goes to a server you have already saved at that address. Only
 a server you have not saved is asked about. The project's settings come with
 it, so its agent command (`claudeCommand`, `llmDefault`) and the rest then apply
@@ -247,10 +248,14 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
   and resume when loaded) and the project bot's folder do not.
 - Paths become their realpaths on the server. Claude's saved histories are copied
   (never moved) to them on Local, and a repository's VMs keep their names.
-- A file already open in a file window is just focused there, not imported.
-- A file opens as a project file window only if none of it could be imported
-  (the result offers **Open as File Window**, from File → Import too), or when
-  the Local server is off (`TREK_NO_LOCAL_SERVER=1`).
+- A `.trekproj` only imports: it never opens as a project file window. If none
+  of it could be imported, the result says why, with only **OK**; opening the
+  file again tries again. With the Local server off (`TREK_NO_LOCAL_SERVER=1`)
+  its part on this machine is left, with that reason.
+- A window left on a file that was not imported does not come back at the next
+  launch; the file stays in your recent projects, marked **import**, and opening
+  it from there imports it. A window on a file that was imported comes back on
+  its project on Local.
 - Each import asks about adding a server once, however many of the file's
   server ids share its address, and imports at most 20 remote parts of a file;
   the rest are listed as not imported, and once any part of the file has landed,
@@ -259,9 +264,9 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
 ## Local server
 
 Trek runs a trek-server of its own on this machine, the **Local** server. It is
-listed first under **Connect to server…**, and Trek starts it, finds it and
-connects to it itself, so it needs no URL or token. New Project… on Local picks
-a folder on this machine.
+listed first under **Open on server…**, and Trek starts it, finds it and
+connects to it itself, so it needs no URL or token. New Project… (on the start
+screen, or File → New Project…, ⌘N) on Local picks a folder on this machine.
 
 - **It keeps running after you quit Trek**, so its sessions do too, and the next
   launch reconnects to it. To stop it whenever Trek quits, turn on **Stop local
@@ -341,11 +346,18 @@ only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
 
 The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
 older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
-`npm run smoke:multi` runs the two-repository end-to-end test, and
-`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs, and
+the end-to-end smokes each build the app and drive it, with a temp user-data
+directory:
+`npm run smoke:local-window` works in a Local server window across two repositories,
+`npm run smoke:windows` checks one window per project, the File menu's New Project…
+and Open on Server…, and window restore,
+`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs,
 `npm run smoke:local-features` drives a Local server window's Docker, environments,
-stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`, and
-`npm run smoke:import` imports a `.trekproj` onto Local and a test server. Terminal
+stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`,
+`npm run smoke:import` imports a `.trekproj` onto Local and a test server,
+`npm run smoke:local-app` starts and stops the app's Local server, and
+`npm run smoke:v2` drives server windows against a test trek-server
+(`smoke:local` and `smoke:client` test the server without the app). Terminal
 PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
 the attention heuristics and worktree load/unload live in the renderer
 (`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only
