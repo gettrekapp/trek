@@ -219,7 +219,16 @@ run by hand:
   registry, so it never copies again; a registry there that cannot be read or
   parse is a warning, nothing is written, and the next start tries again. An
   older Trek still running on that data dir afterwards, or the other local
-  profile, starts stacks this server cannot see (each takes its own copy);
+  profile, starts stacks this server cannot see (each takes its own copy).
+  A local server started by hand without `--import-env-from` that then writes
+  `environments.json` (any `env.up`) has a registry of its own: later starts
+  never import;
+- a local server also reads, read-only, the other local profiles'
+  `environments.json` (`local` and `local-*` beside its data dir), and does not
+  list a VM one of them names as an orphan (each profile took its own copy, so a
+  VM the installed app or a dev build creates afterwards is in only one). A VM
+  another trek-server on this machine (`start` without `--local`) created still
+  shows as an orphan, and deleting it removes its containers and volumes;
 - any path is allowed (the welcome lists the `local` capability), since the
   user picks paths on their own disk. That covers every path check, not only
   `server.addRepo` and `project.import`: `worktree.create`

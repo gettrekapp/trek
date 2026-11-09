@@ -88,6 +88,11 @@ export interface EnvironmentServiceOptions {
   registryFile: string
   /** VMs mount only this directory by default (Colima's $HOME); the worktree must be under it */
   home?: string
+  /**
+   * Other registries on this machine, read only (never written) by `list`: a twb- VM one of them
+   * names is another Trek's (the other Local profile's), not an orphan to delete. Asked on each list.
+   */
+  otherRegistryFiles?: () => string[]
 }
 
 /** Tagged `reason: 'registry'`: the server's TOOL_ERROR carries it as `details.reason`, which the client shows. */
@@ -166,6 +171,20 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
     }
   }
 
+  /** The profiles the other registries name; one that cannot be read or parsed names none. */
+  const otherProfiles = async (): Promise<Set<string>> => {
+    const names = new Set<string>()
+    for (const file of options.otherRegistryFiles?.() ?? []) {
+      try {
+        const parsed: unknown = JSON.parse(await readFile(file, 'utf8'))
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) for (const name of Object.keys(parsed)) names.add(name)
+      } catch {
+        // missing, unreadable or torn: its VMs show as orphans, as they would with no sibling
+      }
+    }
+    return names
+  }
+
   let toolCheck: EnvCheckResult | null = null
 
   return {
@@ -196,9 +215,11 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
           orphaned: (await exists(entry.worktreePath)) ? undefined : true
         })
       }
-      // twb- VMs with no registry entry (crash leftovers): surfaced for cleanup.
+      // twb- VMs with no registry entry (crash leftovers): surfaced for cleanup. A VM another
+      // registry on this machine names is that one's, and not listed.
+      const others = await otherProfiles()
       for (const vm of profiles) {
-        if (!vm.name.startsWith(ENV_PROFILE_PREFIX) || entryOf(registry, vm.name)) continue
+        if (!vm.name.startsWith(ENV_PROFILE_PREFIX) || entryOf(registry, vm.name) || others.has(vm.name)) continue
         infos.push({
           profile: vm.name,
           repoPath: repoKey,

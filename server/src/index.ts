@@ -448,7 +448,7 @@ const server = startServer(
     store: projectFiles.files
   },
   // Absolute: agents read the config file from their own worktree's directory.
-  { mcpDir: resolve(serverDataDir, 'mcp'), local: local !== undefined, machine: createMachine(serverDataDir) }
+  { mcpDir: resolve(serverDataDir, 'mcp'), local: local !== undefined, machine: createMachine(serverDataDir, { local: local !== undefined }) }
 )
 store.watch()
 server.httpServer.on('error', (err: NodeJS.ErrnoException) => {

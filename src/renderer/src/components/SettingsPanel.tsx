@@ -115,10 +115,15 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const orphans = Object.values(environments).filter((e) => e.orphaned)
 
   const destroyOrphan = async (profile: string): Promise<void> => {
+    const known = environments[profile]?.worktreePath
     const ok = await window.api.confirm({
       title: 'Remove environment',
       message: `Delete the Colima VM "${profile}"?`,
-      detail: 'The VM and all its container data/volumes will be removed.',
+      // A VM this server has no entry for may be another Trek's or trek-server's on this machine
+      // (another Local profile's registry is read, but not every server's).
+      detail: known
+        ? `Its worktree (${known}) is gone. Deleting the VM removes its containers and volumes.`
+        : 'This server has no worktree for it: it may belong to another Trek or trek-server on this machine. Deleting it removes the VM and its containers and volumes.',
       confirmLabel: 'Delete'
     })
     if (!ok) return

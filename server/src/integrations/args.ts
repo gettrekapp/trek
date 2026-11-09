@@ -72,6 +72,14 @@ export function requireInt(value: unknown, field: string, min: number, max: numb
   return value
 }
 
+/** A finite number in [min, max]: colima's `--memory` takes GiB as a float (1.5). */
+export function requireNumber(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < min || value > max) {
+    throw bad(`${field} must be a number from ${min} to ${max}`)
+  }
+  return value
+}
+
 /**
  * A compose file setting: one or more comma-separated paths relative to the worktree, each inside
  * it. Not absolute, no "..", no leading "-" (it follows `-f`, but compose must never read a flag),
@@ -142,7 +150,7 @@ export function requireEnvSettings(value: unknown, worktreePath: string): Enviro
   if (networkAddress !== undefined) settings.networkAddress = networkAddress
   if (rosetta !== undefined) settings.rosetta = rosetta
   if (value.cpu !== undefined) settings.cpu = requireInt(value.cpu, 'settings.cpu', 1, 256)
-  if (value.memory !== undefined) settings.memory = requireInt(value.memory, 'settings.memory', 1, 1024)
+  if (value.memory !== undefined) settings.memory = requireNumber(value.memory, 'settings.memory', 0.5, 1024)
   if (value.disk !== undefined) settings.disk = requireInt(value.disk, 'settings.disk', 1, 10_000)
   const composeFile = optionalComposeFile(value.composeFile, worktreePath)
   if (composeFile !== undefined) settings.composeFile = composeFile

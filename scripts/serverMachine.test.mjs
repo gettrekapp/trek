@@ -1,6 +1,7 @@
 // scripts/serverMachine.test.mjs — docker.*, env.*, stack.* and worktree.dirty (phase 5a), against
 // real git in a temp dir and stub docker, colima and stack.sh: nothing here runs a real docker or
-// colima. Each stub records its arguments and working directory.
+// colima. Each stub records its arguments and working directory (`pwd -P`, its real path, which the
+// tests compare with real paths: a checkout under a symlink, /var → /private/var, spells $PWD otherwise).
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
 process.env.GIT_CONFIG_NOSYSTEM = '1'
 
@@ -17,6 +18,7 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { createEventSink } from '../server/src/integrations/machineHandlers.ts'
+import { createMachine, localSiblingRegistries } from '../server/src/integrations/machine.ts'
 import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
 import { deriveProfileName, envListProblem } from '../src/shared/environments.ts'
@@ -29,7 +31,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: g
 const stubDir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-stubs-')))
 const callsFile = join(stubDir, 'calls')
 const stub = (name, body) => {
-  writeFileSync(join(stubDir, name), `#!/bin/bash\necho "${name}|$PWD|$*|FOO=$FOO" >> '${callsFile}'\n${body}\n`)
+  writeFileSync(join(stubDir, name), `#!/bin/bash\necho "${name}|$(pwd -P)|$*|FOO=$FOO" >> '${callsFile}'\n${body}\n`)
   chmodSync(join(stubDir, name), 0o755)
 }
 stub('docker', `case "$1" in
@@ -58,7 +60,7 @@ async function setup(t, options = {}) {
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
   mkdirSync(join(a, 'docker', 'stack'), { recursive: true })
-  writeFileSync(join(a, 'docker', 'stack', 'stack.sh'), `#!/bin/bash\necho "stack|$PWD|$*" >> '${callsFile}'\n${options.stackBody ?? ''}\n`, { mode: 0o755 })
+  writeFileSync(join(a, 'docker', 'stack', 'stack.sh'), `#!/bin/bash\necho "stack|$(pwd -P)|$*" >> '${callsFile}'\n${options.stackBody ?? ''}\n`, { mode: 0o755 })
   writeFileSync(join(a, 'docker-compose.yml'), 'services: {}\n')
   writeFileSync(join(a, 'compose.dev.yaml'), 'services: {}\n')
   git(a, 'add', '.')
@@ -192,7 +194,7 @@ test('env.up refuses settings, compose files and variables that would steer the 
   for (const composeFile of ['../outside.yml', '/etc/passwd', '-f /etc/x', 'a/../../b.yml', 'ok.yml,../x.yml', 'x\0.yml', '.']) {
     refused(await up({ settings: { enabled: true, composeFile } }), 'BAD_REQUEST')
   }
-  for (const settings of [{ enabled: true, cpu: 0 }, { enabled: true, memory: 1.5 }, { enabled: true, disk: '20' }, { enabled: true, rosetta: 'yes' }, { enabled: true, extra: 1 }, 'x', null]) {
+  for (const settings of [{ enabled: true, cpu: 0 }, { enabled: true, memory: 0.25 }, { enabled: true, memory: Number.NaN }, { enabled: true, memory: '2' }, { enabled: true, memory: 2000 }, { enabled: true, cpu: 1.5 }, { enabled: true, disk: 20.5 }, { enabled: true, disk: '20' }, { enabled: true, rosetta: 'yes' }, { enabled: true, extra: 1 }, 'x', null]) {
     refused(await up({ settings }), 'BAD_REQUEST')
   }
   for (const envVars of [{ PATH: '/tmp' }, { LD_PRELOAD: 'x.so' }, { DYLD_INSERT_LIBRARIES: 'x' }, { DOCKER_HOST: 'tcp://x' }, { 'A B': '1' }, { '1X': '1' }, { X: 1 }, { X: 'a\0b' }, ['X=1']]) {
@@ -231,6 +233,88 @@ test('env.up refuses settings, compose files and variables that would steer the 
   // An ordinary name still passes, and a symlink that stays inside the worktree is fine.
   symlinkSync(join(s.feature, 'docker-compose.yml'), join(s.feature, 'linked.yml'))
   assert.equal((await up({ settings: { enabled: true, networkAddress: false, composeFile: 'linked.yml' }, envVars: { API_URL: 'http://x' } })).result.code, 0)
+})
+
+test('env.up takes a fractional memory size, as colima --memory does (GiB)', async (t) => {
+  const s = await setup(t)
+  const worktreeId = s.worktreeAt(s.feature).id
+  const profile = deriveProfileName(s.a, 'feature-x')
+  const res = await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, cpu: 2, memory: 1.5, disk: 30, networkAddress: false } })
+  assert.equal(res.result.code, 0)
+  assert.equal(calls()[0], `colima|${process.cwd()}|start ${profile} --cpu 2 --memory 1.5 --disk 30|FOO=`)
+  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, memory: 0.5, networkAddress: false } })).result.code, 0)
+})
+
+test("a symlinked default docker-compose.yml (into the main checkout, say) is the repository's: no composeFile, no confinement", async (t) => {
+  const s = await setup(t)
+  const worktreeId = s.worktreeAt(s.feature).id
+  const profile = deriveProfileName(s.a, 'feature-x')
+  const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
+  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  writeFileSync(join(outside, 'docker-compose.yml'), 'services: {}\n')
+  unlinkSync(join(s.feature, 'docker-compose.yml'))
+  symlinkSync(join(outside, 'docker-compose.yml'), join(s.feature, 'docker-compose.yml'))
+  const res = await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, networkAddress: false } })
+  assert.equal(res.result.code, 0, JSON.stringify(res))
+  assert.equal(calls()[1], `docker|${s.feature}|--context colima-${profile} compose -f docker-compose.yml up -d|FOO=`)
+  // ps and logs without a composeFile read the default file too.
+  resetCalls()
+  assert.equal((await s.call('env.ps', { projectId: s.projectId, worktreeId })).ok, true)
+  assert.equal((await s.call('env.logs', { projectId: s.projectId, worktreeId, service: 'web' })).ok, true)
+  assert.deepEqual(calls().map((c) => c.split('|')[2]), [
+    `--context colima-${profile} compose -f docker-compose.yml ps --format json`,
+    `--context colima-${profile} compose -f docker-compose.yml logs --no-color --tail 300 web`
+  ])
+  // A client that names it explicitly is still held to the check.
+  refused(await s.call('env.ps', { projectId: s.projectId, worktreeId, composeFile: 'docker-compose.yml' }), 'BAD_REQUEST')
+})
+
+test("a Local server's sibling profiles: local and local-* beside its data dir, never itself or another dir", (t) => {
+  const parent = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-datadirs-')))
+  t.after(() => rmSync(parent, { recursive: true, force: true }))
+  for (const name of ['local', 'local-dev', 'local-wt2', 'other', 'local-', 'local-Bad', 'localx']) mkdirSync(join(parent, name))
+  writeFileSync(join(parent, 'local-file'), '')
+  assert.deepEqual(localSiblingRegistries(join(parent, 'local')).sort(), [join(parent, 'local-dev', 'environments.json'), join(parent, 'local-wt2', 'environments.json')].sort())
+  assert.deepEqual(localSiblingRegistries(join(parent, 'local-dev')).sort(), [join(parent, 'local', 'environments.json'), join(parent, 'local-wt2', 'environments.json')].sort())
+  // A parent that cannot be read has none.
+  assert.deepEqual(localSiblingRegistries(join(parent, 'gone', 'local')), [])
+})
+
+test("a Local server reads the other Local profiles' registries (read-only): their VMs are not orphans to delete", async (t) => {
+  const s = await setup(t)
+  const parent = join(s.dir, 'trek-server')
+  const own = join(parent, 'local')
+  mkdirSync(own, { recursive: true })
+  mkdirSync(join(parent, 'local-dev'))
+  const sibling = join(parent, 'local-dev', 'environments.json')
+  const siblingText = JSON.stringify({ 'twb-devvm-000000': { repoPath: '/elsewhere', branch: 'b', worktreePath: '/elsewhere-b', createdAt: 'then' } })
+  writeFileSync(sibling, siblingText, { mode: 0o600 })
+  const siblingStat = statSync(sibling)
+  // A sibling whose registry cannot be parsed hides nothing and breaks nothing.
+  mkdirSync(join(parent, 'local-torn'))
+  writeFileSync(join(parent, 'local-torn', 'environments.json'), '{"twb-torn')
+  writeFileSync(join(stubDir, 'vms'), ['twb-devvm-000000', 'twb-leftover-000000', 'twb-torn-000000'].map((name) => JSON.stringify({ name, status: 'Running' })).join('\n') + '\n')
+  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
+  const list = async () => (await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result.map((e) => [e.profile, e.orphaned])
+  // Colima's home (homedir(), read when the machine is made) holds the test's worktrees.
+  const home = process.env.HOME
+  process.env.HOME = s.dir
+  t.after(() => {
+    process.env.HOME = home
+  })
+  s.ctx.machine = createMachine(own, { local: true })
+  assert.deepEqual(await list(), [['twb-leftover-000000', true], ['twb-torn-000000', true]])
+  // Its own registry still works beside them, and the siblings' files are never written.
+  assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id, settings: { enabled: true, networkAddress: false } })).result.code, 0)
+  assert.equal(existsSync(join(own, 'environments.json')), true)
+  assert.equal(readFileSync(sibling, 'utf8'), siblingText)
+  assert.equal(statSync(sibling).mtimeMs, siblingStat.mtimeMs)
+  // A server that is not Local reads only its own registry: every unknown twb- VM is an orphan.
+  s.ctx.machine = createMachine(join(parent, 'local-dev'))
+  assert.deepEqual((await list()).filter(([, orphaned]) => orphaned).map(([p]) => p), ['twb-leftover-000000', 'twb-torn-000000'])
+  s.ctx.machine = createMachine(join(s.dir, 'plain'))
+  mkdirSync(join(s.dir, 'plain'))
+  assert.deepEqual((await list()).map(([p]) => p), ['twb-devvm-000000', 'twb-leftover-000000', 'twb-torn-000000'])
 })
 
 test('env.destroy deletes the VM and its registry entry; two environments started at once both stay registered', async (t) => {

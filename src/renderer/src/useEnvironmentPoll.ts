@@ -3,11 +3,14 @@
 // feature (the server runs them on its machine). It starts once a repository
 // has environments on: the tool check first (colima and docker on the server's
 // PATH), asked again each ENV_POLL_MS until it answers, then `colima list`
-// every ENV_POLL_MS. refreshEnvironments no-ops until the check has passed.
+// every ENV_POLL_MS. refreshEnvironments no-ops until the check has passed; a
+// failed check is asked again every minute (envPollTick), so a colima or
+// docker installed on the server meanwhile is picked up. One check at a time.
 import { useEffect } from 'react'
 import { useAppStore } from './store'
 import { getBackend } from './backend'
 import { refreshEnvironments } from './environmentActions'
+import { envPollTick } from './envPollTick'
 
 // colima list is heavier than git worktree list — poll it less often.
 const ENV_POLL_MS = 10_000
@@ -40,8 +43,9 @@ export function useEnvironmentPoll(allowed: boolean): void {
         })
     }
     check()
+    let tick = 0
     const interval = setInterval(() => {
-      if (useAppStore.getState().envToolCheck === null) check()
+      if (envPollTick(useAppStore.getState().envToolCheck, ++tick) === 'check') check()
       else void refreshEnvironments()
     }, ENV_POLL_MS)
     return () => {

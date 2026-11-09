@@ -1,7 +1,7 @@
 // scripts/environmentStart.test.mjs — what Start / Apply compose passes to envUp, and that it is the pending value.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { envStartArgs } from '../src/renderer/src/environmentStart.ts'
+import { composeFileArg, envStartArgs, createRunLogFilter } from '../src/renderer/src/environmentStart.ts'
 import { v2SettingsOverrides } from '../src/renderer/src/v2/settingsOverrides.ts'
 import { createSettingsWriter } from '../src/renderer/src/v2/settingsWriter.ts'
 import { projectV2 } from '../src/renderer/src/v2/projector.ts'
@@ -26,6 +26,37 @@ test('envStartArgs copies only stored values of the right type: booleans for the
   assert.deepEqual(envStartArgs({ id: 'r', name: 'r', path: '/r', environments }, 'feat', 'c.yml').settings, { enabled: true, rosetta: false, composeFile: 'c.yml' })
   const good = { enabled: false, cpu: 2, memory: 6, disk: 40, networkAddress: true }
   assert.deepEqual(envStartArgs({ id: 'r', name: 'r', path: '/r', environments: good }, 'feat', 'c.yml').settings, { ...good, composeFile: 'c.yml' })
+})
+
+test('the default compose file is not sent: the server reads it unconfined, as before 5a (a symlinked docker-compose.yml)', () => {
+  for (const unset of [undefined, '', 'docker-compose.yml']) assert.equal(composeFileArg(unset), undefined)
+  for (const chosen of ['compose.dev.yaml', 'docker-compose.yml,compose.dev.yaml', 'sub/docker-compose.yml']) assert.equal(composeFileArg(chosen), chosen)
+  const repo = { id: 'r', name: 'r', path: '/r', environments: { enabled: true, memory: 1.5 } }
+  assert.deepEqual(envStartArgs(repo, 'feat', 'docker-compose.yml').settings, { enabled: true, memory: 1.5 })
+  assert.equal('composeFile' in envStartArgs(repo, 'feat', '').settings, false)
+  assert.deepEqual(envStartArgs(repo, 'feat', 'compose.dev.yaml').settings, { enabled: true, memory: 1.5, composeFile: 'compose.dev.yaml' })
+})
+
+test("the Env panel's log follows the profile env.up actually used: the first step of a run it started", () => {
+  const filter = createRunLogFilter()
+  // Not running: only the panel's own profile.
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-old', data: 'x' }), true)
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-new', data: '', step: 'vm' }), false)
+  // A Start after a branch switch the poll has not seen: the server names the VM after the new branch.
+  filter.begin()
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-other', data: 'a stop elsewhere' }), false)
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-new', data: '', step: 'vm' }), true)
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-new', data: 'booting' }), true)
+  // Only the first step is adopted: another run's step later is not this one's.
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-third', data: '', step: 'vm' }), false)
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-old', data: 'own' }), true)
+  filter.end()
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-new', data: 'late' }), false)
+  // A run under the panel's own profile adopts it, so no later step is taken for this run's.
+  filter.begin()
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-old', data: '', step: 'vm' }), true)
+  assert.equal(filter.accepts('twb-old', { profile: 'twb-new', data: '', step: 'vm' }), false)
+  filter.end()
 })
 
 test("a server window's Start right after typing uses the variables still pending on the server", () => {

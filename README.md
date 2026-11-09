@@ -263,12 +263,20 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
   registry of its own, it copies Trek's (Trek's registry and pids stay where they
   were; a stack's log is shared, and both only append to it), so your VMs,
   containers and volumes, and a stack that is still running, are its own, under
-  the same names. A stopped stack's pid is not copied, nor a branch variable the
-  server refuses (`PATH`, `HOME`, `DOCKER_*` and the like). If Trek's registry
+  the same names. A stopped stack's pid is not copied. A branch variable the
+  server refuses (`PATH`, `HOME`, `DOCKER_*` and the like) or a compose file
+  outside the worktree is left out of the copied registry, but not out of the
+  branch's variables or the repository's Compose file setting, which Start sends:
+  Start is then refused (`envVars: PATH cannot be set …`) until you remove the
+  variable in the Env tab or pick a compose file inside the worktree. If Trek's registry
   cannot be read then, nothing is copied and the next start tries again. Until you restart an older Local server (Keep
   Running), a Local window has no Docker, Env or Stack tab. An older Trek still
   running on the same app data after the take-over, or the other Local profile
   (a dev build's), starts stacks this one cannot see: each takes its own copy.
+  Each Local profile reads the other's registry too, so a VM the other one
+  created is not offered for deletion in Settings; a VM another trek-server on
+  this machine created is (Settings says it may be another Trek's, and Delete
+  removes its containers and volumes).
 
 ## Attention indicators
 

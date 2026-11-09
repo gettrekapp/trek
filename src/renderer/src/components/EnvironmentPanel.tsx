@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ENV_DEFAULTS, deriveProfileName, envRepoKey, parseEnvVars } from '../../../shared/environments'
 import type { EnvService, EnvUpStep, GitWorktreeInfo } from '../../../shared/types'
 import { refreshEnvironments } from '../environmentActions'
-import { envStartArgs } from '../environmentStart'
+import { composeFileArg, createRunLogFilter, envStartArgs } from '../environmentStart'
 import { SettingText } from './SettingText'
 import { environmentFor, repoById, repoOfInfo, useAppStore } from '../store'
 import { getBackend } from '../backend'
@@ -71,6 +71,8 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const serviceLogRef = useRef<HTMLPreElement>(null)
   // Follow the tail unless the user has scrolled up to read.
   const followLogsRef = useRef(true)
+  // A Start's log under the profile env.up used, which a branch switch the poll has not seen yet changes.
+  const runLogRef = useRef(createRunLogFilter())
 
   const appendLog = (text: string): void => setLog((prev) => (prev + text).slice(-MAX_LOG))
 
@@ -78,7 +80,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   useEffect(() => {
     if (!profile) return undefined
     return getBackend().env.onLog((event) => {
-      if (event.profile !== profile) return
+      if (!runLogRef.current.accepts(profile, event)) return
       if (event.data) appendLog(event.data)
       if (event.step) {
         const step = event.step
@@ -128,7 +130,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     let disposed = false
     const poll = async (): Promise<void> => {
       try {
-        const result = await getBackend().env.ps({ path: info.path }, composeFile)
+        const result = await getBackend().env.ps({ path: info.path }, composeFileArg(composeFile))
         if (!disposed) setServices(result)
       } catch {
         // VM mid-boot or context missing — the next poll retries
@@ -147,7 +149,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     let disposed = false
     const fetchLogs = async (): Promise<void> => {
       try {
-        const text = await getBackend().env.logs({ path: info.path }, composeFile, logsService, SERVICE_LOGS_TAIL)
+        const text = await getBackend().env.logs({ path: info.path }, composeFileArg(composeFile), logsService, SERVICE_LOGS_TAIL)
         if (!disposed) setServiceLogs(text)
       } catch (err) {
         if (!disposed) setServiceLogs(String(err))
@@ -181,6 +183,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     setEnvBusy(profile, 'start')
     setError(null)
     setSteps({ vm: 'active' })
+    runLogRef.current.begin()
     try {
       // The store's project now, not this render's: a variables draft this click's blur just
       // committed is in it (a server window shows the pending edit at once).
@@ -201,6 +204,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     } catch (err) {
       setError(String(err))
     } finally {
+      runLogRef.current.end()
       useAppStore.getState().setEnvBusy(profile, null)
       void refreshEnvironments()
     }

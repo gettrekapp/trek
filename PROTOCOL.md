@@ -364,9 +364,10 @@ server user), and they follow the protocol's rules:
   exists must still be inside the worktree's real path once its symlinks are followed. That check
   limits the client's argument only: the repository's compose content (`include`, `extends`,
   `env_file`, bind mounts, a symlinked default `docker-compose.yml`) is the repository's and is
-  not confined. `env.up`'s `settings` takes only the environment keys (`enabled`, `cpu` 1–256,
-  `memory` 1–1024, `disk` 1–10000, `networkAddress`, `rosetta`, `composeFile`; `profileKey` is
-  ignored), and its `envVars` only variable names (`[A-Za-z_][A-Za-z0-9_]*`, at most 200, string
+  not confined, so a client sends `composeFile` only for a file the user chose, and leaves it out
+  for the default. `env.up`'s `settings` takes only the environment keys (`enabled`, `cpu` 1–256,
+  `memory` 0.5–1024 (GiB, fractional, as colima's `--memory` takes it), `disk` 1–10000 (`cpu` and
+  `disk` integers), `networkAddress`, `rosetta`, `composeFile`; `profileKey` is ignored), and its `envVars` only variable names (`[A-Za-z_][A-Za-z0-9_]*`, at most 200, string
   values without NUL, at most 32 KiB each), never, in any case (`path` and `Docker_Host` are
   refused too), `PATH`, `HOME`, `XDG_CONFIG_HOME` or a `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`,
   `LD_*` or `DYLD_*` name. `tail` is 1–5000 (default 300); `fileId` and `offset` are non-negative
@@ -402,7 +403,7 @@ server user), and they follow the protocol's rules:
 | `docker.container` | `{action: start\|stop\|restart, id}` | `null` |
 | `docker.compose` | `{projectId, repoId, action}` | compose's exit code; it runs in the repository's main checkout |
 | `env.check` | `{}` | `EnvCheckResult`: colima and docker on the server's PATH (an `ok` answer is kept) |
-| `env.list` | `{projectId, repoId}` | `EnvironmentInfo[]`: the repository's environments, and the `twb-` VMs no registry entry names (`orphaned`) |
+| `env.list` | `{projectId, repoId}` | `EnvironmentInfo[]`: the repository's environments, and the `twb-` VMs no registry entry names (`orphaned`); a local server also reads, never writes, the other local profiles' registries (`<platform data dir>/local` and `local-*`), and a VM one of them names is not listed |
 | `env.up` | `{projectId, worktreeId, settings, envVars?}` | `EnvUpResult`: starts (or creates) the VM of the branch git has checked out (re-read first), then `docker compose up -d` in the worktree |
 | `env.stop`, `env.destroy` | `{profile}` | colima's exit code; `destroy` first runs `compose down -v` (for up to a minute) in the registry's worktree while it is there and inside the path allowlist (outside it, the log says compose was skipped and only the VM goes), then deletes the VM and drops the registry entry |
 | `env.ps` | `{projectId, worktreeId, composeFile?}` | `EnvService[]` |
