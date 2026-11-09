@@ -347,7 +347,7 @@ export interface ViewState {
 /**
  * Keeps the selection and each worktree's active tab where they still exist.
  * A gone selection falls back to the first repository's main checkout, a gone
- * tab to the worktree's last one (as removeTerminal does). The selection and
+ * tab to the worktree's last one. The selection and
  * the active-tab map keep their objects when nothing about them changed, so
  * selectors do not re-render on every patch.
  */

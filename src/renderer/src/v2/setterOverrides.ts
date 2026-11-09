@@ -1,47 +1,20 @@
-// The store setters a server window replaces. The reused components edit data
-// through store setters (WorktreeDetail selects renameTerminal, QueuePanel
-// enqueueTerminalText, NotesPanel setBranchNote, …), so instead of touching
-// those call sites, a server window swaps the setters for ones that send the
-// edit to the server. Nothing changes locally: the mirror patch does.
+// What a server window's session and branch-data setters do (the store's `SessionSetter`s). The
+// reused components edit data through store setters (WorktreeDetail selects renameTerminal,
+// QueuePanel enqueueTerminalText, NotesPanel setBranchNote, …), and each store setter calls the one
+// here of the same name: it sends the edit to the server. Nothing changes locally: the mirror patch
+// does.
 //
-// The status is the server's alone (it computes it from the pty), so the
-// setters that would move it locally (setTerminalStatus, setTerminalSession,
-// setGlobalSessions; no renderer code calls them since 4e-2) do nothing here.
-// So does addWorktreeInstance: every worktree of a server project comes from
-// the mirror (AddWorktreeModal's v2 path never calls it). Decisions are the
-// server's too: only its MCP opens one (requestDecision does nothing), any
-// input the server counts closes it, and a dismiss (clearDecision, from
-// DecisionIcon and NotificationsMenu) asks the server; none is cleared here.
+// The status is the server's alone (it computes it from the pty), and so are the worktrees and the
+// decisions: only the server's MCP opens one, any input the server counts closes it, and a dismiss
+// (clearDecision, from DecisionIcon and NotificationsMenu) asks the server; none is cleared here.
 //
-// Pure: windowKind.ts installs the result with useAppStore.setState and puts
-// the originals back when the window leaves the server project.
+// Pure: installV2.ts hands the result to the store (setProjectSetters) and takes it back when the
+// window leaves the server project.
 import { errorCode } from './errors.ts'
 import type { WindowBackend } from '../backend'
-import type { AppState } from '../store'
+import type { AppState, SessionSetter } from '../store'
 
-export const OVERRIDDEN_SETTERS = [
-  'renameTerminal',
-  'toggleTerminalComplete',
-  'clearTerminalAttention',
-  'setTerminalQueue',
-  'enqueueTerminalText',
-  'removeQueuedText',
-  'setBranchTag',
-  'setBranchCustomTag',
-  'setBranchNote',
-  'setBranchTicket',
-  'setBranchPullRequest',
-  'setWorktreeOrder',
-  'setTerminalStatus',
-  'setTerminalSession',
-  'setGlobalSessions',
-  'addWorktreeInstance',
-  'requestDecision',
-  'clearDecision'
-] as const
-
-export type OverriddenSetter = (typeof OVERRIDDEN_SETTERS)[number]
-export type SetterOverrides = Pick<AppState, OverriddenSetter>
+export type SetterOverrides = Pick<AppState, SessionSetter>
 
 type Slice = Pick<AppState, 'terminals' | 'terminalQueues' | 'decisions'>
 
@@ -70,7 +43,6 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
   const send = (title: string, request: Promise<void>): void => {
     request.catch((err: unknown) => reports.reportEdit(title, err))
   }
-  const noop = (): void => {}
   // `session.seen` already sent and not answered yet: a focus repeated meanwhile sends nothing.
   const seenInFlight = new Set<string>()
   // Likewise a dismiss: the decision stays shown until the server's patch removes it.
@@ -124,11 +96,6 @@ export function v2SetterOverrides(backend: WindowBackend, state: () => Slice, re
     setBranchPullRequest: (repoId, branch, url) =>
       send('Could not link the pull request', backend.branch.setPullRequest(repoId, branch, url)),
     setWorktreeOrder: (keys) => send('Could not save the worktree order', backend.worktrees.setOrder(keys)),
-    setTerminalStatus: noop,
-    setTerminalSession: noop,
-    setGlobalSessions: noop,
-    addWorktreeInstance: noop,
-    requestDecision: noop,
     clearDecision: (id) => {
       if (!state().decisions[id] || dismissInFlight.has(id)) return
       dismissInFlight.add(id)

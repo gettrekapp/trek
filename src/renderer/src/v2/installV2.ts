@@ -1,14 +1,15 @@
 // Puts a window into server-project mode and takes it out again. windowKind.ts
 // calls it whenever `serverWindow` changes, inside the same `set`, so the
-// backend, the store-setter overrides and the projected slice always change
-// together: a window that goes back to the start screen never keeps v2
-// overrides on the idle backend, nor a projected project.
+// backend, the store's project setters and the projected slice always change
+// together: a window that goes back to the start screen never keeps this
+// project's setters on the idle backend, nor a projected project.
 import { useAppStore } from '../store'
+import { setProjectSetters } from '../projectSetters'
 import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repoRemoval'
 import { localWorktreeTeardown } from '../localTeardown'
 import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
-import { OVERRIDDEN_SETTERS, v2SetterOverrides, type SetterOverrides } from './setterOverrides'
+import { v2SetterOverrides } from './setterOverrides'
 import { applyV2Project, clearV2Projection, setV2ProjectOverlay, v2Ids } from './applyProjection'
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
@@ -16,11 +17,11 @@ import { editReporter, errorCode, errorText } from './errors'
 import { agentsFetchKey, agentsRetryDelay, agentsStale } from './sessionChoices'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
-import { SETTINGS_SETTERS, v2SettingsOverrides, type SettingsOverrides, type SettingsRequests } from './settingsOverrides'
+import { v2SettingsOverrides, type SettingsRequests } from './settingsOverrides'
 import { ClientError } from '../../../shared/client/index.ts'
 import { isLocalEntryId } from '../../../shared/appServerRules'
 import { createProjectionWaits, PROJECTION_WAIT_MS } from './projectionWaits'
-import { installPatch, leavePatch } from './windowState'
+import { INSTALL_PATCH, LEAVE_PATCH } from './windowState'
 import { stopAllSummaries } from '../voice'
 import type { WindowBackend } from '../backend'
 import type { AppState } from '../store'
@@ -30,7 +31,7 @@ export interface V2Window {
   entryId: string
   projectId: string
   backend: WindowBackend
-  /** Back to no project: terminals, ids, the projected slice and the setter overrides go. */
+  /** Back to no project: terminals, ids, the projected slice and the project setters go. */
   leave(): void
 }
 
@@ -246,19 +247,14 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     if (previous.serverOffline && !state.serverOffline) drafts.saveAll()
   })
 
-  // The store's own setters (zustand 5's initial state), never a live value that may already be an override.
-  const initial = useAppStore.getInitialState()
-  const originals = Object.fromEntries(
-    [...OVERRIDDEN_SETTERS, ...SETTINGS_SETTERS].map((name) => [name, initial[name]])
-  ) as SetterOverrides & SettingsOverrides
+  // The store's project setters send to this server from now on.
+  setProjectSetters({
+    ...v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit }),
+    ...v2SettingsOverrides(settingsWriter, settingsRequests, mirrorProject)
+  })
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
   stopAllSummaries()
-  useAppStore.setState(
-    installPatch({
-      ...v2SetterOverrides(backend, () => useAppStore.getState(), { report, reportEdit }),
-      ...v2SettingsOverrides(settingsWriter, settingsRequests, mirrorProject)
-    })
-  )
+  useAppStore.setState(INSTALL_PATCH)
 
   return {
     entryId,
@@ -285,7 +281,8 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       disposeV2Terminals()
       clearV2Projection()
       stopAllSummaries()
-      useAppStore.setState(leavePatch(originals))
+      setProjectSetters(null)
+      useAppStore.setState(LEAVE_PATCH)
     }
   }
 }

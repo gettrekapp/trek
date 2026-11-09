@@ -1,7 +1,24 @@
 // scripts/v2SetterOverrides.test.mjs — the store setters a server window sends to its server instead.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { OVERRIDDEN_SETTERS, refindQueued, v2SetterOverrides } from '../src/renderer/src/v2/setterOverrides.ts'
+import { refindQueued, v2SetterOverrides } from '../src/renderer/src/v2/setterOverrides.ts'
+
+/** The store's SessionSetter names (store.ts). */
+const SESSION_SETTERS = [
+  'renameTerminal',
+  'toggleTerminalComplete',
+  'clearTerminalAttention',
+  'setTerminalQueue',
+  'enqueueTerminalText',
+  'removeQueuedText',
+  'setBranchTag',
+  'setBranchCustomTag',
+  'setBranchNote',
+  'setBranchTicket',
+  'setBranchPullRequest',
+  'setWorktreeOrder',
+  'clearDecision'
+]
 
 /** A backend whose every method records its call and resolves (or rejects with `fail`). */
 function fakeBackend(fail) {
@@ -31,9 +48,9 @@ const tick = () => new Promise((r) => setImmediate(r))
 /** Reports nothing. */
 const quiet = { report: () => {}, reportEdit: () => {} }
 
-test('overrides exactly the listed setters', () => {
+test("gives exactly the store's session setters", () => {
   const { backend } = fakeBackend()
-  assert.deepEqual(Object.keys(v2SetterOverrides(backend, () => slice, quiet)).sort(), [...OVERRIDDEN_SETTERS].sort())
+  assert.deepEqual(Object.keys(v2SetterOverrides(backend, () => slice, quiet)).sort(), [...SESSION_SETTERS].sort())
 })
 
 test('data edits go to the backend, with legacy ids', async () => {
@@ -80,19 +97,6 @@ test('complete toggles against the status; seen only for attention or done', asy
     ['sessions.seen', 'bell'],
     ['sessions.seen', 'done']
   ])
-})
-
-test('the status is the server\'s: local status setters do nothing, nor does adding a worktree locally', async () => {
-  const { backend, calls } = fakeBackend()
-  const o = v2SetterOverrides(backend, () => slice, quiet)
-  o.setTerminalStatus('busy', 'idle')
-  o.setTerminalSession('busy', 'other')
-  o.setGlobalSessions([])
-  // Only the server's MCP opens a decision for a server session.
-  o.requestDecision('busy', 'local question')
-  o.addWorktreeInstance('r1', { id: 'w', name: 'w', path: '/w' })
-  await tick()
-  assert.deepEqual(calls, [])
 })
 
 test('a failed edit is reported as an edit, a failed seen as an acknowledgement', async () => {

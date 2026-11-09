@@ -1,8 +1,7 @@
-// The settings setters a server window replaces (the Settings panel's, the
-// title bar's and TicketModal's): each becomes a compare-and-set on its field,
-// written through the window's settings writer. Values are turned into the
-// server's form here: what the store's setter would leave out (an empty list,
-// a blank prompt, undefined) is sent as null, which removes the key.
+// What a server window's settings setters do (the store's `SettingsSetter`s: the Settings panel's,
+// the title bar's and TicketModal's): each is a compare-and-set on its field, written through the
+// window's settings writer. Values are turned into the server's form here: an
+// empty list, a blank prompt or undefined is sent as null, which removes the key.
 //
 // A Local window (4c) also edits a repository's Docker environments setting,
 // the Docker favourites and a branch's environment variables. The first two
@@ -18,40 +17,14 @@
 // and a stale draft asks Reload or Keep Mine.
 //
 // Tags: only the new list is sent. The server clears a deleted workflow or
-// custom tag from every branch in the same change (project.updateSettings),
-// as the store's setter does in a file window.
+// custom tag from every branch in the same change (project.updateSettings).
 //
 // Pure: installV2.ts supplies the requests and the writer.
 import type { Project, Repository } from '../../../shared/model/types'
 import type { EnvironmentSettings } from '../../../shared/types'
-import type { AppState } from '../store'
+import type { AppState, SettingsSetter } from '../store'
 import { sameSetting, type Rebased, type SettingsField, type SettingsWriter } from './settingsWriter.ts'
 
-export const SETTINGS_SETTERS = [
-  'setClaudePermissionMode',
-  'setAudioAlerts',
-  'setTitleBarColor',
-  'setLogoImage',
-  'setBannerImage',
-  'setWorktreeTags',
-  'setCustomTags',
-  'setTerminalButtons',
-  'setGlobalTerminalButtons',
-  'setSessionSystemPrompt',
-  'setGlobalSystemPrompt',
-  'setSessionTypes',
-  'setProjectLlmDefault',
-  'setGlobalLlm',
-  'setLinearWorkspace',
-  'setAzureDevOpsBaseUrl',
-  'setProjectName',
-  'setLinkedDirs',
-  'setEnvironmentSettings',
-  'toggleDockerFavorite',
-  'setBranchEnvVars'
-] as const
-
-export type SettingsSetter = (typeof SETTINGS_SETTERS)[number]
 export type SettingsOverrides = Pick<AppState, SettingsSetter>
 
 export interface SettingsRequests {

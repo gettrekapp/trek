@@ -1,8 +1,7 @@
 // scripts/v2SettingsOverrides.test.mjs — the settings setters a server window sends to its server.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SETTINGS_SETTERS, rebaseObject, rebaseSet, v2SettingsOverrides } from '../src/renderer/src/v2/settingsOverrides.ts'
-import { OVERRIDDEN_SETTERS } from '../src/renderer/src/v2/setterOverrides.ts'
+import { rebaseObject, rebaseSet, v2SettingsOverrides } from '../src/renderer/src/v2/settingsOverrides.ts'
 import { createSettingsWriter } from '../src/renderer/src/v2/settingsWriter.ts'
 
 const project = () => ({
@@ -37,10 +36,34 @@ function setup() {
   return { o: v2SettingsOverrides(writer, requests, () => mirror), calls, writer, mirror }
 }
 
-test('overrides exactly the listed settings setters, none of them already overridden', () => {
+/** The store's SettingsSetter names (store.ts). */
+const SETTINGS_SETTERS = [
+  'setClaudePermissionMode',
+  'setAudioAlerts',
+  'setTitleBarColor',
+  'setLogoImage',
+  'setBannerImage',
+  'setWorktreeTags',
+  'setCustomTags',
+  'setTerminalButtons',
+  'setGlobalTerminalButtons',
+  'setSessionSystemPrompt',
+  'setGlobalSystemPrompt',
+  'setSessionTypes',
+  'setProjectLlmDefault',
+  'setGlobalLlm',
+  'setLinearWorkspace',
+  'setAzureDevOpsBaseUrl',
+  'setProjectName',
+  'setLinkedDirs',
+  'setEnvironmentSettings',
+  'toggleDockerFavorite',
+  'setBranchEnvVars'
+]
+
+test("gives exactly the store's settings setters", () => {
   const { o } = setup()
   assert.deepEqual(Object.keys(o).sort(), [...SETTINGS_SETTERS].sort())
-  assert.deepEqual(SETTINGS_SETTERS.filter((name) => OVERRIDDEN_SETTERS.includes(name)), [])
 })
 
 test('each setter sends its key in the server form, with the current value as expected', () => {

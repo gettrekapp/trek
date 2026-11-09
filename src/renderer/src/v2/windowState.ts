@@ -21,9 +21,9 @@ export const EMPTY: Partial<AppState> = {
 }
 
 /**
- * View state a window keeps from what it showed before (a file window's open
- * Global panel or bot tab, its bot, Colima environments and tool check, Linear chips): a
- * server window starts from none of it and leaves none behind. The voice
+ * View state a window keeps from what it showed before (an open Global panel or
+ * bot tab, the bot, Colima environments and tool check, Linear chips): a server
+ * window starts from none of it and leaves none behind. The voice
  * queue is stopped rather than zeroed here (`stopAllSummaries`), so what the
  * store shows stays what plays. The queue panels' open state is an app-wide
  * preference and stays.
@@ -40,12 +40,8 @@ export const VIEW_RESET: Partial<AppState> = {
   linearIssues: {}
 }
 
-/** On install: the setter overrides and the view reset; offline until ServerProjectWindow reports the real status. */
-export function installPatch(overrides: Partial<AppState>): Partial<AppState> {
-  return { ...overrides, ...VIEW_RESET, serverOffline: true, serverLink: null }
-}
+/** On install: the view reset; offline until ServerProjectWindow reports the real status. */
+export const INSTALL_PATCH: Partial<AppState> = { ...VIEW_RESET, serverOffline: true, serverLink: null }
 
-/** On leave: the store's own setters back, the slice emptied and the view reset. */
-export function leavePatch(originals: Partial<AppState>): Partial<AppState> {
-  return { ...originals, ...EMPTY, ...VIEW_RESET }
-}
+/** On leave: the slice emptied and the view reset. */
+export const LEAVE_PATCH: Partial<AppState> = { ...EMPTY, ...VIEW_RESET }

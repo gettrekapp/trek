@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createProjectionWaits, PROJECTION_WAIT_MS, REV_WAIT_MS } from '../src/renderer/src/v2/projectionWaits.ts'
-import { EMPTY, VIEW_RESET, installPatch, leavePatch } from '../src/renderer/src/v2/windowState.ts'
+import { EMPTY, INSTALL_PATCH, LEAVE_PATCH, VIEW_RESET } from '../src/renderer/src/v2/windowState.ts'
 
 const coded = (code) => Object.assign(new Error(code), { code })
 const tick = () => new Promise((r) => setImmediate(r))
@@ -108,14 +108,10 @@ test('with a rev but no mirror it falls back to the store wait', async () => {
 })
 
 test('the view reset applies on install and on leave; the voice fields are left to stopAllSummaries', () => {
-  const overrides = { renameTerminal: () => {} }
-  const installed = installPatch(overrides)
-  for (const [key, value] of Object.entries(VIEW_RESET)) assert.deepEqual(installed[key], value, key)
-  assert.equal(installed.renameTerminal, overrides.renameTerminal)
-  assert.deepEqual([installed.serverOffline, installed.serverLink, installed.globalPanelOpen, installed.globalView], [true, null, false, 'sessions'])
-  const originals = { renameTerminal: () => {} }
-  const left = leavePatch(originals)
-  for (const [key, value] of Object.entries({ ...EMPTY, ...VIEW_RESET })) assert.deepEqual(left[key], value, key)
-  assert.equal(left.renameTerminal, originals.renameTerminal)
+  for (const [key, value] of Object.entries(VIEW_RESET)) assert.deepEqual(INSTALL_PATCH[key], value, key)
+  assert.deepEqual([INSTALL_PATCH.serverOffline, INSTALL_PATCH.serverLink, INSTALL_PATCH.globalPanelOpen, INSTALL_PATCH.globalView], [true, null, false, 'sessions'])
+  for (const [key, value] of Object.entries({ ...EMPTY, ...VIEW_RESET })) assert.deepEqual(LEAVE_PATCH[key], value, key)
+  // Neither swaps a store setter any more: the store's project setters follow setProjectSetters.
+  assert.deepEqual([...Object.keys(INSTALL_PATCH), ...Object.keys(LEAVE_PATCH)].filter((key) => typeof INSTALL_PATCH[key] === 'function' || typeof LEAVE_PATCH[key] === 'function'), [])
   assert.equal('voicePlaying' in VIEW_RESET || 'voiceQueued' in VIEW_RESET, false)
 })

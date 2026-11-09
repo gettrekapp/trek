@@ -6,13 +6,13 @@ import { deriveProfileName } from '../../shared/environments'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
+import { viaServer } from './projectSetters.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   EnvCheckResult,
   EnvironmentInfo,
   EnvironmentSettings,
   GitWorktreeInfo,
-  GlobalSession,
   HostStatus,
   LinearIssue,
   PersistedTerminal,
@@ -25,7 +25,6 @@ import type {
   VoiceSettings,
   WorktreeInstance,
   WorktreeLocator,
-  WorktreeStatus,
   WorktreeTag
 } from '../../shared/types'
 
@@ -132,18 +131,6 @@ export function branchCustomTags(
 /** hostWorktrees cache key: rows of one repository on one host. */
 export const repoHostKey = (repoId: string, serverId?: string): string =>
   `${repoId} ${hostKey(serverId)}`
-
-/** Apply a change to one repository. */
-function patchRepo(
-  project: ProjectFile,
-  repoId: string,
-  patch: (repo: Repository) => Partial<Repository>
-): ProjectFile {
-  return {
-    ...project,
-    repositories: project.repositories.map((r) => (r.id === repoId ? { ...r, ...patch(r) } : r))
-  }
-}
 
 /** Chip colors for a workflow tag: its color over a translucent tint of it. */
 export function tagStyle(tag: WorktreeTag): React.CSSProperties {
@@ -265,8 +252,6 @@ export interface AppState {
   setLlmSettings: (settings: LlmSettings | null) => void
   setProjectLlmDefault: (llm: LlmSelection | undefined) => void
   setGlobalLlm: (llm: LlmSelection | undefined) => void
-  /** Codex: swap a terminal's placeholder session id for the discovered one */
-  setTerminalSession: (id: string, sessionId: string) => void
   /** The spoken summary playing now, and how many wait behind it. Not persisted. */
   voicePlaying: SpokenSummary | null
   voiceQueued: number
@@ -277,23 +262,12 @@ export interface AppState {
    * whose stored path may differ from git's resolved worktree path).
    */
   selectWorktree: (loc: WorktreeLocator, instanceId?: string) => void
-  addWorktreeInstance: (repoId: string, worktree: WorktreeInstance) => void
-  removeWorktreeInstance: (id: string) => void
-  updateWorktreeInstance: (id: string, patch: Partial<WorktreeInstance>) => void
-  setHostWorktrees: (key: string, infos: GitWorktreeInfo[]) => void
-  /** Merge a status sweep's dirty/ahead/behind into the host's cached rows, in every repository. */
-  setWorktreeStatuses: (host: string, statuses: WorktreeStatus[]) => void
-  registerTerminal: (meta: TerminalMeta) => void
-  removeTerminal: (id: string) => void
   setActiveTerminal: (worktreeId: string, terminalId: string) => void
   /** `expected`: the title the edit started from (a server window sends it as a compare-and-set) */
   renameTerminal: (id: string, title: string, expected?: string) => void
-  setTerminalStatus: (id: string, status: TerminalStatus) => void
   clearTerminalAttention: (id: string) => void
-  requestDecision: (id: string, question: string) => void
   clearDecision: (id: string) => void
   toggleTerminalComplete: (id: string) => void
-  toggleWorktreeComplete: (worktreeId: string) => void
   toggleDockerFavorite: (containerName: string) => void
   setBranchTicket: (repoId: string, branch: string, ticketId: string | null) => void
   setBranchPullRequest: (repoId: string, branch: string, url: string | null) => void
@@ -336,13 +310,55 @@ export interface AppState {
   setVoice: (voice: VoiceSettings | null) => void
   setVoicePlayback: (playing: SpokenSummary | null, queued: number) => void
   setLinearIssues: (issues: LinearIssue[]) => void
-  setGlobalSessions: (sessions: GlobalSession[]) => void
   setTerminalQueue: (id: string, texts: string[]) => void
   enqueueTerminalText: (id: string, text: string) => void
   removeQueuedText: (id: string, index: number) => void
 }
 
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
+
+/** The setters that edit the project's sessions, branch data and worktree order on its server. */
+export type SessionSetter =
+  | 'renameTerminal'
+  | 'toggleTerminalComplete'
+  | 'clearTerminalAttention'
+  | 'setTerminalQueue'
+  | 'enqueueTerminalText'
+  | 'removeQueuedText'
+  | 'setBranchTag'
+  | 'setBranchCustomTag'
+  | 'setBranchNote'
+  | 'setBranchTicket'
+  | 'setBranchPullRequest'
+  | 'setWorktreeOrder'
+  | 'clearDecision'
+
+/** The setters that edit the project's settings on its server (Settings, the title bar, TicketModal, the Env and Docker panels). */
+export type SettingsSetter =
+  | 'setClaudePermissionMode'
+  | 'setAudioAlerts'
+  | 'setTitleBarColor'
+  | 'setLogoImage'
+  | 'setBannerImage'
+  | 'setWorktreeTags'
+  | 'setCustomTags'
+  | 'setTerminalButtons'
+  | 'setGlobalTerminalButtons'
+  | 'setSessionSystemPrompt'
+  | 'setGlobalSystemPrompt'
+  | 'setSessionTypes'
+  | 'setProjectLlmDefault'
+  | 'setGlobalLlm'
+  | 'setLinearWorkspace'
+  | 'setAzureDevOpsBaseUrl'
+  | 'setProjectName'
+  | 'setLinkedDirs'
+  | 'setEnvironmentSettings'
+  | 'toggleDockerFavorite'
+  | 'setBranchEnvVars'
+
+export type ProjectSetter = SessionSetter | SettingsSetter
+export type ProjectSetters = Pick<AppState, ProjectSetter>
 
 export const useAppStore = create<AppState>((set) => ({
   serverWindow: null,
@@ -412,302 +428,30 @@ export const useAppStore = create<AppState>((set) => ({
       return { selected: { ...loc, repoId: repo?.id }, activeWorktreeId: instance?.id ?? null }
     }),
 
-  addWorktreeInstance: (repoId, worktree) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => ({
-          worktrees: [...r.worktrees, worktree]
-        })),
-        activeWorktreeId: worktree.id,
-        selected: { serverId: worktree.serverId, path: worktree.path },
-      }
-    }),
-
-  removeWorktreeInstance: (id) =>
-    set((state) => {
-      if (!state.project || isPrimaryWorktreeId(id)) return state
-      const repo = repoOfWorktreeId(state.project, id)
-      if (!repo) return state
-      const terminals = { ...state.terminals }
-      const terminalQueues = { ...state.terminalQueues }
-      for (const termId of state.terminalOrder[id] ?? []) {
-        delete terminals[termId]
-        delete terminalQueues[termId]
-      }
-      const terminalOrder = { ...state.terminalOrder }
-      delete terminalOrder[id]
-      const activeTerminal = { ...state.activeTerminal }
-      delete activeTerminal[id]
-      const loadedWorktrees = { ...state.loadedWorktrees }
-      delete loadedWorktrees[id]
-      return {
-        project: patchRepo(state.project, repo.id, (r) => ({
-          worktrees: r.worktrees.filter((w) => w.id !== id)
-        })),
-        terminals,
-        terminalOrder,
-        activeTerminal,
-        terminalQueues,
-        loadedWorktrees,
-        activeWorktreeId:
-          state.activeWorktreeId === id ? primaryWorktreeId(repo.id) : state.activeWorktreeId,
-        selected: state.activeWorktreeId === id ? { path: repo.path } : state.selected,
-      }
-    }),
-
-  updateWorktreeInstance: (id, patch) =>
-    set((state) => {
-      if (!state.project) return state
-      const repo = repoOfWorktreeId(state.project, id)
-      if (!repo) return state
-      const worktrees = repo.worktrees.map((w) => (w.id === id ? { ...w, ...patch } : w))
-      const updated = worktrees.find((w) => w.id === id)
-      return {
-        project: patchRepo(state.project, repo.id, () => ({ worktrees })),
-        selected:
-          state.activeWorktreeId === id && updated
-            ? { serverId: updated.serverId, path: updated.path }
-            : state.selected,
-      }
-    }),
-
-  setHostWorktrees: (key, infos) =>
-    set((state) => {
-      // A poll can land after its repository or server path was removed.
-      const current = state.project?.repositories.some(
-        (r) =>
-          key === repoHostKey(r.id) ||
-          Object.keys(r.serverPaths ?? {}).some((s) => key === repoHostKey(r.id, s))
-      )
-      if (!current) return state
-      const prev = state.hostWorktrees[key]
-      // listWorktrees doesn't read git status, so carry the last sweep's
-      // dirty/ahead/behind over instead of blanking the rows on every poll.
-      // A moved HEAD invalidates them — better a blank than a stale count.
-      const cached = new Map((prev ?? []).map((w) => [w.path, w]))
-      const merged = infos.map((info) => {
-        const before = cached.get(info.path)
-        if (!before || before.head !== info.head) return info
-        return { ...info, dirty: before.dirty, ahead: before.ahead, behind: before.behind }
-      })
-      if (prev && JSON.stringify(prev) === JSON.stringify(merged)) return state
-      return { hostWorktrees: { ...state.hostWorktrees, [key]: merged } }
-    }),
-
-  setWorktreeStatuses: (host, statuses) =>
-    set((state) => {
-      const byPath = new Map(statuses.map((s) => [s.path, s]))
-      let changed = false
-      const hostWorktrees = { ...state.hostWorktrees }
-      for (const [key, prev] of Object.entries(state.hostWorktrees)) {
-        if (!key.endsWith(` ${host}`)) continue
-        const merged = prev.map((info) => {
-          const status = byPath.get(info.path)
-          if (!status) return info
-          return { ...info, dirty: status.dirty, ahead: status.ahead, behind: status.behind }
-        })
-        if (JSON.stringify(prev) === JSON.stringify(merged)) continue
-        hostWorktrees[key] = merged
-        changed = true
-      }
-      return changed ? { hostWorktrees } : state
-    }),
-
-  registerTerminal: (meta) =>
-    set((state) => ({
-      terminals: { ...state.terminals, [meta.id]: meta },
-      terminalOrder: {
-        ...state.terminalOrder,
-        [meta.worktreeId]: [...(state.terminalOrder[meta.worktreeId] ?? []), meta.id]
-      },
-      activeTerminal: { ...state.activeTerminal, [meta.worktreeId]: meta.id },
-      // A worktree with a live terminal is loaded by definition — saving reads
-      // this flag to decide whether the live terminals or the stored session
-      // list is the truth for that worktree.
-      loadedWorktrees:
-        meta.worktreeId === GLOBAL_WORKTREE_ID
-          ? state.loadedWorktrees
-          : { ...state.loadedWorktrees, [meta.worktreeId]: true as const }
-    })),
-
-  removeTerminal: (id) =>
-    set((state) => {
-      const meta = state.terminals[id]
-      if (!meta) return state
-      const terminals = { ...state.terminals }
-      delete terminals[id]
-      const terminalQueues = { ...state.terminalQueues }
-      delete terminalQueues[id]
-      const decisions = { ...state.decisions }
-      delete decisions[id]
-      const order = (state.terminalOrder[meta.worktreeId] ?? []).filter((t) => t !== id)
-      const activeTerminal = { ...state.activeTerminal }
-      if (activeTerminal[meta.worktreeId] === id) {
-        if (order.length > 0) activeTerminal[meta.worktreeId] = order[order.length - 1]
-        else delete activeTerminal[meta.worktreeId]
-      }
-      return {
-        terminals,
-        terminalOrder: { ...state.terminalOrder, [meta.worktreeId]: order },
-        activeTerminal,
-        terminalQueues,
-        decisions
-      }
-    }),
-
   setActiveTerminal: (worktreeId, terminalId) =>
     set((state) => ({
       activeTerminal: { ...state.activeTerminal, [worktreeId]: terminalId }
     })),
 
-  renameTerminal: (id, title) =>
-    set((state) => {
-      const meta = state.terminals[id]
-      const trimmed = title.trim()
-      if (!meta || !trimmed) return state
-      return { terminals: { ...state.terminals, [id]: { ...meta, title: trimmed } } }
-    }),
-
-  setTerminalStatus: (id, status) =>
-    set((state) => {
-      const meta = state.terminals[id]
-      if (!meta || meta.status === status) return state
-      return { terminals: { ...state.terminals, [id]: { ...meta, status } } }
-    }),
-
-  clearTerminalAttention: (id) =>
-    set((state) => {
-      const meta = state.terminals[id]
-      if (!meta) return state
-      if (meta.status !== 'attention' && meta.status !== 'done') return state
-      return { terminals: { ...state.terminals, [id]: { ...meta, status: 'idle' } } }
-    }),
-
-  requestDecision: (id, question) =>
-    set((state) => {
-      if (!state.terminals[id]) return state
-      return {
-        decisions: { ...state.decisions, [id]: { terminalId: id, question, requestedAt: Date.now() } }
-      }
-    }),
-
-  clearDecision: (id) =>
-    set((state) => {
-      if (!state.decisions[id]) return state
-      const decisions = { ...state.decisions }
-      delete decisions[id]
-      return { decisions }
-    }),
-
-  toggleTerminalComplete: (id) =>
-    set((state) => {
-      const meta = state.terminals[id]
-      if (!meta || meta.status === 'exited') return state
-      const status = meta.status === 'complete' ? 'idle' : 'complete'
-      return { terminals: { ...state.terminals, [id]: { ...meta, status } } }
-    }),
-
-  toggleDockerFavorite: (containerName) =>
-    set((state) => {
-      if (!state.project) return state
-      const favorites = new Set(state.project.dockerFavorites ?? [])
-      if (favorites.has(containerName)) favorites.delete(containerName)
-      else favorites.add(containerName)
-      return {
-        project: { ...state.project, dockerFavorites: [...favorites].sort() },
-      }
-    }),
-
-  setAzureDevOpsBaseUrl: (url) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, azureDevOpsBaseUrl: url } }
-    }),
-
-  setLinearWorkspace: (slug) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, linearWorkspace: slug } }
-    }),
-
-  setAudioAlerts: (enabled) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, audioAlerts: enabled } }
-    }),
-
-  setProjectName: (name) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, name } }
-    }),
-
-  setTitleBarColor: (color) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, titleBarColor: color } }
-    }),
-
-  setLogoImage: (image) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, logoImage: image } }
-    }),
-
-  setBannerImage: (image) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, bannerImage: image } }
-    }),
-
-  setTerminalButtons: (buttons) =>
-    set((state) => {
-      if (!state.project) return state
-      // An emptied list drops the key so it doesn't clutter the project file.
-      const terminalButtons = buttons.length > 0 ? buttons : undefined
-      return { project: { ...state.project, terminalButtons } }
-    }),
-
-  setGlobalTerminalButtons: (buttons) =>
-    set((state) => {
-      if (!state.project) return state
-      const globalTerminalButtons = buttons.length > 0 ? buttons : undefined
-      return { project: { ...state.project, globalTerminalButtons } }
-    }),
-
-  setGlobalSystemPrompt: (prompt) =>
-    set((state) => {
-      if (!state.project) return state
-      const globalSystemPrompt = prompt.trim() ? prompt : undefined
-      return { project: { ...state.project, globalSystemPrompt } }
-    }),
-
-  setSessionSystemPrompt: (prompt) =>
-    set((state) => {
-      if (!state.project) return state
-      const sessionSystemPrompt = prompt.trim() ? prompt : undefined
-      return { project: { ...state.project, sessionSystemPrompt } }
-    }),
-
-  setSessionTypes: (types) =>
-    set((state) => {
-      if (!state.project) return state
-      const sessionTypes = types.length > 0 ? types : undefined
-      return { project: { ...state.project, sessionTypes } }
-    }),
-
-  setWorktreeOrder: (keys) =>
-    set((state) =>
-      state.project ? { project: { ...state.project, worktreeOrder: keys } } : state
-    ),
-
-  setClaudePermissionMode: (mode) =>
-    set((state) => {
-      if (!state.project) return state
-      const { claudePermissionMode: _previous, ...rest } = state.project
-      return { project: mode ? { ...rest, claudePermissionMode: mode } : rest }
-    }),
+  renameTerminal: viaServer('renameTerminal'),
+  clearTerminalAttention: viaServer('clearTerminalAttention'),
+  clearDecision: viaServer('clearDecision'),
+  toggleTerminalComplete: viaServer('toggleTerminalComplete'),
+  toggleDockerFavorite: viaServer('toggleDockerFavorite'),
+  setAzureDevOpsBaseUrl: viaServer('setAzureDevOpsBaseUrl'),
+  setLinearWorkspace: viaServer('setLinearWorkspace'),
+  setAudioAlerts: viaServer('setAudioAlerts'),
+  setProjectName: viaServer('setProjectName'),
+  setTitleBarColor: viaServer('setTitleBarColor'),
+  setLogoImage: viaServer('setLogoImage'),
+  setBannerImage: viaServer('setBannerImage'),
+  setTerminalButtons: viaServer('setTerminalButtons'),
+  setGlobalTerminalButtons: viaServer('setGlobalTerminalButtons'),
+  setGlobalSystemPrompt: viaServer('setGlobalSystemPrompt'),
+  setSessionSystemPrompt: viaServer('setSessionSystemPrompt'),
+  setSessionTypes: viaServer('setSessionTypes'),
+  setWorktreeOrder: viaServer('setWorktreeOrder'),
+  setClaudePermissionMode: viaServer('setClaudePermissionMode'),
 
   setEnvironments: (infos) =>
     set((state) => {
@@ -752,24 +496,8 @@ export const useAppStore = create<AppState>((set) => ({
 
   setLlmSettings: (llmSettings) => set({ llmSettings }),
 
-  setProjectLlmDefault: (llmDefault) =>
-    set((state) =>
-      state.project ? { project: { ...state.project, llmDefault } } : state
-    ),
-
-  setGlobalLlm: (globalLlm) =>
-    set((state) =>
-      state.project ? { project: { ...state.project, globalLlm } } : state
-    ),
-
-  setTerminalSession: (id, sessionId) =>
-    set((state) => {
-      const meta = state.terminals[id]
-      if (!meta) return state
-      return {
-        terminals: { ...state.terminals, [id]: { ...meta, sessionId, sessionPending: false } }
-      }
-    }),
+  setProjectLlmDefault: viaServer('setProjectLlmDefault'),
+  setGlobalLlm: viaServer('setGlobalLlm'),
 
   setVoicePlayback: (playing, queued) => set({ voicePlaying: playing, voiceQueued: queued }),
 
@@ -780,174 +508,19 @@ export const useAppStore = create<AppState>((set) => ({
       return { linearIssues }
     }),
 
-  setGlobalSessions: (sessions) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: { ...state.project, globalSessions: sessions } }
-    }),
-
-  setTerminalQueue: (id, texts) =>
-    set((state) => ({ terminalQueues: { ...state.terminalQueues, [id]: texts } })),
-
-  enqueueTerminalText: (id, text) =>
-    set((state) => ({
-      terminalQueues: {
-        ...state.terminalQueues,
-        [id]: [...(state.terminalQueues[id] ?? []), text]
-      }
-    })),
-
-  removeQueuedText: (id, index) =>
-    set((state) => {
-      const queue = state.terminalQueues[id]
-      if (!queue || index < 0 || index >= queue.length) return state
-      const next = queue.filter((_, i) => i !== index)
-      const terminalQueues = { ...state.terminalQueues }
-      if (next.length > 0) terminalQueues[id] = next
-      else delete terminalQueues[id] // emptied queues don't clutter the file
-      return { terminalQueues }
-    }),
-
-  setBranchTicket: (repoId, branch, ticketId) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => {
-          const branchTickets = { ...(r.branchTickets ?? {}) }
-          if (ticketId) branchTickets[branch] = ticketId
-          else delete branchTickets[branch]
-          return { branchTickets }
-        }),
-      }
-    }),
-
-  setBranchPullRequest: (repoId, branch, url) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => {
-          const branchPullRequests = { ...(r.branchPullRequests ?? {}) }
-          if (url) branchPullRequests[branch] = url
-          else delete branchPullRequests[branch]
-          return { branchPullRequests }
-        }),
-      }
-    }),
-
-  setLinkedDirs: (repoId, dirs) =>
-    set((state) => {
-      if (!state.project) return state
-      // An emptied list drops the key so it doesn't clutter the project file.
-      const linkedDirs = dirs.length > 0 ? dirs : undefined
-      return { project: patchRepo(state.project, repoId, () => ({ linkedDirs })) }
-    }),
-
-  setEnvironmentSettings: (repoId, patch) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => ({
-          environments: { enabled: false, ...r.environments, ...patch }
-        })),
-      }
-    }),
-
-  setBranchNote: (repoId, branch, text) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => {
-          const branchNotes = { ...(r.branchNotes ?? {}) }
-          if (text) branchNotes[branch] = text
-          else delete branchNotes[branch] // empty notes don't clutter the file
-          return { branchNotes }
-        }),
-      }
-    }),
-
-  setBranchEnvVars: (repoId, branch, text) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => {
-          const branchEnvVars = { ...(r.branchEnvVars ?? {}) }
-          if (text.trim()) branchEnvVars[branch] = text
-          else delete branchEnvVars[branch] // empty editors don't clutter the file
-          return { branchEnvVars }
-        }),
-      }
-    }),
-
-  setBranchTag: (repoId, branch, tagId) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => {
-          const branchTags = { ...(r.branchTags ?? {}) }
-          if (tagId) branchTags[branch] = tagId
-          else delete branchTags[branch] // untagged branches don't clutter the file
-          return { branchTags }
-        }),
-      }
-    }),
-
-  setWorktreeTags: (tags) =>
-    set((state) => {
-      if (!state.project) return state
-      // Branches carrying a deleted tag become untagged, in every repository.
-      const ids = new Set(tags.map((t) => t.id))
-      const repositories = state.project.repositories.map((r) => ({
-        ...r,
-        branchTags: Object.fromEntries(
-          Object.entries(r.branchTags ?? {}).filter(([, id]) => ids.has(id))
-        )
-      }))
-      return { project: { ...state.project, worktreeTags: tags, repositories } }
-    }),
-
-  setBranchCustomTag: (repoId, branch, tagId, enabled) =>
-    set((state) => {
-      if (!state.project) return state
-      return {
-        project: patchRepo(state.project, repoId, (r) => {
-          const branchCustomTags = { ...(r.branchCustomTags ?? {}) }
-          const ids = (branchCustomTags[branch] ?? []).filter((id) => id !== tagId)
-          if (enabled) ids.push(tagId)
-          if (ids.length) branchCustomTags[branch] = ids
-          else delete branchCustomTags[branch]
-          return { branchCustomTags }
-        }),
-      }
-    }),
-
-  setCustomTags: (tags) =>
-    set((state) => {
-      if (!state.project) return state
-      // Deleted tags come off every branch carrying them, in every repository.
-      const ids = new Set(tags.map((t) => t.id))
-      const repositories = state.project.repositories.map((r) => {
-        const branchCustomTags: Record<string, string[]> = {}
-        for (const [branch, tagIds] of Object.entries(r.branchCustomTags ?? {})) {
-          const kept = tagIds.filter((id) => ids.has(id))
-          if (kept.length) branchCustomTags[branch] = kept
-        }
-        return { ...r, branchCustomTags }
-      })
-      return { project: { ...state.project, customTags: tags, repositories } }
-    }),
-
-  toggleWorktreeComplete: (worktreeId) =>
-    set((state) => {
-      const ids = (state.terminalOrder[worktreeId] ?? []).filter(
-        (id) => state.terminals[id] && state.terminals[id].status !== 'exited'
-      )
-      if (ids.length === 0) return state
-      const allComplete = ids.every((id) => state.terminals[id].status === 'complete')
-      const status: TerminalStatus = allComplete ? 'idle' : 'complete'
-      const terminals = { ...state.terminals }
-      for (const id of ids) terminals[id] = { ...terminals[id], status }
-      return { terminals }
-    })
+  setTerminalQueue: viaServer('setTerminalQueue'),
+  enqueueTerminalText: viaServer('enqueueTerminalText'),
+  removeQueuedText: viaServer('removeQueuedText'),
+  setBranchTicket: viaServer('setBranchTicket'),
+  setBranchPullRequest: viaServer('setBranchPullRequest'),
+  setLinkedDirs: viaServer('setLinkedDirs'),
+  setEnvironmentSettings: viaServer('setEnvironmentSettings'),
+  setBranchNote: viaServer('setBranchNote'),
+  setBranchEnvVars: viaServer('setBranchEnvVars'),
+  setBranchTag: viaServer('setBranchTag'),
+  setWorktreeTags: viaServer('setWorktreeTags'),
+  setBranchCustomTag: viaServer('setBranchCustomTag'),
+  setCustomTags: viaServer('setCustomTags')
 }))
 
 /** The live environment for a branch's worktree, if one is known. */

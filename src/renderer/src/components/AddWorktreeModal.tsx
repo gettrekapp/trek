@@ -3,7 +3,7 @@ import { hostRepoPath, repoById, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { errorText } from '../v2/errors'
 import { worktreeKey } from '../../../shared/types'
-import type { GitWorktreeInfo, WorktreeInstance } from '../../../shared/types'
+import type { GitWorktreeInfo } from '../../../shared/types'
 
 interface Props {
   repoId: string
@@ -33,7 +33,6 @@ function parsePullRequestUrl(input: string): ParsedPullRequest | null {
 
 export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
-  const addWorktreeInstance = useAppStore((s) => s.addWorktreeInstance)
   // A server project lists every worktree already: there are no "existing" ones to add.
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
   // A server's ClientError reads "code: message" through String(); a project file keeps its text as it was.
@@ -90,25 +89,13 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
   }, [repoId, repoPath])
 
   /**
-   * Opens the worktree with a first session. A project file gets a new
-   * instance first; a server window's mirror already lists the worktree
-   * (`create` waited for it), so it is selected and started by path.
+   * Opens the worktree with a first session. The server window's mirror
+   * already lists the worktree (`create` waited for it), so it is selected
+   * and started by path.
    */
   const addInstance = async (info: { path: string; branch?: string; name?: string }) => {
-    if (serverWindow) {
-      useAppStore.getState().selectWorktree({ path: info.path })
-      await getBackend().sessions.start({ path: info.path })
-      onClose()
-      return
-    }
-    const worktree: WorktreeInstance = {
-      id: crypto.randomUUID(),
-      name: info.name ?? info.branch ?? baseName(info.path),
-      path: info.path,
-      branch: info.branch
-    }
-    addWorktreeInstance(repoId, worktree)
-    await getBackend().sessions.start({ worktreeId: worktree.id })
+    useAppStore.getState().selectWorktree({ path: info.path })
+    await getBackend().sessions.start({ path: info.path })
     onClose()
   }
 
