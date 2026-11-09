@@ -21,6 +21,7 @@
 //     window opens; File → Import .trekproj… on it does the same.
 //   Launch 3: a window left on a file never imported does not come back; its file is in the
 //     recents, offered for import; the start screen's Import .trekproj… imports it into that window.
+//     Two opens of a sixth file at once import it once, with one result dialog (4d M-1).
 // A saved entry on the server's origin under another path is another server: it is not used, and
 // gets no token. Both .trekproj files are byte-identical at the end, and nothing of this run is
 // written under the real HOME.
@@ -217,6 +218,9 @@ writeFileSync(
 const fileE = join(real, 'files', 'Fifth.trekproj')
 writeFileSync(fileE, JSON.stringify({ version: 3, name: 'Fifth', repositories: [{ id: 'e', name: 'fifth', path: otherRepo, worktrees: [] }] }, null, 2))
 const shaE = sha(fileE)
+// A sixth, opened twice at once (launch 3).
+const fileF = join(real, 'files', 'Sixth.trekproj')
+writeFileSync(fileF, JSON.stringify({ version: 3, name: 'Sixth', repositories: [{ id: 'f', name: 'sixth', path: otherRepo, worktrees: [] }] }, null, 2))
 const shaA = sha(fileA)
 const shaB = sha(fileB)
 const shaC = sha(fileC)
@@ -567,6 +571,14 @@ try {
   check('and its project opens in that window', await until(windowTargets, [{ serverEntryId: 'local', projectId: fifthId }]), [{ serverEntryId: 'local', projectId: fifthId }])
   check('its recent became the server project', readJson(join(userData, 'recent-projects.json'))?.some((e) => e === fileE), false)
   check('the fifth file is byte-identical', sha(fileE), shaE)
+
+  // Two opens of one file at once (4d M-1): the second joins the first, so one import, one result.
+  mark = (await dialogs()).length
+  const projectsBeforeSixth = (await localSdk.request('project.list', {})).length
+  await win3.evaluate((f) => Promise.all([window.api.openProjectPath(f), window.api.openProjectPath(f)]), fileF)
+  check('two opens of one file at once import it once', (await localSdk.request('project.list', {})).filter((p) => p.name === 'Sixth').length, 1)
+  check('with one result dialog', (await since(mark)()).filter((d) => d.message === 'Imported “Sixth”').length, 1)
+  check('and one project more on Local', (await localSdk.request('project.list', {})).length, projectsBeforeSixth + 1)
   check('no console or page errors (launch 3)', pageErrors, [])
   check('nothing of this run was written under the real HOME', realHomeLeaks(), [])
   exitCode = failedChecks.length ? 1 : 0
