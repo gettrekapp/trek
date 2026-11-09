@@ -84,6 +84,18 @@ export function windowHasProject(contents: WebContents): boolean {
   return !!state && (state.target !== null || state.unsavedProject)
 }
 
+/**
+ * File → New Project… / Open on Server… in a window: sent once its renderer listens, or else put in
+ * its initial state, which window:takeInitial hands over at boot (so it is shown once, either way).
+ */
+export function showStartView(contents: WebContents, view: NonNullable<InitialWindowState['menu']>): void {
+  const state = windows.get(contents.id)
+  if (!state) return
+  if (state.rendererReady) contents.send(`menu:${view}`)
+  else state.initial = { ...(state.initial ?? initialFromTarget(null)), menu: view }
+}
+
+/** Whether a file window holds `filePath`. 4e-2 deletes it with the file windows. */
 export function fileIsOpen(filePath: string): boolean {
   return windowHoldingFile(filePath) !== undefined
 }
@@ -203,8 +215,9 @@ export async function openServerTarget(
 }
 
 /**
- * Asks the file window holding `filePath`, if any, to close (its renderer offers to save first),
- * before an import reads the file. `closed` false: the user kept it open. `bounds` are its own.
+ * Asks the file window holding `filePath`, if any, to close (its renderer offers to save first).
+ * `closed` false: the user kept it open. `bounds` are its own. Unused since 4e-1: an import no
+ * longer closes a file window first (none opens), and 4e-2 deletes this with the file windows.
  */
 export async function closeFileWindow(filePath: string): Promise<{ closed: boolean; bounds?: WindowBounds }> {
   const holder = windowHoldingFile(filePath)
@@ -214,6 +227,7 @@ export async function closeFileWindow(filePath: string): Promise<{ closed: boole
   return { closed: await requestClose(holder), bounds }
 }
 
+/** Unused since 4e-1 (a .trekproj only imports); 4e-2 deletes it with the file windows. */
 export function focusWindowHoldingFile(filePath: string): void {
   const holder = windowHoldingFile(filePath)
   if (holder) focusWindow(holder.win)

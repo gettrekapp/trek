@@ -5,6 +5,7 @@ import { access } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { ServerConfig } from '../shared/types'
 import { LOCAL_SERVER_DISABLED } from './localServer'
+import { trekprojPath } from './appIpcRules'
 import { importTrekproj, type ImportOptions, type ImportReport } from './importer'
 import {
   importSummary,
@@ -20,7 +21,6 @@ import {
 import { fileKey, readMigrated, updateMigrated } from './migrated'
 import { getRecents } from './recents'
 import { openServerTarget, readRestoreEntries, windowHasProject } from './windows'
-import type { WindowBounds } from './windowRules'
 
 export const PROJECT_FILTERS = [{ name: 'Trek Developer Project', extensions: ['trekproj'] }]
 
@@ -40,7 +40,7 @@ function askAddServer(parent: BrowserWindow | null): ImportOptions['askAddServer
         `Part of this project is on ${server.name} (${server.url}), which is not in your servers. Add it to import that part.\n\n` +
         (tokenCarried
           ? 'The access token saved in Trek for that address comes with it.'
-          : 'No access token is saved in Trek for that address: set one in Connect to server…, then open the file again to import that part.'),
+          : 'No access token is saved in Trek for that address: set one in Open on server…, then open the file again to import that part.'),
       buttons: ['Add Server', 'Skip'],
       defaultId: 0,
       cancelId: 1
@@ -64,10 +64,10 @@ function runImport(path: string, parent: BrowserWindow | null, extra: Pick<Impor
   return { report, joined: false }
 }
 
-/** The result dialog. `buttons` (with the index of the cancel one) when the caller offers a choice. */
-export async function showImportResult(parent: BrowserWindow | null, outcomes: readonly ImportOutcome[], choice?: { buttons: string[]; cancelId: number }): Promise<number> {
+/** The result dialog: only OK, whatever landed. */
+export async function showImportResult(parent: BrowserWindow | null, outcomes: readonly ImportOutcome[]): Promise<void> {
   const { type, message, detail } = importSummary(outcomes)
-  return box(parent, { type, message, detail, buttons: choice?.buttons ?? ['OK'], defaultId: 0, cancelId: choice?.cancelId ?? 0 })
+  await box(parent, { type, message, detail, buttons: ['OK'], defaultId: 0, cancelId: 0 })
 }
 
 /** An empty window of the app whose renderer can take a project, if `win` is one. */
@@ -77,12 +77,12 @@ function emptyWindow(win: BrowserWindow | null): WebContents | null {
 
 /**
  * The windows of an import, Local's piece first: it takes `sender` when that window is empty
- * (main tells its renderer: `window:showServer`) or opens at `bounds`; each other piece opens in
- * a window of its own. A piece already open is focused.
+ * (main tells its renderer: `window:showServer`); each other piece opens in a window of its own.
+ * A piece already open is focused.
  */
-export async function openPieces(sender: WebContents | null, pieces: readonly MigratedPiece[], bounds?: WindowBounds): Promise<void> {
+export async function openPieces(sender: WebContents | null, pieces: readonly MigratedPiece[]): Promise<void> {
   for (const [i, piece] of localFirst(pieces).entries()) {
-    await openServerTarget(i === 0 ? sender : null, targetOf(piece), piece.name, piece.serverName, { announce: true, bounds: i === 0 ? bounds : undefined })
+    await openServerTarget(i === 0 ? sender : null, targetOf(piece), piece.name, piece.serverName, { announce: true })
   }
 }
 
@@ -177,8 +177,9 @@ export async function openFromOs(filePath: string): Promise<void> {
  */
 export function registerImportHandlers(): void {
   ipcMain.handle('project:import', (event) => importFromMenu(event.sender))
-  ipcMain.handle('project:openPath', (event, filePath: unknown) => {
-    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath must be a non-empty string')
+  ipcMain.handle('project:openPath', (event, raw: unknown) => {
+    const filePath = trekprojPath(raw)
+    if (!filePath) throw new Error('filePath must be an absolute path to a .trekproj')
     return openTrekproj(event.sender, filePath)
   })
 }

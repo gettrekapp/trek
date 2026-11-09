@@ -48,6 +48,7 @@ import {
   isQuitting,
   registerWindowHandlers,
   restoreWindows,
+  showStartView,
   windowHasProject
 } from './windows'
 
@@ -68,7 +69,7 @@ function sendToFocused(channel: string): void {
 /** File → New Project… / Open on Server…: the start screen's view, in the focused window if it is empty, else in a new one. */
 function startView(view: 'new-project' | 'open-on-server'): void {
   const focused = BrowserWindow.getFocusedWindow()
-  if (focused && !windowHasProject(focused.webContents)) focused.webContents.send(`menu:${view}`)
+  if (focused && !windowHasProject(focused.webContents)) showStartView(focused.webContents, view)
   else createWindow({ menu: view })
 }
 

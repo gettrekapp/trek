@@ -10,7 +10,7 @@
 //   - the first launch spawns the Local server: local.json with its pid, detached in its own
 //     session (setsid), its output in the profile's server.log (0600); its agents get no TREK_
 //     variable from the app's env;
-//   - Connect to server lists Local first, Running, with no Set token, Edit or Remove;
+//   - Open on server lists Local first, Running, with no Set token, Edit or Remove;
 //   - the start screen's New Project… lists Local first; on it: the folder picker (stubbed) → server.addRepo → the modal named after
 //     the folder with it ticked → Create; the window becomes the Local project window;
 //   - a session started on it runs the fake agent, and the window shows its output;

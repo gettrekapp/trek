@@ -7,7 +7,7 @@
 // temp config, two git repos, a token and a fake agent, and launches the built app
 // (out/main/index.js) with a temp --user-data-dir and window restore on. Through the DOM
 // and window.api it covers:
-//   - Connect to server: add a server (ws:// warnings, token required), connected dot, Test,
+//   - Open on server: add a server (ws:// warnings, token required), connected dot, Test,
 //     a wrong token (Token rejected, grey dot), Set token, Edit (another origin needs the
 //     token again), a bad-token spare server (needs-auth) and Remove.
 //   - New Project…: PATH_DENIED and NOT_A_REPO hints, adding a repo by path, Create; the
@@ -347,7 +347,7 @@ const pageForServerProject = async (projectId, ms = 15_000) => {
   throw new Error(`No window shows server project ${projectId} after ${ms} ms`)
 }
 
-/** In a start screen: Connect to server… and the named server's project list. */
+/** In a start screen: Open on server… and the named server's project list. */
 const connectProjects = async (page, serverName) => {
   await page.locator('.start-actions button', { hasText: 'Open on server…' }).click()
   const item = page.locator('.connect-server-item', { hasText: serverName })

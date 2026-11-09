@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RecentEntry } from '../shared/types'
 import { getRecents, removeRecent } from './recents'
+import { absolutePath, checkboxConfirmOptions, confirmOptions, editorPath, errorDialogText } from './appIpcRules'
 import { parseRecentRef } from './recentsRules'
 
 const execFileAsync = promisify(execFile)
@@ -42,65 +43,42 @@ export function registerAppIpc(): void {
     }
   })
 
-  ipcMain.handle(
-    'dialog:confirm',
-    async (
-      event,
-      opts: {
-        title: string
-        message: string
-        detail?: string
-        confirmLabel: string
-        cancelLabel?: string
-        defaultCancel?: boolean
-      }
-    ): Promise<boolean> => {
-      const win = BrowserWindow.fromWebContents(event.sender)!
-      // From a renderer: anything but text is made text, so a bad call never throws in the dialog.
-      const result = await dialog.showMessageBox(win, {
-        type: 'warning',
-        title: String(opts.title ?? ''),
-        message: String(opts.message ?? ''),
-        detail: typeof opts.detail === 'string' ? opts.detail : undefined,
-        buttons: [typeof opts.cancelLabel === 'string' && opts.cancelLabel ? opts.cancelLabel : 'Cancel', String(opts.confirmLabel ?? 'OK')],
-        defaultId: opts.defaultCancel === true ? 0 : 1,
-        cancelId: 0
-      })
-      return result.response === 1
-    }
-  )
-
-  ipcMain.handle(
-    'dialog:confirmWithCheckbox',
-    async (
-      event,
-      opts: {
-        title: string
-        message: string
-        detail?: string
-        confirmLabel: string
-        checkboxLabel: string
-        checkboxChecked: boolean
-      }
-    ): Promise<{ confirmed: boolean; checked: boolean }> => {
-      const win = BrowserWindow.fromWebContents(event.sender)!
-      const result = await dialog.showMessageBox(win, {
-        type: 'warning',
-        title: opts.title,
-        message: opts.message,
-        detail: opts.detail,
-        buttons: ['Cancel', opts.confirmLabel],
-        defaultId: 1,
-        cancelId: 0,
-        checkboxLabel: opts.checkboxLabel,
-        checkboxChecked: opts.checkboxChecked
-      })
-      return { confirmed: result.response === 1, checked: result.checkboxChecked }
-    }
-  )
-
-  ipcMain.handle('dialog:error', async (event, title: string, message: string): Promise<void> => {
+  ipcMain.handle('dialog:confirm', async (event, raw: unknown): Promise<boolean> => {
     const win = BrowserWindow.fromWebContents(event.sender)!
+    // From a renderer: anything but text is made text, so a bad call never throws in the dialog.
+    const opts = confirmOptions(raw)
+    const result = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: opts.title,
+      message: opts.message,
+      detail: opts.detail,
+      buttons: [opts.cancelLabel, opts.confirmLabel],
+      defaultId: opts.defaultCancel ? 0 : 1,
+      cancelId: 0
+    })
+    return result.response === 1
+  })
+
+  ipcMain.handle('dialog:confirmWithCheckbox', async (event, raw: unknown): Promise<{ confirmed: boolean; checked: boolean }> => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    const opts = checkboxConfirmOptions(raw)
+    const result = await dialog.showMessageBox(win, {
+      type: 'warning',
+      title: opts.title,
+      message: opts.message,
+      detail: opts.detail,
+      buttons: ['Cancel', opts.confirmLabel],
+      defaultId: 1,
+      cancelId: 0,
+      checkboxLabel: opts.checkboxLabel,
+      checkboxChecked: opts.checkboxChecked
+    })
+    return { confirmed: result.response === 1, checked: result.checkboxChecked }
+  })
+
+  ipcMain.handle('dialog:error', async (event, rawTitle: unknown, rawMessage: unknown): Promise<void> => {
+    const win = BrowserWindow.fromWebContents(event.sender)!
+    const { title, message } = errorDialogText(rawTitle, rawMessage)
     await dialog.showMessageBox(win, { type: 'error', title, message: title, detail: message })
   })
 
@@ -113,11 +91,16 @@ export function registerAppIpc(): void {
     }
   })
 
-  ipcMain.handle('app:revealInFinder', (_event, dirPath: string): void => {
+  ipcMain.handle('app:revealInFinder', (_event, raw: unknown): void => {
+    const dirPath = absolutePath(raw)
+    if (!dirPath) throw new Error('dirPath must be an absolute path')
     shell.showItemInFolder(dirPath)
   })
 
-  ipcMain.handle('app:openInVSCode', async (_event, dirPath: string): Promise<void> => {
+  ipcMain.handle('app:openInVSCode', async (_event, raw: unknown): Promise<void> => {
+    // Absolute, so neither `code` nor `open` reads it as an option.
+    const dirPath = editorPath(raw)
+    if (!dirPath) throw new Error('dirPath must be an absolute path')
     try {
       await execFileAsync('code', [dirPath])
     } catch {

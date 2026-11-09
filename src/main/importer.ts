@@ -83,7 +83,7 @@ const codeOf = (err: unknown): string | undefined => (err as { code?: unknown } 
 async function readProjectFile(path: string): Promise<RawProjectFile> {
   const raw = JSON.parse(await readFile(path, 'utf8')) as RawProjectFile
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('This is not a Trek project file')
-  // As openProjectFile does for a file window.
+  // An older or hand-written file: its name from the file name, and no worktrees.
   if (!raw.name) raw.name = basename(path).replace(/\.trekproj$/, '')
   if (!Array.isArray(raw.worktrees) && !raw.repositories) raw.worktrees = []
   return raw
@@ -182,14 +182,14 @@ async function entryFor(piece: ImportedProject, fileServers: ServerConfig[], opt
 
 /** Main's own connection to the entry, once connected. A missing or rejected token fails at once. */
 async function waitForLink(id: string, name: string, timeoutMs: number): Promise<RegisteredServer> {
-  const noToken = `${name} has no access token here: set it in Connect to server…, then open the file again to import this part`
+  const noToken = `${name} has no access token here: set it in Open on server…, then open the file again to import this part`
   if (id !== LOCAL_ENTRY_ID && !(await getAppServerToken(id))) throw new Error(noToken)
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const link = serverLink(id)
     const status = link?.connection.status
     if (link && status === 'connected') return link
-    if (status === 'needs-auth') throw new Error(`${name} rejected its access token: set it in Connect to server…, then open the file again to import this part`)
+    if (status === 'needs-auth') throw new Error(`${name} rejected its access token: set it in Open on server…, then open the file again to import this part`)
     if (status === 'incompatible') throw new Error(`${name} is incompatible with this Trek (${link?.connection.statusMessage || 'upgrade it'})`)
     if (Date.now() >= deadline) throw new Error(`Could not connect to ${name}${status ? ` (${status})` : ''}`)
     await new Promise((done) => setTimeout(done, 150))

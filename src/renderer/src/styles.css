@@ -2615,7 +2615,7 @@ button:disabled {
   vertical-align: 1px;
 }
 
-/* Start screen: Connect to server */
+/* Start screen: Open on server */
 .connect-server {
   width: 680px;
   max-width: calc(100% - 32px);

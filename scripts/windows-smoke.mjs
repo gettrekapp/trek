@@ -12,6 +12,9 @@
 //   - each project's MCP token (the server's per-project config) lists its own worktrees only;
 //   - closing a window asks nothing, and its session keeps running on the server (its agent alive);
 //   - New Window starts empty;
+//   - File → New Project… and Open on Server… (the menu's own items): in an empty window, its view
+//     there and no new window; in a project window, exactly one new window on the view; in an empty
+//     window still loading, the view once it has loaded (main hands it over at boot, sends nothing);
 //   - quit and relaunch: both windows come back on their projects, alpha with its size; the
 //     target survives a reload; a window on a server entry that does not exist comes back on its
 //     target, shows Server removed, keeps the target across a reload and is recorded again;
@@ -266,6 +269,80 @@ try {
   check('New Window starts empty, at the start screen', await targetOf(blank), null)
   const closedBlank = await blank.close().then(() => true, (err) => String(err))
   check('and closes', [closedBlank, await until(windowCount, before)], [true, before])
+
+  // ---- File → New Project… and Open on Server… -------------------------------------------------------
+  // The real menu items, clicked in main. They act on the focused window, and the OS may not give an
+  // app run by a test focus: BrowserWindow.getFocusedWindow answers the window each check names.
+
+  /**
+   * Clicks a File-menu item with the `focus` window focused (by title; 'empty': the one window that is
+   * neither alpha nor beta), all in one main turn, and returns the window count after. 'new' first
+   * clicks New Window and focuses that window, its renderer not loaded yet, counting the menu:*
+   * messages main sends it.
+   */
+  const clickFile = (label, focus) =>
+    app.evaluate(({ BrowserWindow, Menu }, { label, focus }) => {
+      const file = Menu.getApplicationMenu().items.find((i) => i.label === 'File')
+      const item = (l) => file.submenu.items.find((i) => i.label === l)
+      let target
+      if (focus === 'new') {
+        item('New Window').click()
+        target = BrowserWindow.getAllWindows().reduce((a, b) => (a.id > b.id ? a : b))
+        globalThis.__menuSends = 0
+        const send = target.webContents.send.bind(target.webContents)
+        target.webContents.send = (channel, ...args) => {
+          if (String(channel).startsWith('menu:')) globalThis.__menuSends++
+          return send(channel, ...args)
+        }
+      } else if (focus === 'empty') target = BrowserWindow.getAllWindows().find((w) => !['alpha', 'beta'].includes(w.getTitle()))
+      else target = BrowserWindow.getAllWindows().find((w) => w.getTitle() === focus)
+      const real = BrowserWindow.getFocusedWindow
+      BrowserWindow.getFocusedWindow = () => target
+      try {
+        item(label).click()
+      } finally {
+        BrowserWindow.getFocusedWindow = real
+      }
+      return BrowserWindow.getAllWindows().length
+    }, { label, focus })
+  /** The one open page that is not in `known`: a new window takes a moment to load. */
+  const pageOtherThan = async (known) => {
+    for (let i = 0; i < 60; i++) {
+      const page = app.windows().find((p) => !p.isClosed() && !known.includes(p))
+      if (page) return page
+      await sleep(250)
+    }
+    throw new Error('no new window')
+  }
+  const NEW_VIEW = '.new-project'
+  const CONNECT_VIEW = '.connect-server:not(.new-project)'
+  const shows = (page, selector) => page.locator(selector).waitFor({ timeout: 10_000 }).then(() => true, () => false)
+
+  // From an empty window: the view in that window, no new one.
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.find((i) => i.label === 'File').submenu.items.find((i) => i.label === 'New Window').click())
+  const empty = await pageOtherThan([a, b])
+  await empty.waitForLoadState('domcontentloaded')
+  await empty.locator('.start-screen').waitFor({ timeout: 10_000 })
+  check('File → New Project… in an empty window shows New Project there, and opens no window', [await clickFile('New Project…', 'empty'), await shows(empty, NEW_VIEW)], [before + 1, true])
+  check('File → Open on Server… in an empty window shows the servers there, and opens no window', [await clickFile('Open on Server…', 'empty'), await shows(empty, CONNECT_VIEW), await empty.locator(NEW_VIEW).count()], [before + 1, true, 0])
+  await empty.close()
+  await until(windowCount, before)
+
+  // From a project window: one new window, on the view.
+  for (const [label, selector, other] of [['New Project…', NEW_VIEW, CONNECT_VIEW], ['Open on Server…', CONNECT_VIEW, NEW_VIEW]]) {
+    const count = await clickFile(label, 'alpha')
+    const opened = await pageOtherThan([a, b])
+    check(`File → ${label} in a project window opens one window, on that view`, [count, await shows(opened, selector), await opened.locator(other).count(), await targetOf(opened), await targetOf(a)], [before + 1, true, 0, null, ids.alpha])
+    await opened.close()
+    await until(windowCount, before)
+  }
+
+  // An empty window whose renderer is still loading: the view is handed over at boot, not sent (and lost).
+  const loadingCount = await clickFile('New Project…', 'new')
+  const loading = await pageOtherThan([a, b])
+  check('File → New Project… in a window still loading shows New Project there once loaded, sent nothing, opened no other window', [loadingCount, await shows(loading, NEW_VIEW), await app.evaluate(() => globalThis.__menuSends)], [before + 1, true, 0])
+  await loading.close()
+  check('and the menu windows close', await until(windowCount, before), before)
 
   // ---- Quit, relaunch: the windows come back -------------------------------------------------------------
 
