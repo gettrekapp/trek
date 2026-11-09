@@ -8,7 +8,7 @@ function setDockIcon(): void {
   if (!icon.isEmpty()) app.dock.setIcon(icon)
 }
 import { registerPtyHandlers, disposeAllPtys } from './pty'
-import { openLegacy, openProjectFile, registerProjectHandlers } from './project'
+import { openProjectFile, registerProjectHandlers } from './project'
 import { registerAppIpc } from './appIpc'
 import { registerGithubHandlers } from './github'
 import { registerLinearHandlers } from './linear'
@@ -57,7 +57,7 @@ let opensReady = false
 // Registered before ready: a file that launches the app arrives before it.
 app.on('open-file', (event, path) => {
   event.preventDefault()
-  if (opensReady) void openFromOs(path, openLegacy)
+  if (opensReady) void openFromOs(path)
   else pendingOpens.push(path)
 })
 
@@ -120,7 +120,7 @@ function buildMenu(): void {
         },
         {
           label: 'Import .trekproj…',
-          click: () => void importFromMenu(openLegacy)
+          click: () => void importFromMenu()
         },
         ...localServerMenu(),
         { type: 'separator' },
@@ -170,7 +170,7 @@ app.whenReady().then(async () => {
   registerWindowHandlers(openProjectFile)
   registerAppIpc()
   registerProjectHandlers()
-  registerImportHandlers(openLegacy)
+  registerImportHandlers()
   registerGithubHandlers()
   registerLinearHandlers()
   registerSkillHandlers()
@@ -198,9 +198,12 @@ app.whenReady().then(async () => {
   void superviseLocalServer()
   // Once, before the windows come back: those on .trekproj files then come back on their projects.
   await offerFirstLaunchImport().catch((err) => console.error('[import] the first-launch prompt failed', err))
-  await restoreWindows()
+  // A .trekproj that launched the app opens its projects in windows of their own: no empty one first (4d M-6).
+  await restoreWindows({ emptyIfNone: pendingOpens.length === 0 })
   opensReady = true
-  for (const path of pendingOpens.splice(0)) await openFromOs(path, openLegacy)
+  for (const path of pendingOpens.splice(0)) await openFromOs(path)
+  // Nothing came of it (the import failed, or was cancelled): the app still shows a window.
+  if (BrowserWindow.getAllWindows().length === 0) createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

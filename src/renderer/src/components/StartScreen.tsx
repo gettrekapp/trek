@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { baseName, useAppStore } from '../store'
-import { syncWindowProject } from '../windowLifecycle'
 import { errorText } from '../v2/errors'
 import { ConnectServer, openServerProjectHere } from './ConnectServer'
 import { NewProject } from './NewProject'
@@ -17,7 +16,6 @@ export type StartView = 'home' | 'connect' | 'new'
  * `request` switches the view (File → New Project…, Open on Server…); its `n` makes a repeat count.
  */
 export function StartScreen({ request }: { request?: { view: StartView; n: number } }): React.JSX.Element {
-  const setProject = useAppStore((s) => s.setProject)
   // After Pick another project in a server window: straight to Open on server, with that server picked.
   const [view, setView] = useState<StartView>(() => (useAppStore.getState().connectServerId ? 'connect' : (request?.view ?? 'home')))
   const [busy, setBusy] = useState(false)
@@ -70,14 +68,12 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
     setBusy(true)
     setError(null)
     try {
-      const opened = await window.api.openProjectPath(filePath)
-      if (opened) setProject(opened.project, opened.filePath)
+      await window.api.openProjectPath(filePath)
       // Imported: the file's entry became its server projects'.
-      else refreshRecents()
+      refreshRecents()
     } catch (err) {
-      syncWindowProject() // main claimed the file for a project that didn't load
-      setError(`Could not open project: ${String(err)}`)
-      setRecents((r) => r.filter((e) => e.kind !== 'file' || e.path !== filePath))
+      setError(`Could not open ${baseName(filePath)}: ${errorText(err)}`)
+      refreshRecents()
     } finally {
       setBusy(false)
     }

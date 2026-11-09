@@ -20,6 +20,7 @@ import {
   promptCandidates,
   recordImport,
   restoreEntries,
+  splitRestore,
   rewriteOpenWindows,
   rewriteRecents,
   routePiece,
@@ -189,6 +190,18 @@ test('restoreEntries: each window on an imported file comes back on its Local pi
   assert.deepEqual(restoreEntries(windows, parseMigrated(null), key), windows)
 })
 
+test('splitRestore: server windows come back; a window still on a .trekproj is not one, and its file is kept (4e)', () => {
+  const entries = [
+    { target: { kind: 'server', serverEntryId: 'local', projectId: 'p1' }, bounds },
+    { target: { kind: 'file', path: '/never-imported.trekproj' } },
+    { target: { kind: 'server', serverEntryId: 'e9', projectId: 'q' } }
+  ]
+  assert.deepEqual(splitRestore(entries), {
+    windows: [entries[0], entries[2]],
+    files: ['/never-imported.trekproj']
+  })
+})
+
 test('promptCandidates: open windows first, then recents, once per file, none already imported', () => {
   const key = (path) => (path === '/link/a.trekproj' ? '/a.trekproj' : path)
   const recents = [file('/b.trekproj'), server('local', 'p'), file('/link/a.trekproj'), file('/done.trekproj')]
@@ -322,6 +335,16 @@ test('importSummary: nothing landed', () => {
   const s = importSummary([report({ left: [{ target: 'local', label: 'Local', reason: 'off' }] })])
   assert.deepEqual([s.type, s.message], ['error', '“Proj” could not be imported'])
   assert.doesNotMatch(s.detail, /Not carried over/)
+})
+
+test('importSummary: nothing landed says the file opens nowhere else, and that opening it again retries (4e)', () => {
+  const s = importSummary([report({ left: [{ target: 'local', label: 'Local', reason: 'off' }] })])
+  assert.match(s.detail, /Nothing was imported, and the file does not open on its own: fix what is listed, then open it again to try every part again\./)
+})
+
+test('importSummary: nothing landed, with parts over the cap: a retry tries the same parts again (4d Note 12)', () => {
+  const s = importSummary([report({ left: [{ target: 's1', label: 'one', reason: 'down' }, { target: 's21', label: 'twenty-one', reason: OVER_CAP_REASON }] })])
+  assert.match(s.detail, new RegExp(`Opening it again tries Local's part and the first ${MAX_REMOTE_PIECES} servers' again; the others only once one of those has landed\\.`))
 })
 
 test('importSummary: several files, and one that could not be read', () => {

@@ -3,7 +3,7 @@
 import { BrowserWindow, dialog, ipcMain, type MessageBoxOptions, type WebContents } from 'electron'
 import { access } from 'node:fs/promises'
 import { basename } from 'node:path'
-import type { OpenedProject, ServerConfig } from '../shared/types'
+import type { ServerConfig } from '../shared/types'
 import { LOCAL_SERVER_DISABLED } from './localServer'
 import { importTrekproj, type ImportOptions, type ImportReport } from './importer'
 import {
@@ -19,7 +19,7 @@ import {
 } from './importRules'
 import { fileKey, readMigrated, updateMigrated } from './migrated'
 import { getRecents } from './recents'
-import { closeFileWindow, fileIsOpen, openServerTarget, readRestoreEntries, windowHasProject } from './windows'
+import { openServerTarget, readRestoreEntries, windowHasProject } from './windows'
 import type { WindowBounds } from './windowRules'
 
 export const PROJECT_FILTERS = [{ name: 'Trek Developer Project', extensions: ['trekproj'] }]
@@ -89,10 +89,9 @@ export async function openPieces(sender: WebContents | null, pieces: readonly Mi
 /**
  * File → Import .trekproj…, and the start screen's Import .trekproj… (`from`: that window, the
  * parent of the dialogs and, while empty, where the first project opens): always an import
- * (Import Again for a file imported before). When no part lands, the file can still open as a file
- * window (`legacy`, in a window of its own): a file window on it was closed for the import.
+ * (Import Again for a file imported before). A file of which nothing lands only gets the result.
  */
-export async function importFromMenu(legacy: LegacyOpen, from?: WebContents): Promise<void> {
+export async function importFromMenu(from?: WebContents): Promise<void> {
   const parent = from ? BrowserWindow.fromWebContents(from) : BrowserWindow.getFocusedWindow()
   const options = { title: 'Import Project', filters: PROJECT_FILTERS, properties: ['openFile' as const] }
   const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
@@ -111,9 +110,6 @@ export async function importFromMenu(legacy: LegacyOpen, from?: WebContents): Pr
     if (response === 2) return
     if (response === 0) return openPieces(emptyWindow(parent), before.pieces)
   }
-  // A file window on it closes first (offering to save), so the import reads what it saved.
-  const closed = await closeFileWindow(path)
-  if (!closed.closed) return
   let report: ImportReport
   const run = runImport(path, parent)
   try {
@@ -123,17 +119,9 @@ export async function importFromMenu(legacy: LegacyOpen, from?: WebContents): Pr
     return
   }
   if (run.joined) return
-  if (report.pieces.length === 0) {
-    const response = await showImportResult(parent, [report], { buttons: ['Open as File Window', 'Cancel'], cancelId: 1 })
-    if (response === 0) await legacy(null, path)
-    return
-  }
   await showImportResult(parent, [report])
-  await openPieces(closed.bounds ? null : emptyWindow(parent), report.pieces, closed.bounds)
+  await openPieces(emptyWindow(parent), report.pieces)
 }
-
-/** How a .trekproj opened as a file window: the sender takes it (its IPC reply carries it), or a window opens. */
-export type LegacyOpen = (sender: WebContents | null, filePath: string) => Promise<OpenedProject | null>
 
 async function offerRetry(parent: BrowserWindow | null, filePath: string, left: readonly MigratedLeft[]): Promise<void> {
   const response = await box(parent, {
@@ -153,42 +141,46 @@ async function offerRetry(parent: BrowserWindow | null, filePath: string, left: 
 }
 
 /**
- * Opening a .trekproj during phase 4d (File → Open Project…, a recent, Finder): the projects it
- * was imported as open, after offering to retry any part left; a file not imported yet is imported
- * first. Only when no part of it could be imported is a file window offered (the fallback until 4e).
- * A file already open in a file window is focused there. Without the Local server
- * (TREK_NO_LOCAL_SERVER, which the legacy smokes set) a .trekproj opens as a file window, as before.
- * Null whenever the sender has nothing to load: a server window it took hears `window:showServer`.
+ * Opening a .trekproj (a recent on the start screen, Finder): the projects it was imported as
+ * open, after offering to retry any part left; a file not imported yet is imported first, and the
+ * result shown. Nothing else opens a .trekproj: a file of which nothing lands only gets the result.
+ * Without the Local server (TREK_NO_LOCAL_SERVER) its Local part is left, with that reason.
+ * `sender`, while empty, takes the first project (it hears `window:showServer`).
  */
-export async function openTrekproj(sender: WebContents | null, filePath: string, legacy: LegacyOpen): Promise<OpenedProject | null> {
-  if (LOCAL_SERVER_DISABLED || fileIsOpen(filePath)) return legacy(sender, filePath)
+export async function openTrekproj(sender: WebContents | null, filePath: string): Promise<void> {
   const parent = sender ? BrowserWindow.fromWebContents(sender) : BrowserWindow.getFocusedWindow()
   const before = migratedFile(await readMigrated(), fileKey(filePath))
   if (before) {
     await openPieces(sender, before.pieces)
     if (before.left.length > 0) await offerRetry(parent, filePath, before.left)
-    return null
+    return
   }
   const run = runImport(filePath, parent)
   const report = await run.report
-  if (run.joined) return null
-  if (report.pieces.length === 0) {
-    const response = await showImportResult(parent, [report], { buttons: ['Open as File Window', 'Cancel'], cancelId: 1 })
-    return response === 0 ? legacy(sender, filePath) : null
-  }
+  if (run.joined) return
   await showImportResult(parent, [report])
   await openPieces(sender, report.pieces)
-  return null
 }
 
 /** A .trekproj macOS asked the app to open (Finder, the Dock): into the focused window if it is empty. */
-export async function openFromOs(filePath: string, legacy: LegacyOpen): Promise<void> {
+export async function openFromOs(filePath: string): Promise<void> {
   try {
-    // A file window can only be handed over in an IPC reply, so the fallback always gets a window of its own.
-    await openTrekproj(emptyWindow(BrowserWindow.getFocusedWindow()), filePath, (_sender, path) => legacy(null, path))
+    await openTrekproj(emptyWindow(BrowserWindow.getFocusedWindow()), filePath)
   } catch (err) {
     await box(null, { type: 'error', message: `Could not open “${basename(filePath)}”`, detail: errorText(err), buttons: ['OK'] })
   }
+}
+
+/**
+ * The start screen's Import .trekproj… (File → Import's flow, from that window) and its recent
+ * .trekproj files (opened as Finder would: imported, or what they became).
+ */
+export function registerImportHandlers(): void {
+  ipcMain.handle('project:import', (event) => importFromMenu(event.sender))
+  ipcMain.handle('project:openPath', (event, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !filePath) throw new Error('filePath must be a non-empty string')
+    return openTrekproj(event.sender, filePath)
+  })
 }
 
 /** The prompt lists this many files by name; the rest as a count. */
@@ -242,7 +234,3 @@ export async function offerFirstLaunchImport(): Promise<void> {
   await showImportResult(null, outcomes)
 }
 
-/** The start screen's Import .trekproj…: File → Import's flow, from that window. */
-export function registerImportHandlers(legacy: LegacyOpen): void {
-  ipcMain.handle('project:import', (event) => importFromMenu(legacy, event.sender))
-}

@@ -9,7 +9,7 @@ import { isAppUrl, isExternalUrl } from './navigationRules'
 import { openUrl } from './openUrl'
 import { releaseWindowPtys } from './pty'
 import { getAppServer } from './appServers'
-import { addRecentServer } from './recents'
+import { addRecentServer, keepRecentFiles } from './recents'
 import {
   boundsOnScreen,
   capLabel,
@@ -25,7 +25,7 @@ import {
   type WindowBounds,
   type WindowTarget
 } from './windowRules'
-import { restoreEntries } from './importRules'
+import { restoreEntries, splitRestore } from './importRules'
 import { LOCAL_SERVER_DISABLED } from './localServer'
 import { fileKey, readMigrated } from './migrated'
 
@@ -460,27 +460,29 @@ export function readRestoreEntries(): Promise<OpenWindowEntry[]> {
   return readOpenWindows()
 }
 
-/** Reopens the windows from last time, one at a time, or one empty window. */
-export async function restoreWindows(): Promise<void> {
+/**
+ * Reopens the windows from last time, one at a time; with none, one empty window unless
+ * `emptyIfNone` is false (a .trekproj launched the app: its projects open in windows of their
+ * own). Resolves how many came back.
+ */
+export async function restoreWindows(opts: { emptyIfNone?: boolean } = {}): Promise<number> {
+  const emptyIfNone = opts.emptyIfNone ?? true
   if (RESTORE_DISABLED) {
-    createWindow()
-    return
+    if (emptyIfNone) createWindow()
+    return 0
   }
   const workAreas = screen.getAllDisplays().map((d) => d.workArea)
   let restored = 0
   // A window on a .trekproj that was imported comes back on its server project (Local's piece).
-  // Not without the Local server: nothing is imported then, and a .trekproj opens as a file window.
+  // Not without the Local server: nothing is imported then. A window on a file not imported has
+  // no window to come back in: the file stays in the recents, where opening it imports it.
   const saved = await readOpenWindows()
-  const entries = LOCAL_SERVER_DISABLED ? saved : restoreEntries(saved, await readMigrated(), fileKey)
+  const { windows: entries, files } = splitRestore(LOCAL_SERVER_DISABLED ? saved : restoreEntries(saved, await readMigrated(), fileKey))
+  const onDisk: string[] = []
+  for (const path of files) if (await access(path).then(() => true, () => false)) onDisk.push(path)
+  if (onDisk.length > 0) await keepRecentFiles(onDisk).catch((err) => console.warn('[windows] could not keep the unrestored files in the recents:', err))
   for (const { target, bounds } of entries) {
     // A server window comes back even if its entry is gone: it shows "Server removed".
-    if (target.kind === 'file') {
-      const exists = await access(target.path).then(
-        () => true,
-        () => false
-      )
-      if (!exists) continue
-    }
     const win = createWindow({
       initialTarget: target,
       bounds: bounds && boundsOnScreen(bounds, workAreas) ? bounds : undefined
@@ -492,7 +494,8 @@ export async function restoreWindows(): Promise<void> {
       new Promise((done) => setTimeout(done, RESTORE_WINDOW_TIMEOUT_MS))
     ])
   }
-  if (restored === 0) createWindow()
+  if (restored === 0 && emptyIfNone) createWindow()
+  return restored
 }
 
 // ---- IPC -------------------------------------------------------------------

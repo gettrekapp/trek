@@ -1,71 +1,14 @@
-import { BrowserWindow, dialog, ipcMain, type WebContents } from 'electron'
+import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { GitWorktreeInfo, OpenedProject, ProjectFile, WorktreeChanges, WorktreeStatus } from '../shared/types'
 import { getHost } from './hosts/registry'
 import type { RawProjectFile } from '../shared/migration'
 import { addRecent } from './recents'
-import { decideOpen } from './windowRules'
-import { openTrekproj, PROJECT_FILTERS } from './importUi'
-import {
-  claimProject,
-  createWindow,
-  fileIsOpen,
-  fileOpenInOtherWindow,
-  focusWindowHoldingFile,
-  whileWindowPrompts,
-  windowHasProject
-} from './windows'
-
-/** Null when the project ended up in another window: the sender has nothing to load. */
-async function openForSender(sender: WebContents, filePath: string): Promise<OpenedProject | null> {
-  // Read first, so a bad file errors in the window that asked for it.
-  const opened = await openProjectFile(filePath)
-  switch (decideOpen(windowHasProject(sender), fileIsOpen(filePath))) {
-    case 'focus-existing':
-      focusWindowHoldingFile(filePath)
-      return null
-    case 'new-window':
-      createWindow({ initialTarget: { kind: 'file', path: filePath } })
-      await addRecent(opened.filePath)
-      return null
-    case 'use-sender':
-      claimProject(sender, filePath)
-      await addRecent(opened.filePath)
-      return opened
-  }
-}
-
-/**
- * A .trekproj as a file window (phase 4d: only as the fallback, or without the Local server):
- * the sender takes it, or (no sender: macOS opened it) a window of its own does.
- */
-export async function openLegacy(sender: WebContents | null, filePath: string): Promise<OpenedProject | null> {
-  if (sender) return openForSender(sender, filePath)
-  if (fileIsOpen(filePath)) {
-    focusWindowHoldingFile(filePath)
-    return null
-  }
-  const opened = await openProjectFile(filePath)
-  createWindow({ initialTarget: { kind: 'file', path: filePath } })
-  await addRecent(opened.filePath)
-  return null
-}
+import { PROJECT_FILTERS } from './importUi'
+import { claimProject, fileOpenInOtherWindow, whileWindowPrompts } from './windows'
 
 export function registerProjectHandlers(): void {
-  ipcMain.handle('project:open', async (event): Promise<OpenedProject | null> => {
-    const win = BrowserWindow.fromWebContents(event.sender)!
-    const result = await dialog.showOpenDialog(win, {
-      title: 'Open Project',
-      filters: PROJECT_FILTERS,
-      properties: ['openFile']
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return openTrekproj(event.sender, result.filePaths[0], openLegacy)
-  })
-
-  ipcMain.handle('project:openPath', (event, filePath: string) => openTrekproj(event.sender, filePath, openLegacy))
-
   ipcMain.handle(
     'project:save',
     async (event, filePath: string | null, project: ProjectFile): Promise<string | null> => {

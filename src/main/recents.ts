@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { access, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { writeFileAtomic } from './secrets'
-import { addRecentEntry, keepRecents, parseRecents, removeRecentEntry, serializeRecents, type RecentEntry } from './recentsRules'
+import { addRecentEntry, keepFileRecents, keepRecents, parseRecents, removeRecentEntry, serializeRecents, type RecentEntry } from './recentsRules'
 import { rewriteRecents, type MigratedPiece } from './importRules'
 
 function recentsFile(): string {
@@ -57,6 +57,11 @@ export function addRecent(filePath: string): Promise<void> {
 
 export function addRecentServer(entry: Extract<RecentEntry, { kind: 'server' }>): Promise<void> {
   return update((list) => addRecentEntry(list, entry))
+}
+
+/** Keeps these .trekproj files on the start screen (recentsRules.keepFileRecents). */
+export function keepRecentFiles(paths: readonly string[]): Promise<void> {
+  return update((list) => keepFileRecents(list, paths))
 }
 
 export function removeRecent(entry: RecentEntry): Promise<void> {

@@ -55,9 +55,8 @@ function subscribe<T>(channel: string, callback: (payload: T) => void): () => vo
 
 const api = {
   // Project file
-  openProject: (): Promise<OpenedProject | null> => ipcRenderer.invoke('project:open'),
-  openProjectPath: (filePath: string): Promise<OpenedProject | null> =>
-    ipcRenderer.invoke('project:openPath', filePath),
+  /** A recent .trekproj: imported, or the projects it became opened (here while this window is empty). */
+  openProjectPath: (filePath: string): Promise<void> => ipcRenderer.invoke('project:openPath', filePath),
   /** File → Import .trekproj…'s flow from this window: its projects open here while it is empty. */
   importTrekproj: (): Promise<void> => ipcRenderer.invoke('project:import'),
   getRecentProjects: (): Promise<RecentEntry[]> => ipcRenderer.invoke('recents:get'),

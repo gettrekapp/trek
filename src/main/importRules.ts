@@ -288,6 +288,20 @@ export function restoreEntries(entries: readonly OpenWindowEntry[], m: Migrated,
 }
 
 /**
+ * What `restoreWindows` reopens (4e): the server windows. A window still on a .trekproj (never
+ * imported, or Local off) has no window to come back in; its file is kept in the recents instead.
+ */
+export function splitRestore(entries: readonly OpenWindowEntry[]): { windows: OpenWindowEntry[]; files: string[] } {
+  const windows: OpenWindowEntry[] = []
+  const files: string[] = []
+  for (const e of entries) {
+    if (e.target.kind === 'server') windows.push(e)
+    else files.push(e.target.path)
+  }
+  return { windows, files }
+}
+
+/**
  * The files the first-launch prompt offers: those of the windows restored last time, then
  * the recents, once per file (`key` is its realpath), leaving out the ones already imported.
  * Whether each is still on disk is the caller's to check.
@@ -477,6 +491,13 @@ function fileSection(o: ImportOutcome): string {
   for (const l of o.left) lines.push(`Not imported: ${l.label} — ${l.reason.replace(/\.$/, '')}.${o.pieces.length > 0 ? ' Open the file again to retry.' : ''}`)
   if (o.carried > 0) lines.push(`${o.carried} session${o.carried === 1 ? "'s" : "s'"} history was copied to the path the server runs them in.`)
   for (const w of o.warnings) lines.push(`• ${w}`)
+  if (o.pieces.length === 0) {
+    // Not recorded in migrated.json: there is no file window to fall back on (4e), and the next open imports afresh.
+    lines.push('Nothing was imported, and the file does not open on its own: fix what is listed, then open it again to try every part again.')
+    if (o.left.some((l) => l.reason === OVER_CAP_REASON)) {
+      lines.push(`Opening it again tries Local's part and the first ${MAX_REMOTE_PIECES} servers' again; the others only once one of those has landed.`)
+    }
+  }
   return lines.join('\n')
 }
 

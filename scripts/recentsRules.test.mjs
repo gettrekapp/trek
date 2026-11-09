@@ -1,7 +1,7 @@
 // scripts/recentsRules.test.mjs — recents of both kinds: parsing and adding.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { addRecentEntry, keepRecents, parseRecentRef, parseRecents, removeRecentEntry, serializeRecents, MAX_RECENTS } from '../src/main/recentsRules.ts'
+import { addRecentEntry, keepFileRecents, keepRecents, parseRecentRef, parseRecents, removeRecentEntry, serializeRecents, MAX_RECENTS } from '../src/main/recentsRules.ts'
 
 const server = (projectId, name = 'P') => ({ kind: 'server', serverEntryId: 's', projectId, name, serverName: 'box' })
 
@@ -69,4 +69,16 @@ test('parseRecents drops server entries with over-long ids', () => {
     { ...ok, projectId: 'y'.repeat(201) },
     ok
   ]), [ok])
+})
+
+test('keepFileRecents: a file not listed goes at the end; a listed one stays where it is (4e: a window on it is not restored)', () => {
+  const srv = { kind: 'server', serverEntryId: 'local', projectId: 'p', name: 'p', serverName: 'Local' }
+  const list = [srv, { kind: 'file', path: '/a.trekproj' }]
+  assert.deepEqual(keepFileRecents(list, ['/b.trekproj', '/a.trekproj']), [srv, { kind: 'file', path: '/a.trekproj' }, { kind: 'file', path: '/b.trekproj' }])
+  assert.deepEqual(keepFileRecents(list, []), list)
+})
+
+test('keepFileRecents: never over MAX_RECENTS, and never pushes a listed entry out', () => {
+  const full = Array.from({ length: MAX_RECENTS }, (_, i) => ({ kind: 'file', path: `/f${i}.trekproj` }))
+  assert.deepEqual(keepFileRecents(full, ['/new.trekproj']), full)
 })

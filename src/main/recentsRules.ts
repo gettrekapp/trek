@@ -44,6 +44,20 @@ export function keepRecents(list: readonly RecentEntry[], missingFiles: Readonly
   return list.filter((e) => e.kind !== 'file' || !missingFiles.has(e.path))
 }
 
+/**
+ * Keeps each file of `paths` listed: one not listed yet goes at the end while there is room (4e:
+ * a window on a .trekproj never imported is not restored, and its file stays on the start screen
+ * to import). Listed entries never move or go.
+ */
+export function keepFileRecents(list: readonly RecentEntry[], paths: readonly string[]): RecentEntry[] {
+  const out = [...list]
+  for (const path of paths) {
+    const entry: RecentEntry = { kind: 'file', path }
+    if (out.length < MAX_RECENTS && !out.some((e) => sameEntry(e, entry))) out.push(entry)
+  }
+  return out
+}
+
 export function removeRecentEntry(list: readonly RecentEntry[], entry: RecentEntry): RecentEntry[] {
   return list.filter((e) => !sameEntry(e, entry))
 }
