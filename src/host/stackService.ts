@@ -157,6 +157,8 @@ export function createStackService({ stateDir }: StackServiceOptions): StackServ
     const ws = await workspace(worktreePath)
     const { slug } = await resolveStack(ws)
     if (stopping.has(slug)) throw new Error(`Stack '${slug}' is already stopping`)
+    // Its pid is not written yet, so it could not be Ctrl-C'd, and would bring containers up after this.
+    if (starting.has(slug)) throw new Error(`Stack '${slug}' is starting; try again once it has started`)
     stopping.add(slug)
     try {
       const pid = await upPid(slug)

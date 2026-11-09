@@ -420,3 +420,33 @@ test('the event sink drops log chunks past the high-water mark, says so once it 
     ['docker.log', { data: 'c' }]
   ])
 })
+
+test('stack.down and stack.destroy are refused while an up is starting, so the start cannot bring containers up after them', async (t) => {
+  const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 30; fi' })
+  const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
+  for (const method of ['stack.down', 'stack.destroy']) {
+    const [up, stop] = await Promise.all([s.call('stack.up', { ...ref, starter: false }), s.call(method, ref)])
+    assert.equal(up.ok, true, JSON.stringify(up))
+    refused(stop, 'TOOL_ERROR')
+    assert.match(stop.error.message, /is starting/)
+    // Once started, down stops it.
+    assert.equal((await s.call('stack.down', ref)).result, 0)
+  }
+})
+
+test('env.list: a registry file that cannot be read is a TOOL_ERROR naming it, not a list of orphans', async (t) => {
+  const s = await setup(t)
+  const registryFile = join(s.data, 'environments.json')
+  writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: 'twb-real-000000', status: 'Running' })}\n`)
+  t.after(() => rmSync(join(stubDir, 'vms'), { force: true }))
+  for (const text of ['{"twb-real-000000": {', '[]']) {
+    writeFileSync(registryFile, text)
+    const res = await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })
+    refused(res, 'TOOL_ERROR')
+    assert.ok(res.error.message.includes(registryFile), res.error.message)
+    assert.equal(readFileSync(registryFile, 'utf8'), text)
+  }
+  // No file is an empty registry: the VM is a leftover.
+  rmSync(registryFile)
+  assert.deepEqual((await s.call('env.list', { projectId: s.projectId, repoId: s.repoId })).result.map((e) => [e.profile, e.orphaned]), [['twb-real-000000', true]])
+})

@@ -96,8 +96,8 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
 
   /**
    * No file is an empty registry. Any other failure to read or parse it throws when `strict` (a
-   * change, which must not write an empty registry over the entries it could not read); the reads
-   * that change nothing take it as empty, as before.
+   * change, which must not write an empty registry over the entries it could not read, and
+   * `list`, which would show every VM as an orphan to delete); the other reads take it as empty.
    */
   const readRegistry = async (strict = false): Promise<Registry> => {
     let parsed: unknown
@@ -175,7 +175,8 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
     },
 
     async list(repoKey) {
-      const [registry, profiles] = await Promise.all([readRegistry(), listColimaProfiles()])
+      // Strict: an unreadable registry would list every VM as an orphan to delete.
+      const [registry, profiles] = await Promise.all([readRegistry(true), listColimaProfiles()])
       const byName = new Map(profiles.map((p) => [p.name, p]))
       const infos: EnvironmentInfo[] = []
       for (const [profile, entry] of Object.entries(registry)) {
@@ -297,10 +298,15 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
           log.onData(`skipping docker compose down: ${entry.worktreePath} is outside the server's allowed paths\n`)
         } else if (entry && (await exists(entry.worktreePath))) {
           const composeFile = entry.composeFile || ENV_DEFAULTS.composeFile
+          let timer: NodeJS.Timeout | undefined
           await Promise.race([
             composeDownVolumes(profile, entry.worktreePath, composeFile, log.onData, entry.envVars),
-            new Promise((resolve) => setTimeout(resolve, 60_000, -1))
-          ]).catch(() => -1)
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, 60_000, -1)
+            })
+          ])
+            .catch(() => -1)
+            .finally(() => clearTimeout(timer))
         }
         const code = await deleteVm(profile, log.onData)
         try {
