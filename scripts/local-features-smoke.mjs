@@ -296,7 +296,7 @@ try {
   // ---- 4. The feature row ---------------------------------------------------------------------------
 
   const featureRow = rows.filter({ hasText: 'feature-x' })
-  check('the feature row has a running env badge', await until(() => featureRow.locator('.mini-chip.env.running').count(), 1), 1)
+  check("the feature row has a running env badge, main's row none", [await until(() => featureRow.locator('.mini-chip.env.running').count(), 1), await mainRow.locator('.mini-chip.env').count()], [1, 0])
   await featureRow.click()
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
   check('its tabs: Env and Stack, no Docker', await until(() => tabs(), ['Changes', 'Notes', 'Env', 'Stack', '⚙']), ['Changes', 'Notes', 'Env', 'Stack', '⚙'])

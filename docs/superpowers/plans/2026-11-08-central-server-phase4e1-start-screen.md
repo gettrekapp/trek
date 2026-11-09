@@ -160,11 +160,11 @@ Classes: **moved** (a server-window smoke now checks it), **covered** (one alrea
 | Legacy smoke (checks) | Check (lines) | New home, or why dropped |
 |---|---|---|
 | `smoke.mjs` (55 logged values, one pass) | sidebar rows, primary tag, one selected (82–84) | moved: local-window §2 (per section, two repositories) |
-| | `listWorktrees` carries no dirty field; the status sweep fills it (89–98) | dropped: main's two-tier git poll over legacy IPC; the server's poller replaces it (server smoke "git poller") |
+| | `listWorktrees` carries no dirty field; the status sweep fills it (89–98) | dropped: main's two-tier git poll over legacy IPC; the server's poller replaces it (server smoke "git poller"; local-window §4 checks api's dirty row and web's clean one) |
 | | detail title, Clean chip, empty state (104–110) | moved: local-window §2 |
 | | VS Code button (106) | covered: local-features "main's row has Open in VS Code and Reveal" |
 | | session tab, running dot, footer count (124–126) | moved: local-window §3, with a real server session and Claude's marker |
-| | attention badge set and cleared (132–135) | moved: local-window §3 (a bell; a key clears it) |
+| | attention badge set and cleared (132–135) | moved: local-window §3 (a bell, on the server too; showing the session clears it; a key sent over the SDK while it is not shown clears it on the server) |
 | | skill menu (139–142) | covered: local-features "the skill menu lists the worktree's skill" |
 | | Docker panel and compose menu (149–152) | covered: local-features (the menu runs `docker compose up -d`); the item count (6) dropped as cosmetic |
 | | done → complete toggle (161–162) | moved: local-window §3 (on the server) |
@@ -186,12 +186,12 @@ Classes: **moved** (a server-window smoke now checks it), **covered** (one alrea
 | | an unsaved project's close prompt (214–217) | dropped: no unsaved projects |
 | | quit saves the dirty project (232) | dropped: nothing to save |
 | | both windows restored, with their projects, sessions unloaded, alpha's size (242–252) | moved: windows "both windows are back", "alpha keeps its size", "lists its session again" |
-| | a server window restored; its target after a reload; recorded (267–296) | moved: windows "the target survives a reload", "quit records both windows by server target" |
+| | a server window restored; its target after a reload; recorded (267–296) | moved: windows "the target survives a reload", "quit records the three windows by server target"; the unknown server's window (an entry id with no server): "restored on its target", "it shows Server removed", "keeps its target across a reload" |
 | | `reportWindowProject(false)` keeps the server target (292) | dropped: the API goes with file windows in 4e-2 |
 | | the navigation guard: no foreign page, the api stays, http(s) out, other schemes dropped, no window from `window.open` (313–325) | moved: windows, the same four checks |
 | `changes-smoke.mjs` (12) | every check (74–117) | moved: local-window §8 (Changes when clean; "3 files +4 −1"; one row per file; the deleted line; the base; a same-count edit; collapse; a new file in the title and the panel; the toggle; switching) |
 | `multi-repo-smoke.mjs` (28) | two sections, four rows, one primary each, one selected (77–80) | moved: local-window §2 |
-| | api's tag, note, PR are not web's on the same branch; chips per row and in the detail (95–105) | moved: local-window §4 (set on the server) |
+| | api's tag, note, PR are not web's on the same branch; chips per row and in the detail (95–105) | moved: local-window §4 (set on the server; web's branch data checked empty on the server, its ticket chip absent) |
 | | a collapsed section hides its rows and keeps the attention (122–123) | moved: local-window §3 |
 | | a tag filter hides an empty section (131) | moved: local-window §4 |
 | | Remove is disabled with live sessions; removal; selection falls back (140–160) | moved: local-window §10 (removed on the server) |
@@ -201,7 +201,7 @@ Classes: **moved** (a server-window smoke now checks it), **covered** (one alrea
 | | the Env panel's three actions and "No services" (157–159) | moved: local-window §11 |
 | | Settings' three VM size fields (176) | moved: local-window §6 |
 | | the eight switch names (170) | dropped: the list differs in a server window; local-features checks the environments switch saves |
-| `providers-smoke.mjs` (17 call sites, 27 at run time) | every check (88–146) | moved: providers (30), on the Local server: argv, `--` before the first message, Codex's id waiting for discovery (`agentSessionId` unset), done on the marker, the provider in the window's list, the Global Codex session's MCP url, headers helper, token in neither argv nor environment (`ps -E`), the headers reaching the server's MCP |
+| `providers-smoke.mjs` (17 call sites, 27 at run time) | every check (88–146) | moved: providers, on the Local server: argv, `--` before the first message, Codex's id waiting for discovery (`agentSessionId` unset; Gemini's set to its `--session-id` as the control), a Codex session started from the window's Choose…, done on the marker, the provider in the window's list, the Global Codex session's MCP url, headers helper, token in neither argv nor environment (`ps -E`), the headers reaching the server's MCP |
 | `remote-smoke.mjs` (28) | every check | dropped: v1 remote hosts and Move Worktree, both retired (moving returns in phase 5). The origin-bound token rules are covered by `smoke:v2` (a moved address asks for the token again) and `serverTokenRules`/`appServersRules` unit tests |
 | `bot-smoke.mjs` (141 call sites) | every check | dropped: the bot is dormant (Decision 21); its unit tests stay |
 

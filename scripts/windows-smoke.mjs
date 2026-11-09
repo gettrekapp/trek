@@ -4,30 +4,31 @@
 //
 // The built app runs with a temp HOME (its supervisor starts the run's own Local server, in
 // ~/.config/trek-server/local-dev, which outlives each quit as it does for a user) and one temp
-// --user-data-dir across three launches, with window restore on: restore is under test. Three
+// --user-data-dir across two launches, with window restore on: restore is under test. Three
 // projects (alpha, beta, gamma) are made on Local through the SDK. It checks:
 //   - an empty window takes a project; a second project opens in a window of its own; opening a
-//     project another window holds focuses it and adds no window;
+//     project another window holds focuses it (main's win.focus() on alpha's) and adds no window;
 //   - each window shows only its own project's sessions and their output;
 //   - each project's MCP token (the server's per-project config) lists its own worktrees only;
-//   - closing a window asks nothing, and its session keeps running on the server;
+//   - closing a window asks nothing, and its session keeps running on the server (its agent alive);
 //   - New Window starts empty;
 //   - quit and relaunch: both windows come back on their projects, alpha with its size; the
-//     target survives a reload;
+//     target survives a reload; a window on a server entry that does not exist comes back on its
+//     target, shows Server removed, keeps the target across a reload and is recorded again;
 //   - a window never loads a foreign page, the api stays, http(s) links go to the browser and
 //     other schemes are dropped, window.open adds no window;
-//   - the open windows are recorded at quit.
+//   - the open windows are recorded at quit;
+//   - no error dialogs (main's dialogs are stubbed), no console or page errors.
 //
 // Prints WINDOWS SMOKE PASS (n checks) or WINDOWS SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import electronPath from 'electron'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
-import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { alive, closeApp, localTeardown, makeFinish } from './smokeTeardown.mjs'
 
 const WATCHDOG_MS = 240_000
 
@@ -55,13 +56,15 @@ const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-windows-smoke-')))
 const home = join(work, 'home')
 const userData = join(work, 'user-data')
 const profile = join(home, '.config', 'trek-server', 'local-dev')
-const infoPath = join(profile, 'local.json')
 const logPath = join(profile, 'server.log')
+const agentPids = join(work, 'agent-pids')
+// From here on, the work dir goes on exit, whatever throws (the fixtures below included).
+const { info, teardown } = localTeardown({ root, home, work, agentPids, isAgent: (command) => command.includes(work) })
 mkdirSync(profile, { recursive: true })
 writeFileSync(join(home, '.zshrc'), '')
-const agentPids = join(work, 'agent-pids')
 const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT $TREK_WORKTREE_PATH"\nwhile IFS= read -r line; do echo "GOT:$line"; done\n`, { mode: 0o755 })
+// Each agent records its pid and its worktree ("<pid> <path>"), so a session's process can be found.
+writeFileSync(fakeAgent, `#!/bin/sh\necho "$$ $TREK_WORKTREE_PATH" >> '${agentPids}'\necho "FAKE_AGENT $TREK_WORKTREE_PATH"\nwhile IFS= read -r line; do echo "GOT:$line"; done\n`, { mode: 0o755 })
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 const makeRepo = (name) => {
   const repo = join(work, 'repos', name)
@@ -71,27 +74,26 @@ const makeRepo = (name) => {
 }
 const repos = { alpha: makeRepo('alpha'), beta: makeRepo('beta'), gamma: makeRepo('gamma') }
 
-const info = () => {
-  try {
-    return parseLocalInfo(JSON.parse(readFileSync(infoPath, 'utf8')))
-  } catch {
-    return undefined
-  }
+// Main's message boxes: recorded, and answered with their confirm button (index 1).
+const mainStub = join(work, 'main-stub.cjs')
+writeFileSync(
+  mainStub,
+  `const { dialog } = require('electron')
+globalThis.__dialogs = []
+dialog.showMessageBox = async (...args) => {
+  const o = args.find((a) => a && typeof a === 'object' && 'message' in a) ?? {}
+  globalThis.__dialogs.push({ type: o.type ?? null, message: o.message, detail: o.detail ?? null })
+  return { response: o.type === 'error' ? 0 : 1, checkboxChecked: false }
 }
-const alive = (pid) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
+`
+)
 
 const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: '/bin/zsh' }
 delete env.TREK_NO_LOCAL_SERVER
 delete env.TREK_NO_WINDOW_RESTORE
 delete env.TREK_LOCAL_PROFILE
 delete env.ELECTRON_RUN_AS_NODE
+delete env.ELECTRON_RENDERER_URL
 const pageErrors = []
 const watch = (page) => {
   page.on('pageerror', (e) => pageErrors.push(`PAGEERROR: ${String(e)}`))
@@ -100,7 +102,7 @@ const watch = (page) => {
   })
 }
 const launch = async () => {
-  const launched = await electron.launch({ args: ['out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
+  const launched = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   launched.on('window', watch)
   return launched
 }
@@ -108,32 +110,22 @@ const launch = async () => {
 let app = null
 let sdk = null
 let exitCode = 1
-let finished = false
-const finish = async (reason) => {
-  if (finished) return
-  finished = true
-  if (reason) console.error(reason)
-  sdk?.close()
-  if (app) await app.close().catch(() => {})
-  spawnSync(electronPath, [join(root, 'out', 'server', 'trek-server.cjs'), 'stop', '--local', '--local-profile', 'dev'], {
-    env: { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), ELECTRON_RUN_AS_NODE: '1' },
-    timeout: 15_000
-  })
-  const left = info()
-  if (left && alive(left.pid)) process.kill(left.pid, 'SIGKILL')
-  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) {
-    if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch {}
-    }
-  }
-  rmSync(work, { recursive: true, force: true })
-  const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
-  console.log(exitCode === 0 ? `WINDOWS SMOKE PASS (${checks.length} checks)` : `WINDOWS SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''}${failedNames})`)
-  process.exit(exitCode)
+/** Error dialogs across every launch: each launch's stub starts a new list. */
+const errorBoxes = []
+const collectDialogs = async () => {
+  if (app) errorBoxes.push(...(await app.evaluate(() => globalThis.__dialogs).catch(() => [])).filter((d) => d.type === 'error'))
 }
-for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => void finish(`interrupted (${signal})`))
+const finish = makeFinish({
+  getApp: () => app,
+  beforeClose: () => sdk?.close(),
+  teardown: () => teardown(),
+  report: (reason) => {
+    const failedNames = failedChecks.length ? `: ${failedChecks.join('; ')}` : ''
+    const code = reason ? 1 : exitCode
+    console.log(code === 0 ? `WINDOWS SMOKE PASS (${checks.length} checks)` : `WINDOWS SMOKE FAIL (${checks.filter((c) => !c).length} of ${checks.length} checks failed${reason ? ', aborted' : ''}${failedNames})`)
+    return code
+  }
+})
 const watchdog = setTimeout(() => void finish(`watchdog: the run took over ${WATCHDOG_MS} ms`), WATCHDOG_MS)
 
 /** The project a page shows (its server target's project id), or null for an empty window. */
@@ -164,7 +156,7 @@ try {
   if (!local) throw new Error(`no local.json; server.log:\n${existsSync(logPath) ? readFileSync(logPath, 'utf8') : '(none)'}`)
   sdk = new ServerConnection({ url: `ws://127.0.0.1:${local.port}`, token: local.token, createSocket: globalSocketFactory, client: 'windows-smoke' })
   sdk.connect()
-  await until(() => sdk.status, 'connected', 5000)
+  if ((await until(() => sdk.status, 'connected', 10_000)) !== 'connected') throw new Error(`the SDK never connected to the Local server (${sdk.status})`)
   const ids = {}
   for (const [name, path] of Object.entries(repos)) {
     await sdk.request('server.addRepo', { path })
@@ -186,8 +178,20 @@ try {
   check('in a window of its own', await until(windowCount, 2), 2)
   const b = await pageFor(ids.beta)
   check('the first window keeps alpha', await targetOf(a), ids.alpha)
-  check('opening alpha from beta’s window focuses alpha’s', await openIn(b, ids.alpha, 'alpha'), false)
-  await sleep(500)
+  // Main's focusWindow calls win.focus(): recorded by the window's title. The OS may not give an
+  // app run by a test focus, so the call is what is checked, and the focused window when it has one.
+  await app.evaluate(({ BrowserWindow }) => {
+    globalThis.__focusCalls = []
+    const focus = BrowserWindow.prototype.focus
+    BrowserWindow.prototype.focus = function (...args) {
+      globalThis.__focusCalls.push(this.getTitle())
+      return focus.apply(this, args)
+    }
+  })
+  check('opening alpha from beta’s window focuses alpha’s', [await openIn(b, ids.alpha, 'alpha'), await until(() => app.evaluate(() => globalThis.__focusCalls), ['alpha'])], [false, ['alpha']])
+  const focusedTitle = await until(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle() ?? null), 'alpha', 3000)
+  if (focusedTitle !== 'alpha') console.log(`note: the OS reports ${JSON.stringify(focusedTitle)} focused (no focus for a test-run app); the focus call is checked`)
+  // openServerTarget creates any new window before its IPC reply: the count is final once openIn resolved.
   check('and adds no window', await windowCount(), 2)
 
   // ---- Each window shows only its own sessions ---------------------------------------------------
@@ -229,11 +233,18 @@ try {
   const sc = await start(ids.gamma)
   await until(() => sessionsIn(c), [sc])
   await until(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.getTitle()).includes('gamma')), true)
+  // gamma's agent: the pid its script recorded, with gamma's worktree.
+  const agentOf = (repo) => Number((existsSync(agentPids) ? readFileSync(agentPids, 'utf8') : '').split('\n').find((l) => l.endsWith(` ${repo}`))?.split(' ')[0] ?? 0)
+  await until(() => agentOf(repos.gamma) > 0, true)
+  const gammaAgent = agentOf(repos.gamma)
+  check("gamma's agent runs, before the close", gammaAgent > 0 && alive(gammaAgent), true)
   await closeByTitle('gamma')
-  check('closing a window asks nothing and removes it', await until(windowCount, 2), 2)
-  await sleep(500)
+  check('closing a window asks nothing and removes it', [await until(windowCount, 2), (await app.evaluate(() => globalThis.__dialogs)).length], [2, 0])
+  // Nothing to wait for: the window is gone, and what would end the session (the server seeing
+  // its client leave) leaves no trace. 3 s is well past the socket's close and any reaction to it.
+  await sleep(3000)
   const gammaSession = (await mainOf(ids.gamma)).sessions.find((s) => s.id === sc)
-  check('its session keeps running on the server', [!!gammaSession?.ptyId, gammaSession?.status !== 'exited'], [true, true])
+  check('its session keeps running on the server, its agent alive', [!!gammaSession?.ptyId, gammaSession?.status === 'exited' ? 'exited' : 'running', alive(gammaAgent)], [true, 'running', true])
 
   // ---- New Window --------------------------------------------------------------------------------------
 
@@ -249,22 +260,45 @@ try {
     blank = app.windows().find((page) => !page.isClosed() && page !== a && page !== b) ?? null
     if (!blank) await sleep(250)
   }
+  if (!blank) throw new Error('New Window opened no page')
   await blank.waitForLoadState('domcontentloaded')
   await blank.locator('.start-screen').waitFor({ timeout: 10_000 })
   check('New Window starts empty, at the start screen', await targetOf(blank), null)
-  await blank.close()
-  await until(windowCount, before)
+  const closedBlank = await blank.close().then(() => true, (err) => String(err))
+  check('and closes', [closedBlank, await until(windowCount, before)], [true, before])
 
   // ---- Quit, relaunch: the windows come back -------------------------------------------------------------
 
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha').setBounds({ x: 40, y: 60, width: 1000, height: 700 }))
+  // The new bounds are recorded on a debounce; quitting records them anyway.
   await sleep(800)
-  await app.close()
+  await collectDialogs()
+  await closeApp(app)
+  // A server window whose server is unknown (no such entry): main restores it on its target, keeps
+  // that target whatever the renderer shows ("Server removed"), and records it again at quit.
+  const openWindowsPath = join(userData, 'open-windows.json')
+  const missing = { kind: 'server', serverEntryId: 'smoke-missing-server', projectId: 'smoke-missing-project' }
+  writeFileSync(openWindowsPath, JSON.stringify([...JSON.parse(readFileSync(openWindowsPath, 'utf8')), missing], null, 2))
   app = await launch()
   await app.firstWindow()
   const ra = await pageFor(ids.alpha)
   const rb = await pageFor(ids.beta)
-  check('both windows are back, on their projects', [await until(windowCount, 2), await targetOf(ra), await targetOf(rb)], [2, ids.alpha, ids.beta])
+  check('the three windows are back, alpha and beta on their projects', [await until(windowCount, 3), await targetOf(ra), await targetOf(rb)], [3, ids.alpha, ids.beta])
+  // Asked again, main hands a server window its target (state.target): main's view, not the renderer's.
+  const mainTarget = (page) => page.evaluate(() => window.api.takeInitialWindowState().then((s) => s.server)).catch(() => undefined)
+  const missingTarget = { serverEntryId: missing.serverEntryId, projectId: missing.projectId }
+  let rm = null
+  for (let i = 0; i < 60 && !rm; i++) {
+    for (const page of app.windows()) if (!rm && !page.isClosed() && JSON.stringify(await mainTarget(page)) === JSON.stringify(missingTarget)) rm = page
+    if (!rm) await sleep(250)
+  }
+  check('the unknown server’s window is restored on its target', !!rm, true)
+  if (!rm) throw new Error('no window on the unknown server’s target')
+  const titles = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.getTitle()).sort())
+  check('it shows Server removed', [await until(() => rm.locator('text=Server removed').count().then((n) => n > 0), true), await until(titles, ['Server removed', 'alpha', 'beta'].sort())], [true, ['Server removed', 'alpha', 'beta'].sort()])
+  await rm.reload()
+  await rm.waitForLoadState('domcontentloaded')
+  check('and keeps its target across a reload', await until(() => mainTarget(rm), missingTarget), missingTarget)
   const bounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha')?.getBounds() ?? null)
   check('alpha keeps its size', bounds && [bounds.width, bounds.height], [1000, 700])
   check("and lists its session again (it ran on the server meanwhile)", await until(() => sessionsIn(ra), [sa]), [sa])
@@ -282,25 +316,29 @@ try {
   await new Promise((done) => foreign.listen(0, '127.0.0.1', done))
   const foreignUrl = `http://127.0.0.1:${foreign.address().port}/trek-nav-guard`
   const appUrl = rb.url()
-  await rb.evaluate((u) => (location.href = u), foreignUrl).catch(() => {})
-  await sleep(800)
-  await rb.evaluate(() => window.open('https://example.invalid/trek-open-guard'))
-  await rb.evaluate(() => window.open('file:///etc/hosts'))
-  await sleep(800)
-  check('a foreign page is not loaded', rb.url(), appUrl)
-  check('the api is still there', await rb.evaluate(() => typeof window.api), 'object')
-  // openUrl first asks Chrome (osascript, up to 3 s each) for a matching tab.
+  // Each step's positive control is main handing the link on (openUrl): by then it has blocked it.
+  // The file: link goes before the https one, so once the https one is handed on, main has
+  // handled (and dropped) the file: one: window.open reaches main in order.
   const opened = () => app.evaluate(() => [...globalThis.__opened].sort())
+  await rb.evaluate((u) => (location.href = u), foreignUrl).catch(() => {})
+  // openUrl first asks Chrome (osascript, up to 3 s each) for a matching tab.
+  check('a foreign page is blocked, and handed to the browser', [await until(opened, [foreignUrl], 20_000), rb.url()], [[foreignUrl], appUrl])
+  check('the api is still there', await rb.evaluate(() => typeof window.api), 'object')
+  await rb.evaluate(() => window.open('file:///etc/hosts'))
+  await rb.evaluate(() => window.open('https://example.invalid/trek-open-guard'))
   check('http(s) links open externally, other schemes are dropped', await until(opened, [foreignUrl, 'https://example.invalid/trek-open-guard'].sort(), 20_000), [foreignUrl, 'https://example.invalid/trek-open-guard'].sort())
   foreign.close()
-  check('window.open adds no window', await windowCount(), 2)
+  check('window.open adds no window', [await windowCount(), rb.url()], [3, appUrl])
 
   // ---- Recorded at quit -----------------------------------------------------------------------------------
 
-  await app.close()
+  await collectDialogs()
+  await closeApp(app)
   app = null
-  const saved = JSON.parse(readFileSync(join(userData, 'open-windows.json'), 'utf8'))
-  check('quit records both windows by server target', saved.map((e) => [e.kind, e.serverEntryId, e.projectId]).sort(), [['server', 'local', ids.alpha], ['server', 'local', ids.beta]].sort())
+  const saved = JSON.parse(readFileSync(openWindowsPath, 'utf8'))
+  const want = [['server', 'local', ids.alpha], ['server', 'local', ids.beta], ['server', missing.serverEntryId, missing.projectId]].sort()
+  check('quit records the three windows by server target, the unknown server’s too', saved.map((e) => [e.kind, e.serverEntryId, e.projectId]).sort(), want)
+  check('no error dialogs', errorBoxes, [])
   check('no console or page errors', pageErrors, [])
   exitCode = failedChecks.length ? 1 : 0
 } catch (err) {
