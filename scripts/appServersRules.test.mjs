@@ -17,7 +17,7 @@ import {
   withRemoving,
   withToken
 } from '../src/main/appServersRules.ts'
-import { LOCAL_ENTRY_ID, STATUS_LABELS, isLoopbackUrl, localErrorTitle, localStatusLabel, originOf } from '../src/shared/appServerRules.ts'
+import { LOCAL_ENTRY_ID, STATUS_LABELS, isLocalEntryId, isLoopbackUrl, localErrorTitle, localStatusLabel, originOf } from '../src/shared/appServerRules.ts'
 import { LOCAL_ENTRY_ID as MAIN_LOCAL_ENTRY_ID } from '../src/main/localServerRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
@@ -212,4 +212,9 @@ test('mayAdoptToken: a saved entry still at the URL the token was matched to; ne
   // Another entry's record.
   assert.equal(mayAdoptToken('e1', { ...entry, id: 'e2' }, 'wss://b.example'), false)
   assert.equal(mayAdoptToken(LOCAL_ENTRY_ID, { id: LOCAL_ENTRY_ID, name: 'Local', url: 'wss://b.example' }, 'wss://b.example'), false)
+})
+
+test('isLocalEntryId: the built-in Local entry only (4c Note 4: every Local check goes through it)', () => {
+  assert.equal(isLocalEntryId(LOCAL_ENTRY_ID), true)
+  for (const id of ['', 'Local', 'local-dev', '3f6c1c9e-6d1a-4b8e-9a1e-2f1d6c0b7a11']) assert.equal(isLocalEntryId(id), false, id)
 })

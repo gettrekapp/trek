@@ -27,6 +27,15 @@ interface Props {
 /** How long Create waits for an added repo's `server` topic patch before it says so. */
 const TOPIC_WAIT_MS = 5000
 
+/** `project.create` requests in flight in this window. */
+let createsInFlight = 0
+
+/**
+ * A create is in flight here: the start screen keeps its view meanwhile (a menu's view switch
+ * would unmount this dialog and drop the connection, leaving the project created but not opened).
+ */
+export const createInFlight = (): boolean => createsInFlight > 0
+
 function baseName(p: string): string {
   return p.replace(/\/+$/, '').split('/').pop() || p
 }
@@ -123,6 +132,7 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
     creatingRef.current = true
     setCreating(true)
     setCreateError(null)
+    createsInFlight++
     try {
       const projectName = name.trim()
       const { projectId } = await registered.connection.request('project.create', {
@@ -135,6 +145,8 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
       setCreateError(`Could not create the project: ${errorText(err)}`)
       creatingRef.current = false
       setCreating(false)
+    } finally {
+      createsInFlight--
     }
   }
 

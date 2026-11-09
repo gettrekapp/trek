@@ -152,7 +152,13 @@ function repositoryFor(
         loaded: false,
         sessions: isLocal ? (r.primaryTerminals ?? []).map((t) => toSession(t, newId)) : []
       }
-  main.sessions.push(...extraSessions)
+  // A session saved on more than one of the folded worktrees resumes one agent history: once.
+  const seen = new Set(main.sessions.flatMap((s) => (s.agentSessionId ? [s.agentSessionId] : [])))
+  for (const session of extraSessions) {
+    if (session.agentSessionId && seen.has(session.agentSessionId)) continue
+    if (session.agentSessionId) seen.add(session.agentSessionId)
+    main.sessions.push(session)
+  }
   const others = own
     .filter((w) => normalizePath(w.path) !== path)
     .map((w) => toWorktree(w, false, newId))
@@ -196,6 +202,9 @@ function settingsOf(file: ProjectFile): ProjectSettings {
     branchEnvVars: _be,
     linkedDirs: _ld,
     environments: _env,
+    // The project bot's settings are not carried (4d Note 9): when the bot returns (phase 5), a
+    // crafted file must not configure one on a server. It is set up again there.
+    bot: _bot,
     ...settings
   } = file as unknown as Record<string, unknown>
   return settings as ProjectSettings
@@ -216,8 +225,9 @@ function rekeyOrder(
   for (const key of order) {
     if (!key.startsWith(prefix)) continue
     const path = key.slice(prefix.length)
-    const repoId = repoByPath.get(normalizePath(path))
-    if (repoId) out.push(worktreeOrderKey(repoId, path))
+    const normalized = normalizePath(path)
+    const repoId = repoByPath.get(normalized)
+    if (repoId) out.push(worktreeOrderKey(repoId, normalized))
   }
   return out
 }

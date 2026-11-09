@@ -509,3 +509,35 @@ test("Local's piece knows where a file window ran the Global panel: the file's f
   const [v1] = importProjectFile({ version: 1, name: 'Old', repositoryPath: '/old/app', worktrees: [] }, ids()).projects
   assert.equal(v1.globalCwd, '/old/app')
 })
+
+// ---- 4e: the splitter's known gaps (4d Notes 7 and 9) -------------------------------------
+
+test('worktree order keys carry the normalized path, as the worktrees do (4d Note 7)', () => {
+  const file = mixedFile()
+  file.worktreeOrder = ['local /r//api-x/', 'srv /home/api-y/']
+  const [local, remote] = splitProjectByServer(file, ids()).projects
+  assert.deepEqual(local.project.settings.worktreeOrder, [`${local.project.repositories[0].id} /r/api-x`])
+  assert.deepEqual(remote.project.settings.worktreeOrder, [`${remote.project.repositories[0].id} /home/api-y`])
+})
+
+test('a session saved twice on worktrees folded into the main one is imported once (4d Note 7)', () => {
+  const file = mixedFile()
+  file.repositories[0].worktrees.push(
+    { id: 'wm2', name: 'dup', path: '/home//api/', serverId: 'srv', terminals: [term('s3'), term('s4')] },
+    { id: 'wm3', name: 'dup2', path: '/home/api/', serverId: 'srv', terminals: [term('s4')] }
+  )
+  const [, { project }] = splitProjectByServer(file, ids()).projects
+  assert.deepEqual(project.repositories[0].worktrees[0].sessions.map((s) => s.agentSessionId), ['s3', 's4'])
+})
+
+test('a local primary session also saved on a folded worktree is imported once (4d Note 7)', () => {
+  const file = mixedFile()
+  file.repositories[0].worktrees.push({ id: 'wl', name: 'dup', path: '/r/api/', terminals: [term('p1'), term('s5')] })
+  const [{ project }] = splitProjectByServer(file, ids()).projects
+  assert.deepEqual(project.repositories[0].worktrees[0].sessions.map((s) => s.agentSessionId), ['p1', 's5'])
+})
+
+test("a file's bot settings are not imported, so a crafted file cannot configure the bot (4d Note 9)", () => {
+  const file = { ...mixedFile(), bot: { enabled: true, command: '/tmp/evil' } }
+  for (const { project } of splitProjectByServer(file, ids()).projects) assert.equal('bot' in project.settings, false)
+})

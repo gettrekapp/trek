@@ -1,6 +1,6 @@
 // Importing a .trekproj (phase 4d): where each piece of a split file goes, what
 // migrated.json records, and how recents and open-windows.json are rewritten. Pure.
-import { LOCAL_ENTRY_ID, originOf } from '../shared/appServerRules.ts'
+import { isLocalEntryId, originOf } from '../shared/appServerRules.ts'
 import { LOCAL_TARGET } from '../shared/model/importProject.ts'
 import type { Project, Session } from '../shared/model/types.ts'
 import { sessionMigrates } from '../shared/providers/selection.ts'
@@ -61,7 +61,7 @@ export function routePiece(
   if (!server) return { kind: 'unknown', label: `server ${target}`, why: "the file's server list does not name it" }
   const key = originOf(server.url) && isWsUrl(server.url) ? serverKey(server.url) : null
   if (key === null) return { kind: 'unknown', label: server.name, why: 'its address is not a ws:// or wss:// URL' }
-  const same = entries.filter((e) => e.id !== LOCAL_ENTRY_ID && serverKey(e.url) === key)
+  const same = entries.filter((e) => !isLocalEntryId(e.id) && serverKey(e.url) === key)
   const hit = same.find((e) => withoutTrailingSlash(e.url) === withoutTrailingSlash(server.url)) ?? same[0]
   if (hit) return { kind: 'entry', entryId: hit.id, name: hit.name }
   if (hasUserInfo(server.url)) return { kind: 'unknown', label: server.name, why: 'its address has a user name or password in it, which Trek’s server list does not take' }

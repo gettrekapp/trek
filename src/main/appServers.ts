@@ -30,6 +30,7 @@ import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
 import { checkLocalServer, localEntry, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 import { LOCAL_ENTRY_ID } from './localServerRules'
+import { isLocalEntryId } from '../shared/appServerRules.ts'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
 import type { RegisteredServer } from '../shared/client/index.ts'
 import type { AppServerInfo, AppServersChanged, AppServerTest } from '../shared/types'
@@ -133,7 +134,7 @@ function linkEntries(): AppServer[] {
 
 /** Main-only: never return this over IPC. Local's is read from local.json (localServer.ts). */
 export async function getAppServerToken(id: string): Promise<string | null> {
-  return id === LOCAL_ENTRY_ID ? localToken() : tokens.get(id)
+  return isLocalEntryId(id) ? localToken() : tokens.get(id)
 }
 
 async function info(server: AppServer): Promise<AppServerInfo> {
@@ -143,7 +144,7 @@ async function info(server: AppServer): Promise<AppServerInfo> {
 
 /** Save, setToken and remove refuse the Local entry: the supervisor owns it. */
 function refuseLocal(id: unknown, what: string): void {
-  if (id === LOCAL_ENTRY_ID) throw new Error(`The Local server cannot be ${what}`)
+  if (isLocalEntryId(id)) throw new Error(`The Local server cannot be ${what}`)
 }
 
 function requireId(id: unknown): string {
@@ -342,7 +343,7 @@ export function registerAppServerHandlers(
     changed: broadcast,
     linked: (id, registered) => {
       // main's connection to Local going down is the first sign of a restart or crash elsewhere.
-      if (id === LOCAL_ENTRY_ID) {
+      if (isLocalEntryId(id)) {
         registered.connection.on('status', ({ status }) => {
           if (status !== 'connected') checkLocalServer()
         })

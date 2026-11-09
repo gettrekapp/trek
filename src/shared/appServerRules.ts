@@ -5,6 +5,14 @@ import type { LocalServerStatus } from './types.ts'
 /** The synthetic app-server entry's id, for the Local server: recents and open-windows.json are keyed by it. */
 export const LOCAL_ENTRY_ID = 'local'
 
+/**
+ * The built-in Local entry (the supervisor's own server). Every check for Local goes through this
+ * (4c Note 4), so keying Local by profile later changes one place.
+ */
+export function isLocalEntryId(id: unknown): boolean {
+  return id === LOCAL_ENTRY_ID
+}
+
 /** What each connection status reads as in the UI. */
 export const STATUS_LABELS: Record<ConnectionStatus, string> = {
   connected: 'Connected',

@@ -3,8 +3,9 @@ import { baseName, useAppStore } from '../store'
 import { errorText } from '../v2/errors'
 import { ConnectServer, openServerProjectHere } from './ConnectServer'
 import { NewProject } from './NewProject'
+import { createInFlight } from './NewServerProjectModal'
 import { useAppServerLinks } from '../useAppServerLinks'
-import { LOCAL_ENTRY_ID } from '../../../shared/appServerRules.ts'
+import { isLocalEntryId } from '../../../shared/appServerRules.ts'
 import type { RecentEntry } from '../../../shared/types'
 
 export type StartView = 'home' | 'connect' | 'new'
@@ -26,8 +27,9 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
   const { servers } = useAppServerLinks()
   const serverNames = useMemo(() => (servers ? new Map(servers.map((s) => [s.id, s.name])) : null), [servers])
 
+  // Not while a project is being created here: the switch would drop it (4e-1 M-3).
   useEffect(() => {
-    if (request) setView(request.view)
+    if (request && !createInFlight()) setView(request.view)
   }, [request])
 
   // Again on coming back from another view, which may have opened (and so recorded) a server project.
@@ -136,7 +138,7 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
                       <button disabled={busy} onClick={() => void openServerRecent(entry)}>
                         <span className="recent-name">
                           {entry.name || entry.projectId}
-                          <span className="mini-chip recent-server-chip">{entry.serverEntryId === LOCAL_ENTRY_ID ? 'local' : 'server'}</span>
+                          <span className="mini-chip recent-server-chip">{isLocalEntryId(entry.serverEntryId) ? 'local' : 'server'}</span>
                         </span>
                         <span className="recent-path">
                           {serverNames && !serverNames.has(entry.serverEntryId)

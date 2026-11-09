@@ -1,6 +1,6 @@
 // The app-wide trek-server list, validated; and the hello-token injection the relay does. Pure.
 import { isLoopbackUrl, originOf } from '../shared/appServerRules.ts'
-import { LOCAL_ENTRY_ID } from './localServerRules.ts'
+import { isLocalEntryId } from '../shared/appServerRules.ts'
 import type { LocalServerStatus } from '../shared/types.ts'
 
 export interface AppServer {
@@ -31,7 +31,7 @@ export function parseAppServers(raw: unknown): AppServer[] {
     if (!item || typeof item !== 'object') continue
     const { id, name, url } = item as Record<string, unknown>
     // `local` is the synthetic Local entry's: a saved entry never takes it.
-    if (typeof id !== 'string' || !id || id === LOCAL_ENTRY_ID || ids.has(id)) continue
+    if (typeof id !== 'string' || !id || isLocalEntryId(id) || ids.has(id)) continue
     if (typeof name !== 'string' || !name || typeof url !== 'string' || !wsUrl(url)) continue
     ids.add(id)
     out.push({ id, name, url })
@@ -161,7 +161,7 @@ export function addedServerName(name: unknown, url: string): string {
  * the entry has a token already is the secret store's to decide, in the same step (setIfAbsent).
  */
 export function mayAdoptToken(id: string, now: AppServer | undefined, url: string): boolean {
-  return id !== LOCAL_ENTRY_ID && !!now && now.id === id && now.url === url
+  return !isLocalEntryId(id) && !!now && now.id === id && now.url === url
 }
 
 /** Test's refusal once its token is read, if the entry was removed or re-pointed meanwhile: that token goes nowhere. */

@@ -19,6 +19,7 @@ import { projectDir } from '../host/claudeSessionService'
 import { addAppServer, adoptAppServerToken, getAppServer, getAppServerToken, savedAppServers, serverLink } from './appServers'
 import { LOCAL_SERVER_DISABLED } from './localServer'
 import { LOCAL_ENTRY_ID, LOCAL_ENTRY_NAME } from './localServerRules'
+import { isLocalEntryId } from '../shared/appServerRules.ts'
 import { legacyTokenFor } from './legacyTokens'
 import { fileKey, isFileKey, updateMigrated } from './migrated'
 import { rewriteRecentsForImport } from './recents'
@@ -125,7 +126,7 @@ export async function importTrekproj(path: string, given: ImportOptions): Promis
 
 async function importPiece(piece: ImportedProject, fileServers: ServerConfig[], options: ImportOptions, report: ImportReport): Promise<MigratedPiece> {
   const entry = await entryFor(piece, fileServers, options)
-  const isLocal = entry.id === LOCAL_ENTRY_ID
+  const isLocal = isLocalEntryId(entry.id)
   const failed = options.unreachable?.get(entry.id)
   if (failed) throw new Error(failed)
   let link: RegisteredServer
@@ -183,7 +184,7 @@ async function entryFor(piece: ImportedProject, fileServers: ServerConfig[], opt
 /** Main's own connection to the entry, once connected. A missing or rejected token fails at once. */
 async function waitForLink(id: string, name: string, timeoutMs: number): Promise<RegisteredServer> {
   const noToken = `${name} has no access token here: set it in Open on server…, then open the file again to import this part`
-  if (id !== LOCAL_ENTRY_ID && !(await getAppServerToken(id))) throw new Error(noToken)
+  if (!isLocalEntryId(id) && !(await getAppServerToken(id))) throw new Error(noToken)
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const link = serverLink(id)
