@@ -120,7 +120,6 @@ export function WorktreeDetail({
   const [syncBusy, setSyncBusy] = useState<'pull' | 'push' | null>(null)
   const [showTicket, setShowTicket] = useState(false)
   const [showPR, setShowPR] = useState(false)
-  // Move target: 'local' or a server id — null when no move is in progress
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   /** The title the rename started from: a server window refuses it if the title changed meanwhile */
@@ -703,7 +702,6 @@ export function WorktreeDetail({
         <NewSessionMenu
           title={hostDown ? 'Server disconnected' : missing ? 'The worktree is missing on the server' : 'New session (⌘T)'}
           disabled={hostDown || missing}
-          serverId={info.serverId}
           onStart={(sessionType, llm) => {
             setPanel('sessions')
             void getBackend().sessions.start({ serverId: info.serverId, path: info.path }, sessionType, llm)

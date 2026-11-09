@@ -1,7 +1,7 @@
 // Keeps this window's backend in step with what the window shows. Not in
-// store.ts: backend.ts imports the store (directly and through terminals.ts
-// and the rest), so the store importing backend.ts back would
-// make a cycle in which those modules run before the store exists.
+// store.ts: installV2.ts imports the store (directly and through terminals.ts,
+// localTeardown.ts and the rest), so the store importing it back would make a
+// cycle in which those modules run before the store exists.
 import { useAppStore } from './store'
 import { idleBackend, setBackend, type WindowBackend } from './backend'
 import { installV2Window, type V2Window } from './v2/installV2'

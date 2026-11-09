@@ -5,8 +5,8 @@
 // edit to the server. Nothing changes locally: the mirror patch does.
 //
 // The status is the server's alone (it computes it from the pty), so the
-// setters that would move it locally (setTerminalStatus, Codex discovery's
-// setTerminalSession, saveGlobalSessions' setGlobalSessions) do nothing here.
+// setters that would move it locally (setTerminalStatus, setTerminalSession,
+// setGlobalSessions; no renderer code calls them since 4e-2) do nothing here.
 // So does addWorktreeInstance: every worktree of a server project comes from
 // the mirror (AddWorktreeModal's v2 path never calls it). Decisions are the
 // server's too: only its MCP opens one (requestDecision does nothing), any

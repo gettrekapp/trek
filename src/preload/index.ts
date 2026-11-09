@@ -162,7 +162,6 @@ const api = {
     ): (() => void) => subscribe('v2socket:event', callback)
   },
 
-
   // Dialogs
   /** Resolves true for the confirm button; `cancelLabel` renames Cancel, `defaultCancel` makes it the default. */
   confirm: (opts: {
@@ -247,10 +246,6 @@ const api = {
     ipcRenderer.invoke('env:logs', serverId, profile, worktreePath, composeFile, service, tail),
   onEnvLog: (callback: (event: EnvLogEvent) => void): (() => void) =>
     subscribe('env:log', callback),
-
-
-
-
 
   // Menu events
   onMenu: (

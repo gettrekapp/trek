@@ -12,8 +12,6 @@ interface Props {
   onChange: (value: LlmSelection) => void
   /** Restrict the providers offered (e.g. MCP-capable for the Global panel) */
   filter?: (provider: LlmProvider) => boolean
-  /** Host the agent will run on, for the "not installed" check; null = this machine */
-  serverId?: string | null
   /**
    * The agent runs on a v2 server (a server window): `installed` is what the
    * server reported (`server.agents`). Nothing is checked or listed on this
@@ -26,7 +24,7 @@ interface Props {
  * In a server window, what an LlmPicker needs to offer the server's agents:
  * the providers `server.agents` listed and what it said is installed (until
  * it answers, or without `agents`: every provider, with no check on this
- * machine). Nothing in a file window.
+ * machine). Nothing in an empty window.
  */
 export function useServerPicker(): Pick<Props, 'filter' | 'remote'> {
   const serverWindow = useAppStore((s) => s.serverWindow !== null)
@@ -43,9 +41,8 @@ export function useServerPicker(): Pick<Props, 'filter' | 'remote'> {
 }
 
 /** Provider → Model → Effort. Changing provider resets model and effort. */
-export function LlmPicker({ value, onChange, filter, serverId = null, remote }: Props): React.JSX.Element {
+export function LlmPicker({ value, onChange, filter, remote }: Props): React.JSX.Element {
   const settings = useAppStore((s) => s.llmSettings) ?? DEFAULT_LLM_SETTINGS
-  const project = useAppStore((s) => s.project)
   const providers = PROVIDER_LIST.filter((p) => !filter || filter(p))
   const provider = getProvider(value.provider)
   const isLocal = provider.id === 'local'
@@ -57,7 +54,6 @@ export function LlmPicker({ value, onChange, filter, serverId = null, remote }: 
   const [localError, setLocalError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
-  const [installed, setInstalled] = useState<boolean | null>(null)
 
   // Latest props for the async fetch below, so it never acts on a stale selection.
   const latest = useRef({ value, onChange })
@@ -91,16 +87,6 @@ export function LlmPicker({ value, onChange, filter, serverId = null, remote }: 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLocal, backend, baseUrl, !remote])
-
-  const command =
-    (provider.id === 'claude' ? project?.claudeCommand?.trim() : undefined) ||
-    settings.providers[provider.id]?.command?.trim() ||
-    provider.defaultCommand
-  // Without a server's answer (`remote`), whether the agent is installed is not known here: the
-  // server that runs it says (server.agents). Shown as unknown.
-  useEffect(() => {
-    setInstalled(null)
-  }, [command, serverId, !remote])
 
   const models = isLocal ? (localModels ?? []) : provider.models
   const known = models.some((m) => m.id === value.model)
@@ -202,11 +188,6 @@ export function LlmPicker({ value, onChange, filter, serverId = null, remote }: 
           <button className="btn btn-ghost llm-small-btn" onClick={loadLocal}>
             Retry
           </button>
-        </span>
-      )}
-      {installed === false && (
-        <span className="settings-desc settings-warn">
-          “{command.split(/\s+/)[0]}” isn&apos;t installed on this machine — set its command in Settings.
         </span>
       )}
     </div>

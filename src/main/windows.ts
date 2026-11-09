@@ -486,12 +486,4 @@ export function registerWindowHandlers(): void {
     const state = windows.get(event.sender.id)
     if (state?.closing) finishClose(state)
   })
-
-  ipcMain.on('window:close-cancelled', (event) => {
-    const state = windows.get(event.sender.id)
-    if (!state?.closing) return
-    clearCloseTimer(state)
-    state.closing.settle(false)
-    state.closing = null
-  })
 }

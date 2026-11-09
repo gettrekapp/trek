@@ -144,6 +144,9 @@ const noProject = (): Promise<never> => Promise.reject(new Error('No project is 
 /**
  * An empty window's backend (the start screen): no features, and every action refuses. Nothing
  * calls it: the components that act on a project render only in a server window.
+ *
+ * Its contract differs from the v2 backend's: every method rejects, even the fire-and-forget
+ * ones documented above as never rejecting, since no empty-window caller reaches it.
  */
 export const idleBackend: WindowBackend = {
   kind: 'idle',

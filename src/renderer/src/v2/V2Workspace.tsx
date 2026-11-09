@@ -10,11 +10,10 @@ import { GlobalClaude } from '../components/GlobalClaude'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 
 /**
- * A server project's workspace: the legacy Sidebar, WorktreeDetail and Global
- * panel over the projected slice (applyV2Project fills the store). Unlike the
- * legacy Workspace it polls no git: the server's mirror patches carry every
- * worktree, git status and session. A Local server window (`features.env`)
- * polls this machine's Colima environments, as a file window does.
+ * A server project's workspace: the Sidebar, WorktreeDetail and Global panel
+ * over the projected slice (applyV2Project fills the store). It polls no git:
+ * the server's mirror patches carry every worktree, git status and session. A
+ * Local server window (`features.env`) polls this machine's Colima environments.
  */
 export function V2Workspace(): React.JSX.Element {
   const project = useAppStore((s) => s.project)

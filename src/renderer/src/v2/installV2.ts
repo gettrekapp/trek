@@ -1,8 +1,8 @@
 // Puts a window into server-project mode and takes it out again. windowKind.ts
 // calls it whenever `serverWindow` changes, inside the same `set`, so the
 // backend, the store-setter overrides and the projected slice always change
-// together: a window that goes back to the picker never keeps v2 overrides on
-// a legacy backend, nor a projected project the legacy Workspace would render.
+// together: a window that goes back to the start screen never keeps v2
+// overrides on the idle backend, nor a projected project.
 import { useAppStore } from '../store'
 import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repoRemoval'

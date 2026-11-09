@@ -1,11 +1,8 @@
 import { create } from 'zustand'
 import { OFF_VIEW, type BotEvent, type BotView } from '../../shared/bot'
 import type { BotSettings } from '../../shared/types'
-import { DEFAULT_WORKTREE_TAGS, hostKey, sameWorktree } from '../../shared/types'
+import { hostKey, sameWorktree } from '../../shared/types'
 import { deriveProfileName } from '../../shared/environments'
-import { migrateToV3, type RawProjectFile } from '../../shared/migration'
-import { sanitizeAppearance } from '../../shared/appearance'
-import { sanitizeProjectLlm } from '../../shared/providers/selection'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
@@ -44,7 +41,7 @@ export function baseName(p: string): string {
   return p.replace(/\/+$/, '').split('/').pop() ?? p
 }
 
-export function primaryWorktree(repo: Repository): WorktreeInstance {
+function primaryWorktree(repo: Repository): WorktreeInstance {
   return { id: primaryWorktreeId(repo.id), name: baseName(repo.path), path: repo.path }
 }
 
@@ -79,7 +76,7 @@ export function repoOfInfo(project: ProjectFile, info: GitWorktreeInfo): Reposit
 }
 
 /** The repository of a worktree that may have no instance yet. */
-export function repoOfLocator(
+function repoOfLocator(
   project: ProjectFile,
   hostWorktrees: Record<string, GitWorktreeInfo[]>,
   loc: WorktreeLocator
@@ -346,17 +343,6 @@ export interface AppState {
 }
 
 export type EnvBusyAction = 'start' | 'stop' | 'destroy'
-
-/** Older files upgrade on load; projects without configured workflow tags get the default set, and invalid appearance values and LLM selections are dropped. */
-export function migrateProject(raw: RawProjectFile): ProjectFile {
-  const project = migrateToV3(raw, () => crypto.randomUUID())
-  return sanitizeProjectLlm(
-    sanitizeAppearance({
-      ...project,
-      worktreeTags: project.worktreeTags ?? DEFAULT_WORKTREE_TAGS
-    })
-  )
-}
 
 export const useAppStore = create<AppState>((set) => ({
   serverWindow: null,
@@ -986,7 +972,7 @@ export function mergedWorktrees(
 }
 
 /** The repository the selection belongs to, whether or not it has rows. */
-export function selectedRepository(
+function selectedRepository(
   project: ProjectFile,
   selected: SelectedWorktree | null,
   activeWorktreeId: string | null
