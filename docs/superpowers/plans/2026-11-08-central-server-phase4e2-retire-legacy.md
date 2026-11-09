@@ -7,10 +7,10 @@
 2. **The renderer and preload** lose the legacy backend, the legacy halves of `terminals.ts` and `store.ts`, `worktreeActions.ts` (the Local teardown moves to `localTeardown.ts`), `mcpTools.ts`, `persistence.ts`, `repositoryActions.ts` (`removalBlock` moves to `repoRemoval.ts`), `windowLifecycle.ts`, the legacy Workspace, ServersPanel, MoveWorktreeModal, `LEGACY_FEATURES` and half the preload (about 4k lines). An empty window gets an **idle backend**.
 3. **The server** loses protocol v1 (`rpc.ts`, `ptyRegistry.ts`, its welcome and dispatch); a v1 hello is refused with `4002 UPGRADE_CLIENT`; `src/shared/protocol.ts` folds into `protocolV2.ts` (about 0.6k lines).
 4. **The bot stays dormant in the tree:** its logic (`src/host/bot/`, with its MCP gate) compiled and tested; its Electron wiring excluded from the type-check and the bundle, unreachable.
-5. **The splitter's known gaps** close (4d Notes 7–9): normalized worktree-order keys, one session per agent history after folding, no `bot` settings imported; every Local entry check goes through `isLocalEntryId` (4c Note 4).
+5. **The splitter's known gaps** close (4d Notes 7–9): normalized worktree-order keys, one session per agent history after folding, no `bot` settings imported; every Local entry check goes through `isLocalEntryId` (4c Note 4); and the start screen keeps its view while a project is being created (4e-1 M-3).
 6. **Docs:** the README describes projects on servers and the start screen, without file windows, the Servers panel or v1; PROTOCOL.md drops v1; the spec records phase 4 as done.
 
-In all, 115 files change from `aa032fb`: +2268 −9853 lines (`src/` and `server/src/`: +967 −7228).
+In all, 95 files change from `24cd359` (4e-1 as merged): +792 −7315 lines (`src/` and `server/src/`: 83 files, +518 −6887).
 
 **Architecture:**
 - **Stages, each green.** Main first (Task 1): IPC handlers can go while the renderer still calls them, since no file window can be opened (4e-1). The renderer and preload next (Task 2), then the server's v1 (Task 3), whose last client (main's `RemoteHost`) Task 1 deleted. Each task ends with the typecheck, the tests, the build and the smokes that cover what it touched.
@@ -19,7 +19,19 @@ In all, 115 files change from `aa032fb`: +2268 −9853 lines (`src/` and `server
 
 **Tech Stack:** as 4e-1: TypeScript, Electron 43, React 19 + zustand, the `src/shared/client` SDK, `node --test`, Playwright's `_electron`; `ws` on the server.
 
-**Spec:** `docs/superpowers/specs/2026-11-04-central-server-design.md`, "Desktop app" (what main keeps and loses) and "Import and retiring legacy windows (phase 4)". Follows `docs/superpowers/plans/2026-11-08-central-server-phase4e1-start-screen.md` (its roadmap, recorded decisions, the brief's map, conventions and the smoke coverage map apply here too), and its "Notes for 4e-2" 1–7, covered in Tasks 1–2.
+**Spec:** `docs/superpowers/specs/2026-11-04-central-server-design.md`, "Desktop app" (what main keeps and loses) and "Import and retiring legacy windows (phase 4)". Follows `docs/superpowers/plans/2026-11-08-central-server-phase4e1-start-screen.md` (its roadmap, recorded decisions, the brief's map, conventions and the smoke coverage map apply here too), and its "Notes for 4e-2": 1–7 are covered in Tasks 1–2, 8 (M-3) in Task 4 (Decision 12), 9–10 in the Risks, and 11 (regenerate the hunks against the merged tree) is this revision.
+
+## Changes from the first draft
+
+The first draft was cut against a prototype of 4e-1. This revision was rebuilt on a fresh prototype from `24cd359` (4e-1 as merged, with its review fixes `a30bfb6`, `800ed21`, `48a1916`, `6ce035f`, `8eace66`), one commit per task; every hunk and script below comes from it, and every count is the one it gave. Text marked *Revised* changed in meaning; elsewhere only context lines, line numbers and counts moved.
+
+- **Baselines:** 1582 tests (1581 pass, 1 skipped), not 1571; the smokes as merged: `smoke:windows` 38 checks (was 26), `smoke:local-window` 55 (was 49), `smoke:providers` 36 (was 30); the others as before. The end count is 1587 (1582 + 5).
+- **Task 1:** `windows.ts` keeps 4e-1's `showStartView`; with `initial` now `{ server, menu }`, a menu asked for while the renderer loads is stored as `{ server: null, ...state.initial, menu }`, and `window:takeInitial` still hands `menu` over (the ⌘N/⌘O checks in `smoke:windows` cover it). `restoreWindows()` has no `emptyIfNone` (800ed21) and the hunks keep it that way. The comments 6ce035f put on `fileIsOpen`, `closeFileWindow` and `focusWindowHoldingFile` ("4e-2 deletes it") go with them. `git:localDirty` checks its argument with `appIpcRules.absolutePath`, as 6ce035f does for Reveal (it said "a non-empty string"). The moved `mcpRpc.ts` is shown as what changes after the `git mv` (its header comment and one import), not as a new file (a new-file patch does not apply over the moved file).
+- **Task 2:** App.tsx's one-shot start request (a30bfb6) is cleared on `serverWindow` alone, since the store's `project` is no longer read there. The hand-edit diff no longer repeats Step 1's `backendFeatures.test.mjs` hunks (they would not apply twice). Step 5 also runs `smoke:windows`, for the menu views through App.tsx.
+- **Task 3:** unchanged hunks; Step 3's grep is expected to print one comment (`terminalHost.ts`), which Task 6 rewords, not nothing.
+- **Task 4:** a new Step 3 (Decision 12, 4e-1 Note 8, M-3): the start screen ignores a menu view switch while `project.create` is in flight. `importer.ts`'s token hint reads "Open on server…" (6ce035f's wording). Step 4 also runs `smoke:windows`, `smoke:v2` and `smoke:local-app`, which reach the New Project dialog.
+- **Task 5:** the README hunks are merged with 8eace66's README (Open on Server… ⌘O, New Project… ⌘N, the `import` chip, the restore rule): its wording is kept where it already said what 4e-2 says.
+- **Risks:** 6–7 record 4e-1 Notes 9–10.
 
 ---
 
@@ -41,18 +53,19 @@ As 4e-1's 1–5: adapt, then delete; the bot dormant, not deleted; Docker, env, 
 4. **The store's legacy half is the members nothing calls.** `setProject`, `addRepository`, `removeRepository`, `markSaved`, `setServers`, `setServerRepoPaths`, `setServerStatus`, `setWorktreeLoaded`, `setWorktreeSessions`, the project-level `dirty` flag and `filePath` go. The setters a server window overrides keep their original bodies: `installV2.leave()` restores them, and folding the overrides into the store is a refactor with no visible change, left out of this phase. Fields only the dormant bot or the v1 rows read (`botView`, `serverStatus`) stay.
 5. **`terminals.ts` keeps the server window's half**: the xterm entries, their v2 links, `attachTerminal`, `fitTerminal`, `writeTerminal`, `readTerminal`, `focusTerminal`, the tab helpers, `terminalLabel`, `revealTerminal` and the sync. Its pty IPC, the client-side status heuristics, Codex discovery, the launch builders, load/unload and the Global session launchers go (the server does all of it). `Entry.v2` becomes required.
 6. **An empty window's backend is `idleBackend`** (`kind: 'idle'`, `NO_FEATURES`, every action rejects "No project is open in this window"). Nothing calls it: the components that act on a project render only in a server window. `settingsSections(features)` loses its `kind` argument, and the `remoteHosts` section (the Servers panel) goes.
-7. **A Local window's fresh dirty check gets its own IPC** (4e-1 Note 3): `git:localDirty` in `appIpc.ts` (`gitService.worktreeStatuses` on one path, `null` when unreadable), `window.api.localWorktreeDirty`. `smoke:local-features` writes a file just before the delete and checks the uncommitted-changes question (34 → 35 checks).
-8. **What else leaves the renderer with the legacy backend:** WorktreeDetail's Promote and Move to… items (they called `worktreeActions`; the features are off until phase 5), AddWorktreeModal's v1 Location picker, LlmPicker's local "is the command installed" probe (`agents:commandExists`; a server window asks the server, `server.agents`), Settings' Servers panel, App.tsx's file-window branch, title, Save Project and the MCP call handler. A window's close request is answered at once (a server window has nothing to save).
+7. **A Local window's fresh dirty check gets its own IPC** (4e-1 Note 3): `git:localDirty` in `appIpc.ts` (`gitService.worktreeStatuses` on one path, `null` when unreadable; *Revised:* the path must be absolute, by `appIpcRules.absolutePath`, as for Reveal), `window.api.localWorktreeDirty`. `smoke:local-features` writes a file just before the delete and checks the uncommitted-changes question (34 → 35 checks).
+8. **What else leaves the renderer with the legacy backend:** WorktreeDetail's Promote and Move to… items (they called `worktreeActions`; the features are off until phase 5), AddWorktreeModal's v1 Location picker, LlmPicker's local "is the command installed" probe (`agents:commandExists`; a server window asks the server, `server.agents`), Settings' Servers panel, App.tsx's file-window branch, title, Save Project and the MCP call handler. A window's close request is answered at once (a server window has nothing to save). *Revised:* App.tsx's one-shot start-screen request (4e-1's a30bfb6) is cleared once the window is a server window (`serverWindow`), as before minus the file-window `project`.
 9. **v1's refusal** is `4002` with the reason `UPGRADE_CLIENT` for any `protocolVersion` below 2, which the client SDK already reads as "upgrade this client"; `SUPPORTED_PROTOCOL_VERSIONS` is `[2]`. The shared wire types (`WireError*`, close codes, `RemoteRepo`, `PtyInfo`, `HelloFrame`/`ReqFrame`/`EventFrame`, the pty event payloads, `DEFAULT_DAEMON_PORT`) move into `protocolV2.ts`; `EventPayloadsV2` names its payloads directly instead of through `EventPayloadsV1`. The server smoke's v1 checks become one refusal check (bounded at 3 s, so it fails rather than hangs against a server that still serves v1) and one ported check (a prototype-named method is `NOT_FOUND` in v2); 77 → 70 `ok:` lines.
 10. **The splitter (4d Notes 7, 9):** `rekeyOrder` writes the normalized path it matched with; sessions folded into a main worktree are kept once per `agentSessionId` (the first one wins: the primary's, then the folded worktrees' in file order); `settingsOf` drops `bot`, so a crafted file cannot configure the bot when it returns.
 11. **`isLocalEntryId(id: unknown)`** in `src/shared/appServerRules.ts`, and every `=== LOCAL_ENTRY_ID` check in main and the renderer goes through it (4c Note 4); `LOCAL_ENTRY_ID` itself stays as the id main assigns.
+12. *Revised (new):* **A menu view switch waits for a create in flight** (4e-1 Note 8, M-3). ⌘O in the New Project view, or ⌘N in Open on server…, while `project.create` is in flight would unmount the dialog and drop its connection: the project created, not opened, no error. `NewServerProjectModal` counts its creates in flight (`createInFlight()`), and the start screen ignores a menu request meanwhile; once created, the project opens in the window anyway. Covered by the typecheck and the smokes that create projects; no smoke holds a create in flight.
 
 ## Conventions
 
 As 4e-1's, with these:
-- **Baseline:** 1571 tests (1570 pass, 1 skipped) at the end of 4e-1. Each task states the count it ends at.
+- **Baseline** (*Revised*): 4e-1 as merged, `24cd359`: 1582 tests (1581 pass, 1 skipped); `smoke:v2` 170 checks, `smoke:local-app` 45, `smoke:local-window` 55, `smoke:local-features` 34, `smoke:providers` 36, `smoke:windows` 38, `smoke:import` 62, `smoke:local` 85, the server smoke 77 `ok:` lines. Each task states the counts it ends at.
 - **Scripted deletions.** Task 2's edits to `terminals.ts`, `store.ts`, `preload/index.ts` and the components' `scheduleAutoSave()` calls are mostly whole functions and members removed; they are given as Python scripts that do exactly that (run from the repo root, on the tree as Task 1 leaves it), followed by a unified diff of the hand edits. The scripts and the diff together reproduce the prototype's commit byte for byte: that was checked by replaying them on Task 1's commit and diffing the tree against the prototype's (no difference).
-- **Provenance.** As 4e-1: every hunk comes from the prototype, one commit per task, each passing the typecheck, the tests and the smokes named. Task 6's complete run (every smoke, a clean checkout, a packaged run) passed on the last commit.
+- **Provenance.** As 4e-1: every hunk comes from the prototype, branched from `24cd359`, one commit per task, each passing the typecheck, the tests and the smokes named. Task 6's complete run (every smoke, a clean checkout, a packaged run) passed on the last commit. The plan's blocks, replayed in order on `24cd359`, give each task's prototype tree exactly.
 
 ## File map
 
@@ -72,11 +85,11 @@ As 4e-1's, with these:
 | `server/src/ptyRegistry.ts`, `server/src/rpc.ts` | 206 + 164 = 370 | 3 |
 | `src/shared/protocol.ts` | 224 (its shared half moves to `protocolV2.ts`) | 3 |
 
-**Surviving files' removals** (lines removed / added in the task): `terminals.ts` −882/+11, `store.ts` −167/+21, `preload/index.ts` −185/+1 (after Task 1 added 2), `backend.ts` −158/+43, `windows.ts` −160/+31, `server.ts` −39/+13, `backendFeatures.ts` −31/+10, `index.ts` −30/+1.
+**Surviving files' removals** (lines removed / added in the task): `terminals.ts` −882/+11, `store.ts` −167/+21, `preload/index.ts` −185/+1 (after Task 1 added 2), `backend.ts` −158/+43, `windows.ts` −164/+32, `server.ts` −39/+13, `backendFeatures.ts` −31/+10, `index.ts` −30/+1.
 
 **Created:** `src/main/legacyTokens.ts` (1), `src/renderer/src/localTeardown.ts` (2), `src/renderer/src/repoRemoval.ts` (2). **Moved:** `src/main/mcpRpc.ts` → `src/host/bot/mcpRpc.ts` (1). **Excluded, kept:** `src/main/bot.ts`, `src/renderer/src/bot.ts`, `src/renderer/src/components/BotPanel.tsx` (1).
 
-**Modified:** main's `index.ts`, `windows.ts`, `windowRules.ts`, `appIpc.ts`, `importRules.ts`, `importer.ts`, `appServers.ts`, `appServersRules.ts`, `v2relay.ts` (1, 4); `src/shared/types.ts`, `tsconfig.json` (1); the renderer's `App.tsx`, `main.tsx`, `backend.ts`, `backend.typecheck.ts`, `backendFeatures.ts`, `windowKind.ts`, `v2/installV2.ts`, `v2/applyProjection.ts`, `v2/windowState.ts`, `v2/backendV2.ts` and twelve components (1, 2, 4, 6); `src/shared/protocolV2.ts`, `src/shared/client/connection.ts`, `ptyStream.ts`, `src/shared/model/topics.ts`, `importProject.ts`, `appServerRules.ts` (3, 4); the server's `server.ts` and ten files that import the wire types (3); tests `windowRules`, `botMcpGate`, `backendFeatures`, `importProject`, `appServersRules`; smokes `local-features`, the server smoke (1–4); README.md, PROTOCOL.md, server/README.md, the spec (5).
+**Modified:** main's `index.ts`, `windows.ts`, `windowRules.ts`, `appIpc.ts`, `importRules.ts`, `importer.ts`, `appServers.ts`, `appServersRules.ts`, `v2relay.ts` (1, 4); `src/shared/types.ts`, `tsconfig.json` (1); the renderer's `App.tsx`, `main.tsx`, `backend.ts`, `backend.typecheck.ts`, `backendFeatures.ts`, `windowKind.ts`, `v2/installV2.ts`, `v2/applyProjection.ts`, `v2/windowState.ts`, `v2/backendV2.ts` and sixteen components, `StartScreen.tsx` and `NewServerProjectModal.tsx` among them (1, 2, 4, 6); `src/shared/protocolV2.ts`, `src/shared/client/connection.ts`, `ptyStream.ts`, `src/shared/model/topics.ts`, `importProject.ts`, `appServerRules.ts` (3, 4); the server's `server.ts` and ten files that import the wire types (3); tests `windowRules`, `botMcpGate`, `backendFeatures`, `importProject`, `appServersRules`; smokes `local-features`, the server smoke (1–4); README.md, PROTOCOL.md, server/README.md, the spec (5).
 
 ---
 ### Task 1: Main — delete `pty.ts`, `mcp.ts`, `hosts/`, `servers.ts`, `claudeSessions.ts`, `agents.ts`, `project.ts` and the file window kind; the bot dormant
@@ -88,7 +101,7 @@ As 4e-1's, with these:
 - Modify: `src/main/index.ts`, `src/main/windows.ts`, `src/main/windowRules.ts`, `src/main/importRules.ts`, `src/main/importer.ts`, `src/main/appIpc.ts`, `src/shared/types.ts`, `tsconfig.json`, `src/preload/index.ts`, `src/renderer/src/App.tsx`, `src/renderer/src/components/GlobalClaude.tsx`, `src/renderer/src/worktreeActions.ts`
 - Test: `scripts/windowRules.test.mjs`, `scripts/botMcpGate.test.mjs`, `scripts/local-features-smoke.mjs`
 
-Decisions 1–3 and 7. A window holds a `ServerTarget`; `window:takeInitial` hands over `{ menu, server, select }` (no `opened`); `window:projectChanged`, `dialog:closeUnsaved`, `dialog:closeSaveFailed`, Save Project and every `pty:*`, `git:*` (but `git:localDirty`), `claude:*`, `agents:*`, `server:*`, `mcp:*`, `bot:*` and `project:save` handler go.
+Decisions 1–3 and 7. A window holds a `ServerTarget`; `window:takeInitial` hands over `{ menu, server, select }` (no `opened`). *Revised:* 4e-1's `showStartView` stays: a menu view asked for while the renderer is still loading goes into `initial` (`{ server: null, ...state.initial, menu }`), which `window:takeInitial` hands over, as `smoke:windows`' ⌘N/⌘O checks expect; `window:projectChanged`, `dialog:closeUnsaved`, `dialog:closeSaveFailed`, Save Project and every `pty:*`, `git:*` (but `git:localDirty`), `claude:*`, `agents:*`, `server:*`, `mcp:*`, `bot:*` and `project:save` handler go.
 
 - [ ] **Step 1: The failing test**
 
@@ -156,7 +169,7 @@ export async function legacyTokenFor(serverId: string, entryUrl: string): Promis
 
 - [ ] **Step 3: The surviving files**
 
-The bot's gate, now in the bot's tree, and its test:
+The bot's gate, now in the bot's tree, and its test. *Revised:* after the `git mv`, only the header comment and the import of the handlers change:
 
 ```diff
 diff --git a/scripts/botMcpGate.test.mjs b/scripts/botMcpGate.test.mjs
@@ -173,149 +186,26 @@ index 58d8d7c..6e2111f 100644
  import { BotRunner } from '../src/host/bot/runner.ts'
  import { createBotFolder, loadState, saveState } from '../src/host/bot/memory.ts'
 diff --git a/src/host/bot/mcpRpc.ts b/src/host/bot/mcpRpc.ts
-new file mode 100644
-index 0000000..778032f
---- /dev/null
+--- a/src/host/bot/mcpRpc.ts
 +++ b/src/host/bot/mcpRpc.ts
-@@ -0,0 +1,131 @@
+@@ -1,7 +1,7 @@
+-// The JSON-RPC side of Trek's MCP server, and the bot's gate on every tools/call. Pure: the
+-// server (mcp.ts) passes in the tools, the bot's handlers and the way to reach the renderer.
 +// The JSON-RPC side of the desktop's MCP server, and the bot's gate on every tools/call (dormant
 +// until phase 5 ports the bot onto trek-server's MCP; the desktop's server, mcp.ts, is gone). Pure.
-+
+ 
+-import type { BotMcpHandlers } from '../host/bot/mcpHandlers.ts'
 +import type { BotMcpHandlers } from './mcpHandlers.ts'
-+
-+export type { BotMcpHandlers }
-+
-+export interface RpcClient {
-+  windowId: number
-+  /** A bot turn's token. Session tokens are never gated: see gateBotCall. */
-+  bot: boolean
-+}
-+
-+export interface JsonRpcMessage {
-+  jsonrpc: '2.0'
-+  id?: string | number | null
-+  method?: string
-+  params?: Record<string, unknown>
-+}
-+
-+export interface ToolText {
-+  text: string
-+  isError: boolean
-+}
-+
-+export interface RpcDeps {
-+  tools: { name: string }[]
-+  /** Offered to bot tokens only. Each is answered by the bot's handlers, never the renderer. */
-+  botTools: { name: string }[]
-+  handlers: BotMcpHandlers | null
-+  serverInfo: { name: string; version: string }
-+  instructions: string
-+  supportedVersions: string[]
-+  callRenderer: (name: string, args: Record<string, unknown>) => Promise<{ ok: boolean; result?: unknown; error?: string }>
-+}
-+
-+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-+  typeof value === 'object' && value !== null && !Array.isArray(value) &&
-+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
-+
-+/**
-+ * The bot's gate on a known tool: `null` lets the call go on to the renderer; anything else is the
-+ * answer. Runs on every call with a bot token, since the token is in the bot's environment and its
-+ * shell can call this server directly: skipping the CLI's hook gains nothing.
-+ *
-+ * A session token (a worktree or Global session) is never gated, by design: those sessions run
-+ * outside the bot's policy, and Trek's tools are theirs to use. Their tokens stay out of every
-+ * process's environment and argv (they are read from 0600 files), so the bot can't borrow one.
-+ */
-+export function gateBotCall(
-+  handlers: BotMcpHandlers | null,
-+  client: RpcClient,
-+  name: string,
-+  args: Record<string, unknown>,
-+  botTools: { name: string }[] = []
-+): ToolText | null {
-+  if (!client.bot) return null
-+  if (!handlers) return { text: 'The bot is not running', isError: true }
-+  let gate: { allowed: boolean; reason: string }
-+  try {
-+    gate = handlers.toolCall(client.windowId, name, args)
-+  } catch (err) {
-+    gate = { allowed: false, reason: String(err) }
-+  }
-+  if (!gate || gate.allowed !== true) return { text: gate?.reason ?? 'Refused', isError: true }
-+  if (!botTools.some((t) => t.name === name)) return null
-+  try {
-+    // The runner words this: end the turn, or run the call now if it is already approved.
-+    return { text: handlers.requestApproval(client.windowId, args), isError: false }
-+  } catch (err) {
-+    return { text: String(err), isError: true }
-+  }
-+}
-+
-+/** One message; null for a notification, which gets no reply and runs nothing. */
-+export async function handleMessage(msg: JsonRpcMessage, client: RpcClient, deps: RpcDeps): Promise<object | null> {
-+  const isRequest = msg?.id !== undefined && msg?.id !== null
-+  const reply = (result: object): object => ({ jsonrpc: '2.0', id: msg.id, result })
-+  const fail = (code: number, message: string): object => ({
-+    jsonrpc: '2.0',
-+    id: msg.id ?? null,
-+    error: { code, message }
-+  })
-+  const text = (answer: ToolText): object => reply({ content: [{ type: 'text', text: answer.text }], isError: answer.isError })
-+  if (!isRequest) return null
-+
-+  switch (msg.method) {
-+    case 'initialize': {
-+      const requested = msg.params?.protocolVersion
-+      const protocolVersion =
-+        typeof requested === 'string' && deps.supportedVersions.includes(requested) ? requested : deps.supportedVersions[0]
-+      return reply({
-+        protocolVersion,
-+        capabilities: { tools: {} },
-+        serverInfo: deps.serverInfo,
-+        instructions: deps.instructions
-+      })
-+    }
-+    case 'ping':
-+      return reply({})
-+    case 'tools/list':
-+      return reply({ tools: client.bot ? [...deps.tools, ...deps.botTools] : deps.tools })
-+    case 'tools/call': {
-+      const name = msg.params?.name
-+      const known = typeof name === 'string' && [...deps.tools, ...(client.bot ? deps.botTools : [])].some((t) => t.name === name)
-+      if (!known) return fail(-32602, `Unknown tool: ${String(name)}`)
-+      const given = msg.params?.arguments ?? {}
-+      if (!isPlainObject(given)) return fail(-32602, 'Tool arguments must be an object')
-+      const args = given
-+      const gated = gateBotCall(deps.handlers, client, name, args, deps.botTools)
-+      if (gated) return text(gated)
-+      if (deps.botTools.some((t) => t.name === name)) return fail(-32602, `Unknown tool: ${name}`)
-+      const response = await deps.callRenderer(name, args)
-+      return text({
-+        text: response.ok ? JSON.stringify(response.result ?? null, null, 2) : (response.error ?? 'Unknown error'),
-+        isError: !response.ok
-+      })
-+    }
-+    default:
-+      return fail(-32601, `Method not found: ${String(msg.method)}`)
-+  }
-+}
-+
-+/** A request body: one message or a batch. Null when nothing needs a reply (send 202). */
-+export async function handleBody(body: unknown, client: RpcClient, deps: RpcDeps): Promise<object | null> {
-+  const batch = Array.isArray(body)
-+  const messages = (batch ? body : [body]) as JsonRpcMessage[]
-+  const replies = (await Promise.all(messages.map((m) => handleMessage(m, client, deps)))).filter(Boolean) as object[]
-+  if (replies.length === 0) return null
-+  return batch ? replies : replies[0]
-+}
+ 
+ export type { BotMcpHandlers }
+ 
 ```
 
 The window kind, the menu and the registrations:
 
 ```diff
 diff --git a/src/main/importRules.ts b/src/main/importRules.ts
-index 8ed0ed8..af7e3aa 100644
+index fb1d616..70aeddc 100644
 --- a/src/main/importRules.ts
 +++ b/src/main/importRules.ts
 @@ -7,7 +7,7 @@ import { sessionMigrates } from '../shared/providers/selection.ts'
@@ -343,7 +233,7 @@ index 8ed0ed8..af7e3aa 100644
    }
    return { windows, files }
 diff --git a/src/main/importer.ts b/src/main/importer.ts
-index e27c5eb..a24bf0f 100644
+index 5bbda79..90cee0b 100644
 --- a/src/main/importer.ts
 +++ b/src/main/importer.ts
 @@ -19,7 +19,7 @@ import { projectDir } from '../host/claudeSessionService'
@@ -356,7 +246,7 @@ index e27c5eb..a24bf0f 100644
  import { rewriteRecentsForImport } from './recents'
  import {
 diff --git a/src/main/index.ts b/src/main/index.ts
-index 33090b3..6c87946 100644
+index 05d87e3..5fa820b 100644
 --- a/src/main/index.ts
 +++ b/src/main/index.ts
 @@ -7,8 +7,6 @@ function setDockIcon(): void {
@@ -388,7 +278,7 @@ index 33090b3..6c87946 100644
  import { registerLlmHandlers } from './llmSettings'
  import { fixPath } from './env'
  import {
-@@ -124,12 +117,6 @@ function buildMenu(): void {
+@@ -125,12 +118,6 @@ function buildMenu(): void {
          },
          ...localServerMenu(),
          { type: 'separator' },
@@ -401,7 +291,7 @@ index 33090b3..6c87946 100644
          {
            label: 'New Terminal Tab',
            accelerator: 'CmdOrCtrl+T',
-@@ -166,10 +153,8 @@ function buildMenu(): void {
+@@ -167,10 +154,8 @@ function buildMenu(): void {
  app.whenReady().then(async () => {
    // Must complete before anything spawns child processes (docker, git, ptys).
    await fixPath()
@@ -413,7 +303,7 @@ index 33090b3..6c87946 100644
    registerImportHandlers()
    registerGithubHandlers()
    registerLinearHandlers()
-@@ -177,8 +162,6 @@ app.whenReady().then(async () => {
+@@ -178,8 +163,6 @@ app.whenReady().then(async () => {
    registerDockerHandlers()
    registerEnvironmentHandlers()
    registerStackHandlers()
@@ -422,7 +312,7 @@ index 33090b3..6c87946 100644
    registerAppSettingsHandlers()
    // Before the links: their first connections are linked to the aggregator as they are made.
    registerAttentionHandlers()
-@@ -186,10 +169,7 @@ app.whenReady().then(async () => {
+@@ -187,10 +170,7 @@ app.whenReady().then(async () => {
    registerAppServerHandlers({ linked: attention.linked, unlinked: attention.unlinked, listChanged: attention.relabel })
    registerV2Relay()
    registerLocalServerHandlers()
@@ -433,7 +323,7 @@ index 33090b3..6c87946 100644
    registerLlmHandlers()
    buildMenu()
    onLocalServerChanged(buildMenu)
-@@ -210,13 +190,7 @@ app.whenReady().then(async () => {
+@@ -213,13 +193,7 @@ app.whenReady().then(async () => {
    })
  })
  
@@ -447,7 +337,7 @@ index 33090b3..6c87946 100644
    // A quit in progress finishes on its own once closeAllForQuit returns.
    if (process.platform !== 'darwin' && !isQuitting()) app.quit()
  })
-@@ -235,11 +209,8 @@ app.on('before-quit', (event) => {
+@@ -238,11 +212,8 @@ app.on('before-quit', (event) => {
    if (isQuitting()) return
    void closeAllForQuit().then(async (closed) => {
      if (!closed) return
@@ -528,7 +418,7 @@ index 98f1f68..45fe49d 100644
  
  /**
 diff --git a/src/main/windows.ts b/src/main/windows.ts
-index 0ff9175..ddc213f 100644
+index 5c42c0c..a03a043 100644
 --- a/src/main/windows.ts
 +++ b/src/main/windows.ts
 @@ -1,13 +1,9 @@
@@ -573,7 +463,7 @@ index 0ff9175..ddc213f 100644
    /** The renderer is listening, so closing has to ask it first. */
    rendererReady: boolean
    /** A session to show, asked for while the renderer was still loading: handed over by window:takeInitial */
-@@ -66,40 +60,12 @@ interface WindowState {
+@@ -66,22 +60,8 @@ interface WindowState {
  
  const windows = new Map<number, WindowState>()
  
@@ -593,11 +483,21 @@ index 0ff9175..ddc213f 100644
  export function windowHasProject(contents: WebContents): boolean {
 -  const state = windows.get(contents.id)
 -  return !!state && (state.target !== null || state.unsavedProject)
++  return windows.get(contents.id)?.target != null
+ }
+ 
+ /**
+@@ -92,26 +72,11 @@ export function showStartView(contents: WebContents, view: NonNullable<InitialWi
+   const state = windows.get(contents.id)
+   if (!state) return
+   if (state.rendererReady) contents.send(`menu:${view}`)
+-  else state.initial = { ...(state.initial ?? initialFromTarget(null)), menu: view }
 -}
 -
+-/** Whether a file window holds `filePath`. 4e-2 deletes it with the file windows. */
 -export function fileIsOpen(filePath: string): boolean {
 -  return windowHoldingFile(filePath) !== undefined
-+  return windows.get(contents.id)?.target != null
++  else state.initial = { server: null, ...state.initial, menu: view }
  }
  
 -function windowHolding(target: WindowTarget): WindowState | undefined {
@@ -617,7 +517,7 @@ index 0ff9175..ddc213f 100644
  }
  
  export function focusWindow(win: BrowserWindow): void {
-@@ -110,8 +76,8 @@ export function focusWindow(win: BrowserWindow): void {
+@@ -122,8 +87,8 @@ export function focusWindow(win: BrowserWindow): void {
  
  /**
   * The focused window, for attention's notifications: its webContents id and the
@@ -628,7 +528,7 @@ index 0ff9175..ddc213f 100644
   */
  export function focusedWindowTarget(): {
    webContentsId: number
-@@ -123,7 +89,7 @@ export function focusedWindowTarget(): {
+@@ -135,7 +100,7 @@ export function focusedWindowTarget(): {
    const target = state.target
    return {
      webContentsId: state.id,
@@ -637,7 +537,7 @@ index 0ff9175..ddc213f 100644
    }
  }
  
-@@ -134,7 +100,7 @@ export function focusedWindowTarget(): {
+@@ -146,7 +111,7 @@ export function focusedWindowTarget(): {
   * Not recorded as a recent: the user did not pick the project.
   */
  export function showServerSession(serverEntryId: string, projectId: string, select: SessionSelect): void {
@@ -646,7 +546,7 @@ index 0ff9175..ddc213f 100644
    const holder = windowHolding(target)
    switch (routeSelect(holder)) {
      case 'send':
-@@ -160,7 +126,7 @@ export function showServerSession(serverEntryId: string, projectId: string, sele
+@@ -172,7 +137,7 @@ export function showServerSession(serverEntryId: string, projectId: string, sele
   */
  export async function openServerTarget(
    sender: WebContents | null,
@@ -655,13 +555,14 @@ index 0ff9175..ddc213f 100644
    name: unknown,
    serverName: unknown,
    opts: { bounds?: WindowBounds; announce?: boolean } = {}
-@@ -202,35 +168,13 @@ export async function openServerTarget(
+@@ -214,37 +179,13 @@ export async function openServerTarget(
    }
  }
  
 -/**
-- * Asks the file window holding `filePath`, if any, to close (its renderer offers to save first),
-- * before an import reads the file. `closed` false: the user kept it open. `bounds` are its own.
+- * Asks the file window holding `filePath`, if any, to close (its renderer offers to save first).
+- * `closed` false: the user kept it open. `bounds` are its own. Unused since 4e-1: an import no
+- * longer closes a file window first (none opens), and 4e-2 deletes this with the file windows.
 - */
 -export async function closeFileWindow(filePath: string): Promise<{ closed: boolean; bounds?: WindowBounds }> {
 -  const holder = windowHoldingFile(filePath)
@@ -671,6 +572,7 @@ index 0ff9175..ddc213f 100644
 -  return { closed: await requestClose(holder), bounds }
 -}
 -
+-/** Unused since 4e-1 (a .trekproj only imports); 4e-2 deletes it with the file windows. */
 -export function focusWindowHoldingFile(filePath: string): void {
 -  const holder = windowHoldingFile(filePath)
 -  if (holder) focusWindow(holder.win)
@@ -693,7 +595,7 @@ index 0ff9175..ddc213f 100644
  const RENDERER_DIR = join(__dirname, '../renderer')
  
  /**
-@@ -256,7 +200,7 @@ function guardNavigation(contents: WebContents): void {
+@@ -270,7 +211,7 @@ function guardNavigation(contents: WebContents): void {
  }
  
  export function createWindow(
@@ -702,7 +604,7 @@ index 0ff9175..ddc213f 100644
  ): BrowserWindow {
    const win = new BrowserWindow({
      width: 1400,
-@@ -280,10 +224,8 @@ export function createWindow(
+@@ -294,10 +235,8 @@ export function createWindow(
    const state: WindowState = {
      win,
      id: win.webContents.id,
@@ -715,7 +617,7 @@ index 0ff9175..ddc213f 100644
      rendererReady: false,
      pendingSelect: null,
      prompts: 0,
-@@ -299,9 +241,6 @@ export function createWindow(
+@@ -313,9 +252,6 @@ export function createWindow(
    })
    win.on('closed', () => {
      windows.delete(state.id)
@@ -725,7 +627,7 @@ index 0ff9175..ddc213f 100644
      clearCloseTimer(state)
      state.closing?.settle(true)
      state.closing = null
-@@ -391,7 +330,7 @@ function requestClose(state: WindowState): Promise<boolean> {
+@@ -405,7 +341,7 @@ function requestClose(state: WindowState): Promise<boolean> {
  // ---- Quitting --------------------------------------------------------------
  
  /** While set, closing a window keeps its entry: the file describes the windows open at quit. */
@@ -734,7 +636,7 @@ index 0ff9175..ddc213f 100644
  
  export function isQuitting(): boolean {
    return quit !== null
-@@ -423,15 +362,15 @@ const openWindowsFile = (): string => join(app.getPath('userData'), 'open-window
+@@ -437,15 +373,15 @@ const openWindowsFile = (): string => join(app.getPath('userData'), 'open-window
  
  let persistTimer: ReturnType<typeof setTimeout> | null = null
  
@@ -753,7 +655,7 @@ index 0ff9175..ddc213f 100644
    if (RESTORE_DISABLED) return
    await writeFile(openWindowsFile(), JSON.stringify(entries.map(serializeOpenWindow), null, 2), 'utf8').catch((err) =>
      console.error('Could not record open windows', err)
-@@ -500,54 +439,21 @@ export async function restoreWindows(opts: { emptyIfNone?: boolean } = {}): Prom
+@@ -508,54 +444,21 @@ export async function restoreWindows(): Promise<number> {
  
  // ---- IPC -------------------------------------------------------------------
  
@@ -814,7 +716,7 @@ index 0ff9175..ddc213f 100644
    ipcMain.on('window:reportTitle', (event, name: unknown) => {
      const state = windows.get(event.sender.id)
      if (state && !state.win.isDestroyed()) state.win.setTitle(capLabel(name) || 'Trek Dev')
-@@ -556,9 +462,8 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
+@@ -564,9 +467,8 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
    // A server window gives up its project (Pick another project): it is an empty window again.
    ipcMain.handle('window:releaseTarget', (event): void => {
      const state = windows.get(event.sender.id)
@@ -825,7 +727,7 @@ index 0ff9175..ddc213f 100644
      if (!state.win.isDestroyed()) state.win.setTitle('Trek Dev')
      schedulePersist()
    })
-@@ -584,38 +489,4 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
+@@ -592,38 +494,4 @@ export function registerWindowHandlers(readProject: (path: string) => Promise<Op
      state.closing.settle(false)
      state.closing = null
    })
@@ -901,7 +803,7 @@ The fresh dirty check's own IPC (Decision 7), and the renderer's side of the bot
 
 ```diff
 diff --git a/src/main/appIpc.ts b/src/main/appIpc.ts
-index fab44d8..260acfb 100644
+index c7b46cc..6006899 100644
 --- a/src/main/appIpc.ts
 +++ b/src/main/appIpc.ts
 @@ -1,11 +1,13 @@
@@ -917,22 +819,23 @@ index fab44d8..260acfb 100644
  import type { RecentEntry } from '../shared/types'
 +import { worktreeStatuses } from '../host/gitService'
  import { getRecents, removeRecent } from './recents'
+ import { absolutePath, checkboxConfirmOptions, confirmOptions, editorPath, errorDialogText } from './appIpcRules'
  import { parseRecentRef } from './recentsRules'
- 
-@@ -113,6 +115,13 @@ export function registerAppIpc(): void {
+@@ -91,6 +93,14 @@ export function registerAppIpc(): void {
      }
    })
  
 +  // A Local server window's worktree, on this disk: null when git can't read it.
-+  ipcMain.handle('git:localDirty', async (_event, path: unknown): Promise<boolean | null> => {
-+    if (typeof path !== 'string' || !path) throw new Error('path must be a non-empty string')
++  ipcMain.handle('git:localDirty', async (_event, raw: unknown): Promise<boolean | null> => {
++    const path = absolutePath(raw)
++    if (!path) throw new Error('path must be an absolute path')
 +    const [status] = await worktreeStatuses([path])
 +    return status?.dirty ?? null
 +  })
 +
-   ipcMain.handle('app:revealInFinder', (_event, dirPath: string): void => {
-     shell.showItemInFolder(dirPath)
-   })
+   ipcMain.handle('app:revealInFinder', (_event, raw: unknown): void => {
+     const dirPath = absolutePath(raw)
+     if (!dirPath) throw new Error('dirPath must be an absolute path')
 diff --git a/src/preload/index.ts b/src/preload/index.ts
 index f5181d1..781a685 100644
 --- a/src/preload/index.ts
@@ -947,7 +850,7 @@ index f5181d1..781a685 100644
    worktreeStatuses: (serverId: string | null, worktreePaths: string[]): Promise<WorktreeStatus[]> =>
      ipcRenderer.invoke('git:worktreeStatuses', serverId, worktreePaths),
 diff --git a/src/renderer/src/App.tsx b/src/renderer/src/App.tsx
-index 1dc5a31..ca4fd79 100644
+index b89d068..8523f63 100644
 --- a/src/renderer/src/App.tsx
 +++ b/src/renderer/src/App.tsx
 @@ -10,7 +10,6 @@ import { Workspace } from './components/Workspace'
@@ -958,7 +861,7 @@ index 1dc5a31..ca4fd79 100644
  import { useLinearSync } from './linear'
  import { loadVoiceSettings } from './voice'
  import { loadLlmSettings, watchLlmSettings } from './llm'
-@@ -77,8 +76,6 @@ export default function App(): React.JSX.Element {
+@@ -81,8 +80,6 @@ export default function App(): React.JSX.Element {
        window.api.onMcpCall((request) => void handleMcpCall(request)),
        window.api.onWindowCloseRequest(() => void handleWindowCloseRequest()),
        watchWindowProject(),
@@ -967,7 +870,7 @@ index 1dc5a31..ca4fd79 100644
        // Before takeInitialWindowState: main sends selects once the window is listening.
        watchAttention()
      ]
-@@ -89,7 +86,7 @@ export default function App(): React.JSX.Element {
+@@ -93,7 +90,7 @@ export default function App(): React.JSX.Element {
    useEffect(() => {
      window.api
        .takeInitialWindowState()
@@ -976,7 +879,7 @@ index 1dc5a31..ca4fd79 100644
          if (server) {
            useAppStore.getState().setServerWindow(server)
            // Asked for while this window was loading: shown once the project is in.
-@@ -97,7 +94,6 @@ export default function App(): React.JSX.Element {
+@@ -101,7 +98,6 @@ export default function App(): React.JSX.Element {
            setBooted(true)
            return
          }
@@ -1062,7 +965,7 @@ index 8ec95ef..5e6e8ec 100644
 
 ```diff
 diff --git a/scripts/local-features-smoke.mjs b/scripts/local-features-smoke.mjs
-index 3a46a13..5f53c90 100644
+index a0407f5..0d17906 100644
 --- a/scripts/local-features-smoke.mjs
 +++ b/scripts/local-features-smoke.mjs
 @@ -16,7 +16,8 @@
@@ -1095,7 +998,7 @@ index 3a46a13..5f53c90 100644
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: no type errors; `# tests 1571`, `# pass 1570`, `# fail 0`.
+Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
 
 Run: `git grep -nE "from '\./(pty|project|mcp|mcpRpc|servers|claudeSessions|agents)'|hosts/" -- src/main ':!src/main/bot.ts'`
 
@@ -1103,7 +1006,7 @@ Expected: no output (`src/main/bot.ts` still imports `./mcp`: it is excluded).
 
 Run, one at a time: `node scripts/windows-smoke.mjs`, `node scripts/import-smoke.mjs`, `node scripts/local-features-smoke.mjs`
 
-Expected: `WINDOWS SMOKE PASS (26 checks)` (a renderer still calling `bot:attach` fails its "no console or page errors"), `IMPORT SMOKE PASS (62 checks)` (the v1 tokens through `legacyTokens.ts`), `LOCAL FEATURES SMOKE PASS (35 checks)`, with `ok   a fresh dirty check asks before the stack and the VM go: true`.
+Expected: `WINDOWS SMOKE PASS (38 checks)` (a renderer still calling `bot:attach` fails its "no console or page errors"; its ⌘N/⌘O checks cover `showStartView` and `takeInitial`'s `menu`), `IMPORT SMOKE PASS (62 checks)` (the v1 tokens through `legacyTokens.ts`), `LOCAL FEATURES SMOKE PASS (35 checks)`, with `ok   a fresh dirty check asks before the stack and the VM go: true`.
 
 - [ ] **Step 5: Commit**
 
@@ -1564,80 +1467,11 @@ Expected: `strip-autosave.py` prints the eleven components it changed; the other
 
 - [ ] **Step 4: The hand edits**
 
+*Revised:* without Step 1's test hunks, which the first draft repeated here.
+
 ```diff
-diff --git a/scripts/backendFeatures.test.mjs b/scripts/backendFeatures.test.mjs
-index 04001ba..f9314cc 100644
---- a/scripts/backendFeatures.test.mjs
-+++ b/scripts/backendFeatures.test.mjs
-@@ -3,7 +3,7 @@ import test from 'node:test'
- import assert from 'node:assert/strict'
- import {
-   FEATURE_NAMES,
--  LEGACY_FEATURES,
-+  NO_FEATURES,
-   SETTINGS_SECTIONS,
-   V2_FEATURES,
-   globalPanelMode,
-@@ -13,13 +13,13 @@ import {
- 
- test('both sets name exactly the known features', () => {
-   const names = [...FEATURE_NAMES].sort()
--  assert.deepEqual(Object.keys(LEGACY_FEATURES).sort(), names)
-+  assert.deepEqual(Object.keys(NO_FEATURES).sort(), names)
-   assert.deepEqual(Object.keys(V2_FEATURES).sort(), names)
-   assert.equal(new Set(FEATURE_NAMES).size, FEATURE_NAMES.length)
- })
- 
--test('a project file window keeps every feature', () => {
--  for (const name of FEATURE_NAMES) assert.equal(LEGACY_FEATURES[name], true, name)
-+test('an empty window has no feature (4e: no file windows)', () => {
-+  for (const name of FEATURE_NAMES) assert.equal(NO_FEATURES[name], false, name)
- })
- 
- test('a server window can have Linear, settings editing, the Global panel and the machine-local features', () => {
-@@ -37,14 +37,12 @@ test('v2 features are the ceiling AND the welcome capabilities; Linear and setti
-   assert.deepEqual(on(['mcp', 'docker', 'bot']), ['linear', 'settingsEdit', 'globalPanel'])
- })
- 
--test("the settings sections: a file window edits all; a server window hides this machine's and keeps the project's agents", () => {
--  const legacy = settingsSections('legacy', LEGACY_FEATURES)
--  assert.deepEqual(Object.keys(legacy), [...SETTINGS_SECTIONS])
--  for (const name of SETTINGS_SECTIONS) assert.equal(legacy[name], 'edit', name)
--  const v2 = settingsSections('v2', v2Features(['mcp']))
-+test("the settings sections: a server window hides this machine's and keeps the project's agents", () => {
-+  const v2 = settingsSections(v2Features(['mcp']))
-+  assert.deepEqual(Object.keys(v2), [...SETTINGS_SECTIONS])
-   const by = (mode) => SETTINGS_SECTIONS.filter((name) => v2[name] === mode)
-   // Linear's key is app-wide and it reads ticket ids only: shown on every server (4c).
--  assert.deepEqual(by('hidden'), ['voice', 'environments', 'remoteHosts'])
-+  assert.deepEqual(by('hidden'), ['voice', 'environments'])
-   assert.deepEqual(by('project'), ['agents'])
-   assert.deepEqual(by('edit'), [
-     'sessionMode',
-@@ -91,10 +89,10 @@ test('the machine-local features need both the Local entry and the `local` capab
-   assert.deepEqual(any(['mcp'], { localEntry: true }), [])
- })
- 
--test('a Local window also shows the environments; voice and the remote hosts stay hidden', () => {
--  const local = settingsSections('v2', v2Features(['mcp', 'local'], { localEntry: true }))
-+test('a Local window also shows the environments; voice stays hidden', () => {
-+  const local = settingsSections(v2Features(['mcp', 'local'], { localEntry: true }))
-   const hidden = SETTINGS_SECTIONS.filter((name) => local[name] === 'hidden')
--  assert.deepEqual(hidden, ['voice', 'remoteHosts'])
-+  assert.deepEqual(hidden, ['voice'])
-   assert.equal(local.environments, 'edit')
-   assert.equal(local.linear, 'edit')
-   assert.equal(local.agents, 'project')
-@@ -109,7 +107,6 @@ test('the same capabilities give the same object, so a React snapshot read is st
- })
- 
- test('the Global panel without its capability shows the sessions it has, read-only, and hides when there are none', () => {
--  assert.equal(globalPanelMode(LEGACY_FEATURES, 0), 'full')
-   assert.equal(globalPanelMode(v2Features(['mcp']), 0), 'full')
-   assert.equal(globalPanelMode(v2Features([]), 2), 'readOnly')
-   assert.equal(globalPanelMode(v2Features([]), 0), 'hidden')
 diff --git a/src/renderer/src/App.tsx b/src/renderer/src/App.tsx
-index ca4fd79..daec9be 100644
+index 8523f63..b386a65 100644
 --- a/src/renderer/src/App.tsx
 +++ b/src/renderer/src/App.tsx
 @@ -1,14 +1,9 @@
@@ -1665,7 +1499,18 @@ index ca4fd79..daec9be 100644
    const serverWindow = useAppStore((s) => s.serverWindow)
    /** The server project's name, reported by ServerProjectWindow. */
    const [serverTitle, setServerTitle] = useState<string | null>(null)
-@@ -38,7 +30,6 @@ export default function App(): React.JSX.Element {
+@@ -30,8 +22,8 @@ export default function App(): React.JSX.Element {
+   const showStart = (view: StartView): void => setStartRequest((r) => ({ view, n: (r?.n ?? 0) + 1 }))
+   // One-shot: once the window has a project, a later start screen (Pick another project) starts fresh.
+   useEffect(() => {
+-    if (project || serverWindow) setStartRequest(undefined)
+-  }, [project, serverWindow])
++    if (serverWindow) setStartRequest(undefined)
++  }, [serverWindow])
+   useLinearSync()
+ 
+   useEffect(() => {
+@@ -42,7 +34,6 @@ export default function App(): React.JSX.Element {
  
    useEffect(() => {
      const unsubscribes = [
@@ -1673,7 +1518,7 @@ index ca4fd79..daec9be 100644
        // Sent only to an empty window: main opens a new one otherwise.
        window.api.onMenu('new-project', () => showStart('new')),
        window.api.onMenu('open-on-server', () => showStart('connect')),
-@@ -46,10 +37,8 @@ export default function App(): React.JSX.Element {
+@@ -50,10 +41,8 @@ export default function App(): React.JSX.Element {
          const state = useAppStore.getState()
          // A server window offline: its commands wait for the connection. A missing worktree runs nothing.
          if (!state.project || !state.selected || state.serverOffline) return
@@ -1686,7 +1531,7 @@ index ca4fd79..daec9be 100644
          void getBackend().sessions.start(state.selected)
        }),
        window.api.onMenu('close-tab', () => {
-@@ -73,9 +62,8 @@ export default function App(): React.JSX.Element {
+@@ -77,9 +66,8 @@ export default function App(): React.JSX.Element {
          const state = useAppStore.getState()
          if (!state.project && !state.serverWindow) state.setServerWindow(server)
        }),
@@ -1698,7 +1543,7 @@ index ca4fd79..daec9be 100644
        // Before takeInitialWindowState: main sends selects once the window is listening.
        watchAttention()
      ]
-@@ -100,12 +88,12 @@ export default function App(): React.JSX.Element {
+@@ -104,12 +92,12 @@ export default function App(): React.JSX.Element {
        })
        .catch(async (err) => {
          setBooted(true)
@@ -1713,7 +1558,7 @@ index ca4fd79..daec9be 100644
  
    return (
      <div className="app">
-@@ -115,20 +103,7 @@ export default function App(): React.JSX.Element {
+@@ -119,20 +107,7 @@ export default function App(): React.JSX.Element {
        >
          <div className="title-side" />
          <span className="title-text">
@@ -1735,7 +1580,7 @@ index ca4fd79..daec9be 100644
          </span>
          <div className="title-side" />
        </header>
-@@ -139,11 +114,6 @@ export default function App(): React.JSX.Element {
+@@ -143,11 +118,6 @@ export default function App(): React.JSX.Element {
            projectId={serverWindow.projectId}
            onTitle={setServerTitle}
          />
@@ -2493,15 +2338,15 @@ index 6b9a931..43ed094 100644
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: no type errors; `# tests 1571`, `# pass 1570`, `# fail 0`.
+Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
 
 Run: `git grep -nE "window\.api\.(spawnPty|writePty|onPty|listWorktrees|worktreeStatuses|saveProject|connectServer|getMcpAccess|onMcpCall|bot[A-Z])" -- src/renderer ':!src/renderer/src/bot.ts' ':!src/renderer/src/components/BotPanel.tsx'`
 
 Expected: no output.
 
-Run, one at a time: `node scripts/local-window-smoke.mjs`, `HOME=$(mktemp -d) node scripts/v2-smoke.mjs`, `node scripts/local-features-smoke.mjs`
+Run, one at a time: `node scripts/local-window-smoke.mjs`, `HOME=$(mktemp -d) node scripts/v2-smoke.mjs`, `node scripts/local-features-smoke.mjs`, `node scripts/windows-smoke.mjs`
 
-Expected: `LOCAL WINDOW SMOKE PASS (49 checks)`, `V2 SMOKE PASS (170 checks)`, `LOCAL FEATURES SMOKE PASS (35 checks)`.
+Expected: `LOCAL WINDOW SMOKE PASS (55 checks)`, `V2 SMOKE PASS (170 checks)`, `LOCAL FEATURES SMOKE PASS (35 checks)`, `WINDOWS SMOKE PASS (38 checks)` (*Revised:* added for App.tsx's menu views and one-shot start request).
 
 - [ ] **Step 6: Commit**
 
@@ -3185,11 +3030,11 @@ index 5ae6a32..d63a52b 100644
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: no type errors; `# tests 1571`, `# pass 1570`, `# fail 0`.
+Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
 
 Run: `git grep -nE "shared/protocol['.]|ptyRegistry|'\./rpc'|PROTOCOL_VERSION\b" -- src server/src scripts server/scripts`
 
-Expected: no output.
+Expected (*Revised*): one line, the comment `server/src/sessions/terminalHost.ts:21:/** Pause when any attached client has more than this unsent (decision 10, as v1's ptyRegistry). */`, which Task 6 Step 2 rewords.
 
 Run, one at a time: `(cd server && node scripts/smoke.mjs --built)`, `node scripts/client-contract.mjs`, `node scripts/local-server-smoke.mjs`
 
@@ -3205,10 +3050,10 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "refacto
 ### Task 4: The splitter's gaps, the bot's settings, `isLocalEntryId`
 
 **Files:**
-- Modify: `src/shared/model/importProject.ts`, `src/shared/appServerRules.ts`, `src/main/importRules.ts`, `src/main/importer.ts`, `src/main/appServers.ts`, `src/main/appServersRules.ts`, `src/main/v2relay.ts`, `src/renderer/src/v2/installV2.ts`, `src/renderer/src/components/StartScreen.tsx`
+- Modify: `src/shared/model/importProject.ts`, `src/shared/appServerRules.ts`, `src/main/importRules.ts`, `src/main/importer.ts`, `src/main/appServers.ts`, `src/main/appServersRules.ts`, `src/main/v2relay.ts`, `src/renderer/src/v2/installV2.ts`, `src/renderer/src/components/StartScreen.tsx`, `src/renderer/src/components/NewServerProjectModal.tsx`
 - Test: `scripts/importProject.test.mjs`, `scripts/appServersRules.test.mjs`
 
-Decisions 10–11 (4d Notes 7–9; 4c Note 4).
+Decisions 10–12 (4d Notes 7–9; 4c Note 4; 4e-1 Note 8).
 
 - [ ] **Step 1: The failing tests**
 
@@ -3354,7 +3199,7 @@ index 0a9c7aa..071a08b 100644
  
  /** Test's refusal once its token is read, if the entry was removed or re-pointed meanwhile: that token goes nowhere. */
 diff --git a/src/main/importRules.ts b/src/main/importRules.ts
-index af7e3aa..b212ddc 100644
+index 70aeddc..e2aefce 100644
 --- a/src/main/importRules.ts
 +++ b/src/main/importRules.ts
 @@ -1,6 +1,6 @@
@@ -3375,7 +3220,7 @@ index af7e3aa..b212ddc 100644
    if (hit) return { kind: 'entry', entryId: hit.id, name: hit.name }
    if (hasUserInfo(server.url)) return { kind: 'unknown', label: server.name, why: 'its address has a user name or password in it, which Trek’s server list does not take' }
 diff --git a/src/main/importer.ts b/src/main/importer.ts
-index a24bf0f..5791b2e 100644
+index 90cee0b..b0207e1 100644
 --- a/src/main/importer.ts
 +++ b/src/main/importer.ts
 @@ -19,6 +19,7 @@ import { projectDir } from '../host/claudeSessionService'
@@ -3398,7 +3243,7 @@ index a24bf0f..5791b2e 100644
 @@ -183,7 +184,7 @@ async function entryFor(piece: ImportedProject, fileServers: ServerConfig[], opt
  /** Main's own connection to the entry, once connected. A missing or rejected token fails at once. */
  async function waitForLink(id: string, name: string, timeoutMs: number): Promise<RegisteredServer> {
-   const noToken = `${name} has no access token here: set it in Connect to server…, then open the file again to import this part`
+   const noToken = `${name} has no access token here: set it in Open on server…, then open the file again to import this part`
 -  if (id !== LOCAL_ENTRY_ID && !(await getAppServerToken(id))) throw new Error(noToken)
 +  if (!isLocalEntryId(id) && !(await getAppServerToken(id))) throw new Error(noToken)
    const deadline = Date.now() + timeoutMs
@@ -3427,7 +3272,7 @@ index b7c0f38..fb75a12 100644
      // the window closed, reloaded or crashed: then this token goes nowhere.
      // Removed meanwhile: final once written. Re-pointed meanwhile: transient, the next open reads
 diff --git a/src/renderer/src/components/StartScreen.tsx b/src/renderer/src/components/StartScreen.tsx
-index 313b255..86c75ab 100644
+index 5ba6a7d..c334e68 100644
 --- a/src/renderer/src/components/StartScreen.tsx
 +++ b/src/renderer/src/components/StartScreen.tsx
 @@ -4,7 +4,7 @@ import { errorText } from '../v2/errors'
@@ -3439,7 +3284,7 @@ index 313b255..86c75ab 100644
  import type { RecentEntry } from '../../../shared/types'
  
  export type StartView = 'home' | 'connect' | 'new'
-@@ -132,7 +132,7 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
+@@ -136,7 +136,7 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
                        <button disabled={busy} onClick={() => void openServerRecent(entry)}>
                          <span className="recent-name">
                            {entry.name || entry.projectId}
@@ -3532,7 +3377,72 @@ index 76ea994..b0a1cf6 100644
  }
 ```
 
-- [ ] **Step 3: Verify**
+- [ ] **Step 3: The start screen keeps its view while a project is created** (*Revised, new:* Decision 12)
+
+```diff
+diff --git a/src/renderer/src/components/NewServerProjectModal.tsx b/src/renderer/src/components/NewServerProjectModal.tsx
+index b7da209..d285d8a 100644
+--- a/src/renderer/src/components/NewServerProjectModal.tsx
++++ b/src/renderer/src/components/NewServerProjectModal.tsx
+@@ -27,6 +27,15 @@ interface Props {
+ /** How long Create waits for an added repo's `server` topic patch before it says so. */
+ const TOPIC_WAIT_MS = 5000
+ 
++/** `project.create` requests in flight in this window. */
++let createsInFlight = 0
++
++/**
++ * A create is in flight here: the start screen keeps its view meanwhile (a menu's view switch
++ * would unmount this dialog and drop the connection, leaving the project created but not opened).
++ */
++export const createInFlight = (): boolean => createsInFlight > 0
++
+ function baseName(p: string): string {
+   return p.replace(/\/+$/, '').split('/').pop() || p
+ }
+@@ -123,6 +132,7 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose,
+     creatingRef.current = true
+     setCreating(true)
+     setCreateError(null)
++    createsInFlight++
+     try {
+       const projectName = name.trim()
+       const { projectId } = await registered.connection.request('project.create', {
+@@ -135,6 +145,8 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose,
+       setCreateError(`Could not create the project: ${errorText(err)}`)
+       creatingRef.current = false
+       setCreating(false)
++    } finally {
++      createsInFlight--
+     }
+   }
+ 
+diff --git a/src/renderer/src/components/StartScreen.tsx b/src/renderer/src/components/StartScreen.tsx
+index c334e68..a09586f 100644
+--- a/src/renderer/src/components/StartScreen.tsx
++++ b/src/renderer/src/components/StartScreen.tsx
+@@ -3,6 +3,7 @@ import { baseName, useAppStore } from '../store'
+ import { errorText } from '../v2/errors'
+ import { ConnectServer, openServerProjectHere } from './ConnectServer'
+ import { NewProject } from './NewProject'
++import { createInFlight } from './NewServerProjectModal'
+ import { useAppServerLinks } from '../useAppServerLinks'
+ import { isLocalEntryId } from '../../../shared/appServerRules.ts'
+ import type { RecentEntry } from '../../../shared/types'
+@@ -26,8 +27,9 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
+   const { servers } = useAppServerLinks()
+   const serverNames = useMemo(() => (servers ? new Map(servers.map((s) => [s.id, s.name])) : null), [servers])
+ 
++  // Not while a project is being created here: the switch would drop it (4e-1 M-3).
+   useEffect(() => {
+-    if (request) setView(request.view)
++    if (request && !createInFlight()) setView(request.view)
+   }, [request])
+ 
+   // Again on coming back from another view, which may have opened (and so recorded) a server project.
+```
+
+- [ ] **Step 4: Verify**
 
 Run: `node --test scripts/importProject.test.mjs scripts/appServersRules.test.mjs`
 
@@ -3540,16 +3450,16 @@ Expected: `# pass 46`, `# fail 0`.
 
 Run: `npm run typecheck && npm test && npm run build`, then `git grep -n "[!=]== LOCAL_ENTRY_ID" -- src`
 
-Expected: `# tests 1576`, `# pass 1575`, `# fail 0` (1571 + 5); the grep prints only the line inside `isLocalEntryId` itself.
+Expected: `# tests 1587`, `# pass 1586`, `# fail 0` (1582 + 5); the grep prints only the line inside `isLocalEntryId` itself.
 
-Run: `node scripts/import-smoke.mjs`
+Run, one at a time: `node scripts/import-smoke.mjs`, `node scripts/windows-smoke.mjs`, `HOME=$(mktemp -d) node scripts/v2-smoke.mjs`, `node scripts/local-app-smoke.mjs`
 
-Expected: `IMPORT SMOKE PASS (62 checks)`.
+Expected: `IMPORT SMOKE PASS (62 checks)`, `WINDOWS SMOKE PASS (38 checks)` (the menu views, outside a create), `V2 SMOKE PASS (170 checks)` (New Project… on a test server) and `LOCAL APP SMOKE PASS (45 checks)` (New Project… on Local).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "fix(import): worktree order keys use the normalized path; a session saved twice on folded worktrees is imported once; a file's bot settings are not imported; every Local entry check goes through isLocalEntryId" -m "Co-Authored-By: <model trailer>" -- src scripts/importProject.test.mjs scripts/appServersRules.test.mjs
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "fix(import): worktree order keys use the normalized path; a session saved twice on folded worktrees is imported once; a file's bot settings are not imported; every Local entry check goes through isLocalEntryId; the start screen keeps its view while a project is being created (4e-1 M-3)" -m "Co-Authored-By: <model trailer>" -- src scripts/importProject.test.mjs scripts/appServersRules.test.mjs
 ```
 
 ---
@@ -3558,7 +3468,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "fix(imp
 **Files:**
 - Modify: `README.md`, `PROTOCOL.md`, `server/README.md`, `docs/superpowers/specs/2026-11-04-central-server-design.md`
 
-The README's Concepts describe projects on servers and the start screen (no project files, ⌘S, Open Project…, file windows, the Servers panel or main's `mcp.ts`/`pty.ts`); the bot section says it is dormant; Import says nothing opens when nothing lands, and that a window on an unimported file is not restored; Attention says the server computes the status and the app notifies; Development lists the smokes as they are. PROTOCOL.md's v1 half goes, keeping the transport, handshake, request and versioning sections v2 shares; its remaining "as in v1" references are spelled out. The spec records phase 4 as done.
+The README's Concepts describe projects on servers and the start screen (no project files, ⌘S, Open Project…, file windows, the Servers panel or main's `mcp.ts`/`pty.ts`); the bot section says it is dormant; Import says nothing opens when nothing lands, and that a window on an unimported file is not restored; Attention says the server computes the status and the app notifies; Development lists the smokes as they are. PROTOCOL.md's v1 half goes, keeping the transport, handshake, request and versioning sections v2 shares; its remaining "as in v1" references are spelled out. The spec records phase 4 as done. *Revised:* the README hunks start from 4e-1's README (8eace66), whose wording is kept where it already describes the start screen, ⌘N/⌘O, the `import` chip and the restore rule.
 
 - [ ] **Step 1: The edits**
 
@@ -3876,7 +3786,7 @@ index 09da18a..3aa9026 100644
  ## Several clients
  
 diff --git a/README.md b/README.md
-index 1b352a1..8c58c49 100644
+index 8339897..407aa26 100644
 --- a/README.md
 +++ b/README.md
 @@ -7,125 +7,80 @@ local models, across multiple git worktrees of a repository, side by side.
@@ -4075,7 +3985,7 @@ index 1b352a1..8c58c49 100644
  Every project bot turn runs in an OS sandbox (`sandbox-exec` on macOS, `bwrap` on
  Linux) that hides Trek's user-data directory from the bot's own processes. Each bot
  start first proves the sandbox works by trying to read a canary file. If the read
-@@ -163,12 +118,12 @@ which closes the "files that run later" gap, is the planned follow-up.
+@@ -163,7 +118,7 @@ which closes the "files that run later" gap, is the planned follow-up.
  
  ## Servers and server projects
  
@@ -4084,27 +3994,7 @@ index 1b352a1..8c58c49 100644
  keeps their worktrees and sessions running on that machine. A server window is a
  working window: its terminals, sessions and edits all go to the server, and every
  other window on that project sees them live.
- 
--- **Server list**: **Connect to server…** on the start screen opens the app-wide
-+- **Server list**: **Open on server…** on the start screen opens the app-wide
-   list of servers. **Add server** takes a name, a `ws://` or `wss://` URL and a token;
-   each server then has **Set token**, **Test**, **Edit** and **Remove**, and a dot
-   for its connection status. Plain `ws://` to anything but this machine is allowed
-@@ -199,7 +154,7 @@ other window on that project sees them live.
-   token or an incompatible server tries again when you focus it, so a token set in
-   another window takes. Closing the window asks
-   nothing, since the sessions keep running on the server. Server windows appear in
--  recents and come back on launch like file windows.
-+  recents and come back on launch.
- - **Working in a server window**: start, rename, close and restart sessions in
-   the server's terminals; queue prompts; answer and dismiss decisions; create,
-   delete, load and unload worktrees; pull, push and view changes; set tags,
-@@ -212,24 +167,25 @@ other window on that project sees them live.
- - **Machine-local features, in Local windows only**: a window on the [Local
-   server](#local-server) also has Docker, the per-worktree Colima environments
-   (and their variables), dev stacks, skills, Open in VS Code and Reveal in
--  Finder, as a project file window does, since its paths are this machine's.
-+  Finder, since its paths are this machine's.
+@@ -217,13 +172,14 @@ other window on that project sees them live.
    Deleting a worktree there also destroys its dev stack (if ticked) and its VM,
    after a fresh check for uncommitted changes. A window on a remote server shows
    none of these.
@@ -4115,49 +4005,36 @@ index 1b352a1..8c58c49 100644
  
  ## Importing a .trekproj
  
--Opening a `.trekproj` (File → Open Project…, a recent project, or the file from
+-Opening a `.trekproj` (a recent project on the start screen, or the file from
 -Finder) imports it: the part on this machine becomes a project on the Local
 +A `.trekproj` is the project file older Trek builds kept projects in. Trek no longer
-+opens one as a project: opening one (a recent project, or the file from Finder) imports
-+it: the part on this machine becomes a project on the Local
++opens one as a project: opening one (a recent project on the start screen, or the file
++from Finder) imports it: the part on this machine becomes a project on the Local
  server, and each part on a remote server becomes a project there, and their
  windows open. **File → Import .trekproj…** does the same, and can import a file
  again. On the first launch with Local, Trek offers once to import the files in
- your recent projects and the windows open at the last quit.
- 
--**Opening a `.trekproj` imports it without asking**, from Finder, a recent
--project or File → Open Project…: its part on this machine goes to Local, and
-+**Opening a `.trekproj` imports it without asking**, from Finder or a recent
-+project: its part on this machine goes to Local, and
- each remote part goes to a server you have already saved at that address. Only
- a server you have not saved is asked about. The project's settings come with
- it, so its agent command (`claudeCommand`, `llmDefault`) and the rest then apply
-@@ -247,10 +203,11 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
+@@ -248,9 +204,8 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
    and resume when loaded) and the project bot's folder do not.
  - Paths become their realpaths on the server. Claude's saved histories are copied
    (never moved) to them on Local, and a repository's VMs keep their names.
--- A file already open in a file window is just focused there, not imported.
--- A file opens as a project file window only if none of it could be imported
--  (the result offers **Open as File Window**, from File → Import too), or when
--  the Local server is off (`TREK_NO_LOCAL_SERVER=1`).
+-- A `.trekproj` only imports: it never opens as a project file window. If none
+-  of it could be imported, the result says why, with only **OK**; opening the
+-  file again tries again. With the Local server off (`TREK_NO_LOCAL_SERVER=1`)
 +- When none of a file could be imported, the result says what was left and why,
-+  and nothing opens; fix that and open the file again. With the Local server off
-+  (`TREK_NO_LOCAL_SERVER=1`), its part on this machine is left for that reason.
-+- A window left open on a `.trekproj` that was never imported does not come back
-+  at launch; the file stays in the recent projects, where opening it imports it.
- - Each import asks about adding a server once, however many of the file's
-   server ids share its address, and imports at most 20 remote parts of a file;
-   the rest are listed as not imported, and once any part of the file has landed,
-@@ -259,7 +216,7 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
++  with only **OK**, and nothing opens; opening the file again tries again. With the Local server off (`TREK_NO_LOCAL_SERVER=1`)
+   its part on this machine is left, with that reason.
+ - A window left on a file that was not imported does not come back at the next
+   launch; the file stays in your recent projects, marked **import**, and opening
+@@ -264,7 +219,7 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
  ## Local server
  
  Trek runs a trek-server of its own on this machine, the **Local** server. It is
--listed first under **Connect to server…**, and Trek starts it, finds it and
+-listed first under **Open on server…**, and Trek starts it, finds it and
 +listed first under **Open on server…** and **New Project…**, and Trek starts it, finds it and
- connects to it itself, so it needs no URL or token. New Project… on Local picks
- a folder on this machine.
+ connects to it itself, so it needs no URL or token. New Project… (on the start
+ screen, or File → New Project…, ⌘N) on Local picks a folder on this machine.
  
-@@ -306,13 +263,15 @@ highest-priority status of that worktree's sessions (pulsing green = working,
+@@ -311,13 +266,15 @@ highest-priority status of that worktree's sessions (pulsing green = working,
  orange = needs you, solid green = done, gray = idle, hollow ring = unloaded
  with saved sessions).
  
@@ -4177,17 +4054,24 @@ index 1b352a1..8c58c49 100644
  
  ## Development
  
-@@ -339,15 +298,25 @@ ignored (`dev`), and a packaged Trek ignores the variable.
+@@ -344,22 +301,26 @@ ignored (`dev`), and a packaged Trek ignores the variable.
  `TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it);
  only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
  
 -The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
 -older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
--`npm run smoke:multi` runs the two-repository end-to-end test, and
--`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs, and
+-the end-to-end smokes each build the app and drive it, with a temp user-data
+-directory:
+-`npm run smoke:local-window` works in a Local server window across two repositories,
+-`npm run smoke:windows` checks one window per project, the File menu's New Project…
+-and Open on Server…, and window restore,
+-`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs,
 -`npm run smoke:local-features` drives a Local server window's Docker, environments,
--stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`, and
--`npm run smoke:import` imports a `.trekproj` onto Local and a test server. Terminal
+-stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`,
+-`npm run smoke:import` imports a `.trekproj` onto Local and a test server,
+-`npm run smoke:local-app` starts and stops the app's Local server, and
+-`npm run smoke:v2` drives server windows against a test trek-server
+-(`smoke:local` and `smoke:client` test the server without the app). Terminal
 -PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
 -the attention heuristics and worktree load/unload live in the renderer
 -(`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only
@@ -4200,12 +4084,13 @@ index 1b352a1..8c58c49 100644
 +- `npm run smoke:v2`: server windows against a test trek-server (Open on server…,
 +  New Project…, sessions, settings, attention, disconnects);
 +- `npm run smoke:local-app`: the Local server supervisor, and New Project… on Local;
-+- `npm run smoke:local-window`: a Local window's sidebar, sessions, tags, notes,
-+  settings, Changes, unload and repository removal;
++- `npm run smoke:local-window`: a Local window across two repositories: its sidebar,
++  sessions, tags, notes, settings, Changes, unload and repository removal;
 +- `npm run smoke:local-features`: a Local window's Docker, environments, stacks,
 +  skills, VS Code and Reveal against stub `colima`, `docker` and `code`;
 +- `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
-+- `npm run smoke:windows`: one window per project, restore and the navigation guard;
++- `npm run smoke:windows`: one window per project, the File menu's New Project… and
++  Open on Server…, window restore and the navigation guard;
 +- `npm run smoke:import`: importing a `.trekproj` onto Local and a test server;
 +- `npm run smoke:local`, `npm run smoke:client` and `cd server && npm run smoke`: the
 +  server alone.
@@ -4393,7 +4278,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "chore: 
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: `# tests 1576`, `# pass 1575`, `# fail 0`, `# skipped 1`; the build ends with `out/server: trek-server 0.2.0, build <hash>`.
+Expected: `# tests 1587`, `# pass 1586`, `# fail 0`, `# skipped 1`; the build ends with `out/server: trek-server 0.2.0, build <hash>`.
 
 - [ ] **Step 4: Every smoke, one at a time**
 
@@ -4401,10 +4286,10 @@ Expected: `# tests 1576`, `# pass 1575`, `# fail 0`, `# skipped 1`; the build en
 |---|---|
 | `HOME=$(mktemp -d) node scripts/v2-smoke.mjs` | `V2 SMOKE PASS (170 checks)` |
 | `node scripts/local-app-smoke.mjs` | `LOCAL APP SMOKE PASS (45 checks)` |
-| `node scripts/local-window-smoke.mjs` | `LOCAL WINDOW SMOKE PASS (49 checks)` |
+| `node scripts/local-window-smoke.mjs` | `LOCAL WINDOW SMOKE PASS (55 checks)` |
 | `node scripts/local-features-smoke.mjs` | `LOCAL FEATURES SMOKE PASS (35 checks)` |
-| `node scripts/providers-smoke.mjs` | `PROVIDERS SMOKE PASS (30 checks)` |
-| `node scripts/windows-smoke.mjs` | `WINDOWS SMOKE PASS (26 checks)` |
+| `node scripts/providers-smoke.mjs` | `PROVIDERS SMOKE PASS (36 checks)` |
+| `node scripts/windows-smoke.mjs` | `WINDOWS SMOKE PASS (38 checks)` |
 | `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (62 checks)` |
 | `node scripts/local-server-smoke.mjs` | `LOCAL SMOKE PASS (85 checks)` |
 | `node scripts/client-contract.mjs` | `CLIENT CONTRACT PASS` |
@@ -4422,7 +4307,7 @@ npm run typecheck && npm test && npm run build && (cd server && npx tsc --noEmit
 node scripts/local-app-smoke.mjs
 ```
 
-Expected: `npm ci` ends `added 365 packages` (after the server's `added 10 packages` from `postinstall`); `# tests 1576`, `# pass 1575`; `out/server: trek-server 0.2.0, build <hash>`; `LOCAL APP SMOKE PASS (45 checks)`.
+Expected: `npm ci` ends `added 365 packages` (after the server's `added 10 packages` from `postinstall`); `# tests 1587`, `# pass 1586`; `out/server: trek-server 0.2.0, build <hash>`; `LOCAL APP SMOKE PASS (45 checks)`.
 
 - [ ] **Step 6: The packaged app runs the Local smokes**
 
@@ -4460,6 +4345,7 @@ Expected: no output.
 4. **`profileKey`** is data (4d Note 5): any code that builds a Colima profile name keeps using `envRepoKey`.
 5. **`server-tokens.json`, `legacyTokens.ts`, `serverTokenRules.ts`, `importProjectFile`, the splitter and `migration.ts`** go only when the import is retired.
 6. **`voice.ts` and `llmSettings.ts`** stay in main (voice is off in every window; the app-wide LLM settings feed only the Agents settings' app part, which a server window hides). Phase 5 moves voice to the server or drops it, and decides whether app-wide LLM defaults survive.
+7. **Comments that still describe file windows as a live alternative** remain in about 25 places (`SettingText`'s `live` mode, `attentionRules`, `notifications.ts`, `sessionSelect.ts`, `noteDrafts.ts`, `useEnvironmentPoll.ts`, …; `git grep -n "file window" -- src server/src`). Task 6 rewords only those that name a deleted module. The code paths behind some of them (`SettingText`'s `live`, the store's `serverStatus`) are dead in a server window; phase 5's store refactor (Note 2) is the time to drop them with their comments.
 
 ## Risks
 
@@ -4468,6 +4354,8 @@ Expected: no output.
 3. **The store keeps its overridden setters' original bodies** (Decision 4), which edit the project in memory only; a component that called one in an empty window would change nothing on any server. No component does: they render only in a server window.
 4. **The excluded bot files can rot** against the types they no longer check. They are kept for reading and porting, not for building, and phase 5 rewrites their wiring.
 5. **The packaged run signs with the developer identity** electron-builder finds (as `dist:dir` did in 4b); it is not notarized and not installed.
+6. *Revised (new):* **A late `open-file` at launch** (4e-1 Note 9, m-4): one that arrives after `opensReady = true`, while the pending loop still awaits, runs on its own and can race `index.ts`'s final `getAllWindows().length === 0` check, giving one extra empty window. Unchanged here; it needs Finder to send the event, so no smoke reaches it.
+7. *Revised (new):* **Paths no smoke covers** (4e-1 Note 10): `TREK_NO_LOCAL_SERVER` with a `.trekproj` (4e-1 Decision 14); a click on a recent `.trekproj` row (`smoke:import` calls `api.openProjectPath` directly); `keepFileRecents` at `MAX_RECENTS` (unit tests only); and a menu view switch during a create (Decision 12: no smoke holds `project.create` in flight).
 
 ## Questions for the user
 
@@ -4475,3 +4363,4 @@ None block this plan.
 
 1. **The bot's Electron wiring is excluded from the type-check** rather than kept compiling (Decision 3). If you would rather it keep compiling, it needs a small stand-in for the deleted desktop MCP server and the bot IPC.
 2. **The store's overridden setters** are left as they are (Decision 4, Note for phase 5 #2). Say if you want them folded in now.
+3. *Revised (new):* **A menu view switch during a create is ignored, not queued** (Decision 12): ⌘N or ⌘O pressed while a project is being created does nothing, and the new project then opens in the window. Say if you would rather the switch happen once the create returns.
