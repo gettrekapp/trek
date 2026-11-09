@@ -10,7 +10,7 @@
 5. **`smoke:import`** loses its fallback checks and gains launch 3 (a window left on an unimported file; the start screen's Import; two opens of one file at once: 4d M-1): 51 → 62 checks.
 
 **Architecture:**
-- **Main:** `src/main/appIpc.ts` (new) takes the handlers `project.ts` had that are not about project files. `importUi.ts` loses `LegacyOpen`: `importFromMenu(from?)`, `openTrekproj(sender, path)` and `openFromOs(path)` only import; `registerImportHandlers()` serves `project:import` (the start screen's button) and `project:openPath` (a recent `.trekproj`). `restoreWindows({ emptyIfNone })` reopens server windows only (`splitRestore`, pure) and keeps the files of the others in the recents (`keepFileRecents`, pure). `index.ts`'s File menu opens the start screen's views (`startView`).
+- **Main:** `src/main/appIpc.ts` (new) takes the handlers `project.ts` had that are not about project files. `importUi.ts` loses `LegacyOpen`: `importFromMenu(from?)`, `openTrekproj(sender, path)` and `openFromOs(path)` only import; `registerImportHandlers()` serves `project:import` (the start screen's button) and `project:openPath` (a recent `.trekproj`). `restoreWindows()` reopens server windows only (`splitRestore`, pure), keeps the files of the others in the recents (`keepFileRecents`, pure) and opens no empty window; `index.ts` runs the pending opens after it, then creates one empty window only if none exists (review fix 800ed21, which replaced the `emptyIfNone` option Task 6 shows). `index.ts`'s File menu opens the start screen's views (`startView`).
 - **Renderer:** `StartScreen.tsx` shows three views (`home`, `connect`, `new`); `components/NewProject.tsx` (new) is the server picker and the create flow, over `useServerTopic` and `openServerProjectHere`, both extracted from `ConnectServer.tsx`'s project list so the two views share one connection and open path. App.tsx switches the view on `menu:new-project` / `menu:open-on-server` and on a new window's initial `menu`.
 - **Nothing is deleted from `src/` here** but the fallback: file windows still exist in the code (the legacy store, backend, main's pty and git IPC), and only the smokes still reach them, through `__store.setProject`, until Task 8 retires those smokes. 4e-2 deletes them.
 
@@ -64,7 +64,7 @@
 13. **The cap and a file of which nothing lands** (4d Note 12): when parts were left over the cap, the result adds "Opening it again tries Local's part and the first 20 servers' again; the others only once one of those has landed." Kept as a statement rather than recording the cap's progress for a file of which nothing landed, which would make `migrated.json` record imports that made nothing.
 14. **`TREK_NO_LOCAL_SERVER`** no longer opens a file window: the import runs, and the Local part is left with "The Local server is turned off" (the importer's existing reason).
 15. **A window left on a `.trekproj` that was never imported is not restored** (4d Note 3), rather than handed to `openTrekproj` after the windows are up: the first-launch prompt already asked about those files once, and an import at every launch that the user skipped would nag. `restoreWindows` reopens the server windows (`splitRestore`), and keeps each other file that is still on disk in the recents (`keepFileRecents`: appended when missing and there is room, never reordering or pushing out an entry), where opening it imports it. With the Local server off nothing is mapped (4d M-5), so every file entry is kept that way.
-16. **No extra empty window for a launch `.trekproj`** (4d M-6): `restoreWindows({ emptyIfNone: pendingOpens.length === 0 })`, then the pending opens (in windows of their own), then one empty window only if nothing opened.
+16. **No extra empty window for a launch `.trekproj`** (4d M-6): `restoreWindows()` opens no empty window; then the pending opens (in windows of their own); then `index.ts` creates one empty window only if no window exists. (As built by review fix 800ed21; Task 6's `emptyIfNone` option was dropped.)
 17. `project:openPath` moves from `project.ts` to `importUi.registerImportHandlers()` (it validates its argument there), and returns nothing: a window it took hears `window:showServer`.
 
 **The smokes (Tasks 3–5, 7, 8)**
@@ -130,7 +130,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "<msg>" 
 |---|---|---|---|
 | `src/main/appIpc.ts` | create | 1 | the app's own IPC: folder picker, recents, focus, message boxes, alert sound, Reveal, VS Code |
 | `src/main/project.ts` | modify | 1, 6 | loses the app IPC (1); `openForSender`, `openLegacy`, `project:open`, `project:openPath` (6). Deleted in 4e-2 |
-| `src/main/index.ts` | modify | 1, 2, 6 | `registerAppIpc` (1); the File menu's views, `registerImportHandlers` (2); no legacy opens, `restoreWindows({ emptyIfNone })` (6) |
+| `src/main/index.ts` | modify | 1, 2, 6 | `registerAppIpc` (1); the File menu's views, `registerImportHandlers` (2); no legacy opens; `restoreWindows()`, the pending opens, then one empty window only if none exists (6, as fixed in 800ed21) |
 | `src/main/importUi.ts` | modify | 2, 6 | `importFromMenu(from?)`, `project:import` (2); no `LegacyOpen`; `project:openPath` (6) |
 | `src/main/importRules.ts` | modify | 6 | `splitRestore`; the result's "nothing was imported" and cap lines |
 | `src/main/recentsRules.ts`, `src/main/recents.ts` | modify | 6 | `keepFileRecents`, `keepRecentFiles` |
@@ -3081,6 +3081,8 @@ index 4ed35ce..313b255 100644
      }
 ```
 
+> **As built:** review fix 800ed21 replaced `emptyIfNone`. `restoreWindows()` takes no options and never creates an empty window; `index.ts` awaits it, sets `opensReady`, runs the pending opens, and then creates one window only if `BrowserWindow.getAllWindows()` is empty. So an `open-file` during the restore no longer gets an extra empty window.
+
 - [ ] **Step 4: `smoke:import` — the fallback checks out, launch 3 in**
 
 Launch 2's file of which nothing lands now gets an OK-only result and no window, from an open and from File → Import. Launch 3 seeds `open-windows.json` with a window on a fifth file never imported: it does not come back, the file is in the recents with the **import** chip, and the start screen's Import .trekproj… imports it into that window. (The count before the nothing-lands section waits for the third file's Local window, which an earlier retry opens in a window of its own.)
@@ -3452,7 +3454,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test: r
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: `# tests 1571`, `# pass 1570`, `# fail 0` (1566 + 5 in Task 6); the build ends with `out/server: trek-server 0.2.0, build <hash>`.
+Expected (as merged, with the final-review fixes): `# tests 1582`, `# pass 1581`, `# fail 0`, `# skipped 1` (1576 at 803538f, + 6 in `appIpcRules.test.mjs`); the build ends with `out/server: trek-server 0.2.0, build <hash>`.
 
 - [ ] **Step 2: Every smoke, one at a time**
 
@@ -3462,10 +3464,10 @@ Wait for each to exit before the next:
 |---|---|
 | `HOME=$(mktemp -d) node scripts/v2-smoke.mjs` | `V2 SMOKE PASS (170 checks)` |
 | `node scripts/local-app-smoke.mjs` | `LOCAL APP SMOKE PASS (45 checks)` |
-| `node scripts/local-window-smoke.mjs` | `LOCAL WINDOW SMOKE PASS (49 checks)` |
+| `node scripts/local-window-smoke.mjs` | `LOCAL WINDOW SMOKE PASS (55 checks)` |
 | `node scripts/local-features-smoke.mjs` | `LOCAL FEATURES SMOKE PASS (34 checks)` |
-| `node scripts/providers-smoke.mjs` | `PROVIDERS SMOKE PASS (30 checks)` |
-| `node scripts/windows-smoke.mjs` | `WINDOWS SMOKE PASS (26 checks)` |
+| `node scripts/providers-smoke.mjs` | `PROVIDERS SMOKE PASS (36 checks)` |
+| `node scripts/windows-smoke.mjs` | `WINDOWS SMOKE PASS (38 checks)` (32 at 803538f, + 6 File-menu checks: New Project… and Open on Server… from an empty window, from a project window, and in a window still loading) |
 | `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (62 checks)` |
 | `node scripts/local-server-smoke.mjs` | `LOCAL SMOKE PASS (85 checks)` |
 | `node scripts/client-contract.mjs` | `CLIENT CONTRACT PASS` |
@@ -3497,11 +3499,18 @@ Found while prototyping this plan.
 6. **`InitialWindowState.opened`** is always null now; it goes with the file window kind.
 7. **`server-tokens.json`** stays (4d Note 6): only `servers.ts` reads it today, and the importer needs `legacyTokenFor` after `servers.ts` is deleted.
 
+From the 4e-1 final review:
+
+8. **M-3: a menu view switch drops a create in flight.** ⌘O in the New Project view, or ⌘N in the connect view, while a `project.create` is in flight unmounts the view and drops its connection: the project is probably created but not opened, and no error is shown. A cheap fix is to ignore `menu:*` while a create is in flight.
+9. **m-4: a late `open-file` and the final no-window check.** An `open-file` that arrives after `opensReady = true`, while the pending loop still awaits, runs on its own and can race `index.ts`'s final `getAllWindows().length === 0` check: it can get one extra empty window.
+10. **Untested paths:** `TREK_NO_LOCAL_SERVER` with a `.trekproj` (Decision 14); the click on a recent `.trekproj` row (`smoke:import` calls `api.openProjectPath` directly); `keepFileRecents` at `MAX_RECENTS` (unit tests only).
+11. **The 4e-2 plan's hunks must be regenerated** against the merged tree before 4e-2 starts: the final-review fixes (`appIpcRules.ts`, `showStartView`, `openPieces` and `showImportResult` without their dead parameters, the comments in `windows.ts` and `importer.ts`, the README) moved its context lines.
+
 ## Risks
 
 1. **New Project… on a remote server** goes through the same `NewServerProjectModal` as the Projects list's, and `smoke:v2` covers that dialog; the picker's remote branch itself (Choose repositories…) is covered by the typecheck and a manual check, not a smoke, since `smoke:v2` reaches the dialog from the Projects list.
 2. **A user with unimported file windows open at the last quit, who skipped the first-launch prompt**, gets an empty window at launch instead of those projects; their files are in the recents (Decision 15). The README says so (4e-2 Task 5).
-3. **Finder's `open-file`** (and so M-6's fix) is not covered end to end: it needs the OS to send the event (4d Note 10). `restoreWindows`' `emptyIfNone` is covered by every smoke's launch with no pending file.
+3. **Finder's `open-file`** (and so M-6's fix) is not covered end to end: it needs the OS to send the event (4d Note 10). The final no-window check in `index.ts` (one empty window only if none exists after the restore and the pending opens) is covered by every smoke's launch with no pending file.
 4. **The rewritten smokes run a Local server each** (in the run's temp HOME, `local-dev` profile), and stop it at the end; a crashed run could leave one in that temp HOME. Task 9 Step 3 checks for leftovers.
 
 ## Questions for the user
