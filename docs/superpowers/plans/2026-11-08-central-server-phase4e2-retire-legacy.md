@@ -10,7 +10,7 @@
 5. **The splitter's known gaps** close (4d Notes 7–9): normalized worktree-order keys, one session per agent history after folding, no `bot` settings imported; every Local entry check goes through `isLocalEntryId` (4c Note 4); and the start screen keeps its view while a project is being created (4e-1 M-3).
 6. **Docs:** the README describes projects on servers and the start screen, without file windows, the Servers panel or v1; PROTOCOL.md drops v1; the spec records phase 4 as done.
 
-In all, 95 files change from `24cd359` (4e-1 as merged): +792 −7315 lines (`src/` and `server/src/`: 83 files, +518 −6887).
+In all, 95 files change from `24cd359` (4e-1 as merged): +792 −7315 lines (`src/` and `server/src/`: 83 files, +518 −6887). *Revised (the branch as implemented, at `8048b5c`, the plan itself left out):* 103 files, +968 −7524 (`src/` and `server/src/`: 90 files, +599 −7087); the difference is the review follow-ups (`87026a0`, `24423fd`, `f82e52a`) and Task 6's comments.
 
 **Architecture:**
 - **Stages, each green.** Main first (Task 1): IPC handlers can go while the renderer still calls them, since no file window can be opened (4e-1). The renderer and preload next (Task 2), then the server's v1 (Task 3), whose last client (main's `RemoteHost`) Task 1 deleted. Each task ends with the typecheck, the tests, the build and the smokes that cover what it touched.
@@ -32,6 +32,8 @@ The first draft was cut against a prototype of 4e-1. This revision was rebuilt o
 - **Task 4:** a new Step 3 (Decision 12, 4e-1 Note 8, M-3): the start screen ignores a menu view switch while `project.create` is in flight. `importer.ts`'s token hint reads "Open on server…" (6ce035f's wording). Step 4 also runs `smoke:windows`, `smoke:v2` and `smoke:local-app`, which reach the New Project dialog.
 - **Task 5:** the README hunks are merged with 8eace66's README (Open on Server… ⌘O, New Project… ⌘N, the `import` chip, the restore rule): its wording is kept where it already said what 4e-2 says.
 - **Risks:** 6–7 record 4e-1 Notes 9–10.
+- *Revised (as implemented):* **Task 1's follow-up** (`87026a0`, review of `0487d17`) adds a startup sweep of the deleted desktop MCP server's userData configs (`src/main/staleMcpConfigs.ts`, `staleMcpConfigRules.ts`, with `staleMcpConfigRules.test.mjs`'s 2 tests) and splits `smoke:local-features`' dirty check in two (the confirm built on a clean status, then the fresh check's order against the stack and the VM). So the tests are 1584 from Task 1 on and 1589 at the end (1582 + 2 + 5), and `smoke:local-features` is 36 checks, not 35. Every other count is the plan's.
+- *Revised (Task 6):* the full run on `8048b5c` gave the counts in Task 6; Risks 8–10 record two gaps found after Task 4 (the worktree order on moved paths, the create guard) and the one windows-smoke hang seen in Task 2.
 
 ---
 
@@ -53,7 +55,7 @@ As 4e-1's 1–5: adapt, then delete; the bot dormant, not deleted; Docker, env, 
 4. **The store's legacy half is the members nothing calls.** `setProject`, `addRepository`, `removeRepository`, `markSaved`, `setServers`, `setServerRepoPaths`, `setServerStatus`, `setWorktreeLoaded`, `setWorktreeSessions`, the project-level `dirty` flag and `filePath` go. The setters a server window overrides keep their original bodies: `installV2.leave()` restores them, and folding the overrides into the store is a refactor with no visible change, left out of this phase. Fields only the dormant bot or the v1 rows read (`botView`, `serverStatus`) stay.
 5. **`terminals.ts` keeps the server window's half**: the xterm entries, their v2 links, `attachTerminal`, `fitTerminal`, `writeTerminal`, `readTerminal`, `focusTerminal`, the tab helpers, `terminalLabel`, `revealTerminal` and the sync. Its pty IPC, the client-side status heuristics, Codex discovery, the launch builders, load/unload and the Global session launchers go (the server does all of it). `Entry.v2` becomes required.
 6. **An empty window's backend is `idleBackend`** (`kind: 'idle'`, `NO_FEATURES`, every action rejects "No project is open in this window"). Nothing calls it: the components that act on a project render only in a server window. `settingsSections(features)` loses its `kind` argument, and the `remoteHosts` section (the Servers panel) goes.
-7. **A Local window's fresh dirty check gets its own IPC** (4e-1 Note 3): `git:localDirty` in `appIpc.ts` (`gitService.worktreeStatuses` on one path, `null` when unreadable; *Revised:* the path must be absolute, by `appIpcRules.absolutePath`, as for Reveal), `window.api.localWorktreeDirty`. `smoke:local-features` writes a file just before the delete and checks the uncommitted-changes question (34 → 35 checks).
+7. **A Local window's fresh dirty check gets its own IPC** (4e-1 Note 3): `git:localDirty` in `appIpc.ts` (`gitService.worktreeStatuses` on one path, `null` when unreadable; *Revised:* the path must be absolute, by `appIpcRules.absolutePath`, as for Reveal), `window.api.localWorktreeDirty`. `smoke:local-features` writes a file just before the delete and checks the uncommitted-changes question (34 → 35 checks; *Revised:* 36 after Task 1's follow-up `87026a0`, which splits that check in two: the confirm was built on a clean status, and the fresh check asks before the stack and the VM go, by the dialogs' order).
 8. **What else leaves the renderer with the legacy backend:** WorktreeDetail's Promote and Move to… items (they called `worktreeActions`; the features are off until phase 5), AddWorktreeModal's v1 Location picker, LlmPicker's local "is the command installed" probe (`agents:commandExists`; a server window asks the server, `server.agents`), Settings' Servers panel, App.tsx's file-window branch, title, Save Project and the MCP call handler. A window's close request is answered at once (a server window has nothing to save). *Revised:* App.tsx's one-shot start-screen request (4e-1's a30bfb6) is cleared once the window is a server window (`serverWindow`), as before minus the file-window `project`.
 9. **v1's refusal** is `4002` with the reason `UPGRADE_CLIENT` for any `protocolVersion` below 2, which the client SDK already reads as "upgrade this client"; `SUPPORTED_PROTOCOL_VERSIONS` is `[2]`. The shared wire types (`WireError*`, close codes, `RemoteRepo`, `PtyInfo`, `HelloFrame`/`ReqFrame`/`EventFrame`, the pty event payloads, `DEFAULT_DAEMON_PORT`) move into `protocolV2.ts`; `EventPayloadsV2` names its payloads directly instead of through `EventPayloadsV1`. The server smoke's v1 checks become one refusal check (bounded at 3 s, so it fails rather than hangs against a server that still serves v1) and one ported check (a prototype-named method is `NOT_FOUND` in v2); 77 → 70 `ok:` lines; *Revised:* Task 3's follow-up adds a third (a v1 hello with a bad token is still 4002, not 4003, with no frame, under the same 3 s bound), so 71.
 10. **The splitter (4d Notes 7, 9):** `rekeyOrder` writes the normalized path it matched with; sessions folded into a main worktree are kept once per `agentSessionId` (the first one wins: the primary's, then the folded worktrees' in file order); `settingsOf` drops `bot`, so a crafted file cannot configure the bot when it returns.
@@ -65,7 +67,7 @@ As 4e-1's 1–5: adapt, then delete; the bot dormant, not deleted; Docker, env, 
 As 4e-1's, with these:
 - **Baseline** (*Revised*): 4e-1 as merged, `24cd359`: 1582 tests (1581 pass, 1 skipped); `smoke:v2` 170 checks, `smoke:local-app` 45, `smoke:local-window` 55, `smoke:local-features` 34, `smoke:providers` 36, `smoke:windows` 38, `smoke:import` 62, `smoke:local` 85, the server smoke 77 `ok:` lines. Each task states the counts it ends at.
 - **Scripted deletions.** Task 2's edits to `terminals.ts`, `store.ts`, `preload/index.ts` and the components' `scheduleAutoSave()` calls are mostly whole functions and members removed; they are given as Python scripts that do exactly that (run from the repo root, on the tree as Task 1 leaves it), followed by a unified diff of the hand edits. The scripts and the diff together reproduce the prototype's commit byte for byte: that was checked by replaying them on Task 1's commit and diffing the tree against the prototype's (no difference).
-- **Provenance.** As 4e-1: every hunk comes from the prototype, branched from `24cd359`, one commit per task, each passing the typecheck, the tests and the smokes named. Task 6's complete run (every smoke, a clean checkout, a packaged run) passed on the last commit. The plan's blocks, replayed in order on `24cd359`, give each task's prototype tree exactly.
+- **Provenance.** As 4e-1: every hunk comes from the prototype, branched from `24cd359`, one commit per task, each passing the typecheck, the tests and the smokes named. Task 6's complete run (every smoke, a clean checkout, a packaged run) passed on the last commit. *Revised:* on the branch as implemented (the prototype's commits plus the review follow-ups `87026a0`, `24423fd`, `f82e52a`), Task 6's run passed on `8048b5c`, its comment commit; the plan's own update after it changes only this file. The plan's blocks, replayed in order on `24cd359`, give each task's prototype tree exactly.
 
 ## File map
 
@@ -88,7 +90,7 @@ As 4e-1's, with these:
 
 **Surviving files' removals** (lines removed / added in the task): `terminals.ts` −882/+11, `store.ts` −167/+21, `preload/index.ts` −185/+1 (after Task 1 added 2), `backend.ts` −158/+43, `windows.ts` −164/+32, `server.ts` −39/+13, `backendFeatures.ts` −31/+10, `index.ts` −30/+1.
 
-**Created:** `src/main/legacyTokens.ts` (1), `src/renderer/src/localTeardown.ts` (2), `src/renderer/src/repoRemoval.ts` (2). **Moved:** `src/main/mcpRpc.ts` → `src/host/bot/mcpRpc.ts` (1). **Excluded, kept:** `src/main/bot.ts`, `src/renderer/src/bot.ts`, `src/renderer/src/components/BotPanel.tsx` (1).
+**Created:** `src/main/legacyTokens.ts` (1), `src/renderer/src/localTeardown.ts` (2), `src/renderer/src/repoRemoval.ts` (2); *Revised:* `src/main/staleMcpConfigs.ts`, `src/main/staleMcpConfigRules.ts` and `scripts/staleMcpConfigRules.test.mjs` (1, its follow-up `87026a0`). **Moved:** `src/main/mcpRpc.ts` → `src/host/bot/mcpRpc.ts` (1). **Excluded, kept:** `src/main/bot.ts`, `src/renderer/src/bot.ts`, `src/renderer/src/components/BotPanel.tsx` (1).
 
 **Modified:** main's `index.ts`, `windows.ts`, `windowRules.ts`, `appIpc.ts`, `importRules.ts`, `importer.ts`, `appServers.ts`, `appServersRules.ts`, `v2relay.ts` (1, 4); `src/shared/types.ts`, `tsconfig.json` (1); the renderer's `App.tsx`, `main.tsx`, `backend.ts`, `backend.typecheck.ts`, `backendFeatures.ts`, `windowKind.ts`, `v2/installV2.ts`, `v2/applyProjection.ts`, `v2/windowState.ts`, `v2/backendV2.ts` and sixteen components, `StartScreen.tsx` and `NewServerProjectModal.tsx` among them (1, 2, 4, 6); `src/shared/protocolV2.ts`, `src/shared/client/connection.ts`, `ptyStream.ts`, `src/shared/model/topics.ts`, `importProject.ts`, `appServerRules.ts` (3, 4); the server's `server.ts` and ten files that import the wire types (3); tests `windowRules`, `botMcpGate`, `backendFeatures`, `importProject`, `appServersRules`; smokes `local-features`, the server smoke (1–4); README.md, PROTOCOL.md, server/README.md, the spec (5).
 
@@ -999,7 +1001,7 @@ index a0407f5..0d17906 100644
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
+Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0` (*Revised:* 1584 and 1583 after the follow-up `87026a0`, with `staleMcpConfigRules.test.mjs`'s 2).
 
 Run: `git grep -nE "from '\./(pty|project|mcp|mcpRpc|servers|claudeSessions|agents)'|hosts/" -- src/main ':!src/main/bot.ts'`
 
@@ -1007,7 +1009,7 @@ Expected: no output (`src/main/bot.ts` still imports `./mcp`: it is excluded).
 
 Run, one at a time: `node scripts/windows-smoke.mjs`, `node scripts/import-smoke.mjs`, `node scripts/local-features-smoke.mjs`
 
-Expected: `WINDOWS SMOKE PASS (38 checks)` (a renderer still calling `bot:attach` fails its "no console or page errors"; its ⌘N/⌘O checks cover `showStartView` and `takeInitial`'s `menu`), `IMPORT SMOKE PASS (62 checks)` (the v1 tokens through `legacyTokens.ts`), `LOCAL FEATURES SMOKE PASS (35 checks)`, with `ok   a fresh dirty check asks before the stack and the VM go: true`.
+Expected: `WINDOWS SMOKE PASS (38 checks)` (a renderer still calling `bot:attach` fails its "no console or page errors"; its ⌘N/⌘O checks cover `showStartView` and `takeInitial`'s `menu`), `IMPORT SMOKE PASS (62 checks)` (the v1 tokens through `legacyTokens.ts`), `LOCAL FEATURES SMOKE PASS (35 checks)`, with `ok   a fresh dirty check asks before the stack and the VM go: true` (*Revised:* after `87026a0`, 36 checks, with `ok   the confirm was built on a clean status (the file came after): true` and `ok   a fresh dirty check asks before the stack and the VM go (seq): [true,true,true]`).
 
 - [ ] **Step 5: Commit**
 
@@ -2339,7 +2341,7 @@ index 6b9a931..43ed094 100644
 
 Run: `npm run typecheck && npm test && npm run build`
 
-Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
+Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0` (*Revised:* 1584 and 1583 on the branch, after Task 1's follow-up).
 
 Run: `git grep -nE "window\.api\.(spawnPty|writePty|onPty|listWorktrees|worktreeStatuses|saveProject|connectServer|getMcpAccess|onMcpCall|bot[A-Z])" -- src/renderer ':!src/renderer/src/bot.ts' ':!src/renderer/src/components/BotPanel.tsx'`
 
@@ -2347,7 +2349,7 @@ Expected: no output.
 
 Run, one at a time: `node scripts/local-window-smoke.mjs`, `HOME=$(mktemp -d) node scripts/v2-smoke.mjs`, `node scripts/local-features-smoke.mjs`, `node scripts/windows-smoke.mjs`
 
-Expected: `LOCAL WINDOW SMOKE PASS (55 checks)`, `V2 SMOKE PASS (170 checks)`, `LOCAL FEATURES SMOKE PASS (35 checks)`, `WINDOWS SMOKE PASS (38 checks)` (*Revised:* added for App.tsx's menu views and one-shot start request).
+Expected: `LOCAL WINDOW SMOKE PASS (55 checks)`, `V2 SMOKE PASS (170 checks)`, `LOCAL FEATURES SMOKE PASS (35 checks)` (*Revised:* 36 on the branch, after Task 1's follow-up), `WINDOWS SMOKE PASS (38 checks)` (*Revised:* added for App.tsx's menu views and one-shot start request).
 
 - [ ] **Step 6: Commit**
 
@@ -3031,7 +3033,7 @@ index 5ae6a32..d63a52b 100644
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
+Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0` (*Revised:* 1584 and 1583 on the branch, after Task 1's follow-up).
 
 Run: `git grep -nE "shared/protocol['.]|ptyRegistry|'\./rpc'|PROTOCOL_VERSION\b" -- src server/src scripts server/scripts`
 
@@ -3451,7 +3453,7 @@ Expected: `# pass 46`, `# fail 0`.
 
 Run: `npm run typecheck && npm test && npm run build`, then `git grep -n "[!=]== LOCAL_ENTRY_ID" -- src`
 
-Expected: `# tests 1587`, `# pass 1586`, `# fail 0` (1582 + 5); the grep prints only the line inside `isLocalEntryId` itself.
+Expected: `# tests 1587`, `# pass 1586`, `# fail 0` (1582 + 5; *Revised:* 1589 and 1588 on the branch, 1584 + 5); the grep prints only the line inside `isLocalEntryId` itself.
 
 Run, one at a time: `node scripts/import-smoke.mjs`, `node scripts/windows-smoke.mjs`, `HOME=$(mktemp -d) node scripts/v2-smoke.mjs`, `node scripts/local-app-smoke.mjs`
 
@@ -4265,7 +4267,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "chore: 
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: `# tests 1587`, `# pass 1586`, `# fail 0`, `# skipped 1`; the build ends with `out/server: trek-server 0.2.0, build <hash>`.
+Expected (*Revised:* the branch's counts, Task 1's follow-up included): `# tests 1589`, `# pass 1588`, `# fail 0`, `# skipped 1`; the build ends with `out/server: trek-server 0.2.0, build <hash>` (`105c9b7d7023` at `8048b5c`, the same in the clean checkout).
 
 - [ ] **Step 4: Every smoke, one at a time**
 
@@ -4274,7 +4276,7 @@ Expected: `# tests 1587`, `# pass 1586`, `# fail 0`, `# skipped 1`; the build en
 | `HOME=$(mktemp -d) node scripts/v2-smoke.mjs` | `V2 SMOKE PASS (170 checks)` |
 | `node scripts/local-app-smoke.mjs` | `LOCAL APP SMOKE PASS (45 checks)` |
 | `node scripts/local-window-smoke.mjs` | `LOCAL WINDOW SMOKE PASS (55 checks)` |
-| `node scripts/local-features-smoke.mjs` | `LOCAL FEATURES SMOKE PASS (35 checks)` |
+| `node scripts/local-features-smoke.mjs` | `LOCAL FEATURES SMOKE PASS (36 checks)` (*Revised:* 35 in the prototype; Task 1's follow-up split the dirty check) |
 | `node scripts/providers-smoke.mjs` | `PROVIDERS SMOKE PASS (36 checks)` |
 | `node scripts/windows-smoke.mjs` | `WINDOWS SMOKE PASS (38 checks)` |
 | `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (62 checks)` |
@@ -4294,7 +4296,7 @@ npm run typecheck && npm test && npm run build && (cd server && npx tsc --noEmit
 node scripts/local-app-smoke.mjs
 ```
 
-Expected: `npm ci` ends `added 365 packages` (after the server's `added 10 packages` from `postinstall`); `# tests 1587`, `# pass 1586`; `out/server: trek-server 0.2.0, build <hash>`; `LOCAL APP SMOKE PASS (45 checks)`.
+Expected: `npm ci` ends `added 365 packages` (after the server's `added 10 packages` from `postinstall`); `# tests 1589`, `# pass 1588` (*Revised*); `out/server: trek-server 0.2.0, build <hash>`; `LOCAL APP SMOKE PASS (45 checks)`.
 
 - [ ] **Step 6: The packaged app runs the Local smokes**
 
@@ -4306,7 +4308,7 @@ node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app
 node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app
 ```
 
-Expected: electron-builder ends with `signing file=dist/mac-arm64/Trek.app …` and `skipped macOS notarization`; `LOCAL SMOKE PASS (43 checks)`; `LOCAL APP SMOKE PASS (39 checks)`.
+Expected: electron-builder ends with `signing file=dist/mac-arm64/Trek.app …` and `skipped macOS notarization`; `LOCAL SMOKE PASS (43 checks)`; `LOCAL APP SMOKE PASS (39 checks)`. (The packaged app's processes are named `Trek`, not `Electron`: check for leftovers with `pgrep -fl "$CLEAN"`.)
 
 Then remove the clean checkout: `rm -rf "$(dirname "$CLEAN")"`.
 
@@ -4343,6 +4345,9 @@ Expected: no output.
 5. **The packaged run signs with the developer identity** electron-builder finds (as `dist:dir` did in 4b); it is not notarized and not installed.
 6. *Revised (new):* **A late `open-file` at launch** (4e-1 Note 9, m-4): one that arrives after `opensReady = true`, while the pending loop still awaits, runs on its own and can race `index.ts`'s final `getAllWindows().length === 0` check, giving one extra empty window. Unchanged here; it needs Finder to send the event, so no smoke reaches it.
 7. *Revised (new):* **Paths no smoke covers** (4e-1 Note 10): `TREK_NO_LOCAL_SERVER` with a `.trekproj` (4e-1 Decision 14); a click on a recent `.trekproj` row (`smoke:import` calls `api.openProjectPath` directly); `keepFileRecents` at `MAX_RECENTS` (unit tests only); and a menu view switch during a create (Decision 12: no smoke holds `project.create` in flight).
+8. *Revised (new):* **Worktree order on moved paths.** `worktreeOrder` keys are not rekeyed when the server moves a path (macOS's `/var` that the server reports as `/private/var`, say): `rekeyOrder` matches the file's paths, normalized, against the project as sent, while the importer reads the project back only for the session histories (`movedSessions`, which `carryHistories` follows on Local). So a moved worktree's place in the sidebar is lost on import; it falls back to the default order. This predates 4e (4d's splitter). Closing it means comparing every worktree's sent and stored path (as `movedSessions` does, but for every worktree, not only those with resumable sessions) and writing the rekeyed order back with `project.settings`.
+9. *Revised (new):* **The create guard lifts too early.** `createInFlight()` counts `project.create` only: the count drops once `onCreated` returns, while NewProject's `openServerProjectHere` is still in flight. A ⌘O (or ⌘N) in that gap switches the start screen's view and unmounts NewProject, so a failed open's error ("The project … was created, but could not be opened here") is set on an unmounted component and never seen; the project is created but not opened. Holding the count until the open settles (or NewProject reporting its `onOpening`) would close the gap. No smoke reaches it.
+10. *Revised (new, Task 2):* **One `smoke:windows` run hung.** During Task 2 one run stopped in an `app.evaluate` just after the `BrowserWindow.prototype.focus` patch ("opening alpha from beta’s window focuses alpha’s") until the watchdog fired, around the time of a network outage; the rerun passed and the cause was not found. Task 6's run (on `8048b5c`, watched for a stall of 40 s or more) passed in 10 s with no stall, and the OS reported `alpha` focused. If it happens again, sample the app's main process (`sample <pid> 5` on macOS, the `Electron … out/main/index.js --user-data-dir=…trek-windows-smoke-…` process) before the 240 s watchdog fires, and look for main blocked in `focus` (an `NSApp activate` waiting on the window server) versus idle with the evaluate's reply lost.
 
 ## Questions for the user
 
