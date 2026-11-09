@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { StackStatus } from '../../../shared/types'
-import { STACK_STATE_LABELS, stackState, stackUrls, stripAnsi } from '../stacks'
+import { STACK_STATE_LABELS, stackState, stackUrls, stripAnsi } from '../../../shared/stacks'
 import { getBackend } from '../backend'
 
 interface Props {

@@ -24,6 +24,9 @@ import type { ToolDefinition } from './protocol.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import type { VoiceService } from '../../../src/host/voiceService.ts'
 import { requireSpokenText } from '../integrations/integrationHandlers.ts'
+import type { Machine } from '../integrations/machineHandlers.ts'
+import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
+import type { StackStatus } from '../../../src/shared/types'
 
 const WORKTREE_PARAM = {
   type: 'string',
@@ -35,6 +38,9 @@ const SESSION_TYPE_PARAM = {
   type: 'string',
   description: 'Session type id or name (case-insensitive), as returned by list_session_types'
 }
+
+const STACK_DESCRIPTION =
+  "A worktree's dev stack is the repo's docker/stack/stack.sh, run on the Trek server's machine: its own docker compose project (trek-<name>), Trek_<name> database, Cosmos database and block of ports, running side by side with other worktrees' stacks."
 
 const LLM_PARAMS = {
   provider: {
@@ -298,6 +304,44 @@ export const MCP_TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'get_stack',
+    description: `${STACK_DESCRIPTION} Returns whether the worktree has one, its state (starting, running, stopping, stopped), running container count, ports and URLs (App, API, Admin).`,
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
+    name: 'start_stack',
+    description: `${STACK_DESCRIPTION} Starts it in the background (stack.sh up) and returns immediately; poll get_stack until state is running and read_stack_log for progress. A first start restores the database and can take minutes.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        starter: {
+          type: 'boolean',
+          description:
+            'Restore a new stack database from the starter dataset (a year of history) instead of the default slim one. Only matters for a stack whose database does not exist yet.'
+        }
+      },
+      required: ['worktree']
+    }
+  },
+  {
+    name: 'stop_stack',
+    description: `${STACK_DESCRIPTION} Stops it (stack.sh down): removes its containers but keeps its database for the next start. Waits until stopped.`,
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
+    name: 'read_stack_log',
+    description: `${STACK_DESCRIPTION} Returns the last lines of the stack.sh output (setup steps, then the App, API, nodeapp and admin container logs).`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        lines: { type: 'number', description: 'Lines from the end (default 100, max 2000)' }
+      },
+      required: ['worktree']
+    }
+  },
+  {
     name: 'set_worktree_pull_request',
     description:
       'Link a worktree branch to a GitHub pull request: its URL (https://github.com/<owner>/<repo>/pull/123), or just the number (123 or #123) when the repository already has another PR linked to infer the repo from. Omit pullRequest to unlink it.',
@@ -310,7 +354,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   store: ConfigStore
@@ -320,6 +364,8 @@ export interface ToolDeps {
   sessions: SessionManager
   /** ElevenLabs with the server's key, for speak_summary; without it the tool says voice is not set up */
   voice?: VoiceService
+  /** The dev stacks on the server's machine, for the stack tools; without it they say so */
+  machine?: Machine
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -455,6 +501,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     projects: deps.projects,
     poller: deps.poller,
     sessions: deps.sessions,
+    machine: deps.machine,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }
@@ -586,6 +633,51 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         queue: session.queue,
         decision: session.decision?.question ?? null,
         worktree: repo && worktree ? describeWorktree(project, repo, worktree) : null
+      }
+    }
+
+    /** A stack as the tools describe it (the desktop's describeStack). */
+    const describeStack = (status: StackStatus) => ({
+      name: status.slug ? `trek-${status.slug}` : null,
+      state: stackState(status),
+      containers: status.containers,
+      ports: status.port ? { first: status.port, last: status.port + 5 } : null,
+      urls: Object.fromEntries(stackUrls(status).map((u) => [u.label, u.url])),
+      logins: 'admin or bill, password sample123'
+    })
+
+    /** get_stack, start_stack, stop_stack and read_stack_log, through the stack.* commands (their checks and the allowlist). */
+    const stackTool = async (name: string, args: Record<string, unknown>, project: Project): Promise<unknown> => {
+      const { worktree } = resolveWorktree(project, args.worktree)
+      if (!deps.machine) throw bad('This Trek server does not run dev stacks')
+      const ref = { worktreeId: worktree.id }
+      const status = (await v2('stack.status', ref)) as StackStatus
+      if (!status.available) {
+        if (name === 'get_stack') return { available: false }
+        throw bad('That worktree has no docker/stack/stack.sh')
+      }
+      switch (name) {
+        case 'start_stack': {
+          if (args.starter !== undefined && typeof args.starter !== 'boolean') throw bad('starter must be a boolean')
+          const state = stackState(status)
+          if (state !== 'stopped') throw bad(`The stack is already ${state}`)
+          await v2('stack.up', { ...ref, starter: args.starter === true })
+          return describeStack((await v2('stack.status', ref)) as StackStatus)
+        }
+        case 'stop_stack': {
+          const code = await v2('stack.down', ref)
+          if (code !== 0) throw bad(`stack.sh down exited with code ${String(code)} — see read_stack_log`)
+          return describeStack((await v2('stack.status', ref)) as StackStatus)
+        }
+        case 'read_stack_log': {
+          if (args.lines !== undefined && typeof args.lines !== 'number') throw bad('lines must be a number')
+          const lines = Math.min(Math.max(Math.floor(Number(args.lines)) || 100, 1), 2000)
+          // fileId 0 names no log: the answer is the current log's last 64 KiB.
+          const { text } = (await v2('stack.log', { ...ref, fileId: 0, offset: 0 })) as { text: string }
+          return { output: stripAnsi(text).split('\n').slice(-lines).join('\n') }
+        }
+        default:
+          return { available: true, ...describeStack(status) }
       }
     }
 
@@ -805,6 +897,11 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         deps.sessions.requestDecision({ projectId, sessionId: session.id, question: args.question })
         return { notified: true }
       },
+
+      get_stack: (args, project) => stackTool('get_stack', args, project),
+      start_stack: (args, project) => stackTool('start_stack', args, project),
+      stop_stack: (args, project) => stackTool('stop_stack', args, project),
+      read_stack_log: (args, project) => stackTool('read_stack_log', args, project),
 
       speak_summary: async (args) => {
         // Global sessions may speak too, so this does not go through targetIn.

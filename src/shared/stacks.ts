@@ -1,4 +1,5 @@
-import type { StackStatus } from '../../shared/types'
+// A dev stack's state and URLs, from its stack.status: the stack panel's and the server's stack tools'.
+import type { StackStatus } from './types'
 
 export type StackState = 'starting' | 'running' | 'stopping' | 'stopped'
 
