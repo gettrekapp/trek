@@ -412,6 +412,17 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
 5. **Peripheral features on the server:** bot, Docker/env/stacks, Linear, voice, skills, and
    moving worktrees between servers (client-relayed through `exportDirtyPatch` /
    `applyPatch` and session export/import). Each returns to v2 windows as it lands.
+   Split (user decisions, 2026-11-09):
+   - **5a:** the cleanup phase 4 left (the store's setters are the server window's, the
+     v1-only fields and the file windows' dead paths go, 4e-2's Risks 6, 8 and 9) and
+     Docker/Colima/env/stacks on the server's machine, behind the `docker`, `env` and
+     `stacks` capabilities, in every server window. Plans:
+     `docs/superpowers/plans/2026-11-09-central-server-phase5a1-cleanup.md` and
+     `…-phase5a2-machine.md`.
+   - **5b:** Linear, voice (moved to the server) and skills.
+   - **Later, in their own plans:** the bot (ported last, only when asked), moving
+     worktrees between servers, promote to primary, and Windows support for the
+     supervisor.
 6. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
 
 Remote projects can be opened after phase 3. After phase 4 every project is on a server and

@@ -274,7 +274,10 @@ refresh the worktree's status before answering. `worktree.changes` and
 `worktree.diff` return the worktree's changes against its base branch (files with
 their added and removed line counts) and each file's unified diff. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
 a worktree whose path is outside the allowlist (a row from a hand-edited
-project file, say) fail with `PATH_DENIED` before running git.
+project file, say) fail with `PATH_DENIED` before running git. They refuse a
+non-main worktree whose path is, or contains, a registered repository
+(`BAD_REQUEST`); the main worktree is its own repository's checkout and is
+refused only when its path is not that repository's.
 
 `project.import` takes one of the projects that `importProjectFile()`
 (`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.

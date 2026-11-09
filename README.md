@@ -201,9 +201,9 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
   (scheme, host and port).
 - Settings, tags, notes, tickets, pull requests, environment variables, linked
   folders, environments, queues, session types, saved sessions and the worktree
-  order come along. A worktree whose path the server resolves differently (a
-  symlinked path, such as macOS's `/var`, which is `/private/var`) loses its place
-  in that order. Open tabs, drafts, running terminals (sessions come back idle
+  order come along, the order following a worktree whose path the server resolves
+  differently (a symlinked path, such as macOS's `/var`, which is `/private/var`).
+  Open tabs, drafts, running terminals (sessions come back idle
   and resume when loaded) and the project bot's settings do not: the whole `bot`
   setting is dropped, `enabled` and its folder included, so a project's bot is set
   up again on its server.
