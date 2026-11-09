@@ -28,7 +28,7 @@ The first draft was cut against a prototype of 4e-1. This revision was rebuilt o
 - **Baselines:** 1582 tests (1581 pass, 1 skipped), not 1571; the smokes as merged: `smoke:windows` 38 checks (was 26), `smoke:local-window` 55 (was 49), `smoke:providers` 36 (was 30); the others as before. The end count is 1587 (1582 + 5).
 - **Task 1:** `windows.ts` keeps 4e-1's `showStartView`; with `initial` now `{ server, menu }`, a menu asked for while the renderer loads is stored as `{ server: null, ...state.initial, menu }`, and `window:takeInitial` still hands `menu` over (the ⌘N/⌘O checks in `smoke:windows` cover it). `restoreWindows()` has no `emptyIfNone` (800ed21) and the hunks keep it that way. The comments 6ce035f put on `fileIsOpen`, `closeFileWindow` and `focusWindowHoldingFile` ("4e-2 deletes it") go with them. `git:localDirty` checks its argument with `appIpcRules.absolutePath`, as 6ce035f does for Reveal (it said "a non-empty string"). The moved `mcpRpc.ts` is shown as what changes after the `git mv` (its header comment and one import), not as a new file (a new-file patch does not apply over the moved file).
 - **Task 2:** App.tsx's one-shot start request (a30bfb6) is cleared on `serverWindow` alone, since the store's `project` is no longer read there. The hand-edit diff no longer repeats Step 1's `backendFeatures.test.mjs` hunks (they would not apply twice). Step 5 also runs `smoke:windows`, for the menu views through App.tsx.
-- **Task 3:** unchanged hunks; Step 3's grep is expected to print one comment (`terminalHost.ts`), which Task 6 rewords, not nothing.
+- **Task 3:** unchanged hunks; *Revised (review of 1514f2a):* a follow-up commit also checks that a v1 hello with a bad token gets 4002, not 4003 (the version is checked before the token, on purpose), rewords `terminalHost.ts`'s `ptyRegistry` comment and the stale v1 comments in `protocolV2.ts` and the smoke's header, drops the bare block `server.ts` kept where the v2 `if` was, and deletes `src/host/ptyService.ts` (no importer left, not even the excluded bot files) with its `PtySpawnOptions`. Step 3's grep prints nothing; the server smoke ends at 71 `ok:` lines; Task 6 finds three comments, not four.
 - **Task 4:** a new Step 3 (Decision 12, 4e-1 Note 8, M-3): the start screen ignores a menu view switch while `project.create` is in flight. `importer.ts`'s token hint reads "Open on server…" (6ce035f's wording). Step 4 also runs `smoke:windows`, `smoke:v2` and `smoke:local-app`, which reach the New Project dialog.
 - **Task 5:** the README hunks are merged with 8eace66's README (Open on Server… ⌘O, New Project… ⌘N, the `import` chip, the restore rule): its wording is kept where it already said what 4e-2 says.
 - **Risks:** 6–7 record 4e-1 Notes 9–10.
@@ -43,7 +43,7 @@ As 4e-1's 1–5: adapt, then delete; the bot dormant, not deleted; Docker, env, 
 
 ### Decided in this plan
 
-1. **Main keeps** `appIpc.ts`, `appServers*`, `serverLinks.ts`, `v2relay*`, `attention*`, `notifications.ts`, `localServer*`, `importer.ts`, `importRules.ts`, `importUi.ts`, `migrated.ts`, `recents*`, `windows.ts`, `windowRules.ts`, and the machine-local features 4c turned on for Local windows (`docker.ts`, `environments.ts`, `stacks.ts`, `skills.ts`, `linear.ts`, `github.ts`), plus `voice.ts` and `llmSettings.ts` (phase 5 moves or drops them). `src/host/gitService`, `ptyService`, `agentService`, `claudeSessionService` and `colimaService` stay: the server and the Local features use them.
+1. **Main keeps** `appIpc.ts`, `appServers*`, `serverLinks.ts`, `v2relay*`, `attention*`, `notifications.ts`, `localServer*`, `importer.ts`, `importRules.ts`, `importUi.ts`, `migrated.ts`, `recents*`, `windows.ts`, `windowRules.ts`, and the machine-local features 4c turned on for Local windows (`docker.ts`, `environments.ts`, `stacks.ts`, `skills.ts`, `linear.ts`, `github.ts`), plus `voice.ts` and `llmSettings.ts` (phase 5 moves or drops them). `src/host/gitService`, `agentService`, `claudeSessionService` and `colimaService` stay: the server and the Local features use them. Their helpers that nothing calls after 4e (`claudeSessionService`'s `migrateSession`, `exportSession`, `importSession`, `deleteSession`; `gitService`'s `exportDirtyPatch`, `revParseHead`, `defaultBranch`) are kept on purpose: phase 5's moves (moving worktrees, promote) may want them back. *Revised:* `src/host/ptyService.ts` goes in Task 3's follow-up: nothing imports it once main's `pty.ts` and `LocalHost` are gone (the server has its own `terminalHost.ts`), and the dormant bot does not use it.
 2. **`server-tokens.json` stays with the import** (4d Note 6): `legacyTokens.ts` holds `legacyTokenFor`, over the same secret store and `serverTokenRules.ts` (unchanged, with its tests). `servers.ts`, its IPC and `RemoteHost` go.
 3. **The bot: compiled where it is logic, excluded where it is wiring.**
    - **Compiled and tested:** `src/host/bot/` (runner, policy, sandbox, memory, turnProcess, mcpHandlers, consent, …), `src/shared/bot.ts`, `src/main/botSecretFiles.ts` and `src/main/botConsent.ts`. `src/main/mcpRpc.ts` moves to `src/host/bot/mcpRpc.ts` (`git mv`): it is pure, and it is the bot's gate on every MCP `tools/call` (`gateBotCall`), which phase 5 ports onto trek-server's MCP; `botMcpGate.test.mjs` keeps its 12 tests against it.
@@ -55,7 +55,7 @@ As 4e-1's 1–5: adapt, then delete; the bot dormant, not deleted; Docker, env, 
 6. **An empty window's backend is `idleBackend`** (`kind: 'idle'`, `NO_FEATURES`, every action rejects "No project is open in this window"). Nothing calls it: the components that act on a project render only in a server window. `settingsSections(features)` loses its `kind` argument, and the `remoteHosts` section (the Servers panel) goes.
 7. **A Local window's fresh dirty check gets its own IPC** (4e-1 Note 3): `git:localDirty` in `appIpc.ts` (`gitService.worktreeStatuses` on one path, `null` when unreadable; *Revised:* the path must be absolute, by `appIpcRules.absolutePath`, as for Reveal), `window.api.localWorktreeDirty`. `smoke:local-features` writes a file just before the delete and checks the uncommitted-changes question (34 → 35 checks).
 8. **What else leaves the renderer with the legacy backend:** WorktreeDetail's Promote and Move to… items (they called `worktreeActions`; the features are off until phase 5), AddWorktreeModal's v1 Location picker, LlmPicker's local "is the command installed" probe (`agents:commandExists`; a server window asks the server, `server.agents`), Settings' Servers panel, App.tsx's file-window branch, title, Save Project and the MCP call handler. A window's close request is answered at once (a server window has nothing to save). *Revised:* App.tsx's one-shot start-screen request (4e-1's a30bfb6) is cleared once the window is a server window (`serverWindow`), as before minus the file-window `project`.
-9. **v1's refusal** is `4002` with the reason `UPGRADE_CLIENT` for any `protocolVersion` below 2, which the client SDK already reads as "upgrade this client"; `SUPPORTED_PROTOCOL_VERSIONS` is `[2]`. The shared wire types (`WireError*`, close codes, `RemoteRepo`, `PtyInfo`, `HelloFrame`/`ReqFrame`/`EventFrame`, the pty event payloads, `DEFAULT_DAEMON_PORT`) move into `protocolV2.ts`; `EventPayloadsV2` names its payloads directly instead of through `EventPayloadsV1`. The server smoke's v1 checks become one refusal check (bounded at 3 s, so it fails rather than hangs against a server that still serves v1) and one ported check (a prototype-named method is `NOT_FOUND` in v2); 77 → 70 `ok:` lines.
+9. **v1's refusal** is `4002` with the reason `UPGRADE_CLIENT` for any `protocolVersion` below 2, which the client SDK already reads as "upgrade this client"; `SUPPORTED_PROTOCOL_VERSIONS` is `[2]`. The shared wire types (`WireError*`, close codes, `RemoteRepo`, `PtyInfo`, `HelloFrame`/`ReqFrame`/`EventFrame`, the pty event payloads, `DEFAULT_DAEMON_PORT`) move into `protocolV2.ts`; `EventPayloadsV2` names its payloads directly instead of through `EventPayloadsV1`. The server smoke's v1 checks become one refusal check (bounded at 3 s, so it fails rather than hangs against a server that still serves v1) and one ported check (a prototype-named method is `NOT_FOUND` in v2); 77 → 70 `ok:` lines; *Revised:* Task 3's follow-up adds a third (a v1 hello with a bad token is still 4002, not 4003, with no frame, under the same 3 s bound), so 71.
 10. **The splitter (4d Notes 7, 9):** `rekeyOrder` writes the normalized path it matched with; sessions folded into a main worktree are kept once per `agentSessionId` (the first one wins: the primary's, then the folded worktrees' in file order); `settingsOf` drops `bot`, so a crafted file cannot configure the bot when it returns.
 11. **`isLocalEntryId(id: unknown)`** in `src/shared/appServerRules.ts`, and every `=== LOCAL_ENTRY_ID` check in main and the renderer goes through it (4c Note 4); `LOCAL_ENTRY_ID` itself stays as the id main assigns.
 12. *Revised (new):* **A menu view switch waits for a create in flight** (4e-1 Note 8, M-3). ⌘O in the New Project view, or ⌘N in Open on server…, while `project.create` is in flight would unmount the dialog and drop its connection: the project created, not opened, no error. `NewServerProjectModal` counts its creates in flight (`createInFlight()`), and the start screen ignores a menu request meanwhile; once created, the project opens in the window anyway. Covered by the typecheck and the smokes that create projects; no smoke holds a create in flight.
@@ -84,6 +84,7 @@ As 4e-1's, with these:
 | `src/renderer/src/persistence.ts`, `repositoryActions.ts`, `windowLifecycle.ts` | 79 + 81 + 55 = 215 | 2 |
 | `server/src/ptyRegistry.ts`, `server/src/rpc.ts` | 206 + 164 = 370 | 3 |
 | `src/shared/protocol.ts` | 224 (its shared half moves to `protocolV2.ts`) | 3 |
+| `src/host/ptyService.ts` | 81 (*Revised:* no importer left; Task 3's follow-up) | 3 |
 
 **Surviving files' removals** (lines removed / added in the task): `terminals.ts` −882/+11, `store.ts` −167/+21, `preload/index.ts` −185/+1 (after Task 1 added 2), `backend.ts` −158/+43, `windows.ts` −164/+32, `server.ts` −39/+13, `backendFeatures.ts` −31/+10, `index.ts` −30/+1.
 
@@ -3034,11 +3035,11 @@ Expected: no type errors; `# tests 1582`, `# pass 1581`, `# fail 0`.
 
 Run: `git grep -nE "shared/protocol['.]|ptyRegistry|'\./rpc'|PROTOCOL_VERSION\b" -- src server/src scripts server/scripts`
 
-Expected (*Revised*): one line, the comment `server/src/sessions/terminalHost.ts:21:/** Pause when any attached client has more than this unsent (decision 10, as v1's ptyRegistry). */`, which Task 6 Step 2 rewords.
+Expected (*Revised*, review of 1514f2a): no output. The commit itself left one line, the comment `server/src/sessions/terminalHost.ts:21`, `(decision 10, as v1's ptyRegistry)`; its follow-up rewords it to "as the retired v1 pty registry did", so Task 6 no longer does.
 
 Run, one at a time: `(cd server && node scripts/smoke.mjs --built)`, `node scripts/client-contract.mjs`, `node scripts/local-server-smoke.mjs`
 
-Expected: `SERVER SMOKE PASS` with 70 `ok:` lines, among them `ok: a v1 hello is refused with 4002 UPGRADE_CLIENT, before any welcome` and `ok: v2 unknown prototype-named method is NOT_FOUND`; `CLIENT CONTRACT PASS`; `LOCAL SMOKE PASS (85 checks)`.
+Expected: `SERVER SMOKE PASS` with 70 `ok:` lines (71 after the follow-up, which adds `ok: a v1 hello with a bad token is refused with 4002 UPGRADE_CLIENT (not 4003), with no frame`), among them `ok: a v1 hello is refused with 4002 UPGRADE_CLIENT, before any welcome` and `ok: v2 unknown prototype-named method is NOT_FOUND`; `CLIENT CONTRACT PASS`; `LOCAL SMOKE PASS (85 checks)`.
 
 - [ ] **Step 4: Commit**
 
@@ -4208,11 +4209,10 @@ legacyBackend|LEGACY_FEATURES|openLegacy|LegacyOpen|closeFileWindow|Open as File
 
 Run: `git grep -nE -f <scratch>/deleted.re -- src server/src scripts server/scripts ':!src/main/bot.ts' ':!src/renderer/src/bot.ts' ':!src/renderer/src/components/BotPanel.tsx'`
 
-Expected, before Step 2: four comments that name the deleted modules:
+Expected, before Step 2 (*Revised:* three; Task 3's follow-up reworded `terminalHost.ts`'s): the comments that name the deleted modules:
 
 ```
 server/src/mcp/tools.ts:2:// result shapes follow the desktop's (src/main/mcp.ts, src/renderer/src/mcpTools.ts).
-server/src/sessions/terminalHost.ts:21:/** Pause when any attached client has more than this unsent (decision 10, as v1's ptyRegistry). */
 src/renderer/src/v2/backendV2.ts:52: * removed (worktreeActions.ts's, as a file window does it). Used only with
 src/renderer/src/v2/backendV2.ts:340:      // Legacy's dialogs and order (worktreeActions.deleteWorktree), with the
 ```
@@ -4231,19 +4231,6 @@ index 149f53f..f19a3c5 100644
  // Every tool acts on the calling session's project only, and changes state through
  // the v2 commands, run in process.
  import { randomUUID } from 'node:crypto'
-diff --git a/server/src/sessions/terminalHost.ts b/server/src/sessions/terminalHost.ts
-index be2b23d..a01a6d2 100644
---- a/server/src/sessions/terminalHost.ts
-+++ b/server/src/sessions/terminalHost.ts
-@@ -18,7 +18,7 @@ const { Terminal } = (xtermNamespace as { default?: typeof xtermNamespace }).def
- const RING_BUFFER_LIMIT = 2 * 1024 * 1024
- const DRAIN_POLL_MS = 100
- const SCROLLBACK = 2000
--/** Pause when any attached client has more than this unsent (decision 10, as v1's ptyRegistry). */
-+/** Pause when any attached client has more than this unsent (decision 10, as the retired v1 pty registry did). */
- export const SINK_HIGH_WATER = 4 * 1024 * 1024
- /** Resume when every attached client is below this. */
- export const SINK_LOW_WATER = 2 * 1024 * 1024
 diff --git a/src/renderer/src/v2/backendV2.ts b/src/renderer/src/v2/backendV2.ts
 index f31beca..6b640dd 100644
 --- a/src/renderer/src/v2/backendV2.ts
@@ -4271,7 +4258,7 @@ index f31beca..6b640dd 100644
 Run the grep of Step 1 again. Expected: no output.
 
 ```bash
-git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "chore: comments that named the deleted modules" -m "Co-Authored-By: <model trailer>" -- server/src/mcp/tools.ts server/src/sessions/terminalHost.ts src/renderer/src/v2/backendV2.ts
+git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "chore: comments that named the deleted modules" -m "Co-Authored-By: <model trailer>" -- server/src/mcp/tools.ts src/renderer/src/v2/backendV2.ts
 ```
 
 - [ ] **Step 3: The checks**
@@ -4293,7 +4280,7 @@ Expected: `# tests 1587`, `# pass 1586`, `# fail 0`, `# skipped 1`; the build en
 | `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (62 checks)` |
 | `node scripts/local-server-smoke.mjs` | `LOCAL SMOKE PASS (85 checks)` |
 | `node scripts/client-contract.mjs` | `CLIENT CONTRACT PASS` |
-| `(cd server && node scripts/smoke.mjs --built)` | `SERVER SMOKE PASS` (70 `ok:` lines) |
+| `(cd server && node scripts/smoke.mjs --built)` | `SERVER SMOKE PASS` (71 `ok:` lines) |
 
 - [ ] **Step 5: A clean checkout installs and builds**
 

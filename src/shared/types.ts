@@ -605,24 +605,6 @@ export interface EnvCheckResult {
   error?: string
 }
 
-export interface PtySpawnOptions {
-  id: string
-  cwd: string
-  /** Command auto-typed into the shell once it starts (e.g. "claude") */
-  command?: string
-  /** Extra environment variables for the shell */
-  env?: Record<string, string>
-  cols: number
-  rows: number
-  /** Host to spawn on; undefined/null = local */
-  serverId?: string | null
-  /**
-   * Remote restore: if a pty with this id is still running on the daemon,
-   * attach to it (ignoring `command`) instead of spawning a new shell.
-   */
-  attachExisting?: boolean
-}
-
 export interface PtyDataEvent {
   id: string
   data: string

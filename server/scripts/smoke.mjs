@@ -1,7 +1,8 @@
-// trek-server smoke test: throwaway config + temp git repo, then handshake,
-// git.listWorktrees, pty spawn/echo/kill, the projects flow (create, branch
-// note, persist, delete), revs in responses, decisions, server.agents, the
-// topic end of a deleted project and an auth-rejection check.
+// trek-server smoke test: throwaway config + temp git repo, then the refusal of a
+// v1 hello (with a good token and a bad one), the v2 handshake, the projects flow
+// (create, branch note, persist, delete), sessions and their ptys, revs in responses,
+// decisions, server.agents, the trek-dev MCP, the topic end of a deleted project and
+// an auth-rejection check.
 import { spawn, execFileSync } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
@@ -77,12 +78,14 @@ await new Promise((resolve, reject) => {
 })
 
 // --- protocol v1 is retired (phase 4e): its hello is refused, telling the client to upgrade ---
-{
+// The version is checked before the token: a v1 client with a stale token is still told to
+// upgrade (4002, at once), not rejected as unauthorized (4003, after the bad-token delay).
+const v1Hello = async (helloToken) => {
   const old = new WebSocket(`ws://127.0.0.1:${PORT}`)
   await new Promise((r) => old.on('open', r))
   const frames = []
   old.on('message', (raw) => frames.push(JSON.parse(raw.toString())))
-  old.send(JSON.stringify({ type: 'hello', protocolVersion: 1, token, client: 'smoke-v1', clientVersion: '0' }))
+  old.send(JSON.stringify({ type: 'hello', protocolVersion: 1, token: helloToken, client: 'smoke-v1', clientVersion: '0' }))
   // Bounded: a server that still serves v1 answers with a welcome and keeps the socket open.
   const [code, reason] = await new Promise((r) => {
     const timer = setTimeout(() => {
@@ -94,8 +97,17 @@ await new Promise((resolve, reject) => {
       r([c, why.toString()])
     })
   })
+  return { code, reason, frames }
+}
+{
+  const { code, reason, frames } = await v1Hello(token)
   if (code !== 4002 || reason !== 'UPGRADE_CLIENT' || frames.length !== 0) fail(`v1 hello: ${code} ${reason} ${JSON.stringify(frames)}`)
   else ok('a v1 hello is refused with 4002 UPGRADE_CLIENT, before any welcome')
+}
+{
+  const { code, reason, frames } = await v1Hello('wrong')
+  if (code !== 4002 || reason !== 'UPGRADE_CLIENT' || frames.length !== 0) fail(`v1 hello, bad token: ${code} ${reason} ${JSON.stringify(frames)}`)
+  else ok('a v1 hello with a bad token is refused with 4002 UPGRADE_CLIENT (not 4003), with no frame')
 }
 
 // --- protocol v2 ---

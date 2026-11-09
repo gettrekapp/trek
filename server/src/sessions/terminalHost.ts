@@ -18,7 +18,7 @@ const { Terminal } = (xtermNamespace as { default?: typeof xtermNamespace }).def
 const RING_BUFFER_LIMIT = 2 * 1024 * 1024
 const DRAIN_POLL_MS = 100
 const SCROLLBACK = 2000
-/** Pause when any attached client has more than this unsent (decision 10, as v1's ptyRegistry). */
+/** Pause when any attached client has more than this unsent (decision 10, as the retired v1 pty registry did). */
 export const SINK_HIGH_WATER = 4 * 1024 * 1024
 /** Resume when every attached client is below this. */
 export const SINK_LOW_WATER = 2 * 1024 * 1024

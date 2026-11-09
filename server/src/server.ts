@@ -214,8 +214,11 @@ export function startServer(
           ws.close(1002, 'invalid hello')
           return
         }
+        // The version is checked before the token, on purpose: an older client (v1: the file
+        // windows' desktop) is told to upgrade at once, whatever its token (a stale one included)
+        // and without the bad-token delay, as the SDK reads it. The close sends nothing about
+        // the server: no frame goes out before auth.
         if (!SUPPORTED_PROTOCOL_VERSIONS.includes(frame.protocolVersion)) {
-          // An older client (v1: the file windows' desktop) is told to upgrade, as the SDK reads it.
           ws.close(CLOSE_UNSUPPORTED_VERSION, frame.protocolVersion < PROTOCOL_VERSION_V2 ? CLOSE_REASON_UPGRADE_CLIENT : 'unsupported protocol version')
           return
         }
@@ -252,33 +255,31 @@ export function startServer(
         return
       }
       const id = frame.id
-      {
-        const outcome = dispatchV2(frame.method, frame.params, {
-          store,
-          hub,
-          subscriber,
-          projects,
-          poller,
-          sessions,
-          terminal,
-          mcpAccess: access
-            ? {
-                revoke: (id) => {
-                  callers.delete(id)
-                  access.revoke(id)
-                }
+      const outcome = dispatchV2(frame.method, frame.params, {
+        store,
+        hub,
+        subscriber,
+        projects,
+        poller,
+        sessions,
+        terminal,
+        mcpAccess: access
+          ? {
+              revoke: (id) => {
+                callers.delete(id)
+                access.revoke(id)
               }
-            : undefined
-        })
-        const method = frame.method
-        const params = frame.params
-        // A success reports the rev its command left the topic at, read as it answers.
-        const answer = (o: Outcome): void => respond(id, o, o.ok ? responseRev(method, params, hub) : undefined)
-        // Answer synchronous handlers in this tick: a sub.subscribe response
-        // must reach the client before any patch for the topic it subscribed to.
-        if (outcome instanceof Promise) outcome.then(answer).catch(internalError)
-        else answer(outcome)
-      }
+            }
+          : undefined
+      })
+      const method = frame.method
+      const params = frame.params
+      // A success reports the rev its command left the topic at, read as it answers.
+      const answer = (o: Outcome): void => respond(id, o, o.ok ? responseRev(method, params, hub) : undefined)
+      // Answer synchronous handlers in this tick: a sub.subscribe response
+      // must reach the client before any patch for the topic it subscribed to.
+      if (outcome instanceof Promise) outcome.then(answer).catch(internalError)
+      else answer(outcome)
     }
 
     ws.on('message', (raw, isBinary) => {

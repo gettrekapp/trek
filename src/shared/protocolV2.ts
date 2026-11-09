@@ -276,7 +276,7 @@ export interface MethodParamsV2 {
   'session.seen': SessionRef
   /** Clears the session's open decision (the user dismissed it) for everyone */
   'session.dismissDecision': SessionRef
-  // Terminal stream (same shapes as v1)
+  // Terminal stream
   'pty.attach': { ptyId: string }
   'pty.detach': { ptyId: string }
   'pty.write': { ptyId: string; data: string }
@@ -337,7 +337,7 @@ export interface MethodResultsV2 {
   'worktree.pull': null
   'worktree.push': null
   'worktree.changes': WorktreeChanges
-  /** Patch text per changed file (same limits as v1 git.worktreeDiff) */
+  /** Patch text per changed file (gitService's limits: no entry for binary or too-large files, 8 MiB in all) */
   'worktree.diff': Record<string, string>
   'branch.setTag': null
   'branch.setCustomTags': null
