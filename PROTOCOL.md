@@ -213,7 +213,8 @@ lists counts as vanished: git marks it prunable, and the server treats it as
 not listed. The main worktree is never dropped. If a registered repository path
 is itself a linked worktree, that checkout is the project's main worktree, and
 git's own main checkout shows as an ordinary worktree. Worktree commands
-refuse (`BAD_REQUEST`) a worktree that is itself a registered repository, and
+refuse (`BAD_REQUEST`) a non-main worktree that is itself a registered
+repository (the main worktree's rule is under `worktree.diff` below), and
 `worktree.remove` also checks the allowlist (`PATH_DENIED`).
 
 The poller reads a repository's worktree list every 5 s and their
