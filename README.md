@@ -7,124 +7,80 @@ local models, across multiple git worktrees of a repository, side by side.
 
 ## Concepts
 
-- **Project file** (`.trekproj`, JSON): lists one or more repositories and remembers
-  which worktrees have Claude sessions, tickets and PRs linked. Tags, notes, tickets,
-  PR links and env vars are kept per repository, so a branch name shared by two
-  repositories has independent data. Older files upgrade when opened; once saved, they
-  can't be read by older Trek builds. `File → Save Project` (⌘S).
-- **Repositories**: each one is a collapsible sidebar section, and a collapsed section
-  still shows its session status. **Add repository…** in the sidebar footer adds one,
-  and the section's **⋯** menu removes it from the project without touching the disk.
-  A repository can't be removed while it has live sessions, and the first one can't be
-  removed while Global Claude has saved conversations.
-- **Worktree sidebar**: lists *every* git worktree of each repository (polled live),
-  with the Claude session status dot, branch, workflow tag, ticket/PR chips and
-  git ahead/behind/dirty state. The poll is two-tier: the worktree list is one
-  git process per host and refreshes every 5s, while dirty/ahead/behind costs
-  two git processes *per worktree* — across a repo with many worktrees that is
-  seconds of CPU per sweep, so it refreshes every 30s, only while the window
-  has focus, plus immediately when the list changes, the window regains focus,
-  the selection moves, or a pull/push finishes. The `+` on a repository's section adds an existing worktree or creates a
-  new one (`git worktree add`) — new worktrees are created next to the repository
-  as `<repo>-<branch>`. The main checkout is tagged **PRIMARY**.
-- **Workflow tags**: each branch can carry a tag (In Progress, In Review,
-  Changes Needed, Waiting for SQL, In Testing, Ready for Dev, Ready to Deploy,
-  Remove) — click the tag chip in the detail pane to change it, and filter the
-  sidebar by tag with the "Tag:" dropdown under the worktree list. New worktrees start as
-  **In Progress**. Tags are keyed to the branch and saved in the project file,
-  so they survive the worktree being promoted to primary, deleted and re-created.
-- **Detail pane**: the selected worktree's branch, path and linked ticket/PR,
-  with quick actions (Open in VS Code, Reveal in Finder) and an overflow menu
-  (link ticket/PR, promote to primary, delete worktree). Ticket and PR links are
-  keyed to the branch — like tags and notes — so they survive promoting to
-  primary and back, or deleting and re-creating the worktree. A ticket is a
-  Linear issue (`TOW-123`, or paste its `linear.app/<workspace>/issue/…` URL —
-  the workspace is remembered per project) or a legacy Azure DevOps work item
-  id; when the branch name contains a Linear id (Linear's default
-  `user/tow-123-title` format) the ticket dialog pre-fills it. Add a Linear
-  API key in ⚙ Settings to show each issue's status and title on its chip
-  (refreshed every 5 minutes and on window focus); the key is stored
-  encrypted in the app's user-data directory, never in the project file. The **All Notes**
-  panel collects every branch note in one place — including branches whose
-  worktree is gone — with a per-note delete. The Notes, Docker and
-  ⚙ settings panels live on the right of the session tab row.
-- **Claude sessions** (per worktree): each session tab is a real PTY running your
-  shell with `claude` auto-launched in the worktree directory. ⌘T (or the `+`
-  next to the tabs) opens a new one, click the active tab's title to rename it
-  (persisted in the project file), and exited terminals show a **Restart Claude**
-  button (which resumes the same session). Worktrees without a session stay
-  dormant until you press **Start Claude session** — or, when they have saved
-  sessions, until you load them (see below).
-- **Loading / unloading worktrees**: each Claude session costs a shell, a
-  `claude` process and a terminal instance, so a project opens with *every*
-  worktree unloaded — nothing spawns until you ask for it. A worktree with
-  saved sessions shows a hollow dot and a **▸N** button in its sidebar row
-  (and a **Load sessions** button in its detail pane); loading resumes each
-  session one at a time. **⏏** in the row or the session-row **⏏ Unload**
-  button gives the sessions back: they are snapshotted into the project file
-  and torn down, and **Unload all** in the sidebar footer does the whole
-  project at once. Unloading is not closing — the sessions resume where they
-  left off. A local `claude` is killed and resumed via `--resume`; a remote one
-  keeps running on its server and is reattached on the next load.
-- **Session persistence**: every terminal is bound to a Claude session UUID
-  (`--session-id` on first launch). Saving the project (⌘S) snapshots the open
-  terminals per worktree, so loading a worktree later resumes each one with
-  `--resume <uuid>`, picking the conversations back up. Claude starts in
-  auto mode by default — change the default session mode in the ⚙ Settings
-  panel, or override the flags entirely with a `claudeArgs` field in the
-  `.trekproj` file (and `claudeCommand` to replace the binary).
+Every project lives on a **server**: the [Local server](#local-server) Trek runs on this
+machine, or a [trek-server](server/README.md) on another one. The server keeps the
+project, its worktrees and its agent sessions; a Trek window shows one project and
+sends every action to its server, and every other window on that project sees it live.
+
+- **Start screen**: an empty window offers **New Project…** (it asks which server:
+  Local, first, picks a folder on this machine; another server lists its registered
+  repositories), **Open on server…** (the servers, Local first, and their projects) and
+  **Import .trekproj…** (see [Importing a .trekproj](#importing-a-trekproj)), above the
+  recent projects. File → New Project… (⌘N) and File → Open on Server… (⌘O) open those
+  views, in the focused window when it is empty, or in a new one; while a project is
+  being created, the start screen keeps its view.
+- **Repositories**: a project lists one or more; each is a collapsible sidebar section,
+  and a collapsed section still shows its session status. The section's **⋯** menu
+  removes a repository from the project without touching the disk; it can't be removed
+  while it has live sessions. Tags, notes, tickets, PR links and env vars are kept per
+  repository, so a branch name shared by two repositories has independent data.
+- **Worktree sidebar**: lists every git worktree of each repository, with the session
+  status dot, branch, workflow tag, ticket/PR chips and git ahead/behind/dirty state,
+  as the server's git poller reports them. The `+` on a repository's section creates a
+  worktree (`git worktree add`, next to the repository as `<repo>-<branch>`) or checks
+  one out from a pull request. The main checkout is tagged **PRIMARY**.
+- **Workflow tags**: each branch can carry a tag (In Progress, In Review, Changes
+  Needed, Waiting for SQL, In Testing, Ready for Dev, Ready to Deploy, Remove) — click
+  the tag chip in the detail pane to change it, and filter the sidebar by tag with the
+  "Tag:" dropdown under the worktree list. New worktrees start as **In Progress**. Tags,
+  like notes, tickets and PR links, are keyed to the branch, so they survive the
+  worktree being deleted and re-created.
+- **Detail pane**: the selected worktree's branch, path and linked ticket/PR, with quick
+  actions (Open in VS Code and Reveal in Finder, in a Local window) and an overflow menu
+  (link ticket/PR, delete worktree). A ticket is a Linear issue (`TOW-123`, or paste its
+  `linear.app/<workspace>/issue/…` URL) or a legacy Azure DevOps work item id; when the
+  branch name contains a Linear id the ticket dialog pre-fills it. Add a Linear API key
+  in ⚙ Settings to show each issue's status and title on its chip; the key is stored
+  encrypted in the app's user-data directory, never on a server. The **All Notes** panel
+  collects every branch note in one place — including branches whose worktree is gone —
+  with a per-note delete.
+- **Sessions** (per worktree): each session tab is an agent the server runs in the
+  worktree, in a real PTY. ⌘T (or the `+` next to the tabs) opens a new one, click the
+  active tab's title to rename it, and an exited session shows **Restart** (which
+  resumes the same conversation).
+- **Loading / unloading worktrees**: each session costs a process on the server, so
+  worktrees with saved sessions start unloaded. A hollow dot and a **▸N** button in the
+  sidebar row (and **Load sessions** in the detail pane) load them; **⏏** unloads them
+  again, keeping the sessions to resume.
 - **Agents**: each session runs one agent CLI: **Claude** (`claude`), **Codex**
-  (`codex`), **Gemini** (`gemini`), **Grok** (`grok`) or **Local** (Claude Code pointed
-  at Ollama or LM Studio through `ANTHROPIC_BASE_URL`; it needs a model, since Claude's
-  default alias means nothing to Ollama). ⚙ Settings → Agents sets the app-wide default
-  agent, model and effort for ⌘T and `+`, each agent's command and approval mode, and the
-  Local endpoint. A project can override the default (`llmDefault` in the `.trekproj`)
-  and pick the Global panel's agent (`globalLlm`, MCP-capable agents only). Session types
-  can name their own agent, and `▾ → Choose…` next to `+` picks one for a single session.
-  The `start_session` MCP tool takes `provider`, `model` and `effort`, and
-  `save_session_type` takes an `llm` object (`{ provider, model?, effort? }`).
-  A session always resumes with the agent it started with. Codex picks its own session
-  ids, so Trek finds each one in `~/.codex/sessions` (or `$CODEX_HOME/sessions`) after
-  launch; a Codex tab that exits before its id is found can't be resumed. Gemini gets the trek-dev MCP server through
-  `GEMINI_CLI_SYSTEM_SETTINGS_PATH` and has no system-prompt flag, so a session type's
-  prompt is sent ahead of its first message. Grok does the same, and since it can't
-  resume, it starts a fresh conversation (carrying that prompt again) on every load.
-  A Local session on a remote worktree talks to the server's own localhost, while the
-  picker's model list comes from this machine's endpoint. Only Claude and Local sessions follow a worktree when it is promoted, demoted or
-  moved; the others are closed with a notice. A first message is passed so that it can't
-  be read as a flag, and an effort is only passed if it is one the model accepts.
-  Older Trek builds open Codex and Gemini sessions as Claude ones, so don't go back to
-  one with such sessions saved.
-- **Global panel** (⌘J, or click the status bar at the bottom of the window):
-  a project-wide agent session (Claude unless the project picks another) in a
-  collapsible panel, running in the
-  first repository's root, with the others available as extra directories
-  (a repository added mid-session is available from that session's next launch). It starts the first time you open it, keeps running while
-  collapsed, and resumes its conversation when the project is reopened
-  (**New conversation** starts over). Its status bar shows the same
-  working/attention/done badge as any session.
-- **MCP server**: the app serves an MCP server (`trek-dev`, Streamable HTTP on
-  `127.0.0.1` with a per-launch bearer token, `src/main/mcp.ts`) that the
-  global session is launched with. Its tools let it list worktrees, start, load
-  and unload sessions, send prompts and keystrokes, read terminal output, wait
-  for sessions to finish, see and edit a session's prompt queue, focus or
-  close a session, and set a branch's tag,
-  note or linked ticket. Tool calls are executed by the renderer (`src/renderer/src/mcpTools.ts`),
-  which owns the terminals and project state.
-- **Multiple windows**: each window holds one project, with its own sessions and
-  Global Claude. Opening a project uses a new window unless the current one is
-  empty, and focuses the project's window if it's already open. `File → New Window`
-  (⌘⇧N) opens an empty one. Closing a window saves its project and ends its local
-  sessions, which resume on reopen; remote sessions keep running. Codex tabs still
-  waiting for their session id are ended, local or remote, since nothing could
-  resume them. A never-saved
-  project asks first. On launch, the windows open at last quit come back with their
-  sessions unloaded (`open-windows.json` in the user-data directory).
-- **Recent projects**: the start screen lists the last 8 projects you opened or saved,
-  project files and server projects mixed (stored in the app's user-data directory).
-  Missing files are dropped; a server project stays until you remove it with its **×**.
+  (`codex`), **Gemini** (`gemini`), **Grok** (`grok`) or **Local** (Claude Code pointed at
+  Ollama or LM Studio). The server's config (`llm`) sets each agent's command and the
+  default; a project can override the default and pick the Global panel's agent.
+  Session types can name their own agent, and `▾ → Choose…` next to `+` picks one for a
+  single session. A session always resumes with the agent it started with.
+- **Global panel** (⌘J, or click the status bar at the bottom of the window): a
+  project-wide agent session in a collapsible panel, running in the first repository's
+  root, with the trek-dev MCP tools to drive the worktree sessions.
+- **MCP server**: each trek-server serves the `trek-dev` MCP tools to its sessions,
+  scoped to the session's own project (list worktrees, start, load and unload sessions,
+  send prompts and keystrokes, read terminal output, wait for sessions, edit a queue,
+  set a branch's tag, note or ticket, ask the user to decide). See
+  [PROTOCOL.md](PROTOCOL.md#mcp-trek-dev-on-the-server).
+- **Multiple windows**: one window per project. Opening a project another window holds
+  focuses that window; `File → New Window` (⌘⇧N) opens an empty one. Closing a window
+  asks nothing: its sessions keep running on the server. On launch, the windows open at
+  the last quit come back (`open-windows.json` in the user-data directory).
+- **Recent projects**: the start screen lists the last 8 projects you opened. A
+  `.trekproj` there is one not imported yet (marked **import**): opening it imports it.
+  A server project stays until you remove it with its **×**.
 
 ## Project bot sandbox
+
+**The project bot is dormant until phase 5**, when it moves onto trek-server: it ran in
+project file windows, which are gone, so no window offers it now. Its code stays in the
+tree (`src/host/bot/`, compiled and tested; its Electron wiring, `src/main/bot.ts`,
+`src/renderer/src/bot.ts` and `BotPanel.tsx`, is excluded from the build), and what
+follows describes it as it was, and as phase 5 brings it back.
 
 Every project bot turn runs in an OS sandbox (`sandbox-exec` on macOS, `bwrap` on
 Linux) that hides Trek's user-data directory from the bot's own processes. Each bot
@@ -163,7 +119,7 @@ which closes the "files that run later" gap, is the planned follow-up.
 
 ## Servers and server projects
 
-Trek can also open projects that live on a [trek-server](server/README.md), which
+Every project lives on a [trek-server](server/README.md) (the Local server included), which
 keeps their worktrees and sessions running on that machine. A server window is a
 working window: its terminals, sessions and edits all go to the server, and every
 other window on that project sees them live.
@@ -217,13 +173,14 @@ other window on that project sees them live.
   Deleting a worktree there also destroys its dev stack (if ticked) and its VM,
   after a fresh check for uncommitted changes. A window on a remote server shows
   none of these.
-- **Not yet in server windows**: promote to primary, moving worktrees, voice and
-  the bot (phase 5).
+- **Not yet**: promote to primary, moving worktrees between servers, voice
+  summaries, the project bot and the stack MCP tools (phase 5).
 
 ## Importing a .trekproj
 
-Opening a `.trekproj` (a recent project on the start screen, or the file from
-Finder) imports it: the part on this machine becomes a project on the Local
+A `.trekproj` is the project file older Trek builds kept projects in. Trek no longer
+opens one as a project: opening one (a recent project on the start screen, or the file
+from Finder) imports it: the part on this machine becomes a project on the Local
 server, and each part on a remote server becomes a project there, and their
 windows open. **File → Import .trekproj…** does the same, and can import a file
 again. On the first launch with Local, Trek offers once to import the files in
@@ -248,9 +205,8 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
   and resume when loaded) and the project bot's folder do not.
 - Paths become their realpaths on the server. Claude's saved histories are copied
   (never moved) to them on Local, and a repository's VMs keep their names.
-- A `.trekproj` only imports: it never opens as a project file window. If none
-  of it could be imported, the result says why, with only **OK**; opening the
-  file again tries again. With the Local server off (`TREK_NO_LOCAL_SERVER=1`)
+- When none of a file could be imported, the result says what was left and why,
+  with only **OK**, and nothing opens; opening the file again tries again. With the Local server off (`TREK_NO_LOCAL_SERVER=1`)
   its part on this machine is left, with that reason.
 - A window left on a file that was not imported does not come back at the next
   launch; the file stays in your recent projects, marked **import**, and opening
@@ -264,7 +220,7 @@ on those servers too: open a `.trekproj` only if you trust where it came from.
 ## Local server
 
 Trek runs a trek-server of its own on this machine, the **Local** server. It is
-listed first under **Open on server…**, and Trek starts it, finds it and
+listed first under **Open on server…** and **New Project…**, and Trek starts it, finds it and
 connects to it itself, so it needs no URL or token. New Project… (on the start
 screen, or File → New Project…, ⌘N) on Local picks a folder on this machine.
 
@@ -311,13 +267,15 @@ highest-priority status of that worktree's sessions (pulsing green = working,
 orange = needs you, solid green = done, gray = idle, hollow ring = unloaded
 with saved sessions).
 
-You also get native macOS notifications: always when a terminal hits *attention*
-while out of view, and on *done* when the app window isn't focused. Clicking a
-notification focuses the app and jumps to that worktree + terminal.
+The server works the status out from each session's output. You also get native
+macOS notifications, raised once by the app for every server: when a session needs
+you or is done while its project's window isn't focused. Clicking one focuses (or
+opens) the project's window and jumps to that session; the bell in the sidebar lists
+them all.
 
 > **Tip:** for the most reliable "Claude needs you" signal, enable bell
 > notifications in Claude Code: `claude config set --global preferredNotifChannel terminal_bell`.
-> The idle-detection fallback works either way.
+> The idle detection works either way.
 
 ## Development
 
@@ -344,22 +302,26 @@ ignored (`dev`), and a packaged Trek ignores the variable.
 `TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it);
 only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
 
-The project file format lives in `src/shared/types.ts` (`ProjectFile`, `Repository`), and
-older files are upgraded by `src/shared/migration.ts`. `npm test` runs the unit tests;
-the end-to-end smokes each build the app and drive it, with a temp user-data
-directory:
-`npm run smoke:local-window` works in a Local server window across two repositories,
-`npm run smoke:windows` checks one window per project, the File menu's New Project…
-and Open on Server…, and window restore,
-`npm run smoke:providers` starts Codex and Gemini sessions against fake CLIs,
-`npm run smoke:local-features` drives a Local server window's Docker, environments,
-stacks, skills, VS Code and Reveal against stub `colima`, `docker` and `code`,
-`npm run smoke:import` imports a `.trekproj` onto Local and a test server,
-`npm run smoke:local-app` starts and stops the app's Local server, and
-`npm run smoke:v2` drives server windows against a test trek-server
-(`smoke:local` and `smoke:client` test the server without the app). Terminal
-PTYs are managed in the main process (`src/main/pty.ts`); xterm.js instances,
-the attention heuristics and worktree load/unload live in the renderer
-(`src/renderer/src/terminals.ts`). Which worktrees are loaded is runtime-only
-state (`loadedWorktrees` in the store) — it decides, per worktree, whether the
-live terminals or the project file's saved session list is the truth on save.
+`npm test` runs the unit tests. The end-to-end smokes build the app and drive it with
+Playwright, each in its own temp user-data directory and HOME, never yours; run them
+one at a time:
+
+- `npm run smoke:v2`: server windows against a test trek-server (Open on server…,
+  New Project…, sessions, settings, attention, disconnects);
+- `npm run smoke:local-app`: the Local server supervisor, and New Project… on Local;
+- `npm run smoke:local-window`: a Local window across two repositories: its sidebar,
+  sessions, tags, notes, settings, Changes, unload and repository removal;
+- `npm run smoke:local-features`: a Local window's Docker, environments, stacks,
+  skills, VS Code and Reveal against stub `colima`, `docker` and `code`;
+- `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
+- `npm run smoke:windows`: one window per project, the File menu's New Project… and
+  Open on Server…, window restore and the navigation guard;
+- `npm run smoke:import`: importing a `.trekproj` onto Local and a test server;
+- `npm run smoke:local`, `npm run smoke:client` and `cd server && npm run smoke`: the
+  server alone.
+
+The `.trekproj` format the importer reads lives in `src/shared/types.ts` (`ProjectFile`,
+`Repository`), upgraded by `src/shared/migration.ts` and split by server in
+`src/shared/model/importProject.ts`. The renderer's xterm.js instances live in
+`src/renderer/src/terminals.ts`; a server window's store is projected from the
+server's `project:<id>` topic (`src/renderer/src/v2/`).

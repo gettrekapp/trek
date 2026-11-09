@@ -125,7 +125,6 @@ screen of about 2000 + rows lines × cols cells plus a ring buffer of up to 2 Mi
 UTF-16 code units of output, so size `maxSessions` to the machine. WebSocket
 frames are limited to 16 MiB. A project holds at most 500 sessions (running or
 not; close some to start more), and a terminal is at most 500 columns by 200 rows.
-`pty.spawn` (the v1 shell API) is not counted against `maxSessions`.
 
 ```json
 { "maxSessions": 64 }
@@ -167,7 +166,7 @@ trek-server token revoke phone     # closes that device's open connections
 ```
 
 `trek-server token` on its own creates or rotates the token named `default`.
-Paste a token into the app under **Connect to server…** on the start screen (Add server or Set token). Project files that still use per-project servers take theirs under Settings → Servers.
+Paste a token into the app under **Open on server…** on the start screen (Add server or Set token).
 
 ## Run
 
@@ -202,7 +201,7 @@ run by hand:
   clean up (SIGINT, SIGTERM and SIGHUP remove them);
 - any path is allowed (the welcome lists the `local` capability), since the
   user picks paths on their own disk. That covers every path check, not only
-  `server.addRepo` and `project.import`: the v1 `git.*` RPCs, `worktree.create`
+  `server.addRepo` and `project.import`: `worktree.create`
   targets, and a session's `cwd` and `addDirs`. This is acceptable because the
   token already grants a shell as the user (any session is one), it lives only
   in a 0600 file in a 0700 directory, and the server listens on loopback only.

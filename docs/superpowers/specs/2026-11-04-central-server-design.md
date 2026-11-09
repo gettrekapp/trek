@@ -226,10 +226,10 @@ Electron, on Linux, macOS and Windows.
 - **Main process keeps:** windows, menus, dialogs, notifications, open-URL, open-in-VS-Code
   and Reveal in Finder (only for worktrees on the local server), the app-wide server list
   with tokens in safeStorage, the attention aggregator, and the local server supervisor.
-- **Main process loses:** in phase 4, `pty.ts`, `project.ts`, `mcp.ts`, `hosts/` and the
+- **Main process loses:** in phase 4 (done in 4e), `pty.ts`, `project.ts`, `mcp.ts`, `hosts/` and the
   session/git `ipcMain` handlers; in phase 5, `bot.ts`, `docker.ts`, `environments.ts`,
   `stacks.ts`, `linear.ts`, `voice.ts` and `skills.ts`, once each has a server replacement.
-  Until then those keep running in main against the local machine, for legacy windows.
+  Until then those keep running in main against the local machine, for Local windows.
 - **Windows:** one window per project. The registry entry is
   `{kind: 'file', path}` (legacy, until phase 4) or `{kind: 'server', serverId, projectId}`.
   Opening an already-open entry focuses its window. `open-windows.json` and recents store
@@ -306,6 +306,34 @@ Electron, on Linux, macOS and Windows.
   `mcp.ts`, `hosts/`, the session/git IPC and server-side v1 are deleted.
 - The start screen becomes **Open on server…** (Local first), **New Project…** (with a
   server picker) and **Import .trekproj…**.
+
+**Status (phase 4e, done).** Phase 4 is complete:
+- The start screen is New Project… (a server picker, Local first: Local's folder picker,
+  a remote server's New Project dialog), Open on server… and Import .trekproj…, above
+  the recents; File → New Project… and Open on Server… open those views.
+- A `.trekproj` only imports: one of which nothing lands gets the result dialog and
+  nothing else; a window or recent left on a file never imported is not restored, and
+  its file stays in the recents to import.
+- Deleted: the `file` window kind; main's `pty.ts`, `project.ts` (its app IPC moved to
+  `appIpc.ts`), `mcp.ts`, `hosts/`, `servers.ts`, `claudeSessions.ts`, `agents.ts`; the
+  renderer's legacy backend, store and terminal halves, `worktreeActions.ts` (the Local
+  teardown moved to `localTeardown.ts`), `mcpTools.ts`, `persistence.ts`,
+  `repositoryActions.ts`, the legacy Workspace, ServersPanel and MoveWorktreeModal, and
+  half the preload; server-side v1 (`rpc.ts`, `ptyRegistry.ts`, `shared/protocol.ts`,
+  folded into `protocolV2.ts`), and `src/host/ptyService.ts`. A v1 hello is refused with
+  `4002` `UPGRADE_CLIENT` before its token is checked. Main sweeps the MCP config files
+  `mcp.ts` left in userData once at startup.
+- A Local window's delete checks for uncommitted changes through `git:localDirty`.
+  Every Local entry check goes through `isLocalEntryId`. The splitter keys the worktree
+  order by the normalized path, keeps a session folded twice once, and imports no `bot`
+  settings. The start screen ignores ⌘N/⌘O while a project is being created.
+- The bot is dormant: `src/host/bot/` (with its MCP gate, `mcpRpc.ts`) is compiled and
+  tested; its Electron wiring (`src/main/bot.ts`, `src/renderer/src/bot.ts`,
+  `BotPanel.tsx`) stays in the tree, excluded from the build, for phase 5 to port.
+- Kept for the import: `importProjectFile`, the splitter, and `server-tokens.json`
+  (read by `legacyTokens.ts`), until the import is retired.
+- Plans: `docs/superpowers/plans/2026-11-08-central-server-phase4e1-start-screen.md`
+  and `…-phase4e2-retire-legacy.md`.
 
 ## 4. Multi-client behaviour, auth, errors
 

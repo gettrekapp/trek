@@ -1,59 +1,51 @@
 # Trek Server Wire Protocol
 
-Version 1 is described first; [Protocol v2](#protocol-v2) follows it. trek-server serves v1
-fully. In v2 it serves the handshake, the `server`, `attention` and `project:<id>` topics,
-`sub.*`, `server.addRepo`/`server.removeRepo`, `project.*`, `repo.*`, `branch.*`, `worktree.*`,
-`session.*`, v2 `pty.*` and `sys.ping`. Session statuses are computed from live output
-(`working`, `attention`, `done`, `idle`) and the `attention` topic lists the sessions that
-need the user. Queued prompts stay client-sent: the server stores a queue and never sends it.
+trek-server speaks **protocol v2**: the server owns all project state (projects,
+worktrees, sessions, their statuses and prompt queues); clients send domain commands
+and keep a mirror of the topics they subscribe to. Any client (the desktop app, a
+future mobile app) speaks it. Frame shapes: `src/shared/protocolV2.ts`; model:
+`src/shared/model/`.
 
-The companion daemon exposes the operations a client needs to manage git
-worktrees and Claude Code terminal sessions on a remote machine. Any client
-(the desktop app, a future mobile app) speaks this protocol. Frame shapes are
-defined in `src/shared/protocol.ts`.
+Protocol v1 (per-call `git.*`, `pty.spawn` and `claude.*` methods, which the desktop's
+project file windows used) was retired in phase 4e, with those windows. A v1 `hello`
+is closed with `4002` and the reason `UPGRADE_CLIENT`, whatever its token: the version
+is checked before the token, so a stale one gets no bad-token delay, and no frame is
+sent before the close.
 
-- **Transport:** WebSocket, JSON **text frames only**. No binary frames in v1.
-- **TLS:** the daemon itself binds loopback; a reverse proxy (Caddy)
-  terminates `wss://`. Clients must use `wss://` for anything non-loopback.
-- **Auth:** bearer token, either as an `Authorization: Bearer <token>` header
-  on the upgrade request, or in the `hello` frame (for clients that cannot set
-  headers).
+- **Transport:** WebSocket, JSON **text frames only**.
+- **TLS:** the server itself binds loopback; a reverse proxy (Caddy) terminates
+  `wss://`. Clients must use `wss://` for anything non-loopback.
+- **Auth:** bearer token, either as an `Authorization: Bearer <token>` header on the
+  upgrade request, or in the `hello` frame (for clients that cannot set headers).
 
 ## Handshake
 
 1. Client connects and MUST send a `hello` frame within **5 seconds**:
 
    ```json
-   { "type": "hello", "protocolVersion": 1, "token": "…", "client": "trek-desktop", "clientVersion": "0.1.0" }
+   { "type": "hello", "protocolVersion": 2, "token": "…", "client": "trek-desktop", "clientVersion": "0.1.0" }
    ```
 
-   `token` may be omitted if it was sent via the `Authorization` header.
+   `token` may be omitted if it was sent via the `Authorization` header (an empty
+   `token` falls back to it too).
 
-2. The daemon replies with `welcome` on success:
-
-   ```json
-   { "type": "welcome", "protocolVersion": 1, "daemonVersion": "0.1.0",
-     "repos": [{ "id": "trek", "name": "Trek", "path": "/home/dev/repos/Trek" }] }
-   ```
-
-   `repos` is the daemon's configured allowlist — the client should validate
-   its configured repo path against it.
+2. The server replies with `welcome` on success (below).
 
 3. Failure closes the socket:
 
    | Close code | Meaning |
    |---|---|
-   | `4001` | no `hello` within 5s |
-   | `4002` | unsupported `protocolVersion` |
+   | `4001` | no `hello` within 5s, or another frame before it |
+   | `4002` | unsupported `protocolVersion`; reason `UPGRADE_CLIENT` for an older client (v1) |
+   | `4003` | bad token (closed after a short delay; no detail given), or a revoked one |
    | `1002` | malformed JSON or frame |
-| `1003` | binary frame |
-| `1011` | internal error |
-| `4003` | bad token (closed after a short delay; no detail given) |
+   | `1003` | binary frame |
+   | `1011` | internal error |
 
 ## Requests
 
 ```json
-{ "type": "req", "id": 42, "method": "git.listWorktrees", "params": { "repoPath": "/home/dev/repos/Trek" } }
+{ "type": "req", "id": 42, "method": "project.list", "params": {} }
 ```
 
 Responses correlate by `id`:
@@ -63,119 +55,21 @@ Responses correlate by `id`:
 { "type": "res", "id": 42, "ok": false, "error": { "code": "GIT_ERROR", "message": "…" } }
 ```
 
-Error codes: `UNAUTHORIZED`, `BAD_REQUEST`, `NOT_FOUND`, `PATH_DENIED`,
-`GIT_ERROR`, `PTY_NOT_FOUND`, `INTERNAL`, `UNSUPPORTED_VERSION`, and (v2)
-`CONFLICT`, `NOT_A_REPO`, `IN_USE`, `CAPACITY`. `CAPACITY` means a server or project limit
-was reached (`maxSessions`, the session records of a project, or the waits of an
-MCP tool); it is retryable once something frees up. Before phase 2e the
-`maxSessions` refusal was `BAD_REQUEST`.
+Error codes: `UNAUTHORIZED`, `BAD_REQUEST`, `NOT_FOUND`, `PATH_DENIED`, `GIT_ERROR`,
+`PTY_NOT_FOUND`, `INTERNAL`, `UNSUPPORTED_VERSION`, `CONFLICT`, `NOT_A_REPO`, `IN_USE`,
+`CAPACITY` and `CONGESTED`. `CAPACITY` means a server or project limit was reached
+(`maxSessions`, the session records of a project, or the waits of an MCP tool); it is
+retryable once something frees up. An unknown method is `NOT_FOUND`.
 
-Every path param (`repoPath`, `worktreePath`, `cwd`) is realpath-resolved and
-must fall under a configured repo root or worktree root; anything else is
-rejected with `PATH_DENIED`.
-
-## Method catalog
-
-### Repos & git
-
-| Method | Params | Result |
-|---|---|---|
-| `repo.list` | – | `RemoteRepo[]` (same as `welcome.repos`) |
-| `git.listWorktrees` | `{repoPath}` | `GitWorktreeInfo[]` — one git process; carries no dirty/ahead/behind. An entry may carry `prunable: true`: git lists it, but its directory is gone |
-| `git.worktreeStatuses` | `{worktreePaths}` | `WorktreeStatus[]` — dirty/ahead/behind, two git processes per worktree, so clients poll it on a slower cadence than the list |
-| `git.worktreeChanges` | `{worktreePath}` | `WorktreeChanges` — `{base, files}`: commits since the merge-base with the default branch, plus staged, unstaged and untracked files. Clients poll it for the selected worktree only |
-| `git.worktreeDiff` | `{worktreePath}` | `Record<string, string>` — patch text per changed file; entries are omitted for binary, too-large and unreadable files, and for patches past an 8 MB total (kept in sorted path order, smaller later files still included) |
-| `git.listBranches` | `{repoPath}` | `string[]` |
-| `git.addWorktree` | `{repoPath, worktreePath, branch, createBranch}` | `null` |
-| `git.removeWorktree` | `{repoPath, worktreePath}` | `null` — refuses dirty worktrees |
-| `git.checkout` | `{repoPath, branch}` | `null` |
-| `git.defaultBranch` | `{repoPath}` | `string \| null` |
-
-Branch arguments (`branch` in `git.addWorktree` and `git.checkout`, and the other branch-taking git methods) must be valid git branch names (no leading `-`, no `:`, whitespace, `..` and so on); others fail with `GIT_ERROR`.
-
-### Worktree move support
-
-| Method | Params | Result |
-|---|---|---|
-| `git.exportDirtyPatch` | `{worktreePath}` | `{patch, headSha}` — `git add -N . && git diff HEAD --binary`, then `git reset -q` (self-undoing); `patch` empty when clean |
-| `git.applyPatch` | `{worktreePath, patch}` | `null` — `git apply --binary` |
-| `git.revParseHead` | `{worktreePath}` | commit sha |
-| `git.push` | `{worktreePath, branch, setUpstream}` | `null` |
-| `git.fetchBranch` | `{repoPath, branch}` | `null` — `git fetch origin <branch>:<branch>` (creates/fast-forwards the local branch so `worktree add` can check it out) |
-| `git.addWorktreeAt` | `{repoPath, worktreePath, branch}` | `null` — checks out an existing branch, no `-b` |
-| `git.removeWorktreeForce` | `{repoPath, worktreePath}` | `null` — used only after the move is verified on the target |
-
-### PTY (terminal sessions)
-
-PTY ids are client-chosen UUIDs. **PTYs survive disconnects** — the daemon
-never kills a pty because a socket closed. Only `pty.kill` or daemon shutdown
-ends a session.
-
-| Method | Params | Result |
-|---|---|---|
-| `pty.spawn` | `{ptyId, cwd, command?, env?, cols, rows}` | `{ptyId}` — spawns the login shell with `env` merged over the daemon's environment; `command` is auto-typed after 300ms |
-| `pty.attach` | `{ptyId}` | `PtyInfo` — subscribes this connection; the ring buffer is replayed as `pty.data` events with `replay: true`, then live data follows |
-| `pty.detach` | `{ptyId}` | `null` — stop receiving events; pty keeps running |
-| `pty.write` | `{ptyId, data}` | `null` — clients should not await this (keystroke latency) |
-| `pty.resize` | `{ptyId, cols, rows}` | `null` |
-| `pty.kill` | `{ptyId}` | `null` |
-| `pty.list` | – | `PtyInfo[]` — running ptys, for reattach discovery |
-
-Each pty keeps a ~2 MiB ring buffer of output with a monotonic byte-offset
-`seq`. Replay may start mid-escape-sequence; clients should reset their
-terminal before replay and force a repaint after (e.g. a resize wiggle).
-
-### Claude sessions
-
-| Method | Params | Result |
-|---|---|---|
-| `claude.migrateSession` | `{sessionId, fromCwd, toCwd}` | `boolean` — renames the `.jsonl` between cwd encodings on this machine |
-| `claude.exportSession` | `{cwd, sessionId}` | `{content: string \| null}` — reads the session `.jsonl` for cross-machine transfer |
-| `claude.importSession` | `{cwd, sessionId, content}` | `null` |
-| `claude.deleteSession` | `{cwd, sessionId}` | `null` — used only after a verified move |
-| `claude.check` | – | `{available, version?}` — is the `claude` CLI installed for the daemon user |
-
-### Misc
-
-| Method | Params | Result |
-|---|---|---|
-| `sys.ping` | `{t}` | `{t}` — app-level heartbeat (the daemon also sends WS pings) |
-
-## Events (daemon → client)
-
-```json
-{ "type": "event", "event": "pty.data", "payload": { "ptyId": "…", "seq": 1024, "data": "…", "replay": true } }
-```
-
-| Event | Payload | Notes |
-|---|---|---|
-| `pty.data` | `{ptyId, seq, data, replay?}` | only sent to connections attached to the pty; `replay: true` chunks are ring-buffer re-sends — clients must not run activity heuristics/alerts on them |
-| `pty.exit` | `{ptyId, exitCode}` | the process actually exited (socket loss is NOT an exit) |
-| `daemon.shutdown` | `{reason}` | sent best-effort before a graceful stop; all ptys die with the daemon |
+Every path is realpath-resolved and must fall under a configured repo root or
+worktree root; anything else is rejected with `PATH_DENIED`.
 
 ## Versioning
 
-`protocolVersion` is a single integer. Additive changes (new methods, new
-optional fields) do not bump it — clients must ignore unknown fields and
-daemons reply `NOT_FOUND` for unknown methods. Breaking changes bump the
-version, and the daemon rejects clients with a version it does not support
-(close `4002`).
-
----
-
-# Protocol v2
-
-In v2 the server owns all project state: projects, worktrees, sessions, their
-statuses and prompt queues. Clients send domain commands and keep a mirror of the
-topics they subscribe to. Frame shapes: `src/shared/protocolV2.ts`; model:
-`src/shared/model/`.
-
-The transport, `hello`, `req`/`res`/`event` frames, auth and close codes are the
-same as v1. A client selects v2 with `"protocolVersion": 2` in `hello`. A v2
-server keeps accepting v1 clients; a client the server can no longer serve is
-closed with `4002` and the reason `UPGRADE_CLIENT`. Today an unsupported
-version closes with `4002` and the reason `unsupported protocol version`;
-`UPGRADE_CLIENT` is reserved for when v1 support is removed.
+`protocolVersion` is a single integer. Additive changes (new methods, new optional
+fields, new `welcome.capabilities`) do not bump it — clients must ignore unknown
+fields and servers reply `NOT_FOUND` for unknown methods. Breaking changes bump the
+version, and the server closes a client with a version it does not support (`4002`).
 
 ## Welcome
 
@@ -199,7 +93,7 @@ new optional field needs no capability: its absence says enough.
 | `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
 | `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
 | `agents` | `server.agents` lists the agents the server can launch (see Sessions) |
-| `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do the v1 `git.*` RPCs, `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
+| `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 
@@ -246,7 +140,7 @@ the answer is. `project.rename` names a project, so it reports the project
 topic's rev, though the new name also reaches the `server` topic's project list;
 a caller waiting for that list should wait on `server` without a rev (for the
 next patch or snapshot that shows the name). Methods that name no topic
-(`sys.ping`, `pty.*`, `sub.*`, `project.list`), error replies, v1 responses, and
+(`sys.ping`, `pty.*`, `sub.*`, `project.list`), error replies, and
 a project whose topic is gone carry none.
 
 ```json
@@ -270,7 +164,7 @@ server restarts. A server without this field simply leaves it out.
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
-| Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize`, as in v1 (see [Sessions](#sessions)) |
+| Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Agents | `server.agents` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
@@ -376,8 +270,8 @@ They need a checked-out branch that is a valid branch name (`BAD_REQUEST` when
 detached, when the worktree is now `missing`, or for a name like `--mirror`;
 `NOT_FOUND` when the row is gone), pass it to git as `refs/heads/<branch>`, and
 refresh the worktree's status before answering. `worktree.changes` and
-`worktree.diff` return what v1's `git.worktreeChanges` and `git.worktreeDiff`
-do. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
+`worktree.diff` return the worktree's changes against its base branch (files with
+their added and removed line counts) and each file's unified diff. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
 a worktree whose path is outside the allowlist (a row from a hand-edited
 project file, say) fail with `PATH_DENIED` before running git.
 
@@ -436,8 +330,6 @@ restart.
 Tokens are named, one per device (`trek-server token add <name>`). Revoking a
 token closes its open connections with `4003`.
 
-The v1 `git.*`, `repo.list`, `agents.*`, `pty.spawn`, `pty.kill`, `pty.list` and `claude.*` methods are
-internal to a v2 server.
 
 ## Sessions
 
@@ -650,9 +542,8 @@ session it cannot start `exited` with `exitCode` -1, as for any other spawn fail
 
 A project also holds at most 500 session records, running or not, Global ones
 included. `session.start` beyond that answers `CAPACITY` ("close some first"); closing
-a session removes its record. v1's `pty.spawn` ptys are outside `maxSessions` and
-`forceKillAll`: they are not counted, and a shutdown does not SIGKILL stragglers among
-them. That stays until v1 is retired in phase 4.
+a session removes its record. Every pty the server runs is a session's, so all of them
+count, and a shutdown SIGKILLs any straggler.
 
 **Shutdown.** When the server stops it kills every session pty, and after the
 200 ms it allows for `daemon.shutdown` frames to flush it sends SIGKILL to any pty
@@ -675,7 +566,7 @@ a project. `IN_USE` as above.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
 buffer of up to 2 Mi UTF-16 code units) as `pty.data` events with `replay: true`, then streams live
-data, as in v1. The server also keeps a headless copy of the screen (2000 lines of
+data. The server also keeps a headless copy of the screen (2000 lines of
 scrollback) so it can tell whether the agent turned on bracketed paste, and when it
 rang its bell. Any number of connections can attach to one pty, and any of them may
 `pty.write`; `pty.write` and `pty.resize` need the connection to be attached to that pty
@@ -691,8 +582,8 @@ time, and retry a refused attach after a delay, once its own backlog has
 drained. `session.sendPrompt` needs no attach.
 `pty.exit` goes to every attached connection, also when the server killed the pty.
 A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
-meanwhile the pty counts as gone. Only session ptys are reachable through v2;
-v1's `pty.spawn` stays v1-only and outside `maxSessions`.
+meanwhile the pty counts as gone. Every pty is a session's: there is no bare
+`pty.spawn`.
 
 ## MCP (trek-dev) on the server
 
@@ -869,9 +760,9 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 |---|---|
 | `state.patch` | `{topic, rev, ops}` |
 | `topic.ended` | `{topic, reason}`; `reason` is `deleted` (see Subscriptions) |
-| `pty.data` | as v1. Session status is computed on the server from live bytes, never from replay |
-| `pty.exit` | as v1 |
-| `daemon.shutdown` | as v1 |
+| `pty.data` | `{ptyId, seq, data, replay?}`, only to connections attached to the pty; `replay: true` chunks are ring-buffer re-sends. Session status is computed on the server from live bytes, never from replay |
+| `pty.exit` | `{ptyId, exitCode}`: the process exited (a dropped socket is not an exit) |
+| `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
 
 ## Several clients
 
