@@ -57,7 +57,7 @@ See 5a-1's "Roadmap: phase 5": this plan is **5a-2**. 5b is Linear, voice (on th
 
 **The upgrade (Task 2)**
 
-16. **The Local server takes the app's files over, once.** Main starts it with `--import-env-from <userData>`; on a start whose data dir has no `environments.json`, the server copies the app's registry (well-formed `twb-` entries with absolute paths only) and its stack files (`<slug>.pid` copied, `<slug>.log` hard-linked so a stack still running keeps logging to it), before it serves anything. With nothing to copy it writes an empty registry, so it never copies again. The app's files are left as they were: a dev build and the installed app share that userData (4b Risk 1), and each Local profile takes its own copy.
+16. **The Local server takes the app's files over, once.** Main starts it with `--import-env-from <userData>` (resolved); on a start whose data dir has no `environments.json` (nothing at that path, not even a dangling symlink), the server copies the app's registry and its stack files before it serves anything. The registry: well-formed `twb-` entries (`requireProfile`'s names) with absolute paths and their own fields only, their variables and compose file held to `env.up`'s checks (a denied variable or a compose file outside the worktree is left out, the entry kept), written to a 0600 temp file and hard-linked into place, so a registry that appeared meanwhile is never replaced. The stack files: regular files only; `<slug>.pid` written afresh as `String(pid)` when the pid is alive (`process.kill(pid, 0)`: ESRCH dead, EPERM alive), so the stack service's pid-compare cleanup reads it and a reused pid is never Ctrl-C'd; `<slug>.log` hard-linked so a stack still running keeps logging to it (copied when it cannot be linked). With nothing to copy it writes an empty registry, so it never copies again. An app registry that cannot be read or parse (EACCES, EISDIR, a torn write by an older Trek still running) throws and writes nothing: the start warns and the next one tries again, instead of an empty registry that would end the retries and list every VM as an orphan. The app's registry and pid files are left as they were (a dev build and the installed app share that userData, 4b Risk 1, and each Local profile takes its own copy); only a stack's log is shared, and both sides only append to it (the app's `up`, the server's `stack.down` and `stack.destroy`). **Known limit:** an older Trek still running on the same userData after the take-over, or the other Local profile, starts stacks this server cannot see (each takes its own snapshot), until it too runs on a server.
 17. **Nothing else needs to move**: the VM names are unchanged (Decision 7: the same `deriveProfileName(envRepoKey(repo), branch)` the app used), the stack names follow the checkout's path, and the environments setting, the Docker favourites and the branch variables were already server data (4c Note 3).
 18. **A Local server older than 5a** (the user chose Keep Running at the version-skew prompt) has none of the capabilities: a Local window then shows no Docker, Env or Stack tab until it restarts; the next start of the new server takes the files over. Main no longer runs them, so this window has no fallback (README).
 
@@ -1869,26 +1869,48 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "feat(5a
 
 **Files:**
 - Create: `server/src/integrations/envSeed.ts`, `scripts/serverEnvSeed.test.mjs`
-- Modify: `server/src/index.ts` (`--import-env-from`), `src/main/localServer.ts` (passes `userData`), `server/scripts/smoke.mjs` (its usage), `scripts/local-app-smoke.mjs` (the packaged run's command line)
+- Modify: `server/src/index.ts` (`--import-env-from`), `src/main/localServer.ts` (passes `userData`, resolved), `server/scripts/smoke.mjs` (its usage), `scripts/local-app-smoke.mjs` (the packaged run's command line), `scripts/localServerRules.test.mjs` (the command line with `--import-env-from`)
 
 - [ ] **Step 1: The tests**
 
-It copies the registry and the stack files into an empty data dir (the log a hard link: the same inode), leaves the app's alone, and writes 0600; it runs once, even after the copy is emptied; with nothing to copy it writes an empty registry so nothing is copied later; it leaves out what is not a `twb-` entry with absolute paths (`__proto__` included) and a registry that does not parse.
+It copies the registry and the stack files into an empty data dir (the log a hard link: the same inode), leaves the app's alone, and writes 0600; it runs once, even after the copy is emptied; with nothing to copy it writes an empty registry so nothing is copied later; it leaves out what is not a `twb-` entry with absolute paths (`__proto__` included). An app registry that cannot be read or parse (bad JSON, not an object, EISDIR) throws and writes nothing, and a later seed with a good file succeeds. The entries' variables and compose file are held to `env.up`'s checks; stack files are regular files only, a pid only when alive, written as `String(pid)`, never shared with the app's file; the server's registry is never replaced (a corrupt file, a dangling symlink) and is 0600 past a stale temp file; a log that cannot be hard-linked is copied. Then the real `createStackService` runs on a take-over of a live detached `sleep` (stub `docker` first on PATH): its `up` counts, the old app's appended log text shows, and `down` Ctrl-C's the group (killed in `t.after` regardless). `localServerRules.test.mjs`: `isLocalServerCommand` with `--import-env-from <path with spaces>`, with and without `--local-profile dev`.
 
 ```diff
+diff --git a/scripts/localServerRules.test.mjs b/scripts/localServerRules.test.mjs
+index 4f05f0b..8a6b156 100644
+--- a/scripts/localServerRules.test.mjs
++++ b/scripts/localServerRules.test.mjs
+@@ -88,6 +88,14 @@ test('isLocalServerCommand: trek-server, start --local, and this profile\'s --lo
+   assert.equal(isLocalServerCommand(`${bundle} start --localx`, undefined), false)
+   assert.equal(isLocalServerCommand('sleep 300', undefined), false)
+   assert.equal(isLocalServerCommand('/bin/zsh -c start --local', undefined), false, 'no trek-server')
++  // 5a: main appends --import-env-from <userData> after the profile; ps prints it unquoted, spaces and all.
++  const userData = '/Users/u/Library/Application Support/Trek Dev'
++  for (const dir of [userData, `'${userData}'`]) {
++    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, undefined), true, dir)
++    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, 'dev'), false, dir)
++    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, 'dev'), true, dir)
++    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, undefined), false, dir)
++  }
+ })
+ 
+ test('parseBuildJson takes the bundle stamp, nothing else', () => {
 diff --git a/scripts/serverEnvSeed.test.mjs b/scripts/serverEnvSeed.test.mjs
 new file mode 100644
-index 0000000..3ce44ac
+index 0000000..e717411
 --- /dev/null
 +++ b/scripts/serverEnvSeed.test.mjs
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,215 @@
 +// scripts/serverEnvSeed.test.mjs — the Local server takes over the app's environments once (5a's upgrade).
-+import test from 'node:test'
++import test, { mock } from 'node:test'
 +import assert from 'node:assert/strict'
-+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
++import fs, { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
++import { syncBuiltinESMExports } from 'node:module'
++import { spawn, spawnSync } from 'node:child_process'
 +import { tmpdir } from 'node:os'
-+import { join } from 'node:path'
++import { join, sep } from 'node:path'
 +import { seedEnvironmentsFromApp } from '../server/src/integrations/envSeed.ts'
++import { createStackService } from '../src/host/stackService.ts'
 +
 +function dirs(t) {
 +  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-env-seed-')))
@@ -1905,14 +1927,15 @@ index 0000000..3ce44ac
 +  const { app, data } = dirs(t)
 +  const registry = { 'twb-feature-x-1a2b3c': entry(), 'twb-feature-y-4d5e6f': entry({ branch: 'feature-y', envVars: { FOO: 'bar' } }) }
 +  writeFileSync(join(app, 'environments.json'), JSON.stringify(registry))
-+  writeFileSync(join(app, 'stacks', 'app-feature-x.pid'), '4242')
++  // A live pid (this test's own): a dead one is left out (below).
++  writeFileSync(join(app, 'stacks', 'app-feature-x.pid'), String(process.pid))
 +  writeFileSync(join(app, 'stacks', 'app-feature-x.log'), '$ stack.sh up\n')
 +  writeFileSync(join(app, 'stacks', 'notes.txt'), 'not a stack file')
 +  const result = seedEnvironmentsFromApp(app, data)
 +  assert.deepEqual(result, { seeded: true, environments: 2, stackFiles: 2, skipped: [] })
 +  assert.deepEqual(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8')), registry)
 +  assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
-+  assert.equal(readFileSync(join(data, 'stacks', 'app-feature-x.pid'), 'utf8'), '4242')
++  assert.equal(readFileSync(join(data, 'stacks', 'app-feature-x.pid'), 'utf8'), String(process.pid))
 +  // The log is the same file (a hard link): a `stack.sh up` still writing to it shows in the new place.
 +  assert.equal(statSync(join(data, 'stacks', 'app-feature-x.log')).ino, statSync(join(app, 'stacks', 'app-feature-x.log')).ino)
 +  assert.equal(existsSync(join(data, 'stacks', 'notes.txt')), false)
@@ -1936,17 +1959,162 @@ index 0000000..3ce44ac
 +  assert.equal(seedEnvironmentsFromApp(app, data).seeded, false)
 +})
 +
-+test('leaves out what is not a twb- entry with absolute paths, and a registry that does not parse', (t) => {
++test('leaves out what is not a twb- entry with absolute paths', (t) => {
 +  const { app, data } = dirs(t)
 +  const raw = `{"twb-ok-000001": ${JSON.stringify(entry())}, "other": ${JSON.stringify(entry())}, "twb-rel-000002": ${JSON.stringify(entry({ worktreePath: 'rel/path' }))}, "twb-num-000003": ${JSON.stringify(entry({ branch: 3 }))}, "__proto__": ${JSON.stringify(entry())}}`
 +  writeFileSync(join(app, 'environments.json'), raw)
 +  const result = seedEnvironmentsFromApp(app, data)
 +  assert.deepEqual([result.environments, result.skipped], [1, ['environment "other"', 'environment "twb-rel-000002"', 'environment "twb-num-000003"', 'environment "__proto__"']])
 +  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), ['twb-ok-000001'])
-+  const { app: app2, data: data2 } = dirs(t)
-+  writeFileSync(join(app2, 'environments.json'), '{not json')
-+  const broken = seedEnvironmentsFromApp(app2, data2)
-+  assert.deepEqual([broken.seeded, broken.environments, broken.skipped.length], [true, 0, 1])
++})
++
++test("an app registry it cannot read or parse throws and writes nothing, so the next start tries again (an older Trek may be mid-write)", (t) => {
++  const { app, data } = dirs(t)
++  for (const text of ['{not json', '[]']) {
++    writeFileSync(join(app, 'environments.json'), text)
++    assert.throws(() => seedEnvironmentsFromApp(app, data), /environments\.json/)
++    assert.equal(existsSync(join(data, 'environments.json')), false, `nothing written for ${text}`)
++  }
++  rmSync(join(app, 'environments.json'))
++  mkdirSync(join(app, 'environments.json'))
++  assert.throws(() => seedEnvironmentsFromApp(app, data), /environments\.json/, 'EISDIR')
++  assert.equal(existsSync(join(data, 'environments.json')), false)
++  rmSync(join(app, 'environments.json'), { recursive: true })
++  writeFileSync(join(app, 'environments.json'), JSON.stringify({ 'twb-a-000001': entry() }))
++  assert.deepEqual(seedEnvironmentsFromApp(app, data), { seeded: true, environments: 1, stackFiles: 0, skipped: [] })
++})
++
++test("holds the copied entries to env.up's checks: no steering variables, a compose file inside the worktree, only the entry's own fields", (t) => {
++  const { app, data } = dirs(t)
++  const registry = {
++    'twb-vars-000001': entry({ envVars: { FOO: 'bar', PATH: '/evil', DOCKER_HOST: 'tcp://x', 'bad name': 'x', NUM: 3 }, extra: 'dropped' }),
++    'twb-file-000002': entry({ composeFile: '../outside.yml' }),
++    'twb-up-000003': { ...entry(), createdAt: undefined }
++  }
++  writeFileSync(join(app, 'environments.json'), JSON.stringify(registry))
++  const result = seedEnvironmentsFromApp(app, data)
++  const copied = JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))
++  assert.deepEqual(Object.keys(copied), ['twb-vars-000001', 'twb-file-000002'])
++  assert.deepEqual(copied['twb-vars-000001'].envVars, { FOO: 'bar' })
++  assert.equal(copied['twb-vars-000001'].extra, undefined)
++  assert.equal(copied['twb-file-000002'].composeFile, undefined, 'the default compose file instead')
++  assert.equal(result.environments, 2)
++  assert.equal(result.skipped.length, 6, result.skipped.join('\n'))
++  assert.ok(result.skipped.includes('environment "twb-up-000003"'))
++})
++
++test('stack files: only regular files, a live pid as the stack service writes it, nothing already there replaced', (t) => {
++  const { app, data } = dirs(t)
++  writeFileSync(join(app, 'stacks', 'a.pid'), ` ${process.pid}\n`)
++  writeFileSync(join(app, 'stacks', 'b.pid'), 'not a pid')
++  // A pid no process has (the stack ended while the app was closed): left out, so a reused pid is never Ctrl-C'd.
++  const dead = spawnSync('true').pid
++  writeFileSync(join(app, 'stacks', 'd.pid'), String(dead))
++  writeFileSync(join(app, 'secret'), 'outside')
++  symlinkSync(join(app, 'secret'), join(app, 'stacks', 'c.log'))
++  const result = seedEnvironmentsFromApp(app, data)
++  assert.equal(result.stackFiles, 1)
++  assert.equal(readFileSync(join(data, 'stacks', 'a.pid'), 'utf8'), String(process.pid), "String(pid): the stack service's pid compare reads it")
++  assert.equal(statSync(join(data, 'stacks', 'a.pid')).mode & 0o777, 0o600)
++  assert.equal(existsSync(join(data, 'stacks', 'b.pid')), false)
++  assert.equal(existsSync(join(data, 'stacks', 'c.log')), false)
++  assert.equal(existsSync(join(data, 'stacks', 'd.pid')), false)
++  assert.equal(result.skipped.length, 3, result.skipped.join('\n'))
++  assert.ok(result.skipped.includes(`d.pid: no process ${dead}`), result.skipped.join('\n'))
++  // The copy is the server's own file: a write to it never reaches the app's.
++  writeFileSync(join(data, 'stacks', 'a.pid'), '9999')
++  assert.equal(readFileSync(join(app, 'stacks', 'a.pid'), 'utf8'), ` ${process.pid}\n`)
++})
++
++test("the server's registry is never replaced, even a dangling symlink or a file that does not parse, and the copy is 0600 past a stale temp file", (t) => {
++  const { app, data } = dirs(t)
++  writeFileSync(join(app, 'environments.json'), JSON.stringify({ 'twb-a-000001': entry() }))
++  mkdirSync(data, { recursive: true })
++  writeFileSync(join(data, 'environments.json'), '{corrupt')
++  assert.equal(seedEnvironmentsFromApp(app, data).seeded, false)
++  assert.equal(readFileSync(join(data, 'environments.json'), 'utf8'), '{corrupt')
++  rmSync(join(data, 'environments.json'))
++  symlinkSync(join(data, 'nowhere.json'), join(data, 'environments.json'))
++  assert.equal(seedEnvironmentsFromApp(app, data).seeded, false)
++  assert.equal(existsSync(join(data, 'nowhere.json')), false)
++  rmSync(join(data, 'environments.json'))
++  const stale = join(data, `environments.json.${process.pid}.seed.tmp`)
++  writeFileSync(stale, 'stale', { mode: 0o644 })
++  assert.equal(seedEnvironmentsFromApp(app, data).seeded, true)
++  assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
++  assert.equal(existsSync(stale), false)
++  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), ['twb-a-000001'])
++})
++
++test('a log that cannot be hard-linked (another volume) is copied instead', (t) => {
++  const { app, data } = dirs(t)
++  writeFileSync(join(app, 'stacks', 'app-feature-x.log'), '$ stack.sh up\n')
++  const realLink = fs.linkSync
++  mock.method(fs, 'linkSync', (from, to) => {
++    if (String(to).includes(`${sep}stacks${sep}`)) throw Object.assign(new Error('EXDEV: cross-device link not permitted'), { code: 'EXDEV' })
++    return realLink(from, to)
++  })
++  syncBuiltinESMExports()
++  t.after(() => {
++    mock.restoreAll()
++    syncBuiltinESMExports()
++  })
++  const result = seedEnvironmentsFromApp(app, data)
++  assert.deepEqual([result.seeded, result.stackFiles, result.skipped], [true, 1, []])
++  assert.equal(readFileSync(join(data, 'stacks', 'app-feature-x.log'), 'utf8'), '$ stack.sh up\n')
++  assert.notEqual(statSync(join(data, 'stacks', 'app-feature-x.log')).ino, statSync(join(app, 'stacks', 'app-feature-x.log')).ino, 'a copy')
++})
++
++test("the stack service runs on what the seed took over: the app's running up counts, its log shows, and down stops it", async (t) => {
++  const { app, data } = dirs(t)
++  const root = join(app, '..')
++  // Stubs first on PATH: `docker ps` (the status's container count) lists nothing; no real docker runs.
++  const bin = join(root, 'bin')
++  mkdirSync(bin)
++  writeFileSync(join(bin, 'docker'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
++  const savedPath = process.env.PATH
++  const savedRegistry = process.env.TREK_STACK_REGISTRY
++  process.env.PATH = `${bin}:${savedPath}`
++  process.env.TREK_STACK_REGISTRY = join(root, 'stack-registry')
++  t.after(() => {
++    process.env.PATH = savedPath
++    if (savedRegistry === undefined) delete process.env.TREK_STACK_REGISTRY
++    else process.env.TREK_STACK_REGISTRY = savedRegistry
++  })
++  const ws = join(root, 'app-feature-x')
++  mkdirSync(join(ws, 'docker', 'stack'), { recursive: true })
++  writeFileSync(join(ws, 'docker', 'stack', 'stack.sh'), '#!/bin/bash\necho "stub stack.sh $*"\n', { mode: 0o755 })
++
++  // The app's `stack.sh up`, as main ran it before 5a: detached (its own process group), writing to the app's log.
++  const appLog = join(app, 'stacks', 'app-feature-x.log')
++  writeFileSync(appLog, '$ stack.sh up\n')
++  const fd = openSync(appLog, 'a')
++  const up = spawn('sleep', ['300'], { detached: true, stdio: ['ignore', fd, fd] })
++  closeSync(fd)
++  const pid = up.pid
++  t.after(() => {
++    try {
++      process.kill(-pid, 'SIGKILL')
++    } catch {
++      // gone
++    }
++  })
++  writeFileSync(join(app, 'stacks', 'app-feature-x.pid'), String(pid))
++
++  assert.equal(seedEnvironmentsFromApp(app, data).stackFiles, 2)
++  const stacks = createStackService({ stateDir: join(data, 'stacks') })
++  const status = await stacks.status(ws)
++  assert.deepEqual([status.slug, status.upRunning], ['app-feature-x', true])
++  appendFileSync(appLog, 'restoring the database (the old app is still logging)\n')
++  const chunk = await stacks.log(ws, 0, 0)
++  assert.match(chunk.text, /\$ stack\.sh up\nrestoring the database \(the old app is still logging\)\n/)
++
++  const exited = new Promise((resolve) => up.once('exit', (code, signal) => resolve(signal)))
++  assert.equal(await stacks.down(ws), 0)
++  assert.equal(await exited, 'SIGINT', "down Ctrl-C'd the app's up process group")
++  assert.equal((await stacks.status(ws)).upRunning, false)
++  // Only the log is shared, and both sides only append: the server's down shows in the app's file too.
++  assert.match(readFileSync(appLog, 'utf8'), /\$ stack\.sh down\nstub stack\.sh down\n/)
 +})
 ```
 
@@ -1968,7 +2136,7 @@ not ok 1 - scripts/serverEnvSeed.test.mjs
 
 - [ ] **Step 3: The seed, the flag and main's argument**
 
-The flag only applies to `start --local` and needs an absolute path (a usage error, exit 2, otherwise). The copy runs before `startServer`; a failure is a warning (nothing was written, so the next start tries again). Main appends `--import-env-from <userData>` after the profile arguments, so `isLocalServerCommand` still reads the profile (`--local-profile <name>` comes first).
+The flag only applies to `start --local` and needs an absolute path (a usage error, exit 2, otherwise). The copy runs before `startServer`; a failure, including an app registry that cannot be read or parse, is a warning (nothing was written, so the next start tries again). The seed reads the app's registry first, then copies the stack files, then hard-links its 0600 temp file into place (Decision 16). Main appends `--import-env-from <userData>` after the profile arguments, so `isLocalServerCommand` still reads the profile (`--local-profile <name>` comes first).
 
 ```diff
 diff --git a/server/src/index.ts b/server/src/index.ts
@@ -2050,10 +2218,10 @@ index b075f66..3b25590 100644
    version,
 diff --git a/server/src/integrations/envSeed.ts b/server/src/integrations/envSeed.ts
 new file mode 100644
-index 0000000..41ab4e7
+index 0000000..6f59d8a
 --- /dev/null
 +++ b/server/src/integrations/envSeed.ts
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,250 @@
 +// The Local server's one-time take-over of the environments the app ran itself before 5a.
 +//
 +// Before 5a, the Trek app's main process ran Colima, docker and the dev stacks for Local windows,
@@ -2065,18 +2233,30 @@ index 0000000..41ab4e7
 +//
 +// `trek-server start --local --import-env-from <userData>` copies them into the server's data dir
 +// before it serves anything, once: only while the data dir has no environments.json yet. With no
-+// registry to copy it writes an empty one, so a later start never copies again. The app's files
-+// stay as they were (a dev build and the installed app share that userData, and each Local profile
-+// takes its own copy).
-+import { copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
++// registry to copy it writes an empty one, so a later start never copies again. A registry it
++// cannot read or parse (an older Trek may be writing it, not atomically) throws and writes nothing,
++// so the next start tries again, rather than taking every VM for an orphan for good.
++//
++// The app's registry and pid files are copied and left as they were (a dev build and the installed
++// app share that userData, and each Local profile takes its own copy). A stack's log is shared, as
++// a hard link: the app's `stack.sh up` and the server's `stack.down`/`destroy` both only append to
++// it. Known limit: an older Trek still running on that userData after the take-over (or the other
++// Local profile) starts stacks this server cannot see, since each takes its own snapshot.
++//
++// The server's registry is never overwritten: it is written to a temp file (0600: a branch's
++// variables may hold secrets) and hard-linked into place, which fails if a registry appeared
++// meanwhile. Only well-formed entries are copied, with their variables and compose file held to
++// the checks `env.up` applies (args.ts), since the registry's variables reach docker compose.
++import { constants, copyFileSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 +import { isAbsolute, join } from 'node:path'
-+import { writeFileAtomic } from '../atomicWrite.ts'
-+import { ENV_PROFILE_PREFIX } from '../../../src/shared/environments.ts'
 +import { isRecord } from '../validate.ts'
++import { optionalComposeFile, optionalEnvVars, requireProfile } from './args.ts'
 +import { ENV_REGISTRY_FILE, STACKS_DIR } from './machine.ts'
 +
 +/** A stack file the app's stacks.ts wrote: `<slug>.log` or `<slug>.pid` */
 +const STACK_FILE_RE = /^[a-z0-9][a-z0-9-]*\.(log|pid)$/
++/** A pid file's text, as the stack service writes it (`String(pid)`) */
++const PID_RE = /^\s*([1-9][0-9]{0,9})\s*$/
 +
 +export interface EnvSeedResult {
 +  /** Whether this start took the app's files over (false: the data dir already had its registry) */
@@ -2089,88 +2269,230 @@ index 0000000..41ab4e7
 +  skipped: string[]
 +}
 +
-+/** The app's registry, entry by entry: only well-formed twb- entries with absolute paths. */
-+function readAppRegistry(file: string, skipped: string[]): Record<string, unknown> {
++interface SeedEntry {
++  repoPath: string
++  branch: string
++  worktreePath: string
++  composeFile?: string
++  envVars?: Record<string, string>
++  createdAt: string
++}
++
++/** Whether anything (a file, a directory, a symlink, even a dangling one) is at the path. */
++function present(path: string): boolean {
++  try {
++    lstatSync(path)
++    return true
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
++    throw err
++  }
++}
++
++/** Whether a process has the pid: ESRCH is none, EPERM another user's (alive). */
++function alive(pid: number): boolean {
++  try {
++    process.kill(pid, 0)
++    return true
++  } catch (err) {
++    return (err as NodeJS.ErrnoException).code === 'EPERM'
++  }
++}
++
++const isProfile = (profile: string): boolean => {
++  try {
++    requireProfile(profile)
++    return true
++  } catch {
++    return false
++  }
++}
++
++/** One registry entry, as environmentService's RegistryEntry, or undefined when it is not one. */
++function seedEntry(profile: string, entry: unknown, skipped: string[]): SeedEntry | undefined {
++  if (
++    !isProfile(profile) ||
++    !isRecord(entry) ||
++    typeof entry.repoPath !== 'string' ||
++    !isAbsolute(entry.repoPath) ||
++    typeof entry.branch !== 'string' ||
++    typeof entry.worktreePath !== 'string' ||
++    !isAbsolute(entry.worktreePath) ||
++    typeof entry.createdAt !== 'string'
++  ) {
++    return undefined
++  }
++  const out: SeedEntry = { repoPath: entry.repoPath, branch: entry.branch, worktreePath: entry.worktreePath, createdAt: entry.createdAt }
++  if (entry.composeFile !== undefined && entry.composeFile !== null) {
++    try {
++      const composeFile = optionalComposeFile(entry.composeFile, entry.worktreePath)
++      if (composeFile !== undefined) out.composeFile = composeFile
++    } catch (err) {
++      skipped.push(`environment ${JSON.stringify(profile)}'s compose file (${(err as Error).message}; the default file is used)`)
++    }
++  }
++  if (isRecord(entry.envVars)) {
++    const vars: Record<string, string> = {}
++    for (const [key, value] of Object.entries(entry.envVars)) {
++      try {
++        Object.assign(vars, optionalEnvVars({ [key]: value }))
++      } catch {
++        skipped.push(`environment ${JSON.stringify(profile)}'s variable ${JSON.stringify(key)}`)
++      }
++    }
++    if (Object.keys(vars).length > 0) out.envVars = vars
++  } else if (entry.envVars !== undefined && entry.envVars !== null) {
++    skipped.push(`environment ${JSON.stringify(profile)}'s variables (not an object)`)
++  }
++  return out
++}
++
++/**
++ * The app's registry, entry by entry: only well-formed twb- entries with absolute paths. None is an
++ * empty registry; one that cannot be read or parse throws (nothing is written, the next start retries).
++ */
++function readAppRegistry(file: string, skipped: string[]): Record<string, SeedEntry> {
++  let text: string
++  try {
++    text = readFileSync(file, 'utf8')
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
++    throw new Error(`${file} cannot be read (${(err as Error).message})`)
++  }
 +  let parsed: unknown
 +  try {
-+    parsed = JSON.parse(readFileSync(file, 'utf8'))
++    parsed = JSON.parse(text)
 +  } catch (err) {
-+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') skipped.push(`${file}: ${(err as Error).message}`)
-+    return {}
++    throw new Error(`${file} does not parse (${(err as Error).message})`)
 +  }
-+  if (!isRecord(parsed)) {
-+    skipped.push(`${file}: not an object`)
-+    return {}
-+  }
-+  const out: Record<string, unknown> = {}
++  if (!isRecord(parsed)) throw new Error(`${file} is not a JSON object`)
++  const out: Record<string, SeedEntry> = {}
 +  for (const [profile, entry] of Object.entries(parsed)) {
-+    const ok =
-+      profile.startsWith(ENV_PROFILE_PREFIX) &&
-+      profile !== '__proto__' &&
-+      isRecord(entry) &&
-+      typeof entry.repoPath === 'string' &&
-+      isAbsolute(entry.repoPath) &&
-+      typeof entry.branch === 'string' &&
-+      typeof entry.worktreePath === 'string' &&
-+      isAbsolute(entry.worktreePath)
-+    if (ok) out[profile] = entry
++    const seeded = seedEntry(profile, entry, skipped)
++    if (seeded) out[profile] = seeded
 +    else skipped.push(`environment ${JSON.stringify(profile)}`)
 +  }
 +  return out
 +}
 +
-+export function seedEnvironmentsFromApp(appDir: string, dataDir: string): EnvSeedResult {
-+  const result: EnvSeedResult = { seeded: false, environments: 0, stackFiles: 0, skipped: [] }
-+  const registryFile = join(dataDir, ENV_REGISTRY_FILE)
-+  if (existsSync(registryFile)) return result
-+  mkdirSync(dataDir, { recursive: true })
-+
-+  // The stack files first: once the registry is written, this never runs again.
-+  const fromStacks = join(appDir, STACKS_DIR)
-+  const toStacks = join(dataDir, STACKS_DIR)
++/**
++ * The app's stack files into `toStacks`: each `<slug>.log` hard-linked (a `stack.sh up` still
++ * running from the app keeps writing to the same inode), else copied; each `<slug>.pid` written
++ * afresh as the stack service writes it, so its pid-compare cleanup reads the same text and a
++ * write to it never reaches the app's file. Only regular files; nothing already there is replaced.
++ */
++function seedStackFiles(fromStacks: string, toStacks: string, result: EnvSeedResult): void {
 +  let names: string[] = []
 +  try {
 +    names = readdirSync(fromStacks)
 +  } catch {
-+    // none
++    return
 +  }
 +  for (const name of names) {
 +    if (!STACK_FILE_RE.test(name)) continue
-+    mkdirSync(toStacks, { recursive: true })
++    const source = join(fromStacks, name)
 +    const target = join(toStacks, name)
-+    if (existsSync(target)) continue
 +    try {
-+      // A hard link keeps the log's inode: a `stack.sh up` still running from the app keeps writing to it.
-+      linkSync(join(fromStacks, name), target)
-+    } catch {
-+      try {
-+        copyFileSync(join(fromStacks, name), target)
-+      } catch (err) {
-+        result.skipped.push(`${name}: ${(err as Error).message}`)
++      if (!lstatSync(source).isFile()) {
++        result.skipped.push(`${name}: not a regular file`)
 +        continue
 +      }
++      mkdirSync(toStacks, { recursive: true, mode: 0o700 })
++      if (present(target)) continue
++      if (name.endsWith('.pid')) {
++        const pid = PID_RE.exec(readFileSync(source, 'utf8'))?.[1]
++        if (pid === undefined) {
++          result.skipped.push(`${name}: not a pid`)
++          continue
++        }
++        // A stack that ended while the app was closed: its pid may be another process's by now,
++        // which the stack service's down would Ctrl-C.
++        if (!alive(Number(pid))) {
++          result.skipped.push(`${name}: no process ${pid}`)
++          continue
++        }
++        writeFileSync(target, pid, { flag: 'wx', mode: 0o600 })
++      } else {
++        try {
++          linkSync(source, target)
++        } catch (err) {
++          if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue
++          // Another volume, or a file system without hard links: a copy (the app's run keeps logging to its own).
++          copyFileSync(source, target, constants.COPYFILE_EXCL)
++        }
++      }
++      result.stackFiles += 1
++    } catch (err) {
++      result.skipped.push(`${name}: ${(err as Error).message}`)
 +    }
-+    result.stackFiles += 1
 +  }
++}
 +
++/** Writes the registry at 0600, atomically, only if there is none: false when one appeared meanwhile. */
++function writeRegistryOnce(registryFile: string, registry: Record<string, SeedEntry>): boolean {
++  const tmp = `${registryFile}.${process.pid}.seed.tmp`
++  // A temp file a crash left behind would keep its mode; `wx` below then creates it afresh at 0600.
++  try {
++    unlinkSync(tmp)
++  } catch (err) {
++    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
++  }
++  try {
++    writeFileSync(tmp, JSON.stringify(registry, null, 2), { encoding: 'utf8', flag: 'wx', mode: 0o600 })
++    try {
++      // link(2), unlike rename(2), never replaces what is there.
++      linkSync(tmp, registryFile)
++      return true
++    } catch (err) {
++      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
++      throw err
++    }
++  } finally {
++    try {
++      unlinkSync(tmp)
++    } catch {
++      // best effort
++    }
++  }
++}
++
++export function seedEnvironmentsFromApp(appDir: string, dataDir: string): EnvSeedResult {
++  const result: EnvSeedResult = { seeded: false, environments: 0, stackFiles: 0, skipped: [] }
++  const registryFile = join(dataDir, ENV_REGISTRY_FILE)
++  if (present(registryFile)) return result
++  // Read first: a registry that cannot be read throws before anything is written.
 +  const registry = readAppRegistry(join(appDir, ENV_REGISTRY_FILE), result.skipped)
-+  writeFileAtomic(registryFile, JSON.stringify(registry, null, 2), 0o600)
++  mkdirSync(dataDir, { recursive: true, mode: 0o700 })
++
++  // The stack files before the registry: once the registry is written, this never runs again.
++  seedStackFiles(join(appDir, STACKS_DIR), join(dataDir, STACKS_DIR), result)
++
++  if (!writeRegistryOnce(registryFile, registry)) return { seeded: false, environments: 0, stackFiles: result.stackFiles, skipped: result.skipped }
 +  result.seeded = true
 +  result.environments = Object.keys(registry).length
 +  return result
 +}
 diff --git a/src/main/localServer.ts b/src/main/localServer.ts
-index 026ad27..4e3f5aa 100644
+index 026ad27..b183085 100644
 --- a/src/main/localServer.ts
 +++ b/src/main/localServer.ts
+@@ -31,7 +31,7 @@ import {
+ } from 'node:fs'
+ import { createConnection } from 'node:net'
+ import { homedir } from 'node:os'
+-import { join } from 'node:path'
++import { join, resolve as resolvePath } from 'node:path'
+ import { parseLocalInfo, type LocalInfo } from '../shared/localServer.ts'
+ import { globalSocketFactory } from '../shared/client/index.ts'
+ import { probeServer } from './appServerProbe'
 @@ -352,7 +352,9 @@ async function spawnAndWait(): Promise<void> {
    let child
    try {
      // detached: its own session (setsid), so no SIGHUP reaches it from the terminal that ran Trek.
 -    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE)], {
 +    // --import-env-from: the Colima environments and dev stacks this app ran itself before 5a; the
-+    // server takes them over once (server/src/integrations/envSeed.ts).
-+    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', app.getPath('userData')], {
++    // server takes them over once (server/src/integrations/envSeed.ts). Resolved: the server takes only an absolute path.
++    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', resolvePath(app.getPath('userData'))], {
        cwd: homedir(),
        detached: true,
        env: childEnv(process.env),
@@ -2179,7 +2501,7 @@ index 026ad27..4e3f5aa 100644
 
 Run: `node --test scripts/serverEnvSeed.test.mjs`
 
-Expected: `# pass 4`, `# fail 0`.
+Expected: `# pass 10`, `# fail 0`.
 
 - [ ] **Step 4: The server smoke's usage checks; the packaged app's command line**
 
@@ -2231,7 +2553,7 @@ index f12b02c..172fd4a 100644
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: `# tests 1609`, `# pass 1608`, `# fail 0`, `# skipped 1`.
+Expected: `# tests 1615`, `# pass 1614`, `# fail 0`, `# skipped 1`.
 
 Run, one at a time: `(cd server && node scripts/smoke.mjs --built)`, `node scripts/local-app-smoke.mjs`, `node scripts/local-server-smoke.mjs`, `node scripts/local-features-smoke.mjs`
 
@@ -3875,7 +4197,7 @@ Expected: no output.
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: `# tests 1614`, `# pass 1613`, `# fail 0`, `# skipped 1`.
+Expected: `# tests 1620`, `# pass 1619`, `# fail 0`, `# skipped 1`.
 
 Run, one at a time: `node scripts/local-features-smoke.mjs`, `HOME=$(mktemp -d) node scripts/v2-smoke.mjs`, `node scripts/local-window-smoke.mjs`
 
@@ -4584,7 +4906,7 @@ index 7418bef..afe72e3 100644
  
  ## Importing a .trekproj
  
-@@ -248,6 +253,14 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
+@@ -248,6 +253,18 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
    one this Trek bundles. Trek asks once whether to restart it with its own
    version; Keep Running carries on with it, and the list says it is not this
    Trek's version.
@@ -4592,14 +4914,18 @@ index 7418bef..afe72e3 100644
 +  Docker, the Colima environments and the dev stacks itself, and kept their
 +  registry in its app data (`environments.json`, and each stack's log and pid in
 +  `stacks/`). The Local server runs them now: on its first start that has no
-+  registry of its own, it copies Trek's (Trek's files stay where they were), so
-+  your VMs, containers and volumes, and a stack that is still running, are its
-+  own, under the same names. Until you restart an older Local server (Keep
-+  Running), a Local window has no Docker, Env or Stack tab.
++  registry of its own, it copies Trek's (Trek's registry and pids stay where they
++  were; a stack's log is shared, and both only append to it), so your VMs,
++  containers and volumes, and a stack that is still running, are its own, under
++  the same names. If Trek's registry cannot be read then, nothing is copied and
++  the next start tries again. Until you restart an older Local server (Keep
++  Running), a Local window has no Docker, Env or Stack tab. An older Trek still
++  running on the same app data after the take-over, or the other Local profile
++  (a dev build's), starts stacks this one cannot see: each takes its own copy.
  
  ## Attention indicators
  
-@@ -316,7 +329,10 @@ one at a time:
+@@ -316,7 +333,10 @@ one at a time:
  - `npm run smoke:local-window`: a Local window across two repositories: its sidebar,
    sessions, tags, notes, settings, Changes, unload and repository removal;
  - `npm run smoke:local-features`: a Local window's Docker, environments, stacks,
@@ -4659,19 +4985,24 @@ index 8af30af..9a59dd4 100644
  `start --data-dir` remembers the directory in the config, so later commands use it too.
  `trek-server remove` refuses to remove a repo that a project still uses.
  
-@@ -199,6 +205,11 @@ run by hand:
+@@ -199,6 +205,16 @@ run by hand:
    code 3 while that process lives; a dead one's lock, or one from before the
    last boot, is taken over; SIGKILL leaves both files for the next start to
    clean up (SIGINT, SIGTERM and SIGHUP remove them);
 +- `--import-env-from <dir>` (the app passes its own data dir): once, on a start
 +  whose data dir has no `environments.json` yet, the environments registry and
 +  the dev stacks' files a Trek before 5a kept there are copied in (a stack's log
-+  as a hard link, so a stack still running keeps logging to it). The originals
-+  stay. With nothing to copy it writes an empty registry, so it never copies again;
++  as a hard link, so a stack still running keeps logging to it: the log is the
++  one file both share, and both only append; a pid only while its process
++  lives). The registry and pids there stay. With nothing to copy it writes an
++  empty registry, so it never copies again; a registry there that cannot be read
++  or parse is a warning, nothing is written, and the next start tries again. An
++  older Trek still running on that data dir afterwards, or the other local
++  profile, starts stacks this server cannot see (each takes its own copy);
  - any path is allowed (the welcome lists the `local` capability), since the
    user picks paths on their own disk. That covers every path check, not only
    `server.addRepo` and `project.import`: `worktree.create`
-@@ -266,6 +277,12 @@ Then configure the app with `wss://dev.example.com`.
+@@ -266,6 +282,12 @@ Then configure the app with `wss://dev.example.com`.
    SSH key; run the server as a dedicated user if the box is shared.
  - The path allowlist (repos + their parent dirs + `worktreeRoots`) protects
    against path typos and confused-deputy bugs, not against a stolen token.
@@ -4717,7 +5048,7 @@ Expected: no output.
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: `# tests 1614`, `# pass 1613`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build <hash>` (`58e42acfe91c` in the clean checkout of Step 4; `b468628e3f07` in the prototype, whose `node_modules` were symlinks).
+Expected: `# tests 1620`, `# pass 1619`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build <hash>` (`58e42acfe91c` in the clean checkout of Step 4; `b468628e3f07` in the prototype, whose `node_modules` were symlinks).
 
 - [ ] **Step 3: Every smoke, one at a time**
 
@@ -4748,7 +5079,7 @@ npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run buil
 node scripts/local-app-smoke.mjs
 ```
 
-Expected: `npm ci` ends `added 365 packages`; `npm run rebuild` ends `✔ Rebuild Complete`; `# tests 1614`, `# pass 1613`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build 58e42acfe91c`; `LOCAL APP SMOKE PASS (45 checks)`.
+Expected: `npm ci` ends `added 365 packages`; `npm run rebuild` ends `✔ Rebuild Complete`; `# tests 1620`, `# pass 1619`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build 58e42acfe91c`; `LOCAL APP SMOKE PASS (45 checks)`.
 
 - [ ] **Step 5: The packaged app runs the Local smokes**
 

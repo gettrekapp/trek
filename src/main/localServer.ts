@@ -31,7 +31,7 @@ import {
 } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve as resolvePath } from 'node:path'
 import { parseLocalInfo, type LocalInfo } from '../shared/localServer.ts'
 import { globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
@@ -353,8 +353,8 @@ async function spawnAndWait(): Promise<void> {
   try {
     // detached: its own session (setsid), so no SIGHUP reaches it from the terminal that ran Trek.
     // --import-env-from: the Colima environments and dev stacks this app ran itself before 5a; the
-    // server takes them over once (server/src/integrations/envSeed.ts).
-    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', app.getPath('userData')], {
+    // server takes them over once (server/src/integrations/envSeed.ts). Resolved: the server takes only an absolute path.
+    child = spawn(process.execPath, [bundle, 'start', '--local', ...localProfileArgs(PROFILE), '--import-env-from', resolvePath(app.getPath('userData'))], {
       cwd: homedir(),
       detached: true,
       env: childEnv(process.env),

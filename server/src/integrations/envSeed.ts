@@ -9,9 +9,15 @@
 //
 // `trek-server start --local --import-env-from <userData>` copies them into the server's data dir
 // before it serves anything, once: only while the data dir has no environments.json yet. With no
-// registry to copy it writes an empty one, so a later start never copies again. The app's files
-// stay as they were (a dev build and the installed app share that userData, and each Local profile
-// takes its own copy).
+// registry to copy it writes an empty one, so a later start never copies again. A registry it
+// cannot read or parse (an older Trek may be writing it, not atomically) throws and writes nothing,
+// so the next start tries again, rather than taking every VM for an orphan for good.
+//
+// The app's registry and pid files are copied and left as they were (a dev build and the installed
+// app share that userData, and each Local profile takes its own copy). A stack's log is shared, as
+// a hard link: the app's `stack.sh up` and the server's `stack.down`/`destroy` both only append to
+// it. Known limit: an older Trek still running on that userData after the take-over (or the other
+// Local profile) starts stacks this server cannot see, since each takes its own snapshot.
 //
 // The server's registry is never overwritten: it is written to a temp file (0600: a branch's
 // variables may hold secrets) and hard-linked into place, which fails if a registry appeared
@@ -56,6 +62,16 @@ function present(path: string): boolean {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
     throw err
+  }
+}
+
+/** Whether a process has the pid: ESRCH is none, EPERM another user's (alive). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
 }
 
@@ -107,19 +123,25 @@ function seedEntry(profile: string, entry: unknown, skipped: string[]): SeedEntr
   return out
 }
 
-/** The app's registry, entry by entry: only well-formed twb- entries with absolute paths. */
+/**
+ * The app's registry, entry by entry: only well-formed twb- entries with absolute paths. None is an
+ * empty registry; one that cannot be read or parse throws (nothing is written, the next start retries).
+ */
 function readAppRegistry(file: string, skipped: string[]): Record<string, SeedEntry> {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+    throw new Error(`${file} cannot be read (${(err as Error).message})`)
+  }
   let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(file, 'utf8'))
+    parsed = JSON.parse(text)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') skipped.push(`${file}: ${(err as Error).message}`)
-    return {}
+    throw new Error(`${file} does not parse (${(err as Error).message})`)
   }
-  if (!isRecord(parsed)) {
-    skipped.push(`${file}: not an object`)
-    return {}
-  }
+  if (!isRecord(parsed)) throw new Error(`${file} is not a JSON object`)
   const out: Record<string, SeedEntry> = {}
   for (const [profile, entry] of Object.entries(parsed)) {
     const seeded = seedEntry(profile, entry, skipped)
@@ -157,6 +179,12 @@ function seedStackFiles(fromStacks: string, toStacks: string, result: EnvSeedRes
         const pid = PID_RE.exec(readFileSync(source, 'utf8'))?.[1]
         if (pid === undefined) {
           result.skipped.push(`${name}: not a pid`)
+          continue
+        }
+        // A stack that ended while the app was closed: its pid may be another process's by now,
+        // which the stack service's down would Ctrl-C.
+        if (!alive(Number(pid))) {
+          result.skipped.push(`${name}: no process ${pid}`)
           continue
         }
         writeFileSync(target, pid, { flag: 'wx', mode: 0o600 })
@@ -208,12 +236,13 @@ export function seedEnvironmentsFromApp(appDir: string, dataDir: string): EnvSee
   const result: EnvSeedResult = { seeded: false, environments: 0, stackFiles: 0, skipped: [] }
   const registryFile = join(dataDir, ENV_REGISTRY_FILE)
   if (present(registryFile)) return result
+  // Read first: a registry that cannot be read throws before anything is written.
+  const registry = readAppRegistry(join(appDir, ENV_REGISTRY_FILE), result.skipped)
   mkdirSync(dataDir, { recursive: true, mode: 0o700 })
 
-  // The stack files first: once the registry is written, this never runs again.
+  // The stack files before the registry: once the registry is written, this never runs again.
   seedStackFiles(join(appDir, STACKS_DIR), join(dataDir, STACKS_DIR), result)
 
-  const registry = readAppRegistry(join(appDir, ENV_REGISTRY_FILE), result.skipped)
   if (!writeRegistryOnce(registryFile, registry)) return { seeded: false, environments: 0, stackFiles: result.stackFiles, skipped: result.skipped }
   result.seeded = true
   result.environments = Object.keys(registry).length

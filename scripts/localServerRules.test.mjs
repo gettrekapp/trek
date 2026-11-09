@@ -88,6 +88,14 @@ test('isLocalServerCommand: trek-server, start --local, and this profile\'s --lo
   assert.equal(isLocalServerCommand(`${bundle} start --localx`, undefined), false)
   assert.equal(isLocalServerCommand('sleep 300', undefined), false)
   assert.equal(isLocalServerCommand('/bin/zsh -c start --local', undefined), false, 'no trek-server')
+  // 5a: main appends --import-env-from <userData> after the profile; ps prints it unquoted, spaces and all.
+  const userData = '/Users/u/Library/Application Support/Trek Dev'
+  for (const dir of [userData, `'${userData}'`]) {
+    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, undefined), true, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --import-env-from ${dir}`, 'dev'), false, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, 'dev'), true, dir)
+    assert.equal(isLocalServerCommand(`${bundle} start --local --local-profile dev --import-env-from ${dir}`, undefined), false, dir)
+  }
 })
 
 test('parseBuildJson takes the bundle stamp, nothing else', () => {
