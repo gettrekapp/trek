@@ -1,3 +1,4 @@
+import { handOverIntegrationsToLocal } from './integrationsHandover'
 import { app, BrowserWindow, Menu, nativeImage } from 'electron'
 
 app.setName('Trek Dev')
@@ -9,8 +10,6 @@ function setDockIcon(): void {
 }
 import { registerAppIpc } from './appIpc'
 import { registerGithubHandlers } from './github'
-import { registerLinearHandlers } from './linear'
-import { registerSkillHandlers } from './skills'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
 import { appSettings, registerAppSettingsHandlers } from './appSettings'
@@ -28,7 +27,6 @@ import {
 import { localStatusLabel } from '../shared/appServerRules.ts'
 import { registerV2Relay } from './v2relay'
 import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandlers } from './importUi'
-import { registerVoiceHandlers } from './voice'
 import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
 import { removeStaleMcpConfigs } from './staleMcpConfigs'
@@ -160,8 +158,6 @@ app.whenReady().then(async () => {
   registerAppIpc()
   registerImportHandlers()
   registerGithubHandlers()
-  registerLinearHandlers()
-  registerSkillHandlers()
   registerAppSettingsHandlers()
   // Before the links: their first connections are linked to the aggregator as they are made.
   registerAttentionHandlers()
@@ -169,13 +165,13 @@ app.whenReady().then(async () => {
   registerAppServerHandlers({ linked: attention.linked, unlinked: attention.unlinked, listChanged: attention.relabel })
   registerV2Relay()
   registerLocalServerHandlers()
-  registerVoiceHandlers()
   registerLlmHandlers()
   buildMenu()
   onLocalServerChanged(buildMenu)
   setDockIcon()
   // Not awaited: restored Local windows show Connecting until it answers, then follow its URL.
   void superviseLocalServer()
+  handOverIntegrationsToLocal()
   // Once, before the windows come back: those on .trekproj files then come back on their projects.
   await offerFirstLaunchImport().catch((err) => console.error('[import] the first-launch prompt failed', err))
   // No empty window yet: a .trekproj that launched the app, or that arrives during the restore,

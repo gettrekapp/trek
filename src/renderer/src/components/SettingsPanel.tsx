@@ -27,8 +27,8 @@ interface Props {
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // The project's settings are edited on the server: text is committed on blur (each commit is a
-  // request), this machine's sections are hidden (but a Local window's environments, and Linear
-  // everywhere), and a conflict's Reload remounts it.
+  // request), Linear, Voice and the environments show where the window's server has them (their
+  // keys and VMs are the server's), and a conflict's Reload remounts it.
   const features = useFeatures()
   const sections = settingsSections(features)
   const reload = useAppStore((s) => s.settingsReload)

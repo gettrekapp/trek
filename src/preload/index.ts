@@ -7,15 +7,8 @@ import type {
   SessionSelect,
   V2SocketOpenResult,
   AppServerTest,
-  LinearIssue,
-  LinearKeyResult,
   InitialWindowState,
   RecentEntry,
-  SkillInfo,
-  VoiceConfig,
-  VoiceInfo,
-  VoiceKeyResult,
-  VoiceSettings,
 } from '../shared/types'
 import type { LlmSettings, LlmSettingsPatch, LocalBackend, ModelInfo } from '../shared/providers/types'
 
@@ -63,13 +56,6 @@ const api = {
   githubPrHeadBranch: (owner: string, repo: string, number: number): Promise<string | null> =>
     ipcRenderer.invoke('github:prHeadBranch', owner, repo, number),
 
-  // Linear — the API key stays in the main process
-  linearHasApiKey: (): Promise<boolean> => ipcRenderer.invoke('linear:hasApiKey'),
-  linearSetApiKey: (apiKey: string): Promise<LinearKeyResult> =>
-    ipcRenderer.invoke('linear:setApiKey', apiKey),
-  linearClearApiKey: (): Promise<void> => ipcRenderer.invoke('linear:clearApiKey'),
-  linearFetchIssues: (ids: string[]): Promise<LinearIssue[]> =>
-    ipcRenderer.invoke('linear:fetchIssues', ids),
 
   // Agent CLIs — app-wide defaults and local model lists
   llmGetSettings: (): Promise<LlmSettings> => ipcRenderer.invoke('llm:getSettings'),
@@ -80,15 +66,6 @@ const api = {
   llmFetchModels: (backend: LocalBackend, baseUrl: string): Promise<ModelInfo[]> =>
     ipcRenderer.invoke('llm:fetchModels', backend, baseUrl),
 
-  // ElevenLabs voice summaries — the API key stays in the main process
-  voiceGetSettings: (): Promise<VoiceSettings> => ipcRenderer.invoke('voice:getSettings'),
-  voiceSetApiKey: (apiKey: string): Promise<VoiceKeyResult> =>
-    ipcRenderer.invoke('voice:setApiKey', apiKey),
-  voiceClearApiKey: (): Promise<void> => ipcRenderer.invoke('voice:clearApiKey'),
-  voiceListVoices: (): Promise<VoiceInfo[]> => ipcRenderer.invoke('voice:listVoices'),
-  voiceSetConfig: (patch: Partial<VoiceConfig>): Promise<VoiceConfig> =>
-    ipcRenderer.invoke('voice:setConfig', patch),
-  voiceSynthesize: (text: string): Promise<Uint8Array> => ipcRenderer.invoke('voice:synthesize', text),
 
   // App-wide trek-servers (protocol v2). Tokens can be set, never read.
   appServers: {
@@ -170,9 +147,6 @@ const api = {
   showError: (title: string, message: string): Promise<void> =>
     ipcRenderer.invoke('dialog:error', title, message),
 
-  // Skills
-  listSkills: (worktreePath: string): Promise<SkillInfo[]> =>
-    ipcRenderer.invoke('skills:list', worktreePath),
 
   // Menu events
   onMenu: (

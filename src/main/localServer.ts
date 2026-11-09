@@ -629,6 +629,11 @@ async function showError(failed: LocalServerStatus): Promise<void> {
 
 // ---- The API: appServers.ts, the menu, the IPC and quit ----
 
+/** This Trek's Local profile: `local` packaged, else `local-<name>` (a dev build's): the key of what it handed to that server. */
+export function localProfileKey(): string {
+  return PROFILE === undefined ? 'local' : `local-${PROFILE}`
+}
+
 export function localServerStatus(): LocalServerStatus {
   return { ...status }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAppStore } from '../store'
-import { loadVoiceSettings, speakSummary, updateVoiceConfig } from '../voice'
+import { getBackend } from '../backend'
+import { loadVoiceSettings, testVoice, updateVoiceConfig } from '../voice'
 import type { VoiceInfo } from '../../../shared/types'
 
 const MODELS = [
@@ -9,7 +10,7 @@ const MODELS = [
   { id: 'eleven_multilingual_v2', label: 'Multilingual v2 — most natural' }
 ]
 
-/** ElevenLabs key and voice — stored on this machine, shared by every project. */
+/** ElevenLabs key and voice — the window's server's, shared by every project on it. */
 export function VoiceSettings(): React.JSX.Element {
   const voice = useAppStore((s) => s.voice)
   const [apiKey, setApiKey] = useState('')
@@ -20,37 +21,53 @@ export function VoiceSettings(): React.JSX.Element {
 
   useEffect(() => {
     if (!connected) return
-    window.api
-      .voiceListVoices()
+    getBackend()
+      .voice.voices()
       .then(setVoices)
       .catch((err: Error) => setError(err.message))
   }, [connected])
+
+  const fail = (err: unknown): void => setError(err instanceof Error ? err.message : String(err))
 
   const connect = async (): Promise<void> => {
     if (!apiKey.trim()) return
     setBusy(true)
     setError(null)
-    const result = await window.api.voiceSetApiKey(apiKey)
-    setBusy(false)
-    if (!result.ok) {
-      setError(result.error)
-      return
+    try {
+      const result = await getBackend().voice.setKey(apiKey)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setApiKey('')
+      setVoices(result.voices)
+      await loadVoiceSettings()
+    } catch (err) {
+      fail(err)
+    } finally {
+      setBusy(false)
     }
-    setApiKey('')
-    setVoices(result.voices)
-    await loadVoiceSettings()
   }
 
   const disconnect = async (): Promise<void> => {
-    await window.api.voiceClearApiKey()
-    setVoices([])
-    await loadVoiceSettings()
+    try {
+      await getBackend().voice.clearKey()
+      setVoices([])
+      await loadVoiceSettings()
+    } catch (err) {
+      fail(err)
+    }
+  }
+
+  const update = (patch: Parameters<typeof updateVoiceConfig>[0]): void => {
+    setError(null)
+    updateVoiceConfig(patch).catch(fail)
   }
 
   const test = async (): Promise<void> => {
     setError(null)
     try {
-      const result = await speakSummary('', 'This is how spoken summaries from your agent sessions will sound.')
+      const result = await testVoice('This is how spoken summaries from your agent sessions will sound.')
       if (!result.played) setError(result.reason)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -64,9 +81,10 @@ export function VoiceSettings(): React.JSX.Element {
         <span className="settings-label">
           <span className="settings-name">ElevenLabs API key</span>
           <span className="settings-desc">
-            Lets agent sessions read a short summary aloud (the speak_summary tool), while the
-            sidebar toggle is set to Active. Stored encrypted on this machine, not in the project
-            file.
+            Lets agent sessions read a short summary aloud (the speak_summary tool) in every window
+            that has their project open, while that app&apos;s sidebar toggle is set to Active. Stored
+            on this project&apos;s server (owner-only, never sent back), with its voice and model,
+            for every project on it.
           </span>
           {error && <span className="settings-desc settings-warn">{error}</span>}
         </span>
@@ -102,7 +120,7 @@ export function VoiceSettings(): React.JSX.Element {
               <select
                 className="settings-select"
                 value={voice.voiceId}
-                onChange={(e) => void updateVoiceConfig({ voiceId: e.target.value })}
+                onChange={(e) => update({ voiceId: e.target.value })}
               >
                 {!voices.some((v) => v.id === voice.voiceId) && (
                   <option value={voice.voiceId}>{voice.voiceId || 'Choose a voice'}</option>
@@ -122,7 +140,7 @@ export function VoiceSettings(): React.JSX.Element {
             <input
               type="checkbox"
               checked={voice.promptSessions}
-              onChange={(e) => void updateVoiceConfig({ promptSessions: e.target.checked })}
+              onChange={(e) => update({ promptSessions: e.target.checked })}
             />
             <span className="settings-label">
               <span className="settings-name">Summarize automatically</span>
@@ -140,7 +158,7 @@ export function VoiceSettings(): React.JSX.Element {
             <select
               className="settings-select"
               value={voice.modelId}
-              onChange={(e) => void updateVoiceConfig({ modelId: e.target.value })}
+              onChange={(e) => update({ modelId: e.target.value })}
             >
               {!MODELS.some((m) => m.id === voice.modelId) && (
                 <option value={voice.modelId}>{voice.modelId}</option>

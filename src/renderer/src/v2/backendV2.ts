@@ -151,6 +151,14 @@ const LONG_MS = 30 * 60_000
 const SLOW_MS = 10 * 60_000
 /** docker start, stop and restart (the server gives docker two minutes) */
 const CONTAINER_MS = 3 * 60_000
+/** A base64 text (an mp3 over the wire) as bytes. */
+export function base64Bytes(text: string): Uint8Array {
+  const binary = atob(text)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
 const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
 export function createV2Backend(deps: V2BackendDeps): WindowBackend {
@@ -503,6 +511,32 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       down: async (loc) => request('stack.down', { projectId, worktreeId: worktreeAt(loc.path) }, { timeoutMs: SLOW_MS }),
       destroy: async (loc) => request('stack.destroy', { projectId, worktreeId: worktreeAt(loc.path) }, { timeoutMs: SLOW_MS }),
       log: async (loc, fileId, offset) => request('stack.log', { projectId, worktreeId: worktreeAt(loc.path), fileId, offset })
+    },
+    linear: {
+      hasKey: async () => (await request('linear.status', {})).hasKey,
+      setKey: (apiKey) => request('linear.setKey', { apiKey }),
+      clearKey: async () => {
+        await request('linear.clearKey', {})
+      },
+      issues: (ids) => request('linear.issues', { ids })
+    },
+    voice: {
+      settings: () => request('voice.settings', {}),
+      setKey: (apiKey) => request('voice.setKey', { apiKey }),
+      clearKey: async () => {
+        await request('voice.clearKey', {})
+      },
+      voices: () => request('voice.voices', {}),
+      setConfig: (patch) => request('voice.setConfig', patch),
+      synthesize: async (text) => base64Bytes((await request('voice.synthesize', { text })).audio),
+      // Only this project's: the server sends a project's summaries to its subscribers only.
+      onSummary: (listener) =>
+        deps.onEvent('voice.summary', (event) => {
+          if (event.projectId === projectId) listener(event)
+        })
+    },
+    skills: {
+      list: async (loc) => request('skills.list', { projectId, worktreeId: worktreeAt(loc.path) })
     },
     branch: {
       setTag: async (repoId, branch, tagId) => {

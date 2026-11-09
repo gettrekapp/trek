@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppStore } from '../store'
+import { getBackend } from '../backend'
 import { focusTerminal, writeTerminal } from '../terminals'
 import type { SkillInfo, WorktreeInstance } from '../../../shared/types'
 
@@ -52,9 +53,10 @@ export function SkillMenu({ worktree, terminalId }: Props): React.JSX.Element {
     })
     setSkills(null)
     setOpen(true)
-    // Fetched on every open so newly added skills show up without a restart.
-    window.api
-      .listSkills(worktree.path)
+    // Fetched on every open so newly added skills show up without a restart; the window's server
+    // reads the worktree's .claude and its user's ~/.claude on its disk.
+    getBackend()
+      .skills.list({ path: worktree.path })
       .then(setSkills)
       .catch(() => setSkills([]))
   }

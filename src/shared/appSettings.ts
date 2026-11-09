@@ -6,9 +6,11 @@ export interface AppSettings {
   showNotifications: boolean
   /** Quitting Trek stops the Local server too; off by default, so it keeps running */
   stopLocalServerOnQuit: boolean
+  /** Active plays the sessions' spoken summaries in this app's windows; Busy (false) skips them */
+  voiceActive: boolean
 }
 
-export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({ showNotifications: true, stopLocalServerOnQuit: false })
+export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({ showNotifications: true, stopLocalServerOnQuit: false, voiceActive: true })
 
 /** A stored file (or a patch): known fields of the right type are kept, the rest fall back to `base`. */
 export function parseAppSettings(raw: unknown, base: Readonly<AppSettings> = DEFAULT_APP_SETTINGS): AppSettings {
@@ -16,6 +18,7 @@ export function parseAppSettings(raw: unknown, base: Readonly<AppSettings> = DEF
   const flag = (key: keyof AppSettings): boolean => (typeof from[key] === 'boolean' ? (from[key] as boolean) : base[key])
   return {
     showNotifications: flag('showNotifications'),
-    stopLocalServerOnQuit: flag('stopLocalServerOnQuit')
+    stopLocalServerOnQuit: flag('stopLocalServerOnQuit'),
+    voiceActive: flag('voiceActive')
   }
 }

@@ -6,7 +6,7 @@ import { StartScreen, type StartView } from './components/StartScreen'
 import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { requestSessionSelect, watchAttention } from './attentionSelect'
 import { useLinearSync } from './linear'
-import { loadVoiceSettings } from './voice'
+import { useVoice } from './voice'
 import { loadLlmSettings, watchLlmSettings } from './llm'
 import { SummaryBubble } from './components/SummaryBubble'
 import { titleBarForeground } from '../../shared/appearance'
@@ -25,9 +25,9 @@ export default function App(): React.JSX.Element {
     if (serverWindow) setStartRequest(undefined)
   }, [serverWindow])
   useLinearSync()
+  useVoice()
 
   useEffect(() => {
-    void loadVoiceSettings()
     void loadLlmSettings()
     return watchLlmSettings()
   }, [])

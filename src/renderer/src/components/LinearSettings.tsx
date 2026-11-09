@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useAppStore } from '../store'
+import { getBackend } from '../backend'
 
-/** Linear API key — stored encrypted on this machine, shared by every project. */
+/** Linear API key — the window's server's, shared by every project on it. */
 export function LinearSettings(): React.JSX.Element {
   const connected = useAppStore((s) => s.linearConnected)
   const setLinearConnected = useAppStore((s) => s.setLinearConnected)
@@ -14,7 +15,14 @@ export function LinearSettings(): React.JSX.Element {
     if (!apiKey.trim()) return
     setBusy(true)
     setError(null)
-    const result = await window.api.linearSetApiKey(apiKey)
+    let result: Awaited<ReturnType<ReturnType<typeof getBackend>['linear']['setKey']>>
+    try {
+      result = await getBackend().linear.setKey(apiKey)
+    } catch (err) {
+      setBusy(false)
+      setError(err instanceof Error ? err.message : String(err))
+      return
+    }
     setBusy(false)
     if (!result.ok) {
       setError(result.error)
@@ -26,7 +34,12 @@ export function LinearSettings(): React.JSX.Element {
   }
 
   const disconnect = async (): Promise<void> => {
-    await window.api.linearClearApiKey()
+    try {
+      await getBackend().linear.clearKey()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      return
+    }
     setUser(null)
     setLinearConnected(false)
   }
@@ -39,8 +52,9 @@ export function LinearSettings(): React.JSX.Element {
           <span className="settings-name">API key</span>
           <span className="settings-desc">
             Shows each linked issue&apos;s title and status on its ticket chip. Create a personal
-            key under Linear → Settings → Security &amp; access. Stored encrypted on this machine,
-            not in the project.
+            key under Linear → Settings → Security &amp; access. Stored on this project&apos;s
+            server (owner-only, never sent back), not in the project, and used by every project on
+            it.
           </span>
           {connected && (
             <span className="settings-desc">Connected{user ? ` as ${user}` : ''}</span>

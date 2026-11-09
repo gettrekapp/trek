@@ -1,6 +1,9 @@
 import { useEffect } from 'react'
 import { allBranchTickets, isLinearTicket, useAppStore } from './store'
+import { getBackend } from './backend'
 import { useFeatures } from './useFeatures'
+
+// The ticket chips' Linear issues, looked up by the window's server with its own key (5b).
 
 const REFRESH_MS = 5 * 60_000
 /** Window focus refreshes, but not more often than this. */
@@ -14,10 +17,13 @@ function linkedLinearIds(): string[] {
 }
 
 export async function refreshLinearIssues(ids = linkedLinearIds()): Promise<void> {
-  if (!useAppStore.getState().linearConnected || ids.length === 0) return
+  const backend = getBackend()
+  if (!backend.features.linear || !useAppStore.getState().linearConnected || ids.length === 0) return
   lastRefresh = Date.now()
   try {
-    useAppStore.getState().setLinearIssues(await window.api.linearFetchIssues(ids))
+    const issues = await backend.linear.issues(ids)
+    // The window moved to another server meanwhile: not its issues.
+    if (getBackend() === backend) useAppStore.getState().setLinearIssues(issues)
   } catch (err) {
     // Chips fall back to the bare id; the next refresh retries.
     console.warn('Linear issue refresh failed', err)
@@ -27,8 +33,9 @@ export async function refreshLinearIssues(ids = linkedLinearIds()): Promise<void
 /** Keeps the store's Linear issue cache fresh for the open project's tickets. */
 export function useLinearSync(): void {
   const connected = useAppStore((s) => s.linearConnected)
-  // Every window has Linear (4c); the effect still re-runs when the window's features change.
-  const linear = useFeatures().linear
+  // A new object for each backend and each welcome: the key is asked again for the window's server.
+  const features = useFeatures()
+  const linear = features.linear
   // Joined so the effect only re-runs when the set of linked ids changes.
   const idsKey = useAppStore((s) =>
     [...new Set(allBranchTickets(s.project).filter(isLinearTicket))]
@@ -37,10 +44,18 @@ export function useLinearSync(): void {
   )
 
   useEffect(() => {
-    void window.api.linearHasApiKey().then((has) => {
-      useAppStore.getState().setLinearConnected(has)
-    })
-  }, [])
+    const backend = getBackend()
+    if (!backend.features.linear) {
+      useAppStore.getState().setLinearConnected(false)
+      return
+    }
+    backend.linear.hasKey().then(
+      (has) => {
+        if (getBackend() === backend) useAppStore.getState().setLinearConnected(has)
+      },
+      (err) => console.warn('Linear key check failed', err)
+    )
+  }, [features])
 
   useEffect(() => {
     if (!connected || !idsKey || !linear) return

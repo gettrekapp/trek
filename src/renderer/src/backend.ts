@@ -27,14 +27,22 @@ import type {
   EnvironmentInfo,
   EnvironmentSettings,
   GitWorktreeInfo,
+  LinearIssue,
+  LinearKeyResult,
   Repository,
   SessionType,
+  SkillInfo,
   StackLogChunk,
   StackStatus,
   WorktreeChanges,
+  VoiceInfo,
+  VoiceKeyResult,
+  VoiceServerConfig,
+  VoiceServerSettings,
   WorktreeInstance,
   WorktreeLocator
 } from '../../shared/types'
+import type { VoiceSummaryEvent } from '../../shared/protocolV2'
 
 export type { BackendFeatures, FeatureName } from './backendFeatures'
 
@@ -138,6 +146,29 @@ export interface WindowBackend {
     destroy(loc: WorktreeLocator): Promise<number>
     log(loc: WorktreeLocator, fileId: number, offset: number): Promise<StackLogChunk>
   }
+  /** Linear with the server's own API key (feature `linear`); the key is never sent back */
+  readonly linear: {
+    hasKey(): Promise<boolean>
+    setKey(apiKey: string): Promise<LinearKeyResult>
+    clearKey(): Promise<void>
+    issues(ids: string[]): Promise<LinearIssue[]>
+  }
+  /** ElevenLabs with the server's own API key (feature `voice`) */
+  readonly voice: {
+    settings(): Promise<VoiceServerSettings>
+    setKey(apiKey: string): Promise<VoiceKeyResult>
+    clearKey(): Promise<void>
+    voices(): Promise<VoiceInfo[]>
+    setConfig(patch: Partial<VoiceServerConfig>): Promise<VoiceServerConfig>
+    /** An mp3 of `text`, for this window only (Settings' Test) */
+    synthesize(text: string): Promise<Uint8Array>
+    /** The project's sessions' spoken summaries (speak_summary), as the server sends them; returns the unsubscribe */
+    onSummary(listener: (event: VoiceSummaryEvent) => void): () => void
+  }
+  /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
+  readonly skills: {
+    list(loc: WorktreeLocator): Promise<SkillInfo[]>
+  }
   /** Branch data; null or an empty text clears the value */
   readonly branch: {
     setTag(repoId: string, branch: string, tagId: string | null): Promise<void>
@@ -224,6 +255,9 @@ export const idleBackend: WindowBackend = {
     onLog: () => () => {}
   },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
+  linear: { hasKey: noProject, setKey: noProject, clearKey: noProject, issues: noProject },
+  voice: { settings: noProject, setKey: noProject, clearKey: noProject, voices: noProject, setConfig: noProject, synthesize: noProject, onSummary: () => () => {} },
+  skills: { list: noProject },
   branch: { setTag: noProject, setCustomTag: noProject, setNote: noProject, setTicket: noProject, setPullRequest: noProject, setEnvVars: noProject },
   repos: { add: noProject, remove: noProject },
   errors: {

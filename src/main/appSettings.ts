@@ -40,7 +40,7 @@ export function appSettings(): AppSettings {
 /** Every write goes through this chain, so concurrent patches never interleave. */
 let writeChain: Promise<unknown> = Promise.resolve()
 
-async function update(patch: unknown): Promise<AppSettings> {
+export async function updateAppSettings(patch: unknown): Promise<AppSettings> {
   // Applied at once (the next notification follows it), written in order.
   const next = parseAppSettings(patch, appSettings())
   settings = next
@@ -65,5 +65,5 @@ async function update(patch: unknown): Promise<AppSettings> {
 
 export function registerAppSettingsHandlers(): void {
   ipcMain.handle('appSettings:get', () => ({ ...appSettings() }))
-  ipcMain.handle('appSettings:update', (_event, patch: unknown) => update(patch))
+  ipcMain.handle('appSettings:update', (_event, patch: unknown) => updateAppSettings(patch))
 }

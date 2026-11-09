@@ -152,15 +152,16 @@ test('features before the welcome, then when the capabilities change', () => {
   assert.equal(backend.features.globalPanel, false)
 })
 
-test("this machine's features: only the Local entry's server, once it says `local`; the server machine's follow its capabilities; Linear everywhere", () => {
-  const local = (b) => ['skills', 'reveal', 'openInEditor'].filter((name) => b.features[name])
-  const server = (b) => ['docker', 'env', 'stacks'].filter((name) => b.features[name])
-  assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['skills', 'reveal', 'openInEditor'])
+test("this machine's features: only the Local entry's server, once it says `local`; the server's follow its capabilities", () => {
+  const local = (b) => ['reveal', 'openInEditor'].filter((name) => b.features[name])
+  const server = (b) => ['docker', 'env', 'stacks', 'linear', 'voice', 'skills'].filter((name) => b.features[name])
+  assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['reveal', 'openInEditor'])
   assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'] }).backend), [])
   assert.deepEqual(local(setup({ capabilities: ['mcp'], localEntry: true }).backend), [])
   assert.deepEqual(server(setup({ capabilities: ['mcp', 'docker', 'env', 'stacks'] }).backend), ['docker', 'env', 'stacks'])
   assert.deepEqual(server(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), [])
-  assert.equal(setup().backend.features.linear, true)
+  assert.deepEqual(server(setup({ capabilities: ['linear', 'voice', 'skills'] }).backend), ['linear', 'voice', 'skills'])
+  assert.equal(setup().backend.features.linear, false)
   // A server before its welcome, then once it arrives.
   let caps
   const { backend } = setup({ capabilities: () => caps })
@@ -231,6 +232,52 @@ test('a worktree path the projection does not know is refused here, and nothing 
   await assert.rejects(backend.env.up({ path: '/elsewhere' }, { enabled: true }, undefined), (err) => err.code === 'NOT_FOUND')
   await assert.rejects(backend.stacks.status({ path: '/elsewhere' }), (err) => err.code === 'NOT_FOUND')
   assert.deepEqual(calls, [])
+})
+
+test("linear, voice and skills go to the window's server; the clip comes back as bytes; the summaries are this project's", async () => {
+  const replies = {
+    'linear.status': { hasKey: true },
+    'linear.setKey': { ok: true, user: 'Ada' },
+    'linear.issues': [{ identifier: 'TOW-1' }],
+    'voice.settings': { hasKey: false, voiceId: '', modelId: 'm', promptSessions: false },
+    'voice.setKey': { ok: true, voices: [] },
+    'voice.voices': [{ id: 'v1', name: 'Rachel' }],
+    'voice.setConfig': { voiceId: 'v1', modelId: 'm', promptSessions: true },
+    'voice.synthesize': { audio: Buffer.from('mp3!').toString('base64') },
+    'skills.list': [{ name: 'review', source: 'project', kind: 'skill' }]
+  }
+  const { backend, calls, listeners } = setup({ replies })
+  assert.equal(await backend.linear.hasKey(), true)
+  assert.deepEqual(await backend.linear.setKey('lin_k'), { ok: true, user: 'Ada' })
+  await backend.linear.clearKey()
+  assert.deepEqual(await backend.linear.issues(['TOW-1']), [{ identifier: 'TOW-1' }])
+  assert.equal((await backend.voice.settings()).modelId, 'm')
+  await backend.voice.setKey('sk_k')
+  await backend.voice.clearKey()
+  await backend.voice.voices()
+  await backend.voice.setConfig({ promptSessions: true })
+  assert.equal(Buffer.from(await backend.voice.synthesize('Hi')).toString(), 'mp3!')
+  assert.deepEqual(await backend.skills.list({ path: '/r-feat' }), [{ name: 'review', source: 'project', kind: 'skill' }])
+  assert.deepEqual(calls, [
+    ['linear.status', {}],
+    ['linear.setKey', { apiKey: 'lin_k' }],
+    ['linear.clearKey', {}],
+    ['linear.issues', { ids: ['TOW-1'] }],
+    ['voice.settings', {}],
+    ['voice.setKey', { apiKey: 'sk_k' }],
+    ['voice.clearKey', {}],
+    ['voice.voices', {}],
+    ['voice.setConfig', { promptSessions: true }],
+    ['voice.synthesize', { text: 'Hi' }],
+    ['skills.list', { projectId: 'p1', worktreeId: 'w2' }]
+  ])
+  const heard = []
+  const off = backend.voice.onSummary((e) => heard.push(e.text))
+  for (const l of listeners['voice.summary']) l({ projectId: 'p1', sessionId: 's1', text: 'mine', audio: '' })
+  for (const l of listeners['voice.summary']) l({ projectId: 'other', sessionId: 's1', text: 'theirs', audio: '' })
+  off()
+  assert.deepEqual(listeners['voice.summary'], [])
+  assert.deepEqual(heard, ['mine'])
 })
 
 test("the logs come from the window's connection, by event name, until unsubscribed", () => {

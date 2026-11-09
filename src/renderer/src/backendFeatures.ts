@@ -40,19 +40,19 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
 /**
  * A server window (3c-2, 4c, 5a). The ceiling: the v2 backend's features are
  * these AND what `v2Features` asks of the server's welcome and the window's entry.
- * - Off: the bot and voice (phase 5) and the git flows protocol v2 has no
- *   command for (moving a worktree, promote).
+ * - Off: the bot (phase 5) and the git flows protocol v2 has no command for
+ *   (moving a worktree, promote).
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
- * - Linear only reads ticket ids, with this machine's API key: on for every
- *   server (4c).
+ * - Linear, voice and skills are the server's (5b): Linear and ElevenLabs
+ *   with the server's own keys, the skills read on its disk; each needs its
+ *   capability, on any server.
  * - The Global panel needs `mcp`.
  * - Docker, environments and stacks run on the server's machine (5a): each
  *   needs its capability, on any server.
- * - Skills, Reveal and Open in VS Code read or open things on this machine at
- *   the project's paths: only the Local server's paths are on this disk
- *   (`MACHINE_FEATURES`).
+ * - Reveal and Open in VS Code open things on this machine at the project's
+ *   paths: only the Local server's paths are on this disk (`MACHINE_FEATURES`).
  */
 export const V2_FEATURES: BackendFeatures = {
   docker: true,
@@ -60,7 +60,7 @@ export const V2_FEATURES: BackendFeatures = {
   stacks: true,
   bot: false,
   linear: true,
-  voice: false,
+  voice: true,
   skills: true,
   moveWorktree: false,
   reveal: true,
@@ -74,13 +74,17 @@ export const V2_FEATURES: BackendFeatures = {
  * The welcome capability a v2 feature needs, if any. Global sessions drive the
  * worktree sessions through the server's MCP tools, so without `mcp` they
  * could not do their job. Docker, the environments and the stacks are the
- * server's own methods (5a): a server older than them has none of the three.
+ * server's own methods (5a), and Linear, voice and skills (5b): a server older
+ * than them has none of them.
  */
 const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   globalPanel: 'mcp',
   docker: 'docker',
   env: 'env',
-  stacks: 'stacks'
+  stacks: 'stacks',
+  linear: 'linear',
+  voice: 'voice',
+  skills: 'skills'
 }
 
 /**
@@ -89,9 +93,9 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
  * supervisor's own server, which main found by its pid and profile) when its
  * welcome says `local` too. Never by the capability alone: a saved entry can
  * reach another machine's Local server through a tunnel, still on 127.0.0.1,
- * and its paths are not here. Skills move to the server in 5b.
+ * and its paths are not here. Skills moved to the server in 5b.
  */
-export const MACHINE_FEATURES: readonly FeatureName[] = ['skills', 'reveal', 'openInEditor']
+export const MACHINE_FEATURES: readonly FeatureName[] = ['reveal', 'openInEditor']
 
 /** The `local` welcome capability (CAPABILITY.local in shared/protocolV2.ts). */
 const LOCAL_CAPABILITY = 'local'
@@ -171,16 +175,15 @@ export type SectionMode = 'edit' | 'project' | 'hidden'
 
 /**
  * Which Settings sections a window shows. A server window edits the project's
- * settings on the server and hides what belongs to this machine: the voice API
- * keys. Linear (its key is app-wide, in main) shows where the window has the
- * feature (every server), and the Docker environments where it has `env` (a
- * server that runs them, on its own machine).
+ * settings on the server; Linear and Voice (their keys are the server's, 5b)
+ * show where it has `linear` and `voice`, and the Docker environments where it
+ * has `env` (a server that runs them, on its own machine).
  */
 export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
   const out = {} as Record<SettingsSection, SectionMode>
   for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
   if (!features.linear) out.linear = 'hidden'
-  out.voice = 'hidden'
+  if (!features.voice) out.voice = 'hidden'
   if (!features.env) out.environments = 'hidden'
   out.agents = 'project'
   return out
