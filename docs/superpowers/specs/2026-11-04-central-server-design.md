@@ -233,7 +233,8 @@ Electron, on Linux, macOS and Windows.
   session/git `ipcMain` handlers; in phase 5, `bot.ts`, `docker.ts`, `environments.ts`,
   `stacks.ts`, `linear.ts`, `voice.ts` and `skills.ts`, once each has a server replacement.
   Until then those keep running in main against the local machine, for Local windows.
-  `docker.ts`, `environments.ts` and `stacks.ts` went in 5a, with `git:localDirty`.
+  `docker.ts`, `environments.ts` and `stacks.ts` went in 5a, with `git:localDirty`;
+  `linear.ts`, `voice.ts` and `skills.ts` in 5b.
 - **Windows:** one window per project. The registry entry is
   `{kind: 'file', path}` (legacy, until phase 4) or `{kind: 'server', serverId, projectId}`.
   Opening an already-open entry focuses its window. `open-windows.json` and recents store
@@ -423,7 +424,14 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      `stacks` capabilities, in every server window. Plans:
      `docs/superpowers/plans/2026-11-09-central-server-phase5a1-cleanup.md` and
      `…-phase5a2-machine.md`.
-   - **5b:** Linear, voice (moved to the server) and skills.
+   - **5b:** Linear, voice (moved to the server) and skills, behind the `linear`, `voice` and
+     `skills` capabilities, in every server window. User decisions (2026-11-09): the Linear and
+     ElevenLabs keys are each server's (`secrets.json` beside its config, write-only over the
+     protocol); a spoken summary (`speak_summary`, synthesized on the server) plays in every
+     window that has the project open and whose app is Active (Active/Busy stays the app's);
+     main hands the app's keys and voice settings to the Local server once, set-if-absent. The
+     trek-dev stack tools (`get_stack`, `start_stack`, `stop_stack`, `read_stack_log`) return on
+     the server's stack service.
    - **5c:** the cheapest gaps from a comparison with T3 Code (2026-11-09), each in its
      own plan:
      - **PR watch:** the server polls a worktree's linked pull request (`gh`, on the

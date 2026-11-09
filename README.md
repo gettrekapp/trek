@@ -40,8 +40,9 @@ sends every action to its server, and every other window on that project sees it
   (link ticket/PR, delete worktree). A ticket is a Linear issue (`TOW-123`, or paste its
   `linear.app/<workspace>/issue/…` URL) or a legacy Azure DevOps work item id; when the
   branch name contains a Linear id the ticket dialog pre-fills it. Add a Linear API key
-  in ⚙ Settings to show each issue's status and title on its chip; the key is stored
-  encrypted in the app's user-data directory, never on a server. The **All Notes** panel
+  in ⚙ Settings to show each issue's status and title on its chip; the key is the
+  window's server's (stored there, owner-only, never sent back to any client), shared by
+  every project on that server. The **All Notes** panel
   collects every branch note in one place — including branches whose worktree is gone —
   with a per-note delete.
 - **Sessions** (per worktree): each session tab is an agent the server runs in the
@@ -165,7 +166,7 @@ other window on that project sees them live.
   setting first, you pick **Reload** or **Keep Mine**; a Docker favourite or an
   environment setting is re-applied over the other client's change without
   asking. Attention badges and the notifications menu cover server sessions.
-  Linear ticket chips work in every server window, with the app-wide API key.
+  Linear ticket chips work in every server window, with that server's API key.
 - **Docker, environments and dev stacks, on the server's machine**: every server
   window has the Docker tab (the server's containers, and docker compose in a
   repository's main checkout), the per-worktree Colima environments (and their
@@ -177,12 +178,22 @@ other window on that project sees them live.
   A server older than this Trek (without the `docker`, `env` and `stacks`
   capabilities) shows no Docker, Env or Stack tab, and Trek does not fall back
   to running them on this machine.
+- **Linear, voice summaries and skills, on the server**: each server keeps its own
+  Linear and ElevenLabs keys (⚙ Settings, set from any window on it; neither is ever
+  sent back to a client), its voice and model, and whether its sessions are told to
+  speak a summary when they finish ("Summarize automatically"). A session's
+  `speak_summary` is synthesized on the server and played in every Trek window that
+  has its project open, unless that app is set to Busy (the sidebar's Active/Busy
+  toggle, a setting of this app). The ⚡ skill menu lists the worktree's
+  `.claude/skills` and `.claude/commands`, and the server user's `~/.claude` ones, read
+  on the server. Its agents also get the `get_stack`, `start_stack`, `stop_stack` and
+  `read_stack_log` MCP tools. A server older than this Trek (without the `linear`,
+  `voice` and `skills` capabilities) shows none of these.
 - **This machine's features, in Local windows only**: a window on the [Local
-  server](#local-server) also has skills, Open in VS Code and Reveal in Finder,
-  since its paths are this machine's. A window on a remote server shows none of
-  these.
-- **Not yet**: promote to primary, moving worktrees between servers, voice
-  summaries, skills on the server, the project bot and the stack MCP tools (phase 5).
+  server](#local-server) also has Open in VS Code and Reveal in Finder, since its
+  paths are this machine's. A window on a remote server shows neither.
+- **Not yet**: promote to primary, moving worktrees between servers and the project
+  bot (phase 5).
 
 ## Importing a .trekproj
 
@@ -277,6 +288,15 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
   created is not offered for deletion in Settings; a VM another trek-server on
   this machine created is (Settings says it may be another Trek's, and Delete
   removes its containers and volumes).
+- **Your Linear and ElevenLabs keys carry over.** Before this version Trek kept one
+  Linear key and one ElevenLabs key (and the voice, the model and "Summarize
+  automatically") for every window. Each server has its own now: once the Local
+  server runs, Trek hands it this app's keys and voice settings, once per Local
+  profile, and only where the server has no key of its own (one set there wins).
+  The keys are stored as they are, without asking Linear or ElevenLabs, so it works
+  offline; a hand-over that fails (an older Local server) is tried again at its next
+  start. Trek's own files are left as they were. A remote server needs its keys set
+  once from any window on it. Active/Busy stays this app's setting.
 
 ## Attention indicators
 
@@ -345,10 +365,13 @@ one at a time:
 - `npm run smoke:local-window`: a Local window across two repositories: its sidebar,
   sessions, tags, notes, settings, Changes, unload and repository removal;
 - `npm run smoke:local-features`: a Local window's Docker, environments, stacks,
-  skills, VS Code and Reveal against stub `colima`, `docker` and `code`, and the
-  Local server's take-over of the environments an older Trek ran itself;
+  skills, VS Code and Reveal against stub `colima`, `docker` and `code`, the Local
+  server's take-over of the environments an older Trek ran itself, and the hand-over
+  of its Linear and ElevenLabs keys;
 - `npm run smoke:server-env`: a remote server window's Docker, environments and
   stacks, run on the server's machine against stub `colima`, `docker` and `stack.sh`;
+- `npm run smoke:server-integrations`: a remote server window's Linear, voice
+  summaries, skills and the stack MCP tools, against stub Linear and ElevenLabs APIs;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

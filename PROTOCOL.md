@@ -99,6 +99,9 @@ new optional field needs no capability: its absence says enough.
 | `docker` | `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine, and `docker.log` streams compose's output (see [Docker, environments and stacks](#docker-environments-and-stacks)) |
 | `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output |
 | `stacks` | `stack.*` run the worktrees' `docker/stack/stack.sh` dev stacks on the server's machine |
+| `linear` | `linear.*` look Linear issues up with the server's own API key (see [Linear, voice and skills](#linear-voice-and-skills)) |
+| `voice` | `voice.*` keep the server's ElevenLabs key and voice; the MCP tool `speak_summary` sends each spoken summary to the project's subscribers as `voice.summary` |
+| `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -176,6 +179,9 @@ server restarts. A server without this field simply leaves it out.
 | Docker | `docker.list`, `docker.container`, `docker.compose` |
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
+| Linear | `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` |
+| Voice | `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize` |
+| Skills | `skills.list` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -427,6 +433,51 @@ connection on the same project sees the result through `env.list` and `stack.sta
 log. Under backpressure (from more than 4 MiB unsent on the connection until it drains below
 2 MiB) their output chunks are dropped, and the next chunk of that run that is sent follows one
 `[output dropped: the connection fell behind]` line. A `done` or a `step` event is never dropped.
+
+## Linear, voice and skills
+
+With the capabilities `linear`, `voice` and `skills` (phase 5b), the server looks Linear issues up
+and synthesizes spoken summaries with its own API keys, and lists the skills on its own disk.
+Before 5b the desktop app kept one Linear and one ElevenLabs key for every window; now each server
+has its own, set from any client.
+
+**The keys are write-only.** `linear.setKey` and `voice.setKey` store a key in the server's
+`secrets.json`, beside its config file (owner-only, 0600, written then renamed; a file that cannot
+be read or parse is never overwritten), and no method sends a key back: `linear.status` and
+`voice.settings` say only whether one is set. A key is checked first (Linear's `viewer`, the
+ElevenLabs key's voices); the result is `{ok: false, error}` with the service's answer when it is
+refused. `ifAbsent: true` is the desktop's one-time hand-over of its own keys to the local server:
+the key is stored as it is, unchecked (the app checked it when the user entered it), and only while
+the server has none; otherwise the result is `{ok: false, error, present: true}` and the server's
+own key is kept. A key is 1 to 1024 printable ASCII characters with no spaces.
+
+| Method | Params | Result |
+|---|---|---|
+| `linear.status` | `{}` | `{hasKey}` |
+| `linear.setKey` | `{apiKey, ifAbsent?}` | `{ok: true, user}` (the key's Linear user; empty for `ifAbsent`) or `{ok: false, error, present?}` |
+| `linear.clearKey` | `{}` | `null` |
+| `linear.issues` | `{ids}` (at most 500 strings of at most 64 characters) | the `LinearIssue`s that exist and the key can see; ids that are not `ABC-123` are left out; `[]` without a key |
+| `voice.settings` | `{}` | `{hasKey, voiceId, modelId, promptSessions}` |
+| `voice.setKey` | `{apiKey, ifAbsent?}` | `{ok: true, voices}` (the first one is chosen when no voice is; empty for `ifAbsent`) or `{ok: false, error, present?}` |
+| `voice.clearKey` | `{}` | `null` |
+| `voice.voices` | `{}` | the key's voices, `[{id, name}]` |
+| `voice.setConfig` | any of `{voiceId, modelId, promptSessions}` | the whole config |
+| `voice.synthesize` | `{text}` (trimmed, 1 to 400 characters) | `{audio}`: an mp3, base64, for this connection only (a client's Test) |
+| `skills.list` | `{projectId, worktreeId}` | `SkillInfo[]`: the worktree's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, then the server user's `~/.claude` ones; a project one shadows a user one of the same name |
+
+A failure of Linear or ElevenLabs (unreachable, a revoked key, a quota) is `TOOL_ERROR` with the
+service's message. The voice config (`<dataDir>/voice.json`) holds no secret. `promptSessions`
+("Summarize automatically") adds a prompt to every session the server starts that has the MCP tools,
+while it has a key, telling the agent to call `speak_summary` when it finishes or waits on the
+user. `skills.list` takes the worktree's path from the server's state and checks it as the worktree
+commands do (registered repository, not missing, inside the allowlist).
+
+**Spoken summaries.** The MCP tool `speak_summary` (see [MCP](#mcp-trek-dev-on-the-server))
+synthesizes the summary with the server's key and sends it as a `voice.summary` event to every
+connection subscribed to the session's project topic, and answers how many it went to. A
+connection with more than 4 MiB unsent is skipped (the clip would play late). Whether a client
+plays it is the client's: the desktop plays it unless its user set the app to Busy, an app-wide
+setting of that desktop, not the server's.
 
 ## Sessions
 
@@ -796,8 +847,15 @@ or `null`.
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
+| `speak_summary` | `terminalId`, `summary` (one to three short sentences, trimmed, at most 400 characters) | `{played: true, windows}` (the connections it went to, see [Linear, voice and skills](#linear-voice-and-skills)), or `{played: false, reason}` when the server has no ElevenLabs key or no connection has the project open (nothing is synthesized then) |
+| `get_stack` | `worktree` | `{available: false}`, or `{available: true, name, state, containers, ports, urls, logins}`; `state` is `starting`, `running`, `stopping` or `stopped` |
+| `start_stack` | `worktree`; `starter?` (boolean) | the stack as `get_stack` describes it, once `stack.sh up` is started; `BAD_REQUEST` when it is not stopped |
+| `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
+| `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log, colour codes removed |
 
-That is 22 tools. Tags are matched by name or id, case-insensitively, and an
+That is 27 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+`stack.log` (their path checks), on the server's machine; a worktree without
+`docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` takes the
 Linear workspace or Azure DevOps base URL from a URL and saves it to the project's
 settings. A worktree with a detached HEAD has no branch data, so the `set_worktree_*`
@@ -811,8 +869,6 @@ listed, and calling one is `-32602`.
 
 - Client UI only: `get_selected_worktree` and `focus_session` (selection lives in
   clients), and `promote_to_primary` (it needs a confirmation dialog).
-- Phase 5: `speak_summary` (voice) and `get_stack`, `start_stack`, `stop_stack`,
-  `read_stack_log` (Docker).
 
 **Readiness and waiting.**
 
@@ -860,6 +916,7 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
+| `voice.summary` | `{projectId, sessionId, text, audio}`: a session's spoken summary (`speak_summary`), an mp3 in base64, to every connection subscribed to the project's topic (not one more than 4 MiB behind) |
 
 ## Several clients
 

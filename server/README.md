@@ -20,6 +20,8 @@ keeps running on the server; the app reattaches when it reconnects.
   compose), `colima` and `bash` on the server's PATH. Without them the server runs
   fine: those calls answer `TOOL_ERROR` (reason `missing`), or, for a compose or
   Colima run, end with code -1 and say why in their output, which the app shows.
+- Optional, for Linear ticket chips and voice summaries: outbound HTTPS to
+  `api.linear.app` and `api.elevenlabs.io`, and the keys, set from the app's Settings.
 
 ## Install
 
@@ -144,7 +146,26 @@ memory, so each start of the server makes new ones. The config files agents
 launch with are written to `<dataDir>/mcp` (mode 0600, in a 0700 directory) and
 removed when their project is deleted or the server next starts. If that
 directory cannot be used, the server logs a warning and runs without MCP.
-See `../PROTOCOL.md` for the tools.
+Besides those, sessions get `speak_summary` (read aloud through the server's
+ElevenLabs key, in every Trek window that has the project open) and `get_stack`,
+`start_stack`, `stop_stack` and `read_stack_log` (the worktree's dev stack, run on
+this machine). See `../PROTOCOL.md` for the tools.
+
+## Linear and voice keys
+
+The app's Linear and ElevenLabs settings are each server's own: a key set from any
+client is stored in `secrets.json` beside the config file (`~/.config/trek-server/`,
+or the Local profile's directory; mode 0600, written then renamed) and is never sent
+back to a client, which only learns whether one is set. The voice, the model and
+"Summarize automatically" are in the data dir's `voice.json` (no secret). With
+"Summarize automatically" on and a key set, every session the server starts with
+the MCP tools is told to call `speak_summary` when it finishes or waits on the user.
+A `secrets.json` that cannot be read or parse is never overwritten: setting a key
+fails until it is fixed. The app's own keys are handed to its Local server once.
+
+`TREK_SERVER_LINEAR_URL` and `TREK_SERVER_ELEVENLABS_URL` point the server at other
+endpoints (Linear's GraphQL URL; ElevenLabs' `/v1` base). They are for tests, which
+run stub services; leave them unset.
 
 ## Projects
 
@@ -306,6 +327,9 @@ Then configure the app with `wss://dev.example.com`.
   `DYLD_*` name, in any case. A repository's own `docker/stack/stack.sh` and
   compose content (`include`, `env_file`, bind mounts, …) run as written, as a
   session would run them.
+- **The Linear and ElevenLabs keys are the server's**, usable by any client with a
+  token (looking issues up, synthesizing speech), never readable by one. A shared
+  server's keys are shared by everyone who can connect to it.
 - Auth failures are logged with the peer address; bad tokens get a delayed
   close to blunt brute force.
 - Never expose the plain `ws://` listener beyond loopback (`--insecure`
