@@ -220,6 +220,8 @@ export function skewOf(bundled: BundledBuild | undefined, running: Pick<LocalInf
  * and `NPM_TOKEN` are kept.
  */
 const DROPPED_PREFIXES = ['ELECTRON_', 'TREK_', 'npm_']
+/** Kept despite their prefix: the server's test endpoints for Linear and ElevenLabs (the smokes' stubs). */
+const KEPT = new Set(['TREK_SERVER_LINEAR_URL', 'TREK_SERVER_ELEVENLABS_URL'])
 const DROPPED = new Set([
   'NODE_OPTIONS',
   'NODE_PATH',
@@ -245,7 +247,7 @@ const DROPPED = new Set([
 export function childEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [key, value] of Object.entries(env)) {
-    if (value === undefined || DROPPED.has(key) || DROPPED_PREFIXES.some((p) => key.startsWith(p))) continue
+    if (value === undefined || DROPPED.has(key) || (!KEPT.has(key) && DROPPED_PREFIXES.some((p) => key.startsWith(p)))) continue
     out[key] = value
   }
   out.ELECTRON_RUN_AS_NODE = '1'

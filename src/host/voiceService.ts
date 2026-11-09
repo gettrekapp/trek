@@ -21,7 +21,8 @@ export interface VoiceService {
   settings(): VoiceServerSettings
   /**
    * Checks the key by listing its voices, stores it and picks the first voice if none is chosen.
-   * `ifAbsent`: only while no key is stored (the app's hand-over), else `{ ok: false, present: true }`.
+   * `ifAbsent` (the app's hand-over, which sends its voice next): stored as it is, without asking
+   * ElevenLabs, only while no key is stored; else `{ ok: false, present: true }`. Its `voices` are then empty.
    */
   setKey(apiKey: string, options?: { ifAbsent?: boolean }): Promise<VoiceKeyResult>
   clearKey(): void
@@ -103,12 +104,10 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
     settings: () => ({ ...readConfig(), hasKey: !!options.key.get() }),
 
     async setKey(apiKey, { ifAbsent = false } = {}) {
-      if (ifAbsent && options.key.get()) return { ok: false, error: PRESENT_ERROR, present: true }
+      if (ifAbsent) return options.key.setIfAbsent(apiKey) ? { ok: true, voices: [] } : { ok: false, error: PRESENT_ERROR, present: true }
       try {
         const voices = await fetchVoices(apiKey)
-        if (ifAbsent) {
-          if (!options.key.setIfAbsent(apiKey)) return { ok: false, error: PRESENT_ERROR, present: true }
-        } else options.key.set(apiKey)
+        options.key.set(apiKey)
         if (!readConfig().voiceId && voices[0]) setConfig({ voiceId: voices[0].id })
         return { ok: true, voices }
       } catch (err) {

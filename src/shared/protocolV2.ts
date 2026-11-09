@@ -376,8 +376,9 @@ export interface MethodParamsV2 {
   /** Whether the server has a Linear key */
   'linear.status': Record<string, never>
   /**
-   * Checks the key with Linear and stores it on the server (0600, never sent back). `ifAbsent`: only
-   * while the server has none (the app's hand-over); a stored key is kept and the result says `present`.
+   * Checks the key with Linear and stores it on the server (0600, never sent back). `ifAbsent` (the
+   * app's hand-over): stored as it is, unchecked, only while the server has none; a stored key is
+   * kept and the result says `present`.
    */
   'linear.setKey': { apiKey: string; ifAbsent?: boolean }
   'linear.clearKey': Record<string, never>

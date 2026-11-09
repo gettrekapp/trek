@@ -19,8 +19,10 @@ export interface KeySlot {
 export interface LinearService {
   hasKey(): boolean
   /**
-   * Checks the key with Linear, then stores it. `ifAbsent`: only while no key is stored (the app's
-   * hand-over), else `{ ok: false, present: true }` and nothing changes.
+   * Checks the key with Linear, then stores it. `ifAbsent` (the app's hand-over): stored as it is,
+   * without asking Linear (the app checked it when the user entered it, and the hand-over must not
+   * depend on Linear being reachable), only while no key is stored; else `{ ok: false, present: true }`
+   * and nothing changes. Its `user` is then empty.
    */
   setKey(apiKey: string, options?: { ifAbsent?: boolean }): Promise<LinearKeyResult>
   clearKey(): void
@@ -80,13 +82,11 @@ export function createLinearService(options: { key: KeySlot; endpoint?: string; 
     hasKey: () => !!options.key.get(),
 
     async setKey(apiKey, { ifAbsent = false } = {}) {
-      if (ifAbsent && options.key.get()) return { ok: false, error: PRESENT_ERROR, present: true }
+      if (ifAbsent) return options.key.setIfAbsent(apiKey) ? { ok: true, user: '' } : { ok: false, error: PRESENT_ERROR, present: true }
       try {
         const { data, errors } = await graphql<{ viewer: { name: string } }>(apiKey, 'query { viewer { name } }')
         if (!data?.viewer) return { ok: false, error: errors?.[0]?.message ?? 'Invalid API key' }
-        if (ifAbsent) {
-          if (!options.key.setIfAbsent(apiKey)) return { ok: false, error: PRESENT_ERROR, present: true }
-        } else options.key.set(apiKey)
+        options.key.set(apiKey)
         return { ok: true, user: String(data.viewer.name) }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }

@@ -153,14 +153,14 @@ test('linear.setKey checks the key with Linear, stores it 0600 and never sends i
   assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
 })
 
-test('linear.setKey ifAbsent keeps a stored key without asking Linear', async (t) => {
+test('linear.setKey ifAbsent (the hand-over) stores the key unchecked, and keeps a stored one', async (t) => {
   const s = await setup(t)
-  assert.equal((await s.call('linear.setKey', { apiKey: 'good-key', ifAbsent: true })).result.ok, true)
-  const before = s.stub.requests.length
+  assert.deepEqual((await s.call('linear.setKey', { apiKey: 'app-key', ifAbsent: true })).result, { ok: true, user: '' })
   const again = await s.call('linear.setKey', { apiKey: 'other-key', ifAbsent: true })
   assert.deepEqual(again.result, { ok: false, error: 'This server already has a key; it was kept', present: true })
-  assert.equal(s.stub.requests.length, before)
-  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { linear: 'good-key' })
+  // Linear was never asked: the app checked the key when it was entered.
+  assert.equal(s.stub.requests.length, 0)
+  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { linear: 'app-key' })
 })
 
 test('linear.issues looks the ids up in batches of 50 and leaves out unknown and malformed ids', async (t) => {
@@ -214,10 +214,13 @@ test('voice.setKey checks the key by listing its voices, picks the first voice, 
   await s.call('voice.setConfig', { voiceId: 'v2' })
   await s.call('voice.setKey', { apiKey: 'good-voice' })
   assert.equal((await s.call('voice.settings', {})).result.voiceId, 'v2')
-  // ifAbsent keeps the stored key without a request.
+  // ifAbsent keeps the stored key without a request, and stores one unchecked on a server without.
   const before = s.voiceStub.requests.length
   assert.deepEqual((await s.call('voice.setKey', { apiKey: 'other', ifAbsent: true })).result, { ok: false, error: 'This server already has a key; it was kept', present: true })
   assert.equal(s.voiceStub.requests.length, before)
+  const fresh = await setup(t)
+  assert.deepEqual((await fresh.call('voice.setKey', { apiKey: 'app-voice', ifAbsent: true })).result, { ok: true, voices: [] })
+  assert.deepEqual([fresh.voiceStub.requests.length, (await fresh.call('voice.settings', {})).result.hasKey], [0, true])
   assert.equal((await s.call('voice.clearKey', {})).ok, true)
   assert.equal((await s.call('voice.settings', {})).result.hasKey, false)
   refused(await s.call('voice.voices', {}), 'TOOL_ERROR')

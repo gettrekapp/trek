@@ -62,8 +62,9 @@ const result = (value: unknown): { ok?: unknown; present?: unknown } => (value &
 /**
  * Hands over what `done` lacks; resolves what is done now. A part is done when there is nothing to
  * hand over, when the server took it (`ok`), or when it already had a key of its own (`present`:
- * the user set one there, which wins). Anything else (Linear or ElevenLabs unreachable, a rejected
- * key, a server older than 5b) leaves it for the next start. The voice settings go only with a key
+ * the user set one there, which wins). Anything else (a server older than 5b, a dropped link, a
+ * secrets file it cannot write) leaves it for the next start. The server stores a hand-over key
+ * without asking Linear or ElevenLabs (`ifAbsent`), so neither needs to be reachable. The voice settings go only with a key
  * the server took: a server with its own key keeps its own voice too. Settings that fail after
  * their key went are pending, and sent on the next start.
  */
