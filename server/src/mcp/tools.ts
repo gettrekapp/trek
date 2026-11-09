@@ -1,5 +1,5 @@
 // The trek-dev MCP tools on the server (decision 5 of phase 2e). Names, parameters and
-// result shapes follow the desktop's (src/main/mcp.ts, src/renderer/src/mcpTools.ts).
+// result shapes follow the desktop MCP server that phase 4e retired.
 // Every tool acts on the calling session's project only, and changes state through
 // the v2 commands, run in process.
 import { randomUUID } from 'node:crypto'
