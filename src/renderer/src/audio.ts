@@ -1,5 +1,3 @@
-import { useAppStore } from './store'
-
 /**
  * Alert sound for "Claude is ready for input" transitions. The mp3 ships in
  * resources/ and is fetched once through the main process (the renderer has
@@ -20,12 +18,6 @@ async function ensureLoaded(): Promise<void> {
     }
   })()
   return loading
-}
-
-/** Plays the alert if audio alerts are enabled in the project settings. */
-export function playReadyAlert(): void {
-  if (!useAppStore.getState().project?.audioAlerts) return
-  playAlertSound()
 }
 
 /** Plays the alert, unconditionally: main decided (a server project with audio alerts on). */

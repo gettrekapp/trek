@@ -36,15 +36,6 @@ export function registerAppIpc(): void {
     return getRecents()
   })
 
-  ipcMain.handle('window:focus', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender)
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
-    }
-  })
-
   ipcMain.handle('dialog:confirm', async (event, raw: unknown): Promise<boolean> => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     // From a renderer: anything but text is made text, so a bad call never throws in the dialog.

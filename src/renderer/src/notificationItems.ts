@@ -1,6 +1,6 @@
-// What the notifications menu lists: this window's own local decisions (a file
-// window's sessions) and every app-wide server's entries from main, newest
-// first. Pure.
+// What the notifications menu lists: this window's own decisions (from its
+// store, the server project it shows) and every app-wide server's entries from
+// main, newest first. Pure.
 import type { AttentionItem } from '../../shared/types'
 import { attentionPlace } from '../../shared/attentionPlace.ts'
 
@@ -37,7 +37,7 @@ export function serverSource(item: AttentionItem): string {
 }
 
 /**
- * `here` is the server project this window shows (null for a file window). A
+ * `here` is the server project this window shows (null for an empty window). A
  * server window's own decisions come from its store first and from main's
  * list a moment later: a local one main lists too for this project is left
  * out, so it shows once, and it still shows while main's connection is down.

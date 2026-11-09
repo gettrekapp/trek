@@ -57,7 +57,6 @@ const api = {
   reportTitle: (name: string | null): void => ipcRenderer.send('window:reportTitle', name),
   /** A server window gives up its target and becomes an empty window. */
   releaseTarget: (): Promise<void> => ipcRenderer.invoke('window:releaseTarget'),
-  focusWindow: (): Promise<void> => ipcRenderer.invoke('window:focus'),
   takeInitialWindowState: (): Promise<InitialWindowState> => ipcRenderer.invoke('window:takeInitial'),
   onWindowCloseRequest: (callback: () => void): (() => void) =>
     subscribe('window:close-request', callback),
@@ -209,7 +208,7 @@ const api = {
   stackLog: (worktreePath: string, fileId: number, offset: number): Promise<StackLogChunk> =>
     ipcRenderer.invoke('stack:log', worktreePath, fileId, offset),
 
-  // Per-worktree environments (Colima VMs) — serverId must be null in v1
+  // Per-worktree environments (Colima VMs), on this machine only: main refuses a non-null serverId
   envCheck: (): Promise<EnvCheckResult> => ipcRenderer.invoke('env:check'),
   envList: (serverId: string | null, repoPath: string): Promise<EnvironmentInfo[]> =>
     ipcRenderer.invoke('env:list', serverId, repoPath),

@@ -1,5 +1,5 @@
 // App-wide preferences, kept by main in userData's app-settings.json and shared by
-// every window (file and server windows alike). Pure: read and patch, field by field.
+// every window. Pure: read and patch, field by field.
 
 export interface AppSettings {
   /** OS notifications for sessions on the app-wide servers (main's attention); on by default */

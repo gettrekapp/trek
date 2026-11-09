@@ -3,7 +3,6 @@ import { resolveGlobalLlm, resolveNewSessionLlm } from '../../shared/providers/s
 import { mergeLlmSettings } from '../../shared/providers/settings'
 import { DEFAULT_LLM_SETTINGS } from '../../shared/providers/types'
 import type { LlmSelection, LlmSettings, LlmSettingsPatch } from '../../shared/providers/types'
-import type { SessionType } from '../../shared/types'
 
 export async function loadLlmSettings(): Promise<void> {
   try {
@@ -48,16 +47,6 @@ export async function updateLlmSettings(patch: LlmSettingsPatch): Promise<void> 
 /** What a new tab runs when nothing more specific is chosen. */
 export function defaultSessionLlm(): LlmSelection {
   return resolveNewSessionLlm({
-    projectDefault: useAppStore.getState().project?.llmDefault,
-    appDefault: llmSettings().llmDefault
-  })
-}
-
-/** What a new tab runs, given the + menu pick and session type. */
-export function newSessionLlm(sessionType?: SessionType, pick?: LlmSelection): LlmSelection {
-  return resolveNewSessionLlm({
-    pick,
-    sessionType: sessionType?.llm,
     projectDefault: useAppStore.getState().project?.llmDefault,
     appDefault: llmSettings().llmDefault
   })

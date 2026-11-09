@@ -51,8 +51,6 @@ interface WindowState {
   rendererReady: boolean
   /** A session to show, asked for while the renderer was still loading: handed over by window:takeInitial */
   pendingSelect: SessionSelect | null
-  /** Dialogs open on this window's behalf, during which the close timer is paused. */
-  prompts: number
   closing: PendingClose | null
   taken: Promise<void>
   markTaken: () => void
@@ -239,7 +237,6 @@ export function createWindow(
     initial: { server: initialFromTarget(opts.initialTarget ?? null), menu: opts.menu ?? null },
     rendererReady: false,
     pendingSelect: null,
-    prompts: 0,
     closing: null,
     taken,
     markTaken
@@ -281,7 +278,7 @@ function clearCloseTimer(state: WindowState): void {
 }
 
 function armCloseTimer(state: WindowState): void {
-  if (!state.closing || state.prompts > 0) return
+  if (!state.closing) return
   clearCloseTimer(state)
   state.closing.timer = setTimeout(() => void offerForceClose(state), CLOSE_REPLY_TIMEOUT_MS)
 }
@@ -301,20 +298,6 @@ async function offerForceClose(state: WindowState): Promise<void> {
   if (state.closing !== pendingClose) return // the renderer replied in the meantime
   if (response === 1) finishClose(state)
   else armCloseTimer(state)
-}
-
-/** Keeps the close timer from firing while the user is answering a dialog. */
-export async function whileWindowPrompts<T>(contents: WebContents, prompt: () => Promise<T>): Promise<T> {
-  const state = windows.get(contents.id)
-  if (!state) return prompt()
-  state.prompts++
-  clearCloseTimer(state)
-  try {
-    return await prompt()
-  } finally {
-    state.prompts--
-    armCloseTimer(state)
-  }
 }
 
 function finishClose(state: WindowState): void {
