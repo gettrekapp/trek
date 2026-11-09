@@ -16,9 +16,9 @@
 //   - the feature row's env badge; its tabs: Changes, Notes, Env, Stack, Settings; its header's
 //     env chip; VS Code with the worktree's path; the Env panel's VM; its variables, saved on blur;
 //   - a session's skill menu lists the worktree's skill and types it into the server's pty;
-//   - Delete worktree asks with the stack checkbox and the VM named, and (a file written just
-//     before) about its uncommitted changes, from a fresh git status here; then runs `stack.sh destroy`
-//     and `colima delete <profile> --force` before the server removes the worktree;
+//   - Delete worktree asks with the stack checkbox and the VM named, and (a file written as the
+//     confirm shows) about its uncommitted changes, from a fresh git status here, before it runs
+//     `stack.sh destroy` and `colima delete <profile> --force`; then the server removes the worktree;
 //   - no console or page errors.
 // The same window on a remote server (no `local`) is smoke:v2's: no machine-local controls, Linear on.
 //
@@ -134,17 +134,41 @@ writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
 // Main's dialogs and Reveal, stubbed before its script runs: every message box is recorded with its
-// detail and checkbox, and answered with its confirm button (index 1) and the box ticked.
+// detail, its checkbox and a number from the stubs' shared sequence (for the order against
+// stack.sh and colima), and answered with its confirm button (index 1) and the box ticked.
+// The delete's confirm writes an untracked file into the worktree as it is shown: the renderer
+// read the status poll's "clean" before asking, so only main's fresh git:localDirty can see it.
 const mainStub = join(work, 'main-stub.cjs')
+const dirtyOnConfirm = join(worktree, 'scratch.txt')
 writeFileSync(
   mainStub,
   `const { dialog, shell } = require('electron')
+const fs = require('node:fs')
 globalThis.__dialogs = []
 globalThis.__revealed = []
+const pause = new Int32Array(new SharedArrayBuffer(4))
+const nextSeq = () => {
+  for (;;) {
+    try {
+      fs.mkdirSync(${JSON.stringify(seqLock)})
+      break
+    } catch {
+      Atomics.wait(pause, 0, 0, 10)
+    }
+  }
+  let n = 0
+  try {
+    n = Number(fs.readFileSync(${JSON.stringify(seqFile)}, 'utf8')) || 0
+  } catch {}
+  fs.writeFileSync(${JSON.stringify(seqFile)}, String(n + 1) + '\\n')
+  fs.rmdirSync(${JSON.stringify(seqLock)})
+  return n + 1
+}
 const opts = (args) => args.find((a) => a && typeof a === 'object' && 'message' in a) ?? {}
 dialog.showMessageBox = async (...args) => {
   const o = opts(args)
-  globalThis.__dialogs.push({ type: o.type ?? null, message: o.message, detail: o.detail ?? null, checkbox: o.checkboxLabel ?? null })
+  if (o.message === 'Delete worktree “feature-x”?') fs.writeFileSync(${JSON.stringify(dirtyOnConfirm)}, 'unsaved\\n')
+  globalThis.__dialogs.push({ seq: nextSeq(), type: o.type ?? null, message: o.message, detail: o.detail ?? null, checkbox: o.checkboxLabel ?? null })
   return { response: o.type === 'error' ? 0 : 1, checkboxChecked: true }
 }
 shell.showItemInFolder = (path) => void globalThis.__revealed.push(path)
@@ -342,13 +366,14 @@ try {
 
   // ---- 6. Delete the worktree: the stack and the VM go first ----------------------------------------
 
-  // Written just now, so only a fresh `git status` on this disk sees it (main's git:localDirty).
-  writeFileSync(join(worktree, 'scratch.txt'), 'unsaved\n')
+  // The confirm's stub writes scratch.txt into the worktree as it is shown (mainStub).
   await actions.locator('.btn-icon').click()
   await detail.locator('.detail-menu-item', { hasText: 'Delete worktree…' }).click()
   check('the worktree is removed on the server', await until(async () => (await project()).repositories[0].worktrees.length, 1, 30_000), 1)
-  const asked = (await app.evaluate(() => globalThis.__dialogs)).find((d) => d.message === 'Delete worktree “feature-x”?')
-  check('a fresh dirty check asks before the stack and the VM go', (await app.evaluate(() => globalThis.__dialogs)).some((d) => d.message === '“feature-x” has uncommitted changes.'), true)
+  const dialogs = await app.evaluate(() => globalThis.__dialogs)
+  const asked = dialogs.find((d) => d.message === 'Delete worktree “feature-x”?')
+  check('the confirm was built on a clean status (the file came after)', asked?.detail?.includes('Uncommitted changes will block the deletion.') ?? false, true)
+  const discard = dialogs.find((d) => d.message === '“feature-x” has uncommitted changes.')
   check('the confirm names the VM and offers the stack', [/Colima VM “twb-feature-x-[0-9a-f]{6}”/.test(asked?.detail ?? ''), asked?.checkbox?.startsWith('Also destroy its dev stack') ?? false], [true, true])
   check('stack.sh destroy ran in the worktree', callsOf('stack').filter((c) => c.endsWith('|destroy')), [`${worktree}|destroy`])
   check("colima delete ran on the branch's VM", callsOf('colima').filter((c) => c.startsWith('delete')), [`delete ${featureProfile} --force`])
@@ -356,6 +381,13 @@ try {
   const stackAt = seqOf('stack', (c) => c.endsWith('|destroy'))
   const colimaAt = seqOf('colima', (c) => c.startsWith('delete'))
   check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
+  // A broken git:localDirty falls back to "clean": the stack and the VM go, and git's own refusal
+  // asks the same question afterwards. Only the order tells the two apart.
+  check(
+    'a fresh dirty check asks before the stack and the VM go (seq)',
+    [discard !== undefined, asked !== undefined && discard !== undefined && asked.seq < discard.seq, discard !== undefined && stackAt !== null && colimaAt !== null && discard.seq < stackAt && discard.seq < colimaAt],
+    [true, true, true]
+  )
   check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])

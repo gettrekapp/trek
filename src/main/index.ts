@@ -34,6 +34,7 @@ import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandl
 import { registerVoiceHandlers } from './voice'
 import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
+import { removeStaleMcpConfigs } from './staleMcpConfigs'
 import {
   APP_ICON,
   closeAllForQuit,
@@ -152,8 +153,9 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(async () => {
-  // Must complete before anything spawns child processes (docker, git, ptys).
+  // Must complete before anything spawns child processes (docker, git, colima).
   await fixPath()
+  void removeStaleMcpConfigs()
   registerWindowHandlers()
   registerAppIpc()
   registerImportHandlers()

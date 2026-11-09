@@ -125,6 +125,16 @@ async function mapLimit<T, R>(
   return results
 }
 
+/** Whether a worktree has uncommitted or untracked changes; null when git can't read it. */
+export async function worktreeDirty(path: string): Promise<boolean | null> {
+  try {
+    const out = await git(path, ['--no-optional-locks', 'status', '--porcelain'])
+    return out.trim().length > 0
+  } catch {
+    return null
+  }
+}
+
 /**
  * Dirty/ahead/behind for the given worktrees. Two git processes each, so the
  * caller polls this far less often than the worktree list and only a few run
@@ -135,12 +145,8 @@ async function mapLimit<T, R>(
 export async function worktreeStatuses(worktreePaths: string[]): Promise<WorktreeStatus[]> {
   return mapLimit(worktreePaths, STATUS_CONCURRENCY, async (path) => {
     const status: WorktreeStatus = { path }
-    try {
-      const out = await git(path, ['--no-optional-locks', 'status', '--porcelain'])
-      status.dirty = out.trim().length > 0
-    } catch {
-      // unreadable — leave undefined
-    }
+    const dirty = await worktreeDirty(path)
+    if (dirty !== null) status.dirty = dirty // unreadable — leave undefined
     try {
       const counts = await git(path, [
         '--no-optional-locks',

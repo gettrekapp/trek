@@ -293,7 +293,7 @@ async function offerForceClose(state: WindowState): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: 'warning',
     message: 'This window is not responding',
-    detail: 'Its project may not have been saved. Force closing could lose unsaved changes.',
+    detail: 'It has not answered the request to close. Force closing it closes it now.',
     buttons: ['Keep Waiting', 'Force Close'],
     defaultId: 0,
     cancelId: 0

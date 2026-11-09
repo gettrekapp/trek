@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RecentEntry } from '../shared/types'
-import { worktreeStatuses } from '../host/gitService'
+import { worktreeDirty } from '../host/gitService'
 import { getRecents, removeRecent } from './recents'
 import { absolutePath, checkboxConfirmOptions, confirmOptions, editorPath, errorDialogText } from './appIpcRules'
 import { parseRecentRef } from './recentsRules'
@@ -97,8 +97,7 @@ export function registerAppIpc(): void {
   ipcMain.handle('git:localDirty', async (_event, raw: unknown): Promise<boolean | null> => {
     const path = absolutePath(raw)
     if (!path) throw new Error('path must be an absolute path')
-    const [status] = await worktreeStatuses([path])
-    return status?.dirty ?? null
+    return worktreeDirty(path)
   })
 
   ipcMain.handle('app:revealInFinder', (_event, raw: unknown): void => {
