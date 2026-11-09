@@ -41,10 +41,10 @@
 //   - Disconnect: stopping the server shows the banner and keeps the tree, covers the terminal
 //     with the reconnecting overlay and disables the commands; restarting clears all three. A note
 //     typed as the link drops is kept with no dialog and saved once it is back.
-//   - 3d attention: a decision asked through the server's MCP shows in a file window's bell with its
+//   - 3d attention: a decision asked through the server's MCP shows in another project's bell with its
 //     project, server and tab; main raises exactly one OS notification (its Notification is
 //     recorded) and no window raises one; the server window's bell shows it once; a click in the
-//     file window's menu focuses the server window and selects the session's worktree; dismissing
+//     watching window's menu focuses the server window and selects the session's worktree; dismissing
 //     it there goes through main's connection (no window sends it); with "Show notifications" off,
 //     a decision is listed in the bell and main raises no notification; a decision in a project with
 //     no window opens one on a click, which shows the session's tab once loaded, and is no recent.
@@ -1031,7 +1031,7 @@ try {
   check("the Global session runs with the server's MCP tools", await until(async () => (await term(globals[0].id)).includes('--mcp-config'), true), true)
   await w1.locator('.server-window .global-bar').click()
 
-  // ---- 7c. Attention across windows (3d): main's list in a file window's bell, one OS
+  // ---- 7c. Attention across windows (3d): main's list in another project's bell, one OS
   // notification raised by main and none by a window, a click focuses the project's window and
   // selects the session, a dismiss goes through main; a click on a project with no window opens
   // one, which selects the session once loaded. main's Notification is recorded, not shown.
@@ -1050,14 +1050,19 @@ try {
         window.__webNotes.push(title)
       }
     })
+  // Another project's window (4e: there are no file windows) watches: its bell lists every server's.
+  const watcher = (await live.request('project.create', { name: 'Watcher', repositories: [{ path: repoB }] })).projectId
   const wf = await newWindow()
   await tag(wf, 'wf')
-  await wf.evaluate((repoPath) => window.__store.getState().setProject({ version: 1, name: 'Legacy', repositoryPath: repoPath, worktrees: [] }, null), repoB)
+  await wf.evaluate(async ([id, projectId]) => {
+    const { opened } = await window.api.openServerProject(id, projectId, 'Watcher', '')
+    if (opened) window.__store.getState().setServerWindow({ serverEntryId: id, projectId })
+  }, [entryId, watcher])
   const wfBell = wf.locator('.sidebar .notif-bell')
   await wfBell.waitFor({ timeout: 10_000 })
   await stubWebNotifications(wf)
   await stubWebNotifications(w1)
-  // w1 shows another worktree, so the session is not in view there; the file window has focus.
+  // w1 shows another worktree, so the session is not in view there; the watching window has focus.
   await sidebar.locator('.wt-row', { hasText: 'main' }).first().click()
   await inWindowTagged('wf', 'focus')
   // The server restarted in section 7: its MCP listener's port is read again, per project.
@@ -1079,7 +1084,7 @@ try {
   const sessionTitle = worktreeNamed(await projectNow(), 'smoke-wt').sessions[0].title
   await askDemo(s1, 'Deploy now?')
   const bellCount = (page) => page.locator('.notif-bell .notif-count').textContent({ timeout: 500 }).catch(() => null)
-  check("a file window's bell counts the server's decision", await until(() => bellCount(wf), '1'), '1')
+  check("another project's window's bell counts the server's decision", await until(() => bellCount(wf), '1'), '1')
   await wfBell.click()
   const wfEntry = wf.locator('.notif-menu .notif-item')
   check('its menu names the project, the server and the tab, and asks the question', [
@@ -1096,16 +1101,16 @@ try {
   await wfEntry.click()
   check('a click focuses the window holding the project', await until(() => app.evaluate(() => globalThis.__focusCalls), ['Demo'], 5000), ['Demo'])
   check("which selects the session's worktree", await until(() => sidebar.locator('.wt-row.selected .wt-name').textContent(), 'smoke-wt'), 'smoke-wt')
-  // Dismissed from the file window's menu: through main's connection, not a window's.
+  // Dismissed from the watching window's menu: through main's connection, not a window's.
   const sentAtMainDismiss = await sentCount()
   await wfBell.click()
   await wfEntry.locator('.decision-icon').click()
-  check('dismissing it in the file window clears it on the server', await until(decisionNow, null), null)
+  check('dismissing it in the watching window clears it on the server', await until(decisionNow, null), null)
   check('through main: no window sent it', (await sentSince(sentAtMainDismiss)).filter((f) => f.method === 'session.dismissDecision'), [])
   check('and both bells empty', [await until(() => bellCount(wf), null), await until(() => bellCount(w1), null)], [null, null])
   await wf.keyboard.press('Escape')
   // The app-wide "Show notifications" switch off (Decision 15): main raises no OS notification,
-  // and the bell still lists the entry. The file window has focus, so the session is not in view.
+  // and the bell still lists the entry. The watching window has focus, so the session is not in view.
   // main emits the list and raises in the same tick, so once the bell shows it nothing more comes.
   await wf.evaluate(() => window.api.appSettings.update({ showNotifications: false }))
   await inWindowTagged('wf', 'focus')
@@ -1146,6 +1151,9 @@ try {
   await closeTagged('wf')
   check('the attention windows close', await until(windowCount, windowsBefore - 1), windowsBefore - 1)
   await live.request('project.delete', { projectId: second })
+  await live.request('project.delete', { projectId: watcher })
+  // Opened only to watch: not one of the recents the later checks list.
+  await w1.evaluate(([id, projectId]) => window.api.removeRecentProject({ kind: 'server', serverEntryId: id, projectId }), [entryId, watcher])
 
   // ---- 7d. Delete the worktree: confirmed, unloaded, removed on the server.
   await sidebar.locator('.wt-row', { hasText: 'smoke-wt' }).click()
