@@ -191,7 +191,7 @@ function CreateOn({
         setModal(null)
         onOpening(true)
         // Here, this window becomes the project's (the start screen goes); elsewhere, the picker stays.
-        openServerProjectHere(server.id, projectId, name, registered.connection.welcome?.serverName ?? '')
+        return openServerProjectHere(server.id, projectId, name, registered.connection.welcome?.serverName ?? '')
           .then(onDone, (err: unknown) =>
             setError(`The project ${name} was created, but could not be opened here: ${errorText(err)}. Open it from Open on server….`)
           )

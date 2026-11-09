@@ -46,7 +46,10 @@ import {
   windowHasProject
 } from './windows'
 
-/** .trekproj files macOS asked to open (Finder, the Dock) before the windows were restored: opened after. */
+/**
+ * .trekproj files macOS asked to open (Finder, the Dock) before the windows were restored and the
+ * launch's own opens were done: opened after, one at a time, before the empty-window check.
+ */
 const pendingOpens: string[] = []
 let opensReady = false
 // Registered before ready: a file that launches the app arrives before it.
@@ -184,8 +187,10 @@ app.whenReady().then(async () => {
   // No empty window yet: a .trekproj that launched the app, or that arrives during the restore,
   // opens its projects in windows of their own (4d M-6).
   await restoreWindows()
+  // A file that arrives while these run is queued too, so none is still opening when the check
+  // below counts the windows (4e-2 Risk 6): one that arrives afterwards opens on its own.
+  while (pendingOpens.length > 0) await openFromOs(pendingOpens.shift()!)
   opensReady = true
-  for (const path of pendingOpens.splice(0)) await openFromOs(path)
   // Nothing came back and nothing opened (no windows last time, restore off, an import that
   // failed or landed nothing): the app still shows one empty window.
   if (BrowserWindow.getAllWindows().length === 0) createWindow()

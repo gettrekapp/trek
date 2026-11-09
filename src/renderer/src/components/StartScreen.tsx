@@ -3,7 +3,7 @@ import { baseName, useAppStore } from '../store'
 import { errorText } from '../v2/errors'
 import { ConnectServer, openServerProjectHere } from './ConnectServer'
 import { NewProject } from './NewProject'
-import { createInFlight } from './NewServerProjectModal'
+import { createInFlight } from '../createGuard'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { isLocalEntryId } from '../../../shared/appServerRules.ts'
 import type { RecentEntry } from '../../../shared/types'
@@ -27,7 +27,7 @@ export function StartScreen({ request }: { request?: { view: StartView; n: numbe
   const { servers } = useAppServerLinks()
   const serverNames = useMemo(() => (servers ? new Map(servers.map((s) => [s.id, s.name])) : null), [servers])
 
-  // Not while a project is being created here: the switch would drop it (4e-1 M-3).
+  // Not while a project is being created here, or opened once created: the switch would drop it (4e-1 M-3, 4e-2 Risk 9).
   useEffect(() => {
     if (request && !createInFlight()) setView(request.view)
   }, [request])

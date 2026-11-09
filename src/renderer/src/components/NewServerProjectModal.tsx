@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { errorCode, errorText } from '../v2/errors'
+import { whileCreating } from '../createGuard'
 import type { RegisteredServer } from '../../../shared/client/index.ts'
 import type { RemoteRepo } from '../../../shared/protocolV2'
 
@@ -17,7 +18,8 @@ interface Props {
   /** Live from the `server` topic */
   repos: RemoteRepo[]
   onClose: () => void
-  onCreated: (projectId: string, name: string) => void
+  /** Opens the new project; its promise settles once the open has (the create guard holds until then) */
+  onCreated: (projectId: string, name: string) => Promise<void>
   /** The Local server: "Add a folder…" opens the folder picker */
   local?: boolean
   /** A folder already picked (New Project on Local picks first): added at once, and names the project */
@@ -26,15 +28,6 @@ interface Props {
 
 /** How long Create waits for an added repo's `server` topic patch before it says so. */
 const TOPIC_WAIT_MS = 5000
-
-/** `project.create` requests in flight in this window. */
-let createsInFlight = 0
-
-/**
- * A create is in flight here: the start screen keeps its view meanwhile (a menu's view switch
- * would unmount this dialog and drop the connection, leaving the project created but not opened).
- */
-export const createInFlight = (): boolean => createsInFlight > 0
 
 function baseName(p: string): string {
   return p.replace(/\/+$/, '').split('/').pop() || p
@@ -132,22 +125,25 @@ export function NewServerProjectModal({ registered, serverName, repos, onClose, 
     creatingRef.current = true
     setCreating(true)
     setCreateError(null)
-    createsInFlight++
-    try {
+    // The start screen keeps its view until the project is created and its open has settled.
+    await whileCreating(async () => {
       const projectName = name.trim()
-      const { projectId } = await registered.connection.request('project.create', {
-        name: projectName,
-        // From the topic: canCreate waits until every ticked repo is in it.
-        repositories: chosen.map((r) => ({ path: repos.find((t) => t.id === r.id)?.path ?? r.path }))
-      })
-      onCreated(projectId, projectName)
-    } catch (err) {
-      setCreateError(`Could not create the project: ${errorText(err)}`)
-      creatingRef.current = false
-      setCreating(false)
-    } finally {
-      createsInFlight--
-    }
+      let projectId: string
+      try {
+        ;({ projectId } = await registered.connection.request('project.create', {
+          name: projectName,
+          // From the topic: canCreate waits until every ticked repo is in it.
+          repositories: chosen.map((r) => ({ path: repos.find((t) => t.id === r.id)?.path ?? r.path }))
+        }))
+      } catch (err) {
+        setCreateError(`Could not create the project: ${errorText(err)}`)
+        creatingRef.current = false
+        setCreating(false)
+        return
+      }
+      // The caller shows a failed open itself.
+      await onCreated(projectId, projectName).catch(() => {})
+    })
   }
 
   return (

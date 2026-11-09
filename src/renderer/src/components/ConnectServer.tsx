@@ -582,7 +582,7 @@ function ServerProjects({ server }: { server: AppServerLink }): React.JSX.Elemen
           onClose={() => setNewProjectOpen(false)}
           onCreated={(projectId, name) => {
             setNewProjectOpen(false)
-            void open(projectId, name)
+            return open(projectId, name)
           }}
         />
       )}
