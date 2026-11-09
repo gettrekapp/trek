@@ -1,6 +1,6 @@
 // Terminal streams over a ServerConnection: attach (with replay), live data,
 // exit, reattach after a reconnect, write/resize/detach.
-import type { PtyInfo } from '../protocol.ts'
+import type { PtyInfo } from '../protocolV2.ts'
 import { ClientError, type ServerConnection } from './connection.ts'
 
 export interface PtyHandlers {

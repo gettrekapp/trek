@@ -8,7 +8,7 @@ import * as nodePty from 'node-pty'
 // __esModule and has no `default`. Take whichever holds the exports.
 import * as xtermNamespace from '@xterm/headless'
 import type { Terminal as HeadlessTerminal } from '@xterm/headless'
-import type { PtyInfo } from '../../../src/shared/protocol'
+import type { PtyInfo } from '../../../src/shared/protocolV2'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { MAX_COLS, MAX_ROWS } from './limits.ts'

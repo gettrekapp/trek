@@ -1,5 +1,5 @@
 // Subscription topics of protocol v2 and the snapshot each one carries.
-import type { RemoteRepo } from '../protocol.ts'
+import type { RemoteRepo } from '../protocolV2.ts'
 import type { AttentionEntry, Project, ProjectSummary, ServerInfo } from './types.ts'
 
 export type Topic = 'server' | 'attention' | `project:${string}`

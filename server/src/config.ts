@@ -8,7 +8,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { RemoteRepo } from '../../src/shared/protocol'
+import type { RemoteRepo } from '../../src/shared/protocolV2'
 import { writeFileAtomic } from './atomicWrite.ts'
 import type { TokenEntry } from './tokens'
 

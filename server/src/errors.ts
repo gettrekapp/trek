@@ -1,4 +1,4 @@
-import type { WireError, WireErrorCode, WireErrorDetails } from '../../src/shared/protocol'
+import type { WireError, WireErrorCode, WireErrorDetails } from '../../src/shared/protocolV2'
 
 /** Errors carrying one of these codes reach the client as-is. */
 export type Outcome = { ok: true; result: unknown } | { ok: false; error: WireError }

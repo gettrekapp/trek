@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { errorCode, errorText } from '../v2/errors'
 import type { RegisteredServer } from '../../../shared/client/index.ts'
-import type { RemoteRepo } from '../../../shared/protocol'
+import type { RemoteRepo } from '../../../shared/protocolV2'
 
 /**
  * Create a project on a trek-server from repos registered there (`server` topic `repos`).

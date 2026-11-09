@@ -2,12 +2,9 @@ import { createServer, type Server } from 'node:http'
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import {
   CLOSE_HELLO_TIMEOUT,
+  CLOSE_REASON_UPGRADE_CLIENT,
   CLOSE_UNAUTHORIZED,
   CLOSE_UNSUPPORTED_VERSION,
-  PROTOCOL_VERSION,
-  type ServerFrame
-} from '../../src/shared/protocol'
-import {
   PROTOCOL_VERSION_V2,
   SUPPORTED_PROTOCOL_VERSIONS,
   type ServerFrameV2,
@@ -19,8 +16,6 @@ import { isRecord } from './validate'
 import type { ConfigStore } from './configStore'
 import type { ProjectState } from './projects/state'
 import type { ProjectStore } from './projects/store'
-import { PtyRegistry } from './ptyRegistry'
-import { dispatch } from './rpc'
 import { publishServerState } from './serverState'
 import { activeTokenHashes, matchToken } from './tokens'
 import { TopicHub, type Subscriber } from './topicHub'
@@ -41,7 +36,6 @@ const MAX_FRAME_BYTES = 16 * 1024 * 1024
 
 export interface TrekServer {
   httpServer: Server
-  ptys: PtyRegistry
   hub: TopicHub
   projects: ProjectState
   poller: GitPoller
@@ -76,11 +70,6 @@ export function startServer(
   projectsSetup: ProjectsSetup,
   options: ServerOptions = {}
 ): TrekServer {
-  const ptys = new PtyRegistry({
-    send(ws, event, payload) {
-      sendFrame(ws, { type: 'event', event, payload })
-    }
-  })
   const hub = new TopicHub()
   let refreshServerTopic = (): void => {}
   const projects = projectsSetup.create(hub, () => refreshServerTopic())
@@ -226,7 +215,8 @@ export function startServer(
           return
         }
         if (!SUPPORTED_PROTOCOL_VERSIONS.includes(frame.protocolVersion)) {
-          ws.close(CLOSE_UNSUPPORTED_VERSION, 'unsupported protocol version')
+          // An older client (v1: the file windows' desktop) is told to upgrade, as the SDK reads it.
+          ws.close(CLOSE_UNSUPPORTED_VERSION, frame.protocolVersion < PROTOCOL_VERSION_V2 ? CLOSE_REASON_UPGRADE_CLIENT : 'unsupported protocol version')
           return
         }
         // An empty frame token falls back to the Authorization header.
@@ -244,23 +234,14 @@ export function startServer(
           `[auth] ${String(frame.client)}/${String(frame.clientVersion)} (token "${entry.name}", protocol ${protocolVersion}) ` +
             `connected from ${req.socket.remoteAddress}`
         )
-        if (protocolVersion === PROTOCOL_VERSION_V2) {
-          sendFrame(ws, {
-            type: 'welcome',
-            protocolVersion: PROTOCOL_VERSION_V2,
-            daemonVersion,
-            serverId: store.config.serverId ?? '',
-            serverName: store.config.name ?? '',
-            capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true)
-          })
-        } else {
-          sendFrame(ws, {
-            type: 'welcome',
-            protocolVersion: PROTOCOL_VERSION,
-            daemonVersion,
-            repos: store.config.repos
-          })
-        }
+        sendFrame(ws, {
+          type: 'welcome',
+          protocolVersion: PROTOCOL_VERSION_V2,
+          daemonVersion,
+          serverId: store.config.serverId ?? '',
+          serverName: store.config.name ?? '',
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true)
+        })
         return
       }
 
@@ -271,7 +252,7 @@ export function startServer(
         return
       }
       const id = frame.id
-      if (protocolVersion === PROTOCOL_VERSION_V2) {
+      {
         const outcome = dispatchV2(frame.method, frame.params, {
           store,
           hub,
@@ -297,10 +278,6 @@ export function startServer(
         // must reach the client before any patch for the topic it subscribed to.
         if (outcome instanceof Promise) outcome.then(answer).catch(internalError)
         else answer(outcome)
-      } else {
-        dispatch(frame.method, frame.params, { config: store.config, guard: store.guard, ptys, ws })
-          .then((o) => respond(id, o))
-          .catch(internalError)
       }
     }
 
@@ -321,7 +298,6 @@ export function startServer(
       authed.delete(ws)
       hub.unsubscribeAll(subscriber)
       // PTYs keep running — the client reattaches on its next connection.
-      ptys.detachAll(ws)
       sessions.terminals.detachAll(terminal)
     })
   })
@@ -330,7 +306,6 @@ export function startServer(
   const callers = new Map<string, ToolCall>()
   const trek: TrekServer = {
     httpServer,
-    ptys,
     hub,
     projects,
     poller,
@@ -375,7 +350,6 @@ export function startServer(
       sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload: { reason } })
       ws.close(1001, 'server shutting down')
     }
-    ptys.disposeAll()
     wss.close()
     httpServer.close()
   }
@@ -383,7 +357,7 @@ export function startServer(
   return trek
 }
 
-function sendFrame(ws: WebSocket, frame: ServerFrame | ServerFrameV2): void {
+function sendFrame(ws: WebSocket, frame: ServerFrameV2): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame))
 }
 

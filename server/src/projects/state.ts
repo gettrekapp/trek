@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import type { Project, ProjectSummary } from '../../../src/shared/model/types'
-import type { RemoteRepo } from '../../../src/shared/protocol'
+import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import { deepEqual } from '../../../src/shared/sync/jsonDiff.ts'
 import { codedError } from '../errors.ts'
 import type { TopicHub } from '../topicHub.ts'

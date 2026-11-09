@@ -1,7 +1,7 @@
 // Pure helpers for building and inspecting v2 projects on the server.
 import { sep } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
-import type { RemoteRepo } from '../../../src/shared/protocol'
+import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { realOrResolved as real } from '../repos.ts'
 import { requireString } from '../validate.ts'

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
-import type { RemoteRepo } from '../../src/shared/protocol'
+import type { RemoteRepo } from '../../src/shared/protocolV2'
 import type { TrekServerConfig } from './config'
 
 /**

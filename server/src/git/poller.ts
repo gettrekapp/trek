@@ -4,7 +4,7 @@
 import { listWorktrees, worktreeStatuses } from '../../../src/host/gitService.ts'
 import { parseTopic, projectTopic } from '../../../src/shared/model/topics.ts'
 import type { HealthWarning, Project, Repository } from '../../../src/shared/model/types'
-import type { RemoteRepo } from '../../../src/shared/protocol'
+import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import type { GitWorktreeInfo, WorktreeStatus } from '../../../src/shared/types'
 import type { ProjectState } from '../projects/state.ts'
 import { realOrResolved as real } from '../repos.ts'

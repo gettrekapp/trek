@@ -4,7 +4,7 @@
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, watch, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute } from 'node:path'
-import type { RemoteRepo } from '../../src/shared/protocol'
+import type { RemoteRepo } from '../../src/shared/protocolV2'
 import { sanitizeLlmSettings } from '../../src/shared/providers/settings.ts'
 import type { LlmSettings } from '../../src/shared/providers/types'
 import { isRecord } from './validate.ts'

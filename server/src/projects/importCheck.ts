@@ -3,7 +3,7 @@
 // repository and main worktree paths taken from the registry, other worktree
 // paths realpath'd, runtime state reset.
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
-import type { RemoteRepo } from '../../../src/shared/protocol'
+import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import type { PathGuard } from '../paths.ts'
 import { checkQueue, checkTitle } from '../sessions/limits.ts'

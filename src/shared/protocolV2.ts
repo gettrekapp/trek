@@ -1,7 +1,8 @@
-// Protocol v2: the server owns all project state. Clients send domain commands
-// and subscribe to topics (snapshot + JSON patches). Frames are the v1 frames
-// (hello/req/res/event) from protocol.ts; only welcome, the method catalog and
-// the events change. See PROTOCOL.md, "Protocol v2".
+// Protocol v2, the wire protocol between clients (the desktop app, a future mobile app) and
+// trek-server: JSON text frames over WebSocket. The server owns all project state; clients send
+// domain commands and subscribe to topics (snapshot + JSON patches). See PROTOCOL.md. This file is
+// the single source of truth for frame shapes. (Protocol v1, the per-call git and pty methods of
+// the file windows, was retired in phase 4e: a v1 hello is refused with UPGRADE_CLIENT.)
 import type {
   AttentionTopic,
   ProjectTopic,
@@ -10,23 +11,123 @@ import type {
   TopicSnapshot
 } from './model/topics.ts'
 import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
-import type {
-  EventFrame,
-  EventPayloads as EventPayloadsV1,
-  PtyInfo,
-  WireError
-} from './protocol.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { EnvironmentSettings, WorktreeChanges } from './types.ts'
 
 export const PROTOCOL_VERSION_V2 = 2
 
-/** Versions a v2-capable server accepts in `hello`. */
-export const SUPPORTED_PROTOCOL_VERSIONS: readonly number[] = [1, 2]
+/** Versions the server accepts in `hello`: v2 only since phase 4e. */
+export const SUPPORTED_PROTOCOL_VERSIONS: readonly number[] = [2]
 
 /** Close reason sent with code 4002 when the client is older than the server allows. */
 export const CLOSE_REASON_UPGRADE_CLIENT = 'UPGRADE_CLIENT'
+
+/** Default server port (loopback; TLS is terminated by a reverse proxy). */
+export const DEFAULT_DAEMON_PORT = 7345
+
+// WebSocket close codes (4000-range = application-defined)
+export const CLOSE_HELLO_TIMEOUT = 4001
+export const CLOSE_UNSUPPORTED_VERSION = 4002
+export const CLOSE_UNAUTHORIZED = 4003
+
+export type WireErrorCode =
+  | 'UNAUTHORIZED'
+  | 'BAD_REQUEST'
+  | 'NOT_FOUND'
+  | 'PATH_DENIED'
+  | 'GIT_ERROR'
+  | 'PTY_NOT_FOUND'
+  | 'INTERNAL'
+  | 'UNSUPPORTED_VERSION'
+  /** An `expected` guard failed because the field changed since the client read it. */
+  | 'CONFLICT'
+  /** `server.addRepo` was given a path that is not inside a git repository. */
+  | 'NOT_A_REPO'
+  /** The server is at a session limit (`maxSessions` or the per-project session-record cap). */
+  | 'CAPACITY'
+  /** `server.removeRepo` on a repo that projects still use. */
+  | 'IN_USE'
+  /**
+   * `pty.attach` from a connection that already has a large backlog unsent
+   * (over 4 MiB). Nothing was replayed or attached; retry once the backlog drains.
+   */
+  | 'CONGESTED'
+
+export interface WireError {
+  code: WireErrorCode
+  message: string
+  /** A machine-readable detail of the refusal; clients ignore keys they don't know */
+  details?: WireErrorDetails
+}
+
+/** What `WireError.details` may say. */
+export interface WireErrorDetails {
+  /**
+   * `dirty`: `worktree.remove` refused a worktree with modified or untracked files.
+   * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
+   */
+  reason?: string
+}
+
+/** A repository the server has registered (`trek-server add`, `server.addRepo`). */
+export interface RemoteRepo {
+  id: string
+  name: string
+  path: string
+}
+
+// ---------- client → server ----------
+
+export interface HelloFrame {
+  type: 'hello'
+  protocolVersion: number
+  /** Bearer token; may be omitted when sent via the Authorization header. */
+  token?: string
+  client: string
+  clientVersion: string
+}
+
+export interface ReqFrame {
+  type: 'req'
+  id: number
+  method: string
+  params?: unknown
+}
+
+export type ClientFrame = HelloFrame | ReqFrame
+
+// ---------- server → client ----------
+
+export interface EventFrame {
+  type: 'event'
+  event: string
+  payload: unknown
+}
+
+/** A pty as `pty.attach` reports it. */
+export interface PtyInfo {
+  ptyId: string
+  cwd: string
+  cols: number
+  rows: number
+  /** Byte offset of the next output chunk (total bytes emitted so far). */
+  seq: number
+}
+
+export interface PtyDataEventWire {
+  ptyId: string
+  /** Byte offset of this chunk's start within the pty's lifetime output. */
+  seq: number
+  data: string
+  /** Set on chunks re-sent from the ring buffer during attach. */
+  replay?: true
+}
+
+export interface PtyExitEventWire {
+  ptyId: string
+  exitCode: number
+}
 
 /**
  * `welcome.capabilities` values: the features a client cannot otherwise tell a
@@ -296,9 +397,9 @@ export interface StatePatchPayload extends StatePatch {
 }
 
 export interface EventPayloadsV2 {
-  'pty.data': EventPayloadsV1['pty.data']
-  'pty.exit': EventPayloadsV1['pty.exit']
-  'daemon.shutdown': EventPayloadsV1['daemon.shutdown']
+  'pty.data': PtyDataEventWire
+  'pty.exit': PtyExitEventWire
+  'daemon.shutdown': { reason: string }
   'state.patch': StatePatchPayload
   /** Sent to a topic's subscribers just before it stops; nothing more comes for it */
   'topic.ended': TopicEndedPayload

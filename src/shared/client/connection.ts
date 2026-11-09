@@ -1,11 +1,11 @@
 // One protocol-v2 connection to a trek-server: hello/welcome, typed requests,
-// ping, and reconnect with backoff. Ported from the desktop's v1 RemoteHost.
-// Pure TypeScript: the socket and the timers are injected.
-import { CLOSE_UNAUTHORIZED, CLOSE_UNSUPPORTED_VERSION } from '../protocol.ts'
-import type { WireErrorDetails } from '../protocol.ts'
+// ping, and reconnect with backoff. Pure TypeScript: the socket and the timers are injected.
 import {
   CLOSE_REASON_UPGRADE_CLIENT,
+  CLOSE_UNAUTHORIZED,
+  CLOSE_UNSUPPORTED_VERSION,
   PROTOCOL_VERSION_V2,
+  type WireErrorDetails,
   type MethodNameV2,
   type MethodParamsV2,
   type MethodResultsV2,

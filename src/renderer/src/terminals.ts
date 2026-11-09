@@ -4,7 +4,7 @@ import { allWorktrees, repoOfWorktreeId, BOT_DECISION_ID, GLOBAL_WORKTREE_ID, us
 import { getProvider } from '../../shared/providers/registry'
 import type { LlmSelection } from '../../shared/providers/types'
 import type { PtyStream } from '../../shared/client/index.ts'
-import type { PtyInfo } from '../../shared/protocol'
+import type { PtyInfo } from '../../shared/protocolV2'
 import type { Project } from '../../shared/model/types'
 import {
   attachResize,
