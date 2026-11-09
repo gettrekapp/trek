@@ -1,12 +1,15 @@
-// scripts/local-features-smoke.mjs — the machine-local features in a Local server window (4c).
+// scripts/local-features-smoke.mjs — the features of a Local server window (4c): this machine's
+// (VS Code, Reveal, skills) and the server's machine's (docker, environments, stacks: 5a), which for
+// Local is this machine too.
 //
 // Run: npm run smoke:local-features   (builds the app with out/server, then runs this script)
 //
 // The built app is launched with a temp HOME (so its supervisor starts the run's own Local server,
 // in ~/.config/trek-server/local-dev) and a temp --user-data-dir. Stubs on PATH stand in for
 // colima, docker and code: each records how it was called, and colima lists a running VM for the
-// feature branch plus a crash leftover. The HOME's .zshrc puts them first, for main's fixPath and for
-// the server's agents. The project is made on the Local server through the SDK: a repository with a
+// feature branch plus a crash leftover. The HOME's .zshrc puts them first, for main's fixPath (the
+// Local server it spawns inherits that PATH, and runs docker and colima since 5a) and for the
+// server's agents. The project is made on the Local server through the SDK: a repository with a
 // docker/stack/stack.sh stub and a project skill, and a worktree on feature-x. Then the window opens
 // it, and through the DOM it checks:
 //   - main's row: Open in VS Code and Reveal call main with the repository's path; the Docker tab
@@ -17,10 +20,11 @@
 //     env chip; VS Code with the worktree's path; the Env panel's VM; its variables, saved on blur;
 //   - a session's skill menu lists the worktree's skill and types it into the server's pty;
 //   - Delete worktree asks with the stack checkbox and the VM named, and (a file written as the
-//     confirm shows) about its uncommitted changes, from a fresh git status here, before it runs
+//     confirm shows) about its uncommitted changes, from a fresh git status (worktree.dirty), before it runs
 //     `stack.sh destroy` and `colima delete <profile> --force`; then the server removes the worktree;
 //   - no console or page errors.
-// The same window on a remote server (no `local`) is smoke:v2's: no machine-local controls, Linear on.
+// The same window on a remote server (no `local`) is smoke:v2's (none of this machine's controls,
+// Linear on) and smoke:server-env's (docker, environments and stacks on the server's machine).
 //
 // Prints LOCAL FEATURES SMOKE PASS (n checks) or LOCAL FEATURES SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
@@ -137,7 +141,7 @@ writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { p
 // detail, its checkbox and a number from the stubs' shared sequence (for the order against
 // stack.sh and colima), and answered with its confirm button (index 1) and the box ticked.
 // The delete's confirm writes an untracked file into the worktree as it is shown: the renderer
-// read the status poll's "clean" before asking, so only main's fresh git:localDirty can see it.
+// read the status poll's "clean" before asking, so only the server's fresh worktree.dirty can see it.
 const mainStub = join(work, 'main-stub.cjs')
 const dirtyOnConfirm = join(worktree, 'scratch.txt')
 writeFileSync(
@@ -381,7 +385,7 @@ try {
   const stackAt = seqOf('stack', (c) => c.endsWith('|destroy'))
   const colimaAt = seqOf('colima', (c) => c.startsWith('delete'))
   check('in order: the stack, then the VM (seq)', stackAt !== null && colimaAt !== null && stackAt < colimaAt, true)
-  // A broken git:localDirty falls back to "clean": the stack and the VM go, and git's own refusal
+  // A broken worktree.dirty falls back to "clean": the stack and the VM go, and git's own refusal
   // asks the same question afterwards. Only the order tells the two apart.
   check(
     'a fresh dirty check asks before the stack and the VM go (seq)',

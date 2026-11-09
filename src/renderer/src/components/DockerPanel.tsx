@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store'
+import { getBackend } from '../backend'
 import type { ContainerAction, ContainerInfo } from '../../../shared/types'
 
 interface Props {
@@ -23,7 +24,7 @@ export function DockerPanel({ visible }: Props): React.JSX.Element {
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      setContainers(await window.api.listContainers())
+      setContainers(await getBackend().docker.list())
       setError(null)
     } catch (err) {
       setError(String(err))
@@ -40,7 +41,7 @@ export function DockerPanel({ visible }: Props): React.JSX.Element {
   // Compose output streams in regardless of which tab is showing.
   useEffect(
     () =>
-      window.api.onDockerLog(({ data, done }) => {
+      getBackend().docker.onLog(({ data, done }) => {
         setLog((prev) => (prev + data).slice(-MAX_LOG))
         if (done) void refresh()
       }),
@@ -56,7 +57,7 @@ export function DockerPanel({ visible }: Props): React.JSX.Element {
   const act = async (container: ContainerInfo, action: ContainerAction): Promise<void> => {
     setBusy((prev) => ({ ...prev, [container.id]: action }))
     try {
-      await window.api.containerAction(action, container.id)
+      await getBackend().docker.container(action, container.id)
     } catch (err) {
       appendLog(`\n${String(err)}\n`)
     } finally {
@@ -80,7 +81,7 @@ export function DockerPanel({ visible }: Props): React.JSX.Element {
     setBulkBusy(action)
     appendLog(`\n[${action}ing ${targets.length} favorite container(s)…]\n`)
     const results = await Promise.allSettled(
-      targets.map((c) => window.api.containerAction(action, c.id))
+      targets.map((c) => getBackend().docker.container(action, c.id))
     )
     for (let i = 0; i < results.length; i++) {
       const r = results[i]

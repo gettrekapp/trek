@@ -16,6 +16,11 @@ test('envStartArgs: the branch variables parsed, the repository settings with th
   assert.deepEqual(envStartArgs(undefined, 'feat', 'c.yml'), { settings: { enabled: true, composeFile: 'c.yml' }, envVars: undefined })
 })
 
+test('envStartArgs sends only the keys env.up takes: not a profileKey, nor what another client stored', () => {
+  const repo = { id: 'r', name: 'r', path: '/r', environments: { enabled: true, memory: 8, rosetta: true, profileKey: '/old/r', vmType: 'qemu' } }
+  assert.deepEqual(envStartArgs(repo, 'feat', 'compose.yml').settings, { enabled: true, memory: 8, rosetta: true, composeFile: 'compose.yml' })
+})
+
 test("a server window's Start right after typing uses the variables still pending on the server", () => {
   const mirror = {
     id: 'p',

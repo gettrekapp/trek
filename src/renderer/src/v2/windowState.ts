@@ -22,7 +22,7 @@ export const EMPTY: Partial<AppState> = {
 
 /**
  * View state a window keeps from what it showed before (an open Global panel or
- * bot tab, the bot, Colima environments and tool check, Linear chips): a server
+ * bot tab, the bot, Colima environments, tool check and list error, Linear chips): a server
  * window starts from none of it and leaves none behind. The voice
  * queue is stopped rather than zeroed here (`stopAllSummaries`), so what the
  * store shows stays what plays. The queue panels' open state is an app-wide
@@ -36,6 +36,7 @@ export const VIEW_RESET: Partial<AppState> = {
   environments: {},
   envBusy: {},
   envToolCheck: null,
+  envListError: null,
   linearIssues: {}
 }
 

@@ -13,6 +13,7 @@ import { LlmPicker, useServerPicker } from './LlmPicker'
 import { SettingNumber, SettingText } from './SettingText'
 import { settingsSections } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
+import { getBackend } from '../backend'
 import type {
   SessionType,
   EnvironmentSettings,
@@ -70,6 +71,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
   const envBusy = useAppStore((s) => s.envBusy)
   const setEnvBusy = useAppStore((s) => s.setEnvBusy)
   const envToolCheck = useAppStore((s) => s.envToolCheck)
+  const envListError = useAppStore((s) => s.envListError)
   // Default applied outside the selector — `?? []` inside it would return a
   // fresh array every snapshot and loop React's store re-render (error #185).
   const terminalButtons = useAppStore((s) => s.project?.terminalButtons) ?? []
@@ -108,6 +110,8 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
     updateSessionTypes(sessionTypes.map((t) => (t.id === id ? { ...t, ...patch } : t)))
   }
 
+  // While the server cannot read its registry it cannot tell an orphan from a worktree's VM: no
+  // delete is offered from the last list (envListError says why).
   const orphans = Object.values(environments).filter((e) => e.orphaned)
 
   const destroyOrphan = async (profile: string): Promise<void> => {
@@ -120,7 +124,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
     if (!ok) return
     setEnvBusy(profile, 'destroy')
     try {
-      await window.api.envDestroy(null, profile)
+      await getBackend().env.destroy(profile)
     } catch (err) {
       void window.api.showError('Could not remove environment', String(err))
     } finally {
@@ -371,6 +375,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                 {envToolCheck && !envToolCheck.ok && (
                   <span className="settings-desc settings-warn">{envToolCheck.error}</span>
                 )}
+                {envListError && <span className="settings-desc settings-warn">{envListError}</span>}
               </span>
             </label>
             {envSettings?.enabled && (
@@ -453,7 +458,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                     onCommit={(text) => updateEnv({ composeFile: text || undefined })}
                   />
                 </div>
-                {orphans.length > 0 && (
+                {!envListError && orphans.length > 0 && (
                   <div className="settings-row env-orphans">
                     <span className="settings-label">
                       <span className="settings-name">Orphaned environments</span>

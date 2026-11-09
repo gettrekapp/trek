@@ -66,7 +66,7 @@
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -129,6 +129,12 @@ const notRepo = join(repos, 'plain')
 gitRepo(repoA)
 gitRepo(repoB)
 mkdirSync(notRepo)
+// docker and colima stubs, first on the server's PATH: since 5a the server runs them for its windows,
+// and this run must never reach a real one. Each records its call; nothing here should make one.
+const machineStubs = join(work, 'machine-stubs')
+mkdirSync(machineStubs)
+const machineCalls = join(work, 'machine-calls')
+for (const tool of ['docker', 'colima']) writeFileSync(join(machineStubs, tool), `#!/bin/sh\necho "${tool} $*" >> '${machineCalls}'\nexit 0\n`, { mode: 0o755 })
 // A fake agent: prints its args, then echoes each line typed into it as GOT:<line>; "quit" exits 3.
 const fakeAgent = join(work, 'fake-agent.sh')
 writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nwhile IFS= read -r line; do\n  [ "$line" = quit ] && exit 3\n  echo "GOT:$line"\ndone\n', { mode: 0o755 })
@@ -154,6 +160,7 @@ const startDaemon = () =>
   new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', join(work, 'data')], {
       cwd: new URL('../server/', import.meta.url).pathname,
+      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}` },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -786,17 +793,19 @@ try {
   await detail.locator('.terminal-pane:visible .queue-close').click()
 
   // A server that is not the Local entry's (this one's paths happen to be on this disk, but the
-  // window cannot know that): none of this machine's controls (4c). Its tabs have no Docker, Env
-  // or Stack, its header no Open in VS Code or Reveal, its sessions no skill menu.
-  check('a remote server window has no machine-local controls', await detail.evaluate((el) => ({
+  // window cannot know that): none of this machine's controls (4c). Its header has no Open in VS
+  // Code or Reveal, its sessions no skill menu. Docker, the environments and the stacks are the
+  // server's (5a), on: this worktree shows no Env or Stack tab only because its repository has
+  // environments off and no stack.sh, and Docker is the main checkout's tab (smoke:server-env).
+  check("a remote server window has none of this machine's controls", await detail.evaluate((el) => ({
     actions: [...el.querySelectorAll('.detail-actions button')].map((b) => b.textContent.trim()).filter((t) => /VS Code|Reveal/.test(t)),
     tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
     skills: el.querySelectorAll('.skill-menu-trigger').length
   })), { actions: [], tabs: [], skills: 0 })
-  check('and its features say so; Linear is on', await w1.evaluate(() => {
+  check("and its features say so; the server machine's docker, env and stacks, and Linear, are on", await w1.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear]
-  }), [false, false, false, false, false, false, true])
+  }), [true, true, true, false, false, false, true])
 
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
@@ -890,6 +899,7 @@ try {
   await detail.locator('.panel-btn[title="App settings"]').click()
   const settings = w1.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
+  // Environments too since 5a: the server runs them on its own machine.
   check("a server window's Settings show the project's sections only", await settings.locator('h3').allTextContents(), [
     'Settings',
     'Appearance',
@@ -903,7 +913,8 @@ try {
     'Session system prompt',
     'Global system prompt',
     'Global quick buttons',
-    'Session types'
+    'Session types',
+    'Environments'
   ])
   check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
   // The app-wide "Show notifications" switch, the one machine setting a server window shows: on by
@@ -1302,6 +1313,7 @@ try {
 
   // ---- 9. No console errors in any window -------------------------------------------
   check('no console or page errors in any window', pageErrors, [])
+  check("nothing ran docker or colima on the server's machine unasked", existsSync(machineCalls) ? readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean) : [], [])
   exitCode = checks.every(Boolean) ? 0 : 1
   await finish()
 } catch (err) {

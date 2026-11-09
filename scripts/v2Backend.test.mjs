@@ -26,13 +26,16 @@ class CodedError extends Error {
  * method (a value, a function of the params, or an Error to reject with), and
  * `ui` records what the dialogs were asked; `reports` what went to `report`.
  * `revs` is the rev each method's response reports; `waits` records each
- * whenProjected's rev (null without one).
+ * whenProjected's rev (null without one); `timeouts` each request sent with
+ * one; `listeners` what subscribed to each server event.
  */
 function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], localEntry = false, machine = {}, projectedAfter = [], left = () => false, revs = {} } = {}) {
   const calls = []
   const ui = []
   const reports = []
   const waits = []
+  const timeouts = []
+  const listeners = {}
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
@@ -43,8 +46,9 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   }
   const answers = [...confirms]
   const idMap = ids()
-  const request = async (method, params) => {
+  const request = async (method, params, options) => {
     calls.push([method, params])
+    if (options?.timeoutMs !== undefined) timeouts.push([method, options.timeoutMs])
     const reply = replies[method]
     const value = typeof reply === 'function' ? reply(params) : reply
     if (value instanceof Error) throw value
@@ -60,6 +64,12 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     // null stands for "no welcome yet" (undefined would take the default)
     capabilities: typeof capabilities === 'function' ? capabilities : () => capabilities ?? undefined,
     localEntry,
+    onEvent: (event, listener) => {
+      ;(listeners[event] ??= []).push(listener)
+      return () => {
+        listeners[event] = listeners[event].filter((l) => l !== listener)
+      }
+    },
     ids: () => idMap,
     state: () => st,
     // Each projectedAfter entry is applied to the state and ids before the check, like a patch arriving.
@@ -85,9 +95,9 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     removalBlock: (r) => (r.id === 'blocked' ? 'It has live sessions.' : null),
     report: (title, err) => void (left() || reports.push([title, err.code])),
     reportEdit: (title, err, notConfirmed) => void (left() || reports.push([title, err.code, notConfirmed ?? 'edit'])),
-    // This machine's teardown: `machine.env` is the branch's VM, `machine.stack` its dev stack's name
-    // (offered as the confirm's checkbox), `machine.ticked` the checkbox's answer, `machine.dirty`
-    // what a fresh git status of the worktree on this disk says.
+    // The server machine's teardown: `machine.env` is the branch's VM, `machine.stack` its dev stack's
+    // name (offered as the confirm's checkbox), `machine.ticked` the checkbox's answer, `machine.dirty`
+    // what a fresh git status of the worktree (worktree.dirty) says.
     teardown: {
       environment: (info) => {
         ui.push(['env?', info.path])
@@ -107,7 +117,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     },
     left
   })
-  return { backend, calls, ui, st, reports, waits }
+  return { backend, calls, ui, st, reports, waits, timeouts, listeners }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -131,18 +141,99 @@ test('features before the welcome, then when the capabilities change', () => {
   assert.equal(backend.features.globalPanel, false)
 })
 
-test("the machine-local features: only the Local entry's server, once it says `local`; Linear everywhere", () => {
-  const machine = (b) => ['docker', 'env', 'stacks', 'skills', 'reveal', 'openInEditor'].filter((name) => b.features[name])
-  assert.deepEqual(machine(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['docker', 'env', 'stacks', 'skills', 'reveal', 'openInEditor'])
-  assert.deepEqual(machine(setup({ capabilities: ['mcp', 'local'] }).backend), [])
-  assert.deepEqual(machine(setup({ capabilities: ['mcp'], localEntry: true }).backend), [])
+test("this machine's features: only the Local entry's server, once it says `local`; the server machine's follow its capabilities; Linear everywhere", () => {
+  const local = (b) => ['skills', 'reveal', 'openInEditor'].filter((name) => b.features[name])
+  const server = (b) => ['docker', 'env', 'stacks'].filter((name) => b.features[name])
+  assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['skills', 'reveal', 'openInEditor'])
+  assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'] }).backend), [])
+  assert.deepEqual(local(setup({ capabilities: ['mcp'], localEntry: true }).backend), [])
+  assert.deepEqual(server(setup({ capabilities: ['mcp', 'docker', 'env', 'stacks'] }).backend), ['docker', 'env', 'stacks'])
+  assert.deepEqual(server(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), [])
   assert.equal(setup().backend.features.linear, true)
-  // The Local entry before its welcome, then once it arrives.
+  // A server before its welcome, then once it arrives.
   let caps
-  const { backend } = setup({ capabilities: () => caps, localEntry: true })
+  const { backend } = setup({ capabilities: () => caps })
   assert.equal(backend.features.env, false)
-  caps = ['mcp', 'local']
+  caps = ['mcp', 'env']
   assert.equal(backend.features.env, true)
+})
+
+test("docker, env and stacks go to the server by id: a worktree by the store's path, a repository by its id; the long ones with long timeouts", async () => {
+  const { backend, calls, timeouts } = setup({ replies: { 'env.up': { code: 0 }, 'worktree.dirty': true } })
+  const feat = { path: '/r-feat' }
+  await backend.docker.list()
+  await backend.docker.container('restart', 'c1')
+  await backend.docker.compose('r1', 'upBuild')
+  await backend.env.check()
+  await backend.env.list('r1')
+  await backend.env.up(feat, { enabled: true, cpu: 3 }, { FOO: 'bar' })
+  await backend.env.up(feat, { enabled: true }, undefined)
+  await backend.env.stop('twb-feat-abc123')
+  await backend.env.destroy('twb-feat-abc123')
+  await backend.env.ps(feat, undefined)
+  await backend.env.ps(feat, 'compose.dev.yaml')
+  await backend.env.composeFiles(feat)
+  await backend.env.logs(feat, undefined, 'web', 300)
+  await backend.stacks.status(feat)
+  await backend.stacks.up(feat, true)
+  await backend.stacks.down(feat)
+  await backend.stacks.destroy({ path: '/r' })
+  await backend.stacks.log(feat, 7, 120)
+  assert.equal(await backend.git.dirty(feat), true)
+  const w = { projectId: 'p1', worktreeId: 'w2' }
+  assert.deepEqual(calls, [
+    ['docker.list', {}],
+    ['docker.container', { action: 'restart', id: 'c1' }],
+    ['docker.compose', { projectId: 'p1', repoId: 'r1', action: 'upBuild' }],
+    ['env.check', {}],
+    ['env.list', { projectId: 'p1', repoId: 'r1' }],
+    ['env.up', { ...w, settings: { enabled: true, cpu: 3 }, envVars: { FOO: 'bar' } }],
+    ['env.up', { ...w, settings: { enabled: true } }],
+    ['env.stop', { profile: 'twb-feat-abc123' }],
+    ['env.destroy', { profile: 'twb-feat-abc123' }],
+    ['env.ps', w],
+    ['env.ps', { ...w, composeFile: 'compose.dev.yaml' }],
+    ['env.composeFiles', w],
+    ['env.logs', { ...w, service: 'web', tail: 300 }],
+    ['stack.status', w],
+    ['stack.up', { ...w, starter: true }],
+    ['stack.down', w],
+    ['stack.destroy', { projectId: 'p1', worktreeId: 'wm' }],
+    ['stack.log', { ...w, fileId: 7, offset: 120 }],
+    ['worktree.dirty', w]
+  ])
+  const minutes = (ms) => ms / 60_000
+  assert.deepEqual(timeouts.map(([m, ms]) => [m, minutes(ms)]), [
+    ['docker.container', 3],
+    ['docker.compose', 30],
+    ['env.up', 30],
+    ['env.up', 30],
+    ['env.stop', 10],
+    ['env.destroy', 10],
+    ['stack.down', 10],
+    ['stack.destroy', 10]
+  ])
+})
+
+test('a worktree path the projection does not know is refused here, and nothing is sent', async () => {
+  const { backend, calls } = setup()
+  await assert.rejects(backend.env.up({ path: '/elsewhere' }, { enabled: true }, undefined), (err) => err.code === 'NOT_FOUND')
+  await assert.rejects(backend.stacks.status({ path: '/elsewhere' }), (err) => err.code === 'NOT_FOUND')
+  assert.deepEqual(calls, [])
+})
+
+test("the logs come from the window's connection, by event name, until unsubscribed", () => {
+  const { backend, listeners } = setup()
+  const docker = []
+  const env = []
+  const offDocker = backend.docker.onLog((e) => docker.push(e.data))
+  const offEnv = backend.env.onLog((e) => env.push([e.profile, e.step ?? null]))
+  for (const l of listeners['docker.log']) l({ data: 'pulling' })
+  for (const l of listeners['env.log']) l({ profile: 'twb-x', data: '', step: 'vm' })
+  offDocker()
+  offEnv()
+  assert.deepEqual([listeners['docker.log'], listeners['env.log']], [[], []])
+  assert.deepEqual([docker, env], [['pulling'], [['twb-x', 'vm']]])
 })
 
 test('start by instance id or by path sends session.start with the v2 worktree, a size, the type and agent', async () => {
@@ -400,10 +491,11 @@ test('remove: a failed unload is shown, and nothing is loaded again', async () =
   assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
 })
 
-const LOCAL = { capabilities: ['mcp', 'local'], localEntry: true }
+// A server that runs the environments and the stacks (5a): any server, Local or not.
+const MACHINE_CAPS = { capabilities: ['mcp', 'docker', 'env', 'stacks'] }
 
-test("remove in a Local window: the stack and the VM go after the unload, before git's removal (legacy's order)", async () => {
-  const { backend, calls, ui } = setup({ ...LOCAL, confirms: [true], state: LOADED, machine: { env: 'twb-feat-abc123', stack: 'r-feat' } })
+test("remove on a server with env and stacks: the stack and the VM go after the unload, before git's removal (4c's order)", async () => {
+  const { backend, calls, ui } = setup({ ...MACHINE_CAPS, confirms: [true], state: LOADED, machine: { env: 'twb-feat-abc123', stack: 'r-feat' } })
   await backend.worktrees.remove(feat, undefined)
   assert.deepEqual(ui[0], ['env?', '/r-feat'])
   assert.equal(ui[1][0], 'confirm+stack')
@@ -416,50 +508,50 @@ test("remove in a Local window: the stack and the VM go after the unload, before
   ])
 })
 
-test('remove in a Local window: declined tears nothing down; the stack box unticked keeps the stack', async () => {
-  const declined = setup({ ...LOCAL, confirms: [false], machine: { env: 'twb-x', stack: 'r-feat' } })
+test('remove on a server with env and stacks: declined tears nothing down; the stack box unticked keeps the stack', async () => {
+  const declined = setup({ ...MACHINE_CAPS, confirms: [false], machine: { env: 'twb-x', stack: 'r-feat' } })
   await declined.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(declined.calls, [])
-  const unticked = setup({ ...LOCAL, confirms: [true], machine: { env: 'twb-x', stack: 'r-feat', ticked: false } })
+  const unticked = setup({ ...MACHINE_CAPS, confirms: [true], machine: { env: 'twb-x', stack: 'r-feat', ticked: false } })
   await unticked.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(unticked.calls.map(([m]) => m), ['colima delete', 'worktree.remove'])
   // No VM and no stack: only git's removal.
-  const bare = setup({ ...LOCAL, confirms: [true] })
+  const bare = setup({ ...MACHINE_CAPS, confirms: [true] })
   await bare.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(bare.calls.map(([m]) => m), ['worktree.remove'])
 })
 
-test('remove in a Local window: a fresh check finds changes the poll missed, and asks before anything is destroyed', async () => {
+test('remove on a server with env and stacks: a fresh check finds changes the poll missed, and asks before anything is destroyed', async () => {
   // Declined: nothing is unloaded, destroyed or removed.
-  const declined = setup({ ...LOCAL, confirms: [true, false], state: LOADED, machine: { env: 'twb-x', stack: 'r-feat', dirty: true } })
+  const declined = setup({ ...MACHINE_CAPS, confirms: [true, false], state: LOADED, machine: { env: 'twb-x', stack: 'r-feat', dirty: true } })
   await declined.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(declined.calls, [])
   assert.deepEqual(declined.ui.slice(2), [['git status', '/r-feat'], ['confirm', 'Delete Uncommitted Changes', 'Delete Changes & Worktree']])
   // Accepted: the teardown, then a forced removal (no second ask).
-  const accepted = setup({ ...LOCAL, confirms: [true, true], machine: { env: 'twb-x', dirty: true } })
+  const accepted = setup({ ...MACHINE_CAPS, confirms: [true, true], machine: { env: 'twb-x', dirty: true } })
   await accepted.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(accepted.calls.map(([m, p]) => [m, p?.force]), [['colima delete', undefined], ['worktree.remove', true]])
   assert.equal(accepted.ui.filter(([kind]) => kind === 'confirm').length, 1)
 })
 
-test('remove in a Local window: no fresh check when nothing would be destroyed, or the poll already said dirty', async () => {
-  const bare = setup({ ...LOCAL, confirms: [true], machine: { dirty: true } })
+test('remove on a server with env and stacks: no fresh check when nothing would be destroyed, or the poll already said dirty', async () => {
+  const bare = setup({ ...MACHINE_CAPS, confirms: [true], machine: { dirty: true } })
   await bare.backend.worktrees.remove(feat, undefined)
   assert.ok(!bare.ui.some(([kind]) => kind === 'git status'))
-  const polled = setup({ ...LOCAL, confirms: [true], machine: { env: 'twb-x', dirty: true } })
+  const polled = setup({ ...MACHINE_CAPS, confirms: [true], machine: { env: 'twb-x', dirty: true } })
   await polled.backend.worktrees.remove({ ...feat, dirty: true }, undefined)
   assert.ok(!polled.ui.some(([kind]) => kind === 'git status'))
   assert.deepEqual(polled.calls.map(([m, p]) => [m, p?.force]), [['colima delete', undefined], ['worktree.remove', true]])
 })
 
-test('remove in a Local window that fails after the teardown: loaded again, and the error says the stack and VM are gone', async () => {
+test('remove on a server with env and stacks that fails after the teardown: loaded again, and the error says the stack and VM are gone', async () => {
   const replies = { 'worktree.remove': new CodedError('GIT_ERROR', "fatal: '/r-feat' is locked") }
-  const { backend, calls, ui } = setup({ ...LOCAL, confirms: [true], state: LOADED, replies, machine: { env: 'twb-x', stack: 'r-feat' } })
+  const { backend, calls, ui } = setup({ ...MACHINE_CAPS, confirms: [true], state: LOADED, replies, machine: { env: 'twb-x', stack: 'r-feat' } })
   await backend.worktrees.remove(feat, undefined)
   assert.deepEqual(calls.map(([m]) => m), ['worktree.unload', 'stack.sh destroy', 'colima delete', 'worktree.remove', 'worktree.load'])
   assert.deepEqual(ui.at(-1), ['error', 'Could not delete worktree', "fatal: '/r-feat' is locked Its dev stack and its VM were already removed."])
   // A failed unload comes before any teardown: nothing to add.
-  const unload = setup({ ...LOCAL, confirms: [true], state: LOADED, replies: { 'worktree.unload': new CodedError('IN_USE', 'busy') }, machine: { env: 'twb-x' } })
+  const unload = setup({ ...MACHINE_CAPS, confirms: [true], state: LOADED, replies: { 'worktree.unload': new CodedError('IN_USE', 'busy') }, machine: { env: 'twb-x' } })
   await unload.backend.worktrees.remove(feat, undefined)
   assert.deepEqual(unload.ui.at(-1), ['error', 'Could not delete worktree', 'busy'])
 })
@@ -470,8 +562,8 @@ test('tornDownNote names what is already gone', () => {
   assert.equal(tornDownNote(false, true), ' Its VM was already removed.')
 })
 
-test("remove in any other server window never looks at this machine's environments or stacks", async () => {
-  for (const options of [{ capabilities: ['mcp', 'local'] }, { capabilities: ['mcp'], localEntry: true }, {}]) {
+test('remove on a server without env and stacks never looks at environments or stacks, not even on the Local entry', async () => {
+  for (const options of [{ capabilities: ['mcp', 'local'], localEntry: true }, { capabilities: ['mcp'], localEntry: true }, {}]) {
     const { backend, calls, ui } = setup({ ...options, confirms: [true], machine: { env: 'twb-x', stack: 'r-feat' } })
     await backend.worktrees.remove(feat, undefined)
     assert.deepEqual(ui, [['confirm', 'Delete Worktree', 'Delete Worktree']])

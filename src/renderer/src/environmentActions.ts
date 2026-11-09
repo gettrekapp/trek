@@ -1,20 +1,28 @@
-import { envRepoKey } from '../../shared/environments'
+import { getBackend } from './backend'
+import { envListProblem } from '../../shared/environments'
 import { environmentFor, useAppStore } from './store'
 
 /**
- * Pull the current environment list into the store. Cheap (one colima list),
- * called by the Workspace poll and after every environment operation so the
- * badges update immediately instead of waiting out the poll interval.
+ * Pull the current environment list into the store. Cheap (one colima list on the server's
+ * machine per repository, which names its VMs by its envRepoKey), called by the workspace's poll
+ * and after every environment operation so the badges update immediately instead of waiting out
+ * the poll interval.
  */
 export async function refreshEnvironments(): Promise<void> {
-  const { project, envToolCheck, setEnvironments } = useAppStore.getState()
+  const { project, envToolCheck, setEnvironments, setEnvListError } = useAppStore.getState()
   const repos = project?.repositories.filter((r) => r.environments?.enabled) ?? []
   if (repos.length === 0 || !envToolCheck?.ok) return
+  const backend = getBackend()
   try {
-    const lists = await Promise.all(repos.map((r) => window.api.envList(null, envRepoKey(r))))
+    const lists = await Promise.all(repos.map((r) => backend.env.list(r.id)))
     setEnvironments(lists.flat())
-  } catch {
-    // colima hiccup — keep the last known state; the next poll retries
+    setEnvListError(null)
+  } catch (err) {
+    // A registry the server cannot read stays broken until someone fixes the file: say so (the Env
+    // panel, Settings). Anything else is a colima hiccup or a dropped link — keep the last known
+    // state; the next poll retries.
+    const problem = envListProblem(err)
+    if (problem) setEnvListError(problem)
   }
 }
 
@@ -33,7 +41,7 @@ export async function destroyEnvironmentIfAny(
   if (!env) return undefined
   setEnvBusy(env.profile, 'destroy')
   try {
-    await window.api.envDestroy(null, env.profile)
+    await getBackend().env.destroy(env.profile)
     return undefined
   } catch (err) {
     return `Failed to remove environment VM "${env.profile}": ${String(err)}`

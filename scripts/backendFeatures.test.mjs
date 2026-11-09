@@ -22,7 +22,7 @@ test('an empty window has no feature (4e: no file windows)', () => {
   for (const name of FEATURE_NAMES) assert.equal(NO_FEATURES[name], false, name)
 })
 
-test('a server window can have Linear, settings editing, the Global panel and the machine-local features', () => {
+test('a server window can have Linear, settings editing, the Global panel, the server machine\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
   assert.deepEqual(on, ['docker', 'env', 'stacks', 'linear', 'skills', 'reveal', 'openInEditor', 'settingsEdit', 'globalPanel'])
 })
@@ -34,7 +34,18 @@ test('v2 features are the ceiling AND the welcome capabilities; Linear and setti
   // Before the first welcome there are no capabilities.
   assert.deepEqual(on(undefined), ['linear', 'settingsEdit'])
   // A capability the ceiling has off turns nothing on.
-  assert.deepEqual(on(['mcp', 'docker', 'bot']), ['linear', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on(['mcp', 'bot', 'voice']), ['linear', 'settingsEdit', 'globalPanel'])
+})
+
+test("docker, env and stacks run on the server's machine: each follows its own capability, on any server (5a)", () => {
+  const on = (caps, options) => ['docker', 'env', 'stacks'].filter((name) => v2Features(caps, options)[name])
+  assert.deepEqual(on(['mcp', 'docker', 'env', 'stacks']), ['docker', 'env', 'stacks'])
+  assert.deepEqual(on(['docker']), ['docker'])
+  assert.deepEqual(on(['env', 'stacks']), ['env', 'stacks'])
+  // A server older than 5a: none, even on the Local entry with `local`.
+  assert.deepEqual(on(['mcp', 'local'], { localEntry: true }), [])
+  // The Local entry needs nothing more than the capabilities.
+  assert.deepEqual(on(['docker', 'env', 'stacks'], { localEntry: false }), ['docker', 'env', 'stacks'])
 })
 
 test("the settings sections: a server window hides this machine's and keeps the project's agents", () => {
@@ -60,11 +71,12 @@ test("the settings sections: a server window hides this machine's and keeps the 
   ])
 })
 
-const MACHINE = ['docker', 'env', 'stacks', 'skills', 'reveal', 'openInEditor']
+const MACHINE = ['skills', 'reveal', 'openInEditor']
+const SERVER_MACHINE = ['mcp', 'docker', 'env', 'stacks']
 
-test("the Local entry's server, welcomed with `local`, has the machine-local features", () => {
+test("the Local entry's server, welcomed with `local`, has this machine's features too", () => {
   const on = (caps, options) => FEATURE_NAMES.filter((name) => v2Features(caps, options)[name])
-  assert.deepEqual(on(['mcp', 'local'], { localEntry: true }), [
+  assert.deepEqual(on([...SERVER_MACHINE, 'local'], { localEntry: true }), [
     'docker',
     'env',
     'stacks',
@@ -76,26 +88,25 @@ test("the Local entry's server, welcomed with `local`, has the machine-local fea
     'globalPanel'
   ])
   // Never the bot, voice, moving worktrees or promote (phase 5).
-  for (const name of ['bot', 'voice', 'moveWorktree', 'promote']) assert.equal(v2Features(['mcp', 'local'], { localEntry: true })[name], false, name)
+  for (const name of ['bot', 'voice', 'moveWorktree', 'promote']) assert.equal(v2Features([...SERVER_MACHINE, 'local'], { localEntry: true })[name], false, name)
 })
 
-test('the machine-local features need both the Local entry and the `local` capability', () => {
+test("this machine's features need both the Local entry and the `local` capability", () => {
   const any = (caps, options) => MACHINE.filter((name) => v2Features(caps, options)[name])
   // A saved entry whose server says `local` (a tunnel to another machine's Local server): its paths are not on this disk.
-  assert.deepEqual(any(['mcp', 'local']), [])
-  assert.deepEqual(any(['mcp', 'local'], { localEntry: false }), [])
+  assert.deepEqual(any([...SERVER_MACHINE, 'local']), [])
+  assert.deepEqual(any([...SERVER_MACHINE, 'local'], { localEntry: false }), [])
   // The Local entry before its welcome, or a server there that is not a Local one.
   assert.deepEqual(any(undefined, { localEntry: true }), [])
-  assert.deepEqual(any(['mcp'], { localEntry: true }), [])
+  assert.deepEqual(any(SERVER_MACHINE, { localEntry: true }), [])
 })
 
-test('a Local window also shows the environments; voice stays hidden', () => {
-  const local = settingsSections(v2Features(['mcp', 'local'], { localEntry: true }))
-  const hidden = SETTINGS_SECTIONS.filter((name) => local[name] === 'hidden')
-  assert.deepEqual(hidden, ['voice'])
-  assert.equal(local.environments, 'edit')
-  assert.equal(local.linear, 'edit')
-  assert.equal(local.agents, 'project')
+test('a window whose server runs environments shows them in Settings, on Local or not; voice stays hidden', () => {
+  for (const [caps, options] of [[[...SERVER_MACHINE, 'local'], { localEntry: true }], [SERVER_MACHINE, {}]]) {
+    const sections = settingsSections(v2Features(caps, options))
+    assert.deepEqual(SETTINGS_SECTIONS.filter((name) => sections[name] === 'hidden'), ['voice'])
+    assert.deepEqual([sections.environments, sections.linear, sections.agents], ['edit', 'edit', 'project'])
+  }
 })
 
 test('the same capabilities give the same object, so a React snapshot read is stable', () => {

@@ -1,6 +1,6 @@
 // Keeps this window's backend in step with what the window shows. Not in
 // store.ts: installV2.ts imports the store (directly and through terminals.ts,
-// localTeardown.ts and the rest), so the store importing it back would make a
+// worktreeTeardown.ts and the rest), so the store importing it back would make a
 // cycle in which those modules run before the store exists.
 import { useAppStore } from './store'
 import { idleBackend, setBackend, type WindowBackend } from './backend'

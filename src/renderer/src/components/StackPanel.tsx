@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { StackStatus } from '../../../shared/types'
 import { STACK_STATE_LABELS, stackState, stackUrls, stripAnsi } from '../stacks'
+import { getBackend } from '../backend'
 
 interface Props {
   visible: boolean
@@ -13,7 +14,7 @@ interface Props {
 const LOG_POLL_MS = 1000
 const MAX_LOG = 200_000
 
-/** The Stack tab: start/stop the worktree's docker/stack/stack.sh dev stack. */
+/** The Stack tab: start/stop the worktree's docker/stack/stack.sh dev stack, on its server's machine. */
 export function StackPanel({ visible, worktreePath, status, onChanged }: Props): React.JSX.Element {
   const [starter, setStarter] = useState(false)
   const [pending, setPending] = useState<'start' | 'stop' | null>(null)
@@ -38,7 +39,7 @@ export function StackPanel({ visible, worktreePath, status, onChanged }: Props):
     const poll = async (): Promise<void> => {
       try {
         const { id, offset } = fileRef.current
-        const chunk = await window.api.stackLog(worktreePath, id, offset)
+        const chunk = await getBackend().stacks.log({ path: worktreePath }, id, offset)
         if (disposed || fileRef.current.id !== id) return
         fileRef.current = { id: chunk.fileId, offset: chunk.offset }
         if (chunk.fileId !== id) setLog(stripAnsi(chunk.text))
@@ -64,7 +65,7 @@ export function StackPanel({ visible, worktreePath, status, onChanged }: Props):
     setPending('start')
     setError(null)
     try {
-      await window.api.stackUp(worktreePath, starter)
+      await getBackend().stacks.up({ path: worktreePath }, starter)
       followRef.current = true
     } catch (err) {
       setError(String(err))
@@ -79,7 +80,7 @@ export function StackPanel({ visible, worktreePath, status, onChanged }: Props):
     setError(null)
     onChanged()
     try {
-      const code = await window.api.stackDown(worktreePath)
+      const code = await getBackend().stacks.down({ path: worktreePath })
       if (code !== 0) setError(`stack.sh down exited with code ${code} — see the output below`)
     } catch (err) {
       setError(String(err))

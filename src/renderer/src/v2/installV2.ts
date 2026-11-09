@@ -7,7 +7,7 @@ import { useAppStore } from '../store'
 import { setProjectSetters } from '../projectSetters'
 import { disposeV2Terminals, focusTerminal, terminalSize } from '../terminals'
 import { removalBlock } from '../repoRemoval'
-import { localWorktreeTeardown } from '../localTeardown'
+import { worktreeTeardown } from '../worktreeTeardown'
 import { createV2Backend, type V2Request, type V2RequestWithRev } from './backendV2'
 import { v2SetterOverrides } from './setterOverrides'
 import { applyV2Project, clearV2Projection, setV2ProjectOverlay, v2Ids } from './applyProjection'
@@ -53,10 +53,10 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)
   })
 
-  const request: V2Request = (method, params) => {
+  const request: V2Request = (method, params, options) => {
     const server = left ? undefined : registered()
     if (!server) return Promise.reject(new ClientError('NOT_CONNECTED', 'not connected to the server'))
-    return server.connection.request(method, params)
+    return server.connection.request(method, params, options)
   }
   const requestWithRev: V2RequestWithRev = (method, params) => {
     const server = left ? undefined : registered()
@@ -109,6 +109,14 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     requestWithRev,
     capabilities: () => registered()?.connection.welcome?.capabilities,
     localEntry: isLocalEntryId(entryId),
+    // The window's own connection: a reconnect keeps it, and so its listeners.
+    onEvent: (event, listener) => {
+      const server = left ? undefined : registered()
+      if (!server) return () => {}
+      return server.connection.on('event', (frame) => {
+        if (!left && frame.event === event) listener(frame.payload as Parameters<typeof listener>[0])
+      })
+    },
     ids: v2Ids,
     state: () => useAppStore.getState(),
     whenProjected,
@@ -120,7 +128,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     promptRepoPath: requestRepoPath,
     registeredRepoPath,
     removalBlock,
-    teardown: localWorktreeTeardown,
+    teardown: worktreeTeardown,
     report,
     reportEdit,
     left: () => left

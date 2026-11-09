@@ -16,9 +16,21 @@ import { NO_FEATURES, type BackendFeatures } from './backendFeatures'
 import { errorText } from './v2/errors'
 import type { LlmSelection } from '../../shared/providers/types'
 import type {
+  ComposeAction,
+  ContainerAction,
+  ContainerInfo,
+  DockerLogEvent,
+  EnvCheckResult,
+  EnvLogEvent,
+  EnvService,
+  EnvUpResult,
+  EnvironmentInfo,
+  EnvironmentSettings,
   GitWorktreeInfo,
   Repository,
   SessionType,
+  StackLogChunk,
+  StackStatus,
   WorktreeChanges,
   WorktreeInstance,
   WorktreeLocator
@@ -90,6 +102,41 @@ export interface WindowBackend {
     diff(loc: WorktreeLocator): Promise<Record<string, string>>
     pull(loc: WorktreeLocator, branch: string): Promise<void>
     push(loc: WorktreeLocator, branch: string): Promise<void>
+    /** A fresh `git status` of the worktree on its server; null when git cannot read it */
+    dirty(loc: WorktreeLocator): Promise<boolean | null>
+  }
+  /**
+   * Docker on the project's server's machine (feature `docker`). Each rejects with the server's
+   * error (TOOL_ERROR `missing` when docker is not installed there).
+   */
+  readonly docker: {
+    list(): Promise<ContainerInfo[]>
+    container(action: ContainerAction, id: string): Promise<void>
+    /** docker compose in the repository's main checkout; resolves its exit code. Its output comes as `onLog` */
+    compose(repoId: string, action: ComposeAction): Promise<number>
+    /** The output of this window's compose runs; returns the unsubscribe */
+    onLog(listener: (event: DockerLogEvent) => void): () => void
+  }
+  /** The worktrees' Colima environments on the server's machine (feature `env`), by worktree path */
+  readonly env: {
+    check(): Promise<EnvCheckResult>
+    list(repoId: string): Promise<EnvironmentInfo[]>
+    up(loc: WorktreeLocator, settings: EnvironmentSettings, envVars: Record<string, string> | undefined): Promise<EnvUpResult>
+    stop(profile: string): Promise<number>
+    destroy(profile: string): Promise<number>
+    ps(loc: WorktreeLocator, composeFile: string | undefined): Promise<EnvService[]>
+    composeFiles(loc: WorktreeLocator): Promise<string[]>
+    logs(loc: WorktreeLocator, composeFile: string | undefined, service: string, tail: number): Promise<string>
+    /** The output and steps of this window's up, stop and destroy runs; returns the unsubscribe */
+    onLog(listener: (event: EnvLogEvent) => void): () => void
+  }
+  /** The worktrees' dev stacks on the server's machine (feature `stacks`), by worktree path */
+  readonly stacks: {
+    status(loc: WorktreeLocator): Promise<StackStatus>
+    up(loc: WorktreeLocator, starter: boolean): Promise<void>
+    down(loc: WorktreeLocator): Promise<number>
+    destroy(loc: WorktreeLocator): Promise<number>
+    log(loc: WorktreeLocator, fileId: number, offset: number): Promise<StackLogChunk>
   }
   /** Branch data; null or an empty text clears the value */
   readonly branch: {
@@ -163,7 +210,20 @@ export const idleBackend: WindowBackend = {
     dismissDecision: noProject
   },
   worktrees: { load: noProject, unload: noProject, unloadAll: noProject, create: noProject, remove: noProject, setOrder: noProject },
-  git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, pull: noProject, push: noProject },
+  git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, pull: noProject, push: noProject, dirty: noProject },
+  docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
+  env: {
+    check: noProject,
+    list: noProject,
+    up: noProject,
+    stop: noProject,
+    destroy: noProject,
+    ps: noProject,
+    composeFiles: noProject,
+    logs: noProject,
+    onLog: () => () => {}
+  },
+  stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
   branch: { setTag: noProject, setCustomTag: noProject, setNote: noProject, setTicket: noProject, setPullRequest: noProject, setEnvVars: noProject },
   repos: { add: noProject, remove: noProject },
   errors: {

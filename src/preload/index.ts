@@ -7,22 +7,11 @@ import type {
   SessionSelect,
   V2SocketOpenResult,
   AppServerTest,
-  ContainerAction,
-  ContainerInfo,
-  DockerLogEvent,
-  EnvCheckResult,
-  EnvLogEvent,
-  EnvService,
-  EnvUpResult,
-  EnvironmentInfo,
-  EnvironmentSettings,
   LinearIssue,
   LinearKeyResult,
   InitialWindowState,
   RecentEntry,
   SkillInfo,
-  StackLogChunk,
-  StackStatus,
   VoiceConfig,
   VoiceInfo,
   VoiceKeyResult,
@@ -64,8 +53,6 @@ const api = {
   selectDirectory: (title: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectDirectory', title),
 
-  /** `git status` of a worktree on this disk (a Local window's delete); null when it can't be read. */
-  localWorktreeDirty: (path: string): Promise<boolean | null> => ipcRenderer.invoke('git:localDirty', path),
   openInVSCode: (dirPath: string): Promise<void> =>
     ipcRenderer.invoke('app:openInVSCode', dirPath),
   revealInFinder: (dirPath: string): Promise<void> =>
@@ -186,65 +173,6 @@ const api = {
   // Skills
   listSkills: (worktreePath: string): Promise<SkillInfo[]> =>
     ipcRenderer.invoke('skills:list', worktreePath),
-
-  // Docker
-  listContainers: (): Promise<ContainerInfo[]> => ipcRenderer.invoke('docker:list'),
-  containerAction: (action: ContainerAction, id: string): Promise<void> =>
-    ipcRenderer.invoke('docker:container', action, id),
-  compose: (args: string[], cwd: string): Promise<number> =>
-    ipcRenderer.invoke('docker:compose', args, cwd),
-  onDockerLog: (callback: (event: DockerLogEvent) => void): (() => void) =>
-    subscribe('docker:log', callback),
-
-  // Per-worktree dev stacks (the repo's docker/stack/stack.sh)
-  stackStatus: (worktreePath: string): Promise<StackStatus> =>
-    ipcRenderer.invoke('stack:status', worktreePath),
-  stackUp: (worktreePath: string, starter: boolean): Promise<void> =>
-    ipcRenderer.invoke('stack:up', worktreePath, starter),
-  stackDown: (worktreePath: string): Promise<number> =>
-    ipcRenderer.invoke('stack:down', worktreePath),
-  stackDestroy: (worktreePath: string): Promise<number> =>
-    ipcRenderer.invoke('stack:destroy', worktreePath),
-  stackLog: (worktreePath: string, fileId: number, offset: number): Promise<StackLogChunk> =>
-    ipcRenderer.invoke('stack:log', worktreePath, fileId, offset),
-
-  // Per-worktree environments (Colima VMs), on this machine only: main refuses a non-null serverId
-  envCheck: (): Promise<EnvCheckResult> => ipcRenderer.invoke('env:check'),
-  envList: (serverId: string | null, repoPath: string): Promise<EnvironmentInfo[]> =>
-    ipcRenderer.invoke('env:list', serverId, repoPath),
-  envUp: (
-    serverId: string | null,
-    repoPath: string,
-    branch: string,
-    worktreePath: string,
-    settings: EnvironmentSettings | undefined,
-    envVars?: Record<string, string>
-  ): Promise<EnvUpResult> =>
-    ipcRenderer.invoke('env:up', serverId, repoPath, branch, worktreePath, settings, envVars),
-  envStop: (serverId: string | null, profile: string): Promise<number> =>
-    ipcRenderer.invoke('env:stop', serverId, profile),
-  envDestroy: (serverId: string | null, profile: string): Promise<number> =>
-    ipcRenderer.invoke('env:destroy', serverId, profile),
-  envPs: (
-    serverId: string | null,
-    profile: string,
-    worktreePath: string,
-    composeFile?: string
-  ): Promise<EnvService[]> =>
-    ipcRenderer.invoke('env:ps', serverId, profile, worktreePath, composeFile),
-  envComposeFiles: (serverId: string | null, worktreePath: string): Promise<string[]> =>
-    ipcRenderer.invoke('env:composeFiles', serverId, worktreePath),
-  envLogs: (
-    serverId: string | null,
-    profile: string,
-    worktreePath: string,
-    composeFile: string | undefined,
-    service: string,
-    tail?: number
-  ): Promise<string> =>
-    ipcRenderer.invoke('env:logs', serverId, profile, worktreePath, composeFile, service, tail),
-  onEnvLog: (callback: (event: EnvLogEvent) => void): (() => void) =>
-    subscribe('env:log', callback),
 
   // Menu events
   onMenu: (

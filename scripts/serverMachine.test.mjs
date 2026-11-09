@@ -269,6 +269,9 @@ test("stack.*: the worktree's stack.sh, by the server's own path; its state in t
   for (const bad of [{ fileId: -1, offset: 0 }, { fileId: 0, offset: 1.5 }, { fileId: '0', offset: 0 }]) refused(await s.call('stack.log', { ...ref, ...bad }), 'BAD_REQUEST')
   refused(await s.call('stack.up', { ...ref, starter: 'yes' }), 'BAD_REQUEST')
   assert.equal((await s.call('stack.destroy', ref)).result, 0)
+  // The main checkout has its own stack: the repository's.
+  const main = s.repo().worktrees.find((w) => w.isMain)
+  assert.deepEqual((await s.call('stack.status', { projectId: s.projectId, worktreeId: main.id })).result.slug, 'a')
 })
 
 test('worktree.dirty reads git afresh; a worktree outside the allowlist is PATH_DENIED for every machine method', async (t) => {

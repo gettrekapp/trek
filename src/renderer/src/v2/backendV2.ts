@@ -23,11 +23,12 @@ import { primaryWorktreeId } from '../../../shared/repositories.ts'
 import { hostKey } from '../../../shared/types.ts'
 import type { SessionTarget, WindowBackend } from '../backend'
 import type { TerminalMeta } from '../store'
-import type { MethodNameV2, MethodParamsV2, MethodResultsV2, TopicRev } from '../../../shared/protocolV2'
+import type { EventPayloadsV2, MethodNameV2, MethodParamsV2, MethodResultsV2, TopicRev } from '../../../shared/protocolV2'
 import type { RevResult } from '../../../shared/client/connection'
 import type { GitWorktreeInfo, ProjectFile, Repository } from '../../../shared/types'
 
-export type V2Request = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M]) => Promise<MethodResultsV2[M]>
+/** `timeoutMs`: for the long ones (an environment's first boot, a compose run): the SDK's default is a minute */
+export type V2Request = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M], options?: { timeoutMs?: number }) => Promise<MethodResultsV2[M]>
 /** As V2Request, with the rev the response reports (none from a server older than revs). */
 export type V2RequestWithRev = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M]) => Promise<RevResult<M>>
 
@@ -48,9 +49,8 @@ export interface ConfirmPrompt {
 }
 
 /**
- * A Local server window's teardown on this machine before a worktree is
- * removed (localTeardown.ts). Used only with
- * the features: `env` for the VM, `stacks` for the dev stack.
+ * The teardown on the server's machine before a worktree is removed (worktreeTeardown.ts). Used
+ * only with the features: `env` for the VM, `stacks` for the dev stack.
  */
 export interface WorktreeTeardown {
   /** The branch's Colima VM, if the environments poll lists one */
@@ -61,7 +61,7 @@ export interface WorktreeTeardown {
   destroyStack(info: GitWorktreeInfo, stackName: string): Promise<void>
   /** Deletes the VM; shows its own failure and never rejects */
   destroyEnvironment(info: GitWorktreeInfo): Promise<void>
-  /** A fresh `git status` of the worktree on this disk; the cached flag if it can't be read */
+  /** A fresh `git status` of the worktree on its server (`worktree.dirty`); the cached flag if it can't be read */
   isDirty(info: GitWorktreeInfo): Promise<boolean>
 }
 
@@ -81,6 +81,8 @@ export interface V2BackendDeps {
   capabilities(): readonly string[] | undefined
   /** The window's entry is the Local server's: with `local` in the welcome, its paths are this machine's (`v2Features`) */
   localEntry: boolean
+  /** The server's events of one name on the window's connection (`docker.log`, `env.log`); returns the unsubscribe */
+  onEvent<E extends keyof EventPayloadsV2>(event: E, listener: (payload: EventPayloadsV2[E]) => void): () => void
   /** The id map of the projection in the store now */
   ids(): V2IdMap | null
   state(): V2BackendState
@@ -103,7 +105,7 @@ export interface V2BackendDeps {
   registeredRepoPath(repoId: string): Promise<string | null>
   /** Why the repository can't be removed now, or null */
   removalBlock(repo: Repository): string | null
-  /** This machine's teardown for a removed worktree; only a Local window's features reach it */
+  /** The server machine's teardown for a removed worktree; only the `env` and `stacks` features reach it */
   teardown: WorktreeTeardown
   /** Shows a failed request a caller fired and forgot (the setter overrides' `report`) */
   report(title: string, err: unknown): void
@@ -138,6 +140,13 @@ class TargetError extends Error {
 }
 
 const REMOVE_FAILED = 'Could not delete worktree'
+
+/** The machine methods that can run for minutes (a VM's first boot, an image build, a stack's database restore). */
+const LONG_MS = 30 * 60_000
+/** colima stop and delete, a stack's down and destroy (each Ctrl-C's a running up and waits up to a minute) */
+const SLOW_MS = 10 * 60_000
+/** docker start, stop and restart (the server gives docker two minutes) */
+const CONTAINER_MS = 3 * 60_000
 const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
 export function createV2Backend(deps: V2BackendDeps): WindowBackend {
@@ -338,9 +347,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return { path, worktreeId }
       },
       // The server's rules: a loaded worktree is IN_USE, so it is unloaded
-      // first, and loaded again when the removal doesn't go through. A Local
-      // window also tears down the worktree's dev stack (if ticked) and its VM
-      // on this machine, after the unload and before git's removal (4c).
+      // first, and loaded again when the removal doesn't go through. With the
+      // `stacks` and `env` features it also tears down the worktree's dev stack
+      // (if ticked) and its VM on the server's machine, after the unload and
+      // before git's removal (4c's order).
       remove: async (info, instance) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
@@ -442,10 +452,43 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       pull: async (loc) => {
         await request('worktree.pull', { projectId, worktreeId: worktreeAt(loc.path) })
       },
-      // Legacy pushes with -u.
+      // Always with -u.
       push: async (loc) => {
         await request('worktree.push', { projectId, worktreeId: worktreeAt(loc.path), setUpstream: true })
-      }
+      },
+      dirty: async (loc) => request('worktree.dirty', { projectId, worktreeId: worktreeAt(loc.path) })
+    },
+    // Every path the server needs it finds itself, from the ids: a worktree by the store's path,
+    // a repository by its id. Nothing else of this machine's goes over.
+    docker: {
+      list: () => request('docker.list', {}),
+      container: async (action, id) => {
+        await request('docker.container', { action, id }, { timeoutMs: CONTAINER_MS })
+      },
+      compose: (repoId, action) => request('docker.compose', { projectId, repoId, action }, { timeoutMs: LONG_MS }),
+      onLog: (listener) => deps.onEvent('docker.log', listener)
+    },
+    env: {
+      check: () => request('env.check', {}),
+      list: (repoId) => request('env.list', { projectId, repoId }),
+      up: async (loc, settings, envVars) =>
+        request('env.up', { projectId, worktreeId: worktreeAt(loc.path), settings, ...(envVars ? { envVars } : {}) }, { timeoutMs: LONG_MS }),
+      stop: (profile) => request('env.stop', { profile }, { timeoutMs: SLOW_MS }),
+      destroy: (profile) => request('env.destroy', { profile }, { timeoutMs: SLOW_MS }),
+      ps: async (loc, composeFile) => request('env.ps', { projectId, worktreeId: worktreeAt(loc.path), ...(composeFile ? { composeFile } : {}) }),
+      composeFiles: async (loc) => request('env.composeFiles', { projectId, worktreeId: worktreeAt(loc.path) }),
+      logs: async (loc, composeFile, service, tail) =>
+        request('env.logs', { projectId, worktreeId: worktreeAt(loc.path), ...(composeFile ? { composeFile } : {}), service, tail }),
+      onLog: (listener) => deps.onEvent('env.log', listener)
+    },
+    stacks: {
+      status: async (loc) => request('stack.status', { projectId, worktreeId: worktreeAt(loc.path) }),
+      up: async (loc, starter) => {
+        await request('stack.up', { projectId, worktreeId: worktreeAt(loc.path), starter })
+      },
+      down: async (loc) => request('stack.down', { projectId, worktreeId: worktreeAt(loc.path) }, { timeoutMs: SLOW_MS }),
+      destroy: async (loc) => request('stack.destroy', { projectId, worktreeId: worktreeAt(loc.path) }, { timeoutMs: SLOW_MS }),
+      log: async (loc, fileId, offset) => request('stack.log', { projectId, worktreeId: worktreeAt(loc.path), fileId, offset })
     },
     branch: {
       setTag: async (repoId, branch, tagId) => {

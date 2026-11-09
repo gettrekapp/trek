@@ -221,6 +221,8 @@ export interface AppState {
   envBusy: Record<string, EnvBusyAction>
   /** colima/docker toolchain availability; null until checked. */
   envToolCheck: EnvCheckResult | null
+  /** Why the server's env.list cannot list the environments (its registry unreadable); null when it can. */
+  envListError: string | null
   /** Queued prompt blocks per terminal id, oldest first (persisted with the project). */
   terminalQueues: Record<string, string[]>
   /** Whether the queue panel beside the terminal is expanded (app-wide UI state). */
@@ -289,6 +291,7 @@ export interface AppState {
   setEnvironments: (infos: EnvironmentInfo[]) => void
   setEnvBusy: (profile: string, action: EnvBusyAction | null) => void
   setEnvToolCheck: (result: EnvCheckResult) => void
+  setEnvListError: (message: string | null) => void
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
@@ -381,6 +384,7 @@ export const useAppStore = create<AppState>((set) => ({
   environments: {},
   envBusy: {},
   envToolCheck: null,
+  envListError: null,
   terminalQueues: {},
   queuePanelOpen: false,
   globalQueuePanelOpen: false,
@@ -444,6 +448,7 @@ export const useAppStore = create<AppState>((set) => ({
     }),
 
   setEnvToolCheck: (result) => set({ envToolCheck: result }),
+  setEnvListError: (message) => set((state) => (state.envListError === message ? state : { envListError: message })),
 
   setQueuePanelOpen: (open) => set({ queuePanelOpen: open }),
 

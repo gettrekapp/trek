@@ -38,19 +38,21 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
 export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map((name) => [name, false])) as Record<FeatureName, boolean>
 
 /**
- * A server window (3c-2, 4c). The ceiling: the v2 backend's features are these
- * AND what `v2Features` asks of the server's welcome and the window's entry.
- * - Off: the bot and voice (local MCP tools, phase 5) and the git flows
- *   protocol v2 has no command for (moving a worktree, promote).
+ * A server window (3c-2, 4c, 5a). The ceiling: the v2 backend's features are
+ * these AND what `v2Features` asks of the server's welcome and the window's entry.
+ * - Off: the bot and voice (phase 5) and the git flows protocol v2 has no
+ *   command for (moving a worktree, promote).
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
  * - Linear only reads ticket ids, with this machine's API key: on for every
  *   server (4c).
  * - The Global panel needs `mcp`.
- * - Docker, environments, stacks, skills, Reveal and Open in VS Code read or
- *   run things on this machine at the project's paths: only the Local
- *   server's paths are on this disk (`MACHINE_FEATURES`).
+ * - Docker, environments and stacks run on the server's machine (5a): each
+ *   needs its capability, on any server.
+ * - Skills, Reveal and Open in VS Code read or open things on this machine at
+ *   the project's paths: only the Local server's paths are on this disk
+ *   (`MACHINE_FEATURES`).
  */
 export const V2_FEATURES: BackendFeatures = {
   docker: true,
@@ -71,20 +73,25 @@ export const V2_FEATURES: BackendFeatures = {
 /**
  * The welcome capability a v2 feature needs, if any. Global sessions drive the
  * worktree sessions through the server's MCP tools, so without `mcp` they
- * could not do their job.
+ * could not do their job. Docker, the environments and the stacks are the
+ * server's own methods (5a): a server older than them has none of the three.
  */
 const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
-  globalPanel: 'mcp'
+  globalPanel: 'mcp',
+  docker: 'docker',
+  env: 'env',
+  stacks: 'stacks'
 }
 
 /**
- * The features that use the project's paths on this machine. A server window
- * has them only on the Local entry (the supervisor's own server, which main
- * found by its pid and profile) when its welcome says `local` too. Never by
- * the capability alone: a saved entry can reach another machine's Local
- * server through a tunnel, still on 127.0.0.1, and its paths are not here.
+ * The features that use the project's paths on this machine (Electron main
+ * reads or opens them). A server window has them only on the Local entry (the
+ * supervisor's own server, which main found by its pid and profile) when its
+ * welcome says `local` too. Never by the capability alone: a saved entry can
+ * reach another machine's Local server through a tunnel, still on 127.0.0.1,
+ * and its paths are not here. Skills move to the server in 5b.
  */
-export const MACHINE_FEATURES: readonly FeatureName[] = ['docker', 'env', 'stacks', 'skills', 'reveal', 'openInEditor']
+export const MACHINE_FEATURES: readonly FeatureName[] = ['skills', 'reveal', 'openInEditor']
 
 /** The `local` welcome capability (CAPABILITY.local in shared/protocolV2.ts). */
 const LOCAL_CAPABILITY = 'local'
@@ -165,9 +172,9 @@ export type SectionMode = 'edit' | 'project' | 'hidden'
 /**
  * Which Settings sections a window shows. A server window edits the project's
  * settings on the server and hides what belongs to this machine: the voice API
- * keys. Linear (its key is app-wide, in main)
- * shows where the window has the feature (every server), and the Docker
- * environments where it has `env` (the Local server: they run here).
+ * keys. Linear (its key is app-wide, in main) shows where the window has the
+ * feature (every server), and the Docker environments where it has `env` (a
+ * server that runs them, on its own machine).
  */
 export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
   const out = {} as Record<SettingsSection, SectionMode>

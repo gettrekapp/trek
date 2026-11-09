@@ -5,6 +5,7 @@ import { refreshEnvironments } from '../environmentActions'
 import { envStartArgs } from '../environmentStart'
 import { SettingText } from './SettingText'
 import { environmentFor, repoById, repoOfInfo, useAppStore } from '../store'
+import { getBackend } from '../backend'
 
 interface Props {
   visible: boolean
@@ -36,6 +37,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
   const toolCheck = useAppStore((s) => s.envToolCheck)
+  const listError = useAppStore((s) => s.envListError)
   const setEnvBusy = useAppStore((s) => s.setEnvBusy)
   const setBranchEnvVars = useAppStore((s) => s.setBranchEnvVars)
 
@@ -75,7 +77,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   // Output (and step markers) stream in regardless of which tab is showing.
   useEffect(() => {
     if (!profile) return undefined
-    return window.api.onEnvLog((event) => {
+    return getBackend().env.onLog((event) => {
       if (event.profile !== profile) return
       if (event.data) appendLog(event.data)
       if (event.step) {
@@ -107,8 +109,8 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   useEffect(() => {
     if (!visible) return undefined
     let disposed = false
-    window.api
-      .envComposeFiles(null, info.path)
+    getBackend()
+      .env.composeFiles({ path: info.path })
       .then((files) => {
         if (!disposed) setComposeCandidates(files)
       })
@@ -126,7 +128,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     let disposed = false
     const poll = async (): Promise<void> => {
       try {
-        const result = await window.api.envPs(null, profile, info.path, composeFile)
+        const result = await getBackend().env.ps({ path: info.path }, composeFile)
         if (!disposed) setServices(result)
       } catch {
         // VM mid-boot or context missing — the next poll retries
@@ -145,14 +147,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     let disposed = false
     const fetchLogs = async (): Promise<void> => {
       try {
-        const text = await window.api.envLogs(
-          null,
-          profile,
-          info.path,
-          composeFile,
-          logsService,
-          SERVICE_LOGS_TAIL
-        )
+        const text = await getBackend().env.logs({ path: info.path }, composeFile, logsService, SERVICE_LOGS_TAIL)
         if (!disposed) setServiceLogs(text)
       } catch (err) {
         if (!disposed) setServiceLogs(String(err))
@@ -191,7 +186,8 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
       // committed is in it (a server window shows the pending edit at once).
       const now = useAppStore.getState().project
       const { settings, envVars } = envStartArgs(now ? repoById(now, info.repoId) : repo, info.branch!, composeFile)
-      const result = await window.api.envUp(null, repoPath, info.branch!, info.path, settings, envVars)
+      // The server names the VM after the repository and the branch it has checked out (the same profile as here).
+      const result = await getBackend().env.up({ path: info.path }, settings, envVars)
       if (result.code === 0) {
         setSteps({ vm: 'done', compose: 'done', ready: 'done' })
       } else {
@@ -215,7 +211,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     setError(null)
     setSteps(null)
     try {
-      await window.api.envStop(null, profile)
+      await getBackend().env.stop(profile)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -237,7 +233,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     setError(null)
     setSteps(null)
     try {
-      await window.api.envDestroy(null, profile)
+      await getBackend().env.destroy(profile)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -289,6 +285,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
             <span className="muted">brew install colima docker docker-compose</span>
           </div>
         )}
+        {listError && <div className="error">{listError}</div>}
         <div className="env-header">
           <span className={`docker-dot ${running ? 'running' : 'exited'}`} title={stateLabel} />
           <div className="docker-info">

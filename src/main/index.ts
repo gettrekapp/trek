@@ -11,9 +11,6 @@ import { registerAppIpc } from './appIpc'
 import { registerGithubHandlers } from './github'
 import { registerLinearHandlers } from './linear'
 import { registerSkillHandlers } from './skills'
-import { registerDockerHandlers } from './docker'
-import { registerEnvironmentHandlers } from './environments'
-import { registerStackHandlers } from './stacks'
 import { closeServerLinks, registerAppServerHandlers } from './appServers'
 import { attentionHooks, closeAttention, registerAttentionHandlers } from './notifications'
 import { appSettings, registerAppSettingsHandlers } from './appSettings'
@@ -156,7 +153,7 @@ function buildMenu(): void {
 }
 
 app.whenReady().then(async () => {
-  // Must complete before anything spawns child processes (docker, git, colima).
+  // Must complete before anything spawns child processes (the local server, code, gh).
   await fixPath()
   void removeStaleMcpConfigs()
   registerWindowHandlers()
@@ -165,9 +162,6 @@ app.whenReady().then(async () => {
   registerGithubHandlers()
   registerLinearHandlers()
   registerSkillHandlers()
-  registerDockerHandlers()
-  registerEnvironmentHandlers()
-  registerStackHandlers()
   registerAppSettingsHandlers()
   // Before the links: their first connections are linked to the aggregator as they are made.
   registerAttentionHandlers()

@@ -17,7 +17,7 @@ import {
   startVm,
   stopVm
 } from './colimaService.ts'
-import { ENV_DEFAULTS, ENV_PROFILE_PREFIX, deriveProfileName } from '../shared/environments.ts'
+import { ENV_DEFAULTS, ENV_PROFILE_PREFIX, deriveProfileName, registryUnreadableMessage } from '../shared/environments.ts'
 import type {
   EnvCheckResult,
   EnvLogEvent,
@@ -105,11 +105,11 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
       parsed = JSON.parse(await readFile(registryFile, 'utf8'))
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' || !strict) return {}
-      throw new Error(`The environments registry ${registryFile} cannot be read (${(err as Error).message}); it was left as it is`)
+      throw new Error(registryUnreadableMessage(registryFile, (err as Error).message))
     }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Registry
     if (!strict) return {}
-    throw new Error(`The environments registry ${registryFile} cannot be read (it is not a JSON object); it was left as it is`)
+    throw new Error(registryUnreadableMessage(registryFile, 'it is not a JSON object'))
   }
   // Write-then-rename: a crash mid-write must not leave a torn file, which would read as no VMs.
   const writeRegistry = async (registry: Registry): Promise<void> => {

@@ -61,7 +61,7 @@ type Panel =
 
 const STACK_POLL_MS = 4000
 
-/** Polls the worktree's docker/stack/stack.sh status; null while `off` or unknown. */
+/** Polls the worktree's docker/stack/stack.sh status on its server; null while `off` or unknown. */
 function useStackStatus(
   path: string | undefined,
   off: boolean
@@ -70,8 +70,8 @@ function useStackStatus(
 
   const refresh = useCallback(() => {
     if (!path || off) return
-    window.api
-      .stackStatus(path)
+    getBackend()
+      .stacks.status({ path })
       .then((next) =>
         setStatus((prev) => (prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
       )
@@ -129,8 +129,7 @@ export function WorktreeDetail({
 
   const features = useFeatures()
   const path = info?.path
-  // A remote server's paths are not on this disk: nothing here may poll them locally. A Local
-  // server window's are (`features.stacks`).
+  // The stack runs on the server's machine (`features.stacks`, any server that has `stacks`).
   const [stack, refreshStack] = useStackStatus(path, !features.stacks)
   const changesState = useWorktreeChanges(path, offline, panel === 'changes')
   useEffect(() => {
@@ -708,7 +707,7 @@ export function WorktreeDetail({
             className={`panel-btn ${panel === 'docker' ? 'active' : ''}`}
             onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
           >
-            Docker <DockerMenu key={repo.id} repoPath={repo.path} />
+            Docker <DockerMenu key={repo.id} repoId={repo.id} />
           </button>
         )}
         {showEnv && (

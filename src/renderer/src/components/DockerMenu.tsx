@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { getBackend } from '../backend'
+import type { ComposeAction } from '../../../shared/types'
 
 const MENU_WIDTH = 300
 
-const COMPOSE_ACTIONS: { label: string; args: string[]; desc: string }[] = [
-  { label: 'compose up -d', args: ['up', '-d'], desc: 'Start services in the background' },
-  { label: 'compose up --build -d', args: ['up', '--build', '-d'], desc: 'Rebuild images, then start' },
-  { label: 'compose restart', args: ['restart'], desc: 'Restart all services' },
-  { label: 'compose stop', args: ['stop'], desc: 'Stop services without removing them' },
-  { label: 'compose down', args: ['down'], desc: 'Stop and remove containers and networks' },
-  { label: 'compose pull', args: ['pull'], desc: 'Pull the latest images' }
+// The server owns each action's arguments (dockerService.ts's COMPOSE_ARGS): the menu names the action.
+const COMPOSE_ACTIONS: { label: string; action: ComposeAction; desc: string }[] = [
+  { label: 'compose up -d', action: 'up', desc: 'Start services in the background' },
+  { label: 'compose up --build -d', action: 'upBuild', desc: 'Rebuild images, then start' },
+  { label: 'compose restart', action: 'restart', desc: 'Restart all services' },
+  { label: 'compose stop', action: 'stop', desc: 'Stop services without removing them' },
+  { label: 'compose down', action: 'down', desc: 'Stop and remove containers and networks' },
+  { label: 'compose pull', action: 'pull', desc: 'Pull the latest images' }
 ]
 
-/** The ▾ menu on the Docker tab: docker compose actions run in the main repo. */
-export function DockerMenu({ repoPath }: { repoPath: string }): React.JSX.Element {
+/** The ▾ menu on the Docker tab: docker compose actions run in the repository's main checkout, on its server. */
+export function DockerMenu({ repoId }: { repoId: string }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const [running, setRunning] = useState<string | null>(null)
@@ -55,8 +58,10 @@ export function DockerMenu({ repoPath }: { repoPath: string }): React.JSX.Elemen
     if (running) return
     setRunning(action.label)
     try {
-      // Output streams into the Docker panel's log via docker:log events.
-      await window.api.compose(action.args, repoPath)
+      // Output streams into the Docker panel's log as the server's docker.log events.
+      await getBackend().docker.compose(repoId, action.action)
+    } catch {
+      // A failure the server could not even start (offline): the panel's poll shows docker's state.
     } finally {
       setRunning(null)
     }

@@ -1,7 +1,7 @@
 // scripts/environments.test.mjs — which path an environment's VM name hashes.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { deriveProfileName, envRepoKey } from '../src/shared/environments.ts'
+import { deriveProfileName, envListProblem, envRepoKey, registryUnreadableMessage } from '../src/shared/environments.ts'
 
 test("envRepoKey is the repository's path, or the profile key an import kept", () => {
   assert.equal(envRepoKey({ path: '/private/var/t/app' }), '/private/var/t/app')
@@ -22,4 +22,18 @@ test('envRepoKey: a profile key that is not an absolute path string is ignored',
     assert.equal(envRepoKey({ path: '/p', environments: { enabled: true, profileKey } }), '/p', JSON.stringify(profileKey))
   }
   assert.equal(envRepoKey({ path: '/p', environments: { profileKey: '/var/t/app' } }), '/var/t/app')
+})
+
+test("envListProblem: the server's unreadable registry is shown; a colima hiccup or a dropped link is not", () => {
+  const coded = (code, message) => Object.assign(new Error(message), { code })
+  const unreadable = registryUnreadableMessage('/data/environments.json', 'it is not a JSON object')
+  assert.match(unreadable, /\/data\/environments\.json/)
+  assert.equal(envListProblem(coded('TOOL_ERROR', unreadable)), unreadable)
+  // Transient: kept quiet, the last known list stays and the next poll retries.
+  assert.equal(envListProblem(coded('TOOL_ERROR', 'colima list exited with code 1')), null)
+  assert.equal(envListProblem(coded('NOT_CONNECTED', 'not connected to the server')), null)
+  // The registry's words from anything but the server's TOOL_ERROR are not the server's verdict.
+  assert.equal(envListProblem(coded('INTERNAL', unreadable)), null)
+  assert.equal(envListProblem(new Error(unreadable)), null)
+  assert.equal(envListProblem(undefined), null)
 })

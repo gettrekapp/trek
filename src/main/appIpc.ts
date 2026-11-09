@@ -7,7 +7,6 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RecentEntry } from '../shared/types'
-import { worktreeDirty } from '../host/gitService'
 import { getRecents, removeRecent } from './recents'
 import { absolutePath, checkboxConfirmOptions, confirmOptions, editorPath, errorDialogText } from './appIpcRules'
 import { parseRecentRef } from './recentsRules'
@@ -82,13 +81,6 @@ export function registerAppIpc(): void {
     } catch {
       return null // sound file missing — alerts just stay silent
     }
-  })
-
-  // A Local server window's worktree, on this disk: null when git can't read it.
-  ipcMain.handle('git:localDirty', async (_event, raw: unknown): Promise<boolean | null> => {
-    const path = absolutePath(raw)
-    if (!path) throw new Error('path must be an absolute path')
-    return worktreeDirty(path)
   })
 
   ipcMain.handle('app:revealInFinder', (_event, raw: unknown): void => {
