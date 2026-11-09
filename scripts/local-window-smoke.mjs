@@ -39,7 +39,7 @@
 // (n checks) or LOCAL WINDOW SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
@@ -400,6 +400,11 @@ try {
   check('the tab toggles the panel closed', await until(() => detail.locator('.changes-panel').isVisible(), false), false)
   await sections.nth(0).locator('.wt-row', { hasText: 'main' }).click()
   check("switching shows the other worktree's numbers", await title('Changes'), 'Changes')
+  // The main checkout is its repository's own: the server reads its changes too (5a-1).
+  writeFileSync(join(api, 'main-scratch.txt'), 'main line\n')
+  check("the main checkout's changes reach its title", await title('1 file +1 −0'), '1 file +1 −0')
+  rmSync(join(api, 'main-scratch.txt'))
+  check('and go again', await title('Changes'), 'Changes')
 
   // ---- 9. Unload and load --------------------------------------------------------------------------
 

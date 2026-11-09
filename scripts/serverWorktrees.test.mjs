@@ -372,6 +372,23 @@ test('worktree.remove of a stale worktree leaves the repo\'s other stale worktre
   assert.match(listed, /stale-two/, 'not pruned along with it')
 })
 
+test("the main checkout's changes, diff and pull: its own repository's path is not a clash", async (t) => {
+  const s = await setup(t)
+  const main = s.project().repositories[0].worktrees.find((w) => w.isMain)
+  const ids = { projectId: s.projectId, worktreeId: main.id }
+  writeFileSync(join(s.a, 'new.txt'), 'hello\n')
+  const changes = await s.call('worktree.changes', ids)
+  assert.deepEqual([changes.ok, changes.result?.files.map((f) => f.path)], [true, ['new.txt']])
+  assert.equal((await s.call('worktree.diff', ids)).ok, true)
+  // No upstream here: git's own refusal, not the server's.
+  assert.equal((await s.call('worktree.pull', ids)).error?.code, 'GIT_ERROR')
+  // A main row that names another path than its repository's is still refused.
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.isMain).path = join(s.dir, 'repos')
+  })
+  assert.equal((await s.call('worktree.changes', ids)).error?.code, 'BAD_REQUEST')
+})
+
 test('worktree.pull, push and diff refuse a missing worktree', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'gone-soon')

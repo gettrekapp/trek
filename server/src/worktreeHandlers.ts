@@ -86,7 +86,8 @@ function locate(project: Project, worktreeId: unknown): { repo: Repository; work
 /**
  * A worktree git still has, in a repository the registry still has, at a path
  * the allowlist covers (a row from a hand-edited file or a not-yet-polled
- * import may not be).
+ * import may not be). The main worktree is its repository's own checkout;
+ * any other row must not be, nor contain, a registered repository.
  */
 function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree } {
   const found = locate(ctx.projects.require(p.projectId), p.worktreeId)
@@ -95,7 +96,8 @@ function present(ctx: V2Context, p: any): { repo: Repository; worktree: Worktree
     throw bad(`${found.worktree.path} no longer exists; remove the worktree or create its branch again`)
   }
   ctx.store.guard.check(found.worktree.path)
-  assertNotRepository(ctx.store.config.repos, real(found.worktree.path), 'worktree')
+  if (!found.worktree.isMain) assertNotRepository(ctx.store.config.repos, real(found.worktree.path), 'worktree')
+  else if (real(found.worktree.path) !== real(found.repo.path)) throw bad(`${found.worktree.path} is not the checkout of ${found.repo.path}`)
   return found
 }
 
