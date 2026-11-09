@@ -70,7 +70,7 @@ export type WireErrorCode =
   /**
    * A docker, colima or stack.sh command on the server's machine failed. `details.reason`
    * `missing`: the tool is not on the server's PATH (not installed there); `registry`: the
-   * server's environments registry cannot be read (env.list and the env changes; nothing written).
+   * server's environments registry cannot be read (env.list only: env.up and env.destroy resolve -1 instead; nothing written).
    */
   | 'TOOL_ERROR'
 
