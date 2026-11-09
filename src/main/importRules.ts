@@ -2,6 +2,7 @@
 // migrated.json records, and how recents and open-windows.json are rewritten. Pure.
 import { isLocalEntryId, originOf } from '../shared/appServerRules.ts'
 import { LOCAL_TARGET } from '../shared/model/importProject.ts'
+import { worktreeOrderKey } from '../shared/model/keys.ts'
 import type { Project, Session } from '../shared/model/types.ts'
 import { sessionMigrates } from '../shared/providers/selection.ts'
 import type { ServerConfig } from '../shared/types.ts'
@@ -400,6 +401,36 @@ export function movedSessions(sent: Project, stored: Project, globalFrom?: strin
     out.push({ worktree: 'Global', from, to: globalTo, agentSessionIds: globalIds })
   }
   return out
+}
+
+/**
+ * The stored project's worktree order with each moved worktree's key rewritten to the path the
+ * server stored it at. `project.import` keeps the order as sent, keyed by the paths the file had
+ * (normalized), but the server may store a worktree at another path (its realpath: a symlinked
+ * folder, `/var` for `/private/var`), so a key that names the sent path would match no row and
+ * the worktree would lose its place. Every worktree is compared, as sent and as stored (ids are
+ * kept), not only those with sessions. A key that two worktrees would now share is kept once.
+ * Null when nothing changes, so nothing is written back.
+ */
+export function rekeyStoredOrder(sent: Project, stored: Project): string[] | null {
+  const order = stored.settings.worktreeOrder
+  if (!order || order.length === 0) return null
+  const storedPaths = new Map<string, string>()
+  for (const repo of stored.repositories) for (const w of repo.worktrees) storedPaths.set(w.id, w.path)
+  const moved = new Map<string, string>()
+  for (const repo of sent.repositories) {
+    for (const w of repo.worktrees) {
+      const to = storedPaths.get(w.id)
+      if (to !== undefined && to !== w.path) moved.set(worktreeOrderKey(repo.id, w.path), worktreeOrderKey(repo.id, to))
+    }
+  }
+  if (moved.size === 0) return null
+  const out: string[] = []
+  for (const key of order) {
+    const next = moved.get(key) ?? key
+    if (!out.includes(next)) out.push(next)
+  }
+  return out.length === order.length && out.every((key, i) => key === order[i]) ? null : out
 }
 
 export interface WorktreeRef {

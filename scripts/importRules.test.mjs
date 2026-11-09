@@ -19,6 +19,7 @@ import {
   profileKeyFor,
   promptCandidates,
   recordImport,
+  rekeyStoredOrder,
   restoreEntries,
   splitRestore,
   rewriteOpenWindows,
@@ -280,6 +281,33 @@ test("movedSessions: the Global panel's sessions run in the first repository's m
     { worktree: 'app', from: '/var/t/app', to: '/private/var/t/app', agentSessionIds: [UUID1] },
     { worktree: 'Global', from: '/var/t/app', to: '/private/var/t/app', agentSessionIds: [UUID3] }
   ])
+})
+
+test('rekeyStoredOrder: every moved worktree keeps its place, whether or not it has sessions', () => {
+  const order = ['r1 /var/t/app-x', 'r9 /elsewhere', 'r1 /var/t/app']
+  const sent = { ...project({ repo: '/var/t/app', x: '/var/t/app-x' }), settings: { worktreeOrder: order } }
+  // No sessions on the moved worktree: movedSessions would not list it, the order still follows it.
+  sent.repositories[0].worktrees[1].sessions = []
+  const stored = { ...project({ repo: '/private/var/t/app', x: '/private/var/t/app-x' }), settings: { worktreeOrder: order } }
+  assert.deepEqual(movedSessions(sent, stored).map((m) => m.worktree), ['app'])
+  assert.deepEqual(rekeyStoredOrder(sent, stored), ['r1 /private/var/t/app-x', 'r9 /elsewhere', 'r1 /private/var/t/app'])
+})
+
+test('rekeyStoredOrder: null when nothing moved, or there is no order to keep', () => {
+  const order = ['r1 /l/app-x', 'r1 /l/app']
+  const same = { ...project({ repo: '/l/app', x: '/l/app-x' }), settings: { worktreeOrder: order } }
+  assert.equal(rekeyStoredOrder(same, same), null)
+  const sent = project({ repo: '/var/t/app', x: '/var/t/app-x' })
+  const stored = project({ repo: '/private/var/t/app', x: '/private/var/t/app-x' })
+  assert.equal(rekeyStoredOrder(sent, stored), null)
+  // Moved worktrees the order does not name: nothing to write.
+  assert.equal(rekeyStoredOrder(sent, { ...stored, settings: { worktreeOrder: ['r9 /elsewhere'] } }), null)
+})
+
+test('rekeyStoredOrder: a key two worktrees would now share is kept once, in its first place', () => {
+  const sent = project({ repo: '/var/t/app', x: '/var/t/app-x' })
+  const stored = { ...project({ repo: '/private/var/t/app', x: '/private/var/t/app-x' }), settings: { worktreeOrder: ['r1 /var/t/app-x', 'r1 /private/var/t/app-x', 'r1 /var/t/app'] } }
+  assert.deepEqual(rekeyStoredOrder(sent, stored), ['r1 /private/var/t/app-x', 'r1 /private/var/t/app'])
 })
 
 test('worktreeInError finds the worktree a refusal names, never the main one, and the longest path wins', () => {

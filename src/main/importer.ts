@@ -31,6 +31,7 @@ import {
   profileKeyFor,
   OVER_CAP_REASON,
   recordImport,
+  rekeyStoredOrder,
   routePiece,
   runScope,
   withProfileKeys,
@@ -139,13 +140,16 @@ async function importPiece(piece: ImportedProject, fileServers: ServerConfig[], 
   let project = await registerRepositories(link, piece.project, entry.name, report.warnings)
   if (isLocal) project = withProfileKeys(project, localProfileKeys(project, piece.sourcePaths))
   const { projectId, sent } = await sendImport(link, project, entry.name, report.warnings)
+  let stored: Project | null = null
   try {
-    const moved = movedSessions(sent, await readProject(link, projectId), piece.globalCwd)
+    stored = await readProject(link, projectId)
+    const moved = movedSessions(sent, stored, piece.globalCwd)
     if (isLocal) report.carried += await carryHistories(moved, report.warnings)
     else for (const m of moved) report.warnings.push(remoteMoveWarning(m, entry.name))
   } catch (err) {
     report.warnings.push(`Could not read the imported project back from ${entry.name} (${errorText(err)}): sessions whose path changed may start fresh.`)
   }
+  if (stored) await keepWorktreeOrder(link, projectId, sent, stored, entry.name, report.warnings)
   return { target: piece.target, serverEntryId: entry.id, projectId, name: piece.project.name, serverName: entry.name }
 }
 
@@ -252,6 +256,21 @@ async function sendImport(link: RegisteredServer, project: Project, serverName: 
       sent = dropped.project
       warnings.push(`Worktree ${dropped.path} was refused by ${serverName} (${errorText(err)}); it and its ${dropped.sessions} session(s) were not imported.`)
     }
+  }
+}
+
+/**
+ * Writes back the worktree order with the keys of the worktrees the server stored at another
+ * path (rekeyStoredOrder), compare-and-set on the order it read back. A failure is a warning:
+ * the project is imported, and those worktrees fall back to the default order.
+ */
+async function keepWorktreeOrder(link: RegisteredServer, projectId: string, sent: Project, stored: Project, serverName: string, warnings: string[]): Promise<void> {
+  const order = rekeyStoredOrder(sent, stored)
+  if (!order) return
+  try {
+    await link.connection.request('project.updateSettings', { projectId, settings: { worktreeOrder: order }, expected: { worktreeOrder: stored.settings.worktreeOrder } })
+  } catch (err) {
+    warnings.push(`The worktree order could not be kept on ${serverName} (${errorText(err)}): the worktrees ${serverName} stores at another path are listed in the default order.`)
   }
 }
 

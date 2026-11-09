@@ -464,6 +464,8 @@ try {
   check('Local: linked dirs and the environments, with the profile key', [app0.linkedDirs, app0.environments], [['.trek'], { enabled: true, cpu: 3, profileKey: fileRepo }])
   check('Local: the VM names its file window made', deriveProfileName(envRepoKey(app0), 'feature-x'), deriveProfileName(fileRepo, 'feature-x'))
   check('Local: settings and the worktree order, re-keyed', [lp.settings.sessionSystemPrompt, lp.settings.audioAlerts, lp.settings.worktreeOrder?.length], ['Be brief.', true, 2])
+  // The file names them through a symlink and /var: the order follows the paths the server stored.
+  check('Local: the worktree order names the paths the server stored', lp.settings.worktreeOrder, [`${app0.id} ${realFeature}`, `${app0.id} ${realRepo}`])
   const xSession = app0.worktrees[1].sessions[0]
   check('Local: the sessions keep their agent ids and queue; the Global one too', [app0.worktrees[0].sessions.map((s) => s.agentSessionId), xSession?.agentSessionId, xSession?.queue, lp.globalSessions.map((s) => s.agentSessionId)], [[S_MAIN], S_X, ['queued prompt'], [S_GLOBAL]])
   const remoteSdk = await connect(remoteUrl, token)
