@@ -24,7 +24,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
     const instance = project ? instanceForInfo(project, info) : undefined
     useAppStore
       .getState()
-      .selectWorktree({ serverId: info.serverId, path: info.path }, instance?.id)
+      .selectWorktree({ path: info.path }, instance?.id)
   }
 
   const remove = (repoId: string, branch: string): void => {
@@ -34,7 +34,7 @@ export function AllNotesPanel({ visible, worktrees }: Props): React.JSX.Element 
       return
     }
     setConfirming(null)
-    setBranchNote(repoId, branch, '') // empty notes are dropped from the project file
+    setBranchNote(repoId, branch, '') // an empty note is removed on the server
   }
 
   return (

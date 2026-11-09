@@ -11,7 +11,7 @@ const LOGO_LIMITS: ImageLimits = {
   accept: ACCEPTED_IMAGES
 }
 
-// WebP so a photo doesn't bloat the project file; it keeps transparency.
+// WebP so a photo doesn't bloat the project; it keeps transparency.
 const BANNER_LIMITS: ImageLimits = {
   maxWidth: 640,
   maxHeight: 240,
@@ -19,7 +19,7 @@ const BANNER_LIMITS: ImageLimits = {
   accept: ACCEPTED_IMAGES
 }
 
-/** Per-project name, title bar color, logo and banner, stored in the project file. */
+/** Per-project name, title bar color, logo and banner, stored with the project on its server. */
 export function AppearanceSettings(): React.JSX.Element {
   const projectName = useAppStore((s) => s.project?.name ?? '')
   const setProjectName = useAppStore((s) => s.setProjectName)
@@ -29,7 +29,6 @@ export function AppearanceSettings(): React.JSX.Element {
   const setTitleBarColor = useAppStore((s) => s.setTitleBarColor)
   const setLogoImage = useAppStore((s) => s.setLogoImage)
   const setBannerImage = useAppStore((s) => s.setBannerImage)
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
 
   return (
     <>
@@ -38,9 +37,7 @@ export function AppearanceSettings(): React.JSX.Element {
         <span className="settings-label">
           <span className="settings-name">Project name</span>
           <span className="settings-desc">
-            {serverWindow
-              ? 'Shown in the title bar. Renames the project on the server.'
-              : 'Shown in the title bar. The project file keeps its own name.'}
+            Shown in the title bar. Renames the project on the server.
           </span>
         </span>
         <input

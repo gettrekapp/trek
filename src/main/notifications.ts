@@ -1,12 +1,11 @@
 // Attention across servers, in main: the aggregator (attention.ts) over main's
-// own server connections, the `attention:changed` broadcast to every window
-// (file windows included), each new entry's OS notification and alert sound,
-// raised once and only here, and the IPC a window's notifications menu uses.
+// own server connections, the `attention:changed` broadcast to every window,
+// each new entry's OS notification and alert sound, raised once and only here,
+// and the IPC a window's notifications menu uses.
 //
-// Server sessions notify only from here: a server window raises none itself
-// (its terminals have no bell or status wiring, the server sends the status),
-// and a file window notifies only for its own local sessions (terminals.ts),
-// which never reach this list. So nothing is notified twice.
+// Sessions notify only from here: a server window raises none itself (its
+// terminals have no bell or status wiring, the server sends the status), so
+// nothing is notified twice.
 import { BrowserWindow, Notification, ipcMain, type WebContents } from 'electron'
 import { createAttention, type Attention, type AttentionEvent } from './attention'
 import { dismissRequest, notificationText, shouldNotify, wantsAlert, type FocusedWindow } from './attentionRules'

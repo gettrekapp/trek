@@ -6,7 +6,6 @@ import {
   focusTerminal,
   tabCycleStep
 } from '../terminals'
-import { globalSessionLlm } from '../llm'
 import { getBackend } from '../backend'
 import { getProvider } from '../../../shared/providers/registry'
 import { v2GlobalLabel } from '../v2/sessionChoices'
@@ -62,9 +61,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   // Subscribed so the bar label follows the configured Global agent.
   const globalLlm = useAppStore((s) => s.project?.globalLlm)
   const llmDefault = useAppStore((s) => s.project?.llmDefault)
-  useAppStore((s) => s.llmSettings)
-  // A server window: the server picks the agent, and while its link is down nothing can start or close.
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  // The server picks the agent, and while its link is down nothing can start or close.
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
   const offline = useAppStore((s) => s.serverOffline)
   const [height, setHeight] = useState(storedHeight)
@@ -246,7 +243,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
         <span className="global-chevron">{open ? '▾' : '▴'}</span>
         <span className="global-title">
           Global ·{' '}
-          {serverWindow ? v2GlobalLabel({ globalLlm, llmDefault }, serverDefault) : getProvider(globalSessionLlm().provider).label}
+          {v2GlobalLabel({ globalLlm, llmDefault }, serverDefault)}
         </span>
         <StatusBadge status={status ?? null} />
         {decisionCount > 0 && (

@@ -363,7 +363,7 @@ export function reconcileView(prev: ViewState, projection: V2Projection): ViewSt
   const selectedId = prev.selected ? ids.worktreeByPath[prev.selected.path] : undefined
   if (prev.selected && selectedId !== undefined) {
     const repoId = ids.worktrees[selectedId]?.repoId ?? prev.selected.repoId
-    const same = prev.selected.serverId === undefined && prev.selected.repoId === repoId
+    const same = prev.selected.repoId === repoId
     return {
       activeWorktreeId: selectedId,
       selected: same ? prev.selected : { path: prev.selected.path, ...(repoId ? { repoId } : {}) },

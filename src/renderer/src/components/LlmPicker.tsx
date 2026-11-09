@@ -21,23 +21,20 @@ interface Props {
 }
 
 /**
- * In a server window, what an LlmPicker needs to offer the server's agents:
- * the providers `server.agents` listed and what it said is installed (until
- * it answers, or without `agents`: every provider, with no check on this
- * machine). Nothing in an empty window.
+ * What an LlmPicker needs to offer the server's agents: the providers
+ * `server.agents` listed and what it said is installed (until it answers, or
+ * without `agents`: every provider, with no check on this machine).
  */
 export function useServerPicker(): Pick<Props, 'filter' | 'remote'> {
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
   const agents = useAppStore((s) => s.serverAgents)
   return useMemo(() => {
-    if (!serverWindow) return {}
     if (!agents) return { remote: { installed: {} } }
     const listed = new Set(agents.agents.map((a) => a.provider))
     return {
       filter: (p: LlmProvider) => listed.has(p.id),
       remote: { installed: Object.fromEntries(agents.agents.map((a) => [a.provider, a.installed])) }
     }
-  }, [serverWindow, agents])
+  }, [agents])
 }
 
 /** Provider → Model → Effort. Changing provider resets model and effort. */

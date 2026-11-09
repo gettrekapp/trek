@@ -5,7 +5,7 @@ import type { SessionSelect } from '../../../shared/types'
 import { V2_GLOBAL_WORKTREE_ID } from './projector.ts'
 
 export interface SelectView {
-  /** The server project this window shows (null while it boots, or in a file window) */
+  /** The server project this window shows (null while it boots, or in an empty window) */
   here: { serverEntryId: string; projectId: string } | null
   /** The project has been projected into the store */
   projected: boolean
@@ -42,8 +42,7 @@ export interface ViewState {
 /**
  * The sessions a server window shows (as terminals.ts's isTerminalInView, less
  * the focus, which main checks): the selected worktree's active tab, and the
- * Global panel's while it is open on its sessions. A file window reports none:
- * its sessions are not on main's list.
+ * Global panel's while it is open on its sessions. An empty window reports none.
  */
 export function sessionsInView(s: ViewState): string[] {
   if (!s.serverWindow) return []

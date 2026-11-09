@@ -113,8 +113,8 @@ function tagIds(tags: unknown): Set<string> {
 }
 
 /**
- * The tag cascade of a settings patch, as a file window's setWorktreeTags and
- * setCustomTags do it: when the patch sets `worktreeTags` (or removes it, which
+ * The tag cascade of a settings patch (Settings' setWorktreeTags and
+ * setCustomTags): when the patch sets `worktreeTags` (or removes it, which
  * brings back DEFAULT_WORKTREE_TAGS), every branch whose `tag` is not in the new
  * list becomes untagged; when it sets or removes `customTags`, every branch keeps
  * only the custom tag ids still listed, and an emptied list is dropped. A branch

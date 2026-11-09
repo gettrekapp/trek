@@ -40,7 +40,7 @@ export function LinearSettings(): React.JSX.Element {
           <span className="settings-desc">
             Shows each linked issue&apos;s title and status on its ticket chip. Create a personal
             key under Linear → Settings → Security &amp; access. Stored encrypted on this machine,
-            not in the project file.
+            not in the project.
           </span>
           {connected && (
             <span className="settings-desc">Connected{user ? ` as ${user}` : ''}</span>

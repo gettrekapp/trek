@@ -38,7 +38,6 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
   const toolCheck = useAppStore((s) => s.envToolCheck)
   const setEnvBusy = useAppStore((s) => s.setEnvBusy)
   const setBranchEnvVars = useAppStore((s) => s.setBranchEnvVars)
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
 
   const repo = project ? repoOfInfo(project, info) : undefined
   // The path its VM names hash: the repository's, or the one an import kept (envRepoKey).
@@ -104,9 +103,9 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     setComposeCandidates([])
   }, [info.path])
 
-  // Discover compose files whenever the panel is shown (local worktrees only).
+  // Discover compose files whenever the panel is shown.
   useEffect(() => {
-    if (!visible || info.serverId) return undefined
+    if (!visible) return undefined
     let disposed = false
     window.api
       .envComposeFiles(null, info.path)
@@ -119,7 +118,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     return () => {
       disposed = true
     }
-  }, [visible, info.serverId, info.path])
+  }, [visible, info.path])
 
   // Service status only matters while the panel is open and the VM is up.
   useEffect(() => {
@@ -176,13 +175,6 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
     return (
       <div className="env-panel" style={{ display: visible ? 'flex' : 'none' }}>
         <p className="muted">Environments need a worktree on a branch.</p>
-      </div>
-    )
-  }
-  if (info.serverId) {
-    return (
-      <div className="env-panel" style={{ display: visible ? 'flex' : 'none' }}>
-        <p className="muted">Environments are not available for remote worktrees yet.</p>
       </div>
     )
   }
@@ -348,7 +340,7 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
           </button>
           {showVars && (
             <>
-              {/* A server window (Local) saves each commit on the server: on blur, not per keystroke. */}
+              {/* Each commit is saved on the server: on blur, not per keystroke. */}
               <SettingText
                 key={`${repo!.id} ${info.branch}`}
                 className="env-vars-editor"
@@ -356,7 +348,6 @@ export function EnvironmentPanel({ visible, info }: Props): React.JSX.Element {
                 value={varsText}
                 rows={6}
                 spellCheck={false}
-                live={!serverWindow}
                 onCommit={(text) => {
                   setBranchEnvVars(repo!.id, info.branch!, text)
                 }}

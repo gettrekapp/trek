@@ -8,8 +8,6 @@ import {
   instanceForInfo,
   pullRequestLabel,
   repoOfInfo,
-  serverById,
-  serverColorClass,
   tagStyle,
   ticketLabel,
   ticketUrl,
@@ -63,15 +61,15 @@ type Panel =
 
 const STACK_POLL_MS = 4000
 
-/** Polls the worktree's docker/stack/stack.sh status; null for remote or unknown. */
+/** Polls the worktree's docker/stack/stack.sh status; null while `off` or unknown. */
 function useStackStatus(
   path: string | undefined,
-  remote: boolean
+  off: boolean
 ): [StackStatus | null, () => void] {
   const [status, setStatus] = useState<StackStatus | null>(null)
 
   const refresh = useCallback(() => {
-    if (!path || remote) return
+    if (!path || off) return
     window.api
       .stackStatus(path)
       .then((next) =>
@@ -80,15 +78,15 @@ function useStackStatus(
       .catch(() => {
         // transient docker/fs error — keep the last status
       })
-  }, [path, remote])
+  }, [path, off])
 
   useEffect(() => {
     setStatus(null)
-    if (!path || remote) return undefined
+    if (!path || off) return undefined
     refresh()
     const interval = setInterval(refresh, STACK_POLL_MS)
     return () => clearInterval(interval)
-  }, [path, remote, refresh])
+  }, [path, off, refresh])
 
   return [status, refresh]
 }
@@ -124,20 +122,17 @@ export function WorktreeDetail({
   const [draft, setDraft] = useState('')
   /** The title the rename started from: a server window refuses it if the title changed meanwhile */
   const [editFrom, setEditFrom] = useState('')
-  const serverStatus = useAppStore((s) => s.serverStatus)
-  // A server window whose connection is down: its commands are disabled until it is back.
+  // The window's connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
 
   const features = useFeatures()
   const path = info?.path
-  // A remote host's or a remote server's paths are not on this disk: nothing here may poll them
-  // locally. A Local server window's are (`features.stacks`).
-  const [stack, refreshStack] = useStackStatus(path, !!info?.serverId || !features.stacks)
-  const changesPaused = (!!info?.serverId && serverStatus[info.serverId] !== 'connected') || offline
-  const changesState = useWorktreeChanges(path, info?.serverId, changesPaused, panel === 'changes')
+  // A remote server's paths are not on this disk: nothing here may poll them locally. A Local
+  // server window's are (`features.stacks`).
+  const [stack, refreshStack] = useStackStatus(path, !features.stacks)
+  const changesState = useWorktreeChanges(path, offline, panel === 'changes')
   useEffect(() => {
     // Selection changed: back to the sessions view, drop transient UI state.
     setPanel('sessions')
@@ -188,12 +183,8 @@ export function WorktreeDetail({
 
   const repo = repoOfInfo(project, info)
   const instance = instanceForInfo(project, info)
-  const isRemote = !!info.serverId
-  const server = serverById(project, info.serverId)
-  const hostDown = (isRemote && serverStatus[info.serverId!] !== 'connected') || offline
-  // A server worktree git no longer lists (its directory is gone): nothing can run in it.
-  const missing = serverWindow && !!info.prunable
-  const isLocalMain = info.isMain && !isRemote
+  // A worktree git no longer lists on the server (its directory is gone): nothing can run in it.
+  const missing = !!info.prunable
   const order = (instance && terminalOrder[instance.id]) || []
   const activeId = instance ? activeTerminal[instance.id] : undefined
   const loaded = !!instance && !!loadedWorktrees[instance.id]
@@ -216,7 +207,7 @@ export function WorktreeDetail({
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
 
   const envEnabled = !!repo.environments?.enabled
-  const showEnv = features.env && envEnabled && !isRemote && !!info.branch
+  const showEnv = features.env && envEnabled  && !!info.branch
   const env = showEnv ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
   const envOpBusy = env ? envBusy[env.profile] : undefined
   const envChipLabel = envOpBusy
@@ -225,8 +216,8 @@ export function WorktreeDetail({
       ? `Env${env.address ? ` · ${env.address}` : ''}`
       : 'Env stopped'
 
-  const showStack = features.stacks && !isRemote && !!stack?.available
-  const showDocker = features.docker && isLocalMain
+  const showStack = features.stacks  && !!stack?.available
+  const showDocker = features.docker && info.isMain
   const stackStateNow = stack ? stackState(stack) : 'stopped'
   const stackAppUrl = stack ? stackUrls(stack)[0]?.url : undefined
 
@@ -256,7 +247,7 @@ export function WorktreeDetail({
     // The backend the call went to shows its failure (a server window's, as one line).
     const backend = getBackend()
     try {
-      const loc = { serverId: info.serverId, path: info.path }
+      const loc = { path: info.path }
       if (kind === 'pull') await backend.git.pull(loc, info.branch)
       else await backend.git.push(loc, info.branch)
     } catch (err) {
@@ -285,20 +276,8 @@ export function WorktreeDetail({
           <div className="detail-title">
             <span className="wt-prefix">{prefix}</span>
             {name}
-            {server && (
-              <span
-                className={`mini-chip server-chip title-server-chip ${serverColorClass(server.id)} ${hostDown ? 'down' : ''}`}
-                title={hostDown ? `${server.name} — disconnected` : `Runs on ${server.name}`}
-              >
-                {hostDown ? '⏻ ' : ''}
-                {server.name}
-              </span>
-            )}
           </div>
-          <div className="detail-path">
-            {server ? `${server.name}:` : ''}
-            {info.path}
-          </div>
+          <div className="detail-path">{info.path}</div>
           <div className="detail-chips">
             {info.branch && (
               <span className="tag-chip-wrap">
@@ -468,32 +447,28 @@ export function WorktreeDetail({
             <>
               <button
                 className="btn btn-ghost"
-                disabled={hostDown || syncBusy !== null}
-                title={
-                  hostDown
-                    ? 'Server disconnected'
-                    : `git pull --ff-only origin ${info.branch}`
-                }
+                disabled={offline || syncBusy !== null}
+                title={offline ? 'Server disconnected' : `git pull --ff-only origin ${info.branch}`}
                 onClick={() => void runGitSync('pull')}
               >
                 {syncBusy === 'pull' ? 'Pulling…' : `Pull${info.behind ? ` ↓${info.behind}` : ''}`}
               </button>
               <button
                 className="btn btn-ghost"
-                disabled={hostDown || syncBusy !== null}
-                title={hostDown ? 'Server disconnected' : `git push origin ${info.branch}`}
+                disabled={offline || syncBusy !== null}
+                title={offline ? 'Server disconnected' : `git push origin ${info.branch}`}
                 onClick={() => void runGitSync('push')}
               >
                 {syncBusy === 'push' ? 'Pushing…' : `Push${info.ahead ? ` ↑${info.ahead}` : ''}`}
               </button>
             </>
           )}
-          {!isRemote && features.openInEditor && (
+          {features.openInEditor && (
             <button className="btn btn-accent" onClick={openVSCode}>
               Open in VS Code
             </button>
           )}
-          {!isRemote && features.reveal && (
+          {features.reveal && (
             <button
               className="btn btn-ghost"
               title="Reveal in Finder"
@@ -517,37 +492,28 @@ export function WorktreeDetail({
         <>
           <div className="detail-menu-backdrop" onClick={() => setMenuOpen(false)} />
           <div className="detail-menu">
-            {isRemote ? (
-              <div className="detail-menu-item disabled">
-                <div className="detail-menu-name">Remote worktree on {server?.name ?? 'server'}</div>
+            {features.openInEditor && (
+              <div
+                className="detail-menu-item"
+                onClick={() => {
+                  setMenuOpen(false)
+                  openVSCode()
+                }}
+              >
+                <div className="detail-menu-name">Open in VS Code</div>
                 <div className="detail-menu-desc">{info.path}</div>
               </div>
-            ) : (
-              <>
-                {features.openInEditor && (
-                  <div
-                    className="detail-menu-item"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      openVSCode()
-                    }}
-                  >
-                    <div className="detail-menu-name">Open in VS Code</div>
-                    <div className="detail-menu-desc">{info.path}</div>
-                  </div>
-                )}
-                {features.reveal && (
-                  <div
-                    className="detail-menu-item"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      void window.api.revealInFinder(info.path)
-                    }}
-                  >
-                    <div className="detail-menu-name">Reveal in Finder</div>
-                  </div>
-                )}
-              </>
+            )}
+            {features.reveal && (
+              <div
+                className="detail-menu-item"
+                onClick={() => {
+                  setMenuOpen(false)
+                  void window.api.revealInFinder(info.path)
+                }}
+              >
+                <div className="detail-menu-name">Reveal in Finder</div>
+              </div>
             )}
             {info.branch && (
               <>
@@ -594,13 +560,13 @@ export function WorktreeDetail({
             )}
             <div className="detail-menu-divider" />
             {/* Promote and Move to another server come back with phase 5's server commands. */}
-            {!isLocalMain && (
+            {!info.isMain && (
               <>
                 {!info.isMain && (
                   <div
-                    className={`detail-menu-item danger ${busy || hostDown ? 'disabled' : ''}`}
+                    className={`detail-menu-item danger ${busy || offline ? 'disabled' : ''}`}
                     onClick={() => {
-                      if (!hostDown) void runAction(() => getBackend().worktrees.remove(info, instance))
+                      if (!offline) void runAction(() => getBackend().worktrees.remove(info, instance))
                     }}
                   >
                     <div className="detail-menu-name">Delete worktree…</div>
@@ -700,11 +666,11 @@ export function WorktreeDetail({
             )
           })}
         <NewSessionMenu
-          title={hostDown ? 'Server disconnected' : missing ? 'The worktree is missing on the server' : 'New session (⌘T)'}
-          disabled={hostDown || missing}
+          title={offline ? 'Server disconnected' : missing ? 'The worktree is missing on the server' : 'New session (⌘T)'}
+          disabled={offline || missing}
           onStart={(sessionType, llm) => {
             setPanel('sessions')
-            void getBackend().sessions.start({ serverId: info.serverId, path: info.path }, sessionType, llm)
+            void getBackend().sessions.start({ path: info.path }, sessionType, llm)
           }}
         />
         <div className="session-row-spacer" />
@@ -732,7 +698,7 @@ export function WorktreeDetail({
         >
           Notes
         </button>
-        {isLocalMain && (
+        {info.isMain && (
           <button
             className={`panel-btn ${panel === 'allNotes' ? 'active' : ''}`}
             title="All notes collected across branches"
@@ -787,13 +753,6 @@ export function WorktreeDetail({
       </div>
 
       <div className="terminal-card">
-        {hostDown && isRemote && panel === 'sessions' && (
-          <div className="host-down-banner">
-            <span className="wt-dot exited" />
-            {server?.name ?? 'Server'} is disconnected — sessions keep running on the server and
-            reattach when the connection returns.
-          </div>
-        )}
         {order.map((id) => (
           <TerminalPane
             key={id}
@@ -811,7 +770,7 @@ export function WorktreeDetail({
                 </span>
                 <button
                   className="btn btn-accent"
-                  disabled={hostDown || missing}
+                  disabled={offline || missing}
                   onClick={() => void getBackend().worktrees.load(instance.id)}
                 >
                   Load session{dormant.length === 1 ? '' : 's'}
@@ -827,10 +786,10 @@ export function WorktreeDetail({
                 <span>No session in this worktree yet.</span>
                 <button
                   className="btn btn-accent"
-                  disabled={hostDown || missing}
+                  disabled={offline || missing}
                   onClick={() =>
                     void getBackend().sessions.start(
-                      instance ? { worktreeId: instance.id } : { serverId: info.serverId, path: info.path }
+                      instance ? { worktreeId: instance.id } : { path: info.path }
                     )
                   }
                 >
@@ -843,11 +802,11 @@ export function WorktreeDetail({
         <ChangesPanel
           key={info.path}
           visible={panel === 'changes'}
-          paused={changesPaused}
+          paused={offline}
           state={changesState}
         />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
-        {isLocalMain && <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />}
+        {info.isMain && <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />}
         {showDocker && <DockerPanel key={repo.id} visible={panel === 'docker'} />}
         {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}
         {showStack && stack && (

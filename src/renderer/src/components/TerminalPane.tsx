@@ -35,8 +35,6 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
   // A server window whose link is down: input would be dropped, so the pane is covered.
   const offline = useAppStore((s) => s.serverOffline)
   const link = useAppStore((s) => s.serverLink)
-  // The agent's command is a setting of this machine, or of the server's config in a server window.
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
 
   useEffect(() => {
     if (!ref.current) return
@@ -114,9 +112,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
           </button>
           {llm && llm.provider !== 'claude' && (
             <span className="exited-hint">
-              {serverWindow
-                ? `If ${agentLabel(terminalId)} isn't installed on the server, its command is set in the server's config.`
-                : `If ${agentLabel(terminalId)} isn't installed, set its command in ⚙ Settings → Agents.`}
+              {`If ${agentLabel(terminalId)} isn't installed on the server, its command is set in the server's config.`}
             </span>
           )}
         </div>

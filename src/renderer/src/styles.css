@@ -562,44 +562,6 @@ button:disabled {
   color: #b8a8f0;
 }
 
-/* Server chips — one stable muted color per server (hash of its id) */
-.server-chip.sc-0 { background: rgba(94, 174, 255, 0.16); color: #79b8ff; }
-.server-chip.sc-1 { background: rgba(133, 216, 163, 0.16); color: #85d8a3; }
-.server-chip.sc-2 { background: rgba(255, 179, 102, 0.16); color: #ffb366; }
-.server-chip.sc-3 { background: rgba(240, 136, 200, 0.16); color: #f088c8; }
-.server-chip.sc-4 { background: rgba(148, 226, 213, 0.16); color: #94e2d5; }
-.server-chip.sc-5 { background: rgba(203, 166, 247, 0.16); color: #cba6f7; }
-
-.server-chip.down {
-  opacity: 0.55;
-  filter: grayscale(0.6);
-}
-
-/* Rows whose server is unreachable — last known state, actions disabled */
-.wt-row.host-down {
-  opacity: 0.55;
-}
-
-.title-server-chip {
-  margin-left: 8px;
-  vertical-align: 2px;
-}
-
-.remote-main-tag {
-  opacity: 0.75;
-}
-
-.host-down-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
-  background: rgba(255, 179, 102, 0.08);
-  border-bottom: 1px solid rgba(255, 179, 102, 0.15);
-}
-
 .wt-git {
   font-size: 10px;
   color: rgba(255, 255, 255, 0.4);

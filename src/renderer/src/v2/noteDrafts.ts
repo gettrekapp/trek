@@ -154,7 +154,7 @@ export function createNoteDrafts(deps: NoteDraftsDeps): NoteDrafts {
 
 let current: NoteDrafts | null = null
 
-/** The server window's drafts; null in a project file window. installV2 sets it. */
+/** The server window's drafts; null in an empty window. installV2 sets it. */
 export function v2NoteDrafts(): NoteDrafts | null {
   return current
 }

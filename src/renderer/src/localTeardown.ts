@@ -10,7 +10,7 @@ import type { WorktreeTeardown } from './v2/backendV2'
 /** The branch's live environment (environments run on this machine only). */
 function environmentOf(info: GitWorktreeInfo): { profile: string } | undefined {
   const state = useAppStore.getState()
-  if (info.serverId || !state.project) return undefined
+  if (!state.project) return undefined
   return environmentFor(state.environments, envRepoKey(repoOfInfo(state.project, info)), info.branch)
 }
 
@@ -55,7 +55,7 @@ async function confirmRemoval(
   info: GitWorktreeInfo,
   prompt: ConfirmPrompt
 ): Promise<{ confirmed: boolean; stackName?: string }> {
-  const stack = info.serverId ? null : await window.api.stackStatus(info.path).catch(() => null)
+  const stack = await window.api.stackStatus(info.path).catch(() => null)
   const stackName = stack?.available && stack.created ? stack.slug : undefined
   if (!stackName) return { confirmed: await window.api.confirm(prompt) }
   const result = await window.api.confirmWithCheckbox({
@@ -66,11 +66,7 @@ async function confirmRemoval(
   return { confirmed: result.confirmed, stackName: result.checked ? stackName : undefined }
 }
 
-/**
- * The same teardown for a Local server window's worktree delete (backendV2's
- * `worktrees.remove`): its paths are this machine's, and its rows have no
- * serverId, so these helpers see it as a local worktree.
- */
+/** The teardown for a Local server window's worktree delete (backendV2's `worktrees.remove`): its paths are this machine's. */
 export const localWorktreeTeardown: WorktreeTeardown = {
   environment: environmentOf,
   confirm: confirmRemoval,

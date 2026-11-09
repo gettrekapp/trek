@@ -15,7 +15,7 @@ export const SESSION_ICON_LIMITS: ImageLimits = {
   accept: 'image/png'
 }
 
-/** Reads an image and downscales it so the data URL stays small in the project file. */
+/** Reads an image and downscales it so the data URL stays small in the project. */
 async function loadImage(file: File, limits: ImageLimits): Promise<string> {
   const bitmap = await createImageBitmap(file)
   const scale = Math.min(1, limits.maxWidth / bitmap.width, limits.maxHeight / bitmap.height)

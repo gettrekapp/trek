@@ -33,7 +33,6 @@ export const VIEW_RESET: Partial<AppState> = {
   globalView: 'sessions',
   botView: OFF_VIEW,
   botEvents: [],
-  serverStatus: {},
   environments: {},
   envBusy: {},
   envToolCheck: null,

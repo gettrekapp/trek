@@ -9,8 +9,6 @@ import {
   pullRequestLabel,
   repoOfInfo,
   repoWorktrees,
-  serverById,
-  serverColorClass,
   tagStyle,
   ticketLabel,
   useAppStore,
@@ -23,7 +21,7 @@ import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { envRepoKey } from '../../../shared/environments'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
-import type { GitWorktreeInfo, HostStatus, Repository, TerminalStatus } from '../../../shared/types'
+import type { GitWorktreeInfo, Repository, TerminalStatus } from '../../../shared/types'
 
 interface Props {
   worktrees: GitWorktreeInfo[]
@@ -92,13 +90,11 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const terminalOrder = useAppStore((s) => s.terminalOrder)
   const decisions = useAppStore((s) => s.decisions)
   const loadedWorktrees = useAppStore((s) => s.loadedWorktrees)
-  const serverStatus = useAppStore((s) => s.serverStatus)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
   const features = useFeatures()
-  // A server window whose connection is down: its commands are disabled until it is back.
+  // The window's connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
   const [filter, setFilter] = useState('')
   // Tag ids (or 'untagged'); a worktree matching any of them is shown. Empty = all.
   const [tagFilterValue, setTagFilter] = useState<string[]>([])
@@ -126,8 +122,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   )
   const tagOf = (w: GitWorktreeInfo): string | undefined =>
     branchTag(project, repoOfInfo(project, w), w.branch)?.id
-  const serverNameOf = (w: GitWorktreeInfo): string | undefined =>
-    serverById(project, w.serverId)?.name
   const rank = new Map((project.worktreeOrder ?? []).map((key, i) => [key, i]))
   const ordered = [...worktrees].sort(
     (a, b) =>
@@ -139,7 +133,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         !query ||
         branchLabel(w).toLowerCase().includes(query) ||
         w.path.toLowerCase().includes(query) ||
-        (serverNameOf(w)?.toLowerCase().includes(query) ?? false) ||
         repoOfInfo(project, w).name.toLowerCase().includes(query)
     )
     .filter((w) => {
@@ -212,18 +205,13 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const pullRequest = info.branch
       ? repo.branchPullRequests?.[info.branch]
       : undefined
-    const env =
-      info.serverId || !features.env
-        ? undefined
-        : environmentFor(environments, envRepoKey(repo), info.branch)
+    const env = features.env ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
     const envIsBusy = env ? !!envBusy[env.profile] : false
     const isSelected =
       (selected && sameWorktree(info, selected)) ||
-      (info.isMain && !info.serverId && selected?.path === repo.path && !selected.serverId)
-    const server = serverById(project, info.serverId)
-    const hostDown = !!info.serverId && serverStatus[info.serverId] !== 'connected'
-    // A server worktree git no longer lists: it can only be deleted (Notes for 3c-2 #9).
-    const missing = serverWindow && !!info.prunable
+      (info.isMain && selected?.path === repo.path)
+    // A worktree git no longer lists on the server: it can only be deleted (Notes for 3c-2 #9).
+    const missing = !!info.prunable
     const key = worktreeKey(info)
     const dropClass =
       dropTarget?.key === key && dragKey !== key
@@ -234,9 +222,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     return (
       <div
         key={key}
-        className={`wt-row ${isSelected ? 'selected' : ''} ${hostDown ? 'host-down' : ''} ${
-          dragKey === key ? 'dragging' : ''
-        } ${dropClass}`}
+        className={`wt-row ${isSelected ? 'selected' : ''} ${dragKey === key ? 'dragging' : ''} ${dropClass}`}
         draggable={!offline}
         onDragStart={(e) => {
           e.dataTransfer.effectAllowed = 'move'
@@ -257,10 +243,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           dropOn(key, dropTarget?.key === key ? dropTarget.after : false)
         }}
         onDragEnd={endDrag}
-        onClick={() => selectWorktree({ serverId: info.serverId, path: info.path }, instance?.id)}
-        title={`${branchLabel(info)} — ${server ? `${server.name}:` : ''}${info.path}${
-          hostDown ? ` (${server?.name ?? 'server'} is disconnected — showing last known state)` : ''
-        }`}
+        onClick={() => selectWorktree({ path: info.path }, instance?.id)}
+        title={`${branchLabel(info)} — ${info.path}`}
       >
         {dot === 'attention' ? (
           <span className="wt-attn" title={DOT_TITLES.attention}>
@@ -282,11 +266,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                 ⚑
               </span>
             )}
-            {info.isMain && !info.serverId && <span className="primary-tag">PRIMARY</span>}
-            {info.isMain && info.serverId && <span className="primary-tag remote-main-tag">MAIN</span>}
+            {info.isMain && <span className="primary-tag">PRIMARY</span>}
           </div>
           {prefix && <div className="wt-prefix-line">{prefix}</div>}
-          {(tag || rowCustomTags.length > 0 || ticket || pullRequest || server || env || git || missing) && (
+          {(tag || rowCustomTags.length > 0 || ticket || pullRequest || env || git || missing) && (
             <div className="wt-bottom">
               <div className="wt-chips">
                 {missing && (
@@ -325,15 +308,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                 {pullRequest && (
                   <span className="mini-chip pr">{pullRequestLabel(pullRequest)}</span>
                 )}
-                {server && (
-                  <span
-                    className={`mini-chip server-chip ${serverColorClass(server.id)} ${hostDown ? 'down' : ''}`}
-                    title={hostDown ? `${server.name} — disconnected` : server.name}
-                  >
-                    {hostDown ? '⏻ ' : ''}
-                    {server.name}
-                  </span>
-                )}
                 {env && (
                   <span
                     className={`mini-chip env ${envIsBusy ? 'busy' : env.vmState === 'running' ? 'running' : ''}`}
@@ -370,7 +344,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             <button
               className="wt-power dormant"
               title={`Load ${dormant.length} saved session${dormant.length === 1 ? '' : 's'}`}
-              disabled={hostDown || offline}
+              disabled={offline}
               onClick={(e) => {
                 e.stopPropagation()
                 void getBackend().worktrees.load(instance.id)
@@ -575,17 +549,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             </button>
           )}
         </div>
-        {(project.servers ?? []).map((server) => {
-          const status: HostStatus = serverStatus[server.id] ?? 'disconnected'
-          const dotClass =
-            status === 'connected' ? 'done' : status === 'connecting' ? 'running' : 'exited'
-          return (
-            <div key={server.id} className="sidebar-footer-row" title={`${server.url} — ${status}`}>
-              <span className={`wt-dot ${dotClass}`} />
-              {server.name} · {status}
-            </div>
-          )
-        })}
       </div>
     </aside>
   )

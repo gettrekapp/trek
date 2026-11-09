@@ -19,7 +19,6 @@ export interface ChangesState {
 /** What the hook stores: the state plus the worktree it belongs to. */
 interface OwnedState extends ChangesState {
   path: string | undefined
-  serverId: string | undefined
 }
 
 const EMPTY: ChangesState = {
@@ -42,17 +41,16 @@ const errorMessage = (err: unknown): string => (err instanceof Error ? err.messa
  */
 export function useWorktreeChanges(
   path: string | undefined,
-  serverId: string | undefined,
   paused: boolean,
   panelOpen: boolean
 ): ChangesState {
-  const [state, setState] = useState<OwnedState>({ ...EMPTY, path, serverId })
+  const [state, setState] = useState<OwnedState>({ ...EMPTY, path })
   const panelOpenRef = useRef(panelOpen)
   panelOpenRef.current = panelOpen
   const wakeRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
-    setState({ ...EMPTY, path, serverId })
+    setState({ ...EMPTY, path })
     if (!path || paused) return undefined
 
     let cancelled = false
@@ -83,7 +81,7 @@ export function useWorktreeChanges(
       try {
         let changes: WorktreeChanges
         try {
-          changes = await getBackend().git.changes({ serverId, path })
+          changes = await getBackend().git.changes({ path })
         } catch (err) {
           if (cancelled) return
           lastSummary = null
@@ -114,7 +112,7 @@ export function useWorktreeChanges(
         if (open && diffFailedFor !== summary) {
           if (diffsFor !== summary) update({ diffLoading: true })
           try {
-            const diffs = await getBackend().git.diff({ serverId, path })
+            const diffs = await getBackend().git.diff({ path })
             if (cancelled) return
             const json = JSON.stringify(diffs)
             const same = json === diffsJson
@@ -167,14 +165,14 @@ export function useWorktreeChanges(
       wakeRef.current = null
       clearTimeout(timer)
     }
-  }, [path, serverId, paused])
+  }, [path, paused])
 
   useEffect(() => {
     if (panelOpen) wakeRef.current?.()
   }, [panelOpen])
 
   // The first render after switching worktree still holds the old one's state.
-  return state.path === path && state.serverId === serverId ? state : EMPTY
+  return state.path === path ? state : EMPTY
 }
 
 const STATUS_LETTER: Record<ChangedFile['status'], string> = {

@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
-import { hostRepoPath, repoById, useAppStore } from '../store'
+import { useEffect, useState } from 'react'
+import { repoById, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { errorText } from '../v2/errors'
-import { worktreeKey } from '../../../shared/types'
-import type { GitWorktreeInfo } from '../../../shared/types'
 
 interface Props {
   repoId: string
@@ -32,13 +30,9 @@ function parsePullRequestUrl(input: string): ParsedPullRequest | null {
 }
 
 export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element {
-  const project = useAppStore((s) => s.project)!
   // A server project lists every worktree already: there are no "existing" ones to add.
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
-  // A server's ClientError reads "code: message" through String(); a project file keeps its text as it was.
-  const shown = (err: unknown): string => (serverWindow ? errorText(err) : String(err))
+  const project = useAppStore((s) => s.project)!
 
-  const [existing, setExisting] = useState<GitWorktreeInfo[]>([])
   const [branches, setBranches] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -52,41 +46,27 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
   const pr = parsePullRequestUrl(prUrl)
 
   const repo = repoById(project, repoId)!
-  const repoPath = hostRepoPath(repo, undefined)
-
-  const addedKeys = useMemo(
-    () => new Set([worktreeKey({ path: repo.path }), ...repo.worktrees.map((w) => worktreeKey(w))]),
-    [repo.path, repo.worktrees]
-  )
 
   useEffect(() => {
-    if (!repoPath) {
-      setError('This server has no repository path configured.')
-      setLoading(false)
-      return
-    }
     let cancelled = false
     setLoading(true)
     setError(null)
-    Promise.all([
-      getBackend().git.listWorktrees(repoId),
-      getBackend().git.listBranches(repoId)
-    ])
-      .then(([worktrees, branchList]) => {
+    getBackend()
+      .git.listBranches(repoId)
+      .then((branchList) => {
         if (cancelled) return
-        setExisting(worktrees)
         setBranches(branchList)
         setLoading(false)
       })
       .catch((err) => {
         if (cancelled) return
-        setError(shown(err))
+        setError(errorText(err))
         setLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [repoId, repoPath])
+  }, [repoId])
 
   /**
    * Opens the worktree with a first session. The server window's mirror
@@ -101,7 +81,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
 
   const createNew = async (): Promise<void> => {
     const branch = newBranch.trim()
-    if (!branch || !repoPath) return
+    if (!branch) return
     setCreating(true)
     setError(null)
     try {
@@ -112,13 +92,13 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       })
       await addInstance({ path, branch })
     } catch (err) {
-      setError(shown(err))
+      setError(errorText(err))
       setCreating(false)
     }
   }
 
   const createFromPr = async (): Promise<void> => {
-    if (!pr || !repoPath) return
+    if (!pr) return
     setAddingPr(true)
     setError(null)
     try {
@@ -127,12 +107,11 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       const linkPr = (): void => {
         useAppStore.getState().setBranchPullRequest(repoId, branch, pr.url)
       }
-      // The PR's branch may already be checked out — reuse that worktree.
-      const checkedOut = existing.find((w) => w.branch === branch)
-      if (checkedOut) {
+      // The PR's branch may already be checked out: the project lists that worktree already.
+      const rows = await getBackend().git.listWorktrees(repoId)
+      if (rows.some((w) => w.branch === branch)) {
         linkPr()
-        if (addedKeys.has(worktreeKey(checkedOut))) onClose()
-        else await addInstance({ path: checkedOut.path, branch })
+        onClose()
         return
       }
       const { path } = await getBackend().worktrees.create({
@@ -144,12 +123,10 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
       linkPr()
       await addInstance({ path, branch })
     } catch (err) {
-      setError(shown(err))
+      setError(errorText(err))
       setAddingPr(false)
     }
   }
-
-  const available = existing.filter((w) => !addedKeys.has(worktreeKey(w)))
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -160,25 +137,6 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
           <p className="muted">Loading worktrees…</p>
         ) : (
           <>
-            {!serverWindow && <h3>Existing worktrees</h3>}
-            {!serverWindow && available.length === 0 && <p className="muted">All existing worktrees are already open.</p>}
-            <ul className="worktree-list">
-              {available.map((w) => (
-                <li key={worktreeKey(w)}>
-                  <div className="worktree-info">
-                    <span className="worktree-branch">
-                      {w.branch ?? w.head?.slice(0, 8) ?? '(detached)'}
-                      {w.isMain && <span className="main-tag">main checkout</span>}
-                    </span>
-                    <span className="worktree-path">{w.path}</span>
-                  </div>
-                  <button onClick={() => void addInstance({ path: w.path, branch: w.branch })}>
-                    Add
-                  </button>
-                </li>
-              ))}
-            </ul>
-
             <h3>Create new worktree</h3>
             <div className="create-row">
               <input
@@ -211,7 +169,7 @@ export function AddWorktreeModal({ repoId, onClose }: Props): React.JSX.Element 
             <p className="muted">
               New worktrees are created next to the repository as{' '}
               <code>
-                {repoPath ? baseName(repoPath) : 'repo'}-&lt;branch&gt;
+                {baseName(repo.path)}-&lt;branch&gt;
               </code>
               . New branches are cut from the latest master/main (fetched from origin first).
             </p>

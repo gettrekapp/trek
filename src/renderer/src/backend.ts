@@ -73,22 +73,19 @@ export interface WindowBackend {
     load(worktreeId: string): Promise<void>
     unload(worktreeId: string): Promise<void>
     unloadAll(): Promise<void>
-    /**
-     * Resolves the new worktree's path and, in a server window, its v2 id
-     * (legacy leaves it undefined). Rejects on failure, for the caller to show.
-     */
+    /** Resolves the new worktree's path and its v2 id. Rejects on failure, for the caller to show. */
     create(req: CreateWorktreeRequest): Promise<{ path: string; worktreeId?: string }>
     /**
      * Asks the user first; resolves without removing anything if they decline.
      * Reports a failure in its own dialog and resolves.
      */
     remove(info: GitWorktreeInfo, instance: WorktreeInstance | undefined): Promise<void>
-    /** The sidebar's worktree order, as legacy `worktreeKey`s */
+    /** The sidebar's worktree order, as the store's `worktreeKey`s */
     setOrder(keys: string[]): Promise<void>
   }
   readonly git: {
-    listWorktrees(repoId: string, serverId?: string): Promise<GitWorktreeInfo[]>
-    listBranches(repoId: string, serverId?: string): Promise<string[]>
+    listWorktrees(repoId: string): Promise<GitWorktreeInfo[]>
+    listBranches(repoId: string): Promise<string[]>
     changes(loc: WorktreeLocator): Promise<WorktreeChanges>
     diff(loc: WorktreeLocator): Promise<Record<string, string>>
     pull(loc: WorktreeLocator, branch: string): Promise<void>
@@ -99,9 +96,8 @@ export interface WindowBackend {
     setTag(repoId: string, branch: string, tagId: string | null): Promise<void>
     setCustomTag(repoId: string, branch: string, tagId: string, enabled: boolean): Promise<void>
     /**
-     * `expected` is the note the edit started from (null = none): a v2 backend
+     * `expected` is the note the edit started from (null = none): the v2 backend
      * sends it as a compare-and-set, so a concurrent edit isn't overwritten.
-     * Legacy ignores it.
      */
     setNote(repoId: string, branch: string, text: string, expected?: string | null): Promise<void>
     setTicket(repoId: string, branch: string, ticketId: string | null): Promise<void>

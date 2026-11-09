@@ -8,17 +8,16 @@ import { DEFAULT_APP_SETTINGS, type AppSettings } from '../shared/appSettings.ts
 
 /** The focused window, as far as attention cares: the server project it shows, and the session in view there. */
 export interface FocusedWindow {
-  /** null: a file window, or an empty one */
+  /** null: an empty window */
   target: { serverEntryId: string; projectId: string } | null
   /** The sessions the window reports in view: the selected worktree's shown tab, and the open Global panel's */
   viewing: readonly string[]
 }
 
 /**
- * The legacy window's rules, for a server session: `done` is not notified while
- * the session's project window has focus (legacy: `!document.hasFocus()`);
- * attention and a decision are not notified while that session is in view in
- * the focused window (legacy: `isTerminalInView`). No window focused (another
+ * For a server session: `done` is not notified while the session's project
+ * window has focus; attention and a decision are not notified while that
+ * session is in view in the focused window. No window focused (another
  * app is frontmost), or another window focused: notified. Nothing is notified
  * while the app-wide "Show notifications" switch is off (`showNotifications`);
  * the bell and the alert sound do not follow it.

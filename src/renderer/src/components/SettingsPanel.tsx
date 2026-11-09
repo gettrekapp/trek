@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { DEFAULT_PERMISSION_MODE } from '../terminals'
 import { CLAUDE_PERMISSION_MODES } from '../../../shared/providers/claude'
 import { useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
@@ -12,7 +11,6 @@ import { AppearanceSettings } from './AppearanceSettings'
 import { LlmSettings } from './LlmSettings'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 import { SettingNumber, SettingText } from './SettingText'
-import { defaultSessionLlm } from '../llm'
 import { settingsSections } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
 import type {
@@ -27,25 +25,18 @@ interface Props {
 }
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
-  // A server window edits the project's settings on the server: text is committed on blur (each
-  // commit is a request), this machine's sections are hidden (but a Local window's environments,
-  // and Linear everywhere), and a conflict's Reload remounts it.
-  const serverWindow = useAppStore((s) => s.serverWindow !== null)
+  // The project's settings are edited on the server: text is committed on blur (each commit is a
+  // request), this machine's sections are hidden (but a Local window's environments, and Linear
+  // everywhere), and a conflict's Reload remounts it.
   const features = useFeatures()
   const sections = settingsSections(features)
-  const live = !serverWindow
   const reload = useAppStore((s) => s.settingsReload)
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
   const picker = useServerPicker()
   const audioAlerts = useAppStore((s) => s.project?.audioAlerts ?? false)
   const setAudioAlerts = useAppStore((s) => s.setAudioAlerts)
-  // '' is "App default": the project leaves the mode to the app-wide Claude setting.
+  // '' is "Server default": the project leaves the mode to the server's Claude setting.
   const permissionMode = useAppStore((s) => s.project?.claudePermissionMode ?? '')
-  const appPermissionMode = useAppStore(
-    (s) => s.llmSettings?.providers.claude?.approvalMode?.trim() || DEFAULT_PERMISSION_MODE
-  )
-  const appPermissionLabel =
-    CLAUDE_PERMISSION_MODES.find((m) => m.value === appPermissionMode)?.label ?? appPermissionMode
   const setClaudePermissionMode = useAppStore((s) => s.setClaudePermissionMode)
   const claudeArgsOverride = useAppStore((s) => s.project?.claudeArgs?.trim())
   const repositories = useAppStore((s) => s.project?.repositories) ?? []
@@ -157,7 +148,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             </span>
             {claudeArgsOverride && (
               <span className="settings-desc settings-warn">
-                Ignored while the project file sets claudeArgs: “{claudeArgsOverride}”
+                Ignored while the project sets claudeArgs: “{claudeArgsOverride}”
               </span>
             )}
           </span>
@@ -168,7 +159,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               setClaudePermissionMode(e.target.value || undefined)
             }}
           >
-            <option value="">{serverWindow ? 'Server default' : `App default (${appPermissionLabel})`}</option>
+            <option value="">Server default</option>
             {CLAUDE_PERMISSION_MODES.map((m) => (
               <option key={m.value} value={m.value}>
                 {m.label}
@@ -201,27 +192,13 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               and secrets that aren&apos;t committed. Applies to worktrees created from now on.
             </span>
           </span>
-          {live ? (
-            <input
-              className="settings-select"
-              type="text"
-              key={settingsRepo?.id}
-              placeholder=".trek"
-              defaultValue={linkedDirs.join(', ')}
-              onBlur={(e) => {
-                setLinkedDirs(settingsRepo.id, parseDirs(e.target.value))
-              }}
-            />
-          ) : (
-            <SettingText
-              key={settingsRepo?.id}
-              live={false}
-              className="settings-select"
-              placeholder=".trek"
-              value={linkedDirs.join(', ')}
-              onCommit={(text) => setLinkedDirs(settingsRepo.id, parseDirs(text))}
-            />
-          )}
+          <SettingText
+            key={settingsRepo?.id}
+            className="settings-select"
+            placeholder=".trek"
+            value={linkedDirs.join(', ')}
+            onCommit={(text) => setLinkedDirs(settingsRepo.id, parseDirs(text))}
+          />
         </div>
         <AppearanceSettings />
         <NotificationSettings />
@@ -233,7 +210,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           description="Workflow tags assignable to a worktree's branch, in menu order. New worktrees start with the first tag. Deleting a tag removes it from every branch using it."
           tags={worktreeTags}
           onChange={setWorktreeTags}
-          live={live}
           usesOf={(id) =>
             repositories.flatMap((r) => Object.values(r.branchTags ?? {})).filter((t) => t === id).length
           }
@@ -243,7 +219,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           description="Extra tags that can be toggled on and off individually per worktree's branch, alongside its workflow tag. Deleting a tag removes it from every branch using it."
           tags={customTags}
           onChange={setCustomTags}
-          live={live}
           usesOf={(id) =>
             repositories
               .flatMap((r) => Object.values(r.branchCustomTags ?? {}))
@@ -255,7 +230,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           description="Buttons shown under every worktree agent terminal. Clicking one fills the terminal's input with the text and submits it."
           buttons={terminalButtons}
           onChange={updateButtons}
-          live={live}
         />
         <h3>Session system prompt</h3>
         <div className="settings-row">
@@ -268,26 +242,13 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           </span>
         </div>
         <div className="settings-row">
-          {live ? (
-            <textarea
-              className="quick-btn-text-input"
-              rows={6}
-              placeholder="e.g. Run the unit tests before saying a change is done"
-              defaultValue={sessionSystemPrompt}
-              onBlur={(e) => {
-                setSessionSystemPrompt(e.target.value)
-              }}
-            />
-          ) : (
-            <SettingText
-              live={false}
-              rows={6}
-              className="quick-btn-text-input session-prompt-input"
-              placeholder="e.g. Run the unit tests before saying a change is done"
-              value={sessionSystemPrompt}
-              onCommit={setSessionSystemPrompt}
-            />
-          )}
+          <SettingText
+            rows={6}
+            className="quick-btn-text-input session-prompt-input"
+            placeholder="e.g. Run the unit tests before saying a change is done"
+            value={sessionSystemPrompt}
+            onCommit={setSessionSystemPrompt}
+          />
         </div>
         <h3>Global system prompt</h3>
         <div className="settings-row">
@@ -300,33 +261,19 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
           </span>
         </div>
         <div className="settings-row">
-          {live ? (
-            <textarea
-              className="quick-btn-text-input"
-              rows={6}
-              placeholder="e.g. Prefer starting Review sessions for finished worktrees"
-              defaultValue={globalSystemPrompt}
-              onBlur={(e) => {
-                setGlobalSystemPrompt(e.target.value)
-              }}
-            />
-          ) : (
-            <SettingText
-              live={false}
-              rows={6}
-              className="quick-btn-text-input"
-              placeholder="e.g. Prefer starting Review sessions for finished worktrees"
-              value={globalSystemPrompt}
-              onCommit={setGlobalSystemPrompt}
-            />
-          )}
+          <SettingText
+            rows={6}
+            className="quick-btn-text-input"
+            placeholder="e.g. Prefer starting Review sessions for finished worktrees"
+            value={globalSystemPrompt}
+            onCommit={setGlobalSystemPrompt}
+          />
         </div>
         <h3>Global quick buttons</h3>
         <QuickButtonsEditor
           description="Buttons shown under the global terminal at the bottom of the window."
           buttons={globalTerminalButtons}
           onChange={updateGlobalButtons}
-          live={live}
         />
         <h3>Session types</h3>
         <div className="settings-row">
@@ -347,7 +294,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
               title="Choose a PNG icon"
             />
             <SettingText
-              live={live}
               className="quick-btn-label-input"
               placeholder="Name, e.g. Review"
               value={type.name}
@@ -355,7 +301,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
             />
             <div className="session-type-fields">
               <SettingText
-                live={live}
                 rows={6}
                 className="quick-btn-text-input"
                 placeholder="System prompt, e.g. how the agent should approach reviewing"
@@ -363,7 +308,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                 onCommit={(systemPrompt) => patchSessionType(type.id, { systemPrompt })}
               />
               <SettingText
-                live={live}
                 rows={2}
                 className="quick-btn-text-input"
                 placeholder="First message (optional), e.g. /trek-review"
@@ -376,7 +320,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                   checked={!type.llm}
                   onChange={(e) =>
                     patchSessionType(type.id, {
-                      llm: e.target.checked ? undefined : serverWindow ? (serverDefault ?? { provider: 'claude' }) : defaultSessionLlm()
+                      llm: e.target.checked ? undefined : (serverDefault ?? { provider: 'claude' })
                     })
                   }
                 />
@@ -443,7 +387,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                       CPUs
                       <SettingNumber
                         min={1}
-                        live={live}
                         value={envSettings.cpu ?? ENV_DEFAULTS.cpu}
                         fallback={ENV_DEFAULTS.cpu}
                         onCommit={(cpu) => updateEnv({ cpu })}
@@ -453,7 +396,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                       Memory GiB
                       <SettingNumber
                         min={1}
-                        live={live}
                         value={envSettings.memory ?? ENV_DEFAULTS.memory}
                         fallback={ENV_DEFAULTS.memory}
                         onCommit={(memory) => updateEnv({ memory })}
@@ -463,7 +405,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                       Disk GiB
                       <SettingNumber
                         min={5}
-                        live={live}
                         value={envSettings.disk ?? ENV_DEFAULTS.disk}
                         fallback={ENV_DEFAULTS.disk}
                         onCommit={(disk) => updateEnv({ disk })}
@@ -506,7 +447,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
                   </span>
                   <SettingText
                     key={settingsRepo?.id}
-                    live={live}
                     className="settings-select"
                     placeholder={ENV_DEFAULTS.composeFile}
                     value={envSettings.composeFile ?? ''}
@@ -549,15 +489,12 @@ interface QuickButtonsEditorProps {
   description: string
   buttons: TerminalQuickButton[]
   onChange: (buttons: TerminalQuickButton[]) => void
-  /** Text commits on every keystroke (a file window), else on blur */
-  live: boolean
 }
 
 function QuickButtonsEditor({
   description,
   buttons,
-  onChange,
-  live
+  onChange
 }: QuickButtonsEditorProps): React.JSX.Element {
   const patchButton = (id: string, patch: Partial<TerminalQuickButton>): void => {
     onChange(buttons.map((b) => (b.id === id ? { ...b, ...patch } : b)))
@@ -580,14 +517,12 @@ function QuickButtonsEditor({
       {buttons.map((btn, i) => (
         <div key={btn.id} className="quick-btn-row">
           <SettingText
-            live={live}
             className="quick-btn-label-input"
             placeholder="Label"
             value={btn.label}
             onCommit={(label) => patchButton(btn.id, { label })}
           />
           <SettingText
-            live={live}
             rows={1}
             className="quick-btn-text-input"
             placeholder="Text typed into the terminal and submitted"
@@ -637,14 +572,11 @@ function WorktreeTagsEditor({
   description,
   tags,
   onChange,
-  live,
   usesOf
 }: {
   description: string
   tags: WorktreeTag[]
   onChange: (tags: WorktreeTag[]) => void
-  /** Text commits on every keystroke (a file window), else on blur */
-  live: boolean
   /** How many branches carry the tag */
   usesOf: (id: string) => number
 }): React.JSX.Element {
@@ -694,7 +626,6 @@ function WorktreeTagsEditor({
             onChange={(e) => patchTag(tag.id, { color: e.target.value })}
           />
           <SettingText
-            live={live}
             className="quick-btn-text-input"
             placeholder="Tag name"
             value={tag.name}

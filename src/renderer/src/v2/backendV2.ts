@@ -337,11 +337,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         if (path === undefined) throw new Error(`The server created the worktree, but it has not shown up here yet.`)
         return { path, worktreeId }
       },
-      // The file windows' dialogs and order (before 4e), with the
-      // server's rules: a loaded worktree is IN_USE, so it is unloaded first,
-      // and loaded again when the removal doesn't go through. A Local window
-      // also tears down the worktree's dev stack (if ticked) and its VM on this
-      // machine, after the unload and before git's removal, as legacy does.
+      // The server's rules: a loaded worktree is IN_USE, so it is unloaded
+      // first, and loaded again when the removal doesn't go through. A Local
+      // window also tears down the worktree's dev stack (if ticked) and its VM
+      // on this machine, after the unload and before git's removal (4c).
       remove: async (info, instance) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]

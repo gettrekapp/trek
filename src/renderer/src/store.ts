@@ -13,12 +13,10 @@ import type {
   EnvironmentInfo,
   EnvironmentSettings,
   GitWorktreeInfo,
-  HostStatus,
   LinearIssue,
   PersistedTerminal,
   ProjectFile,
   Repository,
-  ServerConfig,
   SessionType,
   TerminalQuickButton,
   TerminalStatus,
@@ -90,7 +88,7 @@ function repoOfLocator(
   return repoById(project, info?.repoId)
 }
 
-/** A live row's instance. The local main checkout matches by isMain, not path: git
+/** A live row's instance. The main checkout matches by isMain, not path: git
  * reports the resolved path, which can differ from the stored Repository.path. */
 export function instanceForInfo(
   project: ProjectFile,
@@ -98,7 +96,7 @@ export function instanceForInfo(
 ): WorktreeInstance | undefined {
   const repo = repoById(project, info.repoId)
   if (!repo) return undefined
-  return info.isMain && !info.serverId
+  return info.isMain
     ? primaryWorktree(repo)
     : repo.worktrees.find((w) => sameWorktree(w, info))
 }
@@ -128,9 +126,8 @@ export function branchCustomTags(
   return ids?.length ? (project.customTags ?? []).filter((t) => ids.includes(t.id)) : []
 }
 
-/** hostWorktrees cache key: rows of one repository on one host. */
-export const repoHostKey = (repoId: string, serverId?: string): string =>
-  `${repoId} ${hostKey(serverId)}`
+/** hostWorktrees cache key: the rows of one repository. */
+export const repoHostKey = (repoId: string): string => `${repoId} ${hostKey()}`
 
 /** Chip colors for a workflow tag: its color over a translucent tint of it. */
 export function tagStyle(tag: WorktreeTag): React.CSSProperties {
@@ -183,12 +180,12 @@ export interface PendingDecision {
 }
 
 export interface AppState {
-  /** A v2 server project shown in this window; separate from the legacy `project`. A window is one or the other. */
+  /** The server project shown in this window (its projection is `project` and the slice below); null in an empty window. */
   serverWindow: { serverEntryId: string; projectId: string } | null
   setServerWindow: (target: { serverEntryId: string; projectId: string } | null) => void
   /** A server window whose connection is down: it shows the last state, and its commands are disabled. */
   serverOffline: boolean
-  /** The server window's connection status, null before it is known (and in a project file window). */
+  /** The server window's connection status, null before it is known (and in an empty window). */
   serverLink: ConnectionStatus | null
   /** Sets `serverLink`, and `serverOffline` to whether it is anything but connected. */
   setServerLink: (status: ConnectionStatus) => void
@@ -202,27 +199,22 @@ export interface AppState {
   project: ProjectFile | null
   activeWorktreeId: string | null
   /**
-   * Worktree selected in the sidebar (host + path — path alone is ambiguous
-   * across machines). Unlike activeWorktreeId this can point at a git
-   * worktree that has no instance (no Claude session) yet.
+   * Worktree selected in the sidebar, by path. Unlike activeWorktreeId this
+   * can point at a git worktree that has no instance (no session) yet.
    */
   selected: SelectedWorktree | null
   terminals: Record<string, TerminalMeta>
   terminalOrder: Record<string, string[]>
   activeTerminal: Record<string, string>
   /**
-   * Worktrees whose Claude sessions are live, by instance id. Not persisted:
-   * a freshly opened project starts with everything unloaded so dozens of
-   * worktrees don't all spawn claude at once. An unloaded worktree keeps its
-   * sessions in the project file (WorktreeInstance.terminals /
-   * Repository.primaryTerminals) and resumes them when loaded.
+   * Worktrees whose sessions are live, by instance id (the server's `loaded`).
+   * An unloaded worktree keeps its sessions on the server
+   * (WorktreeInstance.terminals / Repository.primaryTerminals in the
+   * projection) and resumes them when loaded.
    */
   loadedWorktrees: Record<string, true>
-  /** Live git worktrees per repository and host (keyed by repoHostKey), repoId and serverId stamped. */
+  /** Live git worktrees per repository (keyed by repoHostKey), repoId stamped. */
   hostWorktrees: Record<string, GitWorktreeInfo[]>
-  serverStatus: Record<string, HostStatus>
-  /** The last status's error per server, when it carried one (e.g. a token refused for a changed address). */
-  serverErrors: Record<string, string>
   /** Live Colima environments, keyed by profile name (not persisted). */
   environments: Record<string, EnvironmentInfo>
   /** In-flight environment operation per profile — drives spinners/disabled buttons. */
@@ -382,8 +374,6 @@ export const useAppStore = create<AppState>((set) => ({
   activeTerminal: {},
   loadedWorktrees: {},
   hostWorktrees: {},
-  serverStatus: {},
-  serverErrors: {},
   environments: {},
   envBusy: {},
   envToolCheck: null,
@@ -409,7 +399,7 @@ export const useAppStore = create<AppState>((set) => ({
         : undefined
       return {
         activeWorktreeId: id,
-        selected: instance ? { serverId: instance.serverId, path: instance.path } : state.selected
+        selected: instance ? { path: instance.path } : state.selected
       }
     }),
 
@@ -533,15 +523,12 @@ export function environmentFor(
   return environments[deriveProfileName(repoPath, branch)]
 }
 
-/** Each repository in order: local rows first, then each server's in project.servers order. */
+/** Each repository's rows, in repository order. */
 export function mergedWorktrees(
   project: ProjectFile,
   hostWorktrees: Record<string, GitWorktreeInfo[]>
 ): GitWorktreeInfo[] {
-  return project.repositories.flatMap((repo) => [
-    ...(hostWorktrees[repoHostKey(repo.id)] ?? []),
-    ...(project.servers ?? []).flatMap((s) => hostWorktrees[repoHostKey(repo.id, s.id)] ?? [])
-  ])
+  return project.repositories.flatMap((repo) => hostWorktrees[repoHostKey(repo.id)] ?? [])
 }
 
 /** The repository the selection belongs to, whether or not it has rows. */
@@ -574,30 +561,7 @@ export function selectedWorktreeInfo(
   const exact = selected ? worktrees.find((w) => sameWorktree(w, selected)) : undefined
   if (exact) return exact
   const repo = selectedRepository(project, selected, activeWorktreeId)
-  return repo && worktrees.find((w) => w.repoId === repo.id && w.isMain && !w.serverId)
-}
-
-export function serverById(
-  project: ProjectFile | null,
-  serverId: string | undefined
-): ServerConfig | undefined {
-  if (!project || !serverId) return undefined
-  return project.servers?.find((s) => s.id === serverId)
-}
-
-/** Repo root on the worktree's host: the local repo or the server's clone. */
-export function hostRepoPath(repo: Repository, serverId: string | undefined): string | null {
-  if (!serverId) return repo.path
-  return repo.serverPaths?.[serverId] ?? null
-}
-
-const SERVER_COLOR_COUNT = 6
-
-/** Stable CSS class (sc-0…sc-5) so each server keeps a recognizable color. */
-export function serverColorClass(serverId: string): string {
-  let hash = 0
-  for (let i = 0; i < serverId.length; i++) hash = (hash * 31 + serverId.charCodeAt(i)) | 0
-  return `sc-${Math.abs(hash) % SERVER_COLOR_COUNT}`
+  return repo && worktrees.find((w) => w.repoId === repo.id && w.isMain)
 }
 
 /**

@@ -18,7 +18,7 @@ function timeAgo(at: number): string {
 /**
  * Bell in the sidebar listing the sessions waiting on the user: this window's
  * own decisions, and every app-wide server's sessions in attention, done or
- * with a decision (main's attention list), file windows included. Clicking a
+ * with a decision (main's attention list), in every window. Clicking a
  * local entry opens its session here; a server entry asks main to focus or
  * open its project's window, which selects it. The flag (or ×) dismisses it:
  * a server entry's decision is dismissed, or the session marked seen, through
