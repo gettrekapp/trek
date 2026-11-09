@@ -493,9 +493,13 @@ function fileSection(o: ImportOutcome): string {
   for (const w of o.warnings) lines.push(`• ${w}`)
   if (o.pieces.length === 0) {
     // Not recorded in migrated.json: there is no file window to fall back on (4e), and the next open imports afresh.
-    lines.push('Nothing was imported, and the file does not open on its own: fix what is listed, then open it again to try every part again.')
-    if (o.left.some((l) => l.reason === OVER_CAP_REASON)) {
-      lines.push(`Opening it again tries Local's part and the first ${MAX_REMOTE_PIECES} servers' again; the others only once one of those has landed.`)
+    // Past the cap a retry does not try every part: say which it tries (4d Note 12). Nothing
+    // landed, so every part the file has is in `left`, Local's among them when it has one.
+    const overCap = o.left.some((l) => l.reason === OVER_CAP_REASON)
+    lines.push(`Nothing was imported, and the file does not open on its own: fix what is listed, then open it again to try ${overCap ? 'again' : 'every part again'}.`)
+    if (overCap) {
+      const local = o.left.some((l) => l.target === LOCAL_TARGET) ? "Local's part and " : ''
+      lines.push(`Opening it again tries ${local}the first ${MAX_REMOTE_PIECES} servers' parts again; the others only once one of those has landed.`)
     }
   }
   return lines.join('\n')

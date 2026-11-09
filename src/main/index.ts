@@ -198,11 +198,13 @@ app.whenReady().then(async () => {
   void superviseLocalServer()
   // Once, before the windows come back: those on .trekproj files then come back on their projects.
   await offerFirstLaunchImport().catch((err) => console.error('[import] the first-launch prompt failed', err))
-  // A .trekproj that launched the app opens its projects in windows of their own: no empty one first (4d M-6).
-  await restoreWindows({ emptyIfNone: pendingOpens.length === 0 })
+  // No empty window yet: a .trekproj that launched the app, or that arrives during the restore,
+  // opens its projects in windows of their own (4d M-6).
+  await restoreWindows()
   opensReady = true
   for (const path of pendingOpens.splice(0)) await openFromOs(path)
-  // Nothing came of it (the import failed, or was cancelled): the app still shows a window.
+  // Nothing came back and nothing opened (no windows last time, restore off, an import that
+  // failed or landed nothing): the app still shows one empty window.
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
 
   app.on('activate', () => {

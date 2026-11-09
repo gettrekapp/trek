@@ -82,3 +82,13 @@ test('keepFileRecents: never over MAX_RECENTS, and never pushes a listed entry o
   const full = Array.from({ length: MAX_RECENTS }, (_, i) => ({ kind: 'file', path: `/f${i}.trekproj` }))
   assert.deepEqual(keepFileRecents(full, ['/new.trekproj']), full)
 })
+
+test('keepFileRecents: the same path twice is added once', () => {
+  const list = [{ kind: 'file', path: '/a.trekproj' }]
+  assert.deepEqual(keepFileRecents(list, ['/b.trekproj', '/b.trekproj']), [...list, { kind: 'file', path: '/b.trekproj' }])
+})
+
+test('keepFileRecents: with room for one of two new paths, the first goes in and the list stops at MAX_RECENTS', () => {
+  const seven = Array.from({ length: MAX_RECENTS - 1 }, (_, i) => ({ kind: 'file', path: `/f${i}.trekproj` }))
+  assert.deepEqual(keepFileRecents(seven, ['/x.trekproj', '/y.trekproj']), [...seven, { kind: 'file', path: '/x.trekproj' }])
+})

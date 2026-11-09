@@ -461,16 +461,11 @@ export function readRestoreEntries(): Promise<OpenWindowEntry[]> {
 }
 
 /**
- * Reopens the windows from last time, one at a time; with none, one empty window unless
- * `emptyIfNone` is false (a .trekproj launched the app: its projects open in windows of their
- * own). Resolves how many came back.
+ * Reopens the windows from last time, one at a time, and resolves how many came back. It opens
+ * no empty window: the caller does, once the launch's .trekproj files have had their turn (4d M-6).
  */
-export async function restoreWindows(opts: { emptyIfNone?: boolean } = {}): Promise<number> {
-  const emptyIfNone = opts.emptyIfNone ?? true
-  if (RESTORE_DISABLED) {
-    if (emptyIfNone) createWindow()
-    return 0
-  }
+export async function restoreWindows(): Promise<number> {
+  if (RESTORE_DISABLED) return 0
   const workAreas = screen.getAllDisplays().map((d) => d.workArea)
   let restored = 0
   // A window on a .trekproj that was imported comes back on its server project (Local's piece).
@@ -494,7 +489,6 @@ export async function restoreWindows(opts: { emptyIfNone?: boolean } = {}): Prom
       new Promise((done) => setTimeout(done, RESTORE_WINDOW_TIMEOUT_MS))
     ])
   }
-  if (restored === 0 && emptyIfNone) createWindow()
   return restored
 }
 

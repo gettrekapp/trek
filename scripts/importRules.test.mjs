@@ -342,9 +342,28 @@ test('importSummary: nothing landed says the file opens nowhere else, and that o
   assert.match(s.detail, /Nothing was imported, and the file does not open on its own: fix what is listed, then open it again to try every part again\./)
 })
 
+test('importSummary: nothing landed, no part over the cap: no cap line', () => {
+  const s = importSummary([report({ left: [{ target: 'local', label: 'Local', reason: 'off' }, { target: 's1', label: 'one', reason: 'down' }] })])
+  assert.doesNotMatch(s.detail, /Opening it again tries/)
+})
+
 test('importSummary: nothing landed, with parts over the cap: a retry tries the same parts again (4d Note 12)', () => {
   const s = importSummary([report({ left: [{ target: 's1', label: 'one', reason: 'down' }, { target: 's21', label: 'twenty-one', reason: OVER_CAP_REASON }] })])
-  assert.match(s.detail, new RegExp(`Opening it again tries Local's part and the first ${MAX_REMOTE_PIECES} servers' again; the others only once one of those has landed\\.`))
+  assert.match(s.detail, /then open it again to try again\./)
+  assert.doesNotMatch(s.detail, /try every part again/)
+  // The file has no Local part: the line names none.
+  assert.match(s.detail, new RegExp(`^Opening it again tries the first ${MAX_REMOTE_PIECES} servers' parts again; the others only once one of those has landed\\.$`, 'm'))
+})
+
+test("importSummary: nothing landed, over the cap, with a Local part: the cap line names Local's part", () => {
+  const s = importSummary([report({ left: [{ target: 'local', label: 'Local', reason: 'off' }, { target: 's21', label: 'twenty-one', reason: OVER_CAP_REASON }] })])
+  assert.match(s.detail, new RegExp(`^Opening it again tries Local's part and the first ${MAX_REMOTE_PIECES} servers' parts again; the others only once one of those has landed\\.$`, 'm'))
+})
+
+test('importSummary: a part landed: neither the nothing-imported line nor the cap line, even with a part over the cap', () => {
+  const s = importSummary([report({ pieces: [piece('local', 'p1')], left: [{ target: 's21', label: 'twenty-one', reason: OVER_CAP_REASON }] })])
+  assert.doesNotMatch(s.detail, /Nothing was imported/)
+  assert.doesNotMatch(s.detail, /Opening it again tries/)
 })
 
 test('importSummary: several files, and one that could not be read', () => {
