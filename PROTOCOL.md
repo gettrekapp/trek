@@ -58,9 +58,11 @@ Responses correlate by `id`:
 
 Error codes: `UNAUTHORIZED`, `BAD_REQUEST`, `NOT_FOUND`, `PATH_DENIED`, `GIT_ERROR`,
 `PTY_NOT_FOUND`, `INTERNAL`, `UNSUPPORTED_VERSION`, `CONFLICT`, `NOT_A_REPO`, `IN_USE`,
-`CAPACITY` and `CONGESTED`. `CAPACITY` means a server or project limit was reached
+`CAPACITY`, `CONGESTED` and `TOOL_ERROR`. `CAPACITY` means a server or project limit was reached
 (`maxSessions`, the session records of a project, or the waits of an MCP tool); it is
-retryable once something frees up. An unknown method is `NOT_FOUND`.
+retryable once something frees up. `TOOL_ERROR` means a docker, colima or stack.sh command on
+the server's machine failed (see [Docker, environments and stacks](#docker-environments-and-stacks)).
+An unknown method is `NOT_FOUND`.
 
 Every path is realpath-resolved and must fall under a configured repo root or
 worktree root; anything else is rejected with `PATH_DENIED`.
@@ -94,6 +96,9 @@ new optional field needs no capability: its absence says enough.
 | `decisions` | Sessions carry `decision`, set by the MCP tool `request_decision`, and `session.dismissDecision` clears it (see Decisions) |
 | `dequeue` | `session.dequeue` removes one queued prompt, compare-and-set (see Prompts) |
 | `agents` | `server.agents` lists the agents the server can launch (see Sessions) |
+| `docker` | `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine, and `docker.log` streams compose's output (see [Docker, environments and stacks](#docker-environments-and-stacks)) |
+| `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output |
+| `stacks` | `stack.*` run the worktrees' `docker/stack/stack.sh` dev stacks on the server's machine |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -162,12 +167,15 @@ server restarts. A server without this field simply leaves it out.
 |---|---|
 | Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
 | Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
-| Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` |
+| Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff`, `worktree.dirty` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Agents | `server.agents` |
+| Docker | `docker.list`, `docker.container`, `docker.compose` |
+| Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
+| Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -177,8 +185,9 @@ results carry only new ids; queries return their data.
 
 An error reply may carry `error.details`, an object a client can act on without
 reading the message (which may be git's own, localised text). Today the only key
-is `reason`, and the only reason is `dirty` (see `worktree.remove`). Clients
-ignore keys and reasons they don't know.
+is `reason`: `dirty` (see `worktree.remove`), or, on a `TOOL_ERROR`, `missing` (the
+tool is not installed on the server) or `registry` (the server's environments registry
+cannot be read; nothing was written). Clients ignore keys and reasons they don't know.
 
 `project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
 `session.rename`, `session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
@@ -275,10 +284,10 @@ refresh the worktree's status before answering. `worktree.changes` and
 `worktree.diff` return the worktree's changes against its base branch (files with
 their added and removed line counts) and each file's unified diff. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
 a worktree whose path is outside the allowlist (a row from a hand-edited
-project file, say) fail with `PATH_DENIED` before running git. They refuse a
-non-main worktree whose path is, or contains, a registered repository
-(`BAD_REQUEST`); the main worktree is its own repository's checkout and is
-refused only when its path is not that repository's.
+project file, say) fail with `PATH_DENIED` before running git. They (and the
+docker, env and stack methods) refuse a non-main worktree whose path is, or
+contains, a registered repository (`BAD_REQUEST`); the main worktree is its own
+repository's checkout and is refused only when its path is not that repository's.
 
 `project.import` takes one of the projects that `importProjectFile()`
 (`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
@@ -335,6 +344,88 @@ restart.
 Tokens are named, one per device (`trek-server token add <name>`). Revoking a
 token closes its open connections with `4003`.
 
+
+## Docker, environments and stacks
+
+With the capabilities `docker`, `env` and `stacks`, the server runs these on its own machine,
+for any client (phase 5a; before it, the desktop ran them on its own machine, for its Local
+server's windows only). They add no power the token did not already grant (a shell as the
+server user), and they follow the protocol's rules:
+
+- **Paths come from the server.** A method names a project and a worktree (`worktreeId`) or a
+  repository (`repoId`); the server uses the path it stores, which must still pass the path
+  allowlist (`PATH_DENIED`), as for `worktree.changes`. No method takes a path.
+- **Every other argument is checked** (`BAD_REQUEST`), and none reaches a shell: every command
+  is an argument list. A compose action is a name (`up`, `upBuild`, `restart`, `stop`, `down`,
+  `pull`) whose arguments the server owns. A container `id` is a container id or name (letters,
+  digits, `_`, `.`, `-`, not starting with `-`). A `profile` is a `twb-` environment name. A
+  compose service is a name of the same kind. `composeFile` is one or more comma-separated paths
+  inside the worktree (not absolute, no `..`, not starting with `-`, no NUL), and each one that
+  exists must still be inside the worktree's real path once its symlinks are followed. That check
+  limits the client's argument only: the repository's compose content (`include`, `extends`,
+  `env_file`, bind mounts, a symlinked default `docker-compose.yml`) is the repository's and is
+  not confined. `env.up`'s `settings` takes only the environment keys (`enabled`, `cpu` 1–256,
+  `memory` 1–1024, `disk` 1–10000, `networkAddress`, `rosetta`, `composeFile`; `profileKey` is
+  ignored), and its `envVars` only variable names (`[A-Za-z_][A-Za-z0-9_]*`, at most 200, string
+  values without NUL, at most 32 KiB each), never, in any case (`path` and `Docker_Host` are
+  refused too), `PATH`, `HOME`, `XDG_CONFIG_HOME` or a `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`,
+  `LD_*` or `DYLD_*` name. `tail` is 1–5000 (default 300); `fileId` and `offset` are non-negative
+  integers.
+- **A missing tool is an answer.** The calls that answer at once (`docker.list`,
+  `docker.container`, `env.list`, `env.ps`, `env.logs`) fail with `TOOL_ERROR`,
+  `details.reason: missing`, on a machine without docker or colima, and `env.check` reports
+  which one is missing. The long runs that stream their output (`docker.compose`, `env.up`,
+  `env.stop`, `env.destroy`) never throw for a tool: one that cannot start ends the run with
+  code `-1` (`env.up`: `{code: -1, error}`) and its log says why. Any other failure of a call that
+  answers at once is `TOOL_ERROR` with the tool's message.
+- **An unreadable registry is not an empty one.** When the server cannot read or parse
+  `environments.json` (anything but its absence), nothing is written over it: an empty registry
+  would show every VM as an orphan to delete. `env.list` fails with `TOOL_ERROR`,
+  `details.reason: registry`, naming the file, and the app shows that message until the file is
+  fixed; `env.up` resolves `{code: -1, error}` with the same message before it starts the VM;
+  `env.destroy` deletes the VM, keeps the entry and resolves `-1`, its log saying why.
+- **Stacks.** A worktree's `docker/stack/stack.sh` runs (through `bash`) only when it stays inside
+  the worktree's real path once its symlinks are followed; one that leads out is refused
+  (`TOOL_ERROR`). `stack.status` says `available: false` when there is none. One start at a time:
+  a `stack.up` while that stack is running, starting or stopping, and a `stack.down` or
+  `stack.destroy` while it is starting or stopping, are refused (`TOOL_ERROR`); the client retries.
+  `stack.down` and `stack.destroy` Ctrl-C the running `up`'s process group first.
+- **Long runs.** `env.up` (a VM's first boot), `docker.compose` (an image build) and
+  `stack.down`/`stack.destroy` (each Ctrl-C's a running `up` and waits up to a minute) can take
+  minutes; clients give them a long request timeout. A run outlives the connection that asked
+  for it: if the link drops, the run goes on, and the client reads the result from the next
+  `env.list` or `stack.status`.
+
+| Method | Params | Result |
+|---|---|---|
+| `docker.list` | `{}` | `ContainerInfo[]` (`docker ps -a`) |
+| `docker.container` | `{action: start\|stop\|restart, id}` | `null` |
+| `docker.compose` | `{projectId, repoId, action}` | compose's exit code; it runs in the repository's main checkout |
+| `env.check` | `{}` | `EnvCheckResult`: colima and docker on the server's PATH (an `ok` answer is kept) |
+| `env.list` | `{projectId, repoId}` | `EnvironmentInfo[]`: the repository's environments, and the `twb-` VMs no registry entry names (`orphaned`) |
+| `env.up` | `{projectId, worktreeId, settings, envVars?}` | `EnvUpResult`: starts (or creates) the VM of the branch git has checked out (re-read first), then `docker compose up -d` in the worktree |
+| `env.stop`, `env.destroy` | `{profile}` | colima's exit code; `destroy` first runs `compose down -v` (for up to a minute) in the registry's worktree while it is there and inside the path allowlist (outside it, the log says compose was skipped and only the VM goes), then deletes the VM and drops the registry entry |
+| `env.ps` | `{projectId, worktreeId, composeFile?}` | `EnvService[]` |
+| `env.composeFiles` | `{projectId, worktreeId}` | the compose files in the worktree's root |
+| `env.logs` | `{projectId, worktreeId, composeFile?, service, tail?}` | the service's last lines |
+| `stack.status` | `{projectId, worktreeId}` | `StackStatus` |
+| `stack.up` | `{projectId, worktreeId, starter}` | `null`; `stack.sh up` runs detached and outlives the server |
+| `stack.down`, `stack.destroy` | `{projectId, worktreeId}` | stack.sh's exit code |
+| `stack.log` | `{projectId, worktreeId, fileId, offset}` | `StackLogChunk`: from `offset` in the file `fileId` names (at most 1 MiB), else the last 64 KiB of the current one |
+| `worktree.dirty` | `{projectId, worktreeId}` | `boolean`: whether `git status --porcelain`, read now, lists anything (the status poll's `dirty` can be 30 s old); `null` when git cannot read it |
+
+A VM is named `deriveProfileName(envRepoKey(repository), branch)` (`src/shared/environments.ts`):
+the repository's `environments.profileKey` when an import kept one, else its path. The server
+keeps a registry of its VMs (`<dataDir>/environments.json`, 0600) and each stack's log and `up`
+pid (`<dataDir>/stacks/`). The local server takes over the desktop's own files once, on its
+first start that has none (`start --local --import-env-from <app data dir>`; see the server's
+README).
+
+`docker.log` and `env.log` go only to the connection whose request started the run; another
+connection on the same project sees the result through `env.list` and `stack.status`, not the
+log. Under backpressure (from more than 4 MiB unsent on the connection until it drains below
+2 MiB) their output chunks are dropped, and the next chunk of that run that is sent follows one
+`[output dropped: the connection fell behind]` line. A `done` or a `step` event is never dropped.
 
 ## Sessions
 
@@ -766,6 +857,8 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `pty.data` | `{ptyId, seq, data, replay?}`, only to connections attached to the pty; `replay: true` chunks are ring-buffer re-sends. Session status is computed on the server from live bytes, never from replay |
 | `pty.exit` | `{ptyId, exitCode}`: the process exited (a dropped socket is not an exit) |
 | `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
+| `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
+| `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
 
 ## Several clients
 

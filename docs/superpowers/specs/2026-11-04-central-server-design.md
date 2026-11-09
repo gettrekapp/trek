@@ -204,7 +204,10 @@ Electron, on Linux, macOS and Windows.
   keep running" is no longer needed for unload.)
 - **MCP** is per server. Global sessions launch with that server's MCP URL and token, so a
   project's Global agent sees only its own server's projects.
-- **Docker / env / stacks** (phase 5) act on the server's machine.
+- **Docker / env / stacks** (phase 5a) act on the server's machine: `docker.*`, `env.*`,
+  `stack.*` and `worktree.dirty`, behind the `docker`, `env` and `stacks` capabilities. The
+  environments' registry and the stacks' logs and pids live in the server's data dir; the
+  local server takes over the desktop's own once (`--import-env-from`).
 - **Notifications:** the server publishes the `attention` topic; each client decides
   whether to raise an OS notification.
 
@@ -230,6 +233,7 @@ Electron, on Linux, macOS and Windows.
   session/git `ipcMain` handlers; in phase 5, `bot.ts`, `docker.ts`, `environments.ts`,
   `stacks.ts`, `linear.ts`, `voice.ts` and `skills.ts`, once each has a server replacement.
   Until then those keep running in main against the local machine, for Local windows.
+  `docker.ts`, `environments.ts` and `stacks.ts` went in 5a, with `git:localDirty`.
 - **Windows:** one window per project. The registry entry is
   `{kind: 'file', path}` (legacy, until phase 4) or `{kind: 'server', serverId, projectId}`.
   Opening an already-open entry focuses its window. `open-windows.json` and recents store

@@ -16,6 +16,10 @@ keeps running on the server; the app reattaches when it reconnects.
 - `git` with fetch/push credentials for your repos (the worktree-move flow
   pushes branches through origin)
 - `claude` CLI installed and authenticated **as the user the server runs as**
+- Optional, for the app's Docker, environments and dev stacks tabs: `docker` (with
+  compose), `colima` and `bash` on the server's PATH. Without them the server runs
+  fine: those calls answer `TOOL_ERROR` (reason `missing`), or, for a compose or
+  Colima run, end with code -1 and say why in their output, which the app shows.
 
 ## Install
 
@@ -152,6 +156,9 @@ project is stored as one JSON file in the data dir:
 - Windows: `%LOCALAPPDATA%\trek-server\projects\`
 
 Set `"dataDir"` in the config or pass `--data-dir` to put them elsewhere.
+The data dir also holds the environments' registry (`environments.json`, 0600: each
+`twb-` Colima VM's repository, branch and worktree, and the branch's variables) and
+each dev stack's log and `stack.sh up` pid (`stacks/`).
 `start --data-dir` remembers the directory in the config, so later commands use it too.
 `trek-server remove` refuses to remove a repo that a project still uses.
 
@@ -199,6 +206,20 @@ run by hand:
   code 3 while that process lives; a dead one's lock, or one from before the
   last boot, is taken over; SIGKILL leaves both files for the next start to
   clean up (SIGINT, SIGTERM and SIGHUP remove them);
+- `--import-env-from <dir>` (only with `start --local`, and an absolute path; the
+  app passes its own data dir): once per local profile, on a start whose data
+  dir has no `environments.json` yet, the environments registry and the dev
+  stacks' files a Trek before 5a kept there are copied in. Only well-formed
+  `twb-` entries are copied; a variable `env.up` would refuse (`PATH`, `HOME`,
+  `DOCKER_*`, …) or a compose file outside the worktree is left out, the entry
+  kept. A stack's log is hard-linked (copied when it cannot be), so a stack still
+  running keeps logging to it: the log is the one file both share, and both only
+  append. A pid file is written afresh, and only while its process lives. The
+  registry and pids there stay. With nothing to copy it writes an empty
+  registry, so it never copies again; a registry there that cannot be read or
+  parse is a warning, nothing is written, and the next start tries again. An
+  older Trek still running on that data dir afterwards, or the other local
+  profile, starts stacks this server cannot see (each takes its own copy);
 - any path is allowed (the welcome lists the `local` capability), since the
   user picks paths on their own disk. That covers every path check, not only
   `server.addRepo` and `project.import`: `worktree.create`
@@ -266,6 +287,16 @@ Then configure the app with `wss://dev.example.com`.
   SSH key; run the server as a dedicated user if the box is shared.
 - The path allowlist (repos + their parent dirs + `worktreeRoots`) protects
   against path typos and confused-deputy bugs, not against a stolen token.
+- **Docker, colima and stack.sh run as the server user**, for any client with a
+  token (the app's Docker, Env and Stack tabs). They take no paths from the
+  client (only project, repository and worktree ids, resolved and checked against
+  the allowlist), every argument is checked, and none goes through a shell: a
+  client's compose file and a worktree's `stack.sh` must stay inside the worktree
+  once their symlinks are followed, and a branch's variables may not set `PATH`,
+  `HOME`, `XDG_CONFIG_HOME` or a `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`, `LD_*` or
+  `DYLD_*` name, in any case. A repository's own `docker/stack/stack.sh` and
+  compose content (`include`, `env_file`, bind mounts, …) run as written, as a
+  session would run them.
 - Auth failures are logged with the peer address; bad tokens get a delayed
   close to blunt brute force.
 - Never expose the plain `ws://` listener beyond loopback (`--insecure`

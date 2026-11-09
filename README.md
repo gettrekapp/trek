@@ -166,15 +166,23 @@ other window on that project sees them live.
   environment setting is re-applied over the other client's change without
   asking. Attention badges and the notifications menu cover server sessions.
   Linear ticket chips work in every server window, with the app-wide API key.
-- **Machine-local features, in Local windows only**: a window on the [Local
-  server](#local-server) also has Docker, the per-worktree Colima environments
-  (and their variables), dev stacks, skills, Open in VS Code and Reveal in
-  Finder, since its paths are this machine's.
-  Deleting a worktree there also destroys its dev stack (if ticked) and its VM,
-  after a fresh check for uncommitted changes. A window on a remote server shows
-  none of these.
+- **Docker, environments and dev stacks, on the server's machine**: every server
+  window has the Docker tab (the server's containers, and docker compose in a
+  repository's main checkout), the per-worktree Colima environments (and their
+  variables) and the dev stacks (`docker/stack/stack.sh`), all run by the server
+  on its own machine, with its own docker and colima. A server without them
+  installed says so in the panel. Deleting a worktree also destroys its dev stack
+  (if ticked) and its VM, after a fresh check for uncommitted changes on the
+  server; if the server does not answer that check in time, nothing is deleted.
+  A server older than this Trek (without the `docker`, `env` and `stacks`
+  capabilities) shows no Docker, Env or Stack tab, and Trek does not fall back
+  to running them on this machine.
+- **This machine's features, in Local windows only**: a window on the [Local
+  server](#local-server) also has skills, Open in VS Code and Reveal in Finder,
+  since its paths are this machine's. A window on a remote server shows none of
+  these.
 - **Not yet**: promote to primary, moving worktrees between servers, voice
-  summaries, the project bot and the stack MCP tools (phase 5).
+  summaries, skills on the server, the project bot and the stack MCP tools (phase 5).
 
 ## Importing a .trekproj
 
@@ -248,6 +256,19 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
   one this Trek bundles. Trek asks once whether to restart it with its own
   version; Keep Running carries on with it, and the list says it is not this
   Trek's version.
+- **Your environments and dev stacks carry over.** Before this version, Trek ran
+  Docker, the Colima environments and the dev stacks itself, and kept their
+  registry in its app data (`environments.json`, and each stack's log and pid in
+  `stacks/`). The Local server runs them now: on its first start that has no
+  registry of its own, it copies Trek's (Trek's registry and pids stay where they
+  were; a stack's log is shared, and both only append to it), so your VMs,
+  containers and volumes, and a stack that is still running, are its own, under
+  the same names. A stopped stack's pid is not copied, nor a branch variable the
+  server refuses (`PATH`, `HOME`, `DOCKER_*` and the like). If Trek's registry
+  cannot be read then, nothing is copied and the next start tries again. Until you restart an older Local server (Keep
+  Running), a Local window has no Docker, Env or Stack tab. An older Trek still
+  running on the same app data after the take-over, or the other Local profile
+  (a dev build's), starts stacks this one cannot see: each takes its own copy.
 
 ## Attention indicators
 
@@ -316,7 +337,10 @@ one at a time:
 - `npm run smoke:local-window`: a Local window across two repositories: its sidebar,
   sessions, tags, notes, settings, Changes, unload and repository removal;
 - `npm run smoke:local-features`: a Local window's Docker, environments, stacks,
-  skills, VS Code and Reveal against stub `colima`, `docker` and `code`;
+  skills, VS Code and Reveal against stub `colima`, `docker` and `code`, and the
+  Local server's take-over of the environments an older Trek ran itself;
+- `npm run smoke:server-env`: a remote server window's Docker, environments and
+  stacks, run on the server's machine against stub `colima`, `docker` and `stack.sh`;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

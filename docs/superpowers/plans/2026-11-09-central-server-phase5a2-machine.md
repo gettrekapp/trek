@@ -69,9 +69,9 @@ See 5a-1's "Roadmap: phase 5": this plan is **5a-2**. 5b is Linear, voice (on th
 
 **The smokes (Tasks 3–4)**
 
-22. **`smoke:server-env`** is new rather than more of `smoke:v2` (171 checks): a plain `trek-server start` with its own HOME (the worktrees under it, as Colima mounts only `$HOME`) and stub `docker`, `colima` and `stack.sh` first on its PATH, recording calls with a shared sequence number; the app with a temp HOME and userData, no Local server, main's dialogs stubbed. 29 checks.
+22. **`smoke:server-env`** is new rather than more of `smoke:v2` (171 checks): a plain `trek-server start` with its own HOME (the worktrees under it, as Colima mounts only `$HOME`) and stub `docker`, `colima` and `stack.sh` first on its PATH, recording calls with a shared sequence number; the app with a temp HOME and userData, no Local server, main's dialogs stubbed. 30 checks.
 23. **`smoke:v2`'s server gets stub `docker` and `colima` too**, and the run ends by checking nothing ran them: since 5a a remote server runs them for its windows, and no smoke may reach a real one.
-24. **`smoke:local-features`** seeds the userData as a pre-5a Trek left it (a registry naming the feature branch's VM; a running `up` — a `sleep` in its own process group — with its pid and log) and checks the take-over end to end: the server's copy, the app's left alone, the VM no orphan, the stack still running with its log, and the delete stopping it first. 41 checks.
+24. **`smoke:local-features`** seeds the userData as a pre-5a Trek left it (a registry naming the feature branch's VM; a running `up` — a `sleep` in its own process group — with its pid and log) and checks the take-over end to end: the server's copy, the app's left alone, the VM no orphan, the stack still running with its log, and the delete stopping it first. 42 checks.
 
 ## Conventions
 
@@ -4703,7 +4703,7 @@ index 0000000..60b9adb
 
 Run, one at a time: `node scripts/server-env-smoke.mjs`, `node scripts/local-features-smoke.mjs`
 
-Expected: `SERVER ENV SMOKE PASS (29 checks)`, `LOCAL FEATURES SMOKE PASS (41 checks)`; then `pgrep -fl trek-server`, `pgrep -fl "sleep (60|120)"`: nothing (each smoke stops its server and the `up` it left).
+Expected: `SERVER ENV SMOKE PASS (30 checks)`, `LOCAL FEATURES SMOKE PASS (42 checks)`; then `pgrep -fl trek-server`, `pgrep -fl "sleep (60|600)"`: nothing (each smoke stops its server and the `up` it left).
 
 The checks fail without the code they cover, which the prototype ran: with `env.up`'s variables dropped on the server, `FAIL and compose ran in the worktree with the variables: [".../app-feature-x|--context colima-twb-feature-x-<hash> compose -f docker-compose.yml up -d|FOO="]`; with main not passing `--import-env-from`, five fail: `the Local server took over the app's environments registry: null`, `and its running stack's pid: null`, `only the VM no registry knows is an orphan in Settings: ["twb-feature-x-<hash>Delete","twb-leftover-000000Delete"]`, `the app's running up counts, and its log shows: ["Stopped",false]`, `the destroy stopped the app's running up first: true`.
 
@@ -4725,7 +4725,7 @@ git -c user.name=ghoofman -c user.email=gambitsunob@gmail.com commit -m "test(5a
 
 ```diff
 diff --git a/PROTOCOL.md b/PROTOCOL.md
-index e274fef..c70a72d 100644
+index 7f7ec79..33eaeda 100644
 --- a/PROTOCOL.md
 +++ b/PROTOCOL.md
 @@ -58,9 +58,11 @@ Responses correlate by `id`:
@@ -4769,7 +4769,7 @@ index e274fef..c70a72d 100644
  | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
  | Misc | `sys.ping` |
  
-@@ -177,8 +185,8 @@ results carry only new ids; queries return their data.
+@@ -177,8 +185,9 @@ results carry only new ids; queries return their data.
  
  An error reply may carry `error.details`, an object a client can act on without
  reading the message (which may be git's own, localised text). Today the only key
@@ -4781,7 +4781,7 @@ index e274fef..c70a72d 100644
  
  `project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
  `session.rename`, `session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
-@@ -274,10 +282,10 @@ refresh the worktree's status before answering. `worktree.changes` and
+@@ -275,10 +284,10 @@ refresh the worktree's status before answering. `worktree.changes` and
  `worktree.diff` return the worktree's changes against its base branch (files with
  their added and removed line counts) and each file's unified diff. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
  a worktree whose path is outside the allowlist (a row from a hand-edited
@@ -4796,7 +4796,7 @@ index e274fef..c70a72d 100644
  
  `project.import` takes one of the projects that `importProjectFile()`
  (`src/shared/model/importProject.ts`) makes from a `.trekproj` of any version.
-@@ -335,6 +343,64 @@ Tokens are named, one per device (`trek-server token add <name>`). Revoking a
+@@ -336,6 +345,88 @@ Tokens are named, one per device (`trek-server token add <name>`). Revoking a
  token closes its open connections with `4003`.
  
  
@@ -4815,24 +4815,36 @@ index e274fef..c70a72d 100644
 +  `pull`) whose arguments the server owns. A container `id` is a container id or name (letters,
 +  digits, `_`, `.`, `-`, not starting with `-`). A `profile` is a `twb-` environment name. A
 +  compose service is a name of the same kind. `composeFile` is one or more comma-separated paths
-+  inside the worktree (not absolute, no `..`, not starting with `-`, and not a symlink that leads
-+  out of it). That check limits the client's argument only: the repository's compose content
-+  (`include`, `extends`, `env_file`, bind mounts, a symlinked default `docker-compose.yml`) is the
-+  repository's and is not confined. `env.up`'s `settings` takes
-+  only the environment keys (`enabled`, `cpu` 1–256, `memory` 1–1024, `disk` 1–10000,
-+  `networkAddress`, `rosetta`, `composeFile`; `profileKey` is ignored), and its `envVars` only
-+  variable names (`[A-Za-z_][A-Za-z0-9_]*`, at most 200, string values without NUL), never, in
-+  any case, `PATH`, `HOME`, `XDG_CONFIG_HOME` or a `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`, `LD_*`
-+  or `DYLD_*` name. `tail` is 1–5000
-+  (default 300); `fileId` and `offset` are non-negative integers.
-+- **A missing tool is an answer.** A machine without docker or colima gets `TOOL_ERROR` with
-+  `details.reason: missing` (`docker.list`, `env.list`, …), and `env.check` reports which one is
-+  missing; a compose or Colima run that cannot start ends with code `-1` and says so in its
-+  output. Any other failure of the tool is `TOOL_ERROR` with its message.
++  inside the worktree (not absolute, no `..`, not starting with `-`, no NUL), and each one that
++  exists must still be inside the worktree's real path once its symlinks are followed. That check
++  limits the client's argument only: the repository's compose content (`include`, `extends`,
++  `env_file`, bind mounts, a symlinked default `docker-compose.yml`) is the repository's and is
++  not confined. `env.up`'s `settings` takes only the environment keys (`enabled`, `cpu` 1–256,
++  `memory` 1–1024, `disk` 1–10000, `networkAddress`, `rosetta`, `composeFile`; `profileKey` is
++  ignored), and its `envVars` only variable names (`[A-Za-z_][A-Za-z0-9_]*`, at most 200, string
++  values without NUL, at most 32 KiB each), never, in any case (`path` and `Docker_Host` are
++  refused too), `PATH`, `HOME`, `XDG_CONFIG_HOME` or a `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`,
++  `LD_*` or `DYLD_*` name. `tail` is 1–5000 (default 300); `fileId` and `offset` are non-negative
++  integers.
++- **A missing tool is an answer.** The calls that answer at once (`docker.list`,
++  `docker.container`, `env.list`, `env.ps`, `env.logs`) fail with `TOOL_ERROR`,
++  `details.reason: missing`, on a machine without docker or colima, and `env.check` reports
++  which one is missing. The long runs that stream their output (`docker.compose`, `env.up`,
++  `env.stop`, `env.destroy`) never throw for a tool: one that cannot start ends the run with
++  code `-1` (`env.up`: `{code: -1, error}`) and its log says why. Any other failure of a call that
++  answers at once is `TOOL_ERROR` with the tool's message.
 +- **An unreadable registry is not an empty one.** When the server cannot read or parse
-+  `environments.json`, `env.list` and every environment change fail with `TOOL_ERROR`,
-+  `details.reason: registry`, naming the file, and nothing is written: an empty list would
-+  show every VM as an orphan to delete. The app shows the message until the file is fixed.
++  `environments.json` (anything but its absence), nothing is written over it: an empty registry
++  would show every VM as an orphan to delete. `env.list` fails with `TOOL_ERROR`,
++  `details.reason: registry`, naming the file, and the app shows that message until the file is
++  fixed; `env.up` resolves `{code: -1, error}` with the same message before it starts the VM;
++  `env.destroy` deletes the VM, keeps the entry and resolves `-1`, its log saying why.
++- **Stacks.** A worktree's `docker/stack/stack.sh` runs (through `bash`) only when it stays inside
++  the worktree's real path once its symlinks are followed; one that leads out is refused
++  (`TOOL_ERROR`). `stack.status` says `available: false` when there is none. One start at a time:
++  a `stack.up` while that stack is running, starting or stopping, and a `stack.down` or
++  `stack.destroy` while it is starting or stopping, are refused (`TOOL_ERROR`); the client retries.
++  `stack.down` and `stack.destroy` Ctrl-C the running `up`'s process group first.
 +- **Long runs.** `env.up` (a VM's first boot), `docker.compose` (an image build) and
 +  `stack.down`/`stack.destroy` (each Ctrl-C's a running `up` and waits up to a minute) can take
 +  minutes; clients give them a long request timeout. A run outlives the connection that asked
@@ -4847,7 +4859,7 @@ index e274fef..c70a72d 100644
 +| `env.check` | `{}` | `EnvCheckResult`: colima and docker on the server's PATH (an `ok` answer is kept) |
 +| `env.list` | `{projectId, repoId}` | `EnvironmentInfo[]`: the repository's environments, and the `twb-` VMs no registry entry names (`orphaned`) |
 +| `env.up` | `{projectId, worktreeId, settings, envVars?}` | `EnvUpResult`: starts (or creates) the VM of the branch git has checked out (re-read first), then `docker compose up -d` in the worktree |
-+| `env.stop`, `env.destroy` | `{profile}` | colima's exit code; `destroy` also runs `compose down -v` while the worktree is there, and drops the registry entry |
++| `env.stop`, `env.destroy` | `{profile}` | colima's exit code; `destroy` first runs `compose down -v` (for up to a minute) in the registry's worktree while it is there and inside the path allowlist (outside it, the log says compose was skipped and only the VM goes), then deletes the VM and drops the registry entry |
 +| `env.ps` | `{projectId, worktreeId, composeFile?}` | `EnvService[]` |
 +| `env.composeFiles` | `{projectId, worktreeId}` | the compose files in the worktree's root |
 +| `env.logs` | `{projectId, worktreeId, composeFile?, service, tail?}` | the service's last lines |
@@ -4855,7 +4867,7 @@ index e274fef..c70a72d 100644
 +| `stack.up` | `{projectId, worktreeId, starter}` | `null`; `stack.sh up` runs detached and outlives the server |
 +| `stack.down`, `stack.destroy` | `{projectId, worktreeId}` | stack.sh's exit code |
 +| `stack.log` | `{projectId, worktreeId, fileId, offset}` | `StackLogChunk`: from `offset` in the file `fileId` names (at most 1 MiB), else the last 64 KiB of the current one |
-+| `worktree.dirty` | `{projectId, worktreeId}` | `git status --porcelain` read now (the status poll's `dirty` can be 30 s old); `null` when git cannot read it |
++| `worktree.dirty` | `{projectId, worktreeId}` | `boolean`: whether `git status --porcelain`, read now, lists anything (the status poll's `dirty` can be 30 s old); `null` when git cannot read it |
 +
 +A VM is named `deriveProfileName(envRepoKey(repository), branch)` (`src/shared/environments.ts`):
 +the repository's `environments.profileKey` when an import kept one, else its path. The server
@@ -4864,25 +4876,29 @@ index e274fef..c70a72d 100644
 +first start that has none (`start --local --import-env-from <app data dir>`; see the server's
 +README).
 +
-+`docker.log` and `env.log` go only to the connection whose request started the run.
++`docker.log` and `env.log` go only to the connection whose request started the run; another
++connection on the same project sees the result through `env.list` and `stack.status`, not the
++log. Under backpressure (from more than 4 MiB unsent on the connection until it drains below
++2 MiB) their output chunks are dropped, and the next chunk of that run that is sent follows one
++`[output dropped: the connection fell behind]` line. A `done` or a `step` event is never dropped.
 +
  ## Sessions
  
  A session is one agent (Claude, Codex, Gemini, Grok or a local model) running in a
-@@ -765,6 +831,8 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as
+@@ -766,6 +857,8 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as
  | `pty.data` | `{ptyId, seq, data, replay?}`, only to connections attached to the pty; `replay: true` chunks are ring-buffer re-sends. Session status is computed on the server from live bytes, never from replay |
  | `pty.exit` | `{ptyId, exitCode}`: the process exited (a dropped socket is not an exit) |
  | `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
-+| `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it; `done` on its last |
++| `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 +| `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
  
  ## Several clients
  
 diff --git a/README.md b/README.md
-index 7418bef..afe72e3 100644
+index 7418bef..a9b0a89 100644
 --- a/README.md
 +++ b/README.md
-@@ -166,15 +166,20 @@ other window on that project sees them live.
+@@ -166,15 +166,23 @@ other window on that project sees them live.
    environment setting is re-applied over the other client's change without
    asking. Attention badges and the notifications menu cover server sessions.
    Linear ticket chips work in every server window, with the app-wide API key.
@@ -4900,7 +4916,10 @@ index 7418bef..afe72e3 100644
 +  on its own machine, with its own docker and colima. A server without them
 +  installed says so in the panel. Deleting a worktree also destroys its dev stack
 +  (if ticked) and its VM, after a fresh check for uncommitted changes on the
-+  server. A server older than this Trek shows none of these.
++  server; if the server does not answer that check in time, nothing is deleted.
++  A server older than this Trek (without the `docker`, `env` and `stacks`
++  capabilities) shows no Docker, Env or Stack tab, and Trek does not fall back
++  to running them on this machine.
 +- **This machine's features, in Local windows only**: a window on the [Local
 +  server](#local-server) also has skills, Open in VS Code and Reveal in Finder,
 +  since its paths are this machine's. A window on a remote server shows none of
@@ -4911,7 +4930,7 @@ index 7418bef..afe72e3 100644
  
  ## Importing a .trekproj
  
-@@ -248,6 +253,18 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
+@@ -248,6 +256,19 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
    one this Trek bundles. Trek asks once whether to restart it with its own
    version; Keep Running carries on with it, and the list says it is not this
    Trek's version.
@@ -4922,15 +4941,16 @@ index 7418bef..afe72e3 100644
 +  registry of its own, it copies Trek's (Trek's registry and pids stay where they
 +  were; a stack's log is shared, and both only append to it), so your VMs,
 +  containers and volumes, and a stack that is still running, are its own, under
-+  the same names. If Trek's registry cannot be read then, nothing is copied and
-+  the next start tries again. Until you restart an older Local server (Keep
++  the same names. A stopped stack's pid is not copied, nor a branch variable the
++  server refuses (`PATH`, `HOME`, `DOCKER_*` and the like). If Trek's registry
++  cannot be read then, nothing is copied and the next start tries again. Until you restart an older Local server (Keep
 +  Running), a Local window has no Docker, Env or Stack tab. An older Trek still
 +  running on the same app data after the take-over, or the other Local profile
 +  (a dev build's), starts stacks this one cannot see: each takes its own copy.
  
  ## Attention indicators
  
-@@ -316,7 +333,10 @@ one at a time:
+@@ -316,7 +337,10 @@ one at a time:
  - `npm run smoke:local-window`: a Local window across two repositories: its sidebar,
    sessions, tags, notes, settings, Changes, unload and repository removal;
  - `npm run smoke:local-features`: a Local window's Docker, environments, stacks,
@@ -4967,20 +4987,21 @@ index 01fcbce..b509733 100644
    `{kind: 'file', path}` (legacy, until phase 4) or `{kind: 'server', serverId, projectId}`.
    Opening an already-open entry focuses its window. `open-windows.json` and recents store
 diff --git a/server/README.md b/server/README.md
-index 8af30af..9a59dd4 100644
+index 8af30af..6fce13d 100644
 --- a/server/README.md
 +++ b/server/README.md
-@@ -16,6 +16,9 @@ keeps running on the server; the app reattaches when it reconnects.
+@@ -16,6 +16,10 @@ keeps running on the server; the app reattaches when it reconnects.
  - `git` with fetch/push credentials for your repos (the worktree-move flow
    pushes branches through origin)
  - `claude` CLI installed and authenticated **as the user the server runs as**
 +- Optional, for the app's Docker, environments and dev stacks tabs: `docker` (with
 +  compose), `colima` and `bash` on the server's PATH. Without them the server runs
-+  fine, and those calls answer `TOOL_ERROR` (reason `missing`), which the app shows.
++  fine: those calls answer `TOOL_ERROR` (reason `missing`), or, for a compose or
++  Colima run, end with code -1 and say why in their output, which the app shows.
  
  ## Install
  
-@@ -152,6 +155,9 @@ project is stored as one JSON file in the data dir:
+@@ -152,6 +156,9 @@ project is stored as one JSON file in the data dir:
  - Windows: `%LOCALAPPDATA%\trek-server\projects\`
  
  Set `"dataDir"` in the config or pass `--data-dir` to put them elsewhere.
@@ -4990,32 +5011,40 @@ index 8af30af..9a59dd4 100644
  `start --data-dir` remembers the directory in the config, so later commands use it too.
  `trek-server remove` refuses to remove a repo that a project still uses.
  
-@@ -199,6 +205,16 @@ run by hand:
+@@ -199,6 +206,20 @@ run by hand:
    code 3 while that process lives; a dead one's lock, or one from before the
    last boot, is taken over; SIGKILL leaves both files for the next start to
    clean up (SIGINT, SIGTERM and SIGHUP remove them);
-+- `--import-env-from <dir>` (the app passes its own data dir): once, on a start
-+  whose data dir has no `environments.json` yet, the environments registry and
-+  the dev stacks' files a Trek before 5a kept there are copied in (a stack's log
-+  as a hard link, so a stack still running keeps logging to it: the log is the
-+  one file both share, and both only append; a pid only while its process
-+  lives). The registry and pids there stay. With nothing to copy it writes an
-+  empty registry, so it never copies again; a registry there that cannot be read
-+  or parse is a warning, nothing is written, and the next start tries again. An
++- `--import-env-from <dir>` (only with `start --local`, and an absolute path; the
++  app passes its own data dir): once per local profile, on a start whose data
++  dir has no `environments.json` yet, the environments registry and the dev
++  stacks' files a Trek before 5a kept there are copied in. Only well-formed
++  `twb-` entries are copied; a variable `env.up` would refuse (`PATH`, `HOME`,
++  `DOCKER_*`, …) or a compose file outside the worktree is left out, the entry
++  kept. A stack's log is hard-linked (copied when it cannot be), so a stack still
++  running keeps logging to it: the log is the one file both share, and both only
++  append. A pid file is written afresh, and only while its process lives. The
++  registry and pids there stay. With nothing to copy it writes an empty
++  registry, so it never copies again; a registry there that cannot be read or
++  parse is a warning, nothing is written, and the next start tries again. An
 +  older Trek still running on that data dir afterwards, or the other local
 +  profile, starts stacks this server cannot see (each takes its own copy);
  - any path is allowed (the welcome lists the `local` capability), since the
    user picks paths on their own disk. That covers every path check, not only
    `server.addRepo` and `project.import`: `worktree.create`
-@@ -266,6 +282,12 @@ Then configure the app with `wss://dev.example.com`.
+@@ -266,6 +287,16 @@ Then configure the app with `wss://dev.example.com`.
    SSH key; run the server as a dedicated user if the box is shared.
  - The path allowlist (repos + their parent dirs + `worktreeRoots`) protects
    against path typos and confused-deputy bugs, not against a stolen token.
 +- **Docker, colima and stack.sh run as the server user**, for any client with a
 +  token (the app's Docker, Env and Stack tabs). They take no paths from the
 +  client (only project, repository and worktree ids, resolved and checked against
-+  the allowlist), every argument is checked, and none goes through a shell. A
-+  repository's own `docker/stack/stack.sh` and compose files run as written, as a
++  the allowlist), every argument is checked, and none goes through a shell: a
++  client's compose file and a worktree's `stack.sh` must stay inside the worktree
++  once their symlinks are followed, and a branch's variables may not set `PATH`,
++  `HOME`, `XDG_CONFIG_HOME` or a `DOCKER_*`, `COMPOSE_*`, `BUILDKIT_*`, `LD_*` or
++  `DYLD_*` name, in any case. A repository's own `docker/stack/stack.sh` and
++  compose content (`include`, `env_file`, bind mounts, …) run as written, as a
 +  session would run them.
  - Auth failures are logged with the peer address; bad tokens get a delayed
    close to blunt brute force.
@@ -5053,7 +5082,7 @@ Expected: no output.
 
 Run: `npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run build`
 
-Expected: `# tests 1620`, `# pass 1619`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build <hash>` (`58e42acfe91c` in the clean checkout of Step 4; `b468628e3f07` in the prototype, whose `node_modules` were symlinks).
+Expected: `# tests 1642`, `# pass 1641`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build <hash>` (`58e42acfe91c` in the clean checkout of Step 4; `b468628e3f07` in the prototype, whose `node_modules` were symlinks).
 
 - [ ] **Step 3: Every smoke, one at a time**
 
@@ -5062,8 +5091,8 @@ Expected: `# tests 1620`, `# pass 1619`, `# fail 0`, `# skipped 1`; `out/server:
 | `HOME=$(mktemp -d) node scripts/v2-smoke.mjs` | `V2 SMOKE PASS (171 checks)` |
 | `node scripts/local-app-smoke.mjs` | `LOCAL APP SMOKE PASS (45 checks)` |
 | `node scripts/local-window-smoke.mjs` | `LOCAL WINDOW SMOKE PASS (57 checks)` |
-| `node scripts/local-features-smoke.mjs` | `LOCAL FEATURES SMOKE PASS (41 checks)` |
-| `node scripts/server-env-smoke.mjs` | `SERVER ENV SMOKE PASS (29 checks)` |
+| `node scripts/local-features-smoke.mjs` | `LOCAL FEATURES SMOKE PASS (42 checks)` |
+| `node scripts/server-env-smoke.mjs` | `SERVER ENV SMOKE PASS (30 checks)` |
 | `node scripts/providers-smoke.mjs` | `PROVIDERS SMOKE PASS (36 checks)` |
 | `node scripts/windows-smoke.mjs` (three times) | `WINDOWS SMOKE PASS (38 checks)`, about 10 s each, no stall |
 | `node scripts/import-smoke.mjs` | `IMPORT SMOKE PASS (63 checks)` |
@@ -5084,7 +5113,7 @@ npm run typecheck && (cd server && npx tsc --noEmit) && npm test && npm run buil
 node scripts/local-app-smoke.mjs
 ```
 
-Expected: `npm ci` ends `added 365 packages`; `npm run rebuild` ends `✔ Rebuild Complete`; `# tests 1620`, `# pass 1619`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build 58e42acfe91c`; `LOCAL APP SMOKE PASS (45 checks)`.
+Expected: `npm ci` ends `added 365 packages`; `npm run rebuild` ends `✔ Rebuild Complete`; `# tests 1642`, `# pass 1641`, `# fail 0`, `# skipped 1`; `out/server: trek-server 0.2.0, build 58e42acfe91c`; `LOCAL APP SMOKE PASS (45 checks)`.
 
 - [ ] **Step 5: The packaged app runs the Local smokes**
 
@@ -5100,7 +5129,7 @@ Expected: electron-builder ends with `signing file=dist/mac-arm64/Trek.app …` 
 
 - [ ] **Step 6: Nothing left running, nothing of the user's touched**
 
-Run: `pgrep -fl trek-server; pgrep -fl "trek-(import|local-features|local-app|local-window|windows|providers|v2|server-env|local-smoke|client-contract|server-smoke)"; pgrep -fl "sleep (60|120)"; git status --short`
+Run: `pgrep -fl trek-server; pgrep -fl "trek-(import|local-features|local-app|local-window|windows|providers|v2|server-env|local-smoke|client-contract|server-smoke)"; pgrep -fl "sleep (60|600)"; git status --short`
 
 Expected: no output. No smoke wrote under the real HOME (`~/.config/trek-server/local*`, `~/Library/Application Support/Trek Dev`) or ran a real docker or colima.
 
