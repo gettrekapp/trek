@@ -424,6 +424,22 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      `docs/superpowers/plans/2026-11-09-central-server-phase5a1-cleanup.md` and
      `…-phase5a2-machine.md`.
    - **5b:** Linear, voice (moved to the server) and skills.
+   - **5c:** the cheapest gaps from a comparison with T3 Code (2026-11-09), each in its
+     own plan:
+     - **PR watch:** the server polls a worktree's linked pull request (`gh`, on the
+       server's machine) every few minutes and, on failed or passing checks, new review
+       comments, a merge conflict or a merge, enqueues a prompt for that worktree's
+       session (the existing queue) and raises attention. It can be switched on per
+       worktree from the detail pane and by a `watch_pull_request` MCP tool. Behind a
+       `prWatch` capability that the server reports only when `gh` is authenticated.
+     - **Changes tab review:** a source picker (uncommitted only, the branch against its
+       base, or one commit from the newest 100) and line comments on the diff. "Send to
+       session" enqueues the comments, with their file and line, as one prompt. The tab
+       stays read-only: no staging or reverting.
+     - **Web client:** trek-server serves a browser build of the v2 project window on
+       `packages/client`, using the server's named tokens. The Electron-only actions
+       (Open in VS Code, Reveal in Finder, folder pickers) are hidden there. It covers
+       remote access from any device before phase 6's native client.
    - **Later, in their own plans:** the bot (ported last, only when asked), moving
      worktrees between servers, promote to primary, and Windows support for the
      supervisor.
