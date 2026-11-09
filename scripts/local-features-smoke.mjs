@@ -22,19 +22,23 @@
 //   - Delete worktree asks with the stack checkbox and the VM named, and (a file written as the
 //     confirm shows) about its uncommitted changes, from a fresh git status (worktree.dirty), before it runs
 //     `stack.sh destroy` and `colima delete <profile> --force`; then the server removes the worktree;
+//   - the upgrade (5a): the app's environments registry and its running stack's pid and log, as a
+//     pre-5a Trek left them in userData, are the Local server's now: the VM it knew is no orphan,
+//     the stack's `up` still counts as running and its log shows, and the delete stops it first;
 //   - no console or page errors.
 // The same window on a remote server (no `local`) is smoke:v2's (none of this machine's controls,
 // Linear on) and smoke:server-env's (docker, environments and stacks on the server's machine).
 //
 // Prints LOCAL FEATURES SMOKE PASS (n checks) or LOCAL FEATURES SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
-import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import electronPath from 'electron'
 import { PtyStream, ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { parseLocalInfo } from '../src/shared/localServer.ts'
+import { defaultDataDir } from '../server/src/dataDir.ts'
 import { deriveProfileName } from '../src/shared/environments.ts'
 
 const WATCHDOG_MS = 180_000
@@ -137,6 +141,19 @@ const agentPids = join(work, 'agent-pids')
 writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT ready"\nexec sleep 300\n`, { mode: 0o755 })
 writeFileSync(join(profile, 'config.json'), JSON.stringify({ repos: [], llm: { providers: { claude: { command: fakeAgent } } } }))
 
+// The upgrade: what a pre-5a Trek left in userData. Its registry knew the feature branch's VM, and
+// its stack's `stack.sh up` is still running (a sleep in its own process group, as `up` ran
+// detached), with its pid and log in userData/stacks.
+const legacyRegistry = { [featureProfile]: { repoPath: repo, branch: 'feature-x', worktreePath: worktree, composeFile: 'docker-compose.yml', createdAt: '2026-11-01T00:00:00.000Z' } }
+mkdirSync(join(userData, 'stacks'), { recursive: true })
+writeFileSync(join(userData, 'environments.json'), JSON.stringify(legacyRegistry, null, 2))
+const legacyUp = spawn('sleep', ['120'], { detached: true, stdio: 'ignore' })
+legacyUp.unref()
+writeFileSync(join(userData, 'stacks', 'app-feature-x.pid'), String(legacyUp.pid))
+writeFileSync(join(userData, 'stacks', 'app-feature-x.log'), '$ stack.sh up\nstarted by the app before 5a\n')
+// The Local profile's data dir, where the server keeps them from now on (server/src/dataDir.ts).
+const localData = join(defaultDataDir(process.platform, { HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') }, home), 'local-dev')
+
 // Main's dialogs and Reveal, stubbed before its script runs: every message box is recorded with its
 // detail, its checkbox and a number from the stubs' shared sequence (for the order against
 // stack.sh and colima), and answered with its confirm button (index 1) and the box ticked.
@@ -220,7 +237,7 @@ const finish = async (reason) => {
   })
   const left = info()
   if (left && alive(left.pid)) process.kill(left.pid, 'SIGKILL')
-  for (const pid of existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : []) {
+  for (const pid of [legacyUp.pid, ...(existsSync(agentPids) ? readFileSync(agentPids, 'utf8').split('\n').map(Number) : [])]) {
     if (Number.isInteger(pid) && pid > 0 && alive(pid)) {
       try {
         process.kill(pid, 'SIGKILL')
@@ -262,7 +279,17 @@ try {
   sdk = new ServerConnection({ url: `ws://127.0.0.1:${local.port}`, token: local.token, createSocket: globalSocketFactory, client: 'local-features-smoke' })
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
-  check('the Local server says `local`', sdk.welcome?.capabilities.includes('local'), true)
+  check('the Local server says `local`, and runs docker, env and stacks', ['local', 'docker', 'env', 'stacks'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, true])
+  // The upgrade: the server took the app's files over before it served anything; the app's stay.
+  // Compared key-sorted: the take-over writes each entry's own fields in its own order.
+  const sortedKeys = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedKeys(v[k])])) : v)
+  const seeded = existsSync(join(localData, 'environments.json')) ? JSON.parse(readFileSync(join(localData, 'environments.json'), 'utf8')) : null
+  check("the Local server took over the app's environments registry", sortedKeys(seeded), sortedKeys(legacyRegistry))
+  check("and its running stack's pid", existsSync(join(localData, 'stacks', 'app-feature-x.pid')) ? readFileSync(join(localData, 'stacks', 'app-feature-x.pid'), 'utf8') : null, String(legacyUp.pid))
+  // Its log is the app's own file (a hard link), so the `up` still running keeps logging where the server reads.
+  const inode = (p) => (existsSync(p) ? statSync(p).ino : null)
+  check("and its log, the app's own file", [inode(join(localData, 'stacks', 'app-feature-x.log')) !== null, inode(join(localData, 'stacks', 'app-feature-x.log')) === inode(join(userData, 'stacks', 'app-feature-x.log'))], [true, true])
+  check("the app's own files are left as they were", JSON.parse(readFileSync(join(userData, 'environments.json'), 'utf8')), legacyRegistry)
   await sdk.request('server.addRepo', { path: repo })
   const { projectId } = await sdk.request('project.create', { name: 'features', repositories: [{ path: repo }] })
   const topic = `project:${projectId}`
@@ -319,7 +346,8 @@ try {
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check('the environments poll runs: the tool check passes', await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
   check('and colima list fills the environments', await until(() => win.evaluate(() => Object.keys(window.__store.getState().environments).sort()), [featureProfile, 'twb-leftover-000000'].sort()), [featureProfile, 'twb-leftover-000000'].sort())
-  check('a VM with no worktree is an orphan in Settings', await until(() => settings.locator('.env-orphan-row').count(), 2), 2)
+  // The VM the app's registry knew is the server's now: only the crash leftover is an orphan.
+  check('only the VM no registry knows is an orphan in Settings', await until(() => settings.locator('.env-orphan-row').allTextContents(), ['twb-leftover-000000Delete']), ['twb-leftover-000000Delete'])
   await detail.locator('.panel-btn[title="App settings"]').click()
 
   // ---- 4. The feature row ---------------------------------------------------------------------------
@@ -346,6 +374,8 @@ try {
 
   await detail.locator('.panel-btn', { hasText: 'Stack' }).click()
   check("the Stack panel reads the worktree's stack", await until(() => detail.locator('.env-panel:visible', { hasText: 'trek-app-feature-x' }).count(), 1), 1)
+  // The app's `up`, by the pid file the server took over: still starting, with its log.
+  check("the app's running up counts, and its log shows", [await until(() => detail.locator('.env-panel:visible .docker-meta').first().innerText(), 'Starting…'), await until(() => detail.locator('.env-panel:visible .docker-log').innerText().then((t) => t.includes('started by the app before 5a'), () => false), true)], ['Starting…', true])
 
   // ---- 5. A skill, typed into the server's pty ------------------------------------------------------
 
@@ -393,6 +423,7 @@ try {
     [true, true, true]
   )
   check("then the server's removal: the worktree was still there when the VM went", existsSync(calls('delete-saw-worktree')), true)
+  check("the destroy stopped the app's running up first", alive(legacyUp.pid), false)
   const errorBoxes = (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error')
   check('no error dialogs', errorBoxes, [])
 
