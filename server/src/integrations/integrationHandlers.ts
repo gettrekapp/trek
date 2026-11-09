@@ -1,9 +1,10 @@
-// Linear and ElevenLabs with the server's own API keys (phase 5b; capabilities `linear` and
-// `voice`). Before 5b the app's main process kept one key of each for every window; now each server
+// Linear and ElevenLabs with the server's own API keys, and the skills on its disk (phase 5b;
+// capabilities `linear`, `voice` and `skills`). Before 5b the app's main process kept one key of each for every window; now each server
 // has its own, in its secrets file (secrets.ts), set from any client and never sent back.
 import { MAX_SPOKEN_CHARS } from '../../../src/host/voiceService.ts'
 import type { VoiceServerConfig } from '../../../src/shared/types'
 import type { V2Context } from '../v2.ts'
+import { present } from '../worktreeHandlers.ts'
 import { codedError } from '../errors.ts'
 import type { Integrations } from './integrations.ts'
 
@@ -124,6 +125,12 @@ export const integrationHandlers: Record<string, Handler> = {
   'voice.setConfig': (p, ctx) => {
     const patch = requireVoicePatch(p)
     return viaService(() => integrations(ctx).voice.setConfig(patch))
+  },
+
+  // The worktree's path from the server's state, checked as the worktree commands check it.
+  'skills.list': (p, ctx) => {
+    const { worktree } = present(ctx, p)
+    return viaService(() => integrations(ctx).skills.list(worktree.path))
   },
 
   'voice.synthesize': (p, ctx) => {

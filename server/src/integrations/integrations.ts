@@ -1,8 +1,10 @@
-// The server's integrations with outside services (phase 5b): Linear and ElevenLabs, each with the
-// server's own key in its secrets file. Made once per server (index.ts) and handed to the handlers
+// The server's integrations (phase 5b): Linear and ElevenLabs, each with the server's own key in
+// its secrets file, and the Claude Code skills on its disk. Made once per server (index.ts) and handed to the handlers
 // through V2Context, and to the speak_summary tool and the sessions' launch.
 import { createLinearService, type KeySlot, type LinearService } from '../../../src/host/linearService.ts'
 import { createVoiceService, type VoiceService } from '../../../src/host/voiceService.ts'
+import { listSkills } from '../../../src/host/skillService.ts'
+import type { SkillInfo } from '../../../src/shared/types'
 import { createSecretFile, type SecretFile } from '../secrets.ts'
 
 /** The secrets file's names. */
@@ -14,6 +16,8 @@ export const VOICE_CONFIG_FILE = 'voice.json'
 export interface Integrations {
   linear: LinearService
   voice: VoiceService
+  /** A worktree's skills and commands, then the server user's */
+  skills: { list(worktreePath: string): Promise<SkillInfo[]> }
 }
 
 export interface IntegrationOptions {
@@ -28,6 +32,8 @@ export interface IntegrationOptions {
   voiceConfigFile: string
   /** ElevenLabs' API base (default api.elevenlabs.io/v1); `TREK_SERVER_ELEVENLABS_URL` for the smokes */
   elevenLabsApi?: string
+  /** Whose `~/.claude` the skills come from (default: the server user's home) */
+  home?: string
 }
 
 export function keySlot(file: SecretFile, name: string): KeySlot {
@@ -42,6 +48,7 @@ export function createIntegrations(options: IntegrationOptions): Integrations {
   const secrets = createSecretFile(options.secretsFile)
   return {
     linear: createLinearService({ key: keySlot(secrets, LINEAR_SECRET), endpoint: options.linearEndpoint }),
-    voice: createVoiceService({ key: keySlot(secrets, ELEVENLABS_SECRET), configFile: options.voiceConfigFile, api: options.elevenLabsApi })
+    voice: createVoiceService({ key: keySlot(secrets, ELEVENLABS_SECRET), configFile: options.voiceConfigFile, api: options.elevenLabsApi }),
+    skills: { list: (worktreePath) => listSkills(worktreePath, options.home) }
   }
 }

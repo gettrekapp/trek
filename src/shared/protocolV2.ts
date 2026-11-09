@@ -25,6 +25,7 @@ import type {
   EnvironmentInfo,
   EnvironmentSettings,
   LinearIssue,
+  SkillInfo,
   LinearKeyResult,
   StackLogChunk,
   VoiceInfo,
@@ -186,7 +187,9 @@ export const CAPABILITY = {
    * `voice.*` keep the server's ElevenLabs key and voice; its speak_summary tool sends each spoken
    * summary to the project's subscribers as `voice.summary`
    */
-  voice: 'voice'
+  voice: 'voice',
+  /** `skills.list` lists a worktree's Claude Code skills and commands on the server's disk */
+  skills: 'skills'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -396,6 +399,10 @@ export interface MethodParamsV2 {
   /** An mp3 of `text` (at most 400 characters), for this connection only: Settings' Test */
   'voice.synthesize': { text: string }
 
+  // Skills (capability `skills`)
+  /** The worktree's `.claude/skills` and `.claude/commands`, then the server user's `~/.claude` ones */
+  'skills.list': WorktreeRef
+
   // Subscriptions
   'sub.subscribe': { topic: Topic }
   'sub.unsubscribe': { topic: Topic }
@@ -502,6 +509,7 @@ export interface MethodResultsV2 {
   'voice.setConfig': VoiceServerConfig
   /** The mp3, base64 */
   'voice.synthesize': { audio: string }
+  'skills.list': SkillInfo[]
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }

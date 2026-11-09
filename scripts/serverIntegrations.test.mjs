@@ -1,15 +1,20 @@
-// scripts/serverIntegrations.test.mjs — the server's secrets file, linear.* and voice.* (phase 5b),
+// scripts/serverIntegrations.test.mjs — the server's secrets file, linear.*, voice.* and skills.list (phase 5b),
 // against local HTTP stubs of Linear's and ElevenLabs' APIs: nothing here reaches either service.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile, secretsPathFor } from '../server/src/secrets.ts'
 import { createIntegrations } from '../server/src/integrations/integrations.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
+import { saveConfig } from '../server/src/config.ts'
+import { ConfigStore } from '../server/src/configStore.ts'
+import { GitPoller } from '../server/src/git/poller.ts'
+import { ProjectState } from '../server/src/projects/state.ts'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-integrations-'))
@@ -259,4 +264,54 @@ test('TopicHub.emit reaches the subscribers that take events and counts the ones
   assert.equal(hub.emit('project:p', 'voice.summary', { x: 1 }), 1)
   assert.deepEqual(got, [['voice.summary', { x: 1 }]])
   assert.equal(hub.emit('project:nope', 'voice.summary', {}), 0)
+})
+
+test("skills.list reads the worktree's .claude and the server user's ~/.claude; the project shadows the user", async (t) => {
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+  const dir = realpathSync(tempDir(t))
+  const a = join(dir, 'repos', 'a')
+  execFileSync('git', ['init', '-q', '-b', 'main', a])
+  execFileSync('git', ['-C', a, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', 'init'])
+  const write = (path, text) => {
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, text)
+  }
+  write(join(a, '.claude', 'skills', 'review', 'SKILL.md'), '---\nname: review\ndescription: "Review the branch"\n---\nbody')
+  write(join(a, '.claude', 'commands', 'ship.md'), 'no frontmatter')
+  const home = join(dir, 'home')
+  write(join(home, '.claude', 'skills', 'review', 'SKILL.md'), '---\ndescription: the user one\n---\n')
+  write(join(home, '.claude', 'skills', 'notes', 'SKILL.md'), `---\ndescription: ${'x'.repeat(130)}\n---\n`)
+  mkdirSync(join(home, '.claude', 'skills', 'empty'), { recursive: true })
+  write(join(home, '.claude', 'commands', 'todo.md'), '---\ndescription: List todos\n---\n')
+  const configPath = join(dir, 'config.json')
+  saveConfig(configPath, { serverId: 'sid', name: 'box', repos: [{ id: 'a', name: 'a', path: a }] })
+  const store = new ConfigStore(configPath)
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {} })
+  t.after(() => {
+    poller.stop()
+    store.close()
+  })
+  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), voiceConfigFile: join(dir, 'voice.json'), home })
+  const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, integrations }
+  const call = (method, params) => dispatchV2(method, params, ctx)
+  const projectId = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result.projectId
+  await poller.refresh(a)
+  const main = projects.require(projectId).repositories[0].worktrees[0]
+  const listed = await call('skills.list', { projectId, worktreeId: main.id })
+  assert.deepEqual(listed.result, [
+    { name: 'review', description: 'Review the branch', source: 'project', kind: 'skill' },
+    { name: 'ship', description: undefined, source: 'project', kind: 'command' },
+    { name: 'notes', description: `${'x'.repeat(120)}…`, source: 'user', kind: 'skill' },
+    { name: 'todo', description: 'List todos', source: 'user', kind: 'command' }
+  ])
+  // A row the guard does not cover; an unknown worktree.
+  const outside = realpathSync(tempDir(t))
+  projects.apply(projectId, (d) => {
+    d.repositories[0].worktrees.push({ id: 'out', name: 'out', path: outside, branch: 'x', isMain: false, loaded: false, sessions: [] })
+  })
+  refused(await call('skills.list', { projectId, worktreeId: 'out' }), 'PATH_DENIED')
+  refused(await call('skills.list', { projectId, worktreeId: 'nope' }), 'NOT_FOUND')
 })

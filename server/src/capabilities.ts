@@ -16,7 +16,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.env,
   CAPABILITY.stacks,
   CAPABILITY.linear,
-  CAPABILITY.voice
+  CAPABILITY.voice,
+  CAPABILITY.skills
 ]
 
 /** `mcp` while the MCP listener is up, then the features this server always has, then `local` on the local server. */
