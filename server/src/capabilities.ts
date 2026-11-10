@@ -20,7 +20,15 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.skills
 ]
 
-/** `mcp` while the MCP listener is up, then the features this server always has, then `local` on the local server. */
-export function welcomeCapabilities(mcp: boolean, local = false): string[] {
-  return [...(mcp ? [CAPABILITY.mcp] : []), ...STATIC_CAPABILITIES, ...(local ? [CAPABILITY.local] : [])]
+/**
+ * `mcp` while the MCP listener is up, then the features this server always has, then `prWatch`
+ * while gh is signed in on its machine (5c-1), then `local` on the local server.
+ */
+export function welcomeCapabilities(mcp: boolean, local = false, prWatch = false): string[] {
+  return [
+    ...(mcp ? [CAPABILITY.mcp] : []),
+    ...STATIC_CAPABILITIES,
+    ...(prWatch ? [CAPABILITY.prWatch] : []),
+    ...(local ? [CAPABILITY.local] : [])
+  ]
 }

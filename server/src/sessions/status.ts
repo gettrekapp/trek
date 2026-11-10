@@ -73,7 +73,8 @@ export function isTerminalReply(data: string): boolean {
 }
 
 /**
- * The `attention` topic's entries: sessions in attention or done, or with an open decision, oldest first.
+ * The `attention` topic's entries: sessions in attention or done, or with an open decision, and
+ * worktrees with a pull request notice (5c-1), oldest first.
  * A flagged session with no `since` yet gets now, stored into `since` so it stays the same on the next publish.
  */
 export function attentionEntries(
@@ -107,7 +108,27 @@ export function attentionEntries(
       entries.push(entry)
     }
     for (const s of project.globalSessions) add(null, s)
-    for (const r of project.repositories) for (const w of r.worktrees) for (const s of w.sessions) add(w.id, s)
+    for (const r of project.repositories) {
+      for (const w of r.worktrees) {
+        for (const s of w.sessions) add(w.id, s)
+        // A watched pull request's notice (5c-1): the worktree's entry, with no session.
+        if (w.prNotice) {
+          const n = w.prNotice
+          const entry: AttentionEntry = {
+            projectId: project.id,
+            worktreeId: w.id,
+            sessionId: '',
+            title: n.title,
+            status: 'attention',
+            since: n.at,
+            projectName: project.name,
+            pullRequest: { text: n.text, url: n.url }
+          }
+          if (project.settings.audioAlerts === true) entry.audioAlerts = true
+          entries.push(entry)
+        }
+      }
+    }
   }
   return entries.sort((a, b) => a.since - b.since)
 }

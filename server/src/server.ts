@@ -30,6 +30,8 @@ import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './
 import { createEventSink, type Machine } from './integrations/machineHandlers'
 import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
+import type { GhRunner } from './prWatch/gh'
+import { PrWatcher } from './prWatch/watcher'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -63,6 +65,8 @@ export interface ServerOptions {
   machine?: Machine
   /** Linear and ElevenLabs with the server's own keys (its secrets file), and the skills on its disk (integrations.ts) */
   integrations?: Integrations
+  /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
+  prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
 }
 
 export interface ProjectsSetup {
@@ -105,6 +109,20 @@ export function startServer(
     voicePrompt: () => (options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined)
   })
 
+  // Set once the connections exist (below): gh's first answer comes after this function returns.
+  let prWatchChanged = (_available: boolean): void => {}
+  const prWatch = options.prWatch
+    ? new PrWatcher({
+        projects,
+        sessions,
+        gh: options.prWatch.gh,
+        pollMs: options.prWatch.pollMs,
+        recheckMs: options.prWatch.recheckMs,
+        onAvailability: (available) => prWatchChanged(available)
+      })
+    : undefined
+  prWatch?.start()
+
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
   /** Revoked sockets that have not finished closing yet; terminated if the close handshake stalls. */
@@ -131,6 +149,8 @@ export function startServer(
   const integrationsChanged = (parts: IntegrationsChangedEvent): void => {
     for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'integrations.changed', payload: parts })
   }
+  // An open window shows or hides the PR watch without reconnecting (5c-1).
+  prWatchChanged = (available) => integrationsChanged({ prWatch: available })
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
     health: () => [...projectsSetup.store.health(), ...poller.health()]
@@ -267,7 +287,7 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true)
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true)
         })
         return
       }
@@ -291,6 +311,7 @@ export function startServer(
         machine: options.machine,
         integrations: options.integrations,
         integrationsChanged,
+        prWatch,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -339,7 +360,8 @@ export function startServer(
     projects,
     poller,
     sessions,
-    ready: Promise.resolve(),
+    // The first gh check too, so the local server's first welcome lists `prWatch` if it has it.
+    ready: prWatch ? prWatch.ready : Promise.resolve(),
     shutdown: (reason) => shutdown(reason)
   }
   if (access) {
@@ -349,6 +371,7 @@ export function startServer(
       if (!call) callers.set(projectId, (call = caller(projectId)))
       return call
     }
+    const prWatchReady = trek.ready
     trek.ready = startMcpListener({
       access,
       serverVersion: daemonVersion,
@@ -364,6 +387,7 @@ export function startServer(
       },
       (err: unknown) => console.warn(`[mcp] disabled: the listener did not start: ${(err as Error).message}`)
     )
+    trek.ready = Promise.all([prWatchReady, trek.ready]).then(() => undefined)
   }
 
   const shutdown = (reason: string): void => {
@@ -371,6 +395,7 @@ export function startServer(
     void trek.mcp?.close()
     trek.mcp = undefined
     poller.stop()
+    prWatch?.stop()
     sessions.stopAll()
     store.off('change', onConfigChange)
     serverState.stop()

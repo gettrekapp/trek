@@ -37,6 +37,7 @@
 // The app is launched with a temp HOME (its supervisor starts the run's own Local server in
 // ~/.config/trek-server/local-dev) and a temp --user-data-dir. Prints LOCAL WINDOW SMOKE PASS
 // (n checks) or LOCAL WINDOW SMOKE FAIL and exits 0 or 1.
+import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'

@@ -46,7 +46,7 @@ function resetSession(s: Session): Session {
 }
 
 function resetWorktree(w: Worktree): Worktree {
-  const { head: _h, dirty: _d, ahead: _a, behind: _b, missing: _m, ...rest } = w
+  const { head: _h, dirty: _d, ahead: _a, behind: _b, missing: _m, prNotice: _n, ...rest } = w
   return { ...rest, loaded: false, sessions: w.sessions.map(resetSession) }
 }
 

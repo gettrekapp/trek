@@ -15,6 +15,7 @@
 // (read from inside the asar), with node-pty and its spawn-helper from app.asar.unpacked.
 //
 //   node scripts/local-server-smoke.mjs [--node-only | --electron-only | --packaged <Trek.app>]
+import './smokeGh.mjs'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

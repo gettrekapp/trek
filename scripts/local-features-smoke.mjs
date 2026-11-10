@@ -32,6 +32,7 @@
 // Linear on) and smoke:server-env's (docker, environments and stacks on the server's machine).
 //
 // Prints LOCAL FEATURES SMOKE PASS (n checks) or LOCAL FEATURES SMOKE FAIL and exits 0 or 1.
+import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -319,6 +320,8 @@ try {
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
   check('the Local server says `local`, and runs docker, env and stacks', ['local', 'docker', 'env', 'stacks'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, true])
+  // The app's childEnv keeps TREK_SERVER_GH: the Local server asked smokeGh.mjs's stub, not the real gh (5c-1).
+  check("the Local server's gh is the smoke's stub: no prWatch", sdk.welcome?.capabilities.includes('prWatch'), false)
   // The upgrade: the server took the app's files over before it served anything; the app's stay.
   // Compared key-sorted: the take-over writes each entry's own fields in its own order.
   const sortedKeys = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortedKeys(v[k])])) : v)

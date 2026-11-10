@@ -3,6 +3,7 @@
 // project and wait for its rev, start a session and stream its pty, survive a
 // reconnect, see a deleted project's topic end, and reach needs-auth with a
 // wrong token. Uses only the SDK and the global WebSocket.
+import './smokeGh.mjs'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'

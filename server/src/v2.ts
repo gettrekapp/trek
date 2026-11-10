@@ -1,7 +1,8 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
-// Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts).
+// Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts), and the
+// pull request watch (prWatchHandlers.ts).
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
@@ -14,6 +15,8 @@ import { worktreeHandlers } from './worktreeHandlers.ts'
 import { sessionHandlers } from './sessionHandlers.ts'
 import { machineHandlers, type EventSink, type Machine } from './integrations/machineHandlers.ts'
 import { integrationHandlers } from './integrations/integrationHandlers.ts'
+import { prWatchHandlers } from './prWatch/prWatchHandlers.ts'
+import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
 import { checkImport } from './projects/importCheck.ts'
@@ -57,6 +60,8 @@ export interface V2Context {
   integrations?: Integrations
   /** Tells every authenticated connection the keys or voice settings changed (`integrations.changed`) */
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
+  /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
+  prWatch?: PrWatcher
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -245,7 +250,21 @@ const handlers: Record<string, Handler> = {
   },
   'branch.setNote': (p, ctx) => setBranchField(ctx, p, 'note', clearableString(p.note, 'note'), p.expected),
   'branch.setTicket': (p, ctx) => setBranchField(ctx, p, 'ticket', clearableString(p.ticket, 'ticket')),
-  'branch.setPr': (p, ctx) => setBranchField(ctx, p, 'pr', clearableString(p.pr, 'pr')),
+  // A different PR (or none) ends the branch's watch: it watched the old one (5c-1).
+  'branch.setPr': (p, ctx) => {
+    const pr = clearableString(p.pr, 'pr')
+    const branch = requireBranch(p.branch)
+    ctx.projects.apply(p.projectId, (d) => {
+      const repo = repoIn(d, p.repoId)
+      const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+      if (pr === null) delete data.pr
+      else data.pr = pr
+      if (data.prWatch && repo.branchData[branch]?.pr !== pr) delete data.prWatch
+      if (Object.keys(data).length === 0) delete repo.branchData[branch]
+      else repo.branchData[branch] = data
+    })
+    return null
+  },
   'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env'), p.expected),
 
   'sub.subscribe': (p, ctx) => {
@@ -277,7 +296,8 @@ const handlers: Record<string, Handler> = {
   ...worktreeHandlers,
   ...sessionHandlers,
   ...machineHandlers,
-  ...integrationHandlers
+  ...integrationHandlers,
+  ...prWatchHandlers
 }
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */

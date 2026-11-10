@@ -189,7 +189,13 @@ export const CAPABILITY = {
    */
   voice: 'voice',
   /** `skills.list` lists a worktree's Claude Code skills and commands on the server's disk */
-  skills: 'skills'
+  skills: 'skills',
+  /**
+   * gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's
+   * pull request watch on (5c-1). Checked at start and again while it is missing; a connection sees a
+   * change from its next welcome.
+   */
+  prWatch: 'prWatch'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -294,6 +300,10 @@ export interface MethodParamsV2 {
   'branch.setNote': BranchRef & { note: string | null; expected?: string | null }
   'branch.setTicket': BranchRef & { ticket: string | null }
   'branch.setPr': BranchRef & { pr: string | null }
+  /** Turns the branch's pull request watch on or off (5c-1); on needs `prWatch` and a linked github.com PR */
+  'branch.setPrWatch': BranchRef & { watch: boolean }
+  /** Clears the worktree's pull request notice */
+  'prWatch.dismiss': WorktreeRef
   'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
   // Sessions
   /** `worktreeId: null` starts a Global panel session */
@@ -461,6 +471,8 @@ export interface MethodResultsV2 {
   'branch.setNote': null
   'branch.setTicket': null
   'branch.setPr': null
+  'branch.setPrWatch': null
+  'prWatch.dismiss': null
   'branch.setEnv': null
   'session.start': { sessionId: string; ptyId: string }
   'session.restart': { ptyId: string }
@@ -570,6 +582,11 @@ export interface EventPayloadsV2 {
 export interface IntegrationsChangedEvent {
   linear?: true
   voice?: true
+  /**
+   * gh's sign-in on the server's machine changed (5c-1): the `prWatch` capability is now listed
+   * (true) or not (false). The client SDK applies it to `welcome.capabilities`.
+   */
+  prWatch?: boolean
 }
 
 export interface VoiceSummaryEvent {

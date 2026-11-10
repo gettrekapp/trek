@@ -220,8 +220,11 @@ export function skewOf(bundled: BundledBuild | undefined, running: Pick<LocalInf
  * and `NPM_TOKEN` are kept.
  */
 const DROPPED_PREFIXES = ['ELECTRON_', 'TREK_', 'npm_']
-/** Kept despite their prefix: the server's test endpoints for Linear and ElevenLabs (the smokes' stubs; the server takes them only on loopback). */
-const KEPT = new Set(['TREK_SERVER_LINEAR_URL', 'TREK_SERVER_ELEVENLABS_URL'])
+/**
+ * Kept despite their prefix: the server's test endpoints for Linear and ElevenLabs (the smokes' stubs;
+ * the server takes them only on loopback), and its gh (the smokes' stub, scripts/smokeGh.mjs).
+ */
+const KEPT = new Set(['TREK_SERVER_LINEAR_URL', 'TREK_SERVER_ELEVENLABS_URL', 'TREK_SERVER_GH'])
 const DROPPED = new Set([
   'NODE_OPTIONS',
   'NODE_PATH',

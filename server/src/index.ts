@@ -22,6 +22,8 @@ import { createMachine } from './integrations/machine'
 import { createIntegrations, testEndpoint, VOICE_CONFIG_FILE } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
+import { ghBinary, ghRunner } from './prWatch/gh'
+import { pollMsFromEnv } from './prWatch/watcher'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -459,7 +461,13 @@ const server = startServer(
       linearEndpoint: testEndpoint('TREK_SERVER_LINEAR_URL', process.env.TREK_SERVER_LINEAR_URL),
       voiceConfigFile: resolve(serverDataDir, VOICE_CONFIG_FILE),
       elevenLabsApi: testEndpoint('TREK_SERVER_ELEVENLABS_URL', process.env.TREK_SERVER_ELEVENLABS_URL)
-    })
+    }),
+    prWatch: {
+      gh: ghRunner(ghBinary(process.env.TREK_SERVER_GH)),
+      // The smokes' knob: the time between polls, and between sign-in checks while gh is signed out.
+      pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
+      recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)
+    }
   }
 )
 store.watch()

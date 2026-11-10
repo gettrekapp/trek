@@ -64,6 +64,7 @@
 // patches by shadowing its webContents.send. Any may need updating on an Electron upgrade; the
 // first falls back to the view alone, the others fail the run with a message.
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
+import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -562,6 +563,8 @@ try {
   const sdk = new ServerConnection({ url: `ws://127.0.0.1:${port}`, token, createSocket: globalSocketFactory, client: 'v2-smoke' })
   sdk.connect()
   check('the SDK connects', await until(() => sdk.status, 'connected'), 'connected')
+  // smokeGh.mjs's stub answers "not signed in": the server never asked the real gh (5c-1).
+  check("the server's gh is the smoke's stub: no prWatch", sdk.welcome?.capabilities.includes('prWatch'), false)
   const { snapshot } = await sdk.request('sub.subscribe', { topic: `project:${target.projectId}` })
   const alpha = snapshot.repositories.find((r) => r.name === 'Alpha')
   check('project.create used the canonical repo path', snapshot.repositories.map((r) => r.path), [repoA, repoB])

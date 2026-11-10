@@ -3,6 +3,7 @@
 // (create, branch note, persist, delete), sessions and their ptys, revs in responses,
 // decisions, server.agents, the trek-dev MCP, the topic end of a deleted project and
 // an auth-rejection check.
+import '../../scripts/smokeGh.mjs'
 import { spawn, execFileSync } from 'node:child_process'
 import { request as httpRequest } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'

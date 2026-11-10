@@ -24,6 +24,7 @@
 //   - no error dialogs (main's dialogs are stubbed), no console or page errors.
 //
 // Prints WINDOWS SMOKE PASS (n checks) or WINDOWS SMOKE FAIL and exits 0 or 1.
+import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'

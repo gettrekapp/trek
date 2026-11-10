@@ -74,7 +74,7 @@ test('TREK_LOCAL_PROFILE: a dev build takes a valid name, an invalid one is dev;
   // The server never inherits it: childEnv drops every TREK_ variable.
   assert.equal('TREK_LOCAL_PROFILE' in childEnv({ TREK_LOCAL_PROFILE: 'dev-wt2', PATH: '/bin' }), false)
   // Only the server's test endpoints for Linear and ElevenLabs get through (the smokes' stubs, 5b).
-  assert.deepEqual(childEnv({ TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_OTHER: 'x' }), { TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', ELECTRON_RUN_AS_NODE: '1' })
+  assert.deepEqual(childEnv({ TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_GH: '/tmp/stub/gh', TREK_SERVER_OTHER: 'x' }), { TREK_SERVER_LINEAR_URL: 'http://127.0.0.1:1/graphql', TREK_SERVER_ELEVENLABS_URL: 'http://127.0.0.1:1/v1', TREK_SERVER_GH: '/tmp/stub/gh', ELECTRON_RUN_AS_NODE: '1' })
 })
 
 test('isLocalServerCommand: trek-server, start --local, and this profile\'s --local-profile', () => {
