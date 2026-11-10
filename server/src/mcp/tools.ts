@@ -28,6 +28,7 @@ import type { Machine } from '../integrations/machineHandlers.ts'
 import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
 import type { StackStatus } from '../../../src/shared/types'
 import { MAX_INITIAL_LOG } from '../../../src/host/stackService.ts'
+import type { PrWatcher } from '../prWatch/watcher.ts'
 
 const WORKTREE_PARAM = {
   type: 'string',
@@ -351,11 +352,24 @@ export const MCP_TOOLS: ToolDefinition[] = [
       properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' } },
       required: ['worktree']
     }
+  },
+  {
+    name: 'watch_pull_request',
+    description:
+      "Watch (or stop watching) a worktree branch's linked GitHub pull request. The Trek server polls it with gh every few minutes; when its checks fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is merged or closed, a prompt saying so is queued on the worktree's newest agent session and the user is notified. The watch ends by itself after merged or closed. Link the PR first with set_worktree_pull_request. Needs gh signed in on the server's machine.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        watch: { type: 'boolean', description: 'false stops watching (default true)' }
+      },
+      required: ['worktree']
+    }
   }
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   store: ConfigStore
@@ -367,6 +381,8 @@ export interface ToolDeps {
   voice?: VoiceService
   /** The dev stacks on the server's machine, for the stack tools; without it they say so */
   machine?: Machine
+  /** The pull request watch, for watch_pull_request; without it the tool says the server does not watch PRs */
+  prWatch?: PrWatcher
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -503,6 +519,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     poller: deps.poller,
     sessions: deps.sessions,
     machine: deps.machine,
+    prWatch: deps.prWatch,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }
@@ -773,6 +790,14 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const url = input ? pullRequestUrl(input, repo) : null
         await v2('branch.setPr', { repoId: repo.id, branch, pr: url })
         return { branch, pullRequest: url }
+      },
+
+      watch_pull_request: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        if (args.watch !== undefined && args.watch !== null && typeof args.watch !== 'boolean') throw bad('watch must be a boolean')
+        const watch = args.watch !== false
+        await v2('branch.setPrWatch', { repoId: repo.id, branch, watch })
+        return { branch, pullRequest: branchData(repo, branch).pr ?? null, watching: watch }
       },
 
       list_session_types: (_args, project) => (project.settings.sessionTypes ?? []).map(withoutIcon),

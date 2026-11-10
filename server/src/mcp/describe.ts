@@ -20,6 +20,7 @@ export function describeWorktree(project: Project, repo: Repository, w: Worktree
     customTags: (data.customTags ?? []).map(customName),
     ticket: data.ticket,
     pullRequest: data.pr,
+    watchingPullRequest: data.prWatch !== undefined,
     note: data.note,
     dirty: w.dirty,
     ahead: w.ahead,

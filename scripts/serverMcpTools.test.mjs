@@ -38,7 +38,7 @@ const project = {
 test('describeWorktree', () => {
   assert.deepEqual(describeWorktree(project, project.repositories[0], project.repositories[0].worktrees[1]), {
     worktree: 'af', repo: 'A', repoId: 'ra', path: '/r/a-feat', branch: 'feat', primary: false, missing: false,
-    tag: 'Todo', customTags: ['Hot'], ticket: 'TOW-1', pullRequest: 'https://github.com/o/r/pull/3', note: 'n',
+    tag: 'Todo', customTags: ['Hot'], ticket: 'TOW-1', pullRequest: 'https://github.com/o/r/pull/3', watchingPullRequest: false, note: 'n',
     dirty: true, ahead: 1, behind: 0, loaded: true,
     sessions: [
       { terminalId: 's1', title: 's1', status: 'working', llm: { provider: 'claude' }, queue: ['q'], decision: null },
@@ -113,7 +113,7 @@ test('the tool list matches decision 5', () => {
     'list_session_types', 'list_worktrees', 'load_worktree', 'read_stack_log', 'read_terminal', 'remove_queued_prompt',
     'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'speak_summary', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
-    'wait_for_sessions'
+    'wait_for_sessions', 'watch_pull_request'
   ])
 })
 
@@ -141,6 +141,27 @@ test('branch data tools: tag by name, custom tag, note, ticket, pull request', a
   const data = s.projects.require(s.projectId).repositories[0].branchData.main
   assert.deepEqual([data.tag, data.customTags, data.note, data.ticket, data.pr], ['todo', ['hot'], 'hi', 'TOW-5', 'https://github.com/o/r/pull/9'])
   assert.equal(s.projects.require(s.projectId).settings.linearWorkspace, 'acme')
+})
+
+test('watch_pull_request: on (polled at once), off, and its refusals', async (t) => {
+  const polled = []
+  let available = true
+  const prWatch = { available: () => available, pollSoon: (...a) => polled.push(a), dismiss() {} }
+  const s = await toolSetup(t, { prWatch })
+  const codeOf = (p) => p.then(() => 'ok', (e) => e.code)
+  assert.match(await s.call('watch_pull_request', { worktree: 'main' }).catch((e) => e.message), /no linked pull request/)
+  await s.call('set_worktree_pull_request', { worktree: 'main', pullRequest: 'https://github.com/o/r/pull/9' })
+  assert.deepEqual(await s.call('watch_pull_request', { worktree: 'main' }), { branch: 'main', pullRequest: 'https://github.com/o/r/pull/9', watching: true })
+  assert.equal(polled.length, 1)
+  assert.equal((await s.call('list_worktrees', {}))[0].watchingPullRequest, true)
+  assert.deepEqual(await s.call('watch_pull_request', { worktree: 'main', watch: false }), { branch: 'main', pullRequest: 'https://github.com/o/r/pull/9', watching: false })
+  assert.equal((await s.call('list_worktrees', {}))[0].watchingPullRequest, false)
+  assert.equal(await codeOf(s.call('watch_pull_request', { worktree: 'main', watch: 'yes' })), 'BAD_REQUEST')
+  available = false
+  assert.equal(await codeOf(s.call('watch_pull_request', { worktree: 'main' })), 'TOOL_ERROR')
+  const bare = await toolSetup(t)
+  await bare.call('set_worktree_pull_request', { worktree: 'main', pullRequest: 'https://github.com/o/r/pull/9' })
+  assert.match(await bare.call('watch_pull_request', { worktree: 'main' }).catch((e) => e.message), /gh is not installed or not signed in/)
 })
 
 test('session types: list, save (create and update by name), delete', async (t) => {
