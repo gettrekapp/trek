@@ -102,6 +102,7 @@ new optional field needs no capability: its absence says enough.
 | `linear` | `linear.*` look Linear issues up with the server's own API key (see [Linear, voice and skills](#linear-voice-and-skills)) |
 | `voice` | `voice.*` keep the server's ElevenLabs key and voice; the MCP tool `speak_summary` sends each spoken summary to the project's subscribers as `voice.summary` |
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
+| `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked when the server starts (its first welcome waits up to 3 s for the answer), again every 10 minutes while it is missing, and after a poll fails. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -119,7 +120,7 @@ The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 | Topic | Snapshot |
 |---|---|
 | `server` | `{server: {serverId, name, version, health[]}, projects: [{id, name}], repos: [{id, name, path}]}`. `health` lists `PERSIST_FAILED` (a project could not be saved; the server keeps retrying) and `LOAD_FAILED` (a project file was skipped at start) and `REPO_UNAVAILABLE` (see Worktrees below) |
-| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since, decision?, projectName, audioAlerts?}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done`, and every session with an open decision whatever its status, across all projects, oldest `since` first (epoch ms; see Statuses and Decisions). `projectName` is the project's name and `audioAlerts: true` is present while the project's `audioAlerts` setting is on, so a client can label an entry and decide on its alert sound without the project topic |
+| `attention` | `{entries: [{projectId, worktreeId, sessionId, title, status, since, decision?, projectName, audioAlerts?, pullRequest?}]}` (`worktreeId` null = a Global panel session): every session in `attention` or `done`, every session with an open decision whatever its status, and every worktree with a pull request notice, across all projects, oldest `since` first (epoch ms; see Statuses and Decisions). `projectName` is the project's name and `audioAlerts: true` is present while the project's `audioAlerts` setting is on, so a client can label an entry and decide on its alert sound without the project topic. A notice's entry (see [Pull request watch](#pull-request-watch)) is the worktree's: `sessionId` is `''`, `title` the notice's (`PR #12`), `status` `attention`, `since` when it was raised, and `pullRequest: {text, url}`; a client older than 5c-1 lists it as needing attention |
 | `project:<id>` | the whole `Project` tree |
 
 - `ops` are RFC 6902 JSON Patch, limited to `add`, `remove` and `replace`.
@@ -171,7 +172,7 @@ server restarts. A server without this field simply leaves it out.
 | Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
 | Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
 | Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff`, `worktree.dirty` |
-| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setEnv` |
+| Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setPrWatch`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
@@ -182,6 +183,7 @@ server restarts. A server without this field simply leaves it out.
 | Linear | `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` |
 | Voice | `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize` |
 | Skills | `skills.list` |
+| Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -486,6 +488,38 @@ connection subscribed to the session's project topic, and answers how many it we
 connection with more than 4 MiB unsent is skipped (the clip would play late). Whether a client
 plays it is the client's: the desktop plays it unless its user set the app to Busy, an app-wide
 setting of that desktop, not the server's.
+
+## Pull request watch
+
+With the capability `prWatch` (phase 5c-1), the server watches a branch's linked pull request
+(`branchData.pr`) with the GitHub CLI on its own machine, signed in as the server's user (`gh auth
+login`); the server holds no GitHub token. A watch is the branch's `branchData.prWatch`, saved with
+the project, so it survives a restart: `{}` until its first poll, then `{seen}`, what that poll saw
+(the head commit and checks state, whether GitHub said it conflicts, the newest review or comment
+time). Only a canonical `https://github.com/<owner>/<repo>/pull/<n>` URL is watched, and only while a
+worktree has the branch checked out.
+
+Every 3 minutes the server runs `gh pr view <url> --json
+number,state,mergeable,headRefOid,author,statusCheckRollup,reviews,comments` for each watched branch,
+one at a time, and compares it with `seen`. The first poll is the baseline and reports nothing
+(unless the PR is already merged or closed). After that it reports: checks failed (as soon as one
+has, with their names) or all passed, once per head commit; new reviews or comments by anyone but
+the PR's author; a merge conflict when GitHub starts saying so (`UNKNOWN` keeps the last answer);
+merged; closed. A report is one prompt queued on the worktree's newest session (the last of its
+`sessions`; every v2 session runs an agent), saying what changed and which `gh` command shows it,
+and the worktree's `prNotice` `{title, text, url, at}` (runtime only, like a status), which the
+`attention` topic lists. With no session, or its queue full, nothing is queued and the notice says
+so; no session is started. After merged or closed the watch removes itself; the link stays. A
+failed `gh` call leaves the watch as it was, is logged once while it lasts, and re-checks the
+sign-in.
+
+| Method | Params | Result |
+|---|---|---|
+| `branch.setPrWatch` | `{projectId, repoId, branch, watch}` | `null`. On needs `prWatch` (else `TOOL_ERROR`) and a linked github.com pull URL (else `BAD_REQUEST`); a watch already on keeps its `seen`; a new one is polled at once. Off always works |
+| `prWatch.dismiss` | `{projectId, worktreeId}` | `null`: the worktree's notice is cleared (`NOT_FOUND` for an unknown worktree) |
+
+`branch.setPr` with a different URL, or none, also removes the branch's watch: it watched the old
+pull request. The MCP tool `watch_pull_request` turns a watch on or off.
 
 ## Sessions
 
@@ -827,9 +861,9 @@ An unknown session is `NOT_FOUND`.
 
 A *worktree entry* below is what `list_worktrees` returns for one worktree:
 `{worktree, repo, repoId, path, branch, primary, missing, tag, customTags, ticket,
-pullRequest, note, dirty, ahead, behind, loaded, sessions: [{terminalId, title,
+pullRequest, watchingPullRequest, note, dirty, ahead, behind, loaded, sessions: [{terminalId, title,
 status, llm, queue, decision}]}`, where `decision` is the open decision's question
-or `null`.
+or `null`, and `watchingPullRequest` says the server watches the branch's pull request.
 
 | Tool | Parameters | Result |
 |---|---|---|
@@ -852,6 +886,7 @@ or `null`.
 | `set_worktree_note` | `worktree`, `note` (empty clears) | `{branch}` |
 | `set_worktree_ticket` | `worktree`; `ticket?` (a Linear id or URL, or an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
+| `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
@@ -861,7 +896,7 @@ or `null`.
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
 | `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
 
-That is 27 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 28 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` takes the
@@ -925,7 +960,7 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
 | `voice.summary` | `{projectId, sessionId, text, audio}`: a session's spoken summary (`speak_summary`), an mp3 in base64, to every connection subscribed to the project's topic (not one more than 4 MiB behind) |
-| `integrations.changed` | `{linear?: true, voice?: true}`: the server's Linear or ElevenLabs key, or its voice settings, changed (by any client), to every authenticated connection; re-read `linear.status` / `voice.settings` (see [Linear, voice and skills](#linear-voice-and-skills)) |
+| `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: the server's Linear or ElevenLabs key, or its voice settings, changed (by any client), to every authenticated connection; re-read `linear.status` / `voice.settings` (see [Linear, voice and skills](#linear-voice-and-skills)). `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 
 ## Several clients
 

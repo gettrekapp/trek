@@ -189,6 +189,16 @@ other window on that project sees them live.
   on the server. Its agents also get the `get_stack`, `start_stack`, `stop_stack` and
   `read_stack_log` MCP tools. A server older than this Trek (without the `linear`,
   `voice` and `skills` capabilities) shows none of these.
+- **Pull request watch, on the server**: with a pull request linked to a branch, the
+  worktree's … menu has **Watch pull request** (agents can call `watch_pull_request`).
+  The server asks `gh` on its own machine about it every few minutes; when its checks
+  fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is
+  merged or closed, a prompt saying so (and which `gh` command shows it) is queued on
+  the worktree's newest session, and the worktree is flagged in the sidebar and the
+  notifications menu until you dismiss it. Nothing is started for a worktree with no
+  session. After merged or closed the watch turns itself off. It needs `gh` installed
+  and signed in (`gh auth login`) as the server's user; without that the menu item is
+  not shown.
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.
@@ -382,6 +392,9 @@ one at a time:
   stacks, run on the server's machine against stub `colima`, `docker` and `stack.sh`;
 - `npm run smoke:server-integrations`: a remote server window's Linear, voice
   summaries, skills and the stack MCP tools, against stub Linear and ElevenLabs APIs;
+- `npm run smoke:server-prwatch`: a remote server window's pull request watch, against
+  a stub `gh` (every smoke gives its servers a not-signed-in stub `gh`, `scripts/smokeGh.mjs`,
+  so none runs the real one);
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

@@ -168,6 +168,22 @@ endpoints (Linear's GraphQL URL; ElevenLabs' `/v1` base). They are for tests, wh
 run stub services; leave them unset. Only an `http` or `https` URL on `127.0.0.1`,
 `::1` or `localhost` is taken; any other value is ignored with a warning.
 
+## Pull request watch
+
+A client (or an agent, through `watch_pull_request`) can have the server watch a
+branch's linked GitHub pull request. The server runs the GitHub CLI as its own user,
+so install `gh` on the server's machine and sign in there (`gh auth login`); the
+server stores no GitHub token. While `gh auth status` fails the welcome has no
+`prWatch` and no watch can be turned on (watches already on stay, and resume once
+gh is signed in again). A change in gh's sign-in reaches every connected client at
+once (`integrations.changed`). Every 3 minutes each watched pull request is read with `gh pr
+view`; a change queues a prompt on the worktree's newest session and flags the
+worktree. The watch is saved in the project file, so it survives a restart.
+
+`TREK_SERVER_GH` (an absolute path) is the gh to run instead of `gh` on the PATH, and
+`TREK_SERVER_PR_POLL_MS` (at least 1000) the time between polls and, while gh is signed out, between sign-in checks. They are for tests,
+which run a stub gh; leave them unset.
+
 ## Projects
 
 Clients create projects from registered repos (`trek-server add`). Each

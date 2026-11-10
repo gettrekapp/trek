@@ -441,6 +441,12 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
        session (the existing queue) and raises attention. It can be switched on per
        worktree from the detail pane and by a `watch_pull_request` MCP tool. Behind a
        `prWatch` capability that the server reports only when `gh` is authenticated.
+       User decisions (2026-11-10): the prompt goes to the worktree's newest open agent
+       session; with none, the worktree is flagged and listed in the notifications menu
+       and nothing is started; a watch ends by itself after reporting merged or closed,
+       and survives server restarts until then. Plan:
+       `docs/superpowers/plans/2026-11-10-central-server-phase5c1-pr-watch.md` (5c-1);
+       the review is 5c-2 and the web client 5c-3.
      - **Changes tab review:** a source picker (uncommitted only, the branch against its
        base, or one commit from the newest 100) and line comments on the diff. "Send to
        session" enqueues the comments, with their file and line, as one prompt. The tab
