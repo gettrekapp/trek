@@ -685,17 +685,20 @@ else ok('bad token rejected with 4003')
     if (err.status !== 2) fail(`\`list --port\` exit ${err.status}`)
     else ok('`--port` outside `start` is a usage error (exit 2)')
   }
-  // The Local server's one-time take-over of the app's environments: `start --local` only, an absolute path.
+  // The Local server's one-time take-over of the app's environments: `start --local` only, an absolute
+  // path. The web client (5c-3): `start` only, never the Local server.
   for (const [argv, name] of [
     [['start', '--import-env-from', work, '--config', configPath], 'without --local'],
-    [['start', '--local', '--import-env-from', 'relative/dir'], 'with a relative path']
+    [['start', '--local', '--import-env-from', 'relative/dir'], 'with a relative path'],
+    [['start', '--local', '--web'], 'with --web (the web client is never the local server’s)'],
+    [['list', '--web', '--config', configPath], '--web outside `start`']
   ]) {
     try {
       execFileSync(cmd, [...cmdPrefix, ...argv], { cwd: serverDir, stdio: 'pipe', env: { ...process.env, HOME: work } })
-      fail(`\`--import-env-from\` ${name} was accepted`)
+      fail(`\`${argv.join(' ')}\` (${name}) was accepted`)
     } catch (err) {
-      if (err.status !== 2) fail(`\`--import-env-from\` ${name} exit ${err.status}`)
-      else ok(`\`--import-env-from\` ${name} is a usage error (exit 2)`)
+      if (err.status !== 2) fail(`\`${argv.join(' ')}\` (${name}) exit ${err.status}`)
+      else ok(`\`${argv[0]} ${argv[1]}\` ${name} is a usage error (exit 2)`)
     }
   }
 }

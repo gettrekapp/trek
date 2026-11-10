@@ -18,7 +18,7 @@ import type { ConfigStore } from './configStore'
 import type { ProjectState } from './projects/state'
 import type { ProjectStore } from './projects/store'
 import { publishServerState } from './serverState'
-import { activeTokenHashes, matchToken } from './tokens'
+import { activeTokenHashes, listTokens, matchToken } from './tokens'
 import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2, responseRev } from './v2'
 import { GitPoller } from './git/poller'
@@ -32,6 +32,9 @@ import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
+import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
+import { createWebHandler } from './web/http'
+import type { WebBundle } from './web/bundle'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -67,6 +70,11 @@ export interface ServerOptions {
   integrations?: Integrations
   /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
   prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
+  /**
+   * The web client (5c-3, `start --web`): its built files, served over HTTP with the sign-in
+   * form, and browser sessions signed in by cookie. Without it HTTP answers 426 as before.
+   */
+  web?: { bundle: WebBundle }
 }
 
 export interface ProjectsSetup {
@@ -127,10 +135,26 @@ export function startServer(
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
+  /** The web sign-in each browser socket used (its session's key), so signing out closes it. */
+  const webSockets = new Map<WebSocket, string>()
+  const web = options.web
+    ? { sessions: new WebSessions(), limiter: new LoginLimiter(), bundle: options.web.bundle }
+    : undefined
+  /** A browser session ended (sign-out, its token revoked, a new sign-in in its place): its sockets close. */
+  const signedOut = (key: string): void => {
+    for (const [ws, k] of webSockets) {
+      if (k !== key) continue
+      webSockets.delete(ws)
+      authed.delete(ws)
+      ws.close(CLOSE_UNAUTHORIZED, 'signed out')
+    }
+  }
   /** Revoked sockets that have not finished closing yet; terminated if the close handshake stalls. */
   const revokeTimers = new Map<WebSocket, NodeJS.Timeout>()
   const onConfigChange = (): void => {
     const active = activeTokenHashes(store.config)
+    // A revoked token's browser sessions end with it (their sockets close in the loop below).
+    for (const key of web?.sessions.prune(active) ?? []) signedOut(key)
     for (const [ws, hash] of authed) {
       if (active.has(hash)) continue
       console.warn('[auth] token revoked; closing its connection')
@@ -161,11 +185,38 @@ export function startServer(
   projectsSetup.store.on('health', serverState.refresh)
   poller.start()
 
-  const httpServer = createServer((_req, res) => {
-    res.writeHead(426, { 'content-type': 'text/plain' })
-    res.end('trek-server: WebSocket only\n')
+  const httpServer = createServer(
+    web
+      ? createWebHandler({
+          bundle: web.bundle,
+          sessions: web.sessions,
+          limiter: web.limiter,
+          matchToken: (token) => {
+            const entry = matchToken(store.config, token)
+            return entry ? { hash: entry.hash, name: entry.name } : undefined
+          },
+          serverName: () => store.config.name ?? '',
+          signedOut
+        })
+      : (_req, res) => {
+          res.writeHead(426, { 'content-type': 'text/plain' })
+          res.end('trek-server: WebSocket only\n')
+        }
+  )
+  const wss = new WebSocketServer({
+    server: httpServer,
+    maxPayload: MAX_FRAME_BYTES,
+    // With the web client on, a browser page from another site never gets a socket (cross-site
+    // WebSocket hijacking): a request with an Origin must come from this host. The app's relay and
+    // the CLI clients send no Origin.
+    verifyClient: web
+      ? (info, done) => {
+          const origin = info.req.headers.origin
+          if (origin !== undefined && !sameOrigin(origin, info.req.headers.host)) done(false, 403, 'Forbidden')
+          else done(true)
+        }
+      : undefined
   })
-  const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_FRAME_BYTES })
 
   wss.on('connection', (ws, req) => {
     /** Set once hello is accepted. */
@@ -200,6 +251,12 @@ export function startServer(
     }
 
     const headerToken = bearerToken(req.headers.authorization)
+    // A browser signed in to the web client: its session cookie, sent by the page itself (the
+    // Origin is this host, checked again here); it stands in for a token at hello.
+    const webSession =
+      web && sameOrigin(req.headers.origin, req.headers.host)
+        ? web.sessions.lookup(parseCookies(req.headers.cookie).get(SESSION_COOKIE), Date.now())
+        : undefined
 
     const helloTimer = setTimeout(() => {
       if (protocolVersion === undefined) ws.close(CLOSE_HELLO_TIMEOUT, 'no hello')
@@ -268,9 +325,14 @@ export function startServer(
           ws.close(CLOSE_UNSUPPORTED_VERSION, frame.protocolVersion < PROTOCOL_VERSION_V2 ? CLOSE_REASON_UPGRADE_CLIENT : 'unsupported protocol version')
           return
         }
-        // An empty frame token falls back to the Authorization header.
+        // An empty frame token falls back to the Authorization header, then to the web sign-in:
+        // its session must still be live and its token still listed.
         const token = (frame.token as string | undefined) || headerToken
-        const entry = token ? matchToken(store.config, token) : undefined
+        const entry = token
+          ? matchToken(store.config, token)
+          : webSession && web?.sessions.has(webSession.key, Date.now())
+            ? listTokens(store.config).find((t) => t.hash === webSession.tokenHash)
+            : undefined
         if (!entry) {
           console.warn(`[auth] rejected connection from ${req.socket.remoteAddress}`)
           rejected = true
@@ -279,8 +341,10 @@ export function startServer(
         }
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
+        const viaWeb = !token && webSession !== undefined
+        if (viaWeb) webSockets.set(ws, webSession.key)
         console.log(
-          `[auth] ${String(frame.client)}/${String(frame.clientVersion)} (token "${entry.name}", protocol ${protocolVersion}) ` +
+          `[auth] ${String(frame.client)}/${String(frame.clientVersion)} (token "${entry.name}"${viaWeb ? ', web sign-in' : ''}, protocol ${protocolVersion}) ` +
             `connected from ${req.socket.remoteAddress}`
         )
         sendFrame(ws, {
@@ -348,6 +412,7 @@ export function startServer(
       revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
+      webSockets.delete(ws)
       hub.unsubscribeAll(subscriber)
       // PTYs keep running — the client reattaches on its next connection.
       sessions.terminals.detachAll(terminal)

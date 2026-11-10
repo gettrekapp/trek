@@ -50,6 +50,7 @@ export function validateConfig(raw: unknown): TrekServerConfig {
     throw new Error('config.maxSessions must be a positive integer')
   }
   if (raw.llm !== undefined && !isRecord(raw.llm)) throw new Error('config.llm must be an object')
+  if (raw.web !== undefined && typeof raw.web !== 'boolean') throw new Error('config.web must be true or false')
   for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
   }

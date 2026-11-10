@@ -358,3 +358,11 @@ test('maxSessions: default 64, a positive integer otherwise', (t) => {
     assert.throws(() => validateConfig({ repos: [], maxSessions: bad }), /config.maxSessions must be a positive integer/)
   }
 })
+
+test('web (5c-3) is true or false', () => {
+  assert.equal(validateConfig({ repos: [], web: true }).web, true)
+  assert.equal(validateConfig({ repos: [], web: false }).web, false)
+  for (const bad of ['yes', 1, null, {}]) {
+    assert.throws(() => validateConfig({ repos: [], web: bad }), /config.web must be true or false/)
+  }
+})

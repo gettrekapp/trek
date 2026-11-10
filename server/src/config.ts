@@ -41,6 +41,11 @@ export interface TrekServerConfig {
   maxSessions?: number
   /** Where projects are stored (default: the platform data dir, see dataDir.ts). */
   dataDir?: string
+  /**
+   * Serve the web client (5c-3), as `start --web` does; read at start (a change needs a
+   * restart). Never on the local server.
+   */
+  web?: boolean
 }
 
 export function defaultConfigPath(): string {

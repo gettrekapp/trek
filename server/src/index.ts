@@ -23,6 +23,8 @@ import { createIntegrations, testEndpoint, VOICE_CONFIG_FILE } from './integrati
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import { ghFromEnv } from './prWatch/gh'
+import { loadWebBundle, type WebBundle } from './web/bundle'
+import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
 import {
   addToken,
@@ -52,6 +54,8 @@ interface CliArgs {
   host?: string
   dataDir?: string
   insecure: boolean
+  /** `start --web`: serve the web client (5c-3); `web: true` in the config does the same */
+  web: boolean
   /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
   local: boolean
   /** `--local-profile <name>`: a named local profile (local-<name>) instead of the default one */
@@ -82,12 +86,15 @@ Options:
   --port <port>     Port to listen on (default: config.port or ${DEFAULT_DAEMON_PORT})
   --host <host>     Interface to bind (default: config.host or 127.0.0.1)
   --insecure        Allow binding a non-loopback host without TLS
+  --web             start: serve the web client (a browser build of the project window) on the
+                    same port; a browser signs in by pasting a token once (config: "web": true).
+                    Not with --local.
   --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
   --local           start/stop: the app's local server. Its own config, data and lock under
                     ~/.config/trek-server/local and <platform data dir>/local; 127.0.0.1
                     on a random port; a new token on every start; any path allowed.
                     Writes the port and token to local.json there (0600) while it runs.
-                    Takes none of --config, --data-dir, --port, --host, --insecure.
+                    Takes none of --config, --data-dir, --port, --host, --insecure, --web.
                     Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
   --local-profile <name>
                     With --local: a separate local server, under local-<name> in both
@@ -117,6 +124,7 @@ function parseArgs(argv: string[]): CliArgs {
     configPath: defaultConfigPath(),
     configExplicit: false,
     insecure: false,
+    web: false,
     local: false
   }
   const value = (i: number, flag: string): string => {
@@ -169,6 +177,7 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (arg === '--host') args.host = value(++i, arg)
     else if (arg === '--data-dir') args.dataDir = value(++i, arg)
     else if (arg === '--insecure') args.insecure = true
+    else if (arg === '--web') args.web = true
     else if (arg === '--local') args.local = true
     else if (arg === '--import-env-from') {
       const dir = value(++i, arg)
@@ -194,8 +203,10 @@ function parseArgs(argv: string[]): CliArgs {
   if (args.local && (args.configExplicit || args.dataDir !== undefined || args.port !== undefined || args.host !== undefined || args.insecure)) {
     usageError('--local has its own config, data dir, host and port: drop --config, --data-dir, --port, --host and --insecure')
   }
-  if ((args.port !== undefined || args.host !== undefined || args.insecure) && args.command !== 'start') {
-    usageError('--port, --host and --insecure only apply to `start`')
+  // The Local server is the app's own: no browser ever signs in to it.
+  if (args.local && args.web) usageError('--web does not apply to the local server')
+  if ((args.port !== undefined || args.host !== undefined || args.insecure || args.web) && args.command !== 'start') {
+    usageError('--port, --host, --insecure and --web only apply to `start`')
   }
   if (args.dataDir !== undefined && args.command !== 'start' && args.command !== 'remove') {
     usageError('--data-dir only applies to `start` and `remove`')
@@ -404,6 +415,17 @@ if (readLegacyInPlace) {
   migrateConfig()
   store = openStore(args.configPath)
 }
+/** The web client's files, read once now (`--web` or `web: true`; never the local server). */
+let webBundle: WebBundle | undefined
+if (!local && (args.web || store.config.web === true)) {
+  const dir = webClientDir(__dirname)
+  if (!dir) fail('--web needs the web client build next to the server (dist/web-client): run `npm run build:web` in the Trek repo.')
+  try {
+    webBundle = loadWebBundle(dir)
+  } catch (err) {
+    fail(`Cannot read the web client in ${dir}: ${(err as Error).message}`)
+  }
+}
 const config = store.config
 // --data-dir is remembered, so a later plain `trek-server remove` checks the same projects.
 const dataDir = args.dataDir === undefined ? undefined : resolve(args.dataDir)
@@ -467,7 +489,8 @@ const server = startServer(
       // The smokes' knob: the time between polls, and between sign-in checks.
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
       recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)
-    }
+    },
+    web: webBundle ? { bundle: webBundle } : undefined
   }
 )
 store.watch()
@@ -492,6 +515,16 @@ server.httpServer.listen(port, host, () => {
         : 'No repos registered yet. Add one with `trek-server add <path>`.'
   )
   console.log(`projects: ${projectFiles.loaded.length} in ${projectFiles.dir}`)
+  if (webBundle) {
+    const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1'
+    console.log(
+      `web client: http://${host.includes(':') ? `[${host}]` : host}:${bound}/` +
+        (loopback ? ' (reach it from other devices through your TLS proxy)' : '')
+    )
+    // --insecure on another interface: the page loads, but a browser drops the Secure session
+    // cookie on plain http there, so no sign-in ever sticks.
+    if (!loopback) console.warn('web client: browsers sign in only over https here; put a TLS proxy in front (see the README)')
+  }
   if (local) void announceLocal(local, bound)
 })
 
