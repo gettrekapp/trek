@@ -214,6 +214,14 @@ other window on that project sees them live.
   `get_review_comments` MCP tool (read-only; each comment says whether it is
   outdated). A server older than this Trek (without the `review` capability) shows
   only the branch against its base.
+- **Web client**: a server started with `trek-server start --web` serves the project
+  window to a browser at its own address, for any device (through the server's TLS
+  proxy). Sign in by pasting a server token once (the browser keeps an HttpOnly
+  cookie, never the token), pick a project, and use it as in the app: sessions,
+  terminals, the queue, the Changes tab review, the PR watch, stacks and settings.
+  What needs the browser's own machine (Open in VS Code, Reveal in Finder, folder
+  pickers, the Local server) is not offered. See [trek-server's
+  README](server/README.md#web-client).
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.
@@ -381,6 +389,11 @@ installs it. The app runs that bundle as its Local server. Electron's HMR does n
 reach it: after editing `server/src`, run `npm run build:server` and then
 File → Local Server → Restart Local Server to run the new build.
 
+`npm run build` also builds the web client (`npm run build:web`, Vite with
+`vite.web.config.ts`): the renderer's v2 window code with `src/web/` as its entry, a
+page-made `window.api` in place of the preload, written to `server/dist/web-client`
+for `trek-server start --web`. The Electron renderer's build is unchanged.
+
 A dev build uses its own Local server profile, `~/.config/trek-server/local-dev`
 (`--local-profile dev`), never the installed Trek's `local`. To give a dev run
 from another worktree its own server too, set `TREK_LOCAL_PROFILE` to another
@@ -414,6 +427,10 @@ one at a time:
   source picker, line comments (one from another client, live; one outdated), an
   agent reading them with `get_review_comments`, edit and send conflicts, Send to
   session and Discard;
+- `npm run smoke:server-web`: the web client: `trek-server start --web` driven from a
+  bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
+  session's terminal, the Origin rule on sockets, sign-out, revocation and the
+  sign-in limit;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

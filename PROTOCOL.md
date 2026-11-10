@@ -18,6 +18,7 @@ reconnecting with backoff, so it must be updated to talk to this server.
   `wss://`. Clients must use `wss://` for anything non-loopback.
 - **Auth:** bearer token, either as an `Authorization: Bearer <token>` header on the
   upgrade request, or in the `hello` frame (for clients that cannot set headers).
+  The web client's page signs in by cookie instead (below, "Web client").
 
 ## Handshake
 
@@ -28,7 +29,8 @@ reconnecting with backoff, so it must be updated to talk to this server.
    ```
 
    `token` may be omitted if it was sent via the `Authorization` header (an empty
-   `token` falls back to it too).
+   `token` falls back to it too, then, on a server with the web client, to the
+   browser's session cookie: "Web client" below).
 
 2. The server replies with `welcome` on success (below).
 
@@ -353,7 +355,65 @@ server's config file and patch the `server` topic. Edits made with the
 restart.
 
 Tokens are named, one per device (`trek-server token add <name>`). Revoking a
-token closes its open connections with `4003`.
+token closes its open connections with `4003`, and ends the web client's browser
+sessions signed in with it.
+
+## Web client
+
+`trek-server start --web` (or `"web": true` in the config; never `--local`, which is a
+usage error) also serves the web client (5c-3): a browser build of the project window
+(`npm run build:web` writes it to `server/dist/web-client`, read once at start), on the
+same port as the WebSocket. Without it, HTTP answers `426` as before and nothing below
+applies. The page talks protocol v2 over the browser's own WebSocket to the server that
+served it; it never holds a token.
+
+| Path | |
+|---|---|
+| `GET /login` | The sign-in form (no script): paste a token. Signed in, it goes to `/` |
+| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB. The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `/` with the session cookie set. Else `401` and the form again. Five failures from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one clears its address's count |
+| `POST /logout` | Same-origin only (`403`). Ends the session, closes its sockets (`4003`, reason `signed out`), clears the cookie, `303` to `/login` |
+| `GET /`, `/p/<projectId>`, `/index.html` | The page, only with a live session; else `303` to `/login` |
+| `GET` a file of the build (`/assets/…`) | Served signed in or not (it is the same code for everyone); `/assets/…` is cached for good (Vite hashes the names). Only the build's own regular files, looked up by exact path (no symlinks; `..` and encoded slashes match nothing): any other `/assets/…` is `404` |
+| anything else | `405` for another method |
+
+**The session.** Signing in makes a random 32-byte id, sent once in
+`Set-Cookie: __Host-trek-session=<id>; Path=/; HttpOnly; Secure; SameSite=Strict;
+Max-Age=2592000`. Page scripts cannot read it, no other host or path can set it, and a
+cross-site request never carries it. The server keeps only the id's sha256, the token's
+hash and name, and two times, in memory: a restart signs every browser out. A session
+ends 30 days after sign-in, after 7 days unused, when its token is revoked, when the
+browser signs out, or when it signs in again (the old one ends). At most 1000 are kept
+(the least recently used goes first). `Secure` always: behind the TLS proxy the page is
+https, and a browser keeps a Secure cookie from `http://127.0.0.1` or `localhost` too;
+on any other plain-http address (`--insecure`) a browser drops it, so no sign-in sticks
+(the server warns at start).
+
+**The socket.** With the web client on, an upgrade that carries an `Origin` header
+must come from this host (the `Origin`'s host and port equal the `Host` header's; the
+scheme is not compared, since the proxy terminates TLS), else it is refused with HTTP
+`403` before any frame: a page on another site never gets a socket (cross-site
+WebSocket hijacking). Clients that send no `Origin` (the app's relay, the CLI, the SDK
+in Node) are unaffected. At `hello`, a frame with no token and no `Authorization` header
+is signed in by the session cookie when the upgrade carried this host's `Origin` and the
+session is live and its token still listed; the `welcome` is the same as a token's.
+Anything else is `4003` as for a bad token.
+
+**Headers.** Every answer carries `Content-Security-Policy: default-src 'self';
+script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src
+'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none';
+base-uri 'none'; form-action 'self'; object-src 'none'`, `X-Content-Type-Options:
+nosniff`, `Referrer-Policy: same-origin` (not `no-referrer`: under it a browser sends
+`Origin: null` with the page's own form posts), `X-Frame-Options: DENY`,
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Resource-Policy:
+same-origin`; the page and the form `Cache-Control: no-store`.
+
+**What the page leaves out.** The actions that open something on the machine the
+browser runs on (Open in VS Code, Reveal in Finder, the folder pickers, the Local
+server, `.trekproj` files) are off, as in any window on a server other than this
+machine's Local one; making a project needs a folder on the server, picked from the app
+or the CLI. Spoken summaries play in the page while this browser is Active (kept in its
+local storage, nothing secret). The bell lists what needs the user; the page raises no
+OS notifications.
 
 
 ## Docker, environments and stacks

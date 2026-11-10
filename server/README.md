@@ -203,6 +203,25 @@ prompt (100,000 characters). A worktree git no longer lists is kept, as missing,
 while it holds a draft. Agents can read a draft with the `get_review_comments`
 MCP tool, which never changes it. See PROTOCOL.md, "Changes tab review".
 
+## Web client
+
+`trek-server start --web` (or `"web": true` in the config, read at start) also serves
+a browser build of the project window on the same port, so a project can be used from
+any device with a browser. Build it first, from the Trek repo: `npm run build:web`
+writes it to `server/dist/web-client` (`npm run build` does too); the server refuses
+`--web` without it. The Local server never serves it (`start --local --web` is a usage
+error).
+
+Open the server's address (`https://dev.example.com/` through Caddy, below), paste a
+token made with `trek-server token add <name>` on the sign-in page, and pick a project.
+The browser keeps a session cookie (HttpOnly, Secure, SameSite=Strict), never the
+token; sign out from the title bar. Revoking the token signs its browsers out at once;
+restarting the server signs every browser out. A browser can't do what needs the
+machine it runs on (Open in VS Code, Reveal in Finder, picking folders): make projects
+from the app or the CLI. Browsers keep the Secure cookie only over https or on
+`127.0.0.1`/`localhost`, so expose the web client through the TLS proxy, never with
+`--insecure`. See PROTOCOL.md, "Web client".
+
 ## Projects
 
 Clients create projects from registered repos (`trek-server add`). Each
@@ -342,7 +361,10 @@ dev.example.com {
 }
 ```
 
-Then configure the app with `wss://dev.example.com`.
+Then configure the app with `wss://dev.example.com`. With `--web`, the same address
+serves the web client: `https://dev.example.com/`. Caddy passes the `Host` header
+through, which the web client's same-origin checks compare with the browser's
+`Origin`; a proxy that rewrites `Host` breaks its sign-in.
 
 ## Security notes
 
@@ -366,6 +388,13 @@ Then configure the app with `wss://dev.example.com`.
 - **The Linear and ElevenLabs keys are the server's**, usable by any client with a
   token (looking issues up, synthesizing speech), never readable by one. A shared
   server's keys are shared by everyone who can connect to it.
+- **The web client** (`--web`) adds a sign-in form and a browser session cookie;
+  the session grants what its token does, so a browser signed in is as trusted as
+  the token. The cookie is HttpOnly, Secure, SameSite=Strict and `__Host-`, the
+  page's CSP allows only its own scripts, and a socket or a sign-in from another
+  site's page is refused. Failed sign-ins are rate limited per address and in
+  total; behind a proxy every browser shares the proxy's address, so a flood of bad
+  sign-ins can lock out sign-in (not open sessions) for a minute.
 - Auth failures are logged with the peer address; bad tokens get a delayed
   close to blunt brute force.
 - Never expose the plain `ws://` listener beyond loopback (`--insecure`

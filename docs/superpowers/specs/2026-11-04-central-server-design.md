@@ -460,7 +460,17 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      - **Web client:** trek-server serves a browser build of the v2 project window on
        `packages/client`, using the server's named tokens. The Electron-only actions
        (Open in VS Code, Reveal in Finder, folder pickers) are hidden there. It covers
-       remote access from any device before phase 6's native client.
+       remote access from any device before phase 6's native client. User decisions
+       (2026-11-10, plan `docs/superpowers/plans/2026-11-10-central-server-phase5c3-web-client.md`):
+       a browser signs in by pasting a named token once, and the server answers with a
+       Secure, HttpOnly, SameSite=Strict session cookie, so page scripts never hold the
+       token; revoking it ends the session. The page is the full project window plus a
+       projects list. It is off by default (`trek-server start --web`, or `web: true` in
+       the config) and the Local server never serves it. As built: the renderer's v2
+       window code runs on a page-made `window.api` (`src/web/`, the SDK in
+       `src/shared/client/` over the browser's WebSocket; `packages/client` stays
+       deferred), sessions are in memory (a restart signs browsers out), and with the web
+       client on, a socket whose `Origin` is another site is refused.
    - **Later, in their own plans:** the bot (ported last, only when asked), moving
      worktrees between servers, promote to primary, and Windows support for the
      supervisor.
