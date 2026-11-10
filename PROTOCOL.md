@@ -369,18 +369,33 @@ served it; it never holds a token.
 
 | Path | |
 |---|---|
-| `GET /login` | The sign-in form (no script): paste a token. Signed in, it goes to `/` |
-| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB (else `413` with `Connection: close`, once up to 1 MiB more has been read and dropped; past that the connection is cut). The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `/` with the session cookie set. Else `401` and the form again. Each attempt counts as a failure from the moment it is let in until it succeeds, so concurrent attempts are limited too: five from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one releases its count and clears its address's |
+| `GET /login` | The sign-in form (no script): paste a token. `?next=` (below) rides along as a hidden field. Signed in, it goes to `next` |
+| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB (else `413` with `Connection: close`, once up to 1 MiB more has been read and dropped; past that the connection is cut). The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `next` (a hidden field, below; `/` without it) with the session cookie set. Else `401` and the form again (keeping `next`). Each attempt counts as a failure from the moment it is let in until it succeeds, so concurrent attempts are limited too: five from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one releases its count and clears its address's |
 | `POST /logout` | Same-origin only (`403`). Ends the session, closes its sockets (`4003`, reason `signed out`), clears the cookie, `303` to `/login` |
-| `GET /`, `/p/<projectId>`, `/index.html` | The page, only with a live session; else `303` to `/login` |
+| `GET /`, `/p/<projectId>`, `/index.html`, any other path | The page, only with a live session; else `303` to `/login` (`/login?next=/p/<projectId>` from a project's page) |
 | `GET` a file of the build (`/assets/…`) | Served signed in or not (it is the same code for everyone); `/assets/…` is cached for good (Vite hashes the names). Only the build's own regular files, looked up by exact path (no symlinks; `..` and encoded slashes match nothing): any other `/assets/…` is `404` |
-| anything else | `405` for another method |
+| another method | `405` on any path |
 
 On a loopback bind (`127.0.0.1`, `localhost`, `::1`), every request and upgrade must
 carry a loopback `Host` (`127.0.0.1`, `localhost` or `[::1]`, any port): any other is
 HTTP `421` (an upgrade `403`), so a page on a DNS name rebound to 127.0.0.1 can't reach
 the server. Any other bind (behind the TLS proxy) answers whatever `Host` the proxy
 passes.
+
+**`next`.** A sign-in goes on to `next` only when it is exactly `/` or
+`/p/<projectId>` with an id of letters, digits and `-` (the server's ids); anything else
+(`//host`, `/\host`, a scheme, `..`, an encoded character) is `/`, so a sign-in never
+sends the browser off the site.
+
+**A link from another site.** A browser never sends a `SameSite=Strict` cookie on a
+navigation that starts on another site, so a link to the page from elsewhere (a chat, an
+issue, another web app) would land on `/login` even when signed in. A `GET` for a page
+path (any but a build file) without a live session whose `Sec-Fetch-Site` is
+`cross-site` or `same-site` is answered `200` with a tiny page, no script: `<meta
+http-equiv="refresh" content="0">` and a link, both to the same URL. The reload is a
+same-origin navigation, which carries the cookie; without one it is `303` to `/login` as
+usual (its `Sec-Fetch-Site` is then `same-origin`, so no loop). A request without
+`Sec-Fetch-Site` never gets it.
 
 **The session.** Signing in makes a random 32-byte id, sent once in
 `Set-Cookie: __Host-trek-session=<id>; Path=/; HttpOnly; Secure; SameSite=Strict;
@@ -432,7 +447,10 @@ server, `.trekproj` files) are off, as in any window on a server other than this
 machine's Local one; making a project needs a folder on the server, picked from the app
 or the CLI. Spoken summaries play in the page while this browser is Active (kept in its
 local storage, nothing secret). The bell lists what needs the user; the page raises no
-OS notifications.
+OS notifications. Nor does it play alert sounds; two tabs both speak the summaries; the
+app settings in one tab's local storage aren't synced to another open tab; there are no
+app menu shortcuts, and Close buttons that close an Electron window do nothing; a Local
+model's id is typed, as in any server window (the browser lists no models).
 
 
 ## Docker, environments and stacks

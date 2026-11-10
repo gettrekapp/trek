@@ -214,11 +214,16 @@ error).
 
 Open the server's address (`https://dev.example.com/` through Caddy, below), paste a
 token made with `trek-server token add <name>` on the sign-in page, and pick a project.
+A link to a project's page (`/p/<id>`) signs in and goes on to that project; one
+followed from another site (a chat, an issue) reloads once from the server's own page,
+since a SameSite=Strict cookie isn't sent on a navigation from elsewhere.
 The browser keeps a session cookie (HttpOnly, Secure, SameSite=Strict), never the
 token; sign out from the title bar. Revoking the token signs its browsers out at once;
 restarting the server signs every browser out. A browser can't do what needs the
 machine it runs on (Open in VS Code, Reveal in Finder, picking folders): make projects
-from the app or the CLI. Browsers keep the Secure cookie only over https or on
+from the app or the CLI. Nor does the page play alert sounds, sync its settings
+between tabs (each browser keeps its own), or have the app's menu shortcuts; see
+PROTOCOL.md for the rest. Browsers keep the Secure cookie only over https or on
 `127.0.0.1`/`localhost`, so expose the web client through the TLS proxy, never with
 `--insecure`. See PROTOCOL.md, "Web client".
 

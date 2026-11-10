@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { pathOfProject, projectOfPath } from '../src/web/routes.ts'
 import { browserRelay, socketUrl } from '../src/web/browserRelay.ts'
-import { dialogId, pendingDialogs, shiftDialog, webDialogs } from '../src/web/dialogQueue.ts'
+import { answerDialog, cancelDialogs, dialogId, pendingDialogs, shiftDialog, webDialogs } from '../src/web/dialogQueue.ts'
 import { createWebApi, WEB_ENTRY_ID } from '../src/web/webApi.ts'
 
 test('routes: / is the list, /p/<id> a project; the round trip keeps odd ids', () => {
@@ -95,14 +95,41 @@ test('the dialog queue: one at a time, in order, each answered by its own done',
   const [d1, d2, d3] = pendingDialogs()
   assert.deepEqual([d1.kind, d2.kind, d3.kind], ['confirm', 'error', 'checkbox'])
   assert.ok(dialogId(d1) < dialogId(d2) && dialogId(d2) < dialogId(d3))
-  shiftDialog()
-  d1.done(true)
-  shiftDialog()
-  d2.done()
-  shiftDialog()
-  d3.done({ confirmed: false, checked: true })
+  answerDialog(d1, true)
+  assert.equal(pendingDialogs()[0], d2)
+  answerDialog(d2, true)
+  answerDialog(d3, false, true)
   assert.deepEqual([await first, await second, await third], [true, undefined, { confirmed: false, checked: true }])
   assert.equal(pendingDialogs().length, 0)
+})
+
+test('the dialog queue: shiftDialog takes off the request it is given, not whichever is first', async () => {
+  const a = webDialogs.confirm({ title: 'A', message: 'a?', confirmLabel: 'Yes' })
+  webDialogs.confirm({ title: 'B', message: 'b?', confirmLabel: 'Yes' })
+  const [d1, d2] = pendingDialogs()
+  assert.equal(shiftDialog(d2), true)
+  assert.deepEqual(pendingDialogs(), [d1])
+  assert.equal(shiftDialog(d2), false, 'already off')
+  assert.deepEqual(pendingDialogs(), [d1])
+  // Answered twice (a click and an Escape in the same tick): the first answer stands.
+  answerDialog(d1, true)
+  answerDialog(d1, false)
+  assert.equal(await a, true)
+  assert.equal(pendingDialogs().length, 0)
+})
+
+test('the dialog queue: cancelDialogs (the shown project changed) answers every waiting one with its cancel', async () => {
+  const confirm = webDialogs.confirm({ title: 'A', message: 'a?', confirmLabel: 'Delete' })
+  const error = webDialogs.showError('B', 'b')
+  const box = webDialogs.confirmWithCheckbox({ title: 'C', message: 'c?', confirmLabel: 'Go', checkboxLabel: 'also', checkboxChecked: true })
+  const [, , d3] = pendingDialogs()
+  cancelDialogs()
+  assert.equal(pendingDialogs().length, 0)
+  assert.deepEqual([await confirm, await error, await box], [false, undefined, { confirmed: false, checked: true }])
+  // A late click on the gone dialog's button answers nothing more.
+  answerDialog(d3, true, false)
+  assert.equal(pendingDialogs().length, 0)
+  cancelDialogs()
 })
 
 /** A RegisteredServer-like source for the api's attention. */
@@ -228,8 +255,7 @@ test('the api: confirm and showError go to the in-page queue', async () => {
     const answer = api.confirm({ title: 'T', message: 'm', confirmLabel: 'OK' })
     const [d] = pendingDialogs()
     assert.equal(d.title, 'T')
-    shiftDialog()
-    d.done(true)
+    answerDialog(d, true)
     assert.equal(await answer, true)
   })
 })

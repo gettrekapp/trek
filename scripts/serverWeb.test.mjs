@@ -30,7 +30,7 @@ import { loadWebBundle } from '../server/src/web/bundle.ts'
 import { SESSION_SWEEP_MS, SOCKET_TOUCH_MS, WebSocketSignIns, sweepEvery } from '../server/src/web/sockets.ts'
 import { webClientDir } from '../server/src/web/dir.ts'
 import { hashToken } from '../server/src/tokens.ts'
-import { MAX_LOGIN_BODY, MAX_LOGIN_DRAIN, SECURITY_HEADERS, createWebHandler, loginPage } from '../server/src/web/http.ts'
+import { MAX_LOGIN_BODY, MAX_LOGIN_DRAIN, SECURITY_HEADERS, createWebHandler, loginPage, reloadPage, safeNext } from '../server/src/web/http.ts'
 
 
 const tempDir = (t, prefix) => {
@@ -409,10 +409,16 @@ test('every answer carries the security headers', async (t) => {
 
 test('signed out: the page and its routes go to /login; the sign-in page and the files are served', async (t) => {
   const { req } = await handlerServer(t)
-  for (const path of ['/', '/index.html', '/p/some-project']) {
+  for (const [path, to] of [
+    ['/', '/login'],
+    ['/index.html', '/login'],
+    ['/elsewhere', '/login'],
+    ['/p/some-project', '/login?next=%2Fp%2Fsome-project'],
+    ['/p/a%2Fb', '/login']
+  ]) {
     const res = await req(path)
     assert.equal(res.status, 303, path)
-    assert.equal(res.headers.get('location'), '/login')
+    assert.equal(res.headers.get('location'), to, path)
   }
   const login = await req('/login')
   assert.equal(login.status, 200)
@@ -488,6 +494,99 @@ test('sign-out ends the session (its sockets told) and clears the cookie; from a
   assert.equal(sessions.size, 0)
   assert.equal(signedOut.length, 1)
   assert.equal((await req('/', { headers: { cookie } })).status, 303)
+})
+
+test('safeNext: only / and /p/<id> come back; anything that could leave the site or the route is /', () => {
+  assert.equal(safeNext('/'), '/')
+  assert.equal(safeNext('/p/0b8e7c1a-5f3e-4c2b-9d1e-2a3b4c5d6e7f'), '/p/0b8e7c1a-5f3e-4c2b-9d1e-2a3b4c5d6e7f')
+  for (const bad of [
+    undefined,
+    null,
+    '',
+    '//evil.com',
+    '/\\evil.com',
+    '/\\/evil.com',
+    'https://evil',
+    'http://127.0.0.1/p/x',
+    'javascript:alert(1)',
+    '/p/../x',
+    '/p/..',
+    '/p/%2e%2e',
+    '/p/x%2F..%2F..',
+    '/p/%2F%2Fevil.com',
+    '%2F%2Fevil.com',
+    '/p//evil.com',
+    '/p/x/',
+    '/p/x?y',
+    '/p/x#y',
+    '/p/x\n',
+    '/p/-x',
+    '/login',
+    '/elsewhere',
+    ' /p/x'
+  ]) {
+    assert.equal(safeNext(bad), '/', String(bad))
+  }
+})
+
+test('the deep link: /login keeps a project path as next, the form posts it back, a sign-in goes there', async (t) => {
+  const { req, form } = await handlerServer(t)
+  const login = await req('/login?next=%2Fp%2Fproj-1')
+  const html = await login.text()
+  assert.ok(html.includes('<input type="hidden" name="next" value="/p/proj-1">'), 'the hidden field')
+  assert.ok(!(await (await req('/login?next=%2F%2Fevil.com')).text()).includes('name="next"'), 'an unsafe next is dropped')
+  const res = await form(`token=${TOKEN}&next=%2Fp%2Fproj-1`)
+  assert.equal(res.status, 303)
+  assert.equal(res.headers.get('location'), '/p/proj-1')
+  const cookie = res.headers.get('set-cookie').split(';')[0]
+  // Signed in, /login goes on to the (checked) next.
+  assert.equal((await req('/login?next=%2Fp%2Fproj-1', { headers: { cookie } })).headers.get('location'), '/p/proj-1')
+  assert.equal((await req('/login?next=%2F%2Fevil.com', { headers: { cookie } })).headers.get('location'), '/')
+  // A wrong token keeps next on the form shown again.
+  const wrong = await form('token=wrong&next=%2Fp%2Fproj-1')
+  assert.equal(wrong.status, 401)
+  assert.ok((await wrong.text()).includes('value="/p/proj-1"'))
+})
+
+test('the deep link: a sign-in never goes to another site, whatever next says', async (t) => {
+  const { form } = await handlerServer(t)
+  for (const next of ['//evil.com', '/\\evil.com', 'https://evil', '/p/../x', '%2F%2Fevil.com', '/p/%2e%2e%2Fx', 'http:%2F%2Fevil.com']) {
+    const res = await form(`token=${TOKEN}&next=${encodeURIComponent(next)}`)
+    assert.equal(res.status, 303, next)
+    assert.equal(res.headers.get('location'), '/', next)
+  }
+})
+
+test('a navigation from another site without the cookie gets the reload page; from this site, /login', async (t) => {
+  const { req, signIn } = await handlerServer(t)
+  for (const site of ['cross-site', 'same-site']) {
+    for (const path of ['/', '/p/proj-1', '/elsewhere', '/login']) {
+      const res = await req(path, { headers: { 'sec-fetch-site': site, 'sec-fetch-mode': 'navigate' } })
+      assert.equal(res.status, 200, `${site} ${path}`)
+      for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.equal(res.headers.get(name), value, `${path} ${name}`)
+      assert.equal(res.headers.get('cache-control'), 'no-store')
+      const body = await res.text()
+      assert.equal(body, reloadPage())
+    }
+  }
+  const html = reloadPage()
+  assert.ok(html.includes('<meta http-equiv="refresh" content="0">'))
+  assert.ok(html.includes('<a href=""'), 'a fallback link to this same URL')
+  assert.ok(!html.includes('<script'), 'no script')
+  // The reload is same-origin: with no session it goes to /login as usual (no loop).
+  for (const site of ['same-origin', 'none', undefined]) {
+    const res = await req('/p/proj-1', { headers: site ? { 'sec-fetch-site': site } : {} })
+    assert.equal(res.status, 303, String(site))
+    assert.equal(res.headers.get('location'), '/login?next=%2Fp%2Fproj-1')
+  }
+  // The page's files are not pages: never the reload page.
+  assert.equal((await req('/assets/index-abc.js', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 200)
+  assert.equal((await req('/assets/missing.js', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 404)
+  // Signed in (a same-site navigation does carry a Strict cookie), the page itself.
+  const cookie = await signIn()
+  const page = await req('/p/proj-1', { headers: { cookie, 'sec-fetch-site': 'same-site' } })
+  assert.equal(page.status, 200)
+  assert.ok((await page.text()).includes('id="root"'))
 })
 
 test('a new sign-in in a browser that had a session ends the old one', async (t) => {
@@ -590,6 +689,7 @@ test('on a loopback bind, only a loopback Host is answered (DNS rebinding); else
 test('other methods are 405', async (t) => {
   const { req } = await handlerServer(t)
   assert.equal((await req('/', { method: 'PUT' })).status, 405)
+  assert.equal((await req('/elsewhere', { method: 'POST' })).status, 405)
   assert.equal((await req('/login', { method: 'DELETE' })).status, 405)
 })
 

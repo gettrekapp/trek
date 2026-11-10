@@ -8,21 +8,28 @@
 // BrowserWindow (no Trek main, no preload) loading the server's own URL, with a temp HOME and
 // --user-data-dir: a browser, nothing more. Through HTTP, the page and raw sockets it checks:
 //   - `start --local --web` is a usage error;
-//   - signed out, / goes to /login; every answer has the CSP, frame-ancestors, nosniff and
-//     same-origin referrer headers; paths outside the bundle are never files;
+//   - signed out, / goes to /login (a project's path with it as next); every answer has the CSP,
+//     frame-ancestors, nosniff and same-origin referrer headers; a request naming another host is 421;
+//   - paths outside the bundle are never files, sent verbatim (`..`, encoded dots and slashes) with
+//     the session cookie;
 //   - the sign-in page: a wrong token is refused with a message; the right one signs in, setting an
 //     HttpOnly, Secure, SameSite=Strict, host-only __Host- cookie that page scripts can't read;
 //   - the projects page lists the server's project; opening it shows its worktrees, and a session
 //     the SDK started shows its terminal (the fake agent's output) in the page;
 //   - the Electron-only actions (Open in VS Code, Reveal in Finder) are not offered;
-//   - an in-page dialog stands in for main's (confirm resolves on its buttons);
+//   - an in-page dialog stands in for main's (confirm resolves on its buttons); focus stays in it
+//     (Tab cycles inside), Escape cancels it after a click on the backdrop, and leaving the project
+//     cancels one still open;
+//   - a link from another site to a project's page lands on it signed in: the SameSite=Strict
+//     cookie isn't sent on that navigation, so the server's reload page reloads it from this site;
 //   - the token is nowhere in the page: its string globals, web storage, document.cookie, the DOM,
 //     or the URLs it loaded;
 //   - a socket from another site's page is refused (403), the cookie without this host's Origin is no
 //     sign-in, and with it the cookie alone is welcomed;
 //   - a sign-in posted from another site is refused; past the limit even the right token is 429;
-//   - Sign out goes to /login and the old cookie signs nothing in; signed in again, revoking the token
-//     sends the open page to /login;
+//   - Sign out goes to /login and the old cookie signs nothing in; a project's link then goes to
+//     /login and, signed in, on to the project; revoking the token sends the open page to /login,
+//     and its cookie stays signed out once the token is listed again;
 //   - no console or page errors.
 //
 // Prints SERVER WEB SMOKE PASS (n checks) or SERVER WEB SMOKE FAIL and exits 0 or 1.
@@ -32,6 +39,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { createServer as createHttpServer, request as httpRequest } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -161,6 +169,19 @@ const finish = async (reason) => {
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => void finish(`interrupted (${signal})`))
 const watchdog = setTimeout(() => void finish(`watchdog: the run took over ${WATCHDOG_MS} ms`), WATCHDOG_MS)
 
+/** A GET with its path sent verbatim (fetch would resolve `..` first): status, headers and body. */
+const rawGet = (port, path, headers = {}) =>
+  new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname: '127.0.0.1', port, path, method: 'GET', agent: false, headers }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
+    })
+    req.on('error', reject)
+    req.setTimeout(5000, () => req.destroy(new Error(`GET ${path} timed out`)))
+    req.end()
+  })
+
 /** A raw socket's first answer to a hello with no token: 'welcome', its close code, or 'refused <status>'. */
 const hello = (url, headers) =>
   new Promise((resolve) => {
@@ -188,7 +209,8 @@ try {
   const localWeb = spawnSync(process.execPath, ['dist/trek-server.cjs', 'start', '--local', '--web'], {
     cwd: join(root, 'server'),
     env: { ...process.env, HOME: serverHome },
-    encoding: 'utf8'
+    encoding: 'utf8',
+    timeout: 10_000
   })
   check('`start --local --web` is a usage error (exit 2)', localWeb.status, 2)
 
@@ -244,6 +266,9 @@ try {
     traversal.push(res.status === 404 || res.status === 303 ? 'not a file' : `${res.status} ${body.slice(0, 40)}`)
   }
   check('paths outside the bundle are never files', traversal, ['not a file', 'not a file', 'not a file', 'not a file'])
+  const deep = await get('/p/some-project')
+  check('signed out, a project’s path goes to /login with it as next', deep.headers.get('location'), '/login?next=%2Fp%2Fsome-project')
+  check('a request naming another host is refused (DNS rebinding)', (await rawGet(port, '/login', { host: 'evil.example' })).status, 421)
 
   // ---- 3. The project, through the SDK: a worktree and a session --------------------------------------
 
@@ -317,6 +342,54 @@ try {
   await page.goForward()
   check('Forward shows the project again', await until(() => rows.count(), 1), 1)
 
+  // Focus stays in a dialog: Tab cycles through its buttons, a click on the backdrop keeps it there,
+  // and Escape then cancels it.
+  const escaped = page.evaluate(() => window.api.confirm({ title: 'Smoke', message: 'Escape me', confirmLabel: 'Yes' }))
+  await page.locator('.web-dialog').waitFor({ timeout: 5000 })
+  const focused = () => page.evaluate(() => (document.activeElement?.closest('.web-dialog') ? document.activeElement.className : 'outside'))
+  const tabbed = []
+  for (let i = 0; i < 3; i++) {
+    await page.keyboard.press('Tab')
+    tabbed.push(await focused())
+  }
+  check('Tab cycles inside the dialog', tabbed.map((c) => (c === 'outside' ? c : 'inside')), ['inside', 'inside', 'inside'])
+  await page.mouse.click(5, 300)
+  check('a click on the backdrop leaves focus in it', (await focused()) !== 'outside', true)
+  await page.keyboard.press('Escape')
+  check('Escape then cancels it', [await escaped, await page.locator('.web-dialog').count()], [false, 0])
+  // A dialog left open when the page moves to another view is answered with its cancel.
+  const left = page.evaluate(() => window.api.confirm({ title: 'Smoke', message: 'About this project', confirmLabel: 'Delete' }))
+  await page.locator('.web-dialog').waitFor({ timeout: 5000 })
+  await page.goBack()
+  check('leaving the project cancels a dialog still open', [await left, await until(() => page.locator('.web-dialog').count(), 0)], [false, 0])
+  await page.goForward()
+  await until(() => rows.count(), 1)
+
+  // A link from another site (localhost is not 127.0.0.1's site): the Strict cookie isn't sent on
+  // that navigation, so the server answers its reload page; the reload, from this site, has it.
+  const projectUrl = `${base}/p/${projectId}`
+  const linkPort = await freePort()
+  const linkServer = createHttpServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    res.end(`<!doctype html><title>elsewhere</title><a id="go" href="${projectUrl}">to trek</a>`)
+  })
+  await new Promise((r) => linkServer.listen(linkPort, '127.0.0.1', r))
+  const projectLoads = []
+  const onResponse = (r) => {
+    if (r.url() === projectUrl && r.request().resourceType() === 'document') projectLoads.push(r.status())
+  }
+  page.on('response', onResponse)
+  try {
+    await page.goto(`http://localhost:${linkPort}/`)
+    await page.locator('#go').click()
+    await page.waitForURL(projectUrl, { timeout: 10_000 })
+    check('a link from another site lands on the project, signed in', await until(() => rows.count(), 1), 1)
+    check('through the reload page, then the page itself', await until(() => projectLoads.length, 2, 5000).then(() => projectLoads), [200, 200])
+  } finally {
+    page.off('response', onResponse)
+    linkServer.close()
+  }
+
   // ---- 6. The token is nowhere in the page ----------------------------------------------------------
 
   const leaks = await page.evaluate((secret) => {
@@ -343,6 +416,18 @@ try {
   // ---- 7. Raw sockets: the Origin rule and the cookie ------------------------------------------------
 
   const cookieHeader = `__Host-trek-session=${cookie.value}`
+
+  // Paths outside the bundle, sent as written with the session cookie: never a file (the config, the
+  // token's hash), only a 404, a 400 or the page.
+  const configText = readFileSync(configPath, 'utf8')
+  const rawTraversal = []
+  for (const path of ['/assets/../../config.json', '/assets/%2e%2e/%2e%2e/config.json', '/assets/..%2fconfig.json', '/assets/..%2f..%2f..%2fconfig.json', '/../config.json']) {
+    const res = await rawGet(port, path, { cookie: cookieHeader })
+    const leaked = res.body.includes(tokenEntry.hash) || res.body.includes('"serverId"') || res.body === configText
+    const thePage = res.status === 200 && res.body.includes('id="root"')
+    rawTraversal.push(!leaked && (res.status === 404 || res.status === 400 || thePage) ? 'not a file' : `${res.status} ${res.body.slice(0, 40)}`)
+  }
+  check('raw traversal paths, signed in, are never files', rawTraversal, rawTraversal.map(() => 'not a file'))
   check('a socket from another site’s page is refused', await hello(wsUrl, { origin: 'https://evil.example', cookie: cookieHeader }), 'refused 403')
   check('the cookie without this host’s Origin is no sign-in', await hello(wsUrl, { cookie: cookieHeader }), 4003)
   check('this host’s Origin without the cookie is no sign-in', await hello(wsUrl, { origin: base }), 4003)
@@ -356,11 +441,16 @@ try {
   check('the old cookie signs nothing in after', await hello(wsUrl, { origin: base, cookie: cookieHeader }), 4003)
   check('and the page is not served to it', (await get('/', { cookie: cookieHeader })).status, 303)
 
+  // A project's link while signed out: /login, keeping it as next; signed in, on to the project.
+  await page.goto(projectUrl)
+  await page.waitForURL(/\/login\?next=/, { timeout: 10_000 })
+  check('signed out, a project’s link goes to /login with it as next', new URL(page.url()).search, `?next=${encodeURIComponent(`/p/${projectId}`)}`)
   await page.locator('#token').fill(token)
   await page.locator('button[type=submit]').click()
-  await page.waitForURL(`${base}/`, { timeout: 10_000 })
-  await page.locator('.web-project', { hasText: 'webproj' }).click()
-  await until(() => rows.count(), 1)
+  await page.waitForURL(projectUrl, { timeout: 10_000 })
+  check('signed in, it goes on to the project', await until(() => rows.count(), 1), 1)
+  const second = (await app.evaluate(({ session }) => session.defaultSession.cookies.get({}))).find((c) => c.name === '__Host-trek-session')
+  const secondCookie = `__Host-trek-session=${second?.value}`
   // Revoked in the config: the running server reloads it and closes the page's socket.
   writeConfig([])
   await page.waitForURL(`${base}/login`, { timeout: 15_000 }).catch(() => {})
@@ -371,6 +461,9 @@ try {
   // The token listed again, for the last check.
   writeConfig([tokenEntry])
   await sleep(1000)
+  // The revoked token's session stays ended: listing the token again signs no old cookie back in.
+  check('the revoked session’s cookie still gets no welcome', await hello(wsUrl, { origin: base, cookie: secondCookie }), 4003)
+  check('nor the page', (await get('/', { cookie: secondCookie })).status, 303)
   const post = (body, origin = base) =>
     fetch(`${base}/login`, { method: 'POST', redirect: 'manual', body, headers: { origin, 'content-type': 'application/x-www-form-urlencoded' } })
   check('a sign-in posted from another site is refused', (await post(`token=${token}`, 'https://evil.example')).status, 403)

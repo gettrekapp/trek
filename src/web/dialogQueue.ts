@@ -1,7 +1,9 @@
 // The web client's dialogs (5c-3), the queue: the confirm, error and checkbox
 // dialogs that Electron main shows natively, shown by dialogs.tsx as an
 // in-page modal. One at a time, in order; each call's promise settles when its
-// dialog is answered. Pure: a test drives it without React.
+// dialog is answered, or with its cancel answer when the page moves to another
+// project or the list (a dialog about one project never shows over another).
+// Pure: a test drives it without React.
 export type DialogRequest =
   | { kind: 'error'; title: string; message: string; done: () => void }
   | {
@@ -39,9 +41,29 @@ const push = (d: DialogRequest): void => {
   queue = [...queue, d]
   changed()
 }
-export const shiftDialog = (): void => {
-  queue = queue.slice(1)
+/** Takes this request off the queue (wherever it is); false if it was no longer on it. */
+export const shiftDialog = (request: DialogRequest): boolean => {
+  if (!queue.includes(request)) return false
+  queue = queue.filter((d) => d !== request)
   changed()
+  return true
+}
+
+/**
+ * Answers a request and takes it off the queue: `ok` is its confirm (an error
+ * dialog has only OK), `checked` a checkbox dialog's box (its initial state if
+ * left out). A request answered already (or cancelled) is left alone.
+ */
+export function answerDialog(request: DialogRequest, ok: boolean, checked?: boolean): void {
+  if (!shiftDialog(request)) return
+  if (request.kind === 'error') request.done()
+  else if (request.kind === 'confirm') request.done(ok)
+  else request.done({ confirmed: ok, checked: checked ?? request.checkboxChecked })
+}
+
+/** Every waiting dialog answered with its cancel (the shown project or route changed). */
+export function cancelDialogs(): void {
+  for (const d of [...queue]) answerDialog(d, false)
 }
 
 export const webDialogs = {

@@ -14,6 +14,7 @@ import { SummaryBubble } from '../renderer/src/components/SummaryBubble'
 import { titleBarForeground } from '../shared/appearance'
 import { STATUS_LABELS } from '../shared/appServerRules.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
+import { cancelDialogs } from './dialogQueue.ts'
 import { WebDialogHost } from './dialogs.tsx'
 import { pathOfProject, projectOfPath } from './routes.ts'
 import { WEB_ENTRY_ID, type WebApi } from './webApi.ts'
@@ -75,12 +76,15 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
 
   // The path and the store's serverWindow follow each other: a click on a project (or an
   // attention entry, or "Pick another project") moves the URL; Back and Forward move the window.
+  // A dialog still waiting when the shown project changes is about the one left: it is answered
+  // with its cancel, so its caller doesn't act on the project now shown.
   useEffect(() => {
     followPath()
     const onPop = (): void => followPath()
     window.addEventListener('popstate', onPop)
     const offStore = useAppStore.subscribe((state, previous) => {
       if (state.serverWindow === previous.serverWindow) return
+      if ((state.serverWindow?.projectId ?? null) !== (previous.serverWindow?.projectId ?? null)) cancelDialogs()
       const path = pathOfProject(state.serverWindow?.projectId ?? null)
       if (path !== window.location.pathname) window.history.pushState(null, '', path)
     })
