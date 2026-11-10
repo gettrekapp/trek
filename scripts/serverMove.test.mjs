@@ -298,6 +298,20 @@ test('move.receive validates what it is given', async (t) => {
   assert.equal(await code({ repoId: 'nope' }), 'NOT_FOUND')
 })
 
+test('exportDirtyPatch carries a same-size edit made in the second its file was committed (racily clean)', async (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-racy-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: gitEnv })
+  writeFileSync(join(dir, 'a.txt'), 'one\ntwo\nthree\n')
+  git(dir, 'add', '.')
+  git(dir, 'commit', '-q', '-m', 'init')
+  // Same size, same second: only the index file's own mtime tells git to look at the content.
+  writeFileSync(join(dir, 'a.txt'), 'one\nTWO\nthree\n')
+  await new Promise((r) => setTimeout(r, 1100))
+  const { patch } = await exportDirtyPatch(dir)
+  assert.match(patch, /\+TWO/)
+})
+
 test('move.export leaves out the linked dirs (the target links them itself) and refuses non-UTF-8 text', async (t) => {
   const s = await setup(t)
   mkdirSync(join(s.a, '.trek'))

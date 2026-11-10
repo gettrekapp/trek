@@ -1,7 +1,7 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, symlink } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, stat, symlink, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -410,6 +410,11 @@ export async function exportDirtyPatch(
   try {
     try {
       await copyFile(gitIndex, index)
+      // The copy keeps the index's own times: git tells a "racily clean" entry (a file changed in
+      // the same second it was staged or checked out, same size) by comparing it with the index
+      // file's mtime. A fresh mtime would make git trust the stat and miss that change.
+      const times = await stat(gitIndex)
+      await utimes(index, times.atime, times.mtime)
     } catch (err) {
       // No index yet (nothing ever staged) is fine; anything else would build a wrong patch.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
