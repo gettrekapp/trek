@@ -232,10 +232,15 @@ other window on that project sees them live.
   histories are copied so they resume there, and the note, tags, ticket, pull request,
   its watch and the branch's Docker .env come too. Other agents' sessions, queued prompts and the review draft
   do not. Its Docker VM and dev stack, if it has them, are torn down on the old server
-  once the new worktree is in place (a ticked-by-default checkbox; unticked, the move
-  waits until they are stopped). The old worktree is removed last, and only if nothing changed in it while it
-  was copied; a failure before that leaves it as it was. The web client never offers
-  it (it has one server).
+  once the new worktree is in place (a ticked-by-default checkbox; unticked while they
+  run, Move is disabled until they are stopped). The dialog warns about what is deleted
+  with the old worktree and does not travel: its ignored files and the changes to files
+  flagged assume-unchanged or skip-worktree. The old worktree is removed last, and only
+  if nothing changed in it while it was copied; if it did, the new copy is undone on the
+  other server (unless its VM and stack were already torn down: then both are kept to
+  compare). Cancel works until the other server starts creating it; closing the window
+  or quitting while a move runs asks first. The web client never offers it (it has one
+  server).
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.
@@ -442,7 +447,8 @@ one at a time:
   session and Discard;
 - `npm run smoke:server-move`: a worktree moved between two servers from a window,
   with a bare repository in a temp dir as both clones' origin: the dialog, the steps,
-  the target's worktree, work and Claude session, the source's removal;
+  the target's worktree, work and Claude session, the source's removal, its VM and
+  stack torn down (stub colima and docker), and a move rolled back with `move.unreceive`;
 - `npm run smoke:server-web`: the web client: `trek-server start --web` driven from a
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the

@@ -5,6 +5,7 @@ import { getBackend } from './backend'
 import { StartScreen, type StartView } from './components/StartScreen'
 import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { requestSessionSelect, watchAttention } from './attentionSelect'
+import { runningMoveDetail } from './v2/moveFlow'
 import { useLinearSync } from './linear'
 import { useVoice } from './voice'
 import { loadLlmSettings, watchLlmSettings } from './llm'
@@ -66,8 +67,13 @@ export default function App(): React.JSX.Element {
         const state = useAppStore.getState()
         if (!state.project && !state.serverWindow) state.setServerWindow(server)
       }),
-      // A server window has nothing to save, and its sessions run on the server: it closes at once.
-      window.api.onWindowCloseRequest(() => window.api.windowCloseReady()),
+      // A server window has nothing to save, and its sessions run on the server: it closes at once,
+      // unless it is relaying a worktree move (5d), which main asks the user about first.
+      window.api.onWindowCloseRequest(() => {
+        const move = runningMoveDetail()
+        if (move) window.api.windowCloseBusy(move)
+        else window.api.windowCloseReady()
+      }),
       // Before takeInitialWindowState: main sends selects once the window is listening.
       watchAttention()
     ]

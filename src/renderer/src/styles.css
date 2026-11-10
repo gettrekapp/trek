@@ -3332,7 +3332,29 @@ button:disabled {
 }
 
 .move-summary .warn {
-  color: #f9e2af;
+  color: var(--attention);
+}
+
+.move-paths {
+  margin: 4px 0 2px;
+  padding-left: 16px;
+  max-height: 140px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: text;
+}
+
+.move-summary details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.move-retry {
+  font-size: 11px;
+  padding: 1px 8px;
 }
 
 .move-steps {
@@ -3361,7 +3383,7 @@ button:disabled {
 }
 
 .move-step.failed {
-  color: #f38ba8;
+  color: var(--danger);
 }
 
 .move-step-glyph {

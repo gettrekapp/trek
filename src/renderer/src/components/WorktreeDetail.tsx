@@ -123,7 +123,11 @@ export function WorktreeDetail({
   const [syncBusy, setSyncBusy] = useState<'pull' | 'push' | null>(null)
   const [showTicket, setShowTicket] = useState(false)
   const [showPR, setShowPR] = useState(false)
-  const [showMove, setShowMove] = useState(false)
+  /**
+   * The worktree the Move dialog was opened on, held from the click: once the move removes its row
+   * the detail shows another worktree, and the dialog must stay on the one it moved.
+   */
+  const [moving, setMoving] = useState<{ from: { projectId: string; worktreeId: string }; info: GitWorktreeInfo; name: string } | null>(null)
   const appServers = useAppServerLinks()
   const ownEntry = useAppStore((s) => s.serverWindow?.serverEntryId ?? '')
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -184,16 +188,25 @@ export function WorktreeDetail({
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
 
+  // Rendered whatever the detail shows now: the moved worktree's row goes when the move finishes.
+  const moveModal = moving && <MoveWorktreeModal from={moving.from} info={moving.info} name={moving.name} onClose={() => setMoving(null)} />
+
   if (!info && unreadableRepo) {
     return (
       <main className="detail detail-empty detail-unreadable muted">
         Can’t read the repository {unreadableRepo.name} at {unreadableRepo.path}
+        {moveModal}
       </main>
     )
   }
 
   if (!info) {
-    return <main className="detail detail-empty muted">Reading worktrees…</main>
+    return (
+      <main className="detail detail-empty muted">
+        Reading worktrees…
+        {moveModal}
+      </main>
+    )
   }
 
   const repo = repoOfInfo(project, info)
@@ -632,9 +645,10 @@ export function WorktreeDetail({
               <div
                 className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
                 onClick={() => {
-                  if (busy || offline) return
+                  if (busy || offline || !info.branch) return
+                  const from = getBackend().worktrees.moveRef(info.path)
                   setMenuOpen(false)
-                  setShowMove(true)
+                  if (from) setMoving({ from, info, name: info.branch })
                 }}
               >
                 <div className="detail-menu-name">Move to another server…</div>
@@ -914,10 +928,7 @@ export function WorktreeDetail({
       {showPR && info.branch && (
         <PullRequestModal repoId={repo.id} branch={info.branch} onClose={() => setShowPR(false)} />
       )}
-      {showMove && info.branch && (() => {
-        const from = getBackend().worktrees.moveRef(info.path)
-        return from ? <MoveWorktreeModal from={from} info={info} name={info.branch} onClose={() => setShowMove(false)} /> : null
-      })()}
+      {moveModal}
     </main>
   )
 }

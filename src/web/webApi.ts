@@ -130,6 +130,7 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
     takeInitialWindowState: async () => ({ menu: null, server: null, select: null }),
     onWindowCloseRequest: none,
     windowCloseReady: () => {},
+    windowCloseBusy: () => {},
     selectDirectory: async () => null,
     openInVSCode: refuse,
     revealInFinder: refuse,

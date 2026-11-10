@@ -469,4 +469,28 @@ export function registerWindowHandlers(): void {
     const state = windows.get(event.sender.id)
     if (state?.closing) finishClose(state)
   })
+
+  // The renderer is in the middle of something a close would cut short (a worktree move, 5d): the
+  // user decides. Kept open, the close (or the quit it is part of) is cancelled.
+  ipcMain.on('window:close-busy', (event, detail: unknown) => {
+    const state = windows.get(event.sender.id)
+    const pendingClose = state?.closing
+    if (!state || !pendingClose) return
+    clearCloseTimer(state)
+    void dialog
+      .showMessageBox(state.win, {
+        type: 'warning',
+        message: 'A worktree move is running in this window',
+        detail: capLabel(detail),
+        buttons: ['Keep Window Open', 'Close Anyway'],
+        defaultId: 0,
+        cancelId: 0
+      })
+      .then(({ response }) => {
+        if (state.closing !== pendingClose || state.win.isDestroyed()) return
+        if (response === 1) return finishClose(state)
+        state.closing = null
+        pendingClose.settle(false)
+      })
+  })
 }

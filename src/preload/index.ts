@@ -43,6 +43,8 @@ const api = {
   onWindowCloseRequest: (callback: () => void): (() => void) =>
     subscribe('window:close-request', callback),
   windowCloseReady: (): void => ipcRenderer.send('window:close-ready'),
+  /** The answer to a close request while something must not be cut short (a worktree move): main asks the user */
+  windowCloseBusy: (detail: string): void => ipcRenderer.send('window:close-busy', detail),
   selectDirectory: (title: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectDirectory', title),
 

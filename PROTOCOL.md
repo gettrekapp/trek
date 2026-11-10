@@ -722,7 +722,7 @@ The client's order, and what each step leaves behind when it fails:
    did and fails. Either way it takes the transfer and removes its staged files.
 7. Only when the client tears the source's Docker VM or dev stack down (the user ticked it): `move.finish`
    `{verifyOnly: true}` on the source (the same checks, nothing removed; on `CONFLICT` or `IN_USE`
-   as below), then `env.destroy` and `stack.destroy` on the source. This is the point of
+   as below), then `stack.destroy` and `env.destroy` on the source. This is the point of
    commitment: they are never torn down before the target has the worktree and the source is
    checked unchanged, and they need the worktree's folder, so they come before step 8.
 8. `move.finish` on the source: removes its copy, only if it is unchanged since step 3. On
@@ -730,7 +730,11 @@ The client's order, and what each step leaves behind when it fails:
    `undoToken` from step 6: the worktree, the branch it created, the branch data, the PR watch and
    the histories it wrote all go back) and loads the source again. Should `move.unreceive` refuse
    (`NOT_FOUND` after a target restart, `IN_USE` or `CONFLICT` when the target's copy was loaded or
-   changed meanwhile), both copies stay.
+   changed meanwhile), both copies stay; the Trek app does not fall back to `worktree.remove`,
+   which could neither tell the target's copy is unchanged nor put its branch data and histories
+   back. The exception: once step 7 tore the source's VM or stack down, a `CONFLICT` or `IN_USE`
+   here keeps both copies (no `move.unreceive`), since the source's machine state is already gone;
+   the client says so, for the user to compare them and delete one.
 
 | Method | Params | Result |
 |---|---|---|

@@ -211,8 +211,9 @@ never connect to each other, and no token reaches either window): the source pus
 origin, the target's `move.receive` fetches and checks it out next to its clone of the same
 repository, applies the uncommitted work as one patch and writes the Claude sessions' histories
 (copied in 4 MiB chunks into a staged upload in a temp directory, at most 64 MiB a session) under the new path (in the target server user's `~/.claude`), then the source removes its copy with
-`move.finish`, only if nothing changed there since it was copied. A failure on the target undoes
-all of it; the source is removed last. Both clones need an `origin` that names the same repository,
+`move.finish`, only if nothing changed there since it was copied (if it did, the app undoes the
+target's copy whole with `move.unreceive`). A failure on the target undoes all of it; the source
+is removed last. Both clones need an `origin` that names the same repository,
 and the source's server user must be able to push to it. See PROTOCOL.md, "Moving a worktree
 between servers".
 

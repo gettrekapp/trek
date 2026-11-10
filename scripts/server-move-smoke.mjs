@@ -9,8 +9,10 @@
 // own clone. The built app runs with a temp HOME and --user-data-dir, no Local server, main's
 // dialogs stubbed, both servers saved; A's project window moves the worktree. It checks:
 //   - both welcomes list move; the window offers Move to another server… (B is saved);
-//   - the dialog offers to tear down the worktree's running dev stack (ticked); unticked, Move is
-//     refused; the stack is destroyed on A only after B has the worktree, A's folder still there;
+//   - the dialog offers to tear down the worktree's running VM (a registry entry and stub colima)
+//     and dev stack (ticked); unticked, Move is refused; the stack, then the VM (env.destroy: colima
+//     delete), are destroyed on A only after B has the worktree, A's folder still there;
+//   - it warns that the ignored folder (.trek/) is deleted with the source;
 //   - the dialog lists B's project (same origin), the new path, the session that moves and the
 //     queued prompt that doesn't; a branch already checked out on B is a blocked place;
 //   - the move: the steps all done (a Claude history over 16 MiB copied in chunks, byte for byte,
@@ -18,7 +20,11 @@
 //     on the same commit with the uncommitted work (unstaged), the Claude session saved (not
 //     running) with its history under the new path in B's HOME, the note, the tag (by name) and the
 //     branch's .env;
-//   - A's worktree is gone from disk, its project and its window; A's history file is kept;
+//   - A's worktree is gone from disk, its project and its window; A's history file is kept; the
+//     dialog stays on the moved worktree (no error, its title) when the detail behind moves on;
+//   - a source changed between export and finish (a pre-push hook writes a file into it): finish
+//     refuses, move.unreceive undoes B's copy whole (worktree, branch, branch data), A keeps its own;
+//   - both servers' TMPDIR is a folder in the smoke's work dir, with no trek-move-* left in it;
 //   - Open on B opens B's project window, which lists the moved worktree;
 //   - the renderer never holds either token; no error dialogs, console or page errors.
 //
@@ -27,10 +33,11 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { deriveProfileName } from '../src/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 
@@ -59,7 +66,6 @@ const until = async (fn, expected, ms = 15_000) => {
 // ---- Fixtures --------------------------------------------------------------
 
 const root = new URL('..', import.meta.url).pathname
-const startedAt = Date.now()
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-smoke-')))
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')
@@ -68,13 +74,18 @@ const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.e
 const claudeDir = (home, cwd) => join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
 
 // docker and colima stubs first on both servers' PATH (no real docker or colima ever runs): docker
-// ps lists one container while the file `stack-running` exists, so the dev stack reads as running.
+// ps lists one container while the file `stack-running` exists, so the dev stack reads as running;
+// colima lists the feature branch's VM, running, until `colima delete` of it removes `vm-running`
+// (and records whether A's folder was still there and B had the worktree then).
 const machineStubs = join(work, 'machine-stubs')
 const machineCalls = join(work, 'machine-calls.log')
 const stackRunning = join(work, 'stack-running')
+const vmRunning = join(work, 'vm-running')
+const vmDeletes = join(work, 'vm-deletes.log')
 mkdirSync(machineStubs)
-writeFileSync(join(machineStubs, 'docker'), `#!/bin/sh\necho "docker $*" >> '${machineCalls}'\nif [ "$1" = ps ] && [ -e '${stackRunning}' ]; then echo c0ffee; fi\nexit 0\n`, { mode: 0o755 })
-writeFileSync(join(machineStubs, 'colima'), `#!/bin/sh\necho "colima $*" >> '${machineCalls}'\nexit 0\n`, { mode: 0o755 })
+// Both servers' temp dir: their staged transfers (trek-move-*) land here, and only here is scanned.
+const serverTmp = join(work, 'tmp')
+mkdirSync(serverTmp)
 const stackCalls = join(work, 'stack-calls.log')
 
 const origin = join(work, 'origin.git')
@@ -113,6 +124,31 @@ for (const s of [A, B]) {
 }
 const sourcePath = `${A.repo}-feature-x`
 const targetPath = `${B.repo}-feature-x`
+// The worktree that is changed while it is copied: a pre-push hook (only for it) writes a file into it.
+const lateSource = `${A.repo}-feature-z`
+const lateTarget = `${B.repo}-feature-z`
+writeFileSync(join(A.repo, '.git', 'hooks', 'pre-push'), `#!/bin/sh\nif [ "$(basename "$(pwd -P)")" = '${basename(lateSource)}' ]; then echo late > late.txt; fi\nexit 0\n`, { mode: 0o755 })
+
+// feature-x's VM: A's registry names it (its worktree), colima lists it running.
+const vmProfile = deriveProfileName(A.repo, 'feature-x')
+writeFileSync(join(A.data, 'environments.json'), JSON.stringify({ [vmProfile]: { repoPath: A.repo, branch: 'feature-x', worktreePath: sourcePath, composeFile: 'docker-compose.yml', createdAt: '2026-11-10T00:00:00.000Z' } }))
+writeFileSync(vmRunning, '')
+writeFileSync(
+  join(machineStubs, 'docker'),
+  `#!/bin/sh\nif [ "$1" = --version ]; then echo "Docker version 0.0.0-stub"; exit 0; fi\necho "docker $*" >> '${machineCalls}'\nif [ "$1" = ps ] && [ -e '${stackRunning}' ]; then echo c0ffee; fi\nexit 0\n`,
+  { mode: 0o755 }
+)
+writeFileSync(
+  join(machineStubs, 'colima'),
+  `#!/bin/sh
+if [ "$1" = --version ]; then echo "colima version 0.0.0-stub"; exit 0; fi
+echo "colima $*" >> '${machineCalls}'
+if [ "$1" = list ] && [ -e '${vmRunning}' ]; then echo '${JSON.stringify({ name: vmProfile, status: 'Running' })}'; fi
+if [ "$1" = delete ] && [ "$2" = '${vmProfile}' ]; then echo "$( [ -d '${sourcePath}' ] && echo present )|$( [ -d '${targetPath}' ] && echo on-b )" >> '${vmDeletes}'; rm -f '${vmRunning}'; fi
+exit 0
+`,
+  { mode: 0o755 }
+)
 
 const mainStub = join(work, 'main-stub.cjs')
 writeFileSync(
@@ -179,7 +215,7 @@ async function start(s) {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', s.configPath, '--port', String(port), '--data-dir', s.data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}`, HOME: s.home, XDG_STATE_HOME: join(s.home, '.local', 'state'), SHELL: '/bin/sh', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}`, TMPDIR: serverTmp, HOME: s.home, XDG_STATE_HOME: join(s.home, '.local', 'state'), SHELL: '/bin/sh', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemons.push(d)
@@ -225,6 +261,7 @@ try {
   await b.sdk.request('project.updateSettings', { projectId: pb, settings: { worktreeTags: [{ id: 'other-id', name: 'Review', color: '#000000' }] } })
   const repoA = (await a.project(pa)).repositories[0].id
   const repoB = (await b.project(pb)).repositories[0].id
+  await a.sdk.request('repo.update', { projectId: pa, repoId: repoA, environments: { enabled: true } })
   const { worktreeId } = await a.sdk.request('worktree.create', { projectId: pa, repoId: repoA, branch: 'feature-x', createBranch: true })
   writeFileSync(join(sourcePath, 'feature.txt'), 'committed\n')
   git('-C', sourcePath, 'add', '.')
@@ -253,6 +290,9 @@ try {
   git('-C', `${A.repo}-feature-y`, 'push', '-q', 'origin', 'feature-y')
   git('-C', B.repo, 'fetch', '-q', 'origin')
   git('-C', B.repo, 'worktree', 'add', '-q', join(B.home, 'repos', 'elsewhere'), 'feature-y')
+  // A third, clean, with a note: changed (by the hook) after its export, so its move is rolled back.
+  await a.sdk.request('worktree.create', { projectId: pa, repoId: repoA, branch: 'feature-z', createBranch: true })
+  await a.sdk.request('branch.setNote', { projectId: pa, repoId: repoA, branch: 'feature-z', note: 'late note' })
 
   // ---- 2. The app, with both servers saved, and A's project window ---------------------------------
 
@@ -272,8 +312,9 @@ try {
     if (opened) window.__store.getState().setServerWindow({ serverEntryId: id, projectId: pid })
   }, [entryA.id, pa])
   const rows = win.locator('.server-window .wt-row')
-  await until(() => rows.count(), 3)
+  await until(() => rows.count(), 4)
   check("the window's moveWorktree feature follows the server's move", await until(() => win.evaluate(() => window.__features().moveWorktree), true), true)
+  check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
 
   // ---- 3. The dialog ---------------------------------------------------------------------------------
 
@@ -312,7 +353,9 @@ try {
   ], [true, true, true])
   const teardownBox = modal.locator('.move-teardown input')
   await teardownBox.waitFor({ timeout: 10_000 })
-  check('the dialog offers to tear down its running dev stack, ticked', [await teardownBox.isChecked(), (await modal.locator('.move-teardown').textContent()).includes('dev stack “trek-')], [true, true])
+  const teardownLabel = await modal.locator('.move-teardown').textContent()
+  check('the dialog offers to tear down its running VM and dev stack, ticked', [await teardownBox.isChecked(), teardownLabel.includes(`VM “${vmProfile}”`), teardownLabel.includes('dev stack “trek-')], [true, true, true])
+  check('it warns the ignored .trek/ is deleted with the source', [await modal.locator('.move-ignored').count(), (await modal.locator('.move-ignored .move-paths').textContent()).includes('.trek/')], [1, true])
   await modal.locator('.move-row select').first().selectOption({ label: 'Server B' })
   await modal.locator('.move-path').waitFor({ timeout: 10_000 })
   await teardownBox.uncheck()
@@ -327,6 +370,8 @@ try {
   check('the move reports success', await until(() => modal.locator('.server-test-result.ok').count(), 1, 60_000), 1)
   check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done', 'done'])
   check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
+  check("the VM was deleted on A (env.destroy) after B had it, while A's folder was still there", existsSync(vmDeletes) ? readFileSync(vmDeletes, 'utf8').split('\n').filter(Boolean) : [], ['present|on-b'])
+  check("and is gone from A's registry", Object.keys(JSON.parse(readFileSync(join(A.data, 'environments.json'), 'utf8'))), [])
   check('the history step copied the whole 17 MB', (await modal.locator('.move-step.done', { hasText: 'Copy the session histories' }).locator('.move-step-detail').textContent()).includes('1 session history, 17.0 MB'), true)
   check('origin has the branch at the source commit', git('--git-dir', origin, 'rev-parse', 'refs/heads/feature-x').trim(), head)
   check('B has the worktree on the same commit', existsSync(targetPath) && git('-C', targetPath, 'rev-parse', 'HEAD').trim(), head)
@@ -336,10 +381,12 @@ try {
   check("B's project lists it, unloaded, with the Claude session saved", [row?.loaded, row?.sessions.map((s) => [s.title, s.agentSessionId, s.queue.length])], [false, [['Claude moved', sessionId, 0]]])
   const arrived = readFileSync(join(claudeDir(B.home, targetPath), `${sessionId}.jsonl`))
   check("the session's history (over 16 MiB) is under the new path in B's HOME, byte for byte", [arrived.length > 16 * 1024 * 1024, createHash('sha256').update(arrived).digest('hex')], [true, historySha])
-  check("nothing is left staged on B", readdirSync(tmpdir()).filter((n) => n.startsWith('trek-move-') && statSync(join(tmpdir(), n)).mtimeMs >= startedAt).length, 0)
+  check('nothing is left staged in either server\'s TMPDIR', readdirSync(serverTmp).filter((n) => n.startsWith('trek-move-')), [])
   check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', 'PORT=4100\n'])
   check("A's worktree is gone from disk and from A's project", [existsSync(sourcePath), (await a.project(pa)).repositories[0].worktrees.some((w) => w.id === worktreeId)], [false, false])
   check("and from A's window", await until(() => rows.filter({ hasText: 'feature-x' }).count(), 0), 0)
+  await sleep(500)
+  check('the dialog stays on the moved worktree after the detail moves on: no error, its title', [await modal.locator('.server-test-result.fail').count(), await modal.locator('.server-test-result.ok').count(), (await modal.locator('h2').textContent()).includes('feature-x')], [0, 1, true])
   check("A's copy of the history is kept (copied, not moved)", existsSync(join(claudeDir(A.home, sourcePath), `${sessionId}.jsonl`)), true)
 
   // ---- 5. Open on B ----------------------------------------------------------------------------------
@@ -351,9 +398,34 @@ try {
   await bWin.waitForLoadState('domcontentloaded')
   check("B's window lists the moved worktree", await until(() => bWin.locator('.server-window .wt-row', { hasText: 'feature-x' }).count(), 1, 20_000), 1)
 
+  // ---- 6. A move rolled back: the source changed after its export -------------------------------
+
+  modal = await openMove('feature-z')
+  await modal.locator('.move-row select').first().selectOption({ label: 'Server B' })
+  await modal.locator('.move-path').waitFor({ timeout: 10_000 })
+  await modal.locator('button', { hasText: 'Move worktree' }).click()
+  const undone = modal.locator('.server-test-result.fail')
+  check('the move stops at the finish and says the copy on B was undone', await until(() => undone.textContent().then((t) => t.includes('undone there'), () => false), true, 60_000), true)
+  check('receive done, finish failed', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', '')).slice(4)), ['done', 'skipped', 'failed'])
+  check('no Open on B for a rolled back move', await modal.locator('button', { hasText: 'Open on' }).count(), 0)
+  const bAfter = (await b.project(pb)).repositories[0]
+  check("B is as before: no worktree, no branch, no branch data", [
+    existsSync(lateTarget),
+    bAfter.worktrees.some((w) => w.path === lateTarget),
+    spawnSync('git', ['-C', B.repo, 'rev-parse', '--verify', '-q', 'refs/heads/feature-z']).status === 0,
+    bAfter.branchData['feature-z'] ?? null
+  ], [false, false, false, null])
+  const aAfter = (await a.project(pa)).repositories[0]
+  check('A keeps its worktree, with the late change and its note', [existsSync(join(lateSource, 'late.txt')), aAfter.worktrees.some((w) => w.path === lateSource), aAfter.branchData['feature-z']?.note], [true, true, 'late note'])
+  check('nothing is left staged after the rollback', readdirSync(serverTmp).filter((n) => n.startsWith('trek-move-')), [])
+  await modal.locator('button', { hasText: 'Close' }).click()
+  await modal.waitFor({ state: 'detached', timeout: 5000 })
+
   const held = await Promise.all(app.windows().map((w) => w.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))))
   check("no window's store or page holds either server's token", held.some((h) => h.includes(A.token) || h.includes(B.token)), false)
-  check('docker ran only as the stub, for the stack status (never colima up or delete)', readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean).every((l) => l.startsWith('docker ps') || l.startsWith('colima list')), true)
+  const machineLines = readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean)
+  const unexpected = machineLines.filter((l) => !(l.startsWith('docker ps') || l.startsWith('colima list') || l === `colima delete ${vmProfile} --force` || (l.startsWith('docker ') && l.includes(' compose ') && l.endsWith(' down -v'))))
+  check('docker and colima ran only as the stubs: status, the VM\'s compose down and delete (never colima start)', unexpected, [])
   check('no error dialogs', (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error'), [])
   check('no console or page errors', pageErrors, [])
   exitCode = failedChecks.length ? 1 : 0
