@@ -33,6 +33,8 @@ import type {
   VoiceServerConfig,
   VoiceServerSettings,
   StackStatus,
+  ChangesSource,
+  CommitInfo,
   WorktreeChanges
 } from './types.ts'
 
@@ -196,7 +198,13 @@ export const CAPABILITY = {
    * after a poll fails like a sign-in error; a change is pushed to every authenticated connection as
    * `integrations.changed` `{prWatch}`, which the client SDK applies to `welcome.capabilities`.
    */
-  prWatch: 'prWatch'
+  prWatch: 'prWatch',
+  /**
+   * The Changes tab's review (5c-2): `worktree.changes` and `worktree.diff` take a `source`,
+   * `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line
+   * comments and send them to one of its sessions as one queued prompt
+   */
+  review: 'review'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -291,8 +299,11 @@ export interface MethodParamsV2 {
   'worktree.unload': WorktreeRef
   'worktree.pull': WorktreeRef
   'worktree.push': WorktreeRef & { setUpstream: boolean }
-  'worktree.changes': WorktreeRef
-  'worktree.diff': WorktreeRef
+  /** `source` (5c-2, capability `review`) defaults to the branch against its base */
+  'worktree.changes': WorktreeRef & { source?: ChangesSource }
+  'worktree.diff': WorktreeRef & { source?: ChangesSource }
+  /** The newest 100 commits on the worktree's HEAD, newest first (5c-2) */
+  'worktree.commits': WorktreeRef
   /** A fresh `git status --porcelain` of the worktree (the status poll's `dirty` may be up to 30 s old) */
   'worktree.dirty': WorktreeRef
   // Branch data (null clears)
@@ -306,6 +317,26 @@ export interface MethodParamsV2 {
   /** Clears the worktree's pull request notice */
   'prWatch.dismiss': WorktreeRef
   'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
+  // The Changes tab's review (5c-2): the draft is the worktree's `review` in the project topic
+  /** A new line comment; `lineText` is the line as shown, without the diff's +, - or space */
+  'review.add': WorktreeRef & {
+    source: ChangesSource
+    path: string
+    side: 'old' | 'new'
+    line: number
+    lineText: string
+    body: string
+  }
+  /** `expected`: the body the edit started from (compare-and-set) */
+  'review.edit': WorktreeRef & { commentId: string; body: string; expected?: string }
+  'review.remove': WorktreeRef & { commentId: string }
+  /** Discards the draft; `revision`: the draft the client showed (compare-and-set) */
+  'review.clear': WorktreeRef & { revision: number }
+  /**
+   * Queues the draft on `sessionId` (one of the worktree's sessions) as one prompt and clears it, in
+   * one change; `revision`: the draft the client showed, so nothing unseen is sent (CONFLICT)
+   */
+  'review.send': WorktreeRef & { sessionId: string; revision: number }
   // Sessions
   /** `worktreeId: null` starts a Global panel session */
   'session.start': ProjectRef & {
@@ -467,6 +498,7 @@ export interface MethodResultsV2 {
   'worktree.diff': Record<string, string>
   /** null when git cannot read the worktree's status */
   'worktree.dirty': boolean | null
+  'worktree.commits': CommitInfo[]
   'branch.setTag': null
   'branch.setCustomTags': null
   'branch.setNote': null
@@ -475,6 +507,11 @@ export interface MethodResultsV2 {
   'branch.setPrWatch': null
   'prWatch.dismiss': null
   'branch.setEnv': null
+  'review.add': { commentId: string }
+  'review.edit': null
+  'review.remove': null
+  'review.clear': null
+  'review.send': null
   'session.start': { sessionId: string; ptyId: string }
   'session.restart': { ptyId: string }
   'session.close': null

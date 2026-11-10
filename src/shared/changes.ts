@@ -91,3 +91,42 @@ export function missingPatchNote(
   if (diffError) return 'Diff not available'
   return file.added + file.deleted > 0 ? 'Diff not shown: over the size limit' : 'No text changes'
 }
+
+/** One line of a patch body with its place in the files, for line comments (5c-2). */
+export interface NumberedLine {
+  /** The line without the diff's +, - or space; a hunk header or a note as it is */
+  text: string
+  kind: 'hunk' | 'add' | 'del' | 'context' | 'note'
+  /** Which file a comment on it names: `old` for a removed line, `new` for an added or unchanged one */
+  side?: 'old' | 'new'
+  /** 1-based, in that side's file */
+  line?: number
+}
+
+/**
+ * Numbers a patch body (`patchBody`) from its hunk headers. A `\ No newline at end of file`
+ * note and anything before the first hunk have no number, so they can't be commented on.
+ */
+export function numberedLines(body: readonly string[]): NumberedLine[] {
+  let oldLine = 0
+  let newLine = 0
+  let inHunk = false
+  return body.map((raw): NumberedLine => {
+    if (raw.startsWith('@@')) {
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw)
+      inHunk = m !== null
+      if (m) {
+        oldLine = Number(m[1])
+        newLine = Number(m[2])
+      }
+      return { text: raw, kind: 'hunk' }
+    }
+    if (!inHunk || raw.startsWith('\\')) return { text: raw, kind: 'note' }
+    if (raw.startsWith('+')) return { text: raw.slice(1), kind: 'add', side: 'new', line: newLine++ }
+    if (raw.startsWith('-')) return { text: raw.slice(1), kind: 'del', side: 'old', line: oldLine++ }
+    const line: NumberedLine = { text: raw.slice(1), kind: 'context', side: 'new', line: newLine }
+    newLine++
+    oldLine++
+    return line
+  })
+}

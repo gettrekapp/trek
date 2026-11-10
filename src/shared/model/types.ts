@@ -2,7 +2,7 @@
 // receive it as topic snapshots plus JSON patches (see ../sync/). Type-only, so
 // it is safe for `node --test`, the daemon and a React Native client.
 import type { LlmSelection } from '../providers/types.ts'
-import type { EnvironmentSettings, ProjectFile } from '../types.ts'
+import type { ChangesSource, EnvironmentSettings, ProjectFile } from '../types.ts'
 
 /**
  * Computed on the server from the terminal's live output:
@@ -116,6 +116,35 @@ export interface Worktree {
   sessions: Session[]
   /** Its watched pull request's last report, until dismissed (`prWatch.dismiss`) or replaced. Runtime only. */
   prNotice?: PrNotice
+  /** The Changes tab's draft review (5c-2): saved with the project, until sent or discarded */
+  review?: ReviewDraft
+}
+
+/** A worktree's draft review: line comments on its diffs, sent to a session as one prompt (5c-2). */
+export interface ReviewDraft {
+  /** Goes up by one on every change; `review.send` and `review.clear` compare it */
+  revision: number
+  /** In the order they were written */
+  comments: ReviewComment[]
+}
+
+/** One line comment. It keeps the line's text, so it can still be sent once the line has changed. */
+export interface ReviewComment {
+  /** Server-assigned */
+  id: string
+  /** The diff it was written on */
+  source: ChangesSource
+  /** The file's path in that diff (its new name for a rename) */
+  path: string
+  /** `old`: a removed line, numbered in the old file; `new`: an added or unchanged line, in the new file */
+  side: 'old' | 'new'
+  /** 1-based */
+  line: number
+  /** The line as it read when the comment was written, without the diff's +, - or space */
+  lineText: string
+  body: string
+  /** Epoch ms, the server's clock: when it was written or last edited */
+  at: number
 }
 
 export interface Repository {

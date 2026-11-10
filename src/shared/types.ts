@@ -448,6 +448,24 @@ export interface ChangedFile {
   unreadable?: boolean
 }
 
+/**
+ * What the Changes tab compares (5c-2): the branch against its base (what it would add to the
+ * default branch, uncommitted work included; the default), the uncommitted work alone (staged,
+ * unstaged and untracked, against HEAD), or one commit against its first parent.
+ */
+export type ChangesSource = { kind: 'branch' } | { kind: 'uncommitted' } | { kind: 'commit'; sha: string }
+
+/** One of the newest commits on a worktree's HEAD (`worktree.commits`, 5c-2). */
+export interface CommitInfo {
+  /** The full hex object id */
+  sha: string
+  /** The first line of its message, at most 200 characters */
+  subject: string
+  author: string
+  /** Author time, epoch ms */
+  at: number
+}
+
 /** What a worktree would add to the default branch, uncommitted work included. */
 export interface WorktreeChanges {
   /** The default branch compared against; null when comparing to HEAD */
