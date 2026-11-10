@@ -20,6 +20,9 @@ import { pathOfProject, projectOfPath } from './routes.ts'
 import { WEB_ENTRY_ID, type WebApi } from './webApi.ts'
 import { ProjectsPage } from './ProjectsPage.tsx'
 
+/** Set by Sign out: the session's end then closes the socket, and the form's own answer (/login) is where the page goes. */
+let signingOut = false
+
 /** Shows the path's project (or the list), as the store's serverWindow. */
 function followPath(): void {
   const projectId = projectOfPath(window.location.pathname)
@@ -68,7 +71,11 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
     // A token revoked, a sign-out in another tab, a server restart: the cookie no longer signs
     // this page in. The sign-in page is the way back.
     const offStatus = registered.connection.on('status', ({ status: s }) => {
-      if (s === 'needs-auth') window.location.assign('/login')
+      // The page's path rides along as next; the server keeps it only when it is a project's page.
+      if (s === 'needs-auth' && !signingOut) {
+        const here = window.location.pathname
+        window.location.assign(here === '/' ? '/login' : `/login?next=${encodeURIComponent(here)}`)
+      }
       if (s === 'connected') web.relabel()
     })
     return offStatus
@@ -79,6 +86,8 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
   // A dialog still waiting when the shown project changes is about the one left: it is answered
   // with its cancel, so its caller doesn't act on the project now shown.
   useEffect(() => {
+    // The server's reload page (a link from another site) came back with its marker: drop it.
+    if (new URLSearchParams(window.location.search).has('r')) window.history.replaceState(null, '', window.location.pathname)
     followPath()
     const onPop = (): void => followPath()
     window.addEventListener('popstate', onPop)
@@ -117,7 +126,14 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
         <div className="title-side web-title-right">
           {status !== 'connected' && <span className="web-status">{STATUS_LABELS[status as keyof typeof STATUS_LABELS] ?? status}</span>}
           {/* A plain form: the server ends the session and clears its cookie. */}
-          <form method="post" action="/logout" className="web-signout">
+          <form
+            method="post"
+            action="/logout"
+            className="web-signout"
+            onSubmit={() => {
+              signingOut = true
+            }}
+          >
             <button type="submit" className="btn btn-ghost">
               Sign out
             </button>

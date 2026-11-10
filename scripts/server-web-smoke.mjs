@@ -9,7 +9,8 @@
 // --user-data-dir: a browser, nothing more. Through HTTP, the page and raw sockets it checks:
 //   - `start --local --web` is a usage error;
 //   - signed out, / goes to /login (a project's path with it as next); every answer has the CSP,
-//     frame-ancestors, nosniff and same-origin referrer headers; a request naming another host is 421;
+//     frame-ancestors, nosniff and same-origin referrer headers; a request with a proxy's Host
+//     (dev.example.com, as Caddy passes it to the loopback listener) is answered;
 //   - paths outside the bundle are never files, sent verbatim (`..`, encoded dots and slashes) with
 //     the session cookie;
 //   - the sign-in page: a wrong token is refused with a message; the right one signs in, setting an
@@ -21,14 +22,17 @@
 //     (Tab cycles inside), Escape cancels it after a click on the backdrop, and leaving the project
 //     cancels one still open;
 //   - a link from another site to a project's page lands on it signed in: the SameSite=Strict
-//     cookie isn't sent on that navigation, so the server's reload page reloads it from this site;
+//     cookie isn't sent on that navigation, so the server's reload page reloads it once from this site
+//     (with a marker the page then drops from its URL);
 //   - the token is nowhere in the page: its string globals, web storage, document.cookie, the DOM,
 //     or the URLs it loaded;
 //   - a socket from another site's page is refused (403), the cookie without this host's Origin is no
-//     sign-in, and with it the cookie alone is welcomed;
+//     sign-in, and with it the cookie alone is welcomed; through a proxy's Host, an Origin-less socket
+//     (the app's relay) and one from that host's page are welcomed, another site's still refused;
 //   - a sign-in posted from another site is refused; past the limit even the right token is 429;
 //   - Sign out goes to /login and the old cookie signs nothing in; a project's link then goes to
-//     /login and, signed in, on to the project; revoking the token sends the open page to /login,
+//     /login and, signed in, on to the project; revoking the token sends the open page to /login
+//     (with the project as next),
 //     and its cookie stays signed out once the token is listed again;
 //   - no console or page errors.
 //
@@ -268,7 +272,9 @@ try {
   check('paths outside the bundle are never files', traversal, ['not a file', 'not a file', 'not a file', 'not a file'])
   const deep = await get('/p/some-project')
   check('signed out, a project’s path goes to /login with it as next', deep.headers.get('location'), '/login?next=%2Fp%2Fsome-project')
-  check('a request naming another host is refused (DNS rebinding)', (await rawGet(port, '/login', { host: 'evil.example' })).status, 421)
+  // Bound to loopback behind Caddy, every request names the proxy's host: it is answered.
+  const proxied = await rawGet(port, '/login', { host: 'dev.example.com' })
+  check('a request with a proxy’s Host is answered', [proxied.status, proxied.body.includes('name="token"')], [200, true])
 
   // ---- 3. The project, through the SDK: a worktree and a session --------------------------------------
 
@@ -376,7 +382,8 @@ try {
   await new Promise((r) => linkServer.listen(linkPort, '127.0.0.1', r))
   const projectLoads = []
   const onResponse = (r) => {
-    if (r.url() === projectUrl && r.request().resourceType() === 'document') projectLoads.push(r.status())
+    const u = new URL(r.url())
+    if (u.origin === base && u.pathname === `/p/${projectId}` && r.request().resourceType() === 'document') projectLoads.push(`${r.status()}${u.search}`)
   }
   page.on('response', onResponse)
   try {
@@ -384,7 +391,8 @@ try {
     await page.locator('#go').click()
     await page.waitForURL(projectUrl, { timeout: 10_000 })
     check('a link from another site lands on the project, signed in', await until(() => rows.count(), 1), 1)
-    check('through the reload page, then the page itself', await until(() => projectLoads.length, 2, 5000).then(() => projectLoads), [200, 200])
+    check('through the reload page, then the page itself (once, with the marker)', await until(() => projectLoads.length, 2, 5000).then(() => projectLoads), ['200', '200?r=1'])
+    check('the page drops the marker from its URL', await until(() => page.url(), projectUrl), projectUrl)
   } finally {
     page.off('response', onResponse)
     linkServer.close()
@@ -432,6 +440,12 @@ try {
   check('the cookie without this host’s Origin is no sign-in', await hello(wsUrl, { cookie: cookieHeader }), 4003)
   check('this host’s Origin without the cookie is no sign-in', await hello(wsUrl, { origin: base }), 4003)
   check('with both, the cookie alone is welcomed', await hello(wsUrl, { origin: base, cookie: cookieHeader }), 'welcome')
+  // Behind Caddy on loopback the upgrade's Host is the proxy's name: the app's relay (no Origin) and
+  // that host's own page are welcomed; another site's page is still refused.
+  const viaProxy = { host: 'dev.example.com' }
+  check('through a proxy’s Host, an Origin-less socket is accepted', await hello(wsUrl, { ...viaProxy, authorization: `Bearer ${token}` }), 'welcome')
+  check('and one from that host’s page is welcomed by the cookie', await hello(wsUrl, { ...viaProxy, origin: 'https://dev.example.com', cookie: cookieHeader }), 'welcome')
+  check('another site’s page through it is still refused', await hello(wsUrl, { ...viaProxy, origin: 'https://evil.example', cookie: cookieHeader }), 'refused 403')
 
   // ---- 8. Sign out; sign in again; revoke ------------------------------------------------------------
 
@@ -453,8 +467,11 @@ try {
   const secondCookie = `__Host-trek-session=${second?.value}`
   // Revoked in the config: the running server reloads it and closes the page's socket.
   writeConfig([])
-  await page.waitForURL(`${base}/login`, { timeout: 15_000 }).catch(() => {})
-  check('revoking the token sends the open page to /login', new URL(page.url()).pathname, '/login')
+  await page.waitForURL((u) => u.pathname === '/login', { timeout: 15_000 }).catch(() => {})
+  check('revoking the token sends the open page to /login, the project as next', [new URL(page.url()).pathname, new URL(page.url()).search], [
+    '/login',
+    `?next=${encodeURIComponent(`/p/${projectId}`)}`
+  ])
 
   // ---- 9. Sign-in from elsewhere, the limit (last: it counts every failure from 127.0.0.1) ----------
 

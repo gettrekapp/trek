@@ -370,17 +370,22 @@ served it; it never holds a token.
 | Path | |
 |---|---|
 | `GET /login` | The sign-in form (no script): paste a token. `?next=` (below) rides along as a hidden field. Signed in, it goes to `next` |
-| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB (else `413` with `Connection: close`, once up to 1 MiB more has been read and dropped; past that the connection is cut). The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `next` (a hidden field, below; `/` without it) with the session cookie set. Else `401` and the form again (keeping `next`). Each attempt counts as a failure from the moment it is let in until it succeeds, so concurrent attempts are limited too: five from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one releases its count and clears its address's |
+| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB (else `413` with `Connection: close`, once up to 1 MiB more has been read and dropped; past that the connection is cut). The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `next` (a hidden field, below; `/` without it) with the session cookie set. Else `401` and the form again (keeping `next`). The form's action carries `next` in its query as well (`/login?next=…`), so a `429`, answered before the body is read, keeps it too. Each attempt counts as a failure from the moment it is let in until it succeeds, so concurrent attempts are limited too: five from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one releases its count and clears its address's |
 | `POST /logout` | Same-origin only (`403`). Ends the session, closes its sockets (`4003`, reason `signed out`), clears the cookie, `303` to `/login` |
-| `GET /`, `/p/<projectId>`, `/index.html`, any other path | The page, only with a live session; else `303` to `/login` (`/login?next=/p/<projectId>` from a project's page) |
+| `GET /`, `/p/<projectId>`, `/index.html`, any other path | The page, only with a live session; else `303` to `/login` (`/login?next=%2Fp%2F<projectId>` from a project's page) |
 | `GET` a file of the build (`/assets/…`) | Served signed in or not (it is the same code for everyone); `/assets/…` is cached for good (Vite hashes the names). Only the build's own regular files, looked up by exact path (no symlinks; `..` and encoded slashes match nothing): any other `/assets/…` is `404` |
 | another method | `405` on any path |
 
-On a loopback bind (`127.0.0.1`, `localhost`, `::1`), every request and upgrade must
-carry a loopback `Host` (`127.0.0.1`, `localhost` or `[::1]`, any port): any other is
-HTTP `421` (an upgrade `403`), so a page on a DNS name rebound to 127.0.0.1 can't reach
-the server. Any other bind (behind the TLS proxy) answers whatever `Host` the proxy
-passes.
+The `Host` header is not checked: on the documented deployment (the server on
+`127.0.0.1` behind Caddy) every request and upgrade names the proxy's host
+(`dev.example.com`), and the server answers it like any other. A page on a DNS name
+rebound to `127.0.0.1` reaches the server too, but never with the session: the cookie is
+host-only (`__Host-`), set for the name the browser signed in on, so such a page can load
+only the public build and post to the rate-limited sign-in (tokens are 256-bit), and its
+sockets have no cookie to sign in with. What it can do is spend the sign-in limit:
+failing five sign-ins a minute from this machine's address (fifty from all) keeps new
+sign-ins at `429`, a minute at a time, while the page stays open. Open sessions are
+unaffected.
 
 **`next`.** A sign-in goes on to `next` only when it is exactly `/` or
 `/p/<projectId>` with an id of letters, digits and `-` (the server's ids); anything else
@@ -390,12 +395,17 @@ sends the browser off the site.
 **A link from another site.** A browser never sends a `SameSite=Strict` cookie on a
 navigation that starts on another site, so a link to the page from elsewhere (a chat, an
 issue, another web app) would land on `/login` even when signed in. A `GET` for a page
-path (any but a build file) without a live session whose `Sec-Fetch-Site` is
-`cross-site` or `same-site` is answered `200` with a tiny page, no script: `<meta
-http-equiv="refresh" content="0">` and a link, both to the same URL. The reload is a
-same-origin navigation, which carries the cookie; without one it is `303` to `/login` as
-usual (its `Sec-Fetch-Site` is then `same-origin`, so no loop). A request without
-`Sec-Fetch-Site` never gets it.
+path (any but a build file) without a live session that is a top-level navigation
+(`Sec-Fetch-Mode: navigate`) whose `Sec-Fetch-Site` is `cross-site` or `same-site` is
+answered `200` with a tiny page, no script: `<meta http-equiv="refresh"
+content="0;url=<path>?r=1">` and a link to the same, where `<path>` is the request's
+path when it is `/` or `/p/<projectId>` (`next`'s rule, below) and `/` otherwise; nothing
+else from the request is written. The reload is a same-origin navigation, which carries
+the cookie. It is one shot: a request carrying the `r` marker is never answered with the
+reload page, whatever its `Sec-Fetch-Site` says, so without a session it is `303` to
+`/login` as usual (`next` is the path, never the marker). The page drops the marker from
+its URL. Any other request (no `Sec-Fetch-Site`, or not a navigation: a fetch, an image,
+a frame) never gets it.
 
 **The session.** Signing in makes a random 32-byte id, sent once in
 `Set-Cookie: __Host-trek-session=<id>; Path=/; HttpOnly; Secure; SameSite=Strict;

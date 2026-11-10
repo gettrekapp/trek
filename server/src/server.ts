@@ -32,7 +32,7 @@ import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
-import { LoginLimiter, loopbackHost, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
+import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
 import { createWebHandler } from './web/http'
 import { sweepEvery, WebSocketSignIns } from './web/sockets'
 import type { WebBundle } from './web/bundle'
@@ -77,11 +77,6 @@ export interface ServerOptions {
    */
   web?: {
     bundle: WebBundle
-    /**
-     * The server is bound to loopback: HTTP requests and upgrades must name a loopback
-     * Host (DNS rebinding). Off for any other bind (a TLS proxy passes its own Host).
-     */
-    loopback?: boolean
   }
 }
 
@@ -165,8 +160,7 @@ export function startServer(
     ? {
         sessions: new WebSessions({ onExpire: (key) => webSignIns?.signedOut(key) }),
         limiter: new LoginLimiter(),
-        bundle: options.web.bundle,
-        loopback: options.web.loopback === true
+        bundle: options.web.bundle
       }
     : undefined
   if (web) webSignIns = new WebSocketSignIns(web.sessions, (ws) => closeRevoked(ws, 'signed out'))
@@ -211,8 +205,7 @@ export function startServer(
             return entry ? { hash: entry.hash, name: entry.name } : undefined
           },
           serverName: () => store.config.name ?? '',
-          signedOut,
-          loopback: web.loopback
+          signedOut
         })
       : (_req, res) => {
           res.writeHead(426, { 'content-type': 'text/plain' })
@@ -224,12 +217,12 @@ export function startServer(
     maxPayload: MAX_FRAME_BYTES,
     // With the web client on, a browser page from another site never gets a socket (cross-site
     // WebSocket hijacking): a request with an Origin must come from this host. The app's relay and
-    // the CLI clients send no Origin. On loopback, the Host must be loopback too (DNS rebinding).
+    // the CLI clients send no Origin. The Host isn't checked: behind the proxy it is the proxy's
+    // name, and a page on a DNS name rebound to loopback never has the host-only cookie.
     verifyClient: web
       ? (info, done) => {
           const origin = info.req.headers.origin
-          if (web.loopback && !loopbackHost(info.req.headers.host)) done(false, 403, 'Forbidden')
-          else if (origin !== undefined && !sameOrigin(origin, info.req.headers.host)) done(false, 403, 'Forbidden')
+          if (origin !== undefined && !sameOrigin(origin, info.req.headers.host)) done(false, 403, 'Forbidden')
           else done(true)
         }
       : undefined

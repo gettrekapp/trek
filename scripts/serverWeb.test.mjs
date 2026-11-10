@@ -21,7 +21,6 @@ import {
   WebSessions,
   clearedCookie,
   loginToken,
-  loopbackHost,
   parseCookies,
   sameOrigin,
   sessionCookie
@@ -277,13 +276,6 @@ test('sameOrigin: a default port (80 for http, 443 for https) on either side is 
   assert.equal(sameOrigin('https://trek.example.com', 'trek.example.com:8443'), false)
 })
 
-test('loopbackHost: 127.0.0.1, localhost or [::1], with or without a port; nothing else', () => {
-  for (const h of ['127.0.0.1', '127.0.0.1:7345', 'localhost', 'LOCALHOST:7345', '[::1]', '[::1]:7345', ' localhost:1 ']) assert.equal(loopbackHost(h), true, h)
-  for (const h of [undefined, '', 'evil.example', 'evil.example:7345', '127.0.0.1.evil.example', 'localhost.evil.example', '127.0.0.2', '::1', '[::1]x', 'localhost:', 'localhost:abc', '127.0.0.1:7345:1']) {
-    assert.equal(loopbackHost(h), false, String(h))
-  }
-})
-
 test('loginToken: the form field, trimmed; empty, overlong or odd characters are no token', () => {
   assert.equal(loginToken('token=abc_DEF-123'), 'abc_DEF-123')
   assert.equal(loginToken('token=%20abc%20'), 'abc')
@@ -534,6 +526,7 @@ test('the deep link: /login keeps a project path as next, the form posts it back
   const login = await req('/login?next=%2Fp%2Fproj-1')
   const html = await login.text()
   assert.ok(html.includes('<input type="hidden" name="next" value="/p/proj-1">'), 'the hidden field')
+  assert.ok(html.includes('action="/login?next=%2Fp%2Fproj-1"'), 'and the action, for a 429')
   assert.ok(!(await (await req('/login?next=%2F%2Fevil.com')).text()).includes('name="next"'), 'an unsafe next is dropped')
   const res = await form(`token=${TOKEN}&next=%2Fp%2Fproj-1`)
   assert.equal(res.status, 303)
@@ -557,36 +550,97 @@ test('the deep link: a sign-in never goes to another site, whatever next says', 
   }
 })
 
+/**
+ * A GET with exactly these headers, as a browser would send them: fetch writes its own
+ * `Sec-Fetch-Mode: cors` over any given. A fetch-like answer: status, headers.get, text.
+ */
+function rawFetch(host, path, headers = {}) {
+  const [hostname, port] = host.split(':')
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ hostname, port: Number(port), path, method: 'GET', agent: false, headers }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8')
+        resolve({ status: res.statusCode, headers: { get: (n) => res.headers[n.toLowerCase()] ?? null }, text: async () => body })
+      })
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 test('a navigation from another site without the cookie gets the reload page; from this site, /login', async (t) => {
-  const { req, signIn } = await handlerServer(t)
+  const { host, signIn } = await handlerServer(t)
+  const req = (path, { headers = {} } = {}) => rawFetch(host, path, headers)
+  const nav = (site) => ({ 'sec-fetch-site': site, 'sec-fetch-mode': 'navigate' })
   for (const site of ['cross-site', 'same-site']) {
-    for (const path of ['/', '/p/proj-1', '/elsewhere', '/login']) {
-      const res = await req(path, { headers: { 'sec-fetch-site': site, 'sec-fetch-mode': 'navigate' } })
+    for (const [path, to] of [['/', '/'], ['/p/proj-1', '/p/proj-1'], ['/elsewhere', '/'], ['/login', '/'], ['/login?next=%2Fp%2Fproj-1', '/'], ['/p/a%22b', '/']]) {
+      const res = await req(path, { headers: nav(site) })
       assert.equal(res.status, 200, `${site} ${path}`)
       for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.equal(res.headers.get(name), value, `${path} ${name}`)
       assert.equal(res.headers.get('cache-control'), 'no-store')
       const body = await res.text()
-      assert.equal(body, reloadPage())
+      assert.equal(body, reloadPage(to), `${site} ${path}`)
+      assert.ok(body.includes(`<meta http-equiv="refresh" content="0;url=${to}?r=1">`), `${site} ${path}`)
+      assert.ok(body.includes(`<a href="${to}?r=1"`), 'a fallback link to the same place')
     }
   }
-  const html = reloadPage()
-  assert.ok(html.includes('<meta http-equiv="refresh" content="0">'))
-  assert.ok(html.includes('<a href=""'), 'a fallback link to this same URL')
-  assert.ok(!html.includes('<script'), 'no script')
+  // Only the checked path is ever written into the page.
+  assert.equal(reloadPage('/p/proj-1'), reloadPage('/p/proj-1'))
+  for (const odd of ['//evil.com', '/p/x"><script>', '/p/../x', 'javascript:alert(1)']) {
+    const html = reloadPage(odd)
+    assert.equal(html, reloadPage('/'), odd)
+  }
+  assert.ok(!reloadPage('/').includes('<script'), 'no script')
   // The reload is same-origin: with no session it goes to /login as usual (no loop).
   for (const site of ['same-origin', 'none', undefined]) {
-    const res = await req('/p/proj-1', { headers: site ? { 'sec-fetch-site': site } : {} })
+    const res = await req('/p/proj-1', { headers: site ? { 'sec-fetch-site': site, 'sec-fetch-mode': 'navigate' } : {} })
     assert.equal(res.status, 303, String(site))
     assert.equal(res.headers.get('location'), '/login?next=%2Fp%2Fproj-1')
   }
   // The page's files are not pages: never the reload page.
-  assert.equal((await req('/assets/index-abc.js', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 200)
-  assert.equal((await req('/assets/missing.js', { headers: { 'sec-fetch-site': 'cross-site' } })).status, 404)
+  assert.equal((await req('/assets/index-abc.js', { headers: nav('cross-site') })).status, 200)
+  assert.equal((await req('/assets/missing.js', { headers: nav('cross-site') })).status, 404)
   // Signed in (a same-site navigation does carry a Strict cookie), the page itself.
   const cookie = await signIn()
-  const page = await req('/p/proj-1', { headers: { cookie, 'sec-fetch-site': 'same-site' } })
+  const page = await req('/p/proj-1', { headers: { cookie, ...nav('same-site') } })
   assert.equal(page.status, 200)
   assert.ok((await page.text()).includes('id="root"'))
+  // The marker's request, signed in: the page, however the browser labels it.
+  const marked = await req('/p/proj-1?r=1', { headers: { cookie, ...nav('cross-site') } })
+  assert.equal(marked.status, 200)
+  assert.ok((await marked.text()).includes('id="root"'))
+})
+
+test('the reload page is one shot: the marker is never answered with it, nor a request that is not a navigation', async (t) => {
+  const { host } = await handlerServer(t)
+  const req = (path, { headers = {} } = {}) => rawFetch(host, path, headers)
+  // The reload came back without the cookie, even labelled cross-site: /login, the marker not in next.
+  for (const site of ['cross-site', 'same-site', 'same-origin', undefined]) {
+    const headers = site ? { 'sec-fetch-site': site, 'sec-fetch-mode': 'navigate' } : {}
+    const res = await req('/p/proj-1?r=1', { headers })
+    assert.equal(res.status, 303, String(site))
+    assert.equal(res.headers.get('location'), '/login?next=%2Fp%2Fproj-1', String(site))
+    const root = await req('/?r=1', { headers })
+    assert.equal(root.status, 303, String(site))
+    assert.equal(root.headers.get('location'), '/login', String(site))
+  }
+  // /login with the marker is the form, not the reload page.
+  const login = await req('/login?r=1', { headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate' } })
+  assert.equal(login.status, 200)
+  assert.ok((await login.text()).includes('name="token"'))
+  // Cross-site but not a navigation (a fetch, an image, an iframe, a missing mode): the usual answers.
+  for (const mode of ['cors', 'no-cors', 'same-origin', 'nested-navigate', 'websocket', undefined]) {
+    const headers = { 'sec-fetch-site': 'cross-site', ...(mode ? { 'sec-fetch-mode': mode } : {}) }
+    const res = await req('/p/proj-1', { headers })
+    assert.equal(res.status, 303, String(mode))
+    assert.equal(res.headers.get('location'), '/login?next=%2Fp%2Fproj-1', String(mode))
+    const form = await req('/login', { headers })
+    assert.equal(form.status, 200, String(mode))
+    assert.ok((await form.text()).includes('name="token"'), String(mode))
+    assert.equal((await req('/assets/missing.js', { headers })).status, 404, String(mode))
+  }
 })
 
 test('a new sign-in in a browser that had a session ends the old one', async (t) => {
@@ -663,27 +717,46 @@ function rawGet(host, path, hostHeader, extra = {}) {
   })
 }
 
-test('on a loopback bind, only a loopback Host is answered (DNS rebinding); elsewhere any Host is', async (t) => {
-  const { host } = await handlerServer(t, { loopback: true })
-  const port = host.split(':')[1]
-  for (const h of [`127.0.0.1:${port}`, `localhost:${port}`, 'localhost', `[::1]:${port}`]) {
-    assert.equal((await rawGet(host, '/login', h)).statusCode, 200, h)
-  }
-  for (const h of ['evil.example', `evil.example:${port}`, `127.0.0.1.evil.example:${port}`]) {
-    const res = await rawGet(host, '/login', h)
-    assert.equal(res.statusCode, 421, h)
-    assert.equal(res.headers['content-security-policy'], SECURITY_HEADERS['content-security-policy'])
-    assert.equal((await rawGet(host, '/assets/index-abc.js', h)).statusCode, 421, h)
-    const post = await rawGet(host, '/login', h, {
-      method: 'POST',
-      body: `token=${TOKEN}`,
-      headers: { origin: `http://${h}`, 'content-type': 'application/x-www-form-urlencoded' }
-    })
-    assert.equal(post.statusCode, 421, `POST ${h}`)
-  }
-  // A proxy's server (not on loopback) answers whatever Host the proxy passes.
-  const proxied = await handlerServer(t)
-  assert.equal((await rawGet(proxied.host, '/login', 'trek.example.com')).statusCode, 200)
+test('on loopback behind a proxy, the proxy\'s Host is answered: the page, a same-origin sign-in, the signed-in page', async (t) => {
+  // handlerServer listens on 127.0.0.1: Caddy in front passes `Host: dev.example.com` through.
+  const { host } = await handlerServer(t)
+  const proxied = 'dev.example.com'
+  const page = await rawGet(host, '/login', proxied)
+  assert.equal(page.statusCode, 200)
+  assert.equal(page.headers['content-security-policy'], SECURITY_HEADERS['content-security-policy'])
+  assert.equal((await rawGet(host, '/assets/index-abc.js', proxied)).statusCode, 200)
+  const signIn = await rawGet(host, '/login', proxied, {
+    method: 'POST',
+    body: `token=${TOKEN}&next=%2Fp%2Fproj-1`,
+    headers: { origin: `https://${proxied}`, 'content-type': 'application/x-www-form-urlencoded' }
+  })
+  assert.equal(signIn.statusCode, 303)
+  assert.equal(signIn.headers.location, '/p/proj-1')
+  const cookie = signIn.headers['set-cookie'][0].split(';')[0]
+  assert.equal((await rawGet(host, '/p/proj-1', proxied, { headers: { cookie } })).statusCode, 200)
+  // Another site's form, through the same proxy, is still refused.
+  const cross = await rawGet(host, '/login', proxied, {
+    method: 'POST',
+    body: `token=${TOKEN}`,
+    headers: { origin: 'https://evil.example', 'content-type': 'application/x-www-form-urlencoded' }
+  })
+  assert.equal(cross.statusCode, 403)
+})
+
+test('sign-in: the 429 page keeps a checked next from the form action\'s query', async (t) => {
+  const { req, base } = await handlerServer(t)
+  const post = (path, body) =>
+    req(path, { method: 'POST', body, headers: { origin: base, 'content-type': 'application/x-www-form-urlencoded' } })
+  for (let i = 0; i < LOGIN_FAILS_PER_ADDRESS; i++) assert.equal((await post('/login?next=%2Fp%2Fproj-1', 'token=wrong&next=%2Fp%2Fproj-1')).status, 401)
+  const limited = await post('/login?next=%2Fp%2Fproj-1', `token=${TOKEN}&next=%2Fp%2Fproj-1`)
+  assert.equal(limited.status, 429)
+  const html = await limited.text()
+  assert.ok(html.includes('<input type="hidden" name="next" value="/p/proj-1">'), 'the hidden field')
+  assert.ok(html.includes('action="/login?next=%2Fp%2Fproj-1"'), 'the action')
+  const unsafe = await post('/login?next=%2F%2Fevil.com', `token=${TOKEN}`)
+  assert.equal(unsafe.status, 429)
+  const unsafeHtml = await unsafe.text()
+  assert.ok(!unsafeHtml.includes('name="next"') && unsafeHtml.includes('action="/login"'), 'an unsafe next is dropped')
 })
 
 test('other methods are 405', async (t) => {

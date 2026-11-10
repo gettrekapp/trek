@@ -233,7 +233,9 @@ Cookies are not port-scoped, so a browser sends the session cookie to every port
 that name, and any other web server there (a worktree's dev server an agent can edit
 included) sees it and could sign in as the browser. On loopback, any other local web
 server the browser visits on `127.0.0.1`/`localhost` sees it; the server warns at start.
-Bound to loopback, the server answers only a loopback `Host` (DNS rebinding).
+The server answers whatever `Host` Caddy passes (it doesn't check it): a page on a DNS
+name rebound to 127.0.0.1 never gets the host-only session cookie, but it can spend the
+sign-in limit, keeping new sign-ins out for a minute at a time (see PROTOCOL.md).
 
 ## Projects
 

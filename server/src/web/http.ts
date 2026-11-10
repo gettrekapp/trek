@@ -4,7 +4,7 @@
 // other answers HTTP with 426 as before. The WebSocket upgrade never comes
 // here: server.ts reads the same session cookie at hello.
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { clearedCookie, LoginLimiter, loginToken, loopbackHost, parseCookies, sameOrigin, SESSION_COOKIE, sessionCookie, WebSessions } from './auth.ts'
+import { clearedCookie, LoginLimiter, loginToken, parseCookies, sameOrigin, SESSION_COOKIE, sessionCookie, WebSessions } from './auth.ts'
 import type { WebBundle } from './bundle.ts'
 
 /** The sign-in form's body is one short field. */
@@ -41,11 +41,6 @@ export interface WebDeps {
   serverName(): string
   /** A session was signed out: its sockets close */
   signedOut(key: string): void
-  /**
-   * The server is bound to loopback: only a request whose Host is loopback is answered
-   * (421 otherwise), so a page on a rebound DNS name can't reach it. Off behind a proxy.
-   */
-  loopback?: boolean
   now?: () => number
 }
 
@@ -67,17 +62,23 @@ export function safeNext(next: string | null | undefined): string {
 /** `/login`, carrying a page path worth coming back to. */
 const loginPath = (next: string): string => (safeNext(next) === '/' ? '/login' : `/login?next=${encodeURIComponent(next)}`)
 
+/** The query field the reload page's refresh adds: a request carrying it never gets the reload page. */
+export const RELOAD_MARKER = 'r'
+
 /**
  * A navigation from another site (or a sibling one) without this server's
  * session: the SameSite=Strict cookie isn't sent on one, signed in or not.
- * Answered with a page that reloads the same URL from here, a same-origin
- * navigation that carries the cookie. A browser that has none is then sent to
- * /login as usual (its Sec-Fetch-Site is same-origin by then, so no loop).
- * A request without Sec-Fetch-Site (not a browser, or an old one) never gets it.
+ * Answered with a page that reloads the URL from here, a same-origin
+ * navigation that carries the cookie. One shot: only a top-level navigation
+ * (`Sec-Fetch-Mode: navigate`) whose `Sec-Fetch-Site` is `cross-site` or
+ * `same-site` gets it, and the reload goes to the path with the marker
+ * (`?r=1`), which is never answered with it, whatever the browser labels the
+ * reload. A browser without the cookie is then sent to /login as usual.
+ * A request without these headers (not a browser, or an old one) never gets it.
  */
-const crossSite = (req: IncomingMessage): boolean => {
+const crossSiteNavigation = (req: IncomingMessage, query: URLSearchParams): boolean => {
   const site = req.headers['sec-fetch-site']
-  return typeof site === 'string' && site !== '' && site !== 'same-origin' && site !== 'none'
+  return (site === 'cross-site' || site === 'same-site') && req.headers['sec-fetch-mode'] === 'navigate' && !query.has(RELOAD_MARKER)
 }
 
 export function createWebHandler(deps: WebDeps): Handler {
@@ -135,7 +136,7 @@ export function createWebHandler(deps: WebDeps): Handler {
       })
     })
 
-  const login = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+  const login = async (req: IncomingMessage, res: ServerResponse, query: URLSearchParams): Promise<void> => {
     // A form posted from another site (login CSRF) is refused before its body is read.
     if (!sameOrigin(req.headers.origin, req.headers.host)) return plain(res, 403, 'Forbidden')
     const type = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
@@ -143,11 +144,12 @@ export function createWebHandler(deps: WebDeps): Handler {
     const address = req.socket.remoteAddress ?? ''
     // Counted as a failure from here (so concurrent attempts are limited too) until it succeeds.
     const at = now()
-    if (!deps.limiter.allow(address, at)) return page(res, 429, 'Too many failed sign-ins. Wait a minute, then try again.')
+    // The body isn't read when refused: the form's action carries `next` in its query too.
+    if (!deps.limiter.allow(address, at)) return page(res, 429, 'Too many failed sign-ins. Wait a minute, then try again.', safeNext(query.get('next')))
     const body = await readBody(req, res)
     if (body === null) return
     const token = loginToken(body)
-    const next = safeNext(new URLSearchParams(body).get('next'))
+    const next = safeNext(new URLSearchParams(body).get('next') ?? query.get('next'))
     const entry = token ? deps.matchToken(token) : undefined
     if (!entry) {
       console.warn(`[web] rejected a sign-in from ${address}`)
@@ -183,8 +185,6 @@ export function createWebHandler(deps: WebDeps): Handler {
   }
 
   return (req, res) => {
-    // DNS rebinding: on loopback, a Host that isn't loopback is another site's name for us.
-    if (deps.loopback && !loopbackHost(req.headers.host)) return plain(res, 421, 'Misdirected Request')
     const method = req.method ?? 'GET'
     let path: string
     let query: URLSearchParams
@@ -196,7 +196,7 @@ export function createWebHandler(deps: WebDeps): Handler {
       return plain(res, 400, 'Bad Request')
     }
     if (path === '/login' && method === 'POST') {
-      void login(req, res).catch(() => {
+      void login(req, res, query).catch(() => {
         if (!res.headersSent) plain(res, 500, 'Internal Server Error')
       })
       return
@@ -209,7 +209,7 @@ export function createWebHandler(deps: WebDeps): Handler {
     // The rest are pages: the sign-in form, and the page itself (at / and its project routes,
     // /p/<id>, and any other path) only to a signed-in browser.
     const session = signedIn(req)
-    if (!session && crossSite(req)) return html(res, 200, reloadPage())
+    if (!session && crossSiteNavigation(req, query)) return html(res, 200, reloadPage(path))
     if (path === '/login') {
       const next = safeNext(query.get('next'))
       return session ? redirect(res, next) : page(res, 200, undefined, next)
@@ -231,6 +231,8 @@ export function loginPage(serverName: string, message?: string, next?: string): 
   const note = message ? `<p class="error" role="alert">${escapeHtml(message)}</p>` : ''
   const back = safeNext(next)
   const nextField = back === '/' ? '' : `\n<input type="hidden" name="next" value="${escapeHtml(back)}">`
+  // `next` in the action's query too, for the 429 that answers before the body is read.
+  const action = back === '/' ? '/login' : `/login?next=${encodeURIComponent(back)}`
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -248,7 +250,7 @@ button { padding: 6px 14px; background: #0e639c; color: #fff; border: 0; border-
 </style>
 </head>
 <body>
-<form method="post" action="/login" autocomplete="off">${nextField}
+<form method="post" action="${escapeHtml(action)}" autocomplete="off">${nextField}
 <h1>Trek · ${name}</h1>
 <p>Paste a token made with <code>trek-server token add &lt;name&gt;</code>.</p>
 ${note}
@@ -263,21 +265,23 @@ ${note}
 
 /**
  * The answer to a navigation from another site that came without the session
- * cookie (see `crossSite`): no script, a refresh to this same URL (now from
- * this site, so the cookie goes with it), and a link for a browser that
- * doesn't follow it. `href=""` is this URL too: nothing from the request is
- * written into the page.
+ * cookie (see `crossSiteNavigation`): no script, a refresh (now from this
+ * site, so the cookie goes with it), and a link for a browser that doesn't
+ * follow it, both to the path with the marker. The path is `safeNext`'s (`/`
+ * or a project's page, else `/`): nothing else from the request is written
+ * into the page.
  */
-export function reloadPage(): string {
+export function reloadPage(path: string): string {
+  const to = escapeHtml(`${safeNext(path)}?${RELOAD_MARKER}=1`)
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="refresh" content="0">
+<meta http-equiv="refresh" content="0;url=${to}">
 <title>Trek</title>
 </head>
 <body style="font: 14px -apple-system, system-ui, sans-serif; background: #1e1e1e; color: #ddd">
-<p><a href="" style="color: #3794ff">Continue to Trek</a></p>
+<p><a href="${to}" style="color: #3794ff">Continue to Trek</a></p>
 </body>
 </html>
 `

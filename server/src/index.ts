@@ -491,7 +491,7 @@ const server = startServer(
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
       recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)
     },
-    web: webBundle ? { bundle: webBundle, loopback: loopbackBind } : undefined
+    web: webBundle ? { bundle: webBundle } : undefined
   }
 )
 store.watch()
@@ -519,7 +519,7 @@ server.httpServer.listen(port, host, () => {
   if (webBundle) {
     console.log(
       `web client: http://${host.includes(':') ? `[${host}]` : host}:${bound}/` +
-        (loopbackBind ? ' (reach it from other devices through your TLS proxy)' : '')
+        (loopbackBind ? ' (this machine only; other devices reach it through your TLS proxy, on its https name)' : '')
     )
     // --insecure on another interface: the page loads, but a browser drops the Secure session
     // cookie on plain http there, so no sign-in ever sticks.

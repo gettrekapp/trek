@@ -205,16 +205,6 @@ export function sameOrigin(origin: string | undefined, host: string | undefined)
   return equalText(url.host.toLowerCase(), target)
 }
 
-/**
- * Whether a Host header names this machine's loopback: `127.0.0.1`, `localhost` or
- * `[::1]`, with or without a port. A server bound to loopback answers only these, so a
- * page on a rebound DNS name (evil.example resolving to 127.0.0.1) can't reach it.
- */
-export function loopbackHost(host: string | undefined): boolean {
-  if (!host) return false
-  return /^(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$/.test(host.trim().toLowerCase())
-}
-
 const equalText = (a: string, b: string): boolean => {
   const x = Buffer.from(a)
   const y = Buffer.from(b)
