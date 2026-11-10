@@ -479,7 +479,12 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      worktree is removed, and any failure before that rolls the target back and leaves
      the source as it was; Claude sessions' histories are copied (others are listed as
      not carried), and the note, tags, ticket, PR link and PR watch go along, not the
-     review draft or queued prompts. Plan:
+     review draft or queued prompts. Answered the same day: each Claude history travels
+     in its own chunked requests, up to 64 MiB a session; the worktree's Docker VM and
+     dev stack are torn down as Delete does (a checkbox, ticked by default; unticked, the
+     move is refused while they run), only after the target is verified; the branch's
+     Docker `.env` goes with the note, and a target without `env` lists it as not carried.
+     Plan:
      `docs/superpowers/plans/2026-11-10-central-server-phase5d-move-worktrees.md`.
    - **Later, in their own plans:** the bot (ported last, only when asked), promote to
      primary, and Windows support for the supervisor.
