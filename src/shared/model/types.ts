@@ -60,6 +60,34 @@ export interface BranchData {
   pr?: string
   /** .env-style text for the branch's Docker environment */
   env?: string
+  /** The server watches `pr` (5c-1): on while present; cleared with `pr`, and by the server after merged or closed */
+  prWatch?: PrWatch
+}
+
+/** A pull request watch. `seen` is what the last poll saw; absent until the first poll (the baseline, which reports nothing). */
+export interface PrWatch {
+  seen?: PrSeen
+}
+
+/** What a watch remembers between polls, so a server restart reports nothing twice. */
+export interface PrSeen {
+  /** `<head commit> <checks state>`: a new push, or the same run settling, is a new moment */
+  checks: string
+  /** GitHub last said the PR conflicts with its base (UNKNOWN keeps the previous answer) */
+  conflict: boolean
+  /** ISO time of the newest review or comment by someone other than the PR's author */
+  commentsAt?: string
+}
+
+/** What a watched pull request last reported (5c-1). Runtime only, like a session's status. */
+export interface PrNotice {
+  /** "PR #12" */
+  title: string
+  /** One line: what changed, and where its prompt went */
+  text: string
+  url: string
+  /** Epoch ms, the server's clock */
+  at: number
 }
 
 export interface Worktree {
@@ -84,6 +112,8 @@ export interface Worktree {
   /** Whether the worktree's sessions are running (loaded) or only saved */
   loaded: boolean
   sessions: Session[]
+  /** Its watched pull request's last report, until dismissed (`prWatch.dismiss`) or replaced. Runtime only. */
+  prNotice?: PrNotice
 }
 
 export interface Repository {
@@ -142,7 +172,10 @@ export interface ProjectSummary {
 
 /**
  * A session that needs the user, as listed by the `attention` topic: one in
- * `attention` or `done`, or one with an open decision (in any status).
+ * `attention` or `done`, or one with an open decision (in any status). A
+ * worktree's pull request notice (5c-1) is listed too: `sessionId` '', `title`
+ * the notice's ("PR #12"), `status` 'attention', `since` its `at`, and
+ * `pullRequest` set, so a client older than 5c-1 still lists it as needing attention.
  */
 export interface AttentionEntry {
   projectId: string
@@ -159,4 +192,6 @@ export interface AttentionEntry {
   projectName: string
   /** The project's `audioAlerts` setting, when on: the client plays its alert sound */
   audioAlerts?: true
+  /** A worktree's pull request notice (5c-1): what changed. Its entry has no session (`sessionId` ''). */
+  pullRequest?: { text: string; url: string }
 }
