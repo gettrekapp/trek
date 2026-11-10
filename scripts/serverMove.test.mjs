@@ -16,7 +16,8 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
-import { normalizeOrigin, sameOrigin } from '../src/shared/move.ts'
+import { MAX_MOVE_CHUNK_BYTES, MOVE_TRANSFER_IDLE_MS, normalizeOrigin, sameOrigin } from '../src/shared/move.ts'
+import { MoveTransfers } from '../server/src/move/transfers.ts'
 
 const gitEnv = {
   ...process.env,
@@ -97,19 +98,41 @@ async function setup(t) {
   return { dir, origin, a, b, A, B, worktreeId, path, ref }
 }
 
-/** The whole move, as the app runs it: export, push, receive, finish. */
+/** Copies each carried history from A into a new transfer on B, chunk by chunk; the transfer id. */
+async function copyHistories(s, sessions) {
+  const begun = await s.B.call('move.begin', { projectId: s.B.projectId, repoId: s.B.repoId })
+  assert.equal(begun.ok, true, JSON.stringify(begun))
+  const { transferId } = begun.result
+  let chunks = 0
+  for (const session of sessions) {
+    let offset = 0
+    for (;;) {
+      const chunk = await s.A.call('move.history', { ...s.ref, agentSessionId: session.agentSessionId, offset })
+      assert.equal(chunk.ok, true, JSON.stringify(chunk))
+      const up = await s.B.call('move.upload', { transferId, agentSessionId: session.agentSessionId, offset, data: chunk.result.data })
+      assert.equal(up.ok, true, JSON.stringify(up))
+      offset = up.result.size
+      chunks++
+      if (chunk.result.done) break
+    }
+  }
+  return { transferId, chunks }
+}
+
+/** The whole move, as the app runs it: export, push, histories, receive, finish. */
 async function move(s, { finish = true } = {}) {
   const exported = await s.A.call('move.export', s.ref)
   assert.equal(exported.ok, true, JSON.stringify(exported))
   const pushed = await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
   assert.equal(pushed.ok, true, JSON.stringify(pushed))
   const { fingerprint, notCarried, ...rest } = exported.result
-  const received = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: rest.branch, head: rest.head, patch: rest.patch, sessions: rest.sessions, branchData: rest.branchData })
+  const { transferId, chunks } = await copyHistories(s, rest.sessions)
+  const received = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: rest.branch, head: rest.head, patch: rest.patch, sessions: rest.sessions, branchData: rest.branchData, transferId })
   if (finish && received.ok) {
     const done = await s.A.call('move.finish', { ...s.ref, fingerprint })
     assert.equal(done.ok, true, JSON.stringify(done))
   }
-  return { exported: exported.result, received, notCarried }
+  return { exported: exported.result, received, notCarried, chunks }
 }
 
 test('normalizeOrigin matches the ssh, https and file forms of one repository', () => {
@@ -216,7 +239,8 @@ test('move.receive undoes everything when origin is not at the source head', asy
   const s = await setup(t)
   const exported = (await s.A.call('move.export', s.ref)).result
   await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
-  const res = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: exported.patch, sessions: exported.sessions, branchData: {} })
+  const { transferId } = await copyHistories(s, exported.sessions)
+  const res = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: exported.patch, sessions: exported.sessions, branchData: {}, transferId })
   assert.equal(res.error?.code, 'CONFLICT')
   assert.equal(git(s.b, 'branch', '--list', 'feat').trim(), '')
   assert.ok(!existsSync(join(s.dir, 'b', 'app-feat')))
@@ -227,7 +251,8 @@ test('move.receive undoes the worktree, the branch and the histories when the pa
   const exported = (await s.A.call('move.export', s.ref)).result
   await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
   const target = join(s.dir, 'b', 'app-feat')
-  const res = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: exported.head, patch: 'diff --git a/x b/x\nnot a patch\n', sessions: exported.sessions, branchData: exported.branchData })
+  const { transferId } = await copyHistories(s, exported.sessions)
+  const res = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: exported.head, patch: 'diff --git a/x b/x\nnot a patch\n', sessions: exported.sessions, branchData: exported.branchData, transferId })
   assert.equal(res.error?.code, 'GIT_ERROR', JSON.stringify(res))
   assert.ok(!existsSync(target))
   assert.equal(git(s.b, 'branch', '--list', 'feat').trim(), '')
@@ -250,10 +275,18 @@ test('move.receive validates what it is given', async (t) => {
   const s = await setup(t)
   const base = { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: '', sessions: [], branchData: {} }
   const code = async (over) => (await s.B.call('move.receive', { ...base, ...over })).error?.code
+  // A clean worktree's patch is '': only the head (not on origin) refuses this one.
+  assert.equal(await code({}), 'GIT_ERROR')
   assert.equal(await code({ head: 'HEAD' }), 'BAD_REQUEST')
   assert.equal(await code({ branch: '-x' }), 'BAD_REQUEST')
-  assert.equal(await code({ sessions: [{ title: 't', llm: { provider: 'codex' }, agentSessionId: CLAUDE_ID, history: '' }] }), 'BAD_REQUEST')
-  assert.equal(await code({ sessions: [{ title: 't', llm: { provider: 'claude' }, agentSessionId: '../x', history: '' }] }), 'BAD_REQUEST')
+  const one = { title: 't', llm: { provider: 'claude' }, agentSessionId: CLAUDE_ID, historyBytes: 5, historySha256: 'a'.repeat(64) }
+  assert.equal(await code({ sessions: [{ ...one, llm: { provider: 'codex' } }] }), 'BAD_REQUEST')
+  assert.equal(await code({ sessions: [{ ...one, agentSessionId: '../x' }] }), 'BAD_REQUEST')
+  assert.equal(await code({ sessions: [{ ...one, historyBytes: 64 * 1024 * 1024 + 1 }] }), 'BAD_REQUEST')
+  assert.equal(await code({ sessions: [one, one] }), 'BAD_REQUEST', 'a repeated session')
+  assert.equal(await code({ sessions: [one] }), 'BAD_REQUEST', 'sessions need a transfer')
+  const missing = await s.B.call('move.receive', { ...base, sessions: [one], transferId: '00000000-0000-4000-8000-000000000000' })
+  assert.equal(missing.error?.code, 'NOT_FOUND', JSON.stringify(missing))
   assert.equal(await code({ branchData: { note: 5 } }), 'BAD_REQUEST')
   assert.equal(await code({ repoId: 'nope' }), 'NOT_FOUND')
 })
@@ -270,4 +303,73 @@ test('move.export leaves out the linked dirs (the target links them itself) and 
   const refused = await s.A.call('move.export', s.ref)
   assert.equal(refused.error?.code, 'BAD_REQUEST')
   assert.match(refused.error.message, /not UTF-8/)
+})
+
+test('a history bigger than one chunk (and than a frame) arrives whole, in order', async (t) => {
+  const s = await setup(t)
+  // 17 MiB: five chunks, and more than the server's 16 MiB frame.
+  const line = JSON.stringify({ type: 'assistant', text: 'x'.repeat(1000) }) + '\n'
+  const big = line.repeat(Math.ceil((17 * 1024 * 1024) / line.length))
+  writeFileSync(join(projectDir(s.path), `${CLAUDE_ID}.jsonl`), big)
+  const { received, chunks } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.equal(chunks, Math.ceil(Buffer.byteLength(big) / MAX_MOVE_CHUNK_BYTES))
+  assert.equal(readFileSync(join(projectDir(join(s.dir, 'b', 'app-feat')), `${CLAUDE_ID}.jsonl`), 'utf8'), big)
+})
+
+test('a history that did not arrive whole is refused, and nothing stays staged or built', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const begun = (await s.B.call('move.begin', { projectId: s.B.projectId, repoId: s.B.repoId })).result
+  await s.B.call('move.upload', { transferId: begun.transferId, agentSessionId: CLAUDE_ID, offset: 0, data: Buffer.from('{"type"').toString('base64') })
+  const res = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: exported.head, patch: exported.patch, sessions: exported.sessions, branchData: {}, transferId: begun.transferId })
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res))
+  assert.match(res.error.message, /did not arrive whole/)
+  assert.ok(!existsSync(join(s.dir, 'b', 'app-feat')))
+  assert.equal(git(s.b, 'branch', '--list', 'feat').trim(), '')
+  assert.equal((await s.B.call('move.upload', { transferId: begun.transferId, agentSessionId: CLAUDE_ID, offset: 7, data: 'AAAA' })).error?.code, 'NOT_FOUND', 'the transfer went with the receive')
+})
+
+test('move.history reads only a carried history of an unloaded worktree', async (t) => {
+  const s = await setup(t)
+  assert.equal((await s.A.call('move.history', { ...s.ref, agentSessionId: FRESH_ID, offset: 0 })).error?.code, 'NOT_FOUND', 'no saved conversation')
+  assert.equal((await s.A.call('move.history', { ...s.ref, agentSessionId: CLAUDE_ID, offset: -1 })).error?.code, 'BAD_REQUEST')
+  assert.equal((await s.A.call('move.history', { ...s.ref, agentSessionId: CLAUDE_ID, offset: 9999 })).error?.code, 'BAD_REQUEST')
+  const whole = await s.A.call('move.history', { ...s.ref, agentSessionId: CLAUDE_ID, offset: 0 })
+  assert.deepEqual({ ...whole.result, data: Buffer.from(whole.result.data, 'base64').toString() }, { data: '{"type":"user"}\n', offset: 0, total: 16, done: true })
+  s.A.projects.apply(s.A.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === s.worktreeId).loaded = true })
+  assert.equal((await s.A.call('move.history', { ...s.ref, agentSessionId: CLAUDE_ID, offset: 0 })).error?.code, 'IN_USE')
+})
+
+test('transfers: chunks in order, the limits, abort, and an idle one swept', async (t) => {
+  let now = 1000
+  const transfers = new MoveTransfers(() => now)
+  t.after(() => transfers.clear())
+  const id = await transfers.begin('p', 'r')
+  const chunk = Buffer.from('abcd').toString('base64')
+  assert.equal(await transfers.append(id, CLAUDE_ID, 0, chunk), 4)
+  await assert.rejects(transfers.append(id, CLAUDE_ID, 0, chunk), /starts at 4/)
+  assert.equal(await transfers.append(id, CLAUDE_ID, 4, chunk), 8)
+  await assert.rejects(transfers.append(id, CLAUDE_ID, 8, 'not base64!'), /base64/)
+  await assert.rejects(transfers.append(id, '../etc', 0, chunk), /session id/)
+  await assert.rejects(transfers.append(id, CLAUDE_ID, 8, Buffer.alloc(MAX_MOVE_CHUNK_BYTES + 1).toString('base64')), /at most/)
+  assert.throws(() => transfers.take(id, 'p', 'other'), /another repository/)
+  const staged = transfers.take(id, 'p', 'r')
+  assert.equal(readFileSync(staged.file(CLAUDE_ID), 'utf8'), 'abcdabcd')
+  await staged.discard()
+  assert.ok(!existsSync(staged.file(CLAUDE_ID)))
+  const second = await transfers.begin('p', 'r')
+  await transfers.append(second, CLAUDE_ID, 0, chunk)
+  await transfers.abort(second)
+  await transfers.abort(second)
+  await assert.rejects(transfers.append(second, CLAUDE_ID, 4, chunk), /No such transfer/)
+  const idle = await transfers.begin('p', 'r')
+  now += MOVE_TRANSFER_IDLE_MS + 1
+  await transfers.sweep()
+  assert.equal(transfers.size, 0)
+  await assert.rejects(transfers.append(idle, CLAUDE_ID, 0, chunk), /No such transfer/)
+  const ids = []
+  for (let i = 0; i < 4; i++) ids.push(await transfers.begin('p', 'r'))
+  await assert.rejects(transfers.begin('p', 'r'), /at most 4/)
 })

@@ -4,12 +4,24 @@
 import type { LlmSelection } from './providers/types.ts'
 
 /**
- * The uncommitted work travels as one `git diff --binary` patch inside a protocol frame (16 MiB on
- * the server). The patch and the Claude histories share what is left of it.
+ * The uncommitted work travels as one `git diff --binary` patch inside `move.export`'s answer (a
+ * frame is 16 MiB on the server).
  */
 export const MAX_MOVE_PATCH_BYTES = 8 * 1024 * 1024
-/** All carried session histories together */
-export const MAX_MOVE_HISTORY_BYTES = 6 * 1024 * 1024
+/**
+ * Each Claude history travels in its own requests, in chunks of at most this many bytes (base64
+ * in the frame, so a third larger): `move.history` reads one on the source, `move.upload` stages
+ * it on the target.
+ */
+export const MAX_MOVE_CHUNK_BYTES = 4 * 1024 * 1024
+/** One session's history; a bigger one is listed as not carried */
+export const MAX_MOVE_HISTORY_SESSION_BYTES = 64 * 1024 * 1024
+/** All of one move's staged histories together on the target */
+export const MAX_MOVE_TRANSFER_BYTES = 512 * 1024 * 1024
+/** Moves uploading at once on one target */
+export const MAX_MOVE_TRANSFERS = 4
+/** A staged transfer nobody has written to for this long is removed */
+export const MOVE_TRANSFER_IDLE_MS = 10 * 60_000
 /** Sessions one move carries (a project holds at most 500) */
 export const MAX_MOVE_SESSIONS = 50
 
@@ -46,8 +58,9 @@ export interface MoveSession {
   llm: LlmSelection
   /** The agent's own id, the history file's name */
   agentSessionId: string
-  /** The `.jsonl` history, as Claude wrote it under the old path */
-  history: string
+  /** The `.jsonl` history's size and sha256 (hex), as Claude wrote it under the old path; its bytes go by `move.history` and `move.upload` */
+  historyBytes: number
+  historySha256: string
   sessionTypeName?: string
   systemPrompt?: string
   complete?: boolean
@@ -76,6 +89,14 @@ export interface MoveExport {
   /** Sessions not carried, one line each */
   notCarried: string[]
   branchData: MoveBranchData
+}
+
+/** One chunk of a history (`move.history`): `data` is base64 of the bytes at `offset`; `done` once it reaches `total`. */
+export interface MoveHistoryChunk {
+  data: string
+  offset: number
+  total: number
+  done: boolean
 }
 
 /** One place on the target server the worktree can go (`move.candidates`). */

@@ -3,7 +3,7 @@
 // domain commands and subscribe to topics (snapshot + JSON patches). See PROTOCOL.md. This file is
 // the single source of truth for frame shapes. (Protocol v1, the per-call git and pty methods of
 // the file windows, was retired in phase 4e: a v1 hello is refused with UPGRADE_CLIENT.)
-import type { MoveBranchData, MoveCandidate, MoveExport, MovePlan, MoveReceived, MoveSession } from './move.ts'
+import type { MoveBranchData, MoveCandidate, MoveExport, MoveHistoryChunk, MovePlan, MoveReceived, MoveSession } from './move.ts'
 import type {
   AttentionTopic,
   ProjectTopic,
@@ -207,8 +207,9 @@ export const CAPABILITY = {
    */
   review: 'review',
   /**
-   * Moving a worktree between servers (5d): `move.prepare`, `move.export` and `move.finish` on the
-   * source, `move.candidates` and `move.receive` on the target; the app relays between them
+   * Moving a worktree between servers (5d): `move.prepare`, `move.export`, `move.history` and
+   * `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort` and
+   * `move.receive` on the target; the app relays between them
    */
   move: 'move'
 } as const
@@ -461,12 +462,20 @@ export interface MethodParamsV2 {
   'move.prepare': WorktreeRef
   /** Source: HEAD, the uncommitted work, the Claude histories and the branch data of an unloaded worktree */
   'move.export': WorktreeRef
+  /** Source: one chunk of a carried session's history, from `offset` */
+  'move.history': WorktreeRef & { agentSessionId: string; offset: number }
+  /** Target: opens a transfer for one move's histories */
+  'move.begin': RepoRef
+  /** Target: appends a chunk (base64) to one history in the transfer, at `offset` (what is staged so far) */
+  'move.upload': { transferId: string; agentSessionId: string; offset: number; data: string }
+  /** Target: drops a transfer; an unknown one is fine */
+  'move.abort': { transferId: string }
   /** Source: removes the worktree if it is unchanged since `move.export` (its `fingerprint`); else CONFLICT */
   'move.finish': WorktreeRef & { fingerprint: string }
   /** Target: where a branch of a repository with this origin can go, in every project */
   'move.candidates': { origin: string; branch: string }
   /** Target: builds the worktree from origin and the export, or undoes all of it */
-  'move.receive': RepoRef & { branch: string; head: string; patch: string; sessions: MoveSession[]; branchData: MoveBranchData }
+  'move.receive': RepoRef & { branch: string; head: string; patch: string; sessions: MoveSession[]; branchData: MoveBranchData; transferId?: string }
 
   // Subscriptions
   'sub.subscribe': { topic: Topic }
@@ -585,6 +594,10 @@ export interface MethodResultsV2 {
   'skills.list': SkillInfo[]
   'move.prepare': MovePlan
   'move.export': MoveExport & { fingerprint: string }
+  'move.history': MoveHistoryChunk
+  'move.begin': { transferId: string }
+  'move.upload': { size: number }
+  'move.abort': null
   'move.finish': null
   'move.candidates': MoveCandidate[]
   'move.receive': MoveReceived

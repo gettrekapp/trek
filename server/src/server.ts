@@ -36,6 +36,7 @@ import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } f
 import { createWebHandler } from './web/http'
 import { sweepEvery, WebSocketSignIns } from './web/sockets'
 import type { WebBundle } from './web/bundle'
+import { moveTransfers } from './move/transfers'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -478,6 +479,8 @@ export function startServer(
     poller.stop()
     prWatch?.stop()
     sessions.stopAll()
+    // A move's staged histories (5d) are only of use to the connection that was sending them.
+    void moveTransfers.clear()
     store.off('change', onConfigChange)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)

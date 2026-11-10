@@ -106,7 +106,7 @@ new optional field needs no capability: its absence says enough.
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
 | `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
-| `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export` and `move.finish` on the source, `move.candidates` and `move.receive` on the target |
+| `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort` and `move.receive` on the target |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -711,37 +711,47 @@ The client's order, and what each step leaves behind when it fails:
 3. `move.export` on the source: changes nothing.
 4. `worktree.push` `{setUpstream: true}` on the source: the branch is on origin. A failure here, or
    a cancel up to here, changes nothing but the push itself; the client loads the source again.
-5. `move.receive` on the target: builds the worktree, or undoes everything it did and fails.
-6. `move.finish` on the source: removes its copy, only if it is unchanged since step 3. On
+5. The histories, if any session is carried: `move.begin` on the target opens a transfer, then for
+   each session, in order, `move.history` on the source reads a chunk (at most 4 MiB, base64) and
+   `move.upload` on the target appends it at its `offset`. A failure or a cancel here: `move.abort`
+   on the target, and the source is loaded again.
+6. `move.receive` on the target, with the `transferId`: builds the worktree, or undoes everything it
+   did and fails. Either way it takes the transfer and removes its staged files.
+7. `move.finish` on the source: removes its copy, only if it is unchanged since step 3. On
    `CONFLICT` or `IN_USE` the client removes the target's copy again (`worktree.remove` `{force:
    true}`; the branch it created there stays) and loads the source again.
 
 | Method | Params | Result |
 |---|---|---|
 | `move.prepare` | `{projectId, worktreeId}` | `{branch, origin, repoName, dirty, loaded, sessions, reviewComments, queuedPrompts, prWatch}`. `origin`: `git remote get-url origin` of its repository, or `null`. `sessions`: each `{title, provider, carried, reason?}`. `BAD_REQUEST` for a main checkout or a detached HEAD |
-| `move.export` | `{projectId, worktreeId}` | `{branch, head, patch, sessions, notCarried, branchData, fingerprint}`. `patch`: `git diff --cached --binary HEAD` of every change, untracked files included and ignored ones not, built in a throwaway copy of the index (`GIT_INDEX_FILE`), so the worktree's own index is never touched; the repository's `linkedDirs` are left out (the target links them itself); `''` when clean; at most 8 MiB, and valid UTF-8 (a text file in another encoding would not survive the frame), else `BAD_REQUEST`. `sessions`: the carried ones, each `{title, llm, agentSessionId, history, sessionTypeName?, systemPrompt?, complete?}`. `notCarried`: one line per session left behind. `branchData`: `{note?, tag?, customTags?, ticket?, pr?, prWatch?, env?}`, the tags by name, `env` the branch's Docker `.env` text (a client leaves it out for a target without `env`). `fingerprint`: a hash of `head` and `patch`. `IN_USE` while loaded |
+| `move.export` | `{projectId, worktreeId}` | `{branch, head, patch, sessions, notCarried, branchData, fingerprint}`. `patch`: `git diff --cached --binary HEAD` of every change, untracked files included and ignored ones not, built in a throwaway copy of the index (`GIT_INDEX_FILE`), so the worktree's own index is never touched; the repository's `linkedDirs` are left out (the target links them itself); `''` when clean; at most 8 MiB, and valid UTF-8 (a text file in another encoding would not survive the frame), else `BAD_REQUEST`. `sessions`: the carried ones, each `{title, llm, agentSessionId, historyBytes, historySha256, sessionTypeName?, systemPrompt?, complete?}` (the history's bytes travel by `move.history`). `notCarried`: one line per session left behind. `branchData`: `{note?, tag?, customTags?, ticket?, pr?, prWatch?, env?}`, the tags by name, `env` the branch's Docker `.env` text (a client leaves it out for a target without `env`). `fingerprint`: a hash of `head` and `patch`. `IN_USE` while loaded |
+| `move.history` | `{projectId, worktreeId, agentSessionId, offset}` | `{data, offset, total, done}`: base64 of at most 4 MiB of the session's history from byte `offset`; `done` once `offset` plus the chunk reaches `total`. Only a carried session (a Claude one with a saved history of at most 64 MiB) of an unloaded worktree (`IN_USE`; `NOT_FOUND` for another session; `BAD_REQUEST` for an offset past the end) |
 | `move.finish` | `{projectId, worktreeId, fingerprint}` | `null`: the worktree is removed (`git worktree remove --force`, then from the project, with its sessions and its review draft), and the branch's PR watch ends. `CONFLICT` if its HEAD or uncommitted work changed since `move.export` (`fingerprint`), `IN_USE` if it was loaded again; then nothing changes |
 | `move.candidates` | `{origin, branch}` | `[{projectId, projectName, repoId, repoName, path, blocked?}]`: each project's registered repository whose origin names the same repository (ssh, https and `file://` forms compare equal: `normalizeOrigin` in `src/shared/move.ts`), with the default worktree path (`<repo>-<branch>`), and `blocked` when the branch is checked out there already, the path exists, or the path is outside what the server may use |
-| `move.receive` | `{projectId, repoId, branch, head, patch, sessions, branchData}` | `{worktreeId, dropped}`. See below |
+| `move.begin` | `{projectId, repoId}` | `{transferId}`: a staged upload for one move into this repository: a 0700 temp directory on the target. At most 4 at once (`CAPACITY`); one nobody has written to for 10 minutes is removed (swept by every later `move.begin`, `move.upload` and `move.receive`) |
+| `move.upload` | `{transferId, agentSessionId, offset, data}` | `{size}`: appends `data` (base64, 1 byte to 4 MiB) to that session's staged history. `offset` must be what is staged for it so far (else `CONFLICT`), so chunks go one at a time, in order. At most 64 MiB a session, 50 sessions and 512 MiB a transfer (`BAD_REQUEST`); `NOT_FOUND` for a finished, aborted or swept transfer |
+| `move.abort` | `{transferId}` | `null`: the transfer and its files go; an unknown one is fine |
+| `move.receive` | `{projectId, repoId, branch, head, patch, sessions, branchData, transferId?}` | `{worktreeId, dropped}`. See below. `transferId` is required when `sessions` isn't empty, and must be a transfer begun for this repository |
 
 `move.receive`, in order: refuses (`CONFLICT`) a branch already checked out in the repository or a
 default path that exists; fetches `refs/heads/<branch>` from origin into `origin/<branch>` and
 refuses (`CONFLICT`) when it is not at `head`; creates the local branch tracking it (or
 fast-forwards an existing one that is behind `head`; `CONFLICT` when it has commits `head` lacks);
 checks it out at the default path (linking the repository's `linkedDirs`), checks `HEAD` is
-`head`, applies `patch` (`git apply --binary`: all of it unstaged, staged files included); writes each
-session's `history` to `~/.claude/projects/<the new path, encoded>/<agentSessionId>.jsonl` (mode
+`head`, applies `patch` (`git apply --binary`: all of it unstaged, staged files included); checks each
+session's staged history has its `historyBytes` and `historySha256` (else `BAD_REQUEST`: it did not
+arrive whole) and copies it to `~/.claude/projects/<the new path, encoded>/<agentSessionId>.jsonl` (mode
 0600) under the server user's HOME; and adds the worktree's row, unloaded, with one saved session
 per carried one (a new `id`, the same `agentSessionId`, `idle` or `complete`, an empty queue; its
 session type by name), and the branch data on top of what the project already has for the branch,
 the tags by name. A failure at any step undoes the ones before it (the worktree, the branch it
 created or moved, the history files it wrote) and answers the error. `dropped`: what did not come
 across, one line each (a tag or session type the project lacks, a PR watch on a server whose gh
-is not signed in). Limits: at most 50 sessions, only Claude ones (`agentSessionId` a session id), 6
-MiB of histories in all, an 8 MiB patch, the project's 500 sessions.
+is not signed in). Limits: at most 50 sessions, only Claude ones (`agentSessionId` a session id, no
+two alike), each history 1 byte to 64 MiB, an 8 MiB patch, the project's 500 sessions.
 
 What moves: the commits (through origin), the uncommitted work (unstaged), Claude sessions that
-have a saved history (copied, not moved: the source's file stays), the note, the workflow and custom
+have a saved history of at most 64 MiB (copied, not moved: the source's file stays), the note, the workflow and custom
 tags (by name), the ticket, the pull request link and its watch, the branch's Docker `.env` text. What does not: other agents'
 sessions (closed with the source), queued prompts, the review draft, a Docker environment or dev
 stack running for it on the source's machine, and the staged/unstaged split.

@@ -13,6 +13,7 @@ export const MOVE_STEPS = [
   { key: 'unload', label: 'Stop the sessions on the source' },
   { key: 'export', label: 'Read the uncommitted work and the session histories' },
   { key: 'push', label: 'Push the branch to origin' },
+  { key: 'histories', label: 'Copy the session histories' },
   { key: 'receive', label: 'Create the worktree on the target' },
   { key: 'finish', label: 'Remove the source worktree' }
 ] as const
@@ -51,6 +52,14 @@ export type MoveOutcome =
 
 class Cancelled extends Error {}
 
+/** Bytes in a base64 string */
+export function base64Bytes(data: string): number {
+  if (!data) return 0
+  return (data.length / 4) * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0)
+}
+
+const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+
 export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
   const { source, target, from, to } = deps
   let step: MoveStepKey = 'unload'
@@ -64,6 +73,11 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     if (unloaded) await source('worktree.load', from).catch(() => {})
   }
   let exported: MethodResultsV2['move.export']
+  /** The target's staged upload, once begun; dropped on any failure before `move.receive` takes it */
+  let transferId: string | undefined
+  const abort = async (): Promise<void> => {
+    if (transferId) await target('move.abort', { transferId }).catch(() => {})
+  }
   try {
     begin('unload')
     if (deps.loaded) {
@@ -80,9 +94,34 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     begin('push')
     await source('worktree.push', { ...from, setUpstream: true }, { timeoutMs: STEP_MS })
     deps.progress('push', 'done')
+
+    // Each history in its own chunks, one at a time and in order: the target appends at its offset.
+    begin('histories')
+    if (exported.sessions.length === 0) deps.progress('histories', 'skipped', 'no session history to copy')
+    else {
+      transferId = (await target('move.begin', to)).transferId
+      const total = exported.sessions.reduce((n, s) => n + s.historyBytes, 0)
+      let copied = 0
+      for (const session of exported.sessions) {
+        let offset = 0
+        for (;;) {
+          if (deps.cancelled()) throw new Cancelled('Cancelled')
+          const chunk = await source('move.history', { ...from, agentSessionId: session.agentSessionId, offset }, { timeoutMs: STEP_MS })
+          const bytes = base64Bytes(chunk.data)
+          if (bytes > 0) await target('move.upload', { transferId, agentSessionId: session.agentSessionId, offset, data: chunk.data }, { timeoutMs: STEP_MS })
+          offset += bytes
+          copied += bytes
+          deps.progress('histories', 'active', `${mb(copied)} of ${mb(total)}`)
+          if (chunk.done) break
+          if (bytes === 0) throw new Error(`the history of “${session.title}” stopped at ${offset} of ${chunk.total} bytes`)
+        }
+      }
+      deps.progress('histories', 'done', `${exported.sessions.length} session histor${exported.sessions.length === 1 ? 'y' : 'ies'}, ${mb(total)}`)
+    }
     begin('receive')
   } catch (err) {
     if (!(err instanceof Cancelled)) deps.progress(step, 'failed', errorText(err))
+    await abort()
     await restore()
     return { kind: 'failed', step, error: err instanceof Cancelled ? 'Cancelled' : errorText(err) }
   }
@@ -98,11 +137,12 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
       branchData = rest
       kept.push("The branch's Docker .env was not carried: the target server has no environments")
     }
-    received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData }, { timeoutMs: STEP_MS })
+    received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData, ...(transferId ? { transferId } : {}) }, { timeoutMs: STEP_MS })
   } catch (err) {
     deps.progress('receive', 'failed', errorText(err))
     // A refusal undid itself on the target. A lost answer may not have.
     if (errorCode(err) === 'NOT_CONNECTED' || errorCode(err) === 'TIMEOUT') {
+      await abort()
       return { kind: 'unknown', error: `${errorText(err)}. The target may have created the worktree: check it before trying again. The source was not changed.` }
     }
     await restore()

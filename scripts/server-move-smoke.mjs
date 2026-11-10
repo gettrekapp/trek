@@ -11,7 +11,8 @@
 //   - both welcomes list move; the window offers Move to another server… (B is saved);
 //   - the dialog lists B's project (same origin), the new path, the session that moves and the
 //     queued prompt that doesn't; a branch already checked out on B is a blocked place;
-//   - the move: the steps all done; origin has the branch; B has the worktree at the default path
+//   - the move: the steps all done (a Claude history over 16 MiB copied in chunks, byte for byte,
+//     nothing left staged); origin has the branch; B has the worktree at the default path
 //     on the same commit with the uncommitted work (unstaged), the Claude session saved (not
 //     running) with its history under the new path in B's HOME, the note, the tag (by name) and the
 //     branch's .env;
@@ -24,7 +25,7 @@ import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,6 +57,7 @@ const until = async (fn, expected, ms = 15_000) => {
 // ---- Fixtures --------------------------------------------------------------
 
 const root = new URL('..', import.meta.url).pathname
+const startedAt = Date.now()
 const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-smoke-')))
 const appHome = join(work, 'app-home')
 const userData = join(work, 'user-data')
@@ -217,7 +219,10 @@ try {
   git('-C', sourcePath, 'add', 'staged.txt')
   writeFileSync(join(sourcePath, 'untracked.txt'), 'untracked\n')
   const { sessionId } = await a.sdk.request('session.start', { projectId: pa, worktreeId, cols: 80, rows: 24, title: 'Claude moved' })
-  const history = '{"type":"user","message":"hello"}\n'
+  // Over a frame (16 MiB): it travels in chunks.
+  const line = JSON.stringify({ type: 'assistant', message: 'x'.repeat(2000) }) + '\n'
+  const history = '{"type":"user","message":"hello"}\n' + line.repeat(Math.ceil((17 * 1024 * 1024) / line.length))
+  const historySha = createHash('sha256').update(history).digest('hex')
   mkdirSync(claudeDir(A.home, sourcePath), { recursive: true })
   writeFileSync(join(claudeDir(A.home, sourcePath), `${sessionId}.jsonl`), history)
   await a.sdk.request('session.enqueue', { projectId: pa, sessionId, text: 'a queued prompt' })
@@ -294,14 +299,17 @@ try {
 
   await modal.locator('button', { hasText: 'Move worktree' }).click()
   check('the move reports success', await until(() => modal.locator('.server-test-result.ok').count(), 1, 60_000), 1)
-  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done'])
+  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done'])
+  check('the history step copied the whole 17 MB', (await modal.locator('.move-step.done', { hasText: 'Copy the session histories' }).locator('.move-step-detail').textContent()).includes('1 session history, 17.0 MB'), true)
   check('origin has the branch at the source commit', git('--git-dir', origin, 'rev-parse', 'refs/heads/feature-x').trim(), head)
   check('B has the worktree on the same commit', existsSync(targetPath) && git('-C', targetPath, 'rev-parse', 'HEAD').trim(), head)
   check('with the uncommitted work, all of it unstaged', git('-C', targetPath, 'status', '--porcelain').split('\n').filter(Boolean).sort(), [' M README', '?? staged.txt', '?? untracked.txt'])
   const moved = (await b.project(pb)).repositories[0]
   const row = moved.worktrees.find((w) => w.path === targetPath)
   check("B's project lists it, unloaded, with the Claude session saved", [row?.loaded, row?.sessions.map((s) => [s.title, s.agentSessionId, s.queue.length])], [false, [['Claude moved', sessionId, 0]]])
-  check("the session's history is under the new path in B's HOME", readFileSync(join(claudeDir(B.home, targetPath), `${sessionId}.jsonl`), 'utf8'), history)
+  const arrived = readFileSync(join(claudeDir(B.home, targetPath), `${sessionId}.jsonl`))
+  check("the session's history (over 16 MiB) is under the new path in B's HOME, byte for byte", [arrived.length > 16 * 1024 * 1024, createHash('sha256').update(arrived).digest('hex')], [true, historySha])
+  check("nothing is left staged on B", readdirSync(tmpdir()).filter((n) => n.startsWith('trek-move-') && statSync(join(tmpdir(), n)).mtimeMs >= startedAt).length, 0)
   check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', 'PORT=4100\n'])
   check("A's worktree is gone from disk and from A's project", [existsSync(sourcePath), (await a.project(pa)).repositories[0].worktrees.some((w) => w.id === worktreeId)], [false, false])
   check("and from A's window", await until(() => rows.filter({ hasText: 'feature-x' }).count(), 0), 0)

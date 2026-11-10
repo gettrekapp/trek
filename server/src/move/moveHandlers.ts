@@ -1,24 +1,28 @@
 // Moving a worktree between servers (phase 5d), behind the `move` capability. The app relays: it
 // asks the source `move.prepare` (what would move), the target `move.candidates` (where it can go),
-// unloads the source, takes `move.export` (HEAD, the uncommitted work as one patch, the Claude
-// histories, the branch data), pushes the branch through origin (`worktree.push`), hands it all
-// to the target's `move.receive` (which builds the worktree, or rolls itself back), and finally
-// asks the source `move.finish` to remove its copy, only if nothing changed since the export.
+// unloads the source, takes `move.export` (HEAD, the uncommitted work as one patch, the carried
+// Claude sessions with each history's size and hash, the branch data), pushes the branch through
+// origin (`worktree.push`), copies each history in chunks (`move.history` on the source,
+// `move.upload` into a `move.begin` transfer on the target), hands the rest to the target's
+// `move.receive` (which builds the worktree, or rolls itself back), and finally asks the source
+// `move.finish` to remove its copy, only if nothing changed since the export.
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
-import { readFile, rm, stat, writeFile, mkdir } from 'node:fs/promises'
+import { createReadStream, existsSync } from 'node:fs'
+import { copyFile, chmod, mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
 import { projectDir } from '../../../src/host/claudeSessionService.ts'
 import type { BranchData, Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import {
-  MAX_MOVE_HISTORY_BYTES,
+  MAX_MOVE_CHUNK_BYTES,
+  MAX_MOVE_HISTORY_SESSION_BYTES,
   MAX_MOVE_PATCH_BYTES,
   MAX_MOVE_SESSIONS,
   sameOrigin,
   type MoveBranchData,
   type MoveCandidate,
   type MoveExport,
+  type MoveHistoryChunk,
   type MovePlan,
   type MoveReceived,
   type MoveSession,
@@ -33,6 +37,7 @@ import { MAX_SESSIONS_PER_PROJECT, checkTitle } from '../sessions/limits.ts'
 import { isRecord, requireBranch, requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, present } from '../worktreeHandlers.ts'
+import { moveTransfers, type StagedHistories } from './transfers.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -43,6 +48,15 @@ const FINGERPRINT = /^[0-9a-f]{64}$/
 const MAX_SYSTEM_PROMPT = 100_000
 const MAX_NOTE = 100_000
 const MB = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+const SHA256 = /^[0-9a-f]{64}$/
+
+/** A file's sha256, streamed */
+function sha256File(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    createReadStream(file).on('data', (b) => hash.update(b)).on('error', reject).on('end', () => resolve(hash.digest('hex')))
+  })
+}
 
 /** Same head and same patch: nothing changed in the worktree since it was exported. */
 function fingerprint(head: string, patch: string): string {
@@ -71,10 +85,9 @@ async function historyOf(worktree: Worktree, session: Session): Promise<{ file: 
 }
 
 /** Which of the worktree's sessions are carried: Claude ones with a history, within the limits. */
-async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string }[] }> {
+async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string; size: number }[] }> {
   const info: MoveSessionInfo[] = []
-  const carried: { session: Session; file: string }[] = []
-  let total = 0
+  const carried: { session: Session; file: string; size: number }[] = []
   for (const session of worktree.sessions) {
     const base = { title: session.title, provider: session.llm.provider }
     if (session.llm.provider !== 'claude') {
@@ -90,12 +103,11 @@ async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionI
       info.push({ ...base, carried: false, reason: `a move carries at most ${MAX_MOVE_SESSIONS} sessions` })
       continue
     }
-    if (total + history.size > MAX_MOVE_HISTORY_BYTES) {
-      info.push({ ...base, carried: false, reason: `its history (${MB(history.size)}) is over what one move carries (${MB(MAX_MOVE_HISTORY_BYTES)} in all)` })
+    if (history.size > MAX_MOVE_HISTORY_SESSION_BYTES) {
+      info.push({ ...base, carried: false, reason: `its history (${MB(history.size)}) is over what one session carries (${MB(MAX_MOVE_HISTORY_SESSION_BYTES)})` })
       continue
     }
-    total += history.size
-    carried.push({ session, file: history.file })
+    carried.push({ session, file: history.file, size: history.size })
     info.push({ ...base, carried: true })
   }
   return { info, carried }
@@ -146,7 +158,7 @@ function checkSessions(value: unknown): MoveSession[] {
   if (value === undefined) return []
   if (!Array.isArray(value)) throw bad('sessions must be an array')
   if (value.length > MAX_MOVE_SESSIONS) throw bad(`sessions must hold at most ${MAX_MOVE_SESSIONS} entries`)
-  let total = 0
+  const seen = new Set<string>()
   return value.map((raw: unknown, i) => {
     if (!isRecord(raw)) throw bad(`sessions[${i}] must be an object`)
     const title = checkTitle(requireString(raw.title, `sessions[${i}].title`), `sessions[${i}].title`)
@@ -156,10 +168,15 @@ function checkSessions(value: unknown): MoveSession[] {
     if (!llm) throw bad(`sessions[${i}].llm must be an LLM selection`)
     const agentSessionId = requireString(raw.agentSessionId, `sessions[${i}].agentSessionId`)
     if (!SESSION_ID.test(agentSessionId)) throw bad(`sessions[${i}].agentSessionId must be a session id`)
-    const history = requireString(raw.history, `sessions[${i}].history`)
-    total += Buffer.byteLength(history)
-    if (total > MAX_MOVE_HISTORY_BYTES) throw bad(`the histories must be at most ${MB(MAX_MOVE_HISTORY_BYTES)} in all`)
-    const session: MoveSession = { title, llm, agentSessionId, history }
+    if (seen.has(agentSessionId)) throw bad(`sessions[${i}].agentSessionId repeats another`)
+    seen.add(agentSessionId)
+    const historyBytes = raw.historyBytes
+    if (!Number.isInteger(historyBytes) || (historyBytes as number) < 1 || (historyBytes as number) > MAX_MOVE_HISTORY_SESSION_BYTES) {
+      throw bad(`sessions[${i}].historyBytes must be 1 to ${MAX_MOVE_HISTORY_SESSION_BYTES}`)
+    }
+    const historySha256 = requireString(raw.historySha256, `sessions[${i}].historySha256`)
+    if (!SHA256.test(historySha256)) throw bad(`sessions[${i}].historySha256 must be a sha256 in hex`)
+    const session: MoveSession = { title, llm, agentSessionId, historyBytes: historyBytes as number, historySha256 }
     if (raw.sessionTypeName !== undefined) session.sessionTypeName = requireString(raw.sessionTypeName, `sessions[${i}].sessionTypeName`)
     if (raw.systemPrompt !== undefined) {
       const prompt = requireString(raw.systemPrompt, `sessions[${i}].systemPrompt`)
@@ -258,13 +275,13 @@ export const moveHandlers: Record<string, Handler> = {
     const { info, carried } = await carriedSessions(worktree)
     const sessions: MoveSession[] = []
     const notCarried = info.filter((s) => !s.carried).map((s) => `${s.title}: ${s.reason}`)
-    for (const { session, file } of carried) {
-      const history = await readFile(file, 'utf8').catch(() => null)
-      if (history === null) {
+    for (const { session, file, size } of carried) {
+      const historySha256 = await sha256File(file).catch(() => null)
+      if (historySha256 === null) {
         notCarried.push(`${session.title}: its history could not be read`)
         continue
       }
-      const out: MoveSession = { title: session.title, llm: session.llm, agentSessionId: session.agentSessionId!, history }
+      const out: MoveSession = { title: session.title, llm: session.llm, agentSessionId: session.agentSessionId!, historyBytes: size, historySha256 }
       const type = session.sessionTypeId ? project.settings.sessionTypes?.find((t) => t.id === session.sessionTypeId) : undefined
       if (type) out.sessionTypeName = type.name
       if (session.systemPrompt) out.systemPrompt = session.systemPrompt
@@ -273,6 +290,49 @@ export const moveHandlers: Record<string, Handler> = {
     }
     const data = Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : undefined
     return { branch, head: headSha, patch, sessions, notCarried, branchData: exportBranchData(project, data), fingerprint: fingerprint(headSha, patch) }
+  },
+
+  /**
+   * One chunk of a carried session's history, from `offset` (at most MAX_MOVE_CHUNK_BYTES, base64).
+   * Only from an unloaded worktree, for one of its Claude sessions with a history.
+   */
+  'move.history': async (p, ctx): Promise<MoveHistoryChunk> => {
+    const agentSessionId = requireString(p.agentSessionId, 'agentSessionId')
+    if (!Number.isInteger(p.offset) || p.offset < 0) throw bad('offset must be a whole number of bytes')
+    const { worktree } = await source(ctx, p)
+    if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} has running sessions; unload it first`)
+    const session = worktree.sessions.find((s) => s.agentSessionId === agentSessionId)
+    const history = session ? await historyOf(worktree, session) : null
+    if (!history) throw codedError('NOT_FOUND', `No carried history ${agentSessionId} in ${worktree.path}`)
+    if (history.size > MAX_MOVE_HISTORY_SESSION_BYTES) throw bad(`that history is over ${MB(MAX_MOVE_HISTORY_SESSION_BYTES)}`)
+    if (p.offset > history.size) throw bad(`offset is past the history's ${history.size} bytes`)
+    const length = Math.min(MAX_MOVE_CHUNK_BYTES, history.size - p.offset)
+    const buffer = Buffer.alloc(length)
+    const handle = await open(history.file, 'r')
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, length, p.offset)
+      const offset = p.offset as number
+      return { data: buffer.subarray(0, bytesRead).toString('base64'), offset, total: history.size, done: offset + bytesRead >= history.size }
+    } finally {
+      await handle.close()
+    }
+  },
+
+  /** Target: opens a transfer for one move's histories into this project's repository. */
+  'move.begin': async (p, ctx): Promise<{ transferId: string }> => {
+    const project = ctx.projects.require(p.projectId)
+    const repo = repoIn(project, p.repoId)
+    findRegistered(ctx.store.config.repos, repo.path)
+    return { transferId: await moveTransfers.begin(project.id, repo.id) }
+  },
+
+  /** Target: appends one chunk of a history to the transfer, in order (`offset` is what is staged so far). */
+  'move.upload': async (p): Promise<{ size: number }> => ({ size: await moveTransfers.append(p.transferId, p.agentSessionId, p.offset, p.data) }),
+
+  /** Target: drops a transfer and its files; an unknown or finished one is fine. */
+  'move.abort': async (p): Promise<null> => {
+    await moveTransfers.abort(p.transferId)
+    return null
   },
 
   /**
@@ -356,10 +416,38 @@ export const moveHandlers: Record<string, Handler> = {
     await checkBranchName(repo.path, branch, false)
     const head = requireString(p.head, 'head')
     if (!SHA.test(head)) throw bad('head must be a full commit id')
-    const patch = p.patch === undefined ? '' : requireString(p.patch, 'patch')
+    if (p.patch !== undefined && typeof p.patch !== 'string') throw bad('patch must be a string')
+    const patch: string = p.patch ?? ''
     if (Buffer.byteLength(patch) > MAX_MOVE_PATCH_BYTES) throw bad(`patch must be at most ${MB(MAX_MOVE_PATCH_BYTES)}`)
     const sessions = checkSessions(p.sessions)
     const incoming = checkBranchData(p.branchData)
+    await moveTransfers.sweep()
+    // The transfer is the move's: whatever happens below, its staged files go.
+    let staged: StagedHistories | undefined
+    if (p.transferId !== undefined) staged = moveTransfers.take(p.transferId, project.id, repo.id)
+    else if (sessions.length > 0) throw bad('transferId is needed to carry sessions')
+    try {
+      return await receive(ctx, p, project, repo, branch, head, patch, sessions, incoming, staged)
+    } finally {
+      await staged?.discard()
+    }
+  }
+}
+
+/** move.receive's work, once its params are checked and its transfer taken. */
+async function receive(
+  ctx: V2Context,
+  p: any,
+  project: Project,
+  repo: Repository,
+  branch: string,
+  head: string,
+  patch: string,
+  sessions: MoveSession[],
+  incoming: MoveBranchData,
+  staged: StagedHistories | undefined
+): Promise<MoveReceived> {
+  {
     const records = project.globalSessions.length + project.repositories.reduce((n, r) => n + r.worktrees.reduce((m, w) => m + w.sessions.length, 0), 0)
     if (records + sessions.length > MAX_SESSIONS_PER_PROJECT) throw codedError('CAPACITY', `a project holds at most ${MAX_SESSIONS_PER_PROJECT} sessions`)
 
@@ -400,11 +488,16 @@ export const moveHandlers: Record<string, Handler> = {
       }
       const dir = projectDir(target)
       for (const s of sessions) {
+        const from = staged?.file(s.agentSessionId)
+        if (!from || staged!.size(s.agentSessionId) !== s.historyBytes || (await sha256File(from)) !== s.historySha256) {
+          throw bad(`the history of “${s.title}” did not arrive whole (${staged?.size(s.agentSessionId) ?? 0} of ${s.historyBytes} bytes, or another hash)`)
+        }
         const file = join(dir, `${s.agentSessionId}.jsonl`)
-        const before = await readFile(file, 'utf8').catch(() => null)
+        const before = await readFile(file).catch(() => null)
         await mkdir(dir, { recursive: true })
-        await writeFile(file, s.history, { encoding: 'utf8', mode: 0o600 })
-        undo.push(() => (before === null ? rm(file, { force: true }) : writeFile(file, before, 'utf8')))
+        await copyFile(from, file)
+        await chmod(file, 0o600)
+        undo.push(() => (before === null ? rm(file, { force: true }) : writeFile(file, before)))
       }
       if (!(await ctx.poller.refresh(repo.path))) {
         throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
