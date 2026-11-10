@@ -6,10 +6,13 @@ import { promisify } from 'node:util'
 import type {
   ChangedFile,
   ChangedFileStatus,
+  ChangesSource,
+  CommitInfo,
   GitWorktreeInfo,
   WorktreeChanges,
   WorktreeStatus
 } from '../shared/types'
+import { COMMIT_LIST_LIMIT, isCommitSha } from '../shared/review.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -400,6 +403,75 @@ async function changesBase(path: string): Promise<{ base: string | null; ref: st
   return { base: null, ref: 'HEAD' }
 }
 
+/** What one source's diff runs: `git diff <from> [<to>]`, and whether untracked files count. */
+interface SourceRange {
+  /** The default branch compared against; null otherwise */
+  base: string | null
+  from: string
+  /** A commit's own id; absent = the working tree */
+  to?: string
+  untracked: boolean
+}
+
+async function emptyTree(path: string): Promise<string> {
+  return (await git(path, ['hash-object', '-t', 'tree', '/dev/null'])).trim()
+}
+
+/**
+ * The diff a source names (5c-2). A commit must be a full hex id that names a commit in this
+ * repository; it is compared with its first parent (the empty tree for a root commit).
+ */
+async function sourceRange(path: string, source: ChangesSource): Promise<SourceRange> {
+  if (source.kind === 'branch') {
+    const { base, ref } = await changesBase(path)
+    return { base, from: ref, untracked: true }
+  }
+  if (source.kind === 'uncommitted') {
+    try {
+      await git(path, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+      return { base: null, from: 'HEAD', untracked: true }
+    } catch {
+      return { base: null, from: await emptyTree(path), untracked: true }
+    }
+  }
+  if (!isCommitSha(source.sha)) throw new Error('sha must be a full hex commit id')
+  try {
+    await git(path, ['rev-parse', '--verify', '--quiet', `${source.sha}^{commit}`])
+  } catch {
+    throw new Error(`${source.sha.slice(0, 12)} is not a commit in this repository`)
+  }
+  let parent: string
+  try {
+    parent = (await git(path, ['rev-parse', '--verify', '--quiet', `${source.sha}^1`])).trim()
+  } catch {
+    parent = await emptyTree(path) // a root commit: everything in it is new
+  }
+  return { base: null, from: parent, to: source.sha, untracked: false }
+}
+
+const rangeArgs = (range: SourceRange): string[] => (range.to ? [range.from, range.to] : [range.from])
+
+/**
+ * The newest commits on the worktree's HEAD, newest first; none before the first commit.
+ * Merges are listed too (their diff is against the first parent).
+ */
+export async function worktreeCommits(path: string, limit = COMMIT_LIST_LIMIT): Promise<CommitInfo[]> {
+  try {
+    await git(path, ['rev-parse', '--verify', '--quiet', 'HEAD'])
+  } catch {
+    return []
+  }
+  // NUL between fields and RS after each commit: neither can appear in a subject or a name.
+  const out = await git(path, ['--no-optional-locks', 'log', '-n', String(limit), '--no-color', '--format=%H%x00%an%x00%at%x00%s%x1e', 'HEAD', '--'])
+  const commits: CommitInfo[] = []
+  for (const record of out.split('\x1e')) {
+    const fields = record.replace(/^\n/, '').split('\0')
+    if (fields.length < 4 || !isCommitSha(fields[0])) continue
+    commits.push({ sha: fields[0], author: fields[1], at: Number(fields[2]) * 1000, subject: fields[3].slice(0, 200) })
+  }
+  return commits
+}
+
 function fileStatus(letter: string): ChangedFileStatus {
   if (letter === 'A') return 'added'
   if (letter === 'D') return 'deleted'
@@ -537,18 +609,20 @@ async function untrackedFile(worktreePath: string, path: string): Promise<Change
 }
 
 /**
- * Everything this worktree would add to the default branch: commits since the
- * merge-base plus staged, unstaged and untracked files. Cheap enough to poll
- * for the selected worktree; patches come from worktreeDiff.
+ * The files a source changes (5c-2). The default, the branch: everything this worktree would add
+ * to the default branch, commits since the merge-base plus staged, unstaged and untracked files.
+ * Uncommitted: staged, unstaged and untracked against HEAD. A commit: against its first parent.
+ * Cheap enough to poll for the selected worktree; patches come from worktreeDiff.
  */
-export async function worktreeChanges(path: string): Promise<WorktreeChanges> {
-  const { base, ref } = await changesBase(path)
+export async function worktreeChanges(path: string, source: ChangesSource = { kind: 'branch' }): Promise<WorktreeChanges> {
+  const range = await sourceRange(path, source)
   const tracked = parseDiffRawNumstat(
-    await git(path, ['--no-optional-locks', 'diff', '-M', '-z', '--raw', '--numstat', ref, '--'])
+    await git(path, ['--no-optional-locks', 'diff', '-M', '-z', '--raw', '--numstat', ...rangeArgs(range), '--'])
   )
-  const untracked = await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) =>
-    untrackedFile(path, p)
-  )
+  const untracked = range.untracked
+    ? await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) => untrackedFile(path, p))
+    : []
+  const base = range.base
   const files = mergeChangedFiles(tracked, untracked).sort((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0
   )
@@ -705,17 +779,17 @@ export function limitPatches(
  * as text (binary, too large or unreadable untracked files) have no entry, and
  * neither do patches past the MAX_DIFF_BYTES total.
  */
-export async function worktreeDiff(path: string): Promise<Record<string, string>> {
-  const { ref } = await changesBase(path)
+export async function worktreeDiff(path: string, source: ChangesSource = { kind: 'branch' }): Promise<Record<string, string>> {
+  const range = await sourceRange(path, source)
   const tracked = splitPatch(
-    await git(path, ['--no-optional-locks', 'diff', '-M', ...PATCH_FORMAT_ARGS, ref, '--'])
+    await git(path, ['--no-optional-locks', 'diff', '-M', ...PATCH_FORMAT_ARGS, ...rangeArgs(range), '--'])
   )
   for (const key of Object.keys(tracked)) {
     if (isBinarySection(tracked[key])) delete tracked[key]
   }
-  const candidates = await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) =>
-    untrackedFile(path, p)
-  )
+  const candidates = range.untracked
+    ? await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) => untrackedFile(path, p))
+    : []
   const textFiles = candidates
     .filter((f) => !f.binary && !f.tooLarge && !f.unreadable)
     .map((f) => f.path)

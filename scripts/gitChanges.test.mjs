@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { limitPatches, splitPatch, worktreeChanges, worktreeDiff } from '../src/host/gitService.ts'
+import { limitPatches, splitPatch, worktreeChanges, worktreeCommits, worktreeDiff } from '../src/host/gitService.ts'
 
 function makeRepo(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
@@ -447,4 +447,85 @@ test('worktreeDiff stays under the total size limit while worktreeChanges lists 
   assert.ok(Object.keys(patches).length >= 1 && Object.keys(patches).length < 5)
   const changes = await worktreeChanges(dir)
   assert.equal(changes.files.filter((f) => f.path.startsWith('big')).length, 5)
+})
+
+// 5c-2: the review's sources and the commit list.
+
+function withWork(t) {
+  const repo = makeRepo(t)
+  const { dir, run } = repo
+  writeFileSync(join(dir, 'committed.txt'), 'x\n')
+  run('add', '.')
+  run('commit', '-qm', 'first work')
+  writeFileSync(join(dir, 'second.txt'), 'y\n')
+  run('add', '.')
+  run('commit', '-qm', 'second work')
+  writeFileSync(join(dir, 'keep.txt'), 'one\nedited\n')
+  writeFileSync(join(dir, 'untracked.txt'), 'u\n')
+  const sha = (rev) => run('rev-parse', rev).trim()
+  return { ...repo, sha }
+}
+
+const paths = (changes) => changes.files.map((f) => f.path)
+
+test('source uncommitted: staged, unstaged and untracked against HEAD, no commits', async (t) => {
+  const { dir } = withWork(t)
+  const changes = await worktreeChanges(dir, { kind: 'uncommitted' })
+  assert.equal(changes.base, null)
+  assert.deepEqual(paths(changes), ['keep.txt', 'untracked.txt'])
+  const diff = await worktreeDiff(dir, { kind: 'uncommitted' })
+  assert.deepEqual(Object.keys(diff).sort(), ['keep.txt', 'untracked.txt'])
+  assert.match(diff['keep.txt'], /\+edited/)
+})
+
+test('source branch is the default: commits and uncommitted work against the base', async (t) => {
+  const { dir } = withWork(t)
+  const changes = await worktreeChanges(dir, { kind: 'branch' })
+  assert.equal(changes.base, 'main')
+  assert.deepEqual(paths(changes), ['committed.txt', 'keep.txt', 'second.txt', 'untracked.txt'])
+  assert.deepEqual(await worktreeChanges(dir), changes)
+})
+
+test('source commit: one commit against its parent, without the working tree', async (t) => {
+  const { dir, sha } = withWork(t)
+  const first = sha('HEAD~1')
+  const changes = await worktreeChanges(dir, { kind: 'commit', sha: first })
+  assert.deepEqual(changes, { base: null, files: [{ path: 'committed.txt', status: 'added', added: 1, deleted: 0, binary: false }] })
+  const diff = await worktreeDiff(dir, { kind: 'commit', sha: first })
+  assert.deepEqual(Object.keys(diff), ['committed.txt'])
+  assert.match(diff['committed.txt'], /^\+x$/m)
+})
+
+test('source commit: a root commit is compared with the empty tree', async (t) => {
+  const { dir, sha } = withWork(t)
+  const root = sha('main')
+  const changes = await worktreeChanges(dir, { kind: 'commit', sha: root })
+  assert.deepEqual(paths(changes), ['.gitignore', 'gone.txt', 'keep.txt', 'moved.txt'])
+})
+
+test('source commit: anything but a full hex id of a commit is refused before git sees it', async (t) => {
+  const { dir, sha, run } = withWork(t)
+  for (const bad of ['HEAD', '--output=/tmp/x', sha('HEAD').slice(0, 12), `${sha('HEAD')}^`]) {
+    await assert.rejects(worktreeChanges(dir, { kind: 'commit', sha: bad }), /full hex commit id/, bad)
+  }
+  await assert.rejects(worktreeChanges(dir, { kind: 'commit', sha: 'f'.repeat(40) }), /is not a commit/)
+  const tree = run('rev-parse', 'HEAD^{tree}').trim()
+  await assert.rejects(worktreeDiff(dir, { kind: 'commit', sha: tree }), /is not a commit/)
+})
+
+test('worktreeCommits lists HEAD newest first, with subject, author and time', async (t) => {
+  const { dir, sha } = withWork(t)
+  const commits = await worktreeCommits(dir)
+  assert.deepEqual(commits.map((c) => c.subject), ['second work', 'first work', 'base'])
+  assert.equal(commits[0].sha, sha('HEAD'))
+  assert.equal(commits[0].author, 't')
+  assert.ok(Math.abs(commits[0].at - Date.now()) < 60_000)
+  assert.equal((await worktreeCommits(dir, 2)).length, 2)
+})
+
+test('worktreeCommits: none before the first commit', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  execFileSync('git', ['-C', dir, 'init', '-q'])
+  assert.deepEqual(await worktreeCommits(dir), [])
 })
