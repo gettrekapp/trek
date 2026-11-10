@@ -10,7 +10,8 @@ import { assertNotRepository, findRegistered, repoIn } from './projects/model.ts
 import { realOrResolved as real } from './repos.ts'
 import { requireAbsolutePath, requireBoolean, requireBranch, requireString } from './validate.ts'
 import type { V2Context } from './v2.ts'
-import { checkSource } from './review/draft.ts'
+import { checkPath, checkSource } from './review/draft.ts'
+import { MAX_REVIEW_COMMENTS } from '../../src/shared/review.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -116,6 +117,14 @@ export async function checkedOut(ctx: V2Context, p: any): Promise<{ repo: Reposi
   if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD)`)
   await checkBranchName(repo.path, worktree.branch, false)
   return { repo, worktree, branch: worktree.branch }
+}
+
+/** `worktree.diff`'s optional `paths` (5c-2): at most MAX_REVIEW_COMMENTS file paths, as a comment names them. */
+function checkDiffPaths(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value)) throw codedError('BAD_REQUEST', 'paths must be an array of file paths')
+  if (value.length > MAX_REVIEW_COMMENTS) throw codedError('BAD_REQUEST', `paths must hold at most ${MAX_REVIEW_COMMENTS} entries`)
+  return value.map((v, i) => checkPath(v, `paths[${i}]`))
 }
 
 export const worktreeHandlers: Record<string, Handler> = {
@@ -244,8 +253,9 @@ export const worktreeHandlers: Record<string, Handler> = {
 
   'worktree.diff': async (p, ctx) => {
     const source = checkSource(p.source)
+    const paths = checkDiffPaths(p.paths)
     const { worktree } = present(ctx, p)
-    return viaGit(() => gitService.worktreeDiff(worktree.path, source))
+    return viaGit(() => gitService.worktreeDiff(worktree.path, source, paths))
   },
 
   /** The newest commits on its HEAD, for the Changes tab's commit picker (5c-2) */

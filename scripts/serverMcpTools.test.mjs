@@ -169,6 +169,36 @@ test("get_review_comments: the worktree's draft, each comment outdated or not ag
   await assert.rejects(s.call('get_review_comments', { worktree: 'nope' }), (e) => e.code === 'NOT_FOUND')
 })
 
+test('get_review_comments: five sources are checked, a sixth is null; another project\'s worktree is NOT_FOUND', async (t) => {
+  const s = await toolSetup(t)
+  const run = (...args) => execFileSync('git', ['-C', s.a, ...args], { env: gitEnv, encoding: 'utf8' })
+  const shas = []
+  for (let i = 0; i < 6; i++) {
+    writeFileSync(join(s.a, `f${i}.txt`), `line ${i}\n`)
+    run('add', '.')
+    run('commit', '-q', '-m', `c${i}`)
+    shas.push(run('rev-parse', 'HEAD').trim())
+  }
+  const wt = () => s.projects.require(s.projectId).repositories[0].worktrees[0]
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].review = {
+      revision: 3,
+      comments: shas.map((sha, i) => ({ id: `c${i}`, source: { kind: 'commit', sha }, path: `f${i}.txt`, side: 'new', line: 1, lineText: `line ${i}`, body: 'b', at: 1 }))
+    }
+  })
+  const res = await s.call('get_review_comments', { worktree: 'main' })
+  assert.deepEqual(res.comments.map((c) => c.outdated), [false, false, false, false, false, null])
+
+  // A second project with its own repository: its worktree id is not found from the first.
+  const b = join(s.dir, 'repos', 'b')
+  execFileSync('git', ['init', '-q', '-b', 'main', b], { env: gitEnv })
+  execFileSync('git', ['-C', b, 'commit', '--allow-empty', '-q', '-m', 'init'], { env: gitEnv })
+  const other = s.projects.create('Q', [{ registered: { id: 'b', name: 'b', path: b }, name: undefined }])
+  const otherWorktree = s.projects.require(other).repositories[0].worktrees[0].id
+  await assert.rejects(s.call('get_review_comments', { worktree: otherWorktree }), (e) => e.code === 'NOT_FOUND')
+  assert.equal(wt().review.comments.length, 6)
+})
+
 test('watch_pull_request: on (polled at once), off, and its refusals', async (t) => {
   const polled = []
   let available = true

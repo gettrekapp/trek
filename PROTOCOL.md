@@ -221,8 +221,8 @@ deleted ids on the branches, where clients show no tag for them.
 **Worktrees.** A project lists every git worktree of its repositories: the
 server polls `git worktree list` and adds or removes rows to match. Projects
 that share a repository see the same worktrees, each with its own ids and
-sessions. A worktree git no longer lists is dropped, unless it holds sessions:
-then it stays with `missing: true` and comes back by itself if git lists the
+sessions. A worktree git no longer lists is dropped, unless it holds sessions
+or a review draft: then it stays with `missing: true` and comes back by itself if git lists the
 path again. A `missing` worktree has no status. `worktree.unload`,
 `worktree.remove` and `session.close` work on it; other worktree and session
 commands fail with `BAD_REQUEST`. A worktree that goes missing while loaded
@@ -283,7 +283,7 @@ runs a repository-wide `git worktree prune`, which would also drop worktrees on
 an unmounted volume. A `missing` worktree's row is just dropped, without running
 git, so a directory that still exists on disk at that path is left untouched.
 Other projects' rows for the same path are left to the poller, which drops them
-or, if they hold sessions, keeps them as `missing`.
+or, if they hold sessions or a review draft, keeps them as `missing`.
 `worktree.pull` (fast-forward only) and `worktree.push {setUpstream}` first
 re-read the repository's worktrees, then act on the branch git has checked out
 in the worktree now, which may differ from the branch the row last showed.
@@ -543,28 +543,38 @@ The tab stays read-only: nothing stages or reverts.
 |---|---|
 | absent, or `{kind: 'branch'}` | The branch against its base: the merge-base with the default branch (`origin/HEAD`, else `origin/master`, `origin/main`, `master`, `main`) to the working tree, untracked files included. The only view a server without `review` has |
 | `{kind: 'uncommitted'}` | Staged, unstaged and untracked work against `HEAD` (the empty tree before the first commit); `base` is `null` |
-| `{kind: 'commit', sha}` | One commit against its first parent (the empty tree for a root commit), without the working tree; `base` is `null`. `sha` must be a full lowercase hex object id (40 or 64 characters, else `BAD_REQUEST`, before git runs) that names a commit in the repository (else `GIT_ERROR`) |
+| `{kind: 'commit', sha}` | One commit against its first parent (the empty tree for a root commit), without the working tree; `base` is `null`. `sha` must be a full lowercase hex object id (40 or 64 characters, else `BAD_REQUEST`, before git runs) that names a commit in the repository (else `GIT_ERROR`). A shallow clone's boundary commit, whose parent the clone lacks, is `GIT_ERROR` too, rather than a diff of its whole tree |
+
+`worktree.diff` also takes an optional `paths`: at most 100 file paths, each checked as a
+comment's `path` (else `BAD_REQUEST`). It then returns only those files' patches, each the same as
+the whole diff's (a path is literal, never a pattern; a rename is still paired with its other
+side), and runs git and reads untracked files for those only. The 8 MiB total counts only them.
 
 `worktree.commits` `{projectId, worktreeId}` returns the newest 100 commits on the worktree's
 `HEAD`, newest first, as `{sha, subject, author, at}` (`at`: the author time, epoch ms; `subject`:
-the first line, at most 200 characters); none before the first commit. Merges are listed, and
+the first line, at most 200 characters); none before the first commit. A user's `log.showSignature`
+is ignored. Merges are listed, and
 their diff is against their first parent. Any commit can be asked for, not only these.
 
 A worktree's draft is its `review` in the project topic, `{revision, comments}`, saved with the
-project (it survives a restart; one of the wrong shape is dropped at load and at `project.import`).
+project (it survives a restart). At load and at `project.import` a comment that `review.add` would
+refuse, or that repeats an id, is dropped, as is a draft left with none or whose prompt no longer
+fits in one queued prompt; a revision below 1 or above 2^50 is replaced with one above the
+worktree's `reviewRevision`.
 Every client sees it, and every change to it, in the topic's patches. Each comment is `{id, source,
 path, side, line, lineText, body, at}`: the diff it was written on, the file's path there, `side`
 `old` (a removed line, numbered in the old file) or `new` (an added or unchanged line, in the new
 file), the 1-based line, the line as it read then (without the diff's `+`, `-` or space), the
 comment, and when it was written or last edited (the server's clock). The server never re-reads the
 line: a client shows a comment whose line no longer reads the same as outdated, and it is still sent
-with the text it was written on. `revision` goes up with every change, and never below the server's
-clock (epoch ms), so a draft begun after another was sent or discarded does not repeat a revision a
-client still holds. The draft goes away when its last comment does.
+with the text it was written on. `revision` goes up by one with every change and never repeats on a
+worktree: the worktree's `reviewRevision`, saved with the project, is the last one handed out and
+stays when the draft is sent, discarded or emptied, so a client holding an old revision gets
+`CONFLICT`. The draft goes away when its last comment does.
 
 | Method | Params | Result |
 |---|---|---|
-| `review.add` | `{projectId, worktreeId, source, path, side, line, lineText, body}` | `{commentId}`. `path`: one line, 1–4096 characters; `line`: 1–10,000,000; `lineText`: one line, at most 500 characters (clients cut a longer line, and drop its control characters); `body`: not blank, at most 4000 characters; at most 100 comments; and the prompt the draft would send must fit in one queued prompt (100,000 characters). Else `BAD_REQUEST` |
+| `review.add` | `{projectId, worktreeId, source, path, side, line, lineText, body}` | `{commentId}`. `path`: 1–4096 characters; `line`: 1–10,000,000; `lineText`: at most 500 characters, empty for a blank line (clients cut a longer line, and drop its control characters); neither holds a control character (C0, DEL or C1) but a tab; `body`: not blank, at most 4000 characters, no control character but a tab and a line break (LF); at most 100 comments; and the prompt the draft would send must fit in one queued prompt (100,000 characters). Else `BAD_REQUEST` |
 | `review.edit` | `{projectId, worktreeId, commentId, body, expected?}` | `null`. `expected`: the body the edit started from (`CONFLICT` if it changed); the same limits as `review.add` |
 | `review.remove` | `{projectId, worktreeId, commentId}` | `null` (`NOT_FOUND` for an unknown comment) |
 | `review.clear` | `{projectId, worktreeId, revision}` | `null`: the draft is discarded. `revision`: the draft the client showed (`CONFLICT` if it changed) |
@@ -573,7 +583,8 @@ client still holds. The draft goes away when its last comment does.
 The prompt lists every comment, grouped by the diff it was written on (`## Uncommitted changes`,
 `## The branch against its base`, `## Commit <sha7>`), then by file and line, each as `<path>, line
 <n>:` (or `removed line <n>`), the line quoted (`> <lineText>`) and the comment
-(`reviewPrompt` in `src/shared/review.ts`). Like every queued prompt it is not sent on its own: the
+(`reviewPrompt` in `src/shared/review.ts`; control characters are dropped from the worktree's name
+there). Like every queued prompt it is not sent on its own: the
 user sends it from the session's queue. An agent can read a worktree's draft with the MCP tool
 `get_review_comments` (read-only, with each comment's `outdated`); no tool writes one.
 
@@ -761,7 +772,9 @@ released when the call ends, also when git refuses the removal.
 removes the record.
 
 **Prompts.** `session.sendPrompt {text}` types the text into the running session as
-the desktop pastes it: newlines become `\r`, the text is wrapped in bracketed
+the desktop pastes it: control characters but tabs and line breaks (an escape, C0,
+DEL, C1) are dropped, so nothing in the text can end the paste early or reach the
+terminal as a control sequence; newlines become `\r`, the text is wrapped in bracketed
 paste when the agent has turned that mode on, and `\r` follows 150 ms later. It
 answers `BAD_REQUEST` when the session has no running pty, or when `text` is longer
 than 1 MiB (1,048,576 UTF-16 code units), the limit of `pty.write`. `session.enqueue
@@ -943,7 +956,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `set_worktree_ticket` | `worktree`; `ticket?` (a Linear id or URL, or an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
 | `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
-| `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source |
+| `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, of only the files commented on in it, with its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source |
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |

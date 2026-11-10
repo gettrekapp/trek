@@ -134,3 +134,11 @@ test('isOutdated: no patch, no such line, or another text', () => {
   assert.equal(isOutdated({ ...c, line: 99 }, PATCH), true)
   assert.equal(isOutdated(c, undefined), true)
 })
+
+test('reviewPrompt drops control characters from the worktree name', () => {
+  const c = { id: 'c', source: { kind: 'branch' }, path: 'a.txt', side: 'new', line: 1, lineText: 'x', body: 'y', at: 1 }
+  const prompt = reviewPrompt('feat\x1b[201~\nx\u009b', [c])
+  assert.match(prompt, /^Review comments on the changes in feat\[201~x \(1 comment\)/)
+  // eslint-disable-next-line no-control-regex
+  assert.equal(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/.test(prompt), false)
+})

@@ -440,11 +440,16 @@ async function sourceRange(path: string, source: ChangesSource): Promise<SourceR
   } catch {
     throw new Error(`${source.sha.slice(0, 12)} is not a commit in this repository`)
   }
-  let parent: string
+  // The first parent as the commit records it, not `<sha>^1`: in a shallow clone the boundary
+  // commit's parents are not there and git treats it as a root, so its diff would be the whole
+  // tree. Such a commit is refused instead; a real root commit is compared with the empty tree.
+  const header = (await git(path, ['cat-file', 'commit', source.sha])).split('\n\n')[0]
+  const parent = /^parent ([0-9a-f]+)$/m.exec(header)?.[1]
+  if (!parent) return { base: null, from: await emptyTree(path), to: source.sha, untracked: false }
   try {
-    parent = (await git(path, ['rev-parse', '--verify', '--quiet', `${source.sha}^1`])).trim()
+    await git(path, ['rev-parse', '--verify', '--quiet', `${parent}^{commit}`])
   } catch {
-    parent = await emptyTree(path) // a root commit: everything in it is new
+    throw new Error(`${source.sha.slice(0, 12)}'s parent is not in this repository (a shallow clone): fetch more history to see it`)
   }
   return { base: null, from: parent, to: source.sha, untracked: false }
 }
@@ -461,12 +466,19 @@ export async function worktreeCommits(path: string, limit = COMMIT_LIST_LIMIT): 
   } catch {
     return []
   }
-  // NUL between fields and RS after each commit: neither can appear in a subject or a name.
-  const out = await git(path, ['--no-optional-locks', 'log', '-n', String(limit), '--no-color', '--format=%H%x00%an%x00%at%x00%s%x1e', 'HEAD', '--'])
+  // One line per commit, NUL between its fields: %s is the subject folded onto one line and a name
+  // holds no line break, so only a line break ends a record, and a commit message cannot hold a
+  // NUL. An RS or another control character in a subject is kept as it is. --no-show-signature:
+  // a user's log.showSignature would add signature lines ("No signature", gpg's output) between
+  // the records; any other line that is not a record is skipped too.
+  const out = await git(path, [
+    '--no-optional-locks', 'log', '--no-show-signature', '-n', String(limit), '--no-color',
+    '--format=%H%x00%an%x00%at%x00%s', 'HEAD', '--'
+  ])
   const commits: CommitInfo[] = []
-  for (const record of out.split('\x1e')) {
-    const fields = record.replace(/^\n/, '').split('\0')
-    if (fields.length < 4 || !isCommitSha(fields[0])) continue
+  for (const line of out.split('\n')) {
+    const fields = line.split('\0')
+    if (fields.length !== 4 || !isCommitSha(fields[0]) || !/^\d+$/.test(fields[2])) continue
     commits.push({ sha: fields[0], author: fields[1], at: Number(fields[2]) * 1000, subject: fields[3].slice(0, 200) })
   }
   return commits
@@ -550,16 +562,20 @@ function mergeChangedFiles(tracked: ChangedFile[], untracked: ChangedFile[]): Ch
   return [...byPath.values()]
 }
 
-async function untrackedPaths(path: string): Promise<string[]> {
+/** The untracked files, or only those of `only` (each a literal path, never a pattern). */
+async function untrackedPaths(path: string, only?: ReadonlySet<string>): Promise<string[]> {
   const out = await git(path, [
+    '--literal-pathspecs',
     '--no-optional-locks',
     'ls-files',
     '--others',
     '--exclude-standard',
-    '-z'
+    '-z',
+    ...(only ? ['--', ...only] : [])
   ])
-  // A trailing slash is a nested repository, which has no lines of its own.
-  return out.split('\0').filter((p) => p && !p.endsWith('/'))
+  // A trailing slash is a nested repository, which has no lines of its own. A path of `only` that
+  // is a directory matches the files in it: those are not asked for.
+  return out.split('\0').filter((p) => p && !p.endsWith('/') && (!only || only.has(p)))
 }
 
 async function isBinaryFile(fullPath: string): Promise<boolean> {
@@ -775,20 +791,51 @@ export function limitPatches(
 }
 
 /**
+ * The paths a diff of `wanted` must include so that it pairs renames as the whole diff does: each
+ * wanted path and the other side of any rename it is part of. Rename detection still looks at
+ * every file (names only, no patch text); only the patches are limited.
+ */
+async function withRenamePartners(path: string, range: SourceRange, wanted: ReadonlySet<string>): Promise<Set<string>> {
+  const out = await git(path, ['--no-optional-locks', 'diff', '-M', '-z', '--name-status', ...rangeArgs(range), '--'])
+  const parts = out.split('\0')
+  const all = new Set(wanted)
+  for (let i = 0; i < parts.length && parts[i]; ) {
+    const letter = parts[i][0]
+    if (letter === 'R' || letter === 'C') {
+      const [from, to] = [parts[i + 1], parts[i + 2]]
+      if (wanted.has(from) || wanted.has(to)) all.add(from).add(to)
+      i += 3
+    } else i += 2
+  }
+  return all
+}
+
+/**
  * The patch text per changed file, keyed by path. Files with nothing to show
  * as text (binary, too large or unreadable untracked files) have no entry, and
  * neither do patches past the MAX_DIFF_BYTES total.
+ *
+ * With `paths`, only those files' patches (each a literal path), the same as the whole diff's
+ * entries for them: git and the untracked reads are limited to them (and the other side of a
+ * rename), so a few files of a large diff cost little. The size limit then counts only these.
  */
-export async function worktreeDiff(path: string, source: ChangesSource = { kind: 'branch' }): Promise<Record<string, string>> {
+export async function worktreeDiff(
+  path: string,
+  source: ChangesSource = { kind: 'branch' },
+  paths?: readonly string[]
+): Promise<Record<string, string>> {
   const range = await sourceRange(path, source)
+  const wanted = paths ? new Set(paths.filter((p) => typeof p === 'string' && p !== '')) : undefined
+  if (wanted && wanted.size === 0) return {}
+  const pathspec = wanted ? [...(await withRenamePartners(path, range, wanted))] : []
   const tracked = splitPatch(
-    await git(path, ['--no-optional-locks', 'diff', '-M', ...PATCH_FORMAT_ARGS, ...rangeArgs(range), '--'])
+    await git(path, ['--literal-pathspecs', '--no-optional-locks', 'diff', '-M', ...PATCH_FORMAT_ARGS, ...rangeArgs(range), '--', ...pathspec])
   )
   for (const key of Object.keys(tracked)) {
     if (isBinarySection(tracked[key])) delete tracked[key]
   }
   const candidates = range.untracked
-    ? await mapLimit(await untrackedPaths(path), UNTRACKED_CONCURRENCY, (p) => untrackedFile(path, p))
+    ? await mapLimit(await untrackedPaths(path, wanted), UNTRACKED_CONCURRENCY, (p) => untrackedFile(path, p))
     : []
   const textFiles = candidates
     .filter((f) => !f.binary && !f.tooLarge && !f.unreadable)
@@ -800,6 +847,9 @@ export async function worktreeDiff(path: string, source: ChangesSource = { kind:
   const result = { ...tracked }
   for (const [p, patch] of patches) {
     if (patch) result[p] = (result[p] ?? '') + patch
+  }
+  if (wanted) {
+    for (const key of Object.keys(result)) if (!wanted.has(key)) delete result[key]
   }
   return limitPatches(result, MAX_DIFF_BYTES)
 }

@@ -315,7 +315,10 @@ export class SessionManager {
     return null
   }
 
-  /** Types `text` into the running session as the desktop pastes it, then presses enter. */
+  /**
+   * Types `text` into the running session as the desktop pastes it (without its control
+   * characters but tabs and line breaks), then presses enter.
+   */
   async sendPrompt(p: any): Promise<null> {
     const text = requireString(p.text, 'text')
     if (text.length > MAX_PTY_WRITE) throw bad(`text must be at most ${MAX_PTY_WRITE} characters`)
@@ -324,7 +327,10 @@ export class SessionManager {
     if (!ptyId || !this.terminals.has(ptyId)) throw bad('the session is not running')
     await this.terminals.settled(ptyId)
     if (!this.terminals.has(ptyId)) throw bad('the session is not running')
-    const normalized = text.replace(/\r?\n/g, '\r')
+    // Typed as text: an escape or another control character (but a tab or a line break) could move
+    // the cursor, or end the bracketed paste early and run the rest as keys. They are dropped.
+    // eslint-disable-next-line no-control-regex
+    const normalized = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, '').replace(/\r?\n/g, '\r')
     this.terminals.write(ptyId, this.terminals.bracketedPaste(ptyId) ? `\x1b[200~${normalized}\x1b[201~` : normalized)
     // A prompt is the user acting, whatever its bytes are: no terminal-reply filter.
     this.onUserInput(ptyId)

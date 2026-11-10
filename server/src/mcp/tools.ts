@@ -804,17 +804,23 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       // Read-only (5c-2). Outdated is worked out against the comment's own source now: one
-      // worktree.diff per source (its path checks and limits), at most MAX_OUTDATED_SOURCES of them.
+      // worktree.diff per source (its path checks and limits), at most MAX_OUTDATED_SOURCES of them,
+      // each of only the files commented on in that source; a comment of a later source is null.
       get_review_comments: async (args, project) => {
         const { worktree } = resolveWorktree(project, args.worktree)
         const draft = worktree.review
         if (!draft || draft.comments.length === 0) return { worktree: worktree.id, revision: null, comments: [] }
-        const sources = new Map<string, ChangesSource>()
-        for (const c of draft.comments) sources.set(sourceKey(c.source), c.source)
+        const sources = new Map<string, { source: ChangesSource; paths: Set<string> }>()
+        for (const c of draft.comments) {
+          const key = sourceKey(c.source)
+          const entry = sources.get(key) ?? { source: c.source, paths: new Set<string>() }
+          entry.paths.add(c.path)
+          sources.set(key, entry)
+        }
         const diffs = new Map<string, Record<string, string> | null>()
-        for (const [key, source] of [...sources].slice(0, MAX_OUTDATED_SOURCES)) {
+        for (const [key, { source, paths }] of [...sources].slice(0, MAX_OUTDATED_SOURCES)) {
           try {
-            diffs.set(key, (await v2('worktree.diff', { worktreeId: worktree.id, source })) as Record<string, string>)
+            diffs.set(key, (await v2('worktree.diff', { worktreeId: worktree.id, source, paths: [...paths] })) as Record<string, string>)
           } catch {
             diffs.set(key, null) // a missing worktree, a commit gone: not checked
           }

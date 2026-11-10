@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { limitPatches, splitPatch, worktreeChanges, worktreeCommits, worktreeDiff } from '../src/host/gitService.ts'
 
+// Keep a user's global and system git config (signing, log settings, hooks) out of these tests.
+process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+process.env.GIT_CONFIG_NOSYSTEM = '1'
+
 function makeRepo(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -528,4 +532,78 @@ test('worktreeCommits: none before the first commit', async (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   execFileSync('git', ['-C', dir, 'init', '-q'])
   assert.deepEqual(await worktreeCommits(dir), [])
+})
+
+test('worktreeCommits keeps every commit when log.showSignature is on and a commit is signed', async (t) => {
+  const { dir, run } = withWork(t)
+  const key = join(dir, '.git', 'signing-key')
+  execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-f', key])
+  run('-c', 'gpg.format=ssh', '-c', `user.signingkey=${key}`, 'commit', '--allow-empty', '-S', '-qm', 'signed')
+  // A repo-local setting, as a user's global one would be: git log would print "No signature" lines.
+  run('config', 'log.showSignature', 'true')
+  assert.match(run('log', '-n', '1', '--format=%s'), /signature/i)
+  assert.deepEqual((await worktreeCommits(dir)).map((c) => c.subject), ['signed', 'second work', 'first work', 'base'])
+})
+
+test('worktreeCommits: a subject with an RS keeps its record and its text', async (t) => {
+  const { dir, run } = withWork(t)
+  run('commit', '--allow-empty', '-qm', 'a \x1e b')
+  run('commit', '--allow-empty', '-qm', 'after')
+  const subjects = (await worktreeCommits(dir)).map((c) => c.subject)
+  assert.deepEqual(subjects.slice(0, 2), ['after', 'a \x1e b'])
+  assert.equal(subjects.length, 5)
+})
+
+test('source commit: a merge is compared with its first parent', async (t) => {
+  const { dir, run, sha } = withWork(t)
+  run('checkout', '-qb', 'side', 'main')
+  writeFileSync(join(dir, 'side.txt'), 's\n')
+  run('add', 'side.txt')
+  run('commit', '-qm', 'side work')
+  run('checkout', '-q', '-f', 'feature')
+  run('merge', '-q', '--no-ff', '-m', 'merge side', 'side')
+  const merge = sha('HEAD')
+  const changes = await worktreeChanges(dir, { kind: 'commit', sha: merge })
+  assert.deepEqual(paths(changes), ['side.txt'])
+  const diff = await worktreeDiff(dir, { kind: 'commit', sha: merge })
+  assert.deepEqual(Object.keys(diff), ['side.txt'])
+})
+
+test('source uncommitted on an unborn HEAD: everything against the empty tree', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  execFileSync('git', ['-C', dir, 'init', '-q'])
+  writeFileSync(join(dir, 'staged.txt'), 's\n')
+  execFileSync('git', ['-C', dir, 'add', 'staged.txt'])
+  writeFileSync(join(dir, 'new.txt'), 'n\n')
+  const changes = await worktreeChanges(dir, { kind: 'uncommitted' })
+  assert.deepEqual(paths(changes), ['new.txt', 'staged.txt'])
+  assert.deepEqual(Object.keys(await worktreeDiff(dir, { kind: 'uncommitted' })).sort(), ['new.txt', 'staged.txt'])
+})
+
+test('worktreeDiff with paths: only those files, the same patches, untracked ones included', async (t) => {
+  const { dir, run } = withWork(t)
+  run('mv', 'moved.txt', 'renamed.txt')
+  writeFileSync(join(dir, '*.txt'), 'glob\n')
+  const full = await worktreeDiff(dir)
+  for (const want of [['keep.txt'], ['untracked.txt'], ['renamed.txt'], ['moved.txt'], ['keep.txt', 'untracked.txt', 'nope.txt']]) {
+    const only = await worktreeDiff(dir, { kind: 'branch' }, want)
+    const expected = Object.fromEntries(Object.entries(full).filter(([k]) => want.includes(k)))
+    assert.deepEqual(only, expected, want.join(','))
+  }
+  // A path is literal, never a pathspec pattern.
+  assert.deepEqual(Object.keys(await worktreeDiff(dir, { kind: 'branch' }, ['*.txt'])), ['*.txt'])
+  assert.deepEqual(await worktreeDiff(dir, { kind: 'branch' }, []), {})
+  const commit = run('rev-parse', 'HEAD').trim()
+  assert.deepEqual(await worktreeDiff(dir, { kind: 'commit', sha: commit }, ['second.txt']), await worktreeDiff(dir, { kind: 'commit', sha: commit }))
+})
+
+test('source commit: a shallow clone\'s boundary commit is refused, not shown as the whole tree', async (t) => {
+  const { dir, sha } = withWork(t)
+  const clone = mkdtempSync(join(tmpdir(), 'trek-changes-shallow-'))
+  t.after(() => rmSync(clone, { recursive: true, force: true }))
+  execFileSync('git', ['clone', '-q', '--depth', '1', '-b', 'feature', `file://${dir}`, join(clone, 'c')])
+  const boundary = sha('HEAD')
+  await assert.rejects(worktreeChanges(join(clone, 'c'), { kind: 'commit', sha: boundary }), /shallow clone/)
+  await assert.rejects(worktreeDiff(join(clone, 'c'), { kind: 'commit', sha: boundary }), /shallow clone/)
 })

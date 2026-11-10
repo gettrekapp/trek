@@ -15,6 +15,8 @@ export const MAX_REVIEW_LINE_TEXT = 500
 export const MAX_REVIEW_PATH = 4096
 /** The highest line number a comment may name. */
 export const MAX_REVIEW_LINE = 10_000_000
+/** The highest draft revision; a saved one past it (or below 1) is replaced at load. */
+export const MAX_REVIEW_REVISION = 2 ** 50
 /** How many commits `worktree.commits` lists, and the picker offers. */
 export const COMMIT_LIST_LIMIT = 100
 
@@ -68,8 +70,11 @@ export function reviewPrompt(worktreeName: string, comments: readonly ReviewComm
     groups.set(key, group)
   }
   const count = comments.length
+  // The worktree's name is a branch or directory name: no control character reaches the session.
+  // eslint-disable-next-line no-control-regex
+  const name = worktreeName.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
   const parts = [
-    `Review comments on the changes in ${worktreeName} (${count} ${count === 1 ? 'comment' : 'comments'}). ` +
+    `Review comments on the changes in ${name} (${count} ${count === 1 ? 'comment' : 'comments'}). ` +
       'Each quotes the line as it read when the comment was written; the file may have changed since. ' +
       'Address each one.'
   ]

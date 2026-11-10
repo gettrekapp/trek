@@ -535,6 +535,12 @@ test('sendPrompt pastes with CRs, bracketed when the agent asked for it, then pr
   await s.sessions.terminals.settled(ptyId)
   await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'c' })
   assert.equal(proc.written[2], '\x1b[200~c\x1b[201~')
+  // Nothing in the text can end the paste early or reach the terminal as a control sequence.
+  await s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'a\x1b[201~rm -rf ~\r\x9b201~\x07\tb\nc' })
+  const pasted = proc.written.at(-1)
+  assert.equal(pasted, '\x1b[200~a[201~rm -rf ~\r201~\tb\rc\x1b[201~')
+  assert.equal(pasted.split('\x1b[201~').length, 2)
+  assert.ok(pasted.endsWith('\x1b[201~'))
   proc.exit(0)
   await assert.rejects(Promise.resolve().then(() => s.sessions.sendPrompt({ projectId: s.projectId, sessionId, text: 'd' })), (e) => e.code === 'BAD_REQUEST')
 })

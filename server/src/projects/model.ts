@@ -5,7 +5,7 @@ import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { realOrResolved as real } from '../repos.ts'
 import { requireString } from '../validate.ts'
-import { cleanReview } from '../review/draft.ts'
+import { cleanReview, isRevision } from '../review/draft.ts'
 
 /** The registered repo at `path` (compared by realpath), or PATH_DENIED. */
 export function findRegistered(registry: readonly RemoteRepo[], path: string): RemoteRepo {
@@ -47,10 +47,19 @@ function resetSession(s: Session): Session {
 }
 
 function resetWorktree(w: Worktree): Worktree {
-  const { head: _h, dirty: _d, ahead: _a, behind: _b, missing: _m, prNotice: _n, review: saved, ...rest } = w
-  // The review draft (5c-2) is saved with the project; one of the wrong shape is dropped.
-  const review = saved === undefined ? undefined : cleanReview(saved)
-  return { ...rest, ...(review ? { review } : {}), loaded: false, sessions: w.sessions.map(resetSession) }
+  const { head: _h, dirty: _d, ahead: _a, behind: _b, missing: _m, prNotice: _n, review: saved, reviewRevision: counter, ...rest } = w
+  // The review draft (5c-2) and the last revision handed out are saved with the project; a draft
+  // of the wrong shape is dropped, a counter out of range forgotten.
+  const last = isRevision(counter) ? counter : 0
+  const review = saved === undefined ? undefined : cleanReview(saved, typeof w.name === 'string' ? w.name : '', last)
+  const reviewRevision = Math.max(last, review?.revision ?? 0)
+  return {
+    ...rest,
+    ...(review ? { review } : {}),
+    ...(reviewRevision > 0 ? { reviewRevision } : {}),
+    loaded: false,
+    sessions: w.sessions.map(resetSession)
+  }
 }
 
 /**

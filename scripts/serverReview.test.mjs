@@ -18,7 +18,10 @@ import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH } from '../server/src/sessions/limits.ts'
-import { MAX_REVIEW_BODY, MAX_REVIEW_COMMENTS, reviewPrompt } from '../src/shared/review.ts'
+import { MAX_REVIEW_BODY, MAX_REVIEW_COMMENTS, MAX_REVIEW_REVISION, reviewPrompt } from '../src/shared/review.ts'
+import { cleanReview } from '../server/src/review/draft.ts'
+import { ProjectStore } from '../server/src/projects/store.ts'
+import { reconcileWorktrees } from '../server/src/git/reconcile.ts'
 
 const gitEnv = {
   ...process.env,
@@ -114,6 +117,20 @@ test('a bad source is BAD_REQUEST before git runs; an unknown commit is GIT_ERRO
     await s.refused('worktree.diff', { source }, 'BAD_REQUEST')
   }
   await s.refused('worktree.changes', { source: { kind: 'commit', sha: 'f'.repeat(40) } }, 'GIT_ERROR')
+  await s.refused('worktree.diff', { source: { kind: 'commit', sha: 'f'.repeat(40) } }, 'GIT_ERROR')
+})
+
+test('worktree.diff takes paths: only those files, each checked like a comment\'s path', async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.a, 'c.txt'), 'c\n')
+  const full = await s.ok('worktree.diff', {})
+  assert.deepEqual(Object.keys(full).sort(), ['a.txt', 'c.txt'])
+  assert.deepEqual(await s.ok('worktree.diff', { paths: ['c.txt'] }), { 'c.txt': full['c.txt'] })
+  assert.deepEqual(await s.ok('worktree.diff', { paths: ['a.txt', 'nope.txt'] }), { 'a.txt': full['a.txt'] })
+  assert.deepEqual(await s.ok('worktree.diff', { paths: [] }), {})
+  for (const paths of ['a.txt', [''], [3], ['a\x1bb'], Array(MAX_REVIEW_COMMENTS + 1).fill('a.txt')]) {
+    await s.refused('worktree.diff', { paths }, 'BAD_REQUEST')
+  }
 })
 
 test('review.add, edit and remove keep the draft on the worktree, saved with the project', async (t) => {
@@ -145,10 +162,25 @@ test('review.add refuses bad comments', async (t) => {
     { lineText: 'x'.repeat(501) },
     { body: '   ' },
     { body: 'x'.repeat(MAX_REVIEW_BODY + 1) },
-    { source: { kind: 'commit', sha: 'nope' } }
+    { source: { kind: 'commit', sha: 'nope' } },
+    // Control characters could end the bracketed paste the prompt is typed in, or move the cursor.
+    { path: 'a\x1b[201~b' },
+    { path: 'a\u009bb' },
+    { path: 'a\tb\u0000' },
+    { lineText: 'TWO\x1b[2J' },
+    { lineText: 'TWO\r' },
+    { body: 'ok\x1b[201~then this runs' },
+    { body: 'ok\r\nthen' },
+    { body: 'bell\x07' },
+    { path: 7 },
+    { lineText: undefined }
   ]
   for (const over of bad) await s.refused('review.add', comment(over), 'BAD_REQUEST')
   assert.equal(s.main().review, undefined)
+  // A tab in a line or a body, a line break in a body and a blank line are all fine.
+  await s.ok('review.add', comment({ lineText: '\tTWO', body: 'one\n\ttwo' }))
+  await s.ok('review.add', comment({ line: 1, lineText: '' }))
+  await s.refused('review.edit', { commentId: s.main().review.comments[0].id, body: 'x\x1by' }, 'BAD_REQUEST')
   const res = await s.call('review.add', { projectId: s.projectId, worktreeId: 'nope', ...comment() })
   assert.equal(res.error.code, 'NOT_FOUND')
 })
@@ -231,4 +263,107 @@ test('a review draft survives a restart; one of the wrong shape is dropped', () 
   }
   const mixed = resetRuntime(project({ revision: 2, comments: [comment1, { ...comment1, id: 'd', source: { kind: 'commit', sha: 'HEAD' } }] }))
   assert.deepEqual(mixed.repositories[0].worktrees[0].review.comments.map((c) => c.id), ['c'])
+})
+
+test('revisions never repeat on a worktree: across a send, a discard, an emptied draft and a restart', async (t) => {
+  const s = await setup(t)
+  const seen = []
+  const rev = () => s.main().review.revision
+  await s.ok('review.add', comment())
+  seen.push(rev())
+  await s.ok('review.clear', { revision: rev() })
+  assert.equal(s.main().review, undefined)
+  const { commentId } = await s.ok('review.add', comment())
+  seen.push(rev())
+  await s.ok('review.remove', { commentId })
+  await s.ok('review.add', comment())
+  seen.push(rev())
+  await s.ok('review.send', { sessionId: 's-old', revision: rev() })
+  await s.ok('review.add', comment())
+  seen.push(rev())
+  assert.deepEqual([...new Set(seen)], seen, 'no revision repeats')
+  assert.deepEqual([...seen].sort((a, b) => a - b), seen, 'each above the last')
+  // The counter is saved with the project and kept through a reload.
+  await s.ok('review.clear', { revision: rev() })
+  const saved = s.saved.at(-1)
+  const last = saved.repositories[0].worktrees[0].reviewRevision
+  assert.equal(last, seen.at(-1))
+  const reloaded = resetRuntime(structuredClone(saved))
+  assert.equal(reloaded.repositories[0].worktrees[0].reviewRevision, last)
+})
+
+test('a send racing an add in one tick: the add moves the revision and the send is refused', async (t) => {
+  const s = await setup(t)
+  await s.ok('review.add', comment())
+  const { revision } = s.main().review
+  const [added, sent] = await Promise.all([
+    s.call('review.add', { projectId: s.projectId, worktreeId: s.worktreeId, ...comment({ line: 1, body: 'second' }) }),
+    s.call('review.send', { projectId: s.projectId, worktreeId: s.worktreeId, sessionId: 's-old', revision })
+  ])
+  assert.equal(added.ok, true)
+  assert.equal(sent.ok, false)
+  assert.equal(sent.error.code, 'CONFLICT')
+  assert.equal(s.main().review.comments.length, 2)
+  assert.deepEqual(s.main().sessions.find((x) => x.id === 's-old').queue, [])
+})
+
+test('cleanReview: the checks review.add makes, unique ids, one prompt, a sane revision', () => {
+  const c = (id, over = {}) => ({ id, source: { kind: 'branch' }, path: 'a.txt', side: 'new', line: 1, lineText: 'x', body: 'y', at: 1, ...over })
+  const ids = (draft) => draft?.comments.map((x) => x.id)
+  for (const over of [{ path: 'a\x1b[201~b' }, { lineText: 'x\x1b' }, { body: 'y\x1b[201~' }, { body: 'y\r' }, { line: 0 }, { at: 'now' }, { id: '' }]) {
+    assert.deepEqual(ids(cleanReview({ revision: 3, comments: [c('ok'), c('bad', over)] }, 'w')), ['ok'], JSON.stringify(over))
+  }
+  assert.deepEqual(ids(cleanReview({ revision: 3, comments: [c('a'), c('a', { body: 'again' }), c('b')] }, 'w')), ['a', 'b'])
+  assert.deepEqual(cleanReview({ revision: 3, comments: [c('a', { body: 'two\n\tlines' })] }, 'w').comments[0].body, 'two\n\tlines')
+  // A draft whose prompt no longer fits in one queued prompt is dropped.
+  const big = Array.from({ length: 30 }, (_, i) => c(`c${i}`, { body: 'x'.repeat(MAX_REVIEW_BODY) }))
+  assert.equal(cleanReview({ revision: 3, comments: big }, 'w'), undefined)
+  // A revision out of range is replaced with one above the worktree's last.
+  for (const revision of [0, -1, 1.5, 'x', undefined, MAX_REVIEW_REVISION + 1, Number.MAX_SAFE_INTEGER]) {
+    assert.equal(cleanReview({ revision, comments: [c('a')] }, 'w', 41).revision, 42, String(revision))
+  }
+  assert.equal(cleanReview({ revision: 7, comments: [c('a')] }, 'w', 41).revision, 7)
+  assert.equal(cleanReview({ revision: 7, comments: Array.from({ length: 150 }, (_, i) => c(`c${i}`)) }, 'w').comments.length, MAX_REVIEW_COMMENTS)
+})
+
+test('a review draft survives the real project store: saved, then loaded from disk', (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-review-store-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const review = { revision: 12, comments: [{ id: 'c1', source: { kind: 'uncommitted' }, path: 'a.txt', side: 'old', line: 3, lineText: '\tthree', body: 'why\nnot?', at: 5 }] }
+  const project = {
+    id: 'p1', name: 'P', settings: {}, globalSessions: [],
+    repositories: [{ id: 'r', name: 'r', path: '/r', branchData: {}, worktrees: [
+      { id: 'w', name: 'w', path: '/r', isMain: true, loaded: true, sessions: [], review, reviewRevision: 12 },
+      { id: 'w2', name: 'w2', path: '/r2', isMain: false, loaded: false, sessions: [], reviewRevision: 30 }
+    ] }]
+  }
+  const store = new ProjectStore(dir, { debounceMs: 0 })
+  t.after(() => store.close())
+  store.save(project)
+  store.flush()
+  const [loaded] = new ProjectStore(dir).loadAll()
+  assert.deepEqual(loaded.repositories[0].worktrees[0].review, review)
+  assert.equal(loaded.repositories[0].worktrees[0].reviewRevision, 12)
+  assert.equal(loaded.repositories[0].worktrees[1].review, undefined)
+  assert.equal(loaded.repositories[0].worktrees[1].reviewRevision, 30)
+})
+
+test('the git poll keeps a vanished worktree with a draft as missing, and folds duplicate rows\' drafts', () => {
+  const c = (id) => ({ id, source: { kind: 'branch' }, path: 'a.txt', side: 'new', line: 1, lineText: 'x', body: id, at: 1 })
+  const main = { id: 'm', name: 'R', path: '/r', isMain: true, loaded: false, sessions: [] }
+  const gone = { id: 'g', name: 'g', path: '/r-g', branch: 'g', head: 'h', isMain: false, loaded: false, sessions: [], review: { revision: 4, comments: [c('a')] } }
+  const repo = (worktrees) => ({ id: 'r', name: 'R', path: '/r', branchData: {}, worktrees })
+  const listed = [{ path: '/r', branch: 'main', head: 'h1', isMain: true }]
+  const out = reconcileWorktrees(repo([main, gone]), listed, () => 'new')
+  assert.equal(out.worktrees.length, 2)
+  assert.equal(out.worktrees[1].missing, true)
+  assert.deepEqual(out.worktrees[1].review, gone.review)
+
+  const first = { ...gone, review: { revision: 4, comments: [c('a')] }, reviewRevision: 4 }
+  const dup = { ...gone, id: 'g2', review: { revision: 9, comments: [c('a'), c('b')] }, reviewRevision: 9 }
+  const folded = reconcileWorktrees(repo([main, first, dup]), [...listed, { path: '/r-g', branch: 'g', head: 'h', isMain: false }], () => 'new')
+  assert.equal(folded.worktrees.length, 2)
+  assert.deepEqual(folded.worktrees[1].review.comments.map((x) => x.id), ['a', 'b'])
+  assert.ok(folded.worktrees[1].review.revision > 9)
+  assert.equal(folded.worktrees[1].reviewRevision, folded.worktrees[1].review.revision)
 })

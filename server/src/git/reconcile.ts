@@ -1,10 +1,12 @@
 // Pure merges of git's view into a repository's worktree rows. The server
-// keeps its own ids, sessions and `loaded`; git decides which rows exist and
-// their branch, head and status.
+// keeps its own ids, sessions, `loaded` and review drafts; git decides which
+// rows exist and their branch, head and status.
 import { basename } from 'node:path'
 import type { Repository, Worktree } from '../../../src/shared/model/types'
 import type { GitWorktreeInfo, WorktreeStatus } from '../../../src/shared/types'
+import { MAX_REVIEW_COMMENTS } from '../../../src/shared/review.ts'
 import { realOrResolved as real } from '../repos.ts'
+import { fitsOnePrompt, lastRevision } from '../review/draft.ts'
 
 export interface Reconciled {
   worktrees: Worktree[]
@@ -28,6 +30,27 @@ function displayName(w: Worktree, repo: Repository): string {
   return w.isMain ? w.name || repo.name : w.branch ?? basename(w.path)
 }
 
+/**
+ * A duplicate row's review draft (5c-2) folds into the first row's: its comments the first lacks
+ * are added while the draft stays within its limits, under a revision above both rows' last.
+ */
+function foldReview(first: Worktree, other: Worktree): void {
+  const last = Math.max(lastRevision(first), lastRevision(other))
+  if (other.review) {
+    const comments = [...(first.review?.comments ?? [])]
+    const have = new Set(comments.map((c) => c.id))
+    for (const c of other.review.comments) {
+      if (have.has(c.id) || comments.length >= MAX_REVIEW_COMMENTS) continue
+      if (!fitsOnePrompt(first.name, [...comments, c])) continue
+      comments.push(c)
+    }
+    first.review = { revision: last + 1, comments }
+    first.reviewRevision = last + 1
+  } else if (last > 0) {
+    first.reviewRevision = last
+  }
+}
+
 export function reconcileWorktrees(repo: Repository, listed: readonly GitWorktreeInfo[], newId: () => string): Reconciled {
   let membershipChanged = false
   let headsChanged = false
@@ -47,6 +70,7 @@ export function reconcileWorktrees(repo: Repository, listed: readonly GitWorktre
     const have = new Set(first.sessions.map((s) => s.id))
     for (const s of w.sessions) if (!have.has(s.id)) first.sessions.push(s)
     first.loaded = first.loaded || w.loaded
+    foldReview(first, w)
     membershipChanged = true
   }
 
@@ -94,7 +118,7 @@ export function reconcileWorktrees(repo: Repository, listed: readonly GitWorktre
   for (const row of rows) {
     if (row.isMain || listedKeys.has(keyOf(row))) {
       kept.push(row)
-    } else if (row.sessions.length > 0) {
+    } else if (row.sessions.length > 0 || row.review) {
       const { head: _h, ...rest } = withoutStatus(row)
       kept.push({ ...rest, missing: true })
     } else {

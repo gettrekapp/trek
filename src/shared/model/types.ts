@@ -107,8 +107,8 @@ export interface Worktree {
   ahead?: number
   behind?: number
   /**
-   * Git no longer lists this worktree, but it holds sessions, so the server
-   * keeps the row. Not polled for status; worktree.remove drops it.
+   * Git no longer lists this worktree, but it holds sessions or a review
+   * draft, so the server keeps the row. Not polled for status; worktree.remove drops it.
    */
   missing?: boolean
   /** Whether the worktree's sessions are running (loaded) or only saved */
@@ -118,11 +118,17 @@ export interface Worktree {
   prNotice?: PrNotice
   /** The Changes tab's draft review (5c-2): saved with the project, until sent or discarded */
   review?: ReviewDraft
+  /**
+   * The last review revision handed out on this worktree (5c-2), saved with the project and kept
+   * once the draft is sent, discarded or emptied: the next draft's revision is above it, so a
+   * revision never repeats on a worktree.
+   */
+  reviewRevision?: number
 }
 
 /** A worktree's draft review: line comments on its diffs, sent to a session as one prompt (5c-2). */
 export interface ReviewDraft {
-  /** Goes up by one on every change; `review.send` and `review.clear` compare it */
+  /** Goes up by one on every change, never repeating on the worktree; `review.send` and `review.clear` compare it */
   revision: number
   /** In the order they were written */
   comments: ReviewComment[]
