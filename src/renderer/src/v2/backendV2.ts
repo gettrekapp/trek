@@ -518,7 +518,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       clearKey: async () => {
         await request('linear.clearKey', {})
       },
-      issues: (ids) => request('linear.issues', { ids })
+      issues: (ids) => request('linear.issues', { ids }),
+      onChanged: (listener) =>
+        deps.onEvent('integrations.changed', (parts) => {
+          if (parts.linear) listener()
+        })
     },
     voice: {
       settings: () => request('voice.settings', {}),
@@ -533,6 +537,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       onSummary: (listener) =>
         deps.onEvent('voice.summary', (event) => {
           if (event.projectId === projectId) listener(event)
+        }),
+      onChanged: (listener) =>
+        deps.onEvent('integrations.changed', (parts) => {
+          if (parts.voice) listener()
         })
     },
     skills: {

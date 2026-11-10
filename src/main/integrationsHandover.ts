@@ -11,8 +11,8 @@ import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../shared/client/index.ts'
 import { CAPABILITY } from '../shared/protocolV2.ts'
 import { appSettings, updateAppSettings } from './appSettings'
-import { createSecretStore, writeFileAtomic } from './secrets'
-import { handOver, parseHandoverState, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
+import { createSecretStore, writeFileAtomic, type SecretRead, type SecretStore } from './secrets'
+import { handOver, nothingToHandOver, parseHandoverState, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
 import { localProfileKey, localServerStatus, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 
 const STATE_FILE = 'integrations-handover.json'
@@ -38,12 +38,17 @@ function readLegacyVoice(): LegacyIntegrations['voice'] {
   }
 }
 
+const readSecret = (store: SecretStore): Promise<SecretRead> => store.read('apiKey').catch((): SecretRead => ({ state: 'unreadable' }))
+
 async function readLegacy(): Promise<LegacyIntegrations> {
-  const [linearKey, voiceKey] = await Promise.all([
-    createSecretStore('linear.json').get('apiKey').catch(() => null),
-    createSecretStore('elevenlabs.json').get('apiKey').catch(() => null)
-  ])
-  return { linearKey, voiceKey, voice: readLegacyVoice() }
+  const [linear, voice] = await Promise.all([readSecret(createSecretStore('linear.json')), readSecret(createSecretStore('elevenlabs.json'))])
+  const unreadable = { ...(linear.state === 'unreadable' ? { linear: true as const } : {}), ...(voice.state === 'unreadable' ? { voice: true as const } : {}) }
+  return {
+    linearKey: linear.state === 'value' ? linear.value : null,
+    voiceKey: voice.state === 'value' ? voice.value : null,
+    voice: readLegacyVoice(),
+    ...(Object.keys(unreadable).length > 0 ? { unreadable } : {})
+  }
 }
 
 /** Connected to the Local server, or null when it does not answer in time (or has no `linear`/`voice`). */
@@ -76,52 +81,68 @@ function connectLocal(url: string, token: string): Promise<ServerConnection | nu
 /** The Local server's pid this ran for: once per server run (a later start retries what failed). */
 let triedPid: number | undefined
 
+/** Runs one after another: a server restart while a hand-over is still going waits for it. */
+let chain: Promise<void> = Promise.resolve()
+const serial = (task: () => Promise<void>, what: string): void => {
+  chain = chain.then(task).catch((err) => console.warn(`trek: could not ${what}`, err))
+}
+
+const writeState = (state: HandoverState): Promise<void> => writeFileAtomic(statePath(), JSON.stringify(state, null, 2))
+
+/**
+ * Active/Busy stays the app's: voice-settings.json's, into the app settings, once. Needs no
+ * server (a remote-only user has one too); left undone when the app settings cannot be written.
+ */
+async function migrateVoiceActive(): Promise<void> {
+  const state = readState()
+  if (state.voiceActive) return
+  if (readLegacyVoice().active === false && appSettings().voiceActive) await updateAppSettings({ voiceActive: false })
+  state.voiceActive = true
+  await writeState(state)
+}
+
 async function run(): Promise<void> {
   const state = readState()
   const profile = localProfileKey()
   const done = Object.hasOwn(state.profiles, profile) ? state.profiles[profile] : {}
+  if (done.linear && done.voice && !done.voiceConfigPending) return
   const legacy = await readLegacy()
-  let changed = false
-  // Active/Busy stays the app's: voice-settings.json's, into the app settings, once.
-  if (!state.voiceActive) {
-    if (legacy.voice.active === false && appSettings().voiceActive) await updateAppSettings({ voiceActive: false }).catch(() => undefined)
-    state.voiceActive = true
-    changed = true
-  }
-  if (!(done.linear && done.voice) || done.voiceConfigPending) {
-    let next = done
-    if (!legacy.linearKey && !legacy.voiceKey) next = { linear: true, voice: true }
-    else {
-      const url = localServerUrl()
-      const token = localToken()
-      const conn = url && token ? await connectLocal(url, token) : null
-      if (conn) {
-        try {
-          next = await handOver((method, params) => conn.request(method, params as never, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
-        } finally {
-          conn.close()
-        }
+  const unreadable = [legacy.unreadable?.linear && !done.linear ? 'Linear' : '', legacy.unreadable?.voice && !done.voice ? 'ElevenLabs' : ''].filter(Boolean)
+  if (unreadable.length > 0) console.warn(`trek: this app's ${unreadable.join(' and ')} key could not be decrypted here; not handed to the Local server (tried again next start)`)
+  let next = done
+  if (nothingToHandOver(legacy)) next = { linear: true, voice: true }
+  else {
+    const url = localServerUrl()
+    const token = localToken()
+    const conn = url && token ? await connectLocal(url, token) : null
+    if (conn) {
+      try {
+        next = await handOver((method, params) => conn.request(method, params as never, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
+      } finally {
+        conn.close()
       }
     }
-    if (next.linear !== done.linear || next.voice !== done.voice || next.voiceConfigPending !== done.voiceConfigPending) {
-      Object.defineProperty(state.profiles, profile, { value: next, enumerable: true, writable: true, configurable: true })
-      changed = true
-      const parts = [next.linear && !done.linear ? 'Linear' : '', next.voice && !done.voice ? 'ElevenLabs' : ''].filter(Boolean)
-      if (parts.length > 0) console.log(`trek: handed this app's ${parts.join(' and ')} settings to the Local server (${profile})`)
-    }
   }
-  if (changed) await writeFileAtomic(statePath(), JSON.stringify(state, null, 2))
+  if (next.linear === done.linear && next.voice === done.voice && next.voiceConfigPending === done.voiceConfigPending) return
+  Object.defineProperty(state.profiles, profile, { value: next, enumerable: true, writable: true, configurable: true })
+  await writeState(state)
+  const parts = [next.linear && !done.linear ? 'Linear' : '', next.voice && !done.voice ? 'ElevenLabs' : ''].filter(Boolean)
+  if (parts.length > 0) console.log(`trek: handed this app's ${parts.join(' and ')} settings to the Local server (${profile})`)
 }
 
 function maybeRun(): void {
   const status = localServerStatus()
   if (status.state !== 'running' || status.pid === undefined || status.pid === triedPid) return
   triedPid = status.pid
-  void run().catch((err) => console.warn('trek: could not hand the Linear and voice settings to the Local server', err))
+  serial(run, 'hand the Linear and voice settings to the Local server')
 }
 
-/** Called once at startup, beside the supervisor: runs each time a new Local server is running. */
+/**
+ * Called once at startup, beside the supervisor: moves the app's Active/Busy into the app settings
+ * (whether or not a Local server runs), then hands over each time a new Local server is running.
+ */
 export function handOverIntegrationsToLocal(): void {
+  serial(migrateVoiceActive, "move this app's voice Active/Busy into the app settings")
   onLocalServerChanged(maybeRun)
   maybeRun()
 }

@@ -75,7 +75,11 @@ export const integrations = (ctx: V2Context): Integrations => {
   return ctx.integrations
 }
 
-/** A failed lookup (Linear down, the secrets file unreadable) is TOOL_ERROR, never INTERNAL; a coded refusal stays as it is. */
+/**
+ * Any failure (Linear or ElevenLabs down or refusing, the secrets or voice file unreadable or
+ * unwritable) is TOOL_ERROR with its message, never INTERNAL; only BAD_REQUEST and NOT_FOUND (no
+ * integrations, a worktree that is not there) pass through as they are.
+ */
 export async function viaService<T>(operation: () => T | Promise<T>): Promise<T> {
   try {
     return await operation()
@@ -86,6 +90,16 @@ export async function viaService<T>(operation: () => T | Promise<T>): Promise<T>
   }
 }
 
+/** A key the service stored (`{ ok: true }`), not one it refused or kept (`ifAbsent` with one present). */
+const stored = (result: unknown): boolean => (result as { ok?: unknown } | null)?.ok === true
+
+/** Runs `operation`, then tells every connection that `part` changed (only when `changed` says so). */
+async function changing<T>(ctx: V2Context, part: 'linear' | 'voice', operation: () => T | Promise<T>, changed: (result: T) => boolean = () => true): Promise<T> {
+  const result = await viaService(operation)
+  if (changed(result)) ctx.integrationsChanged?.({ [part]: true })
+  return result
+}
+
 export const integrationHandlers: Record<string, Handler> = {
   'linear.status': (_p, ctx) => viaService(() => ({ hasKey: integrations(ctx).linear.hasKey() })),
 
@@ -93,11 +107,11 @@ export const integrationHandlers: Record<string, Handler> = {
   'linear.setKey': (p, ctx) => {
     const apiKey = requireApiKey(p.apiKey)
     const ifAbsent = optionalFlag(p.ifAbsent, 'ifAbsent')
-    return viaService(() => integrations(ctx).linear.setKey(apiKey, { ifAbsent }))
+    return changing(ctx, 'linear', () => integrations(ctx).linear.setKey(apiKey, { ifAbsent }), stored)
   },
 
   'linear.clearKey': (_p, ctx) =>
-    viaService(() => {
+    changing(ctx, 'linear', () => {
       integrations(ctx).linear.clearKey()
       return null
     }),
@@ -113,11 +127,11 @@ export const integrationHandlers: Record<string, Handler> = {
   'voice.setKey': (p, ctx) => {
     const apiKey = requireApiKey(p.apiKey)
     const ifAbsent = optionalFlag(p.ifAbsent, 'ifAbsent')
-    return viaService(() => integrations(ctx).voice.setKey(apiKey, { ifAbsent }))
+    return changing(ctx, 'voice', () => integrations(ctx).voice.setKey(apiKey, { ifAbsent }), stored)
   },
 
   'voice.clearKey': (_p, ctx) =>
-    viaService(() => {
+    changing(ctx, 'voice', () => {
       integrations(ctx).voice.clearKey()
       return null
     }),
@@ -126,7 +140,7 @@ export const integrationHandlers: Record<string, Handler> = {
 
   'voice.setConfig': (p, ctx) => {
     const patch = requireVoicePatch(p)
-    return viaService(() => integrations(ctx).voice.setConfig(patch))
+    return changing(ctx, 'voice', () => integrations(ctx).voice.setConfig(patch))
   },
 
   // The worktree's path from the server's state, checked as the worktree commands check it.

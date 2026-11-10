@@ -152,6 +152,8 @@ export interface WindowBackend {
     setKey(apiKey: string): Promise<LinearKeyResult>
     clearKey(): Promise<void>
     issues(ids: string[]): Promise<LinearIssue[]>
+    /** The server's key was set or cleared (by any client: another window, the hand-over); returns the unsubscribe */
+    onChanged(listener: () => void): () => void
   }
   /** ElevenLabs with the server's own API key (feature `voice`) */
   readonly voice: {
@@ -164,6 +166,8 @@ export interface WindowBackend {
     synthesize(text: string): Promise<Uint8Array>
     /** The project's sessions' spoken summaries (speak_summary), as the server sends them; returns the unsubscribe */
     onSummary(listener: (event: VoiceSummaryEvent) => void): () => void
+    /** The server's key or voice settings changed (by any client); returns the unsubscribe */
+    onChanged(listener: () => void): () => void
   }
   /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
   readonly skills: {
@@ -255,8 +259,17 @@ export const idleBackend: WindowBackend = {
     onLog: () => () => {}
   },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
-  linear: { hasKey: noProject, setKey: noProject, clearKey: noProject, issues: noProject },
-  voice: { settings: noProject, setKey: noProject, clearKey: noProject, voices: noProject, setConfig: noProject, synthesize: noProject, onSummary: () => () => {} },
+  linear: { hasKey: noProject, setKey: noProject, clearKey: noProject, issues: noProject, onChanged: () => () => {} },
+  voice: {
+    settings: noProject,
+    setKey: noProject,
+    clearKey: noProject,
+    voices: noProject,
+    setConfig: noProject,
+    synthesize: noProject,
+    onSummary: () => () => {},
+    onChanged: () => () => {}
+  },
   skills: { list: noProject },
   branch: { setTag: noProject, setCustomTag: noProject, setNote: noProject, setTicket: noProject, setPullRequest: noProject, setEnvVars: noProject },
   repos: { add: noProject, remove: noProject },

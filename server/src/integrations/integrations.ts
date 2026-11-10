@@ -25,15 +25,35 @@ export interface IntegrationOptions {
   secretsFile: string
   /**
    * Linear's GraphQL endpoint, for tests (default api.linear.app); the server reads
-   * `TREK_SERVER_LINEAR_URL` from its environment for its smokes.
+   * `TREK_SERVER_LINEAR_URL` from its environment for its smokes (loopback only: testEndpoint).
    */
   linearEndpoint?: string
   /** `voice.json` in the data dir */
   voiceConfigFile: string
-  /** ElevenLabs' API base (default api.elevenlabs.io/v1); `TREK_SERVER_ELEVENLABS_URL` for the smokes */
+  /** ElevenLabs' API base (default api.elevenlabs.io/v1); `TREK_SERVER_ELEVENLABS_URL` for the smokes (loopback only) */
   elevenLabsApi?: string
   /** Whose `~/.claude` the skills come from (default: the server user's home) */
   home?: string
+}
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost'])
+
+/**
+ * A test endpoint from the environment (`name`, for the smokes' stubs): taken only as an http(s)
+ * URL on loopback, so an inherited variable can never send the server's keys elsewhere; anything
+ * else is ignored with a warning (the real service is used).
+ */
+export function testEndpoint(name: string, value: string | undefined, warn: (message: string) => void = console.warn): string | undefined {
+  if (!value) return undefined
+  let url: URL | undefined
+  try {
+    url = new URL(value)
+  } catch {
+    url = undefined
+  }
+  if (url && (url.protocol === 'http:' || url.protocol === 'https:') && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password) return value
+  warn(`[integrations] ignoring ${name}: only an http(s) URL on 127.0.0.1, ::1 or localhost is accepted`)
+  return undefined
 }
 
 export function keySlot(file: SecretFile, name: string): KeySlot {

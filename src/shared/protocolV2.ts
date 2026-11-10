@@ -559,6 +559,17 @@ export interface EventPayloadsV2 {
    * project's topic; a client plays it unless its user is Busy
    */
   'voice.summary': VoiceSummaryEvent
+  /**
+   * The server's Linear or ElevenLabs key or voice settings changed (any client's linear.setKey
+   * that stored, linear.clearKey, voice.setKey that stored, voice.clearKey, voice.setConfig), to
+   * every authenticated connection: re-read `linear.status` / `voice.settings`
+   */
+  'integrations.changed': IntegrationsChangedEvent
+}
+
+export interface IntegrationsChangedEvent {
+  linear?: true
+  voice?: true
 }
 
 export interface VoiceSummaryEvent {

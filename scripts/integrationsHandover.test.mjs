@@ -2,7 +2,7 @@
 // settings to the Local server once (phase 5b), against a fake server's set-if-absent methods.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handOver, legacyVoiceConfig, parseHandoverState } from '../src/main/integrationsHandoverRules.ts'
+import { handOver, legacyVoiceConfig, nothingToHandOver, parseHandoverState } from '../src/main/integrationsHandoverRules.ts'
 
 /** A fake Local server: `keys` it already has; `fail` methods that throw (a server older than 5b, a dropped link). */
 function fakeServer({ keys = {}, reject = {}, fail = [] } = {}) {
@@ -58,6 +58,19 @@ test('nothing to hand over is done at once; a refused key or an older server is 
   const next = fakeServer({ keys: { voice: 'sk_app' } })
   assert.deepEqual(await handOver(next.request, legacy, pending), { linear: true, voice: true })
   assert.deepEqual(next.calls, [['voice.setConfig', { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true }]])
+})
+
+test('a key stored but unreadable here (safeStorage cannot decrypt it) is not done: tried again next start', async () => {
+  const unreadable = { linearKey: null, voiceKey: null, voice: legacy.voice, unreadable: { linear: true, voice: true } }
+  assert.equal(nothingToHandOver(unreadable), false)
+  assert.equal(nothingToHandOver({ linearKey: null, voiceKey: null, voice: {} }), true)
+  const server = fakeServer()
+  assert.deepEqual(await handOver(server.request, unreadable, {}), {})
+  assert.deepEqual(server.calls, [])
+  // One part unreadable, the other handed over.
+  const half = fakeServer()
+  assert.deepEqual(await handOver(half.request, { ...legacy, linearKey: null, unreadable: { linear: true } }, {}), { voice: true })
+  assert.deepEqual(half.calls.map(([m]) => m), ['voice.setKey', 'voice.setConfig'])
 })
 
 test('only well-formed voice settings are sent; the state file reads strictly', () => {

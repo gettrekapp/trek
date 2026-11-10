@@ -242,6 +242,8 @@ export interface AppState {
   decisions: Record<string, PendingDecision>
   /** Machine-wide ElevenLabs settings, null until loaded. */
   voice: VoiceSettings | null
+  /** This app's voice Active/Busy (app settings), apart from `voice`: null until loaded (not active). */
+  voiceActive: boolean | null
   llmSettings: LlmSettings | null
   setLlmSettings: (settings: LlmSettings | null) => void
   setProjectLlmDefault: (llm: LlmSelection | undefined) => void
@@ -303,6 +305,7 @@ export interface AppState {
   setBotSettings: (settings: BotSettings) => void
   setLinearConnected: (connected: boolean) => void
   setVoice: (voice: VoiceSettings | null) => void
+  setVoiceActive: (active: boolean) => void
   setVoicePlayback: (playing: SpokenSummary | null, queued: number) => void
   setLinearIssues: (issues: LinearIssue[]) => void
   setTerminalQueue: (id: string, texts: string[]) => void
@@ -396,6 +399,7 @@ export const useAppStore = create<AppState>((set) => ({
   linearIssues: {},
   decisions: {},
   voice: null,
+  voiceActive: null,
   llmSettings: null,
   voicePlaying: null,
   voiceQueued: 0,
@@ -472,6 +476,8 @@ export const useAppStore = create<AppState>((set) => ({
   setLinearConnected: (connected) =>
     set(connected ? { linearConnected: true } : { linearConnected: false, linearIssues: {} }),
   setVoice: (voice) => set({ voice }),
+  // The Settings section's copy (`voice.active`) follows it.
+  setVoiceActive: (active) => set((s) => ({ voiceActive: active, voice: s.voice && s.voice.active !== active ? { ...s.voice, active } : s.voice })),
 
   setLlmSettings: (llmSettings) => set({ llmSettings }),
 

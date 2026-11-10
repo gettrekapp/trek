@@ -7,6 +7,7 @@ import {
   CLOSE_UNSUPPORTED_VERSION,
   PROTOCOL_VERSION_V2,
   SUPPORTED_PROTOCOL_VERSIONS,
+  type IntegrationsChangedEvent,
   type ServerFrameV2,
   type TopicRev
 } from '../../src/shared/protocolV2'
@@ -60,7 +61,7 @@ export interface ServerOptions {
   local?: boolean
   /** Docker, the environments and the dev stacks on this machine, with their files in the data dir (machine.ts) */
   machine?: Machine
-  /** Linear with the server's own key, in its secrets file (integrations.ts) */
+  /** Linear and ElevenLabs with the server's own keys (its secrets file), and the skills on its disk (integrations.ts) */
   integrations?: Integrations
 }
 
@@ -126,6 +127,10 @@ export function startServer(
   // Registered before publishServerState's listener, so a revoked socket is
   // already closing (and gets no frames) when the new server state is published.
   store.on('change', onConfigChange)
+  /** To every authenticated connection, whatever it subscribes to: each window re-reads its server's keys. */
+  const integrationsChanged = (parts: IntegrationsChangedEvent): void => {
+    for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'integrations.changed', payload: parts })
+  }
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
     health: () => [...projectsSetup.store.health(), ...poller.health()]
@@ -285,6 +290,7 @@ export function startServer(
         events,
         machine: options.machine,
         integrations: options.integrations,
+        integrationsChanged,
         mcpAccess: access
           ? {
               revoke: (id) => {

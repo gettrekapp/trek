@@ -111,6 +111,18 @@ test("this machine's features need both the Local entry and the `local` capabili
   assert.deepEqual(any(SERVER_MACHINE, { localEntry: true }), [])
 })
 
+test('a connected server older than 5b (no linear or voice) shows a hint to update it in their place', () => {
+  const older = settingsSections(v2Features(['mcp', 'env']), { connected: true })
+  assert.deepEqual([older.linear, older.voice, older.environments], ['needsUpdate', 'needsUpdate', 'edit'])
+  // Not connected (connecting, offline, an empty window): nothing is known, so they are hidden.
+  const offline = settingsSections(v2Features(['mcp', 'env']), { connected: false })
+  assert.deepEqual([offline.linear, offline.voice], ['hidden', 'hidden'])
+  // Environments are a machine's, not a version's: still hidden without env.
+  assert.equal(settingsSections(v2Features(['linear', 'voice']), { connected: true }).environments, 'hidden')
+  const current = settingsSections(v2Features(['linear', 'voice']), { connected: true })
+  assert.deepEqual([current.linear, current.voice], ['edit', 'edit'])
+})
+
 test('a window whose server runs environments and has Linear and voice shows them in Settings, on Local or not', () => {
   for (const [caps, options] of [[[...SERVER_MACHINE, 'local'], { localEntry: true }], [SERVER_MACHINE, {}]]) {
     const sections = settingsSections(v2Features(caps, options))

@@ -8,7 +8,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, s
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile, secretsPathFor } from '../server/src/secrets.ts'
-import { createIntegrations } from '../server/src/integrations/integrations.ts'
+import { createIntegrations, testEndpoint } from '../server/src/integrations/integrations.ts'
 import { readBodyCapped } from '../src/host/httpBody.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -450,4 +450,47 @@ test("skills.list lists nothing from a worktree's .claude (or its skills dir) th
   mkdirSync(join(s.a, '.claude', 'skills', 'linked'), { recursive: true })
   symlinkSync(join(outside, 'skills', 'stolen', 'SKILL.md'), join(s.a, '.claude', 'skills', 'linked', 'SKILL.md'))
   assert.deepEqual((await s.list()).map((x) => x.name), ['ship', 'mine'])
+})
+
+test('integrations.changed: a stored key, a cleared key and new voice settings say so; a refused or kept key does not', async (t) => {
+  const s = await setup(t)
+  const changes = []
+  const ctx = { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) }
+  const call = (method, params) => dispatchV2(method, params, ctx)
+  await call('linear.setKey', { apiKey: 'bad-key' })
+  assert.deepEqual(changes, [])
+  await call('linear.setKey', { apiKey: 'good-key' })
+  await call('linear.setKey', { apiKey: 'other', ifAbsent: true })
+  await call('linear.clearKey', {})
+  assert.deepEqual(changes, [{ linear: true }, { linear: true }])
+  changes.length = 0
+  await call('voice.setKey', { apiKey: 'bad-voice' })
+  assert.deepEqual(changes, [])
+  await call('voice.setKey', { apiKey: 'good-voice' })
+  await call('voice.setConfig', { promptSessions: true })
+  refused(await call('voice.setConfig', { voiceId: 'no spaces' }), 'BAD_REQUEST')
+  await call('voice.clearKey', {})
+  assert.deepEqual(changes, [{ voice: true }, { voice: true }, { voice: true }])
+  // Reads say nothing.
+  changes.length = 0
+  await call('linear.status', {})
+  await call('voice.settings', {})
+  assert.deepEqual(changes, [])
+})
+
+
+test('the test endpoints (TREK_SERVER_LINEAR_URL, TREK_SERVER_ELEVENLABS_URL) are taken only on loopback', () => {
+  const warned = []
+  const warn = (m) => warned.push(m)
+  assert.equal(testEndpoint('X', undefined, warn), undefined)
+  assert.equal(testEndpoint('X', '', warn), undefined)
+  assert.equal(testEndpoint('X', 'http://127.0.0.1:4000/graphql', warn), 'http://127.0.0.1:4000/graphql')
+  assert.equal(testEndpoint('X', 'https://localhost/v1', warn), 'https://localhost/v1')
+  assert.equal(testEndpoint('X', 'http://[::1]:9/v1', warn), 'http://[::1]:9/v1')
+  assert.deepEqual(warned, [])
+  for (const bad of ['https://evil.example/graphql', 'http://127.0.0.1.evil.example/', 'file:///etc/passwd', 'http://10.0.0.1/', 'not a url', 'http://localhost@evil.example/']) {
+    assert.equal(testEndpoint('X', bad, warn), undefined, bad)
+  }
+  assert.equal(warned.length, 6)
+  assert.match(warned[0], /X/)
 })

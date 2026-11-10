@@ -169,9 +169,12 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
  * How a section shows: `edit`, the whole section; `project` only the
  * project's part, with a hint that the rest is the server's config (the
  * agents: the server's default and its provider commands are its `llm`
- * section, which the protocol does not edit); `hidden`.
+ * section, which the protocol does not edit); `needsUpdate`, a one-line hint
+ * that the window's server is too old for it (Linear and Voice on a connected
+ * server older than 5b, a Local server still running an older build included);
+ * `hidden`.
  */
-export type SectionMode = 'edit' | 'project' | 'hidden'
+export type SectionMode = 'edit' | 'project' | 'needsUpdate' | 'hidden'
 
 /**
  * Which Settings sections a window shows. A server window edits the project's
@@ -179,11 +182,13 @@ export type SectionMode = 'edit' | 'project' | 'hidden'
  * show where it has `linear` and `voice`, and the Docker environments where it
  * has `env` (a server that runs them, on its own machine).
  */
-export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
+export function settingsSections(features: BackendFeatures, options: { connected?: boolean } = {}): Readonly<Record<SettingsSection, SectionMode>> {
   const out = {} as Record<SettingsSection, SectionMode>
   for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
-  if (!features.linear) out.linear = 'hidden'
-  if (!features.voice) out.voice = 'hidden'
+  // Every server since 5b has them: a connected one without them is older (before its welcome, nothing is known).
+  const missing: SectionMode = options.connected === true ? 'needsUpdate' : 'hidden'
+  if (!features.linear) out.linear = missing
+  if (!features.voice) out.voice = missing
   if (!features.env) out.environments = 'hidden'
   out.agents = 'project'
   return out

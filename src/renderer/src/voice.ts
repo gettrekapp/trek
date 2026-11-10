@@ -3,6 +3,7 @@ import { useAppStore, type SpokenSummary } from './store'
 import { getBackend } from './backend'
 import { useFeatures } from './useFeatures'
 import { base64Bytes } from './v2/backendV2'
+import { followAppActive, isPresenceActive } from './voicePresence'
 import type { VoiceConfig, VoiceSettings } from '../../shared/types'
 
 /**
@@ -63,7 +64,8 @@ export function stopAllSummaries(): void {
   publish()
 }
 
-const isActive = (): boolean => useAppStore.getState().voice?.active !== false
+/** This app's Active/Busy (its own store field, not the server's voice settings): not active until loaded. */
+const isActive = (): boolean => isPresenceActive(useAppStore.getState().voiceActive)
 
 /** Queues a clip to play; its position in the queue (0: playing now). */
 function enqueue(terminalId: string, text: string, audio: Uint8Array): number {
@@ -72,15 +74,6 @@ function enqueue(terminalId: string, text: string, audio: Uint8Array): number {
   const position = queue.length + (current ? 1 : 0) - 1
   playNext()
   return position
-}
-
-/** This app's Active/Busy, from the app settings (true when they cannot be read). */
-async function appActive(): Promise<boolean> {
-  try {
-    return (await window.api.appSettings.get()).voiceActive !== false
-  } catch {
-    return true
-  }
 }
 
 /**
@@ -93,11 +86,12 @@ export async function loadVoiceSettings(): Promise<void> {
     useAppStore.getState().setVoice(null)
     return
   }
-  const [server, active] = await Promise.all([backend.voice.settings(), appActive()])
+  const server = await backend.voice.settings()
   // The window moved to another server meanwhile: its own load wins.
   if (getBackend() !== backend) return
   const { hasKey, ...config } = server
-  const voice: VoiceSettings = { ...config, hasApiKey: hasKey, active }
+  // Until the app's Active/Busy is loaded the section shows Active (the default); it follows.
+  const voice: VoiceSettings = { ...config, hasApiKey: hasKey, active: useAppStore.getState().voiceActive !== false }
   useAppStore.getState().setVoice(voice)
 }
 
@@ -109,6 +103,7 @@ export async function updateVoiceConfig(patch: Partial<VoiceConfig>): Promise<vo
   let next: VoiceSettings = { ...before }
   if (active !== undefined) {
     const settings = await window.api.appSettings.update({ voiceActive: active })
+    useAppStore.getState().setVoiceActive(settings.voiceActive)
     next = { ...next, active: settings.voiceActive }
   }
   if (Object.keys(server).length > 0) {
@@ -127,7 +122,10 @@ export type SpeakResult = { played: true; position: number } | { played: false; 
 export async function testVoice(text: string): Promise<SpeakResult> {
   const busy: SpeakResult = { played: false, reason: 'The user is Busy, so it was not played' }
   if (!isActive()) return busy
-  const audio = await getBackend().voice.synthesize(text)
+  const backend = getBackend()
+  const audio = await backend.voice.synthesize(text)
+  // The window moved to another server meanwhile: not this one's clip.
+  if (getBackend() !== backend) return { played: false, reason: "The window's server changed, so it was not played" }
   // The user may have gone Busy while it was synthesizing.
   if (!isActive()) return busy
   return { played: true, position: enqueue('', text, audio) }
@@ -140,25 +138,34 @@ export async function testVoice(text: string): Promise<SpeakResult> {
  */
 export function useVoice(): void {
   const features = useFeatures()
+  // The app's Active/Busy, for as long as the window is open, whatever its server.
+  useEffect(
+    () =>
+      followAppActive(window.api.appSettings, {
+        set: (active) => useAppStore.getState().setVoiceActive(active),
+        onBusy: stopAllSummaries
+      }),
+    []
+  )
   useEffect(() => {
-    void loadVoiceSettings().catch((err) => {
-      console.warn('Voice settings could not be read', err)
-      useAppStore.getState().setVoice(null)
-    })
+    const load = (): void => {
+      void loadVoiceSettings().catch((err) => {
+        console.warn('Voice settings could not be read', err)
+        useAppStore.getState().setVoice(null)
+      })
+    }
+    load()
     if (!features.voice) return
-    const offSummary = getBackend().voice.onSummary((event) => {
+    const backend = getBackend()
+    const offSummary = backend.voice.onSummary((event) => {
       if (!isActive()) return
       enqueue(event.sessionId, event.text, base64Bytes(event.audio))
     })
-    const offSettings = window.api.appSettings.onChanged((settings) => {
-      const voice = useAppStore.getState().voice
-      if (!voice || voice.active === settings.voiceActive) return
-      useAppStore.getState().setVoice({ ...voice, active: settings.voiceActive })
-      if (!settings.voiceActive) stopAllSummaries()
-    })
+    // The key or voice set elsewhere (another window, the hand-over to the Local server).
+    const offChanged = backend.voice.onChanged(load)
     return () => {
       offSummary()
-      offSettings()
+      offChanged()
     }
   }, [features])
 }

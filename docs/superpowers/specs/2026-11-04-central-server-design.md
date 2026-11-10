@@ -174,7 +174,7 @@ Electron, on Linux, macOS and Windows.
 | `pty/` | Spawn, ring buffer, attach; a headless xterm (`@xterm/headless`) per PTY for screen reads | `daemon/src/ptyRegistry.ts`, `src/host/ptyService.ts`, `src/main/hosts/ptyWindows.ts` |
 | `sessions/` | Start, resume, load, unload; agent command lines; Codex id discovery; attention heuristics; prompt queue | logic from `src/renderer/src/terminals.ts`, `src/shared/providers/*`, `src/host/agentService.ts`, `src/host/claudeSessionService.ts` |
 | `mcp/` | The `trek-dev` MCP server, one per server; tools run directly against `state/` and `sessions/` | `src/main/mcp.ts` + `src/renderer/src/mcpTools.ts` |
-| `integrations/` (phase 5) | Bot, Linear, Docker/Colima/env/stacks, voice synthesis (audio returned to the client), skills | `src/host/bot/*`, `src/main/{linear,docker,environments,stacks,voice,skills}.ts` |
+| `integrations/` (phase 5) | Bot, Linear, Docker/Colima/env/stacks, voice synthesis (a spoken summary's clip sent to the project's windows; `voice.synthesize` returns one to its caller), skills | `src/host/bot/*`, `src/main/{linear,docker,environments,stacks,voice,skills}.ts` |
 | `secrets/` (phase 5) | Linear and voice keys in a 0600 file in the server's config dir | replaces `src/main/secrets.ts` for these |
 | `access/` | Path allowlist (repo roots + parents + `worktreeRoots`), also applied to `project.import` and `repo.add` | `daemon/src/paths.ts`, `config.ts` |
 
@@ -429,7 +429,8 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      ElevenLabs keys are each server's (`secrets.json` beside its config, write-only over the
      protocol); a spoken summary (`speak_summary`, synthesized on the server) plays in every
      window that has the project open and whose app is Active (Active/Busy stays the app's);
-     main hands the app's keys and voice settings to the Local server once, set-if-absent. The
+     main hands the app's keys to the Local server once, set-if-absent, and the voice settings
+     only with an ElevenLabs key the server stored (one that had its own keeps its own). The
      trek-dev stack tools (`get_stack`, `start_stack`, `stop_stack`, `read_stack_log`) return on
      the server's stack service.
    - **5c:** the cheapest gaps from a comparison with T3 Code (2026-11-09), each in its

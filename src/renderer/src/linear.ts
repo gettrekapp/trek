@@ -49,12 +49,17 @@ export function useLinearSync(): void {
       useAppStore.getState().setLinearConnected(false)
       return
     }
-    backend.linear.hasKey().then(
-      (has) => {
-        if (getBackend() === backend) useAppStore.getState().setLinearConnected(has)
-      },
-      (err) => console.warn('Linear key check failed', err)
-    )
+    const check = (): void => {
+      backend.linear.hasKey().then(
+        (has) => {
+          if (getBackend() === backend) useAppStore.getState().setLinearConnected(has)
+        },
+        (err) => console.warn('Linear key check failed', err)
+      )
+    }
+    check()
+    // A key set or cleared elsewhere (another window, the hand-over to the Local server).
+    return backend.linear.onChanged(check)
   }, [features])
 
   useEffect(() => {

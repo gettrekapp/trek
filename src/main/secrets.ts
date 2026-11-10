@@ -8,8 +8,13 @@ import { ownSecret } from './secretsRules'
 // prefix so reads know how to decode them.
 const PLAIN_PREFIX = 'plain:'
 
+/** A stored secret as read: none stored, stored but not decryptable here (safeStorage refused, an unreadable file), or its value. */
+export type SecretRead = { state: 'absent' } | { state: 'unreadable' } | { state: 'value'; value: string }
+
 export interface SecretStore {
   get: (key: string) => Promise<string | null>
+  /** Like `get`, but tells "nothing stored" from "stored and unreadable" (get answers null for both). */
+  read: (key: string) => Promise<SecretRead>
   set: (key: string, value: string | null) => Promise<void>
   /**
    * Stores `value` only when `key` has nothing stored, in one step of the write chain: a set
@@ -49,6 +54,31 @@ export function createSecretStore(fileName: string): SecretStore {
     }
   }
 
+  /** The file as stored, or 'unreadable' when it exists but cannot be read or parsed (absent: {}). */
+  const readAllStrict = async (): Promise<Record<string, string> | 'unreadable'> => {
+    let text: string
+    try {
+      text = await readFile(filePath(), 'utf8')
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'ENOENT' ? {} : 'unreadable'
+    }
+    try {
+      const all: unknown = JSON.parse(text)
+      return all && typeof all === 'object' && !Array.isArray(all) ? (all as Record<string, string>) : 'unreadable'
+    } catch {
+      return 'unreadable'
+    }
+  }
+
+  const decode = (stored: string): string | null => {
+    if (stored.startsWith(PLAIN_PREFIX)) return Buffer.from(stored.slice(PLAIN_PREFIX.length), 'base64').toString('utf8')
+    try {
+      return safeStorage.decryptString(Buffer.from(stored, 'base64'))
+    } catch {
+      return null
+    }
+  }
+
   /** An own property even for a key like `__proto__`, which a plain assignment would not make. */
   const defineOwn = (all: Record<string, string>, key: string, value: string): void => {
     Object.defineProperty(all, key, { value, enumerable: true, writable: true, configurable: true })
@@ -69,15 +99,15 @@ export function createSecretStore(fileName: string): SecretStore {
     async get(key) {
       // After any queued set, so a get never sees a value older than a set it followed.
       const stored = ownSecret(await serial(readAll), key)
-      if (!stored) return null
-      if (stored.startsWith(PLAIN_PREFIX)) {
-        return Buffer.from(stored.slice(PLAIN_PREFIX.length), 'base64').toString('utf8')
-      }
-      try {
-        return safeStorage.decryptString(Buffer.from(stored, 'base64'))
-      } catch {
-        return null
-      }
+      return stored ? decode(stored) : null
+    },
+    async read(key) {
+      const all = await serial(readAllStrict)
+      if (all === 'unreadable') return { state: 'unreadable' }
+      const stored = ownSecret(all, key)
+      if (!stored) return { state: 'absent' }
+      const value = decode(stored)
+      return value ? { state: 'value', value } : { state: 'unreadable' }
     },
     set(key, value) {
       return serial(async () => {

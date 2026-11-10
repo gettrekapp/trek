@@ -25,12 +25,25 @@ interface Props {
   visible: boolean
 }
 
+/** In place of a section the window's server is too old for (it predates Trek 5b). */
+function NeedsUpdate({ title, what }: { title: string; what: string }): React.JSX.Element {
+  return (
+    <>
+      <h3>{title}</h3>
+      <div className="settings-row">
+        <span className="settings-desc">This server is older than Trek 5b: update it to use {what} here.</span>
+      </div>
+    </>
+  )
+}
+
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // The project's settings are edited on the server: text is committed on blur (each commit is a
   // request), Linear, Voice and the environments show where the window's server has them (their
   // keys and VMs are the server's), and a conflict's Reload remounts it.
   const features = useFeatures()
-  const sections = settingsSections(features)
+  const connected = useAppStore((s) => s.serverLink === 'connected')
+  const sections = settingsSections(features, { connected })
   const reload = useAppStore((s) => s.settingsReload)
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
   const picker = useServerPicker()
@@ -211,8 +224,10 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         </div>
         <AppearanceSettings />
         <NotificationSettings />
-        {sections.linear !== 'hidden' && <LinearSettings />}
-        {sections.voice !== 'hidden' && <VoiceSettings />}
+        {sections.linear === 'edit' && <LinearSettings />}
+        {sections.linear === 'needsUpdate' && <NeedsUpdate title="Linear" what="Linear" />}
+        {sections.voice === 'edit' && <VoiceSettings />}
+        {sections.voice === 'needsUpdate' && <NeedsUpdate title="Voice summaries" what="voice summaries" />}
         <LlmSettings projectOnly={sections.agents === 'project'} />
         <h3>Worktree tags</h3>
         <WorktreeTagsEditor

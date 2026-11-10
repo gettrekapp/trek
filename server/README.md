@@ -165,7 +165,8 @@ fails until it is fixed. The app's own keys are handed to its Local server once.
 
 `TREK_SERVER_LINEAR_URL` and `TREK_SERVER_ELEVENLABS_URL` point the server at other
 endpoints (Linear's GraphQL URL; ElevenLabs' `/v1` base). They are for tests, which
-run stub services; leave them unset.
+run stub services; leave them unset. Only an `http` or `https` URL on `127.0.0.1`,
+`::1` or `localhost` is taken; any other value is ignored with a warning.
 
 ## Projects
 

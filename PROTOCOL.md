@@ -453,6 +453,12 @@ the key is stored as it is, unchecked (the app checked it when the user entered 
 the server has none; otherwise the result is `{ok: false, error, present: true}` and the server's
 own key is kept. A key is 1 to 1024 printable ASCII characters with no spaces.
 
+**Changes reach every client.** A `linear.setKey` or `voice.setKey` that stored its key (`ok:
+true`), a `linear.clearKey`, a `voice.clearKey` and a `voice.setConfig` send `integrations.changed`
+(`{linear: true}` or `{voice: true}`) to every authenticated connection, whatever it subscribes to,
+the caller's included; a client re-reads `linear.status` or `voice.settings`. A refused key, or
+one kept by `ifAbsent`, sends nothing.
+
 | Method | Params | Result |
 |---|---|---|
 | `linear.status` | `{}` | `{hasKey}` |
@@ -849,7 +855,7 @@ or `null`.
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
-| `speak_summary` | `terminalId`, `summary` (one to three short sentences, trimmed, at most 400 characters) | `{played: true, windows}` (the connections it went to, see [Linear, voice and skills](#linear-voice-and-skills)), or `{played: false, reason}` when the server has no ElevenLabs key or voice, or no connection has the project open (nothing is synthesized then) |
+| `speak_summary` | `terminalId`, `summary` (one to three short sentences, trimmed, at most 400 characters) | `{played: true, windows}` (the connections it went to, see [Linear, voice and skills](#linear-voice-and-skills)), or `{played: false, reason}`: voice is not set up (the server has no ElevenLabs key or no voice, or its secrets file cannot be read), or no connection has the project open (nothing is synthesized in either case), or the clip was synthesized but every connection with the project open is more than 4 MiB behind. A failed synthesis (ElevenLabs unreachable, a quota) is a tool error |
 | `get_stack` | `worktree` | `{available: false}`, or `{available: true, name, state, containers, ports, urls, logins}`; `state` is `starting`, `running`, `stopping` or `stopped` |
 | `start_stack` | `worktree`; `starter?` (boolean) | the stack as `get_stack` describes it, once `stack.sh up` is started; `BAD_REQUEST` when it is not stopped |
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
@@ -919,6 +925,7 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
 | `voice.summary` | `{projectId, sessionId, text, audio}`: a session's spoken summary (`speak_summary`), an mp3 in base64, to every connection subscribed to the project's topic (not one more than 4 MiB behind) |
+| `integrations.changed` | `{linear?: true, voice?: true}`: the server's Linear or ElevenLabs key, or its voice settings, changed (by any client), to every authenticated connection; re-read `linear.status` / `voice.settings` (see [Linear, voice and skills](#linear-voice-and-skills)) |
 
 ## Several clients
 

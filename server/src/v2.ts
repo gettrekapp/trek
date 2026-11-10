@@ -1,9 +1,9 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
-// Linear with the server's key (integrationHandlers.ts).
+// Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts).
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
-import type { TopicRev } from '../../src/shared/protocolV2'
+import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
@@ -53,8 +53,10 @@ export interface V2Context {
   machine?: Machine
   /** This connection, as a receiver of the `docker.log` and `env.log` its own requests stream */
   events?: EventSink
-  /** Linear with the server's own key (phase 5b) */
+  /** Linear and ElevenLabs with the server's own keys, and the skills on its disk (phase 5b) */
   integrations?: Integrations
+  /** Tells every authenticated connection the keys or voice settings changed (`integrations.changed`) */
+  integrationsChanged?: (parts: IntegrationsChangedEvent) => void
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown

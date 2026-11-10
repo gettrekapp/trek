@@ -291,12 +291,22 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
 - **Your Linear and ElevenLabs keys carry over.** Before this version Trek kept one
   Linear key and one ElevenLabs key (and the voice, the model and "Summarize
   automatically") for every window. Each server has its own now: once the Local
-  server runs, Trek hands it this app's keys and voice settings, once per Local
-  profile, and only where the server has no key of its own (one set there wins).
-  The keys are stored as they are, without asking Linear or ElevenLabs, so it works
-  offline; a hand-over that fails (an older Local server) is tried again at its next
-  start. Trek's own files are left as they were. A remote server needs its keys set
-  once from any window on it. Active/Busy stays this app's setting.
+  server runs, Trek hands it this app's keys, once per Local profile, and only
+  where the server has no key of its own (one set there wins). The voice, the model
+  and "Summarize automatically" go with the ElevenLabs key only when that key is
+  stored on the server: a server that already had its own key keeps its own voice
+  settings too. The keys are stored as they are, without asking Linear or
+  ElevenLabs, so it works offline; a hand-over that fails (an older Local server, a
+  key this app cannot decrypt now) is tried again at its next start. Trek's own
+  files are left as they were. A remote server needs its keys set once from any
+  window on it; a key set, cleared or changed in one window shows in every window
+  on that server. Active/Busy stays this app's setting.
+- **A server older than this version has no Linear or voice summaries.** Linear
+  issues and spoken summaries now come from the window's server, so a window on an
+  older trek-server (remote, or a Local server you kept running across the upgrade)
+  shows "This server is older than Trek 5b" in Settings in their place, and its
+  ticket chips show the bare id, until that server is updated (restart the Local
+  server, or upgrade the remote one).
 
 ## Attention indicators
 

@@ -17,10 +17,15 @@ export interface HandoverState {
   voiceActive?: true
 }
 
-/** The app's own files, decrypted. */
+/** The app's own files, decrypted. A key is null when none is stored. */
 export interface LegacyIntegrations {
   linearKey: string | null
   voiceKey: string | null
+  /**
+   * A key that is stored but could not be read here (safeStorage refused to decrypt it, the file
+   * is unreadable): that part is not done, and is tried again on the next start.
+   */
+  unreadable?: { linear?: true; voice?: true }
   voice: { voiceId?: unknown; modelId?: unknown; promptSessions?: unknown; active?: unknown }
 }
 
@@ -61,13 +66,18 @@ const result = (value: unknown): { ok?: unknown; present?: unknown } => (value &
 
 /**
  * Hands over what `done` lacks; resolves what is done now. A part is done when there is nothing to
- * hand over, when the server took it (`ok`), or when it already had a key of its own (`present`:
+ * hand over (no key stored: one stored but unreadable here is not "nothing"), when the server took it (`ok`), or when it already had a key of its own (`present`:
  * the user set one there, which wins). Anything else (a server older than 5b, a dropped link, a
  * secrets file it cannot write) leaves it for the next start. The server stores a hand-over key
  * without asking Linear or ElevenLabs (`ifAbsent`), so neither needs to be reachable. The voice settings go only with a key
  * the server took: a server with its own key keeps its own voice too. Settings that fail after
  * their key went are pending, and sent on the next start.
  */
+/** Nothing to send for any part: no key stored, and none stored but unreadable. */
+export function nothingToHandOver(legacy: LegacyIntegrations): boolean {
+  return !legacy.linearKey && !legacy.voiceKey && !legacy.unreadable?.linear && !legacy.unreadable?.voice
+}
+
 export async function handOver(request: HandoverRequest, legacy: LegacyIntegrations, done: HandoverDone): Promise<HandoverDone> {
   const next: HandoverDone = { ...done }
   const attempt = async <T>(run: () => Promise<T>): Promise<T | false> => {
@@ -77,7 +87,7 @@ export async function handOver(request: HandoverRequest, legacy: LegacyIntegrati
       return false
     }
   }
-  if (!next.linear) {
+  if (!next.linear && !legacy.unreadable?.linear) {
     const ok = await attempt(async () => {
       if (!legacy.linearKey) return true
       const r = result(await request('linear.setKey', { apiKey: legacy.linearKey, ifAbsent: true }))
@@ -90,7 +100,7 @@ export async function handOver(request: HandoverRequest, legacy: LegacyIntegrati
     if (Object.keys(config).length > 0) await request('voice.setConfig', config)
     return true
   })
-  if (!next.voice) {
+  if (!next.voice && !legacy.unreadable?.voice) {
     const stored = await attempt(async () => {
       if (!legacy.voiceKey) return 'nothing'
       const r = result(await request('voice.setKey', { apiKey: legacy.voiceKey, ifAbsent: true }))

@@ -22,7 +22,9 @@
 //   - a session's skill menu lists the worktree's skill and the server user's command;
 //   - get_stack, start_stack, read_stack_log and stop_stack (MCP) run the worktree's stack.sh on the
 //     server;
-//   - the renderer never holds the server token or either API key; no console or page errors.
+//   - a key cleared by another client: the window follows (integrations.changed, to every connection);
+//   - the renderer's store, page, string globals and web storage never hold the server token or either
+//     API key; no console or page errors.
 //
 // Prints SERVER INTEGRATIONS SMOKE PASS (n checks) or SERVER INTEGRATIONS SMOKE FAIL and exits 0 or 1.
 import { _electron as electron } from 'playwright-core'
@@ -235,8 +237,11 @@ try {
   const url = `ws://127.0.0.1:${port}`
   sdk = new ServerConnection({ url, token, createSocket: globalSocketFactory, client: 'server-integrations-smoke' })
   const sdkSummaries = []
+  /** integrations.changed, heard by a connection that is not subscribed to anything then */
+  const sdkChanges = []
   sdk.on('event', (ev) => {
     if (ev.event === 'voice.summary') sdkSummaries.push(ev.payload.text)
+    if (ev.event === 'integrations.changed') sdkChanges.push(ev.payload)
   })
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
@@ -306,6 +311,7 @@ try {
   const linearSection = settings.locator('.settings-row', { hasText: 'Shows each linked issue' })
   check('a good key connects, as its Linear user', await until(() => linearSection.locator('.settings-desc', { hasText: 'Connected' }).textContent().catch(() => null), 'Connected as Ada Lovelace'), 'Connected as Ada Lovelace')
   const secrets = join(work, 'secrets.json')
+  check('every connection hears the key changed, subscribed to nothing or not', await until(() => sdkChanges.filter((c) => c.linear).length > 0, true), true)
   check("the key is in the server's secrets file, beside its config, owner-only", [existsSync(secrets) ? JSON.parse(readFileSync(secrets, 'utf8')).linear === LINEAR_KEY : false, existsSync(secrets) ? statSync(secrets).mode & 0o777 : null], [true, 0o600])
   check("the branch's ticket chip shows the issue, looked up by the server", await until(() => featureRow.locator('.mini-chip.ticket').getAttribute('title').catch(() => null), 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
   check('every Linear request carried the key the user typed, from the server', [...new Set(linearRequests.map((r) => r.auth))], ['lin_api_wrong', LINEAR_KEY])
@@ -353,7 +359,15 @@ try {
   // Busy (this app's setting): the clip still comes, and is not played.
   await win.locator('.voice-toggle').click()
   check('the sidebar toggle goes Busy, an app setting', await until(() => win.evaluate(async () => (await window.api.appSettings.get()).voiceActive), false), false)
-  check('a summary while Busy is sent but not played', [(await tool('speak_summary', { terminalId: started.sessionId, summary: 'Nobody hears this.' })).value.played, await sleep(1000).then(clips)], [true, 2])
+  // What the window's backend hears, played or not: the clip is counted only once it arrived.
+  await win.evaluate(() => {
+    window.__heard = []
+    window.__offHeard = window.__onVoiceSummary((text) => window.__heard.push(text))
+  })
+  const busySpoken = await tool('speak_summary', { terminalId: started.sessionId, summary: 'Nobody hears this.' })
+  const heard = await until(() => win.evaluate(() => window.__heard.includes('Nobody hears this.')), true)
+  check('a summary while Busy reaches the window but is not played', [busySpoken.value.played, heard, await sleep(500).then(clips)], [true, true, 2])
+  await win.evaluate(() => window.__offHeard())
   await win.locator('.voice-toggle').click()
   await sdk.request('sub.unsubscribe', { topic })
   const tooLong = await tool('speak_summary', { terminalId: started.sessionId, summary: 'x'.repeat(401) })
@@ -381,8 +395,27 @@ try {
   check('read_stack_log reads its output', await until(async () => (await tool('read_stack_log', { worktree: 'feature-x' })).value.output?.includes('stack step up') ?? false, true), true)
   check('stop_stack Ctrl-Cs it and runs stack.sh down', [(await tool('stop_stack', { worktree: 'feature-x' })).value.state, readFileSync(stackCalls, 'utf8').trim().split('\n')], ['stopped', ['up', 'down']])
 
-  const html = await win.evaluate(() => JSON.stringify(window.__store.getState()) + document.documentElement.outerHTML)
-  check('the renderer never holds the server token or either API key', [token, LINEAR_KEY, VOICE_KEY].map((s) => html.includes(s)), [false, false, false])
+  // ---- 8. A key cleared by another client: the window follows (integrations.changed) ---------------
+
+  check('the window has Linear connected', await win.evaluate(() => window.__store.getState().linearConnected), true)
+  await sdk.request('linear.clearKey', {})
+  check("a key cleared elsewhere: the window's Linear goes disconnected", await until(() => win.evaluate(() => window.__store.getState().linearConnected), false), false)
+  await sdk.request('voice.clearKey', {})
+  check("a voice key cleared elsewhere: the window's Voice settings follow", await until(() => win.evaluate(() => window.__store.getState().voice?.hasApiKey ?? null), false), false)
+
+  // The store's state, the page, the window's own string globals and its web storage.
+  const held = await win.evaluate(() => {
+    const globals = Object.keys(window).flatMap((k) => {
+      try {
+        return typeof window[k] === 'string' ? [window[k]] : []
+      } catch {
+        return []
+      }
+    })
+    const storage = [localStorage, sessionStorage].flatMap((s) => Object.keys(s).map((k) => `${k}=${s.getItem(k)}`))
+    return [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML, ...globals, ...storage].join('\n')
+  })
+  check("the renderer's store, page, string globals and web storage never hold the server token or either API key", [token, LINEAR_KEY, VOICE_KEY].map((s) => held.includes(s)), [false, false, false])
   check('no error dialogs', (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error'), [])
   check('no console or page errors', pageErrors, [])
   exitCode = failedChecks.length ? 1 : 0

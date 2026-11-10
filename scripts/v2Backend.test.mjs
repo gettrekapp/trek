@@ -278,6 +278,17 @@ test("linear, voice and skills go to the window's server; the clip comes back as
   off()
   assert.deepEqual(listeners['voice.summary'], [])
   assert.deepEqual(heard, ['mine'])
+  // A key or voice change made anywhere (another window, the hand-over): each part's own listeners.
+  const changed = []
+  const offLinear = backend.linear.onChanged(() => changed.push('linear'))
+  const offVoice = backend.voice.onChanged(() => changed.push('voice'))
+  for (const l of listeners['integrations.changed']) l({ linear: true })
+  for (const l of listeners['integrations.changed']) l({ voice: true })
+  for (const l of listeners['integrations.changed']) l({ linear: true, voice: true })
+  offLinear()
+  offVoice()
+  assert.deepEqual(listeners['integrations.changed'], [])
+  assert.deepEqual(changed, ['linear', 'voice', 'linear', 'voice'])
 })
 
 test("the logs come from the window's connection, by event name, until unsubscribed", () => {
