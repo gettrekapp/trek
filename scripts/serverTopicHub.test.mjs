@@ -182,3 +182,17 @@ test('onSubscribe fires once per new subscriber, and a throwing listener is cont
   hub.subscribe('project:p', recorder())
   assert.deepEqual(seen, ['project:p'])
 })
+
+test('emit serializes the event frame once, however many subscribers take it', () => {
+  const hub = new TopicHub()
+  hub.publish('project:p', {})
+  const frames = []
+  for (let i = 0; i < 3; i++) hub.subscribe('project:p', { send() {}, event: (_e, _p, frame) => (frames.push(frame()), true) })
+  hub.subscribe('project:p', { send() {} })
+  const payload = { toJSON() { payload.calls += 1; return { x: 1 } }, calls: 0 }
+  assert.equal(hub.emit('project:p', 'voice.summary', payload), 3)
+  assert.equal(payload.calls, 1)
+  assert.deepEqual(frames.map((f) => JSON.parse(f)), Array(3).fill({ type: 'event', event: 'voice.summary', payload: { x: 1 } }))
+  assert.equal(hub.eventSubscriberCount('project:p'), 3)
+  assert.equal(hub.eventSubscriberCount('project:nope'), 0)
+})

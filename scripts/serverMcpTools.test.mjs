@@ -628,11 +628,11 @@ test('read_terminal clamps lines', async (t) => {
 })
 
 /** A voice service stub: `hasKey`, and an mp3 that is the text's bytes. */
-const voiceStub = (hasKey = true) => {
+const voiceStub = (hasKey = true, voiceId = 'v1') => {
   const spoken = []
   return {
     spoken,
-    settings: () => ({ hasKey, voiceId: 'v1', modelId: 'm', promptSessions: false }),
+    settings: () => ({ hasKey, voiceId, modelId: 'm', promptSessions: false }),
     synthesize: async (text) => {
       spoken.push(text)
       return new TextEncoder().encode(`mp3:${text}`)
@@ -661,8 +661,19 @@ test('speak_summary sends the clip to every window that has the project open', a
   assert.deepEqual(voice.spoken, ['The tests pass.'])
 })
 
-test('speak_summary without a key (or without voice) says it is not set up', async (t) => {
-  for (const voice of [voiceStub(false), undefined]) {
+test('speak_summary with only an MCP call subscribed (no window) synthesizes nothing', async (t) => {
+  const voice = voiceStub()
+  const s = await toolSetup(t, { voice })
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  // A subscriber that takes no events, as an MCP tool call's is.
+  s.hub.subscribe(`project:${s.projectId}`, { send() {} })
+  assert.deepEqual(await s.call('speak_summary', { terminalId, summary: 'Done.' }), { played: false, reason: 'No Trek window has this project open, so nobody would hear it' })
+  assert.deepEqual(voice.spoken, [])
+})
+
+test('speak_summary without a key, without a chosen voice (or without voice) says it is not set up', async (t) => {
+  const stubs = [voiceStub(false), voiceStub(true, ''), undefined]
+  for (const voice of stubs) {
     const s = await toolSetup(t, voice ? { voice } : {})
     const { terminalId } = await s.call('start_session', { worktree: 'main' })
     s.hub.subscribe(`project:${s.projectId}`, { send() {}, event: () => true })
@@ -670,4 +681,5 @@ test('speak_summary without a key (or without voice) says it is not set up', asy
     assert.equal(result.played, false)
     assert.match(result.reason, /not set up/)
   }
+  assert.deepEqual([stubs[0].spoken, stubs[1].spoken], [[], []])
 })

@@ -3,7 +3,7 @@
 // subscriber the diff as a single patch. Snapshots are treated as immutable:
 // callers build a fresh object for each publish.
 import type { Topic } from '../../src/shared/model/topics'
-import type { TopicEndReason } from '../../src/shared/protocolV2'
+import type { EventFrame, TopicEndReason } from '../../src/shared/protocolV2'
 import { diffJson } from '../../src/shared/sync/jsonDiff.ts'
 import type { PatchOp } from '../../src/shared/sync/jsonPatch'
 
@@ -11,8 +11,12 @@ export interface Subscriber {
   send(topic: Topic, rev: number, ops: PatchOp[]): void
   /** The topic stopped for good (see `drop`); without it the subscriber is just forgotten */
   ended?(topic: Topic, reason: TopicEndReason): void
-  /** An event for the topic's subscribers (`voice.summary`); false when it was not sent (a congested connection) */
-  event?(event: string, payload: unknown): boolean
+  /**
+   * An event for the topic's subscribers (`voice.summary`); false when it was not sent (a congested
+   * connection). `frame()` is the event frame's JSON, built on the first call and shared by every
+   * subscriber of one emit (a clip is serialized once, not once per window).
+   */
+  event?(event: string, payload: unknown, frame: () => string): boolean
 }
 
 interface TopicEntry {
@@ -42,6 +46,13 @@ export class TopicHub {
 
   subscriberCount(topic: Topic): number {
     return this.topics.get(topic)?.subscribers.size ?? 0
+  }
+
+  /** The subscribers `emit` could reach: connections, not an MCP tool call's no-op subscriber. */
+  eventSubscriberCount(topic: Topic): number {
+    let count = 0
+    for (const subscriber of this.topics.get(topic)?.subscribers ?? []) if (subscriber.event) count += 1
+    return count
   }
 
   /** Sets the topic's state. The first publish starts at rev 0; an unchanged snapshot sends nothing. */
@@ -113,10 +124,12 @@ export class TopicHub {
     const entry = this.topics.get(topic)
     if (!entry) return 0
     let sent = 0
+    let json: string | undefined
+    const frame = (): string => (json ??= JSON.stringify({ type: 'event', event, payload } satisfies EventFrame))
     for (const subscriber of [...entry.subscribers]) {
       if (!subscriber.event) continue
       try {
-        if (subscriber.event(event, payload)) sent += 1
+        if (subscriber.event(event, payload, frame)) sent += 1
       } catch (err) {
         console.warn(`topic ${topic}: sending ${event} to a subscriber failed`, err)
       }

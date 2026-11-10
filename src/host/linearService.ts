@@ -2,6 +2,7 @@
 // Electron-free: the key is in a slot the caller owns (the server's secrets file), and the
 // endpoint can be pointed elsewhere (a test's stub server).
 import type { LinearIssue, LinearKeyResult } from '../shared/types'
+import { MAX_JSON_BYTES, readBodyCapped } from './httpBody.ts'
 
 export const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 export const LINEAR_ISSUE_ID = /^[A-Z][A-Z0-9]*-\d+$/
@@ -22,7 +23,9 @@ export interface LinearService {
    * Checks the key with Linear, then stores it. `ifAbsent` (the app's hand-over): stored as it is,
    * without asking Linear (the app checked it when the user entered it, and the hand-over must not
    * depend on Linear being reachable), only while no key is stored; else `{ ok: false, present: true }`
-   * and nothing changes. Its `user` is then empty.
+   * and nothing changes. Its `user` is then empty. `{ ok: false, error }` is only Linear's answer
+   * (or Linear unreachable); a key slot that cannot be read or written throws, before any request
+   * when it cannot be read.
    */
   setKey(apiKey: string, options?: { ifAbsent?: boolean }): Promise<LinearKeyResult>
   clearKey(): void
@@ -57,7 +60,13 @@ export function createLinearService(options: { key: KeySlot; endpoint?: string; 
     })
     if (res.status === 401) throw new Error('Linear rejected the API key')
     if (!res.ok && res.status !== 400) throw new Error(`Linear API returned ${res.status}`)
-    return (await res.json()) as GraphQLResponse<T>
+    const body = await readBodyCapped(res, MAX_JSON_BYTES, "Linear's reply")
+    try {
+      return JSON.parse(body.toString('utf8')) as GraphQLResponse<T>
+    } catch {
+      // A proxy's HTML error page, say: report the status, not a JSON parse error.
+      throw new Error(res.ok ? "Linear's reply is not JSON" : `Linear API returned ${res.status}`)
+    }
   }
 
   async function fetchBatch(apiKey: string, ids: string[]): Promise<LinearIssue[]> {
@@ -83,14 +92,19 @@ export function createLinearService(options: { key: KeySlot; endpoint?: string; 
 
     async setKey(apiKey, { ifAbsent = false } = {}) {
       if (ifAbsent) return options.key.setIfAbsent(apiKey) ? { ok: true, user: '' } : { ok: false, error: PRESENT_ERROR, present: true }
+      // An unreadable secrets file fails here, before Linear sees the key.
+      options.key.get()
+      let viewer: { name: string }
       try {
         const { data, errors } = await graphql<{ viewer: { name: string } }>(apiKey, 'query { viewer { name } }')
         if (!data?.viewer) return { ok: false, error: errors?.[0]?.message ?? 'Invalid API key' }
-        options.key.set(apiKey)
-        return { ok: true, user: String(data.viewer.name) }
+        viewer = data.viewer
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
+      // Outside the try: a failed write is the server's error, not a rejected key.
+      options.key.set(apiKey)
+      return { ok: true, user: String(viewer.name) }
     },
 
     clearKey: () => options.key.set(null),

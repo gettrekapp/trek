@@ -5,7 +5,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, rmSync } from
 import { join } from 'node:path'
 import { codexHeadersHelper } from '../../../src/shared/providers/codex.ts'
 import type { McpAccess } from '../../../src/shared/providers/types'
-import { writeFileAtomic } from '../atomicWrite.ts'
+import { writeFileAtomic } from '../../../src/host/atomicWrite.ts'
 
 /** The files written for each project: Claude's config, Gemini's settings, Codex's headers. */
 const filesOf = (access: McpAccess, dir: string, projectId: string): string[] => [

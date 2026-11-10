@@ -1,9 +1,10 @@
 // ElevenLabs voice summaries with the server's API key (phase 5b; main's voice.ts before it).
 // Electron-free: the key is in a slot the caller owns (the server's secrets file), the voice and
 // model in a JSON file, and the API's base URL can be pointed at a test's stub server.
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import type { VoiceInfo, VoiceKeyResult, VoiceServerConfig, VoiceServerSettings } from '../shared/types'
+import { writeFileAtomic } from './atomicWrite.ts'
+import { MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES, readBodyCapped } from './httpBody.ts'
 import { PRESENT_ERROR, type KeySlot } from './linearService.ts'
 
 export const ELEVENLABS_API = 'https://api.elevenlabs.io/v1'
@@ -23,6 +24,8 @@ export interface VoiceService {
    * Checks the key by listing its voices, stores it and picks the first voice if none is chosen.
    * `ifAbsent` (the app's hand-over, which sends its voice next): stored as it is, without asking
    * ElevenLabs, only while no key is stored; else `{ ok: false, present: true }`. Its `voices` are then empty.
+   * `{ ok: false, error }` is only ElevenLabs' answer; a key slot that cannot be read (checked
+   * before any request) or written throws, as does a stored key whose first voice cannot be saved.
    */
   setKey(apiKey: string, options?: { ifAbsent?: boolean }): Promise<VoiceKeyResult>
   clearKey(): void
@@ -30,22 +33,8 @@ export interface VoiceService {
   setConfig(patch: Partial<VoiceServerConfig>): VoiceServerConfig
   /** An mp3 of `text` in the chosen voice */
   synthesize(text: string): Promise<Uint8Array>
-  /** Sessions are told to speak: a key is set and "Summarize automatically" is on */
+  /** Sessions are told to speak: a key is set, a voice is chosen and "Summarize automatically" is on */
   promptSessions(): boolean
-}
-
-/** Written then renamed, so a reader never sees half a file. */
-function writeAtomic(path: string, text: string): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.${process.pid}.tmp`
-  try {
-    rmSync(tmp, { force: true })
-    writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
-    renameSync(tmp, path)
-  } catch (err) {
-    rmSync(tmp, { force: true })
-    throw err
-  }
 }
 
 export function createVoiceService(options: { key: KeySlot; configFile: string; api?: string; fetch?: typeof fetch }): VoiceService {
@@ -70,7 +59,7 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
 
   const setConfig = (patch: Partial<VoiceServerConfig>): VoiceServerConfig => {
     const next = { ...readConfig(), ...patch }
-    writeAtomic(options.configFile, JSON.stringify(next, null, 2) + '\n')
+    writeFileAtomic(options.configFile, JSON.stringify(next, null, 2) + '\n', 0o600)
     return next
   }
 
@@ -82,7 +71,10 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
     })
     if (res.status === 401) throw new Error('ElevenLabs rejected the API key')
     if (!res.ok) {
-      const body = await res.text().catch(() => '')
+      // An error text over the cap is left out: the status still says what failed.
+      const body = await readBodyCapped(res, MAX_ERROR_BYTES, "ElevenLabs' error")
+        .then((bytes) => bytes.toString('utf8'))
+        .catch(() => '')
       throw new Error(`ElevenLabs returned ${res.status}${body ? `: ${body.slice(0, 300)}` : ''}`)
     }
     return res
@@ -90,7 +82,9 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
 
   async function fetchVoices(apiKey: string): Promise<VoiceInfo[]> {
     const res = await request(apiKey, '/voices')
-    const { voices } = (await res.json()) as { voices?: { voice_id: unknown; name: unknown }[] }
+    const { voices } = JSON.parse((await readBodyCapped(res, MAX_JSON_BYTES, "ElevenLabs' voice list")).toString('utf8')) as {
+      voices?: { voice_id: unknown; name: unknown }[]
+    }
     return (Array.isArray(voices) ? voices : []).map((v) => ({ id: String(v.voice_id), name: String(v.name) }))
   }
 
@@ -105,14 +99,27 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
 
     async setKey(apiKey, { ifAbsent = false } = {}) {
       if (ifAbsent) return options.key.setIfAbsent(apiKey) ? { ok: true, voices: [] } : { ok: false, error: PRESENT_ERROR, present: true }
+      // An unreadable secrets file fails here, before ElevenLabs sees the key.
+      options.key.get()
+      let voices: VoiceInfo[]
       try {
-        const voices = await fetchVoices(apiKey)
-        options.key.set(apiKey)
-        if (!readConfig().voiceId && voices[0]) setConfig({ voiceId: voices[0].id })
-        return { ok: true, voices }
+        voices = await fetchVoices(apiKey)
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
+      // Outside the try: a failed write is the server's error, not a rejected key.
+      options.key.set(apiKey)
+      if (!readConfig().voiceId && voices[0]) {
+        // The key is stored by now, so `ok: false` would be untrue (Settings would ask for it
+        // again) and `ok: true` would hide that no voice is chosen (speak_summary is not set up
+        // without one). Throw (TOOL_ERROR) saying both.
+        try {
+          setConfig({ voiceId: voices[0].id })
+        } catch (err) {
+          throw new Error(`The key was stored, but the voice could not be saved: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      return { ok: true, voices }
     },
 
     clearKey: () => options.key.set(null),
@@ -130,12 +137,13 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
         headers: { Accept: 'audio/mpeg' },
         body: JSON.stringify({ text, model_id: modelId })
       })
-      return new Uint8Array(await res.arrayBuffer())
+      return new Uint8Array(await readBodyCapped(res, MAX_AUDIO_BYTES, "ElevenLabs' clip"))
     },
 
     promptSessions: () => {
       try {
-        return !!options.key.get() && readConfig().promptSessions
+        const config = readConfig()
+        return config.promptSessions && !!config.voiceId && !!options.key.get()
       } catch {
         // An unreadable secrets file: launch the session without the prompt.
         return false

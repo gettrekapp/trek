@@ -13,7 +13,7 @@ import {
   parseLocalInfo,
   type LocalInfo
 } from '../../src/shared/localServer.ts'
-import { writeFileAtomic } from './atomicWrite.ts'
+import { writeFileAtomic } from '../../src/host/atomicWrite.ts'
 
 export interface LocalProfile {
   /** ~/.config/trek-server/local (or local-<name>) */

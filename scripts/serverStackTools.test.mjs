@@ -92,11 +92,28 @@ test('get_stack, start_stack, read_stack_log and stop_stack drive the worktree s
   }
   assert.match(output, /\$ stack\.sh up --starter\nstep up/)
   assert.equal(output.includes('\x1b'), false)
-  assert.equal((await s.call('read_stack_log', { worktree: 'feature-x', lines: 1 })).output.split('\n').length, 1)
+  const read = async (lines) => (await s.call('read_stack_log', { worktree: 'feature-x', lines })).output
+  // The log ends in a newline: lines counts the lines before it; 0.5 is one line.
+  assert.equal(await read(1), 'step up')
+  assert.equal(await read(0.5), 'step up')
+  assert.equal(await read(2), '$ stack.sh up --starter\nstep up')
   rmSync(runningFlag)
   const stopped = await s.call('stop_stack', { worktree: 'feature-x' })
   assert.equal(stopped.state, 'stopped')
   assert.deepEqual(calls().filter((c) => c.startsWith('stack|')), ['stack|up --starter', 'stack|down'])
+})
+
+test('read_stack_log of a log longer than the 64 KiB it reads leaves out the cut first line', async (t) => {
+  const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then for i in $(seq 1 3000); do echo "line $i padding-padding-padding"; done; fi' })
+  await s.call('start_stack', { worktree: 'feature-x' })
+  let output = ''
+  for (let i = 0; i < 100 && !output.endsWith('line 3000 padding-padding-padding'); i++) {
+    output = (await s.call('read_stack_log', { worktree: 'feature-x', lines: 2000 })).output
+    await new Promise((r) => setTimeout(r, 20))
+  }
+  const lines = output.split('\n')
+  assert.equal(lines.length < 2000, true)
+  for (const line of lines) assert.match(line, /^line \d+ padding-padding-padding$/)
 })
 
 test('the stack tools: a worktree without stack.sh, a failed down, bad arguments, and a server without stacks', async (t) => {

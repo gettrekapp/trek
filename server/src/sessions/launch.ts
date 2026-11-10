@@ -32,6 +32,9 @@ export function agentCommand(launch: AgentLaunch, settings: ProjectSettings, llm
   const isClaude = provider.id === 'claude'
   const mcp = launch.mcp && provider.capabilities.mcp ? launch.mcp : undefined
   const voice = mcp ? launch.voicePrompt : undefined
+  // Trek's own guidance (the Global role, the voice prompt) first, then the user's (the session
+  // type's prompt, the project's shared or Global prompt) last, so the user's can override it,
+  // "do not speak summaries" included, as the desktop ordered them (worktreeLaunch/globalLaunch).
   const prompts = launch.global
     ? [mcp ? (isClaude ? GLOBAL_SYSTEM_PROMPT : globalAgentPrompt(provider.label)) : undefined, voice, settings.globalSystemPrompt?.trim()]
     : [voice, launch.systemPrompt?.trim(), settings.sessionSystemPrompt?.trim()]

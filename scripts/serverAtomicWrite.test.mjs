@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeFileAtomic } from '../server/src/atomicWrite.ts'
+import { writeFileAtomic } from '../src/host/atomicWrite.ts'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-atomic-')))

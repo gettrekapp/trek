@@ -3,7 +3,7 @@
 // client can set, replace or clear one and ask whether it is set, never read it back.
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { writeFileAtomic } from './atomicWrite.ts'
+import { writeFileAtomic } from '../../src/host/atomicWrite.ts'
 
 export const SECRETS_FILE = 'secrets.json'
 

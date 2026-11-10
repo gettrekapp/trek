@@ -12,7 +12,7 @@ import type { StackLogChunk, StackStatus } from '../shared/types'
 const execFileAsync = promisify(execFile)
 
 export const STACK_SCRIPT = 'docker/stack/stack.sh'
-const MAX_INITIAL_LOG = 64 * 1024
+export const MAX_INITIAL_LOG = 64 * 1024
 /** The most one `log` call reads: a reader that fell further behind skips ahead (its pane keeps the last 200 KB anyway). */
 const MAX_LOG_READ = 1024 * 1024
 

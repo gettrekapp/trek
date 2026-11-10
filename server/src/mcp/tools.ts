@@ -27,6 +27,7 @@ import { requireSpokenText } from '../integrations/integrationHandlers.ts'
 import type { Machine } from '../integrations/machineHandlers.ts'
 import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
 import type { StackStatus } from '../../../src/shared/types'
+import { MAX_INITIAL_LOG } from '../../../src/host/stackService.ts'
 
 const WORKTREE_PARAM = {
   type: 'string',
@@ -88,7 +89,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'speak_summary',
     description:
-      "Read a short spoken summary aloud to the user through the Trek server's ElevenLabs voice. Keep it SHORT: one to three plain sentences (max 400 characters), written to be heard — no markdown, code, file paths, URLs or lists. Use it only when your instructions or the user ask for spoken summaries. It plays in every Trek window that has this project open, one summary at a time, and is skipped where the user is set to Busy, so never repeat it. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
+      "Read a short spoken summary aloud to the user through the Trek server's ElevenLabs voice. Keep it SHORT: one to three plain sentences (max 400 characters), written to be heard — no markdown, code, file paths, URLs or lists. Use it only when your instructions or the user ask for spoken summaries. It plays in every Trek window that has this project open, one summary at a time, and is skipped where the user is set to Busy, so never repeat it. The result's windows counts the windows it was sent to, Busy ones included. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -331,7 +332,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'read_stack_log',
-    description: `${STACK_DESCRIPTION} Returns the last lines of the stack.sh output (setup steps, then the App, API, nodeapp and admin container logs).`,
+    description: `${STACK_DESCRIPTION} Returns the last lines of the stack.sh output (setup steps, then the App, API, nodeapp and admin container logs), from the log's last 64 KiB.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -671,10 +672,16 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         }
         case 'read_stack_log': {
           if (args.lines !== undefined && typeof args.lines !== 'number') throw bad('lines must be a number')
-          const lines = Math.min(Math.max(Math.floor(Number(args.lines)) || 100, 1), 2000)
-          // fileId 0 names no log: the answer is the current log's last 64 KiB.
-          const { text } = (await v2('stack.log', { ...ref, fileId: 0, offset: 0 })) as { text: string }
-          return { output: stripAnsi(text).split('\n').slice(-lines).join('\n') }
+          // Clamped before flooring, so 0.5 is one line; 0, NaN and no value are the default.
+          const requested = Number(args.lines)
+          const lines = requested ? Math.floor(Math.min(Math.max(requested, 1), 2000)) : 100
+          // fileId 0 names no log: the answer is the current log's last 64 KiB (offset is its size).
+          const { text, offset } = (await v2('stack.log', { ...ref, fileId: 0, offset: 0 })) as { text: string; offset: number }
+          // The log ends in a newline, which ends the last line rather than starting an empty one.
+          let all = stripAnsi(text).replace(/\n+$/, '').split('\n')
+          // A log longer than what was read starts mid-line: leave that piece out.
+          if (offset > MAX_INITIAL_LOG) all = all.slice(1)
+          return { output: all.slice(-lines).join('\n') }
         }
         default:
           return { available: true, ...describeStack(status) }
@@ -908,16 +915,19 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const { session } = sessionIn(args.terminalId)
         const summary = requireSpokenText(args.summary, 'summary')
         const notSetUp = { played: false, reason: 'Voice summaries are not set up on this Trek server — do not call speak_summary again' }
+        // Ready: a key and a chosen voice (synthesize refuses without one).
         let ready = false
         try {
-          ready = deps.voice?.settings().hasKey === true
+          const settings = deps.voice?.settings()
+          ready = settings?.hasKey === true && !!settings.voiceId
         } catch {
           // An unreadable secrets file: not set up.
         }
         if (!ready) return notSetUp
         const topic = projectTopic(projectId)
         const nobody = { played: false, reason: 'No Trek window has this project open, so nobody would hear it' }
-        if (deps.hub.subscriberCount(topic) === 0) return nobody
+        // Only the subscribers emit reaches: an MCP tool call's no-op subscriber hears nothing.
+        if (deps.hub.eventSubscriberCount(topic) === 0) return nobody
         const audio = Buffer.from(await deps.voice!.synthesize(summary)).toString('base64')
         const windows = deps.hub.emit(topic, 'voice.summary', { projectId, sessionId: session.id, text: summary, audio })
         return windows > 0 ? { played: true, windows } : nobody

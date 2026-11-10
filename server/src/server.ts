@@ -165,9 +165,9 @@ export function startServer(
         sendFrame(ws, { type: 'event', event: 'topic.ended', payload: { topic, reason } })
       },
       // A spoken summary to a connection that has fallen behind is dropped: it would play late.
-      event(event, payload) {
+      event(_event, _payload, frame) {
         if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > SINK_HIGH_WATER) return false
-        sendFrame(ws, { type: 'event', event, payload })
+        ws.send(frame())
         return true
       }
     }

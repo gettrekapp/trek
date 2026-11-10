@@ -446,7 +446,9 @@ has its own, set from any client.
 be read or parse is never overwritten), and no method sends a key back: `linear.status` and
 `voice.settings` say only whether one is set. A key is checked first (Linear's `viewer`, the
 ElevenLabs key's voices); the result is `{ok: false, error}` with the service's answer when it is
-refused. `ifAbsent: true` is the desktop's one-time hand-over of its own keys to the local server:
+refused. A `secrets.json` that cannot be read is `TOOL_ERROR` before the service is asked (with
+`ifAbsent` too), as is one that cannot be written; a `voice.setKey` whose key was stored but whose
+first voice could not be saved is `TOOL_ERROR` saying so. `ifAbsent: true` is the desktop's one-time hand-over of its own keys to the local server:
 the key is stored as it is, unchecked (the app checked it when the user entered it), and only while
 the server has none; otherwise the result is `{ok: false, error, present: true}` and the server's
 own key is kept. A key is 1 to 1024 printable ASCII characters with no spaces.
@@ -463,12 +465,12 @@ own key is kept. A key is 1 to 1024 printable ASCII characters with no spaces.
 | `voice.voices` | `{}` | the key's voices, `[{id, name}]` |
 | `voice.setConfig` | any of `{voiceId, modelId, promptSessions}` | the whole config |
 | `voice.synthesize` | `{text}` (trimmed, 1 to 400 characters) | `{audio}`: an mp3, base64, for this connection only (a client's Test) |
-| `skills.list` | `{projectId, worktreeId}` | `SkillInfo[]`: the worktree's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, then the server user's `~/.claude` ones; a project one shadows a user one of the same name |
+| `skills.list` | `{projectId, worktreeId}` | `SkillInfo[]`: the worktree's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, then the server user's `~/.claude` ones; a project one shadows a user one of the same name. Only regular files are read, their first 16 KiB; nothing is listed from a worktree's `.claude` (or its `skills`, `commands`, or a `SKILL.md`) whose real path is outside the worktree |
 
 A failure of Linear or ElevenLabs (unreachable, a revoked key, a quota) is `TOOL_ERROR` with the
 service's message. The voice config (`<dataDir>/voice.json`) holds no secret. `promptSessions`
 ("Summarize automatically") adds a prompt to every session the server starts that has the MCP tools,
-while it has a key, telling the agent to call `speak_summary` when it finishes or waits on the
+while it has a key and a voice, telling the agent to call `speak_summary` when it finishes or waits on the
 user. `skills.list` takes the worktree's path from the server's state and checks it as the worktree
 commands do (registered repository, not missing, inside the allowlist).
 
@@ -847,11 +849,11 @@ or `null`.
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
-| `speak_summary` | `terminalId`, `summary` (one to three short sentences, trimmed, at most 400 characters) | `{played: true, windows}` (the connections it went to, see [Linear, voice and skills](#linear-voice-and-skills)), or `{played: false, reason}` when the server has no ElevenLabs key or no connection has the project open (nothing is synthesized then) |
+| `speak_summary` | `terminalId`, `summary` (one to three short sentences, trimmed, at most 400 characters) | `{played: true, windows}` (the connections it went to, see [Linear, voice and skills](#linear-voice-and-skills)), or `{played: false, reason}` when the server has no ElevenLabs key or voice, or no connection has the project open (nothing is synthesized then) |
 | `get_stack` | `worktree` | `{available: false}`, or `{available: true, name, state, containers, ports, urls, logins}`; `state` is `starting`, `running`, `stopping` or `stopped` |
 | `start_stack` | `worktree`; `starter?` (boolean) | the stack as `get_stack` describes it, once `stack.sh up` is started; `BAD_REQUEST` when it is not stopped |
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
-| `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log, colour codes removed |
+| `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
 
 That is 27 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without

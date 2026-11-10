@@ -89,10 +89,11 @@ export async function viaService<T>(operation: () => T | Promise<T>): Promise<T>
 export const integrationHandlers: Record<string, Handler> = {
   'linear.status': (_p, ctx) => viaService(() => ({ hasKey: integrations(ctx).linear.hasKey() })),
 
+  // The service's own refusal is `{ ok: false }`; the secrets file failing is TOOL_ERROR.
   'linear.setKey': (p, ctx) => {
     const apiKey = requireApiKey(p.apiKey)
     const ifAbsent = optionalFlag(p.ifAbsent, 'ifAbsent')
-    return integrations(ctx).linear.setKey(apiKey, { ifAbsent })
+    return viaService(() => integrations(ctx).linear.setKey(apiKey, { ifAbsent }))
   },
 
   'linear.clearKey': (_p, ctx) =>
@@ -108,10 +109,11 @@ export const integrationHandlers: Record<string, Handler> = {
 
   'voice.settings': (_p, ctx) => viaService(() => integrations(ctx).voice.settings()),
 
+  // The service's own refusal is `{ ok: false }`; the secrets file failing is TOOL_ERROR.
   'voice.setKey': (p, ctx) => {
     const apiKey = requireApiKey(p.apiKey)
     const ifAbsent = optionalFlag(p.ifAbsent, 'ifAbsent')
-    return integrations(ctx).voice.setKey(apiKey, { ifAbsent })
+    return viaService(() => integrations(ctx).voice.setKey(apiKey, { ifAbsent }))
   },
 
   'voice.clearKey': (_p, ctx) =>

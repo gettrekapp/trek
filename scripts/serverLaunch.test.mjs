@@ -41,7 +41,7 @@ test('global sessions get the global prompt and addDirs; the role prompt only wi
   assert.match(withMcp.command, /--mcp-config '\/c.json'/)
 })
 
-test('the voice prompt goes first for a worktree session, after the role for a Global one, and only with MCP', () => {
+test("the voice prompt goes before the user's prompts (they can override it), after a Global session's role, and only with MCP", () => {
   const mcp = { configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }
   const worktree = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', voicePrompt: 'VOICE', mcp }, { sessionSystemPrompt: 'SHARED' }, DEFAULT_LLM_SETTINGS)
   assert.match(worktree.command, /--append-system-prompt 'VOICE\n\nTYPE\n\nSHARED'/)

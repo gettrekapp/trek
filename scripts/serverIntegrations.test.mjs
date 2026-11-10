@@ -4,11 +4,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile, secretsPathFor } from '../server/src/secrets.ts'
 import { createIntegrations } from '../server/src/integrations/integrations.ts'
+import { readBodyCapped } from '../src/host/httpBody.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { saveConfig } from '../server/src/config.ts'
@@ -34,6 +35,10 @@ async function linearStub(t, options = {}) {
       const send = (status, value) => {
         res.writeHead(status, { 'content-type': 'application/json' })
         res.end(JSON.stringify(value))
+      }
+      if (options.notJson) {
+        res.writeHead(400, { 'content-type': 'text/html' })
+        return res.end('<html>Bad Request</html>')
       }
       if (options.status) return send(options.status, {})
       if (req.headers.authorization !== 'good-key') return send(401, {})
@@ -73,6 +78,13 @@ async function elevenLabsStub(t, options = {}) {
       const speech = /^\/v1\/text-to-speech\/([^?]+)\?output_format=mp3_44100_128$/.exec(req.url)
       if (req.method === 'POST' && speech) {
         const { text, model_id } = JSON.parse(body)
+        if (options.audioBytes) {
+          // A clip over the cap, streamed without a content-length.
+          res.writeHead(200, { 'content-type': 'audio/mpeg', 'transfer-encoding': 'chunked' })
+          const chunk = Buffer.alloc(64 * 1024, 1)
+          for (let sent = 0; sent < options.audioBytes; sent += chunk.length) res.write(chunk)
+          return res.end()
+        }
         res.writeHead(200, { 'content-type': 'audio/mpeg' })
         return res.end(`mp3:${decodeURIComponent(speech[1])}:${model_id}:${text}`)
       }
@@ -236,9 +248,11 @@ test('voice.setConfig checks each field; voice.synthesize speaks in the chosen v
   assert.equal(s.integrations.voice.promptSessions(), true)
   const spoken = await s.call('voice.synthesize', { text: ' Hello there. ' })
   assert.equal(Buffer.from(spoken.result.audio, 'base64').toString(), 'mp3:v1:eleven_turbo_v2_5:Hello there.')
-  for (const params of [{ voiceId: '../x' }, { voiceId: '' }, { modelId: 'a b' }, { promptSessions: 'yes' }, { active: true }]) {
+  for (const params of [{ voiceId: '../x' }, { voiceId: '' }, { modelId: 'a b' }, { promptSessions: 'yes' }, { promptSessions: 1 }, { active: true }, { voiceId: 'v2', extra: 1 }]) {
     refused(await s.call('voice.setConfig', params), 'BAD_REQUEST')
   }
+  // Nothing refused reached the file.
+  assert.deepEqual(JSON.parse(readFileSync(s.voiceConfigFile, 'utf8')), config.result)
   refused(await s.call('voice.synthesize', { text: 'x'.repeat(401) }), 'BAD_REQUEST')
   refused(await s.call('voice.synthesize', { text: '' }), 'BAD_REQUEST')
   // Without a key, sessions are not told to speak whatever the setting.
@@ -317,4 +331,123 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
   })
   refused(await call('skills.list', { projectId, worktreeId: 'out' }), 'PATH_DENIED')
   refused(await call('skills.list', { projectId, worktreeId: 'nope' }), 'NOT_FOUND')
+})
+
+/** The secrets file a directory: every read of it fails (EISDIR), whoever runs the test. */
+const unreadableSecrets = (s) => mkdirSync(s.secretsFile, { recursive: true })
+
+test('setKey with an unreadable secrets file is TOOL_ERROR before any request, with or without ifAbsent', async (t) => {
+  const s = await setup(t)
+  unreadableSecrets(s)
+  for (const method of ['linear.setKey', 'voice.setKey']) {
+    for (const ifAbsent of [false, true]) {
+      const res = await s.call(method, { apiKey: method === 'linear.setKey' ? 'good-key' : 'good-voice', ifAbsent })
+      refused(res, 'TOOL_ERROR')
+      assert.match(res.error.message, /cannot be read/)
+    }
+  }
+  assert.deepEqual([s.stub.requests.length, s.voiceStub.requests.length], [0, 0])
+})
+
+test('voice.setKey: a key stored whose voice choice cannot be saved is TOOL_ERROR saying the key was kept', async (t) => {
+  const s = await setup(t)
+  // voice.json's directory is a file: the config reads as the defaults and cannot be written.
+  writeFileSync(join(s.dir, 'data'), '')
+  const res = await s.call('voice.setKey', { apiKey: 'good-voice' })
+  refused(res, 'TOOL_ERROR')
+  assert.match(res.error.message, /key was stored.*voice could not be saved/)
+  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { elevenlabs: 'good-voice' })
+})
+
+test('linear.setKey: a 400 whose body is not JSON is a failed check, not a parse error', async (t) => {
+  const s = await setup(t, { notJson: true })
+  assert.deepEqual((await s.call('linear.setKey', { apiKey: 'good-key' })).result, { ok: false, error: 'Linear API returned 400' })
+  assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
+})
+
+test('sessions are prompted to speak only with a key, a chosen voice and the setting on', async (t) => {
+  const s = await setup(t)
+  await s.call('voice.setKey', { apiKey: 'app-voice', ifAbsent: true })
+  await s.call('voice.setConfig', { promptSessions: true })
+  assert.equal(s.integrations.voice.promptSessions(), false)
+  await s.call('voice.setConfig', { voiceId: 'v1' })
+  assert.equal(s.integrations.voice.promptSessions(), true)
+})
+
+test('voice.synthesize: a clip over 4 MiB is TOOL_ERROR', async (t) => {
+  const s = await setup(t, { voice: { audioBytes: 4 * 1024 * 1024 + 64 * 1024 } })
+  await s.call('voice.setKey', { apiKey: 'good-voice' })
+  const res = await s.call('voice.synthesize', { text: 'Hi' })
+  refused(res, 'TOOL_ERROR')
+  assert.match(res.error.message, /larger than/)
+})
+
+test('readBodyCapped: content-length over the cap, a stream over the cap, and one under it', async () => {
+  const stream = (bytes) => new ReadableStream({ start(c) { for (let i = 0; i < bytes; i += 10) c.enqueue(new Uint8Array(10)); c.close() } })
+  await assert.rejects(readBodyCapped(new Response('x'.repeat(20), { headers: { 'content-length': '20' } }), 10, 'The reply'), /The reply is larger than 10 bytes/)
+  await assert.rejects(readBodyCapped(new Response(stream(30)), 25, 'The reply'), /larger than 25 bytes/)
+  assert.equal((await readBodyCapped(new Response(stream(30)), 30, 'The reply')).length, 30)
+  assert.equal((await readBodyCapped(new Response(null), 30, 'The reply')).length, 0)
+})
+
+/** A worktree for skills.list, as the first skills test makes it. */
+async function skillsSetup(t) {
+  process.env.GIT_CONFIG_GLOBAL = '/dev/null'
+  process.env.GIT_CONFIG_NOSYSTEM = '1'
+  const dir = realpathSync(tempDir(t))
+  const a = join(dir, 'repos', 'a')
+  execFileSync('git', ['init', '-q', '-b', 'main', a])
+  const home = join(dir, 'home')
+  mkdirSync(home, { recursive: true })
+  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), voiceConfigFile: join(dir, 'voice.json'), home })
+  return { dir, a, home, list: () => integrations.skills.list(a) }
+}
+
+const write = (path, text) => {
+  mkdirSync(join(path, '..'), { recursive: true })
+  writeFileSync(path, text)
+}
+
+test('skills.list skips FIFOs and links to devices, and reads only a file\'s head', { skip: process.platform === 'win32', timeout: 10_000 }, async (t) => {
+  const s = await skillsSetup(t)
+  for (const root of [join(s.a, '.claude'), join(s.home, '.claude')]) {
+    mkdirSync(join(root, 'skills', 'fifo'), { recursive: true })
+    execFileSync('mkfifo', [join(root, 'skills', 'fifo', 'SKILL.md')])
+    mkdirSync(join(root, 'skills', 'zero'), { recursive: true })
+    symlinkSync('/dev/zero', join(root, 'skills', 'zero', 'SKILL.md'))
+    mkdirSync(join(root, 'commands'), { recursive: true })
+    execFileSync('mkfifo', [join(root, 'commands', 'pipe.md')])
+  }
+  // Frontmatter that ends past the first 16 KiB is not read; a big file's head still is.
+  write(join(s.a, '.claude', 'skills', 'long', 'SKILL.md'), `---\n${'# pad\n'.repeat(3000)}description: too far\n---\n`)
+  write(join(s.a, '.claude', 'skills', 'big', 'SKILL.md'), `---\ndescription: Big one\n---\n${'x'.repeat(2 * 1024 * 1024)}`)
+  write(join(s.home, '.claude', 'commands', 'huge.md'), `---\ndescription: Huge\n---\n${'x'.repeat(2 * 1024 * 1024)}`)
+  assert.deepEqual(await s.list(), [
+    { name: 'big', description: 'Big one', source: 'project', kind: 'skill' },
+    { name: 'long', description: undefined, source: 'project', kind: 'skill' },
+    { name: 'huge', description: 'Huge', source: 'user', kind: 'command' }
+  ])
+})
+
+test("skills.list lists nothing from a worktree's .claude (or its skills dir) that leads outside the worktree", async (t) => {
+  const s = await skillsSetup(t)
+  const outside = join(s.dir, 'outside')
+  write(join(outside, 'skills', 'stolen', 'SKILL.md'), '---\ndescription: from outside\n---\n')
+  write(join(outside, 'commands', 'leak.md'), '---\ndescription: from outside\n---\n')
+  symlinkSync(outside, join(s.a, '.claude'))
+  assert.deepEqual(await s.list(), [])
+  // A real .claude whose skills dir links out: its commands are still listed.
+  rmSync(join(s.a, '.claude'))
+  write(join(s.a, '.claude', 'commands', 'ship.md'), '---\ndescription: Ship it\n---\n')
+  symlinkSync(join(outside, 'skills'), join(s.a, '.claude', 'skills'))
+  // A SKILL.md that links out of the worktree is not read either.
+  write(join(s.home, '.claude', 'skills', 'mine', 'SKILL.md'), '---\ndescription: the user one\n---\n')
+  assert.deepEqual(await s.list(), [
+    { name: 'ship', description: 'Ship it', source: 'project', kind: 'command' },
+    { name: 'mine', description: 'the user one', source: 'user', kind: 'skill' }
+  ])
+  rmSync(join(s.a, '.claude', 'skills'))
+  mkdirSync(join(s.a, '.claude', 'skills', 'linked'), { recursive: true })
+  symlinkSync(join(outside, 'skills', 'stolen', 'SKILL.md'), join(s.a, '.claude', 'skills', 'linked', 'SKILL.md'))
+  assert.deepEqual((await s.list()).map((x) => x.name), ['ship', 'mine'])
 })

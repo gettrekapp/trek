@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events'
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import type { HealthWarning, Project } from '../../../src/shared/model/types'
-import { writeFileAtomic } from '../atomicWrite.ts'
+import { writeFileAtomic } from '../../../src/host/atomicWrite.ts'
 import { isRecord } from '../validate.ts'
 import { collectIds, resetRuntime } from './model.ts'
 
