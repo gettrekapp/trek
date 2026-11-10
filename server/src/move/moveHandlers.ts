@@ -53,6 +53,7 @@ async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
   } catch (err) {
+    if (err instanceof gitService.NotUtf8PatchError) throw bad(err.message)
     throw codedError('GIT_ERROR', (err as Error).message)
   }
 }
@@ -246,7 +247,7 @@ export const moveHandlers: Record<string, Handler> = {
   'move.export': async (p, ctx): Promise<MoveExport & { fingerprint: string }> => {
     const { project, repo, worktree, branch } = await source(ctx, p)
     if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} has running sessions; unload it first`)
-    const { patch, headSha } = await viaGit(() => gitService.exportDirtyPatch(worktree.path))
+    const { patch, headSha } = await viaGit(() => gitService.exportDirtyPatch(worktree.path, repo.linkedDirs ?? []))
     const size = Buffer.byteLength(patch)
     if (size > MAX_MOVE_PATCH_BYTES) {
       throw bad(`the uncommitted changes make a ${MB(size)} patch; a move carries at most ${MB(MAX_MOVE_PATCH_BYTES)}. Commit or remove the large files first`)
@@ -283,7 +284,7 @@ export const moveHandlers: Record<string, Handler> = {
     if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} was loaded again after it was copied; it is kept`)
     const unblock = ctx.sessions.blockPath(worktree.path)
     try {
-      const { patch, headSha } = await viaGit(() => gitService.exportDirtyPatch(worktree.path))
+      const { patch, headSha } = await viaGit(() => gitService.exportDirtyPatch(worktree.path, repo.linkedDirs ?? []))
       if (fingerprint(headSha, patch) !== expected) {
         throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
       }

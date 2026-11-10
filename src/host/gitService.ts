@@ -246,27 +246,41 @@ export async function checkout(repoPath: string, branch: string): Promise<void> 
   await git(repoPath, ['checkout', branch])
 }
 
+/** The uncommitted work has a text file git diffs as text but that is not UTF-8 (a worktree move carries the patch as a string). */
+export class NotUtf8PatchError extends Error {}
+
 /**
  * Uncommitted + untracked changes as one binary patch against HEAD (a worktree move, 5d). It is
  * built in a throwaway copy of the index (GIT_INDEX_FILE), so the worktree's own index, its
- * staged changes included, is never touched. Ignored files never appear. The patch puts every
- * change back unstaged.
+ * staged changes included, is never touched. Ignored files never appear, nor do `exclude`'s
+ * repo-relative paths (the repository's linkedDirs, which the target links itself). The patch
+ * puts every change back unstaged. A patch that is not valid UTF-8 (a Latin-1 text file, say)
+ * would not survive a JSON frame: NotUtf8PatchError.
  */
 export async function exportDirtyPatch(
-  worktreePath: string
+  worktreePath: string,
+  exclude: readonly string[] = []
 ): Promise<{ patch: string; headSha: string }> {
   const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const dir = await mkdtemp(join(tmpdir(), 'trek-move-index-'))
   const index = join(dir, 'index')
+  const pathspec = ['.', ...exclude.map((p) => `:(exclude,literal)${p.replace(/\/+$/, '')}`)]
   try {
     await copyFile(gitIndex, index).catch(() => {})
     const env = { ...process.env, GIT_INDEX_FILE: index }
-    const run = (args: string[]) =>
-      execFileAsync('git', ['-C', worktreePath, ...args], { env, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
-    await run(['add', '-A', '--', '.'])
-    const { stdout } = await run(['diff', '--cached', '--binary', '--no-color', '--no-ext-diff', 'HEAD'])
-    return { patch: stdout, headSha }
+    const options = { env, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }
+    await execFileAsync('git', ['-C', worktreePath, 'add', '-A', '--', ...pathspec], options)
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'diff', '--cached', '--binary', '--no-color', '--no-ext-diff', 'HEAD', '--', ...pathspec],
+      { ...options, encoding: 'buffer' }
+    )
+    try {
+      return { patch: new TextDecoder('utf-8', { fatal: true }).decode(stdout), headSha }
+    } catch {
+      throw new NotUtf8PatchError('the uncommitted changes include a text file that is not UTF-8; commit it (or remove it) first')
+    }
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

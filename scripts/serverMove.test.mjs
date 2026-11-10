@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -256,4 +256,18 @@ test('move.receive validates what it is given', async (t) => {
   assert.equal(await code({ sessions: [{ title: 't', llm: { provider: 'claude' }, agentSessionId: '../x', history: '' }] }), 'BAD_REQUEST')
   assert.equal(await code({ branchData: { note: 5 } }), 'BAD_REQUEST')
   assert.equal(await code({ repoId: 'nope' }), 'NOT_FOUND')
+})
+
+test('move.export leaves out the linked dirs (the target links them itself) and refuses non-UTF-8 text', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(s.a, '.trek'))
+  await s.A.call('repo.update', { projectId: s.A.projectId, repoId: s.A.repoId, linkedDirs: ['.trek'] })
+  symlinkSync(join(s.a, '.trek'), join(s.path, '.trek'))
+  const res = await s.A.call('move.export', s.ref)
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.doesNotMatch(res.result.patch, /\.trek/)
+  writeFileSync(join(s.path, 'latin1.txt'), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]))
+  const refused = await s.A.call('move.export', s.ref)
+  assert.equal(refused.error?.code, 'BAD_REQUEST')
+  assert.match(refused.error.message, /not UTF-8/)
 })
