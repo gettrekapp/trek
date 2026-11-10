@@ -229,3 +229,16 @@ test('a worktree branch that git could read as an option is BAD_REQUEST', (t) =>
   ok.repositories[0].worktrees[1].branch = 'feat/x-1'
   assert.equal(code(() => checkImport(ok, ctx)), 'ok')
 })
+
+test("a branch's pull request watch must be an object; what it saw is dropped, so the first poll is a fresh baseline", (t) => {
+  const { registry, guard, project } = setup(t)
+  const ctx = { registry, guard, existingIds: new Set(), projectId: 'pid' }
+  const p = project()
+  p.repositories[0].branchData.feature = { pr: 'https://github.com/acme/app/pull/12', prWatch: { seen: { checks: 'aaa failing', conflict: false, commentsAt: '2099-01-01T00:00:00Z' } } }
+  assert.deepEqual(checkImport(p, ctx).repositories[0].branchData.feature, { pr: 'https://github.com/acme/app/pull/12', prWatch: {} })
+  for (const bad of [true, 'on', [], null]) {
+    const q = project()
+    q.repositories[0].branchData.feature = { prWatch: bad }
+    assert.equal(code(() => checkImport(q, ctx)), 'BAD_REQUEST', JSON.stringify(bad))
+  }
+})

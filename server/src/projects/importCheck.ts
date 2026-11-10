@@ -79,6 +79,11 @@ function checkRepository(raw: unknown, where: string, ctx: ImportContext, seen: 
   if (!isRecord(raw.branchData)) throw bad(`${where}.branchData must be an object`)
   for (const [branch, data] of Object.entries(raw.branchData)) {
     if (!isRecord(data)) throw bad(`${where}.branchData["${branch}"] must be an object`)
+    if (data.prWatch !== undefined) {
+      if (!isRecord(data.prWatch)) throw bad(`${where}.branchData["${branch}"].prWatch must be an object`)
+      // What another server's watch saw is not this server's to trust: the first poll here is a fresh baseline.
+      data.prWatch = {}
+    }
   }
   if (raw.linkedDirs !== undefined && (!Array.isArray(raw.linkedDirs) || raw.linkedDirs.some((d) => typeof d !== 'string'))) {
     throw bad(`${where}.linkedDirs must be an array of strings`)

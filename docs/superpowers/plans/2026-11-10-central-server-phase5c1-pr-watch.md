@@ -69,27 +69,38 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
    - GitHub Enterprise hosts are not watched, and sign-in is checked for `github.com` only.
 10. **What counts as a change** (`watchStep`):
    - **The first poll is the baseline** and reports nothing, unless the PR is already merged or closed. Turning a watch on never replays what was already there.
-   - **Checks** are reported once per head commit. A failure is reported as soon as one check has failed, with the failed checks' names, even while others still run. A pass is reported once all checks have passed. Pending and no checks at all are never reported. A new push that fails the same way again is a new report.
-   - **Reviews and comments** are counted when they are newer than the newest one seen, by anyone but the PR's author. That includes bots (Decision 5). A deleted comment never moves the mark back.
+   - **Checks** are reported once per head commit. A failure is reported as soon as one check has failed, with the failed checks' names, even while others still run. A pass is reported once all checks have settled. Pending and no checks at all are never reported. A new push that fails the same way again is a new report.
+     - *Review fix:* a finished CheckRun whose conclusion is not a failure is settled: `SUCCESS`, `NEUTRAL`, `SKIPPED`, `STALE`, and any conclusion GitHub adds later, so an unfamiliar word never holds "passed" back forever. A StatusContext settles only at `SUCCESS` (`PENDING` and `EXPECTED` wait).
+   - **Reviews and comments** are counted when they are newer than the newest one seen, by anyone but the PR's author and gh's signed-in user (the agent's own replies). That includes bots (Decision 5). A deleted comment never moves the mark back.
+     - *Review fix:* GitHub's times are to the second, so `seen.commentsAtCount` also keeps how many were at `commentsAt`; one more in that same second is counted. A watch saved before the field counts whatever is at that time as seen.
+     - *Review fix:* the signed-in user is the query's `viewer { login }`, read with every poll, so it follows a re-login without a separate call.
    - **A conflict** is reported when GitHub starts saying `CONFLICTING`. `UNKNOWN`, while GitHub is still working it out, keeps the last answer.
    - **Merged or closed** is reported, and then the watch ends.
    - **One poll gives one prompt and one notice**, whatever changed in it.
 11. **The prompt says what to do.** It names the PR and each change, together with the `gh` command that shows it (`gh pr checks <url>`, `gh pr view <url> --comments`). It is queued, not sent (Decision 4).
-   - Up to 10 failed checks are named; the rest are counted.
-   - With the session's queue full (100 prompts), nothing is queued and the notice says so.
+   - Up to 10 failed checks are named; the rest are counted. *Review fix:* a name is untrusted text from the repo's CI config, so it is made one line (control, bidi and zero-width characters removed, whitespace runs collapsed) and cut to 100 characters (`checkName`).
+   - With the newest session's queue full (100 prompts), nothing is queued and the notice says so.
+   - *Review fix:* a session that refuses the prompt for another reason (closed meanwhile, `NOT_FOUND`) passes it to the next newest session. With none left, the notice alone reports it ("no agent session"), never "queue is full".
 12. **The notice** is `{title: 'PR #12', text, url, at}`. `text` is what changed and where the prompt went, for example "Checks failed · 1 new comment — prompt queued for Claude".
    - The notice is runtime only (Risk 4). The next report replaces it, and `prWatch.dismiss` clears it.
    - It is published unpersisted, like a session's status.
 13. **Polling.**
    - Every watched branch is polled every 3 minutes (`PR_POLL_MS`), one at a time.
-   - Each poll runs `gh pr view <url> --json number,state,mergeable,headRefOid,author,statusCheckRollup,reviews,comments`, with a 30 s timeout and at most 8 MiB of output. gh runs with no prompt, no pager and no update check.
-   - Turning a watch on polls it at once. A branch already being polled is skipped.
-   - After each `gh` answer the branch is read again, so a watch turned off, or a PR changed, during the call is left alone.
+   - *Review fix:* each poll runs one `gh api graphql` query (`PR_QUERY`, `prQueryArgs`) instead of `gh pr view --json …reviews,comments`, whose comment and review bodies could pass the output cap on a bot-heavy PR. It asks only for what is compared: state, mergeable, head commit, the head commit's first 100 checks, the author and time of the newest 100 reviews and comments, and `viewer { login }`. The answer is a few kilobytes; the cap is now 1 MiB, with a 30 s timeout. gh runs with no prompt, no pager and no update check.
+   - Turning a watch on polls it at once. A poll already running for the same branch and URL is skipped. *Review fix:* the URL is part of that key, so a PR re-linked mid-poll gets its own baseline poll at once; the old answer is then dropped by the re-read below.
+   - After each `gh` answer the branch is read again, so a watch turned off, a PR changed, or the worktree gone, during the call is left alone (its `seen` does not move).
+   - *Review fix:* a branch's polls failing 3 times in a row (`FAILS_BEFORE_NOTICE`) set the worktree's notice to "Can’t be read: <first line of the error>", once, until a poll succeeds; the good poll withdraws it unless something replaced it. A watch is never dead silently.
+   - *Review fix:* a watched branch with no worktree (removed, or missing on disk) drops its `seen` at the next round (`forgetUnpolled`), so when a worktree has it again its first poll is a fresh baseline rather than a report of everything since. Chosen over "unpolled for longer than N": it needs no saved timestamp, and a server that was down for a while still reports what changed meanwhile.
+   - *Review fix:* `stop()` aborts any running gh (an `AbortSignal` on `execFile`); nothing is applied, logged or re-checked after it.
+   - *Review fix:* a round goes on past a branch whose poll throws.
+   - *Review fix:* `project.import` checks a branch's `prWatch` is an object and drops its `seen`, so an imported watch starts with a baseline.
 14. **The `prWatch` capability.**
-    - **When it is checked:** `gh auth status --hostname github.com` runs at start, again every 10 minutes while it fails, and after any failed poll.
+    - **When it is checked:** `gh auth status --hostname github.com` runs at start, then every 10 minutes (`GH_RECHECK_MS`) on its own timer, signed in or not, and after a poll that fails with what looks like a sign-in error (`isAuthFailure`: HTTP 401, bad credentials, not logged in, authentication). *Review fix:* before, it was re-checked only while signed out, or after any failed poll. A sign-out with nothing watched was never noticed, and one network blip withdrew the capability from every window and paused every watch for 10 minutes.
+    - Callers while a check runs share it (one in-flight promise), so two can't both report the same change.
+    - Not `--active`: gh before 2.40 rejects the flag, which would read as signed out.
     - **Signed out:** no watch can be turned on (`TOOL_ERROR`), but the watches already on stay on and resume once gh is signed in again.
     - **A change is pushed** to every authenticated connection as `integrations.changed {prWatch}` (Decision 6). For the smoke, `TREK_SERVER_PR_POLL_MS` also sets the time between sign-in checks.
-    - **`trek.ready`** waits up to 3 s for the first check, so a slow gh never holds up the start.
+    - **`trek.ready`** waits up to 3 s for the first check, so a slow gh never holds up the start. Only the Local server's announcement waits on it, so the app's first welcome has the answer; a remote server takes connections at once, and a welcome sent before gh answered lacks `prWatch` until the change is pushed.
 15. **The methods.**
     - **`branch.setPrWatch {projectId, repoId, branch, watch}`:**
       - Turning a watch on needs `prWatch` (otherwise `TOOL_ERROR`) and a linked github.com URL (otherwise `BAD_REQUEST`).
@@ -114,8 +125,8 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
     - The projector gives the store `branchPrWatches` and `branchPrNotices`, keyed by branch, as it does `branchPullRequests`.
 18. **`src/main/github.ts` stays.** It resolves a PR's head branch when the app creates a worktree from a PR, which has nothing to do with the watch.
 19. **No smoke runs the real gh.**
-    - `TREK_SERVER_GH` (an absolute path) is the gh the server runs; otherwise it runs `gh` from the PATH.
-    - `TREK_SERVER_PR_POLL_MS` (at least 1000) sets the time between polls and, while gh is signed out, between sign-in checks, for the smoke.
+    - `TREK_SERVER_GH` (an absolute path) is the gh the server runs. Only an unset variable means `gh` from the PATH. *Review fix:* any other value (empty, relative) is logged and fails closed: the runner always rejects, so gh reads as not installed. Before, it fell back to the real gh on the PATH, so a typo in a test's stub path reached GitHub.
+    - `TREK_SERVER_PR_POLL_MS` (at least 1000) sets the time between polls and between sign-in checks, for the smoke.
     - Every smoke imports `scripts/smokeGh.mjs` first. It writes a stub that is never signed in and sets `TREK_SERVER_GH` to it in `process.env`.
     - Every child inherits the variable, and main's `childEnv` keeps it for the Local server. `smoke:v2` and `smoke:local-features` check that the welcome has no `prWatch`, which proves the stub was the gh that ran.
     - This lands in Task 2, with the first code that runs gh, so no smoke between tasks reaches the real one. This machine has `/opt/homebrew/bin/gh`.
@@ -124,7 +135,7 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
 
 As 5b's, with these:
 - **Baseline:** master `300eb5e`: 1697 tests (1696 pass, 1 skipped). Smokes are as in 5b's final verification.
-- **No real gh, ever, and no GitHub.** Unit tests hand `PrWatcher` a fake runner. Smokes get `smokeGh.mjs`'s stub; `smoke:server-prwatch` scripts its own and checks every `pr view` it saw.
+- **No real gh, ever, and no GitHub.** Unit tests hand `PrWatcher` a fake runner. Smokes get `smokeGh.mjs`'s stub; `smoke:server-prwatch` scripts its own and checks every `api graphql` query it saw.
 - **No real docker, colima, Linear or ElevenLabs**, as in 5b.
 
 ## File map
@@ -3373,11 +3384,13 @@ index 4c25c26..08a4fd0 100644
 3. **Bots' comments count as new comments** (CI bots, coverage bots), so a busy bot means a prompt every poll it comments (Decision 5).
 4. **A notice is lost on a server restart** (runtime only, Decisions 7 and 12). The prompt it reported is still in the queue, and the watch's `seen` keeps it from being reported again.
 5. **GitHub API use.**
-   - Each watched PR costs one GraphQL call every 3 minutes, which is far under gh's 5000 an hour for a handful of PRs.
-   - A PR that keeps failing (no access, deleted) also re-runs `gh auth status` every round. It is logged once.
+   - Each watched PR costs one GraphQL call every 3 minutes, which is far under gh's 5000 an hour for a handful of PRs, plus one `gh auth status` every 10 minutes.
+   - A PR that keeps failing (no access, deleted) is logged once and flags its worktree after 3 failures; it re-runs `gh auth status` only when its error looks like sign-in.
+   - Only the newest 100 reviews and comments and the first 100 checks are read. More than 100 new comments within one poll are counted as 100; a failing check past the first 100 is missed.
 6. **The server must find gh.**
    - A Local server inherits the app's fixed PATH, as docker does.
    - A remote server needs gh on its user's PATH, signed in as that user. Without it, `prWatch` is simply missing.
+   - A sign-in or sign-out reaches open windows within about 10 minutes (the timer), or at the next poll that fails with a sign-in error.
 7. **A queued prompt waits for the user to send it.** The queue is click-to-send (2d-2), so the agent does nothing until then. The notification and the flag are what draw the user (Decision 4).
 8. **"Checks passed" and "merged" prompts are informational.** The spec asks for them, but they cost a queue slot.
 

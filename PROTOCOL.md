@@ -102,7 +102,7 @@ new optional field needs no capability: its absence says enough.
 | `linear` | `linear.*` look Linear issues up with the server's own API key (see [Linear, voice and skills](#linear-voice-and-skills)) |
 | `voice` | `voice.*` keep the server's ElevenLabs key and voice; the MCP tool `speak_summary` sends each spoken summary to the project's subscribers as `voice.summary` |
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
-| `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked when the server starts (its first welcome waits up to 3 s for the answer), again every 10 minutes while it is missing, and after a poll fails. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
+| `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -496,22 +496,29 @@ With the capability `prWatch` (phase 5c-1), the server watches a branch's linked
 login`); the server holds no GitHub token. A watch is the branch's `branchData.prWatch`, saved with
 the project, so it survives a restart: `{}` until its first poll, then `{seen}`, what that poll saw
 (the head commit and checks state, whether GitHub said it conflicts, the newest review or comment
-time). Only a canonical `https://github.com/<owner>/<repo>/pull/<n>` URL is watched, and only while a
-worktree has the branch checked out.
+time and how many were at that second). Only a canonical `https://github.com/<owner>/<repo>/pull/<n>`
+URL is watched, and only while a worktree has the branch checked out; a watched branch with no
+worktree drops its `seen`, so its next poll is a fresh baseline. `project.import` keeps a branch's
+`prWatch` (it must be an object) but drops its `seen`.
 
-Every 3 minutes the server runs `gh pr view <url> --json
-number,state,mergeable,headRefOid,author,statusCheckRollup,reviews,comments` for each watched branch,
-one at a time, and compares it with `seen`. The first poll is the baseline and reports nothing
-(unless the PR is already merged or closed). After that it reports: checks failed (as soon as one
-has, with their names) or all passed, once per head commit; new reviews or comments by anyone but
-the PR's author; a merge conflict when GitHub starts saying so (`UNKNOWN` keeps the last answer);
-merged; closed. A report is one prompt queued on the worktree's newest session (the last of its
-`sessions`; every v2 session runs an agent), saying what changed and which `gh` command shows it,
-and the worktree's `prNotice` `{title, text, url, at}` (runtime only, like a status), which the
-`attention` topic lists. With no session, or its queue full, nothing is queued and the notice says
-so; no session is started. After merged or closed the watch removes itself; the link stays. A
-failed `gh` call leaves the watch as it was, is logged once while it lasts, and re-checks the
-sign-in.
+Every 3 minutes the server runs one `gh api graphql` query for each watched branch, one at a time:
+the PR's state, mergeable state, head commit and its first 100 checks, and the author and time of
+its newest 100 reviews and comments (no bodies), plus gh's signed-in user. It compares the answer
+with `seen`. The first poll is the baseline and reports nothing (unless the PR is already merged or
+closed). After that it reports: checks failed (as soon as one has, with their names) or all settled
+(a finished check whose conclusion is not a failure, `STALE` included, is settled), once per head
+commit; new reviews or comments by anyone but the PR's author and gh's signed-in user (bots
+count); a merge conflict when GitHub starts saying so (`UNKNOWN` keeps the last answer); merged;
+closed. A report is one prompt queued on the worktree's newest session (the last of its `sessions`;
+every v2 session runs an agent), saying what changed and which `gh` command shows it, and the
+worktree's `prNotice` `{title, text, url, at}` (runtime only, like a status), which the `attention`
+topic lists. A failed check's name in the prompt is one line without control characters, at most
+100 characters, and at most 10 are named. With the newest session's queue full nothing is queued and
+the notice says so; a session that refuses the prompt otherwise (closed meanwhile) passes it to the
+next newest; with no session left the notice alone reports it. No session is started. After merged
+or closed the watch removes itself; the link stays. A failed `gh` call leaves the watch as it was
+and is logged once while it lasts; three failures in a row set the worktree's notice to `Can’t be
+read: <reason>`, once, and the next good poll withdraws it.
 
 | Method | Params | Result |
 |---|---|---|

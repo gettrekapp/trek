@@ -196,9 +196,11 @@ other window on that project sees them live.
   merged or closed, a prompt saying so (and which `gh` command shows it) is queued on
   the worktree's newest session, and the worktree is flagged in the sidebar and the
   notifications menu until you dismiss it. Nothing is started for a worktree with no
-  session. After merged or closed the watch turns itself off. It needs `gh` installed
-  and signed in (`gh auth login`) as the server's user; without that the menu item is
-  not shown.
+  session. After merged or closed the watch turns itself off. A pull request the
+  server cannot read three polls in a row flags the worktree too. It needs `gh`
+  installed and signed in (`gh auth login`) as the server's user; without that the
+  menu item is not shown (a sign-in or sign-out on the server shows within about 10
+  minutes).
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.

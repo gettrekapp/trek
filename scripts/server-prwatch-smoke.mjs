@@ -4,7 +4,8 @@
 //
 // A plain `trek-server start` (no `local`) runs with its own HOME, TREK_SERVER_GH pointed at a stub gh
 // and TREK_SERVER_PR_POLL_MS=1000: nothing here runs the real gh or reaches GitHub. The stub answers
-// `gh auth status` while a marker file exists, and `gh pr view` with a JSON file this script rewrites.
+// `gh auth status` while a marker file exists, and `gh api graphql` (the watch's one query) with a JSON
+// file this script rewrites.
 // The server's agent is a fake one that lingers. The built app runs with a temp HOME and
 // --user-data-dir, no Local server, and main's dialogs stubbed; the server is added as an app server,
 // and the window opens a project made through the SDK. Through the DOM, the SDK and the server's MCP
@@ -16,7 +17,7 @@
 //     listed in the notifications menu and flags its sidebar row; the notice's × clears it;
 //   - watch_pull_request (MCP) turns the watch off and on;
 //   - merged with no session: the notice says nothing was queued, and the watch turns itself off;
-//   - gh signed out: a failed poll re-checks, a new connection's welcome has no prWatch, and the open
+//   - gh signed out: a failed poll (HTTP 401) re-checks, a new connection's welcome has no prWatch, and the open
 //     window and connection follow (integrations.changed {prWatch}); signed in again, they follow back;
 //   - the renderer never holds the server token; no error dialogs, console or page errors.
 //
@@ -30,6 +31,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
+import { PR_QUERY } from '../src/shared/prWatch.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 
 const WATCHDOG_MS = 150_000
@@ -74,25 +76,35 @@ mkdirSync(stubs)
 const signedIn = join(work, 'gh-signed-in')
 const prJson = join(work, 'gh-pr.json')
 const ghCalls = join(work, 'gh-calls')
-// gh: `auth status` while the marker exists; `pr view` answers with gh-pr.json (exit 1 when it is gone).
+// gh: `auth status` while the marker exists; `api graphql` answers with gh-pr.json (exit 1 when it is gone).
 writeFileSync(
   join(stubs, 'gh'),
   `#!/bin/bash
 echo "$*" >> '${ghCalls}'
 if [ "$1" = auth ]; then [ -e '${signedIn}' ] && exit 0; echo 'You are not logged into any GitHub hosts.' >&2; exit 1; fi
-if [ "$1" = pr ] && [ "$2" = view ]; then [ -e '${prJson}' ] && exec cat '${prJson}'; echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
+if [ "$1" = api ] && [ "$2" = graphql ]; then [ -e '${prJson}' ] && exec cat '${prJson}'; echo 'HTTP 401: Bad credentials' >&2; exit 1; fi
 exit 1
 `,
   { mode: 0o755 }
 )
 writeFileSync(signedIn, '')
-const pr = (overrides = {}) =>
-  writeFileSync(
-    prJson,
-    JSON.stringify({ number: 12, state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: 'aaa', author: { login: 'me' }, statusCheckRollup: [{ __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: '' }], reviews: [], comments: [], ...overrides })
-  )
+// The answer to PR_QUERY, from the flat fields the steps vary.
+const pr = (overrides = {}) => {
+  const o = { number: 12, state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: 'aaa', author: { login: 'me' }, statusCheckRollup: [{ __typename: 'CheckRun', name: 'lint', status: 'IN_PROGRESS', conclusion: '' }], reviews: [], comments: [], ...overrides }
+  const pullRequest = {
+    number: o.number,
+    state: o.state,
+    mergeable: o.mergeable,
+    headRefOid: o.headRefOid,
+    author: o.author,
+    reviews: { nodes: o.reviews },
+    comments: { nodes: o.comments },
+    commits: { nodes: [{ commit: { statusCheckRollup: o.statusCheckRollup.length > 0 ? { contexts: { nodes: o.statusCheckRollup } } : null } }] }
+  }
+  writeFileSync(prJson, JSON.stringify({ data: { viewer: { login: 'agent' }, repository: { pullRequest } } }))
+}
 pr()
-const prViews = () => (existsSync(ghCalls) ? readFileSync(ghCalls, 'utf8').trim().split('\n').filter((l) => l.startsWith('pr view')) : [])
+const prViews = () => (existsSync(ghCalls) ? readFileSync(ghCalls, 'utf8').trim().split('\n').filter((l) => l.startsWith('api graphql')) : [])
 
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' })
 git('init', '-q', '-b', 'main', repo)
@@ -257,7 +269,7 @@ try {
   await menuItem('Watch pull request').click()
   check("the branch's watch is on, saved on the server", await until(async () => (await branchData())?.prWatch !== undefined, true), true)
   check('polled at once, with the linked URL', await until(() => prViews().length > 0, true), true)
-  check('every gh pr view named the linked URL and the watch’s fields', [...new Set(prViews())], [`pr view ${PR_URL} --json number,state,mergeable,headRefOid,author,statusCheckRollup,reviews,comments`])
+  check('every poll ran the watch’s query on the linked PR', [...new Set(prViews())], [`api graphql -f query=${PR_QUERY} -f owner=acme -f name=app -F number=12`])
   check('the PR chip says watching', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watching'), 'PR #12 · watching')
   check('the baseline is saved: checks pending, no notice yet', [await until(async () => (await branchData())?.prWatch?.seen?.checks ?? null, 'aaa pending'), (await feature()).prNotice ?? null], ['aaa pending', null])
 

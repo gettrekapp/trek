@@ -4,27 +4,32 @@
 // `attention` topic lists. Nothing starts a session. A watch is the branch's `prWatch` field: it
 // is saved with the project, so it survives a restart, and its `seen` keeps a restart from reporting
 // anything twice. Merged or closed is reported, then the watch turns itself off.
-import type { Project, Repository, Worktree } from '../../../src/shared/model/types'
+import type { PrNotice, Project, Repository, Worktree } from '../../../src/shared/model/types'
 import {
-  PR_VIEW_FIELDS,
   noticeText,
   parsePrView,
+  prQueryArgs,
   promptText,
   watchStep,
   watchableUrl,
   type PrEvent,
+  type PrView,
   type PromptOutcome
 } from '../../../src/shared/prWatch.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { MAX_QUEUE_LENGTH } from '../sessions/limits.ts'
-import { ghSignedIn, type GhRunner } from './gh.ts'
+import { ghSignedIn, isAuthFailure, type GhRunner } from './gh.ts'
 
 /** Between rounds of polls */
 export const PR_POLL_MS = 3 * 60_000
-/** How often a server whose gh is not signed in looks again */
+/** Between sign-in checks (`gh auth status`), signed in or not */
 export const GH_RECHECK_MS = 10 * 60_000
 /** `ready` waits at most this long for the first check: a slow gh never holds up the server's start */
 export const GH_READY_MS = 3000
+/** Failed polls in a row before the worktree gets a "can't be read" notice */
+export const FAILS_BEFORE_NOTICE = 3
+/** A failure's reason in that notice is cut to this many characters */
+const MAX_REASON = 120
 
 /**
  * `TREK_SERVER_PR_POLL_MS` from the server's environment, for the smokes: a whole number of
@@ -42,7 +47,7 @@ export interface ScheduledJob {
 
 export interface PrWatcherDeps {
   projects: ProjectState
-  /** The SessionManager's: queues a prompt (throws when the queue is full), and republishes `attention` */
+  /** The SessionManager's: queues a prompt (throws when the queue is full or the session is gone), and republishes `attention` */
   sessions: {
     enqueue(p: { projectId: string; sessionId: string; text: string }): unknown
     refreshAttention(): void
@@ -57,15 +62,18 @@ export interface PrWatcherDeps {
 }
 
 /** One watched branch, as a round found it. */
-interface Target {
+export interface Target {
   projectId: string
   repoId: string
   branch: string
   url: string
   number: number
+  owner: string
+  repo: string
 }
 
-const keyOf = (t: { projectId: string; repoId: string; branch: string }): string => JSON.stringify([t.projectId, t.repoId, t.branch])
+/** A poll's identity: the URL too, so a PR re-linked mid-poll gets its own (baseline) poll at once. */
+const keyOf = (t: Target): string => JSON.stringify([t.projectId, t.repoId, t.branch, t.url])
 
 /** The worktree that has `branch` checked out (and is still on disk). */
 function worktreeOn(repo: Repository, branch: string): Worktree | undefined {
@@ -80,11 +88,17 @@ export function watchTargets(projects: Iterable<Project>): Target[] {
       for (const [branch, data] of Object.entries(repo.branchData)) {
         if (!data.prWatch || !worktreeOn(repo, branch)) continue
         const pr = watchableUrl(data.pr)
-        if (pr) out.push({ projectId: project.id, repoId: repo.id, branch, url: pr.url, number: pr.number })
+        if (pr) out.push({ projectId: project.id, repoId: repo.id, branch, ...pr })
       }
     }
   }
   return out
+}
+
+/** The first line of a failure, cut short, for a notice. */
+function shortReason(message: string): string {
+  const line = message.split('\n')[0].trim() || 'gh failed'
+  return line.length > MAX_REASON ? `${line.slice(0, MAX_REASON - 1)}…` : line
 }
 
 export class PrWatcher {
@@ -92,13 +106,21 @@ export class PrWatcher {
   private readonly now: () => number
   private readonly schedule: NonNullable<PrWatcherDeps['schedule']>
   private signedIn = false
-  private lastCheck = -Infinity
-  private job: ScheduledJob | undefined
+  /** The sign-in check running now: every caller meanwhile shares it, so one change is told once */
+  private signInCheck: Promise<boolean> | undefined
+  private pollJob: ScheduledJob | undefined
+  private recheckJob: ScheduledJob | undefined
   private stopped = false
-  /** Branches being polled now: a poll asked for meanwhile is skipped */
+  /** Aborted by stop(): kills any gh still running */
+  private readonly abort = new AbortController()
+  /** Polls running now (keyOf): a poll asked for meanwhile is skipped */
   private readonly inFlight = new Set<string>()
-  /** The last failure logged per branch, so a lasting one is logged once */
+  /** The last failure logged per poll key, so a lasting one is logged once */
   private readonly lastError = new Map<string, string>()
+  /** Failed polls in a row per key */
+  private readonly failures = new Map<string, number>()
+  /** The "can't be read" notice raised per key (its `at`), withdrawn by the next good poll */
+  private readonly unreadable = new Map<string, number>()
   /** Settles once the first `gh auth status` has answered, or after GH_READY_MS; never rejects */
   readonly ready: Promise<void>
   private readonly firstCheck: Promise<boolean>
@@ -126,12 +148,17 @@ export class PrWatcher {
   }
 
   start(): void {
-    void this.firstCheck.then(() => this.next())
+    void this.firstCheck.then(() => {
+      this.nextRound()
+      this.nextRecheck()
+    })
   }
 
   stop(): void {
     this.stopped = true
-    this.job?.cancel()
+    this.pollJob?.cancel()
+    this.recheckJob?.cancel()
+    this.abort.abort()
   }
 
   /** A watch was turned on (or its PR changed): poll it now rather than at the next round. */
@@ -152,82 +179,177 @@ export class PrWatcher {
     this.deps.sessions.refreshAttention()
   }
 
-  private async checkSignIn(): Promise<boolean> {
-    this.lastCheck = this.now()
-    const was = this.signedIn
-    this.signedIn = await ghSignedIn(this.deps.gh)
-    if (this.signedIn !== was) {
-      this.deps.onAvailability?.(this.signedIn)
-      console.log(this.signedIn ? '[prWatch] gh is signed in: pull requests can be watched' : '[prWatch] gh is not installed or not signed in: pull requests are not watched')
+  /**
+   * Asks `gh auth status`, and tells onAvailability when the answer changed. It runs at start, every
+   * GH_RECHECK_MS signed in or not (so a sign-out is noticed with nothing watched), and after a poll
+   * fails in a way that looks like gh's sign-in. Callers while one runs share it.
+   */
+  checkSignIn(): Promise<boolean> {
+    if (this.stopped) return Promise.resolve(this.signedIn)
+    this.signInCheck ??= this.askSignIn().finally(() => (this.signInCheck = undefined))
+    return this.signInCheck
+  }
+
+  private async askSignIn(): Promise<boolean> {
+    const now = await ghSignedIn(this.deps.gh, this.abort.signal)
+    if (this.stopped) return this.signedIn
+    if (now !== this.signedIn) {
+      this.signedIn = now
+      this.deps.onAvailability?.(now)
+      console.log(now ? '[prWatch] gh is signed in: pull requests can be watched' : '[prWatch] gh is not installed or not signed in: pull requests are not watched')
     }
-    return this.signedIn
+    return now
   }
 
-  private next(): void {
+  private nextRound(): void {
     if (this.stopped) return
-    this.job = this.schedule(() => this.round(), this.deps.pollMs ?? PR_POLL_MS)
+    this.pollJob = this.schedule(() => this.round(), this.deps.pollMs ?? PR_POLL_MS)
   }
 
-  /** One round: every watched branch, one at a time. */
+  private nextRecheck(): void {
+    if (this.stopped) return
+    this.recheckJob = this.schedule(async () => {
+      try {
+        await this.checkSignIn()
+      } finally {
+        this.nextRecheck()
+      }
+    }, this.deps.recheckMs ?? GH_RECHECK_MS)
+  }
+
+  /** One round: forgets what unwatchable branches saw, then polls every watched branch, one at a time. */
   async round(): Promise<void> {
     try {
-      if (!this.signedIn && this.now() - this.lastCheck >= (this.deps.recheckMs ?? GH_RECHECK_MS)) await this.checkSignIn()
+      this.forgetUnpolled()
       if (!this.signedIn) return
       for (const target of watchTargets(this.deps.projects.all())) {
         if (this.stopped) return
-        await this.poll(target)
+        try {
+          await this.poll(target)
+        } catch (err) {
+          console.warn(`[prWatch] polling ${target.url} failed: ${(err as Error).message}`)
+        }
       }
     } catch (err) {
       console.warn(`[prWatch] a round failed: ${(err as Error).message}`)
     } finally {
-      this.next()
+      this.nextRound()
     }
   }
 
-  /** Asks gh about one PR and applies what changed; a failure is logged (once while it lasts) and the watch stays. */
+  /**
+   * A watched branch with no worktree (removed, or missing from disk) is not polled; its `seen`
+   * is dropped, so when a worktree has it again the next poll is a fresh baseline rather than a
+   * report of everything that happened meanwhile.
+   */
+  private forgetUnpolled(): void {
+    for (const project of this.deps.projects.all()) {
+      const stale = project.repositories.some((r) => Object.entries(r.branchData).some(([b, d]) => d.prWatch?.seen && !worktreeOn(r, b)))
+      if (!stale) continue
+      this.deps.projects.apply(project.id, (d) => {
+        for (const r of d.repositories) {
+          for (const [b, data] of Object.entries(r.branchData)) if (data.prWatch?.seen && !worktreeOn(r, b)) data.prWatch = {}
+        }
+      })
+    }
+  }
+
+  /**
+   * Asks gh about one PR and applies what changed. A failure is logged (once while it lasts), the
+   * watch stays as it was, and the sign-in is re-checked only when the failure looks like gh's
+   * sign-in (a network blip or one unreadable PR leaves the capability alone). FAILS_BEFORE_NOTICE
+   * failures in a row raise a "can't be read" notice on the worktree, once, until a poll succeeds.
+   */
   async poll(target: Target): Promise<void> {
     const key = keyOf(target)
-    if (this.inFlight.has(key)) return
+    if (this.inFlight.has(key) || this.stopped) return
     this.inFlight.add(key)
     try {
-      let stdout: string
+      let view: PrView
       try {
-        stdout = await this.deps.gh(['pr', 'view', target.url, '--json', PR_VIEW_FIELDS])
-      } catch (err) {
-        this.logOnce(key, `gh pr view ${target.url}: ${(err as Error).message}`)
-        // Signed out meanwhile: stop asking until the next check finds it signed in.
-        await this.checkSignIn()
-        return
-      }
-      let view
-      try {
+        const stdout = await this.deps.gh(prQueryArgs(target), this.abort.signal)
+        if (this.stopped) return
         view = parsePrView(JSON.parse(stdout))
       } catch (err) {
-        this.logOnce(key, `gh pr view ${target.url}: ${(err as Error).message}`)
+        if (this.stopped) return
+        const message = (err as Error).message
+        this.failed(target, key, message)
+        if (isAuthFailure(message)) await this.checkSignIn()
         return
       }
       this.lastError.delete(key)
-      if (this.stopped) return
-      this.apply(target, view)
+      this.failures.delete(key)
+      this.apply(target, key, view)
     } finally {
       this.inFlight.delete(key)
     }
   }
 
-  private logOnce(key: string, message: string): void {
-    if (this.lastError.get(key) === message) return
-    this.lastError.set(key, message)
-    console.warn(`[prWatch] ${message}`)
+  private failed(target: Target, key: string, message: string): void {
+    if (this.lastError.get(key) !== message) {
+      this.lastError.set(key, message)
+      console.warn(`[prWatch] reading ${target.url}: ${message}`)
+    }
+    const count = (this.failures.get(key) ?? 0) + 1
+    this.failures.set(key, count)
+    if (count !== FAILS_BEFORE_NOTICE) return
+    const worktree = this.worktreeOf(target)
+    if (!worktree) return
+    const notice: PrNotice = { title: `PR #${target.number}`, text: `Can’t be read: ${shortReason(message)}`, url: target.url, at: this.now() }
+    if (this.setNotice(target, worktree.id, notice)) this.unreadable.set(key, notice.at)
   }
 
-  /** Re-reads the branch after the await: a watch turned off, or a PR changed, meanwhile is left alone. */
-  private apply(target: Target, view: ReturnType<typeof parsePrView>): void {
+  private worktreeOf(target: Target): Worktree | undefined {
+    try {
+      const repo = this.deps.projects.require(target.projectId).repositories.find((r) => r.id === target.repoId)
+      return repo && worktreeOn(repo, target.branch)
+    } catch {
+      return undefined // the project is gone
+    }
+  }
+
+  /** Sets (or, with undefined, clears) a worktree's notice and republishes `attention`; false if the project is gone. */
+  private setNotice(target: Target, worktreeId: string, notice: PrNotice | undefined, only?: (current: PrNotice | undefined) => boolean): boolean {
+    try {
+      this.deps.projects.apply(
+        target.projectId,
+        (d) => {
+          for (const r of d.repositories) {
+            for (const w of r.worktrees) {
+              if (w.id !== worktreeId || (only && !only(w.prNotice))) continue
+              if (notice) w.prNotice = notice
+              else delete w.prNotice
+            }
+          }
+        },
+        { persist: false }
+      )
+    } catch {
+      return false
+    }
+    this.deps.sessions.refreshAttention()
+    return true
+  }
+
+  /**
+   * Re-reads the branch after the await: a watch turned off, a PR changed, or the worktree gone
+   * meanwhile is left alone (its `seen` does not move, so nothing is lost; the next round's
+   * forgetUnpolled drops it if the worktree stays gone).
+   */
+  private apply(target: Target, key: string, view: PrView): void {
+    const unreadableAt = this.unreadable.get(key)
+    if (unreadableAt !== undefined) {
+      this.unreadable.delete(key)
+      const worktree = this.worktreeOf(target)
+      // Readable again: the "can't be read" notice goes, unless something replaced it.
+      if (worktree) this.setNotice(target, worktree.id, undefined, (n) => n?.at === unreadableAt && n.url === target.url)
+    }
     let events: PrEvent[] = []
     try {
       events = this.deps.projects.apply(target.projectId, (d) => {
         const repo = d.repositories.find((r) => r.id === target.repoId)
         const data = repo && Object.hasOwn(repo.branchData, target.branch) ? repo.branchData[target.branch] : undefined
-        if (!repo || !data?.prWatch || data.pr !== target.url) return []
+        if (!repo || !data?.prWatch || data.pr !== target.url || !worktreeOn(repo, target.branch)) return []
         const step = watchStep(data.prWatch.seen, view)
         if (step.stop) delete data.prWatch
         else data.prWatch = { seen: step.seen }
@@ -239,39 +361,32 @@ export class PrWatcher {
     if (events.length > 0) this.report(target, events)
   }
 
-  /** Queues the prompt on the worktree's newest session, if any, and sets the worktree's notice. */
+  /**
+   * Queues the prompt on the worktree's newest session, and sets the worktree's notice. The newest
+   * session's full queue is reported as such (the prompt is not moved to another session); a
+   * session that refuses it otherwise (closed meanwhile) passes it to the next newest. With none
+   * left, the notice alone reports it.
+   */
   private report(target: Target, events: PrEvent[]): void {
-    const project = this.deps.projects.require(target.projectId)
-    const repo = project.repositories.find((r) => r.id === target.repoId)
-    const worktree = repo && worktreeOn(repo, target.branch)
+    // apply() ran in this same tick and found the worktree; this guard only covers a future await.
+    const worktree = this.worktreeOf(target)
     if (!worktree) return
-    // Sessions are kept in the order they were started; every v2 session runs an agent.
-    const session = worktree.sessions.at(-1)
+    const text = promptText(target.url, target.number, events)
     let outcome: PromptOutcome = 'noSession'
-    if (session) {
-      if (session.queue.length >= MAX_QUEUE_LENGTH) outcome = 'queueFull'
-      else {
-        try {
-          this.deps.sessions.enqueue({ projectId: target.projectId, sessionId: session.id, text: promptText(target.url, target.number, events) })
-          outcome = { queuedFor: session.title }
-        } catch (err) {
-          console.warn(`[prWatch] could not queue the prompt for ${target.url}: ${(err as Error).message}`)
-          outcome = 'queueFull'
-        }
+    // Sessions are kept in the order they were started; every v2 session runs an agent.
+    for (const session of [...worktree.sessions].reverse()) {
+      if (session.queue.length >= MAX_QUEUE_LENGTH) {
+        outcome = 'queueFull'
+        break
+      }
+      try {
+        this.deps.sessions.enqueue({ projectId: target.projectId, sessionId: session.id, text })
+        outcome = { queuedFor: session.title }
+        break
+      } catch (err) {
+        console.warn(`[prWatch] could not queue the prompt for ${target.url} on ${session.title}: ${(err as Error).message}`)
       }
     }
-    const notice = { title: `PR #${target.number}`, text: noticeText(events, outcome), url: target.url, at: this.now() }
-    try {
-      this.deps.projects.apply(
-        target.projectId,
-        (d) => {
-          for (const r of d.repositories) for (const w of r.worktrees) if (w.id === worktree.id) w.prNotice = notice
-        },
-        { persist: false }
-      )
-    } catch {
-      return
-    }
-    this.deps.sessions.refreshAttention()
+    this.setNotice(target, worktree.id, { title: `PR #${target.number}`, text: noticeText(events, outcome), url: target.url, at: this.now() })
   }
 }

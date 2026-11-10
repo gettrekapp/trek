@@ -75,8 +75,10 @@ export interface PrSeen {
   checks: string
   /** GitHub last said the PR conflicts with its base (UNKNOWN keeps the previous answer) */
   conflict: boolean
-  /** ISO time of the newest review or comment by someone other than the PR's author */
+  /** ISO time of the newest review or comment by someone other than the PR's author or gh's signed-in user */
   commentsAt?: string
+  /** How many of those were at `commentsAt` (times are to the second), so one more in the same second still counts */
+  commentsAtCount?: number
 }
 
 /** What a watched pull request last reported (5c-1). Runtime only, like a session's status. */

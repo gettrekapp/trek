@@ -4,48 +4,77 @@
 import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 
-/** Runs `gh <args>`, resolving with its stdout; rejects on a non-zero exit, a timeout or no gh. */
-export type GhRunner = (args: string[]) => Promise<string>
+/**
+ * Runs `gh <args>`, resolving with its stdout; rejects on a non-zero exit, a timeout, no gh, or
+ * `signal` aborting (the server stopping), which kills the child.
+ */
+export type GhRunner = (args: string[], signal?: AbortSignal) => Promise<string>
 
 const GH_TIMEOUT_MS = 30_000
-/** A PR's reviews and comments can be long; past this the call fails rather than buffer more */
-const GH_MAX_OUTPUT = 8 * 1024 * 1024
+/** A poll's answer is a few kilobytes (PR_QUERY asks for no bodies); past this the call fails */
+const GH_MAX_OUTPUT = 1024 * 1024
 
 /**
- * The gh executable: `TREK_SERVER_GH` from the server's environment when it is an absolute path
- * (the smokes point it at a stub, so no smoke runs the real gh), else `gh` on the PATH.
+ * The gh executable: `gh` on the PATH when `TREK_SERVER_GH` is unset, the variable itself when it
+ * is an absolute path (the smokes point it at a stub, so no smoke runs the real gh), and null for
+ * any other value: a test that meant a stub must never reach the real gh by a typo.
  */
-export function ghBinary(value: string | undefined): string {
-  return value !== undefined && isAbsolute(value) ? value : 'gh'
+export function ghBinary(value: string | undefined): string | null {
+  if (value === undefined) return 'gh'
+  return isAbsolute(value) ? value : null
 }
 
-/** A runner for `binary`. */
-export const ghRunner = (binary: string): GhRunner => (args) =>
-  new Promise((resolve, reject) => {
-    execFile(
-      binary,
-      args,
-      {
-        timeout: GH_TIMEOUT_MS,
-        maxBuffer: GH_MAX_OUTPUT,
-        // Never a prompt, a pager or an update check: the server has no terminal for them.
-        env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          const detail = String(stderr).trim().split('\n')[0] || err.message
-          reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? 'gh is not installed on the server' : detail))
-          return
-        }
-        resolve(String(stdout))
-      }
-    )
-  })
+const NO_GH = 'gh is not installed on the server'
 
-/** `gh auth status` succeeds: gh is installed and signed in to github.com. */
-export async function ghSignedIn(run: GhRunner): Promise<boolean> {
+/** A runner for `binary`; for null, one that always fails as though gh were not installed. */
+export const ghRunner = (binary: string | null): GhRunner => {
+  if (binary === null) return () => Promise.reject(new Error(`${NO_GH} (TREK_SERVER_GH is not an absolute path)`))
+  return (args, signal) =>
+    new Promise((resolve, reject) => {
+      execFile(
+        binary,
+        args,
+        {
+          timeout: GH_TIMEOUT_MS,
+          maxBuffer: GH_MAX_OUTPUT,
+          signal,
+          // Never a prompt, a pager or an update check: the server has no terminal for them.
+          env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
+        },
+        (err, stdout, stderr) => {
+          if (err) {
+            const detail = String(stderr).trim().split('\n')[0] || err.message
+            reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? NO_GH : detail))
+            return
+          }
+          resolve(String(stdout))
+        }
+      )
+    })
+}
+
+/** The runner for `TREK_SERVER_GH`; a value that is not an absolute path is logged and fails closed. */
+export function ghFromEnv(value: string | undefined): GhRunner {
+  const binary = ghBinary(value)
+  if (binary === null) console.warn(`[prWatch] TREK_SERVER_GH (${JSON.stringify(value)}) is not an absolute path: gh is treated as not installed`)
+  return ghRunner(binary)
+}
+
+/**
+ * A failed gh call that says gh's sign-in is the problem (rather than the network, GitHub, or
+ * this one PR): only then does a failed poll re-check the sign-in.
+ */
+export function isAuthFailure(message: string): boolean {
+  return /\b401\b|bad credentials|not logged in|logged into any|gh auth login|authenticat/i.test(message)
+}
+
+/**
+ * `gh auth status --hostname github.com` succeeds: gh is installed and signed in to github.com.
+ * Not `--active`: gh before 2.40 rejects the flag, which would read as signed out.
+ */
+export async function ghSignedIn(run: GhRunner, signal?: AbortSignal): Promise<boolean> {
   try {
-    await run(['auth', 'status', '--hostname', 'github.com'])
+    await run(['auth', 'status', '--hostname', 'github.com'], signal)
     return true
   } catch {
     return false
