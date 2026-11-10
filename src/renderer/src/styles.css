@@ -1971,6 +1971,8 @@ button:disabled {
   line-height: 16px;
   cursor: pointer;
   opacity: 0;
+  /* Copying diff lines never picks up a "+" */
+  user-select: none;
 }
 
 .changes-line:hover .review-add,
@@ -2124,8 +2126,15 @@ button:disabled {
   cursor: pointer;
 }
 
-.review-send-target:hover {
+.review-send-target:hover,
+.review-send-target:focus-visible {
   background: var(--surface);
+}
+
+.review-send-detail {
+  margin-left: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .review-elsewhere .review-comment {

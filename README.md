@@ -412,7 +412,8 @@ one at a time:
   so none runs the real one);
 - `npm run smoke:server-review`: a remote server window's Changes tab review: the
   source picker, line comments (one from another client, live; one outdated), an
-  agent reading them with `get_review_comments`, Send to session and Discard;
+  agent reading them with `get_review_comments`, edit and send conflicts, Send to
+  session and Discard;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

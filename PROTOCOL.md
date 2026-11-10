@@ -578,7 +578,7 @@ stays when the draft is sent, discarded or emptied, so a client holding an old r
 | `review.edit` | `{projectId, worktreeId, commentId, body, expected?}` | `null`. `expected`: the body the edit started from (`CONFLICT` if it changed); the same limits as `review.add` |
 | `review.remove` | `{projectId, worktreeId, commentId}` | `null` (`NOT_FOUND` for an unknown comment) |
 | `review.clear` | `{projectId, worktreeId, revision}` | `null`: the draft is discarded. `revision`: the draft the client showed (`CONFLICT` if it changed) |
-| `review.send` | `{projectId, worktreeId, sessionId, revision}` | `null`: the draft is queued on `sessionId`, one of the worktree's sessions (`NOT_FOUND` otherwise), as one prompt, and cleared, in one change to the project (one patch). `revision`: the draft the client showed (`CONFLICT` if it changed, so nothing unseen is sent). `BAD_REQUEST` when the draft is empty or the session's queue is full (100 prompts); then nothing changes |
+| `review.send` | `{projectId, worktreeId, sessionId, revision}` | `null`: the draft is queued on `sessionId`, one of the worktree's sessions (`NOT_FOUND` otherwise; a dormant session of an unloaded worktree is accepted too, though the app offers only a loaded worktree's open agent sessions), as one prompt, and cleared, in one change to the project (one patch). `revision`: the draft the client showed (`CONFLICT` if it changed, so nothing unseen is sent). `BAD_REQUEST` when the draft is empty or the session's queue is full (100 prompts); then nothing changes |
 
 The prompt lists every comment, grouped by the diff it was written on (`## Uncommitted changes`,
 `## The branch against its base`, `## Commit <sha7>`), then by file and line, each as `<path>, line

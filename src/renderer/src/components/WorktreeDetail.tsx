@@ -134,12 +134,16 @@ export function WorktreeDetail({
   // The stack runs on the server's machine (`features.stacks`, any server that has `stacks`).
   const [stack, refreshStack] = useStackStatus(path, !features.stacks)
   // What the Changes tab compares (5c-2): a server without `review` is asked without a source.
-  const [changesSource, setChangesSource] = useState<ChangesSource>(BRANCH_SOURCE)
+  // Held with the worktree it was picked on, so a new selection never asks for the old source
+  // with the new path (the reset below lands a render later).
+  const [changesPick, setChangesPick] = useState<{ path: string | undefined; source: ChangesSource }>({ path, source: BRANCH_SOURCE })
+  const changesSource = changesPick.path === path ? changesPick.source : BRANCH_SOURCE
+  const setChangesSource = useCallback((source: ChangesSource) => setChangesPick({ path, source }), [path])
   const changesState = useWorktreeChanges(path, offline, panel === 'changes', features.review ? changesSource : undefined)
   useEffect(() => {
     // Selection changed: back to the sessions view, drop transient UI state.
     setPanel('sessions')
-    setChangesSource(BRANCH_SOURCE)
+    setChangesPick({ path, source: BRANCH_SOURCE })
     setMenuOpen(false)
     setTagMenuOpen(false)
     setCustomTagMenuOpen(false)
@@ -207,9 +211,14 @@ export function WorktreeDetail({
   // The server watches it (5c-1); its last report stays on the chip until dismissed.
   const watchingPr = !!pullRequest && !!info.branch && !!repo.branchPrWatches?.[info.branch]
   const prNotice = repo.worktreePrNotices?.[info.path]
-  // Where the Changes tab's review can go (5c-2): the worktree's open sessions, newest first.
+  // Where the Changes tab's review can go (5c-2): the worktree's open agent sessions (not one that
+  // exited), newest first, each with its agent and status to tell same-titled ones apart.
   const reviewTargets: ReviewTarget[] = loaded
-    ? [...order].reverse().flatMap((id) => (terminals[id] ? [{ terminalId: id, title: terminals[id].title }] : []))
+    ? [...order].reverse().flatMap((id) => {
+        const t = terminals[id]
+        if (!t || t.status === 'exited') return []
+        return [{ terminalId: id, title: t.title, detail: `${describeLlm(t.llm ?? { provider: 'claude' })} · ${t.status}` }]
+      })
     : []
   const linearIssue = ticket ? linearIssues[ticket] : undefined
   const linkedTicketUrl = ticket ? ticketUrl(project, ticket, linearIssue) : null
