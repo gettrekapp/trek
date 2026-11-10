@@ -3,7 +3,7 @@
 An Electron + React + TypeScript app for running Claude Code, or Codex, Gemini, Grok and
 local models, across multiple git worktrees of a repository, side by side.
 
-<img width="1206" height="765" alt="Screenshot 2026-07-22 at 2 48 07 PM" src="https://github.com/user-attachments/assets/16ea55ed-6a88-4f7d-bc72-9ee9fa21fce9" />
+<img width="1206" alt="Trek Dev's project explorer in dark mode" src="docs/project-explorer-dark.png" />
 
 ## Concepts
 
