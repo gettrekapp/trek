@@ -111,7 +111,7 @@ async function toolSetup(t, opts = {}) {
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
     'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack',
-    'list_session_types', 'list_worktrees', 'load_worktree', 'read_stack_log', 'read_terminal', 'remove_queued_prompt',
+    'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt',
     'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'speak_summary', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'

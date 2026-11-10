@@ -20,6 +20,7 @@ import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
 import { describeWorktree, resolveWorktree } from './describe.ts'
+import type { PromoteRequests } from '../promote/requests.ts'
 import type { ToolDefinition } from './protocol.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import type { VoiceService } from '../../../src/host/voiceService.ts'
@@ -376,11 +377,21 @@ export const MCP_TOOLS: ToolDefinition[] = [
       },
       required: ['worktree']
     }
+  },
+  {
+    name: 'promote_to_primary',
+    description:
+      "Ask the user to promote a worktree to the primary checkout: its branch is checked out in the repository's main checkout (which must have no uncommitted changes), its own uncommitted work is carried there, and the worktree is removed. Its Claude and local-model sessions move to the main checkout and resume; others are closed. Every Trek window with this project open shows a confirmation; the call waits (up to 15 minutes) for the user's answer and fails if they decline, if the promote fails, or if no window has the project open. Returns the main checkout in the same shape as a list_worktrees entry. Pass your $TREK_TERMINAL_ID as terminalId so the dialog can say who asked.",
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID (optional)' } },
+      required: ['worktree']
+    }
   }
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   store: ConfigStore
@@ -394,6 +405,8 @@ export interface ToolDeps {
   machine?: Machine
   /** The pull request watch, for watch_pull_request; without it the tool says the server does not watch PRs */
   prWatch?: PrWatcher
+  /** promote_to_primary's confirmations (5e); without it the tool says no window can confirm */
+  promoteRequests?: PromoteRequests
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -851,6 +864,38 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const watch = args.watch !== false
         await v2('branch.setPrWatch', { repoId: repo.id, branch, watch })
         return { branch, pullRequest: branchData(repo, branch).pr ?? null, watching: watch }
+      },
+
+      // 5e: a window confirms and runs the promote; this waits for its answer.
+      promote_to_primary: async (args, project, signal) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        if (worktree.isMain) throw bad('That worktree is already the primary checkout')
+        if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD); it can't be promoted`)
+        let from: string | undefined
+        if (typeof args.terminalId === 'string' && args.terminalId) {
+          try {
+            from = sessionIn(args.terminalId, project).session.title
+          } catch {
+            // an unknown terminal only loses the dialog's "asked by"
+          }
+        }
+        const nobody = 'No Trek window has this project open to confirm the promote, so nothing was changed. Ask the user to open the project, or to promote it themselves.'
+        if (!deps.promoteRequests) throw codedError('BAD_REQUEST', nobody)
+        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch: worktree.branch, ...(from ? { from } : {}) }, signal)
+        switch (answer.outcome) {
+          case 'promoted':
+            return { promoted: true, primary: describeById(answer.worktreeId) }
+          case 'declined':
+            throw bad('The user declined the promote; nothing was changed. Do not ask again unless they say so.')
+          case 'failed':
+            throw codedError('GIT_ERROR', `The promote failed and nothing was changed: ${answer.error}`)
+          case 'no-window':
+            throw bad(nobody)
+          case 'timeout':
+            throw bad('The user did not answer within 15 minutes; nothing was changed.')
+          case 'cancelled':
+            throw disconnected()
+        }
       },
 
       list_session_types: (_args, project) => (project.settings.sessionTypes ?? []).map(withoutIcon),
