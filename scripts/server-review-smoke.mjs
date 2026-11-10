@@ -283,7 +283,7 @@ try {
   const saved = (await draft()).comments[0]
   check('with its source, file, side, line and line text', { source: saved.source, path: saved.path, side: saved.side, line: saved.line, lineText: saved.lineText, body: saved.body }, { source: { kind: 'commit', sha: newestSha }, path: 'a.txt', side: 'new', line: 2, lineText: 'TWO', body: 'Why shout?' })
   check('it shows under its line', await until(() => fileBox('a.txt').locator('.review-comment .review-comment-body').allTextContents(), ['Why shout?']), ['Why shout?'])
-  check('⌘/Ctrl+Enter saved it: the editor closed, focus back on its line', [await panel.locator('.review-editor').count(), await until(focusedLine, 'new 2')], [0, 'new 2'])
+  check('⌘/Ctrl+Enter saved it: the editor closed, focus back on its line', [await until(() => panel.locator('.review-editor').count(), 0), await until(focusedLine, 'new 2')], [0, 'new 2'])
   check('the bar counts it', await until(() => panel.locator('.review-count').textContent(), 'Review · 1 comment'), 'Review · 1 comment')
   const sendButton = panel.locator('.review-send')
   check('with the worktree unloaded and no session, Send is disabled and says why', [await sendButton.isDisabled(), await sendButton.getAttribute('title')], [true, 'Load the worktree to send the review to one of its sessions'])
