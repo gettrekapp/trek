@@ -231,7 +231,9 @@ other window on that project sees them live.
   the uncommitted work goes along as a patch (all of it unstaged), Claude sessions'
   histories are copied so they resume there, and the note, tags, ticket, pull request,
   its watch and the branch's Docker .env come too. Other agents' sessions, queued prompts and the review draft
-  do not. The old worktree is removed last, and only if nothing changed in it while it
+  do not. Its Docker VM and dev stack, if it has them, are torn down on the old server
+  once the new worktree is in place (a ticked-by-default checkbox; unticked, the move
+  waits until they are stopped). The old worktree is removed last, and only if nothing changed in it while it
   was copied; a failure before that leaves it as it was. The web client never offers
   it (it has one server).
 - **This machine's features, in Local windows only**: a window on the [Local

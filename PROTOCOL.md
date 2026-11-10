@@ -717,7 +717,12 @@ The client's order, and what each step leaves behind when it fails:
    on the target, and the source is loaded again.
 6. `move.receive` on the target, with the `transferId`: builds the worktree, or undoes everything it
    did and fails. Either way it takes the transfer and removes its staged files.
-7. `move.finish` on the source: removes its copy, only if it is unchanged since step 3. On
+7. Only when the client tears the source's Docker VM or dev stack down (the user ticked it): `move.finish`
+   `{verifyOnly: true}` on the source (the same checks, nothing removed; on `CONFLICT` or `IN_USE`
+   as below), then `env.destroy` and `stack.destroy` on the source. This is the point of
+   commitment: they are never torn down before the target has the worktree and the source is
+   checked unchanged, and they need the worktree's folder, so they come before step 8.
+8. `move.finish` on the source: removes its copy, only if it is unchanged since step 3. On
    `CONFLICT` or `IN_USE` the client removes the target's copy again (`worktree.remove` `{force:
    true}`; the branch it created there stays) and loads the source again.
 
@@ -726,7 +731,7 @@ The client's order, and what each step leaves behind when it fails:
 | `move.prepare` | `{projectId, worktreeId}` | `{branch, origin, repoName, dirty, loaded, sessions, reviewComments, queuedPrompts, prWatch}`. `origin`: `git remote get-url origin` of its repository, or `null`. `sessions`: each `{title, provider, carried, reason?}`. `BAD_REQUEST` for a main checkout or a detached HEAD |
 | `move.export` | `{projectId, worktreeId}` | `{branch, head, patch, sessions, notCarried, branchData, fingerprint}`. `patch`: `git diff --cached --binary HEAD` of every change, untracked files included and ignored ones not, built in a throwaway copy of the index (`GIT_INDEX_FILE`), so the worktree's own index is never touched; the repository's `linkedDirs` are left out (the target links them itself); `''` when clean; at most 8 MiB, and valid UTF-8 (a text file in another encoding would not survive the frame), else `BAD_REQUEST`. `sessions`: the carried ones, each `{title, llm, agentSessionId, historyBytes, historySha256, sessionTypeName?, systemPrompt?, complete?}` (the history's bytes travel by `move.history`). `notCarried`: one line per session left behind. `branchData`: `{note?, tag?, customTags?, ticket?, pr?, prWatch?, env?}`, the tags by name, `env` the branch's Docker `.env` text (a client leaves it out for a target without `env`). `fingerprint`: a hash of `head` and `patch`. `IN_USE` while loaded |
 | `move.history` | `{projectId, worktreeId, agentSessionId, offset}` | `{data, offset, total, done}`: base64 of at most 4 MiB of the session's history from byte `offset`; `done` once `offset` plus the chunk reaches `total`. Only a carried session (a Claude one with a saved history of at most 64 MiB) of an unloaded worktree (`IN_USE`; `NOT_FOUND` for another session; `BAD_REQUEST` for an offset past the end) |
-| `move.finish` | `{projectId, worktreeId, fingerprint}` | `null`: the worktree is removed (`git worktree remove --force`, then from the project, with its sessions and its review draft), and the branch's PR watch ends. `CONFLICT` if its HEAD or uncommitted work changed since `move.export` (`fingerprint`), `IN_USE` if it was loaded again; then nothing changes |
+| `move.finish` | `{projectId, worktreeId, fingerprint, verifyOnly?}` | `null`: with `verifyOnly`, only the checks below, nothing removed; else the worktree is removed (`git worktree remove --force`, then from the project, with its sessions and its review draft), and the branch's PR watch ends. `CONFLICT` if its HEAD or uncommitted work changed since `move.export` (`fingerprint`), `IN_USE` if it was loaded again; then nothing changes |
 | `move.candidates` | `{origin, branch}` | `[{projectId, projectName, repoId, repoName, path, blocked?}]`: each project's registered repository whose origin names the same repository (ssh, https and `file://` forms compare equal: `normalizeOrigin` in `src/shared/move.ts`), with the default worktree path (`<repo>-<branch>`), and `blocked` when the branch is checked out there already, the path exists, or the path is outside what the server may use |
 | `move.begin` | `{projectId, repoId}` | `{transferId}`: a staged upload for one move into this repository: a 0700 temp directory on the target. At most 4 at once (`CAPACITY`); one nobody has written to for 10 minutes is removed (swept by every later `move.begin`, `move.upload` and `move.receive`) |
 | `move.upload` | `{transferId, agentSessionId, offset, data}` | `{size}`: appends `data` (base64, 1 byte to 4 MiB) to that session's staged history. `offset` must be what is staged for it so far (else `CONFLICT`), so chunks go one at a time, in order. At most 64 MiB a session, 50 sessions and 512 MiB a transfer (`BAD_REQUEST`); `NOT_FOUND` for a finished, aborted or swept transfer |
@@ -753,8 +758,10 @@ two alike), each history 1 byte to 64 MiB, an 8 MiB patch, the project's 500 ses
 What moves: the commits (through origin), the uncommitted work (unstaged), Claude sessions that
 have a saved history of at most 64 MiB (copied, not moved: the source's file stays), the note, the workflow and custom
 tags (by name), the ticket, the pull request link and its watch, the branch's Docker `.env` text. What does not: other agents'
-sessions (closed with the source), queued prompts, the review draft, a Docker environment or dev
-stack running for it on the source's machine, and the staged/unstaged split.
+sessions (closed with the source), queued prompts, the review draft, and the staged/unstaged
+split. A Docker environment (VM) or dev stack for it on the source's machine is not moved: the app
+tears it down (step 7) when the user leaves "Tear down its VM and stack" ticked, and refuses to
+move while one runs when they untick it (a stopped one then stays behind).
 
 ## Sessions
 

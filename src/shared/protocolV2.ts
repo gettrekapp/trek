@@ -471,7 +471,7 @@ export interface MethodParamsV2 {
   /** Target: drops a transfer; an unknown one is fine */
   'move.abort': { transferId: string }
   /** Source: removes the worktree if it is unchanged since `move.export` (its `fingerprint`); else CONFLICT */
-  'move.finish': WorktreeRef & { fingerprint: string }
+  'move.finish': WorktreeRef & { fingerprint: string; verifyOnly?: boolean }
   /** Target: where a branch of a repository with this origin can go, in every project */
   'move.candidates': { origin: string; branch: string }
   /** Target: builds the worktree from origin and the export, or undoes all of it */

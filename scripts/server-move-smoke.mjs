@@ -9,6 +9,8 @@
 // own clone. The built app runs with a temp HOME and --user-data-dir, no Local server, main's
 // dialogs stubbed, both servers saved; A's project window moves the worktree. It checks:
 //   - both welcomes list move; the window offers Move to another server… (B is saved);
+//   - the dialog offers to tear down the worktree's running dev stack (ticked); unticked, Move is
+//     refused; the stack is destroyed on A only after B has the worktree, A's folder still there;
 //   - the dialog lists B's project (same origin), the new path, the session that moves and the
 //     queued prompt that doesn't; a branch already checked out on B is a blocked place;
 //   - the move: the steps all done (a Claude history over 16 MiB copied in chunks, byte for byte,
@@ -65,6 +67,16 @@ for (const dir of [appHome, userData]) mkdirSync(dir, { recursive: true })
 const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', '-c', 'init.defaultBranch=main', ...args], { encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' } })
 const claudeDir = (home, cwd) => join(home, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
 
+// docker and colima stubs first on both servers' PATH (no real docker or colima ever runs): docker
+// ps lists one container while the file `stack-running` exists, so the dev stack reads as running.
+const machineStubs = join(work, 'machine-stubs')
+const machineCalls = join(work, 'machine-calls.log')
+const stackRunning = join(work, 'stack-running')
+mkdirSync(machineStubs)
+writeFileSync(join(machineStubs, 'docker'), `#!/bin/sh\necho "docker $*" >> '${machineCalls}'\nif [ "$1" = ps ] && [ -e '${stackRunning}' ]; then echo c0ffee; fi\nexit 0\n`, { mode: 0o755 })
+writeFileSync(join(machineStubs, 'colima'), `#!/bin/sh\necho "colima $*" >> '${machineCalls}'\nexit 0\n`, { mode: 0o755 })
+const stackCalls = join(work, 'stack-calls.log')
+
 const origin = join(work, 'origin.git')
 git('init', '-q', '--bare', origin)
 const fakeAgent = join(work, 'fake-agent.sh')
@@ -86,6 +98,10 @@ const A = serverFiles('a')
 const B = serverFiles('b')
 git('init', '-q', '-b', 'main', A.repo)
 writeFileSync(join(A.repo, 'README'), 'one\n')
+// A dev stack: stack.sh records each call and the folder it ran in.
+writeFileSync(join(A.repo, '.gitignore'), '.trek/\n')
+mkdirSync(join(A.repo, 'docker', 'stack'), { recursive: true })
+writeFileSync(join(A.repo, 'docker', 'stack', 'stack.sh'), `#!/bin/sh\necho "$1|$(pwd -P)|$( [ -f .git ] && echo present )|$( [ -d '${B.repo}-feature-x' ] && echo on-b )" >> '${stackCalls}'\nexit 0\n`, { mode: 0o755 })
 git('-C', A.repo, 'add', '.')
 git('-C', A.repo, 'commit', '-q', '-m', 'init')
 git('-C', A.repo, 'remote', 'add', 'origin', origin)
@@ -163,7 +179,7 @@ async function start(s) {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', s.configPath, '--port', String(port), '--data-dir', s.data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: s.home, XDG_STATE_HOME: join(s.home, '.local', 'state'), SHELL: '/bin/sh', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}`, HOME: s.home, XDG_STATE_HOME: join(s.home, '.local', 'state'), SHELL: '/bin/sh', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemons.push(d)
@@ -214,6 +230,9 @@ try {
   git('-C', sourcePath, 'add', '.')
   git('-C', sourcePath, 'commit', '-q', '-m', 'feature')
   const head = git('-C', sourcePath, 'rev-parse', 'HEAD').trim()
+  // The stack has run here (.trek/stack, ignored) and is running (docker ps lists a container).
+  mkdirSync(join(sourcePath, '.trek', 'stack'), { recursive: true })
+  writeFileSync(stackRunning, '')
   writeFileSync(join(sourcePath, 'README'), 'one\nedited\n')
   writeFileSync(join(sourcePath, 'staged.txt'), 'staged\n')
   git('-C', sourcePath, 'add', 'staged.txt')
@@ -291,7 +310,14 @@ try {
     lines.some((l) => l.includes('1 queued prompt(s) are not moved')),
     lines.some((l) => l.includes('running sessions are stopped first'))
   ], [true, true, true])
+  const teardownBox = modal.locator('.move-teardown input')
+  await teardownBox.waitFor({ timeout: 10_000 })
+  check('the dialog offers to tear down its running dev stack, ticked', [await teardownBox.isChecked(), (await modal.locator('.move-teardown').textContent()).includes('dev stack “trek-')], [true, true])
   await modal.locator('.move-row select').first().selectOption({ label: 'Server B' })
+  await modal.locator('.move-path').waitFor({ timeout: 10_000 })
+  await teardownBox.uncheck()
+  check('unticked while the stack runs, the move is refused', [await modal.locator('button', { hasText: 'Move worktree' }).isDisabled(), (await modal.locator('.move-summary').textContent()).includes('It is running: stop it first')], [true, true])
+  await teardownBox.check()
   check('B\'s project is offered, with the new path', await until(() => modal.locator('.move-path').textContent().catch(() => null), `New worktree: ${targetPath}`), `New worktree: ${targetPath}`)
   check('the place is On B — app', (await modal.locator('.move-row select').nth(1).locator('option:checked').textContent()).trim(), 'On B — app')
 
@@ -299,7 +325,8 @@ try {
 
   await modal.locator('button', { hasText: 'Move worktree' }).click()
   check('the move reports success', await until(() => modal.locator('.server-test-result.ok').count(), 1, 60_000), 1)
-  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done'])
+  check('every step done (unload too: the session was running)', await modal.locator('.move-step').evaluateAll((els) => els.map((e) => e.className.replace('move-step ', ''))), ['done', 'done', 'done', 'done', 'done', 'done', 'done'])
+  check("the dev stack was destroyed on A after B had it, while A's folder was still there", readFileSync(stackCalls, 'utf8').split('\n').filter((l) => l.startsWith('destroy')), [`destroy|${sourcePath}|present|on-b`])
   check('the history step copied the whole 17 MB', (await modal.locator('.move-step.done', { hasText: 'Copy the session histories' }).locator('.move-step-detail').textContent()).includes('1 session history, 17.0 MB'), true)
   check('origin has the branch at the source commit', git('--git-dir', origin, 'rev-parse', 'refs/heads/feature-x').trim(), head)
   check('B has the worktree on the same commit', existsSync(targetPath) && git('-C', targetPath, 'rev-parse', 'HEAD').trim(), head)
@@ -326,6 +353,7 @@ try {
 
   const held = await Promise.all(app.windows().map((w) => w.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))))
   check("no window's store or page holds either server's token", held.some((h) => h.includes(A.token) || h.includes(B.token)), false)
+  check('docker ran only as the stub, for the stack status (never colima up or delete)', readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean).every((l) => l.startsWith('docker ps') || l.startsWith('colima list')), true)
   check('no error dialogs', (await app.evaluate(() => globalThis.__dialogs)).filter((d) => d.type === 'error'), [])
   check('no console or page errors', pageErrors, [])
   exitCode = failedChecks.length ? 1 : 0

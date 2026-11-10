@@ -3327,6 +3327,10 @@ button:disabled {
   gap: 4px;
 }
 
+.move-teardown {
+  cursor: pointer;
+}
+
 .move-summary .warn {
   color: #f9e2af;
 }

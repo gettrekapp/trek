@@ -158,3 +158,35 @@ test('a move with no carried session copies nothing and sends no transfer', asyn
   assert.deepEqual(target.methods(), ['move.receive'])
   assert.equal(target.calls[0][1].transferId, undefined)
 })
+
+test('the teardown runs only after the target has it and the source checks unchanged, before the source goes', async () => {
+  const order = []
+  const source = src({ 'move.finish': (p) => { order.push(p.verifyOnly ? 'verify' : 'finish'); return null } })
+  const target = tgt({ 'move.receive': () => { order.push('receive'); return { worktreeId: 'wb', dropped: [] } } })
+  const result = await run(source, target, { teardown: async () => { order.push('teardown'); return [] } }).outcome
+  assert.equal(result.kind, 'moved')
+  assert.deepEqual(order, ['receive', 'verify', 'teardown', 'finish'])
+})
+
+test('a source changed before the teardown: nothing is torn down and the target copy goes', async () => {
+  let tornDown = false
+  const source = src({ 'move.finish': (p) => { if (p.verifyOnly) throw new ClientError('CONFLICT', 'it changed'); return null } })
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', dropped: [] } })
+  const result = await run(source, target, { teardown: async () => { tornDown = true; return [] } }).outcome
+  assert.deepEqual([result.kind, result.step], ['failed', 'teardown'])
+  assert.equal(tornDown, false)
+  assert.equal(target.methods().at(-1), 'worktree.remove')
+  assert.equal(source.methods().at(-1), 'worktree.load')
+})
+
+test('teardown warnings become notes; a change after the teardown keeps both copies', async () => {
+  const warned = await run(src(), tgt({ 'move.receive': { worktreeId: 'wb', dropped: [] } }), { teardown: async () => ['stack.sh destroy exited with code 1.'] }).outcome
+  assert.equal(warned.kind, 'moved')
+  assert.ok(warned.notes.includes('stack.sh destroy exited with code 1.'))
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', dropped: [] } })
+  const late = src({ 'move.finish': (p) => { if (!p.verifyOnly) throw new ClientError('CONFLICT', 'changed by the teardown'); return null } })
+  const both = await run(late, target, { teardown: async () => [] }).outcome
+  assert.equal(both.kind, 'both')
+  assert.match(both.error, /torn down/)
+  assert.ok(!target.methods().includes('worktree.remove'))
+})

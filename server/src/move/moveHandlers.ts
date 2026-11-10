@@ -338,11 +338,13 @@ export const moveHandlers: Record<string, Handler> = {
   /**
    * The last step, once the target has the worktree: the source's copy is removed (force) only if
    * its HEAD and uncommitted work are what was exported; otherwise CONFLICT and nothing changes.
-   * Its PR watch ends (the target watches it now).
+   * Its PR watch ends (the target watches it now). `verifyOnly`: the same checks, nothing removed
+   * (the app asks before it tears the source's VM and dev stack down, the point of commitment).
    */
   'move.finish': async (p, ctx): Promise<null> => {
     const expected = requireString(p.fingerprint, 'fingerprint')
     if (!FINGERPRINT.test(expected)) throw bad('fingerprint must be what move.export returned')
+    if (p.verifyOnly !== undefined && typeof p.verifyOnly !== 'boolean') throw bad('verifyOnly must be a boolean')
     const { repo, worktree, branch } = await source(ctx, p)
     if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} was loaded again after it was copied; it is kept`)
     const unblock = ctx.sessions.blockPath(worktree.path)
@@ -351,6 +353,7 @@ export const moveHandlers: Record<string, Handler> = {
       if (fingerprint(headSha, patch) !== expected) {
         throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
       }
+      if (p.verifyOnly === true) return null
       await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path))
       await ctx.poller.refresh(repo.path)
     } finally {

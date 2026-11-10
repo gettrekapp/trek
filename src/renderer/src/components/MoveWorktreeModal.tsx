@@ -3,7 +3,11 @@
 // (v2/moveFlow.ts) step by step. The source is this window's server; the target is reached through
 // the same main-process relay as every server window, so no token is in this window.
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAppStore } from '../store'
+import { environmentFor, repoOfInfo, useAppStore } from '../store'
+import { getBackend } from '../backend'
+import { useFeatures } from '../useFeatures'
+import { destroyEnvironmentIfAny } from '../environmentActions'
+import { envRepoKey } from '../../../shared/environments'
 import { errorText } from '../v2/errors'
 import { connectServerEntry, dropServerEntry, registeredServerEntry } from '../v2/serverClients'
 import { MOVE_STEPS, moveWorktree, type MoveOutcome, type MoveStepKey, type MoveStepStatus, type Requester } from '../v2/moveFlow'
@@ -12,10 +16,13 @@ import type { MoveCandidate, MovePlan } from '../../../shared/move'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { moveTargets } from '../v2/moveFlow'
 import type { RegisteredServer } from '../../../shared/client/index'
+import type { GitWorktreeInfo, StackStatus } from '../../../shared/types'
 
 interface Props {
   /** The worktree on this window's server */
   from: { projectId: string; worktreeId: string }
+  /** The worktree as the window lists it: its path and branch, for its VM and dev stack */
+  info: GitWorktreeInfo
   name: string
   onClose: () => void
 }
@@ -51,7 +58,7 @@ function connected(server: RegisteredServer, ms = 15_000): Promise<string[]> {
   })
 }
 
-export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Element {
+export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.JSX.Element {
   const serverWindow = useAppStore((s) => s.serverWindow)
   const ownEntry = serverWindow?.serverEntryId ?? ''
   const [plan, setPlan] = useState<MovePlan | null>(null)
@@ -69,6 +76,40 @@ export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Ele
   const opened = useRef(new Set<string>())
 
   const source = useMemo(() => (ownEntry ? registeredServerEntry(ownEntry) : undefined), [ownEntry])
+
+  // The worktree's Docker VM and dev stack on the source's machine (the same ones Delete tears down).
+  const features = useFeatures()
+  const project = useAppStore((s) => s.project)
+  const environments = useAppStore((s) => s.environments)
+  const repo = project ? (() => { try { return repoOfInfo(project, info) } catch { return undefined } })() : undefined
+  const env = features.env && repo ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
+  const [stack, setStack] = useState<StackStatus | null>(null)
+  useEffect(() => {
+    if (!features.stacks) return
+    getBackend().stacks.status({ path: info.path }).then(setStack, () => setStack(null))
+  }, [features.stacks, info.path])
+  const stackName = stack?.available && stack.created ? stack.slug : undefined
+  const machine = [env ? `its VM “${env.profile}”` : null, stackName ? `its dev stack “trek-${stackName}”` : null].filter(Boolean).join(' and ')
+  const machineRunning = env?.vmState === 'running' || (!!stackName && !!stack && (stack.containers > 0 || stack.upRunning))
+  const [tearDown, setTearDown] = useState(true)
+  const machineBlocks = !!machine && !tearDown && machineRunning
+  const teardown = async (): Promise<string[]> => {
+    const warnings: string[] = []
+    const backend = getBackend()
+    if (stackName) {
+      try {
+        const code = await backend.stacks.destroy({ path: info.path })
+        if (code !== 0) warnings.push(`stack.sh destroy exited with code ${code}. Remove the leftover stack on the source's machine with TREK_STACK_NAME=${stackName} docker/stack/stack.sh destroy.`)
+      } catch (err) {
+        warnings.push(`The dev stack was not destroyed: ${errorText(err)}`)
+      }
+    }
+    if (env && repo) {
+      const warning = await destroyEnvironmentIfAny(envRepoKey(repo), info.branch, backend)
+      if (warning) warnings.push(`${warning} It is listed under Orphaned environments in Settings.`)
+    }
+    return warnings
+  }
 
   useEffect(() => {
     if (!source) return
@@ -127,6 +168,7 @@ export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Ele
       to: { projectId: chosen.projectId, repoId: chosen.repoId },
       loaded: plan.loaded,
       targetCapabilities: server.connection.welcome?.capabilities ?? [],
+      ...(machine && tearDown ? { teardown } : {}),
       progress: (step, status, detail) => setSteps((prev) => ({ ...prev, [step]: { status, detail } })),
       cancelled: () => cancelled.current
     })
@@ -201,6 +243,15 @@ export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Ele
               {plan.reviewComments > 0 && <li className="warn">The {plan.reviewComments} unsent review comment(s) are not moved and are lost.</li>}
               {plan.queuedPrompts > 0 && <li className="warn">The {plan.queuedPrompts} queued prompt(s) are not moved and are lost.</li>}
               {plan.loaded && <li>Its running sessions are stopped first.</li>}
+              {machine && (
+                <li className={machineBlocks ? 'warn' : undefined}>
+                  <label className="move-teardown">
+                    <input type="checkbox" checked={tearDown} onChange={(e) => setTearDown(e.target.checked)} /> Tear down {machine} on this
+                    server once the worktree is in place there
+                  </label>
+                  {!tearDown && (machineRunning ? ' It is running: stop it first, or tick this, to move.' : ' Left as it is (stopped), it stays behind.')}
+                </li>
+              )}
               <li>The note, tags, ticket, pull request link and Docker .env go with it{plan.prWatch ? ', and the PR watch moves there' : ''}.</li>
             </ul>
           </>
@@ -235,7 +286,7 @@ export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Ele
           {phase === 'choose' && (
             <>
               <button onClick={onClose}>Cancel</button>
-              <button className="btn btn-accent" disabled={!chosen} onClick={() => void start()}>
+              <button className="btn btn-accent" disabled={!chosen || machineBlocks} onClick={() => void start()}>
                 Move worktree
               </button>
             </>

@@ -15,6 +15,7 @@ export const MOVE_STEPS = [
   { key: 'push', label: 'Push the branch to origin' },
   { key: 'histories', label: 'Copy the session histories' },
   { key: 'receive', label: 'Create the worktree on the target' },
+  { key: 'teardown', label: 'Tear down its VM and dev stack on the source' },
   { key: 'finish', label: 'Remove the source worktree' }
 ] as const
 
@@ -38,6 +39,12 @@ export interface MoveFlowDeps {
   progress(step: MoveStepKey, status: MoveStepStatus, detail?: string): void
   /** Checked between steps, until the target starts building */
   cancelled(): boolean
+  /**
+   * The source's Docker VM and dev stack, torn down (the user ticked it) once the target has the
+   * worktree and the source is checked unchanged, before its folder goes; never earlier. Shows
+   * nothing itself: its warnings come back as notes, and the move goes on (as Delete's does).
+   */
+  teardown?: () => Promise<string[]>
 }
 
 export type MoveOutcome =
@@ -151,6 +158,23 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
   const notes = [...exported.notCarried.map((line) => `Not carried: ${line}`), ...kept, ...received.dropped]
   deps.progress('receive', 'done', received.dropped.length > 0 ? `${received.dropped.length} thing(s) not carried over` : undefined)
 
+  // The point of commitment: the target has it. With a teardown, the source is checked unchanged
+  // first (move.finish verifyOnly), so a VM or stack is only destroyed for a move that will finish.
+  let tornDown = false
+  if (deps.teardown) {
+    deps.progress('teardown', 'active')
+    try {
+      await source('move.finish', { ...from, fingerprint: exported.fingerprint, verifyOnly: true }, { timeoutMs: STEP_MS })
+    } catch (err) {
+      deps.progress('teardown', 'failed', errorText(err))
+      return undoTarget(err, 'teardown')
+    }
+    const warnings = await deps.teardown().catch((err: unknown) => [errorText(err)])
+    notes.push(...warnings)
+    tornDown = true
+    deps.progress('teardown', warnings.length > 0 ? 'failed' : 'done', warnings.length > 0 ? warnings.join(' ') : undefined)
+  } else deps.progress('teardown', 'skipped', 'nothing to tear down')
+
   deps.progress('finish', 'active')
   try {
     await source('move.finish', { ...from, fingerprint: exported.fingerprint }, { timeoutMs: STEP_MS })
@@ -158,18 +182,24 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     return { kind: 'moved', worktreeId: received.worktreeId, notes }
   } catch (err) {
     const code = errorCode(err)
-    // The source changed (or was loaded) after the copy: the copy on the target is stale, so it goes.
-    if (code === 'CONFLICT' || code === 'IN_USE') {
-      const undone = await target('worktree.remove', { projectId: to.projectId, worktreeId: received.worktreeId, force: true }).then(() => true, () => false)
-      deps.progress('finish', 'failed', errorText(err))
-      if (undone) {
-        await restore()
-        return { kind: 'failed', step: 'finish', error: `${errorText(err)}. The copy on the target was removed again (its branch stays there).` }
-      }
-      return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, and the copy on the target could not be removed: both servers have it now.`, notes }
-    }
     deps.progress('finish', 'failed', errorText(err))
+    // Changed or loaded after the copy: the target's copy is stale and goes, unless the source's VM
+    // and stack are already gone (then both are kept, for the user to compare).
+    if ((code === 'CONFLICT' || code === 'IN_USE') && !tornDown) return undoTarget(err, 'finish')
+    if (code === 'CONFLICT' || code === 'IN_USE') {
+      return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, after its VM and dev stack were torn down: both servers have the worktree now. Compare them and delete one.`, notes }
+    }
     return { kind: 'both', worktreeId: received.worktreeId, error: `The target has the worktree, but the source's copy was not removed (${errorText(err)}). Delete it there once you have checked the target.`, notes }
+  }
+
+  /** The source changed after the copy: the target's copy is removed again and the source loaded. */
+  async function undoTarget(err: unknown, at: MoveStepKey): Promise<MoveOutcome> {
+    const undone = await target('worktree.remove', { projectId: to.projectId, worktreeId: received.worktreeId, force: true }).then(() => true, () => false)
+    if (undone) {
+      await restore()
+      return { kind: 'failed', step: at, error: `${errorText(err)}. The copy on the target was removed again (its branch stays there).` }
+    }
+    return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, and the copy on the target could not be removed: both servers have it now.`, notes }
   }
 }
 

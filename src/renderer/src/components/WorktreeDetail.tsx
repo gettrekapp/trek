@@ -916,7 +916,7 @@ export function WorktreeDetail({
       )}
       {showMove && info.branch && (() => {
         const from = getBackend().worktrees.moveRef(info.path)
-        return from ? <MoveWorktreeModal from={from} name={info.branch} onClose={() => setShowMove(false)} /> : null
+        return from ? <MoveWorktreeModal from={from} info={info} name={info.branch} onClose={() => setShowMove(false)} /> : null
       })()}
     </main>
   )

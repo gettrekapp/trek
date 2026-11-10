@@ -264,7 +264,11 @@ test('move.receive undoes the worktree, the branch and the histories when the pa
 test('move.finish keeps a source that changed after the export', async (t) => {
   const s = await setup(t)
   const exported = (await s.A.call('move.export', s.ref)).result
+  const checked = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, verifyOnly: true })
+  assert.equal(checked.ok, true, JSON.stringify(checked))
+  assert.ok(existsSync(s.path), 'verifyOnly removes nothing')
   writeFileSync(join(s.path, 'later.txt'), 'typed after the copy\n')
+  assert.equal((await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, verifyOnly: true })).error?.code, 'CONFLICT')
   const res = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint })
   assert.equal(res.error?.code, 'CONFLICT')
   assert.ok(existsSync(join(s.path, 'later.txt')))
