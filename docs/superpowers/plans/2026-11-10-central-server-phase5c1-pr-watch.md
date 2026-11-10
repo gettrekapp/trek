@@ -94,6 +94,7 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
    - *Review fix:* `stop()` aborts any running gh (an `AbortSignal` on `execFile`); nothing is applied, logged or re-checked after it.
    - *Review fix:* a round goes on past a branch whose poll throws.
    - *Review fix:* `project.import` checks a branch's `prWatch` is an object and drops its `seen`, so an imported watch starts with a baseline.
+   - *Final review fix:* a watch that ends (turned off, its PR changed, merged or closed, or no longer a target at a round) forgets its failure count, logged error and "can't be read" mark (`PrWatcher.forget`), so turned back on it can raise a fresh notice.
 14. **The `prWatch` capability.**
     - **When it is checked:** `gh auth status --hostname github.com` runs at start, then every 10 minutes (`GH_RECHECK_MS`) on its own timer, signed in or not, and after a poll that fails with what looks like a sign-in error (`isAuthFailure`: HTTP 401, bad credentials, not logged in, authentication). *Review fix:* before, it was re-checked only while signed out, or after any failed poll. A sign-out with nothing watched was never noticed, and one network blip withdrew the capability from every window and paused every watch for 10 minutes.
     - Callers while a check runs share it (one in-flight promise), so two can't both report the same change.
@@ -109,6 +110,7 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
     - **`prWatch.dismiss {projectId, worktreeId}`** clears the notice; an unknown worktree is `NOT_FOUND`.
     - **`watch_pull_request {worktree, watch?}`** goes through `branch.setPrWatch` and answers `{branch, pullRequest, watching}`.
 16. **The attention entry is the worktree's**, with `sessionId: ''`.
+    - *Final review fix:* a notice does not outlive its worktree: `worktree.remove` republishes `attention`, and so does the git poller when a list drops a row that had a notice (`onAttentionChange`).
     - **Main's handling:**
       - main keys it as `worktree:<id>`;
       - it raises it as a new kind, `pullRequest`, once per `at`;
@@ -123,7 +125,7 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
     - The PR chip shows "· watching" while the branch is watched. *App review fix:* while gh is signed out (`features.prWatch` off) a kept watch shows as "· watch paused — gh signed out". The menu item does nothing while another action is busy.
     - A notice adds a chip with a × (titled Dismiss, disabled while offline), flags the sidebar row and adds an entry to the notifications menu. *App review fix:* the row's flag ("PR", its tooltip the notice) sits beside the status dot instead of replacing it, so a working session still shows; a collapsed repo header shows the flag too when any of its worktrees has a notice. The menu words a notice's entry as a notice: its × is "Dismiss", a failed dismiss says "Could not dismiss the notice", and the bell's title counts sessions and pull request notices apart (`MenuEntry.pullRequest`).
     - The projector gives the store `branchPrWatches`, keyed by branch, as it does `branchPullRequests`. *App review fix:* notices are `worktreePrNotices`, keyed by the worktree's path, not its branch: keyed by branch, a `missing` worktree on the same branch could override the live one's notice, and the row's × then dismissed the live worktree, which had none.
-18. **`src/main/github.ts` stays.** It resolves a PR's head branch when the app creates a worktree from a PR, which has nothing to do with the watch. *App review fix:* it picks gh as the server does (`src/main/ghBinary.ts`): `TREK_SERVER_GH` when it is an absolute path, no gh (the public API fallback only) for any other value, and `gh` from the PATH only when it is unset. So no smoke reaches the real gh through main either.
+18. **`src/main/github.ts` stays.** It resolves a PR's head branch when the app creates a worktree from a PR, which has nothing to do with the watch. *App review fix:* it picks gh as the server does (`src/main/ghBinary.ts`): `TREK_SERVER_GH` when it is an absolute path, no gh (the public API fallback only) for any other value, and `gh` from the PATH only when it is unset. So no smoke reaches the real gh through main either. *Final review fix:* the public API fallback runs only while `TREK_SERVER_GH` is unset (`publicApiFallback`), so a stubbed environment never reaches GitHub.
 19. **No smoke runs the real gh.**
     - `TREK_SERVER_GH` (an absolute path) is the gh the server runs. Only an unset variable means `gh` from the PATH. *Review fix:* any other value (empty, relative) is logged and fails closed: the runner always rejects, so gh reads as not installed. Before, it fell back to the real gh on the PATH, so a typo in a test's stub path reached GitHub.
     - `TREK_SERVER_PR_POLL_MS` (at least 1000) sets the time between polls and between sign-in checks, for the smoke.

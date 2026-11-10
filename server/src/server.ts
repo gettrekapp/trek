@@ -90,7 +90,9 @@ export function startServer(
     projects,
     hub,
     registry: () => store.config.repos,
-    onHealth: () => refreshServerTopic()
+    onHealth: () => refreshServerTopic(),
+    // The SessionManager is made below; a list only runs once the server is up.
+    onAttentionChange: () => sessions.refreshAttention()
   })
   let mcpAccess: McpAccessStore | undefined
   if (options.mcpDir !== undefined) {

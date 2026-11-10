@@ -146,7 +146,7 @@ test('branch data tools: tag by name, custom tag, note, ticket, pull request', a
 test('watch_pull_request: on (polled at once), off, and its refusals', async (t) => {
   const polled = []
   let available = true
-  const prWatch = { available: () => available, pollSoon: (...a) => polled.push(a), dismiss() {} }
+  const prWatch = { available: () => available, pollSoon: (...a) => polled.push(a), forget() {}, dismiss() {} }
   const s = await toolSetup(t, { prWatch })
   const codeOf = (p) => p.then(() => 'ok', (e) => e.code)
   assert.match(await s.call('watch_pull_request', { worktree: 'main' }).catch((e) => e.message), /no linked pull request/)

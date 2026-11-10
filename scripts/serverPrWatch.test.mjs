@@ -226,6 +226,36 @@ test(`${FAILS_BEFORE_NOTICE} failed polls in a row raise a "can't be read" notic
   assert.deepEqual(s.queued, [])
 })
 
+test('a watch turned off forgets its failures, so turned back on it can raise a fresh "can\'t be read" notice', async (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const fail = () => new Error('HTTP 502: Bad Gateway')
+  const s = setup(project(watching), Array.from({ length: 2 * FAILS_BEFORE_NOTICE }, fail))
+  await s.watcher.ready
+  for (let i = 0; i < FAILS_BEFORE_NOTICE; i++) await s.watcher.poll(target)
+  assert.equal(s.worktree().prNotice.at, 1000)
+  s.watcher.dismiss('p1', 'w1')
+  s.watcher.forget('p1', 'r1', 'feature')
+  s.tick(10)
+  for (let i = 0; i < FAILS_BEFORE_NOTICE; i++) await s.watcher.poll(target)
+  assert.equal(s.worktree().prNotice?.at, 1010, 'counted afresh')
+})
+
+test('a round forgets the failures of a branch no longer watched', async (t) => {
+  t.mock.method(console, 'warn', () => {})
+  const fail = () => new Error('HTTP 502: Bad Gateway')
+  const s = setup(project(watching), Array.from({ length: 2 * FAILS_BEFORE_NOTICE - 1 }, fail))
+  await s.watcher.ready
+  for (let i = 0; i < FAILS_BEFORE_NOTICE - 1; i++) await s.watcher.poll(target)
+  // Turned off elsewhere (say merged, or another client), then a round runs, then on again.
+  s.projects.apply('p1', (d) => delete d.repositories[0].branchData.feature.prWatch)
+  await s.watcher.round()
+  s.projects.apply('p1', (d) => (d.repositories[0].branchData.feature.prWatch = {}))
+  for (let i = 0; i < FAILS_BEFORE_NOTICE - 1; i++) await s.watcher.poll(target)
+  assert.equal(s.worktree().prNotice, undefined, 'the earlier failures do not count')
+  await s.watcher.poll(target)
+  assert.ok(s.worktree().prNotice)
+})
+
 test('a failure that looks like sign-in re-checks it; the checks running at once share one gh call', async () => {
   const s = setup(project(watching), [new Error('HTTP 401: Bad credentials')])
   await s.watcher.ready
@@ -486,16 +516,18 @@ function ctxFor(initial, { available = true } = {}) {
   const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [initial])
   const polled = []
   const dismissed = []
+  const forgot = []
   const prWatch = {
     available: () => available,
     pollSoon: (...a) => polled.push(a),
+    forget: (...a) => forgot.push(a),
     dismiss: (projectId, worktreeId) => {
       dismissed.push(worktreeId)
       projects.apply(projectId, (d) => delete d.repositories[0].worktrees[1].prNotice, { persist: false })
     }
   }
   const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub, projects, prWatch, sessions: { refreshAttention() {} } })
-  return { call, projects, polled, dismissed, data: () => projects.require('p1').repositories[0].branchData.feature }
+  return { call, projects, polled, dismissed, forgot, data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
 test('branch.setPrWatch: on needs gh and a github.com PR; on twice keeps what it saw; off always works', () => {
@@ -509,6 +541,7 @@ test('branch.setPrWatch: on needs gh and a github.com PR; on twice keeps what it
   assert.equal(c.polled.length, 1)
   c.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: false })
   assert.deepEqual(c.data(), { pr: URL })
+  assert.deepEqual(c.forgot, [['p1', 'r1', 'feature']], 'turned off: its failures are forgotten')
 
   const noPr = ctxFor(project({ prWatch: null, pr: null }))
   assert.equal(noPr.call('branch.setPrWatch', { repoId: 'r1', branch: 'feature', watch: true }).error.code, 'BAD_REQUEST')
@@ -524,8 +557,10 @@ test('branch.setPr: a different PR, or none, ends the watch; the same one keeps 
   const c = ctxFor(project())
   c.call('branch.setPr', { repoId: 'r1', branch: 'feature', pr: URL })
   assert.deepEqual(c.data(), { pr: URL, prWatch: {} })
+  assert.deepEqual(c.forgot, [], 'the same PR keeps the watch')
   c.call('branch.setPr', { repoId: 'r1', branch: 'feature', pr: 'https://github.com/acme/app/pull/13' })
   assert.deepEqual(c.data(), { pr: 'https://github.com/acme/app/pull/13' })
+  assert.deepEqual(c.forgot, [['p1', 'r1', 'feature']], 'the watch ended')
   c.call('branch.setPr', { repoId: 'r1', branch: 'feature', pr: null })
   assert.equal(c.data(), undefined)
 })

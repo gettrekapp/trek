@@ -33,7 +33,10 @@ export const prWatchHandlers: Record<string, Handler> = {
       else repo.branchData[branch] = data
       return { repoId: repo.id, changed }
     })
-    if (watch && changed) ctx.prWatch?.pollSoon(requireString(p.projectId, 'projectId'), repoId, branch)
+    const projectId = requireString(p.projectId, 'projectId')
+    if (watch && changed) ctx.prWatch?.pollSoon(projectId, repoId, branch)
+    // Off: its failures are forgotten, so turned on again it can raise a fresh "can't be read" notice.
+    if (!watch) ctx.prWatch?.forget(projectId, repoId, branch)
     return null
   },
 

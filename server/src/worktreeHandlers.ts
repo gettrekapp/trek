@@ -214,6 +214,8 @@ export const worktreeHandlers: Record<string, Handler> = {
         else delete d.settings.worktreeOrder
       }
     })
+    // The `attention` topic lists the row's PR notice (5c-1), if it had one.
+    ctx.sessions.refreshAttention()
     return null
   },
 

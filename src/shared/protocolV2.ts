@@ -192,8 +192,9 @@ export const CAPABILITY = {
   skills: 'skills',
   /**
    * gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's
-   * pull request watch on (5c-1). Checked at start and again while it is missing; a connection sees a
-   * change from its next welcome.
+   * pull request watch on (5c-1). Checked at start, every ~10 minutes after that (listed or not), and
+   * after a poll fails like a sign-in error; a change is pushed to every authenticated connection as
+   * `integrations.changed` `{prWatch}`, which the client SDK applies to `welcome.capabilities`.
    */
   prWatch: 'prWatch'
 } as const

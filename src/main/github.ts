@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { ghBinary } from './ghBinary.ts'
+import { ghBinary, publicApiFallback } from './ghBinary.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -34,6 +34,8 @@ async function prHeadBranch(owner: string, repo: string, number: number): Promis
   } catch {
     // gh missing or not authenticated — try the public API
   }
+  // A stubbed (or turned off) gh never falls back to GitHub itself.
+  if (!publicApiFallback(process.env.TREK_SERVER_GH)) return null
   try {
     const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${number}`, {
       headers: { Accept: 'application/vnd.github+json' },

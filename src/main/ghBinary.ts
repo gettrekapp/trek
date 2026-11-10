@@ -8,3 +8,11 @@ export function ghBinary(value: string | undefined): string | null {
   if (value === undefined) return 'gh'
   return isAbsolute(value) ? value : null
 }
+
+/**
+ * Whether a gh that failed may be backed up by GitHub's public API: only while TREK_SERVER_GH is
+ * unset (final review). Set to anything, gh is stubbed or turned off, and nothing reaches GitHub.
+ */
+export function publicApiFallback(value: string | undefined): boolean {
+  return value === undefined
+}

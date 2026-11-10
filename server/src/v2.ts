@@ -254,15 +254,21 @@ const handlers: Record<string, Handler> = {
   'branch.setPr': (p, ctx) => {
     const pr = clearableString(p.pr, 'pr')
     const branch = requireBranch(p.branch)
-    ctx.projects.apply(p.projectId, (d) => {
+    const ended = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
       if (pr === null) delete data.pr
       else data.pr = pr
-      if (data.prWatch && repo.branchData[branch]?.pr !== pr) delete data.prWatch
+      let ended: string | undefined
+      if (data.prWatch && repo.branchData[branch]?.pr !== pr) {
+        delete data.prWatch
+        ended = repo.id
+      }
       if (Object.keys(data).length === 0) delete repo.branchData[branch]
       else repo.branchData[branch] = data
+      return ended
     })
+    if (ended !== undefined) ctx.prWatch?.forget(requireString(p.projectId, 'projectId'), ended, branch)
     return null
   },
   'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env'), p.expected),

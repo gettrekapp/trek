@@ -167,6 +167,24 @@ export class PrWatcher {
     if (target && this.signedIn) void this.poll(target)
   }
 
+  /**
+   * A branch's watch ended (turned off, its PR changed, or merged): its failure count, logged
+   * failure and "can't be read" mark go, so a watch turned back on counts afresh and can raise a
+   * new notice.
+   */
+  forget(projectId: string, repoId: string, branch: string): void {
+    this.forgetKeys((key) => {
+      const [p, r, b] = JSON.parse(key) as string[]
+      return p === projectId && r === repoId && b === branch
+    })
+  }
+
+  private forgetKeys(drop: (key: string) => boolean): void {
+    for (const map of [this.failures, this.lastError, this.unreadable]) {
+      for (const key of [...map.keys()]) if (drop(key)) map.delete(key)
+    }
+  }
+
   /** Clears a worktree's notice (`prWatch.dismiss`). */
   dismiss(projectId: unknown, worktreeId: string): void {
     this.deps.projects.apply(
@@ -217,12 +235,18 @@ export class PrWatcher {
     }, this.deps.recheckMs ?? GH_RECHECK_MS)
   }
 
-  /** One round: forgets what unwatchable branches saw, then polls every watched branch, one at a time. */
+  /**
+   * One round: forgets what unwatchable branches saw (and the failures of branches no longer
+   * watched, however their watch ended), then polls every watched branch, one at a time.
+   */
   async round(): Promise<void> {
     try {
       this.forgetUnpolled()
+      const targets = watchTargets(this.deps.projects.all())
+      const live = new Set(targets.map(keyOf))
+      this.forgetKeys((key) => !live.has(key) && !this.inFlight.has(key))
       if (!this.signedIn) return
-      for (const target of watchTargets(this.deps.projects.all())) {
+      for (const target of targets) {
         if (this.stopped) return
         try {
           await this.poll(target)
@@ -351,8 +375,10 @@ export class PrWatcher {
         const data = repo && Object.hasOwn(repo.branchData, target.branch) ? repo.branchData[target.branch] : undefined
         if (!repo || !data?.prWatch || data.pr !== target.url || !worktreeOn(repo, target.branch)) return []
         const step = watchStep(data.prWatch.seen, view)
-        if (step.stop) delete data.prWatch
-        else data.prWatch = { seen: step.seen }
+        if (step.stop) {
+          delete data.prWatch
+          this.forgetKeys((k) => k === key)
+        } else data.prWatch = { seen: step.seen }
         return step.events
       })
     } catch {

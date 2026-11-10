@@ -37,6 +37,8 @@ export interface GitPollerDeps {
   registry: () => readonly RemoteRepo[]
   /** Called when health() changes */
   onHealth: () => void
+  /** Called when a list drops a row that had a PR notice (5c-1): the `attention` topic lists it, so it is republished */
+  onAttentionChange?: () => void
   git?: GitReader
   now?: () => number
   intervals?: Partial<PollIntervals>
@@ -264,14 +266,25 @@ export class GitPoller {
     if (!repo) return false
     // A dry run decides whether this write must reach disk.
     const preview = reconcileWorktrees(repo, listed, () => 'preview')
+    let droppedNotice = false
     this.deps.projects.apply(
       projectId,
       (draft) => {
         const target = draft.repositories.find((r) => r.id === repo.id)
-        if (target) target.worktrees = reconcileWorktrees(target, listed, this.deps.projects.newId).worktrees
+        if (!target) return
+        const noticed = target.worktrees.filter((w) => w.prNotice).map((w) => w.id)
+        target.worktrees = reconcileWorktrees(target, listed, this.deps.projects.newId).worktrees
+        droppedNotice = noticed.some((id) => !target.worktrees.some((w) => w.id === id && w.prNotice))
       },
       { persist: preview.membershipChanged }
     )
+    if (droppedNotice) {
+      try {
+        this.deps.onAttentionChange?.()
+      } catch (err) {
+        console.warn('git poller attention listener failed', err)
+      }
+    }
     return preview.headsChanged
   }
 

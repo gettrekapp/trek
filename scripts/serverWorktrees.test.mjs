@@ -15,6 +15,7 @@ import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { attentionEntries } from '../server/src/sessions/status.ts'
 
 const gitEnv = {
   ...process.env,
@@ -33,11 +34,14 @@ async function setup(t) {
   const store = new ConfigStore(configPath)
   const hub = new TopicHub()
   const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
-  const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {} })
+  // What the SessionManager's refreshAttention publishes, kept here for the tests to read.
+  const attention = { entries: [] }
+  const refreshAttention = () => { attention.entries = attentionEntries(projects.all(), new Map(), () => 0) }
+  const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {}, onAttentionChange: refreshAttention })
   t.after(() => { poller.stop(); store.close() })
   const subscriber = { send: () => {} }
   const blocked = []
-  const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } }, refreshAttention: () => {} }
+  const sessions = { blockPath: (path) => { blocked.push(path); return () => { blocked.push(`unblock ${path}`) } }, refreshAttention }
   const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber, projects, poller, sessions })
   const created = await call('project.create', { name: 'P', repositories: [{ path: a }] })
   const projectId = created.result.projectId
@@ -45,7 +49,7 @@ async function setup(t) {
   const project = () => projects.require(projectId)
   const repoId = project().repositories[0].id
   const worktree = (id) => project().repositories[0].worktrees.find((w) => w.id === id)
-  return { dir, a, store, projects, poller, call, blocked, projectId, repoId, project, worktree }
+  return { dir, a, store, projects, poller, call, blocked, projectId, repoId, project, worktree, attention, refreshAttention }
 }
 
 test('worktree.create cuts a new branch at <repo>-<branch> and lists it', async (t) => {
@@ -204,6 +208,34 @@ test('worktree.remove deletes a clean worktree and its worktreeOrder entry', asy
   assert.equal(existsSync(wt.path), false)
   assert.equal(s.worktree(wt.id), undefined)
   assert.equal(s.project().settings.worktreeOrder, undefined)
+})
+
+/** Gives a worktree a PR notice (5c-1) and republishes attention, as the PR watch does. */
+function withNotice(s, wt) {
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.id === wt.id).prNotice = { title: 'PR #12', text: 'changed', url: 'https://github.com/acme/app/pull/12', at: 1 }
+  }, { persist: false })
+  s.refreshAttention()
+  assert.deepEqual(s.attention.entries.map((e) => e.worktreeId), [wt.id])
+}
+
+test("worktree.remove: a removed worktree's PR notice leaves the attention topic", async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'noticed')
+  withNotice(s, wt)
+  const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+  assert.deepEqual(res, { ok: true, result: null })
+  assert.deepEqual(s.attention.entries, [])
+})
+
+test("the poller dropping a sessionless row takes its PR notice out of the attention topic", async (t) => {
+  const s = await setup(t)
+  const wt = await withWorktree(s, 'dropped')
+  withNotice(s, wt)
+  git(s.a, 'worktree', 'remove', wt.path)
+  await s.poller.refresh(s.a)
+  assert.equal(s.worktree(wt.id), undefined)
+  assert.deepEqual(s.attention.entries, [])
 })
 
 test('worktree.remove refuses a dirty worktree unless forced', async (t) => {
