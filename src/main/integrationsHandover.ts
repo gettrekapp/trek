@@ -12,7 +12,7 @@ import { ServerConnection, globalSocketFactory } from '../shared/client/index.ts
 import { CAPABILITY } from '../shared/protocolV2.ts'
 import { appSettings, updateAppSettings } from './appSettings'
 import { createSecretStore, writeFileAtomic, type SecretRead, type SecretStore } from './secrets'
-import { handOver, nothingToHandOver, parseHandoverState, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
+import { handOver, nothingToHandOver, readHandoverState, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
 import { localProfileKey, localServerStatus, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 
 const STATE_FILE = 'integrations-handover.json'
@@ -21,12 +21,12 @@ const REQUEST_TIMEOUT_MS = 30_000
 
 const statePath = (): string => join(app.getPath('userData'), STATE_FILE)
 
-function readState(): HandoverState {
-  try {
-    return parseHandoverState(JSON.parse(readFileSync(statePath(), 'utf8')))
-  } catch {
-    return parseHandoverState(undefined)
-  }
+/** The state, or null (logged) when the file is there but cannot be read or parsed: that start does nothing. */
+function readState(what: string): HandoverState | null {
+  const { state, error } = readHandoverState(() => readFileSync(statePath(), 'utf8'))
+  if (state) return state
+  console.warn(`trek: ${statePath()} cannot be read; not trying to ${what} this start (nothing written)`, error)
+  return null
 }
 
 function readLegacyVoice(): LegacyIntegrations['voice'] {
@@ -94,15 +94,16 @@ const writeState = (state: HandoverState): Promise<void> => writeFileAtomic(stat
  * server (a remote-only user has one too); left undone when the app settings cannot be written.
  */
 async function migrateVoiceActive(): Promise<void> {
-  const state = readState()
-  if (state.voiceActive) return
+  const state = readState("move this app's voice Active/Busy into the app settings")
+  if (!state || state.voiceActive) return
   if (readLegacyVoice().active === false && appSettings().voiceActive) await updateAppSettings({ voiceActive: false })
   state.voiceActive = true
   await writeState(state)
 }
 
 async function run(): Promise<void> {
-  const state = readState()
+  const state = readState('hand the Linear and voice settings to the Local server')
+  if (!state) return
   const profile = localProfileKey()
   const done = Object.hasOwn(state.profiles, profile) ? state.profiles[profile] : {}
   if (done.linear && done.voice && !done.voiceConfigPending) return

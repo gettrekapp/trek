@@ -3,7 +3,7 @@ import { useAppStore, type SpokenSummary } from './store'
 import { getBackend } from './backend'
 import { useFeatures } from './useFeatures'
 import { base64Bytes } from './v2/backendV2'
-import { followAppActive, isPresenceActive } from './voicePresence'
+import { admitsClip, followAppActive, isPresenceActive, mergeVoice } from './voicePresence'
 import type { VoiceConfig, VoiceSettings } from '../../shared/types'
 
 /**
@@ -67,8 +67,9 @@ export function stopAllSummaries(): void {
 /** This app's Active/Busy (its own store field, not the server's voice settings): not active until loaded. */
 const isActive = (): boolean => isPresenceActive(useAppStore.getState().voiceActive)
 
-/** Queues a clip to play; its position in the queue (0: playing now). */
-function enqueue(terminalId: string, text: string, audio: Uint8Array): number {
+/** Queues a clip to play; its position in the queue (0: playing now), or null when the queue is full (dropped). */
+function enqueue(terminalId: string, text: string, audio: Uint8Array): number | null {
+  if (!admitsClip(queue.length)) return null
   const url = URL.createObjectURL(new Blob([audio as BlobPart], { type: 'audio/mpeg' }))
   queue.push({ terminalId, text, url })
   const position = queue.length + (current ? 1 : 0) - 1
@@ -98,22 +99,24 @@ export async function loadVoiceSettings(): Promise<void> {
 /** `active` is this app's (app settings); the rest is the window's server's. */
 export async function updateVoiceConfig(patch: Partial<VoiceConfig>): Promise<void> {
   const { active, ...server } = patch
-  const before = useAppStore.getState().voice
-  if (!before) return
-  let next: VoiceSettings = { ...before }
+  if (!useAppStore.getState().voice) return
+  // Each result is merged into the settings as they are after its await, not a copy from before.
+  const apply = (update: Partial<VoiceSettings>): void => {
+    const next = mergeVoice(useAppStore.getState().voice, update)
+    if (next) useAppStore.getState().setVoice(next)
+  }
   if (active !== undefined) {
     const settings = await window.api.appSettings.update({ voiceActive: active })
     useAppStore.getState().setVoiceActive(settings.voiceActive)
-    next = { ...next, active: settings.voiceActive }
+    apply({ active: settings.voiceActive })
+    if (!settings.voiceActive) stopAllSummaries()
   }
   if (Object.keys(server).length > 0) {
     const backend = getBackend()
     const config = await backend.voice.setConfig(server)
     if (getBackend() !== backend) return
-    next = { ...next, ...config }
+    apply(config)
   }
-  useAppStore.getState().setVoice(next)
-  if (!next.active) stopAllSummaries()
 }
 
 export type SpeakResult = { played: true; position: number } | { played: false; reason: string }
@@ -128,7 +131,9 @@ export async function testVoice(text: string): Promise<SpeakResult> {
   if (getBackend() !== backend) return { played: false, reason: "The window's server changed, so it was not played" }
   // The user may have gone Busy while it was synthesizing.
   if (!isActive()) return busy
-  return { played: true, position: enqueue('', text, audio) }
+  const position = enqueue('', text, audio)
+  if (position === null) return { played: false, reason: 'Too many summaries are waiting to play, so it was not queued' }
+  return { played: true, position }
 }
 
 /**

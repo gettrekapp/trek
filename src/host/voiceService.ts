@@ -25,11 +25,13 @@ export interface VoiceService {
    * `ifAbsent` (the app's hand-over, which sends its voice next): stored as it is, without asking
    * ElevenLabs, only while no key is stored; else `{ ok: false, present: true }`. Its `voices` are then empty.
    * `{ ok: false, error }` is only ElevenLabs' answer; a key slot that cannot be read (checked
-   * before any request) or written throws, as does a stored key whose first voice cannot be saved.
+   * before any request) or written throws, as does a stored key whose first voice cannot be saved
+   * (that error has `keyStored: true`).
    */
   setKey(apiKey: string, options?: { ifAbsent?: boolean }): Promise<VoiceKeyResult>
   clearKey(): void
   voices(): Promise<VoiceInfo[]>
+  /** Throws, writing nothing, when voice.json is there but cannot be read or parsed (only a missing one is the defaults). */
   setConfig(patch: Partial<VoiceServerConfig>): VoiceServerConfig
   /** An mp3 of `text` in the chosen voice */
   synthesize(text: string): Promise<Uint8Array>
@@ -41,14 +43,8 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
   const api = options.api ?? ELEVENLABS_API
   const doFetch = options.fetch ?? fetch
 
-  /** A missing or unreadable file is the defaults (it holds no secret); known fields of the right type are kept. */
-  const readConfig = (): VoiceServerConfig => {
-    let raw: unknown
-    try {
-      raw = JSON.parse(readFileSync(options.configFile, 'utf8'))
-    } catch {
-      return { ...DEFAULT_VOICE_CONFIG }
-    }
+  /** Known fields of the right type are kept; anything else is the default. */
+  const fromRaw = (raw: unknown): VoiceServerConfig => {
     const from = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
     return {
       voiceId: typeof from.voiceId === 'string' ? from.voiceId : DEFAULT_VOICE_CONFIG.voiceId,
@@ -57,8 +53,39 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
     }
   }
 
+  /** For reading only: a missing or unreadable file is the defaults (it holds no secret). */
+  const readConfig = (): VoiceServerConfig => {
+    try {
+      return readConfigStrict()
+    } catch {
+      return { ...DEFAULT_VOICE_CONFIG }
+    }
+  }
+
+  /**
+   * Before a write: only a missing file is the defaults. One that cannot be read or parsed (or is
+   * not a JSON object) throws, so a write never replaces a voice and settings it could not see.
+   */
+  const readConfigStrict = (): VoiceServerConfig => {
+    let text: string
+    try {
+      text = readFileSync(options.configFile, 'utf8')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ...DEFAULT_VOICE_CONFIG }
+      throw new Error(`The voice settings (${options.configFile}) cannot be read: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    let raw: unknown
+    try {
+      raw = JSON.parse(text)
+    } catch (err) {
+      throw new Error(`The voice settings (${options.configFile}) cannot be parsed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error(`The voice settings (${options.configFile}) are not a JSON object`)
+    return fromRaw(raw)
+  }
+
   const setConfig = (patch: Partial<VoiceServerConfig>): VoiceServerConfig => {
-    const next = { ...readConfig(), ...patch }
+    const next = { ...readConfigStrict(), ...patch }
     writeFileAtomic(options.configFile, JSON.stringify(next, null, 2) + '\n', 0o600)
     return next
   }
@@ -109,15 +136,16 @@ export function createVoiceService(options: { key: KeySlot; configFile: string; 
       }
       // Outside the try: a failed write is the server's error, not a rejected key.
       options.key.set(apiKey)
-      if (!readConfig().voiceId && voices[0]) {
-        // The key is stored by now, so `ok: false` would be untrue (Settings would ask for it
-        // again) and `ok: true` would hide that no voice is chosen (speak_summary is not set up
-        // without one). Throw (TOOL_ERROR) saying both.
-        try {
-          setConfig({ voiceId: voices[0].id })
-        } catch (err) {
-          throw new Error(`The key was stored, but the voice could not be saved: ${err instanceof Error ? err.message : String(err)}`)
-        }
+      // The key is stored by now, so `ok: false` would be untrue (Settings would ask for it
+      // again) and `ok: true` would hide that no voice is chosen (speak_summary is not set up
+      // without one). Throw (TOOL_ERROR) saying both, marked `keyStored` (the handler still says
+      // the voice changed). A voice.json that cannot be read is not overwritten.
+      try {
+        if (!readConfigStrict().voiceId && voices[0]) setConfig({ voiceId: voices[0].id })
+      } catch (err) {
+        throw Object.assign(new Error(`The key was stored, but the voice could not be saved: ${err instanceof Error ? err.message : String(err)}`), {
+          keyStored: true
+        })
       }
       return { ok: true, voices }
     },

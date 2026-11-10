@@ -3,6 +3,20 @@
 // null (no project yet, a server without voice) while summaries still arrive. Pure: the app
 // settings API comes in, so `node --test` covers it.
 
+import type { VoiceSettings } from '../../shared/types'
+
+/** Clips waiting behind the one playing; more are dropped (an agent in a loop cannot pile up audio). */
+export const MAX_QUEUED_CLIPS = 5
+
+/** A clip is queued only while fewer than MAX_QUEUED_CLIPS are waiting. */
+export const admitsClip = (waiting: number): boolean => waiting < MAX_QUEUED_CLIPS
+
+/**
+ * An update merged into the window's voice settings as they are now (read after the update's
+ * awaits, so a load that landed meanwhile is kept); null when the window has none any more.
+ */
+export const mergeVoice = (now: VoiceSettings | null, update: Partial<VoiceSettings>): VoiceSettings | null => (now ? { ...now, ...update } : null)
+
 interface AppSettingsApi {
   get: () => Promise<{ voiceActive: boolean }>
   onChanged: (callback: (settings: { voiceActive: boolean }) => void) => () => void

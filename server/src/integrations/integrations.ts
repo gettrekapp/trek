@@ -41,7 +41,8 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost'])
 /**
  * A test endpoint from the environment (`name`, for the smokes' stubs): taken only as an http(s)
  * URL on loopback, so an inherited variable can never send the server's keys elsewhere; anything
- * else is ignored with a warning (the real service is used).
+ * else is ignored with a warning (the real service is used). Returns the URL as parsed (the one
+ * that was checked), not the string as given.
  */
 export function testEndpoint(name: string, value: string | undefined, warn: (message: string) => void = console.warn): string | undefined {
   if (!value) return undefined
@@ -51,7 +52,7 @@ export function testEndpoint(name: string, value: string | undefined, warn: (mes
   } catch {
     url = undefined
   }
-  if (url && (url.protocol === 'http:' || url.protocol === 'https:') && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password) return value
+  if (url && (url.protocol === 'http:' || url.protocol === 'https:') && LOOPBACK_HOSTS.has(url.hostname) && !url.username && !url.password) return url.href
   warn(`[integrations] ignoring ${name}: only an http(s) URL on 127.0.0.1, ::1 or localhost is accepted`)
   return undefined
 }

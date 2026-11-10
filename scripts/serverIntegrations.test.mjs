@@ -359,6 +359,39 @@ test('voice.setKey: a key stored whose voice choice cannot be saved is TOOL_ERRO
   assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { elevenlabs: 'good-voice' })
 })
 
+test('voice.setKey: a key stored whose voice choice cannot be saved still says the voice changed', async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.dir, 'data'), '')
+  const changes = []
+  const res = await dispatchV2('voice.setKey', { apiKey: 'good-voice' }, { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) })
+  refused(res, 'TOOL_ERROR')
+  assert.deepEqual(changes, [{ voice: true }])
+  // A key refused before anything was stored says nothing.
+  changes.length = 0
+  await dispatchV2('voice.setKey', { apiKey: 'bad-voice' }, { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) })
+  assert.deepEqual(changes, [])
+})
+
+test('voice.json that cannot be parsed: settings read the defaults, but setConfig and the first-voice pick fail and leave it as it was', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(s.dir, 'data'), { recursive: true })
+  writeFileSync(s.voiceConfigFile, '{"voiceId": "v2", "promptSessions": tr')
+  const original = readFileSync(s.voiceConfigFile, 'utf8')
+  assert.equal((await s.call('voice.settings', {})).result.voiceId, '')
+  assert.equal(s.integrations.voice.promptSessions(), false)
+  const res = await s.call('voice.setConfig', { modelId: 'eleven_turbo_v2_5' })
+  refused(res, 'TOOL_ERROR')
+  assert.equal(readFileSync(s.voiceConfigFile, 'utf8'), original)
+  const key = await s.call('voice.setKey', { apiKey: 'good-voice' })
+  refused(key, 'TOOL_ERROR')
+  assert.match(key.error.message, /key was stored.*voice could not be saved/)
+  assert.equal(readFileSync(s.voiceConfigFile, 'utf8'), original)
+  // Neither is a JSON value that is not an object replaced.
+  writeFileSync(s.voiceConfigFile, '[1]')
+  refused(await s.call('voice.setConfig', { promptSessions: true }), 'TOOL_ERROR')
+  assert.equal(readFileSync(s.voiceConfigFile, 'utf8'), '[1]')
+})
+
 test('linear.setKey: a 400 whose body is not JSON is a failed check, not a parse error', async (t) => {
   const s = await setup(t, { notJson: true })
   assert.deepEqual((await s.call('linear.setKey', { apiKey: 'good-key' })).result, { ok: false, error: 'Linear API returned 400' })
@@ -487,6 +520,9 @@ test('the test endpoints (TREK_SERVER_LINEAR_URL, TREK_SERVER_ELEVENLABS_URL) ar
   assert.equal(testEndpoint('X', 'http://127.0.0.1:4000/graphql', warn), 'http://127.0.0.1:4000/graphql')
   assert.equal(testEndpoint('X', 'https://localhost/v1', warn), 'https://localhost/v1')
   assert.equal(testEndpoint('X', 'http://[::1]:9/v1', warn), 'http://[::1]:9/v1')
+  // The URL as parsed (the one that was checked), not the string as given.
+  assert.equal(testEndpoint('X', 'HTTP://LOCALHOST:9/v1', warn), 'http://localhost:9/v1')
+  assert.equal(testEndpoint('X', 'http://127.0.0.1:9/a/../v1', warn), 'http://127.0.0.1:9/v1')
   assert.deepEqual(warned, [])
   for (const bad of ['https://evil.example/graphql', 'http://127.0.0.1.evil.example/', 'file:///etc/passwd', 'http://10.0.0.1/', 'not a url', 'http://localhost@evil.example/']) {
     assert.equal(testEndpoint('X', bad, warn), undefined, bad)

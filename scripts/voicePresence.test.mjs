@@ -3,7 +3,7 @@
 // the server's voice settings; not active until it is known.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { followAppActive, isPresenceActive } from '../src/renderer/src/voicePresence.ts'
+import { MAX_QUEUED_CLIPS, admitsClip, followAppActive, isPresenceActive, mergeVoice } from '../src/renderer/src/voicePresence.ts'
 
 function fakeSettings(initial) {
   const listeners = new Set()
@@ -53,4 +53,19 @@ test('a change heard before the load answers wins over the older load; a failed 
   followAppActive(failing, { set: (v) => got.push(v), onBusy: () => {} })
   await new Promise((r) => setImmediate(r))
   assert.deepEqual(got, [true])
+})
+
+test('mergeVoice: an update lands on the voice settings as they are now, not as they were before it', () => {
+  const now = { voiceId: 'v2', modelId: 'm', promptSessions: true, hasApiKey: true, active: true }
+  assert.deepEqual(mergeVoice(now, { active: false }), { ...now, active: false })
+  assert.deepEqual(mergeVoice(now, { voiceId: 'v3' }), { ...now, voiceId: 'v3' })
+  // The window lost its voice settings meanwhile (another server, no voice): nothing to merge into.
+  assert.equal(mergeVoice(null, { active: false }), null)
+})
+
+test('the clip queue holds at most MAX_QUEUED_CLIPS waiting; more are dropped', () => {
+  assert.equal(MAX_QUEUED_CLIPS, 5)
+  assert.equal(admitsClip(0), true)
+  assert.equal(admitsClip(4), true)
+  assert.equal(admitsClip(5), false)
 })

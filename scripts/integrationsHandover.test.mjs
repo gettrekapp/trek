@@ -2,7 +2,7 @@
 // settings to the Local server once (phase 5b), against a fake server's set-if-absent methods.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handOver, legacyVoiceConfig, nothingToHandOver, parseHandoverState } from '../src/main/integrationsHandoverRules.ts'
+import { handOver, legacyVoiceConfig, nothingToHandOver, parseHandoverState, readHandoverState } from '../src/main/integrationsHandoverRules.ts'
 
 /** A fake Local server: `keys` it already has; `fail` methods that throw (a server older than 5b, a dropped link). */
 function fakeServer({ keys = {}, reject = {}, fail = [] } = {}) {
@@ -82,4 +82,27 @@ test('only well-formed voice settings are sent; the state file reads strictly', 
   const proto = parseHandoverState(JSON.parse('{"profiles":{"__proto__":{"linear":true}}}'))
   assert.equal(Object.hasOwn(proto.profiles, '__proto__'), true)
   assert.equal(Object.getPrototypeOf(proto.profiles), Object.prototype)
+})
+
+test('the state file: missing is the empty state; unreadable or unparsable is null (that start does nothing)', () => {
+  const missing = () => {
+    throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' })
+  }
+  assert.deepEqual(readHandoverState(missing), { state: { profiles: {} } })
+  assert.deepEqual(readHandoverState(() => JSON.stringify({ profiles: { local: { linear: true } }, voiceActive: true })), {
+    state: { profiles: { local: { linear: true } }, voiceActive: true }
+  })
+  for (const read of [
+    () => '{"profiles": {"local": {"linear": tr',
+    () => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    },
+    () => {
+      throw Object.assign(new Error('EISDIR'), { code: 'EISDIR' })
+    }
+  ]) {
+    const res = readHandoverState(read)
+    assert.equal(res.state, null)
+    assert.ok(res.error instanceof Error)
+  }
 })

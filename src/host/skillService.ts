@@ -18,9 +18,11 @@ export const MAX_SKILL_HEAD = 16 * 1024
  * the handle, so a file swapped for a FIFO in between does not block either.
  */
 async function readHead(path: string, confine?: string): Promise<string | undefined> {
-  if (!(await stat(path)).isFile()) return undefined
-  if (confine && !within(confine, await realpath(path))) return undefined
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
+  // The real path is what is checked and what is opened: a link swapped after the check is not followed.
+  const real = await realpath(path)
+  if (confine && !within(confine, real)) return undefined
+  if (!(await stat(real)).isFile()) return undefined
+  const handle = await open(real, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
   try {
     if (!(await handle.stat()).isFile()) return undefined
     const buffer = Buffer.alloc(MAX_SKILL_HEAD)

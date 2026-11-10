@@ -127,7 +127,20 @@ export const integrationHandlers: Record<string, Handler> = {
   'voice.setKey': (p, ctx) => {
     const apiKey = requireApiKey(p.apiKey)
     const ifAbsent = optionalFlag(p.ifAbsent, 'ifAbsent')
-    return changing(ctx, 'voice', () => integrations(ctx).voice.setKey(apiKey, { ifAbsent }), stored)
+    // A key stored whose first voice could not be saved throws (TOOL_ERROR), but the key changed.
+    return changing(
+      ctx,
+      'voice',
+      async () => {
+        try {
+          return await integrations(ctx).voice.setKey(apiKey, { ifAbsent })
+        } catch (err) {
+          if ((err as { keyStored?: unknown }).keyStored === true) ctx.integrationsChanged?.({ voice: true })
+          throw err
+        }
+      },
+      stored
+    )
   },
 
   'voice.clearKey': (_p, ctx) =>

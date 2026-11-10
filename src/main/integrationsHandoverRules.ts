@@ -53,6 +53,27 @@ export function parseHandoverState(raw: unknown): HandoverState {
   return { profiles, ...(from.voiceActive === true ? { voiceActive: true } : {}) }
 }
 
+/**
+ * `integrations-handover.json` through `read` (its text): a missing file (ENOENT) is the empty
+ * state. Any other failure (unreadable, not JSON) is `{ state: null, error }`: the caller then
+ * does nothing that start (neither the hand-over nor the Active/Busy move) and writes nothing, so
+ * a key the user cleared on the server is not handed over again and the file is not replaced.
+ */
+export function readHandoverState(read: () => string): { state: HandoverState; error?: undefined } | { state: null; error: unknown } {
+  let text: string
+  try {
+    text = read()
+  } catch (err) {
+    if ((err as { code?: unknown } | null)?.code === 'ENOENT') return { state: parseHandoverState(undefined) }
+    return { state: null, error: err }
+  }
+  try {
+    return { state: parseHandoverState(JSON.parse(text)) }
+  } catch (err) {
+    return { state: null, error: err }
+  }
+}
+
 /** The voice settings worth sending: a chosen voice, a model, the flag; nothing else. */
 export function legacyVoiceConfig(voice: LegacyIntegrations['voice']): Record<string, unknown> {
   const out: Record<string, unknown> = {}
