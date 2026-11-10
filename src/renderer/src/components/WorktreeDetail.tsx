@@ -36,6 +36,9 @@ import { SettingsPanel } from './SettingsPanel'
 import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
+import { MoveWorktreeModal } from './MoveWorktreeModal'
+import { useAppServerLinks } from '../useAppServerLinks'
+import { moveTargets } from '../v2/moveFlow'
 import { envRepoKey } from '../../../shared/environments'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
@@ -120,6 +123,9 @@ export function WorktreeDetail({
   const [syncBusy, setSyncBusy] = useState<'pull' | 'push' | null>(null)
   const [showTicket, setShowTicket] = useState(false)
   const [showPR, setShowPR] = useState(false)
+  const [showMove, setShowMove] = useState(false)
+  const appServers = useAppServerLinks()
+  const ownEntry = useAppStore((s) => s.serverWindow?.serverEntryId ?? '')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   /** The title the rename started from: a server window refuses it if the title changed meanwhile */
@@ -130,6 +136,7 @@ export function WorktreeDetail({
   const envBusy = useAppStore((s) => s.envBusy)
 
   const features = useFeatures()
+  const canMove = features.moveWorktree && moveTargets(appServers.servers, ownEntry).length > 0
   const path = info?.path
   // The stack runs on the server's machine (`features.stacks`, any server that has `stacks`).
   const [stack, refreshStack] = useStackStatus(path, !features.stacks)
@@ -620,7 +627,20 @@ export function WorktreeDetail({
               </>
             )}
             <div className="detail-menu-divider" />
-            {/* Promote and Move to another server come back with phase 5's server commands. */}
+            {/* Promote comes back with a server command of its own. */}
+            {canMove && !info.isMain && info.branch && getBackend().worktrees.moveRef(info.path) && (
+              <div
+                className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
+                onClick={() => {
+                  if (busy || offline) return
+                  setMenuOpen(false)
+                  setShowMove(true)
+                }}
+              >
+                <div className="detail-menu-name">Move to another server…</div>
+                <div className="detail-menu-desc">Push the branch and carry the uncommitted work and Claude sessions to a clone on another server</div>
+              </div>
+            )}
             {!info.isMain && (
               <div
                 className={`detail-menu-item danger ${busy || offline ? 'disabled' : ''}`}
@@ -894,6 +914,10 @@ export function WorktreeDetail({
       {showPR && info.branch && (
         <PullRequestModal repoId={repo.id} branch={info.branch} onClose={() => setShowPR(false)} />
       )}
+      {showMove && info.branch && (() => {
+        const from = getBackend().worktrees.moveRef(info.path)
+        return from ? <MoveWorktreeModal from={from} name={info.branch} onClose={() => setShowMove(false)} /> : null
+      })()}
     </main>
   )
 }

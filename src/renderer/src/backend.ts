@@ -108,6 +108,8 @@ export interface WindowBackend {
     remove(info: GitWorktreeInfo, instance: WorktreeInstance | undefined): Promise<void>
     /** The sidebar's worktree order, as the store's `worktreeKey`s */
     setOrder(keys: string[]): Promise<void>
+    /** The v2 worktree at this path, for a move to another server (feature `moveWorktree`); null if it isn't one */
+    moveRef(path: string): { projectId: string; worktreeId: string } | null
   }
   readonly git: {
     listWorktrees(repoId: string): Promise<GitWorktreeInfo[]>
@@ -272,7 +274,7 @@ export const idleBackend: WindowBackend = {
     seen: noProject,
     dismissDecision: noProject
   },
-  worktrees: { load: noProject, unload: noProject, unloadAll: noProject, create: noProject, remove: noProject, setOrder: noProject },
+  worktrees: { load: noProject, unload: noProject, unloadAll: noProject, create: noProject, remove: noProject, setOrder: noProject, moveRef: () => null },
   git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, commits: noProject, pull: noProject, push: noProject, dirty: noProject },
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
   env: {

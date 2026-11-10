@@ -457,6 +457,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           await fail(forceErr)
         }
       },
+      moveRef: (path) => {
+        const legacyId = legacyIdAt(path)
+        const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
+        return ref ? { projectId, worktreeId: ref.worktreeId } : null
+      },
       // The one settings write a server window makes (settings are read-only in v2).
       // No keys clears the order; keys none of which map (a stale drag) send nothing.
       setOrder: async (keys) => {

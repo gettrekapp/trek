@@ -24,7 +24,12 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'linear', 'voice', 'skills', 'prWatch', 'review', 'reveal', 'openInEditor', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on, ['docker', 'env', 'stacks', 'linear', 'voice', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'settingsEdit', 'globalPanel'])
+})
+
+test('moving a worktree to another server follows move (5d)', () => {
+  assert.equal(v2Features(['move']).moveWorktree, true)
+  assert.equal(v2Features(['review', 'mcp']).moveWorktree, false)
 })
 
 test('the Changes tab review follows review (5c-2): an older server has only the branch view', () => {

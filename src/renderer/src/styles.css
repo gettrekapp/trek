@@ -3295,6 +3295,42 @@ button:disabled {
   max-width: 520px;
 }
 
+.move-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  font-size: 12.5px;
+}
+
+.move-row > span {
+  width: 52px;
+  color: var(--text-muted);
+}
+
+.move-row select {
+  flex: 1;
+}
+
+.move-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  user-select: text;
+}
+
+.move-summary {
+  margin: 12px 0;
+  padding-left: 18px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.move-summary .warn {
+  color: #f9e2af;
+}
+
 .move-steps {
   list-style: none;
   margin: 14px 0;

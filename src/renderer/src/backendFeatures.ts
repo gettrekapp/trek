@@ -44,8 +44,9 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
 /**
  * A server window (3c-2, 4c, 5a). The ceiling: the v2 backend's features are
  * these AND what `v2Features` asks of the server's welcome and the window's entry.
- * - Off: the bot (phase 5) and the git flows protocol v2 has no command for
- *   (moving a worktree, promote).
+ * - Off: the bot (phase 5) and promote, which protocol v2 has no command for.
+ * - Moving a worktree to another server (5d) needs `move` on this server (the target's is
+ *   checked when it is picked).
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
@@ -72,7 +73,7 @@ export const V2_FEATURES: BackendFeatures = {
   skills: true,
   prWatch: true,
   review: true,
-  moveWorktree: false,
+  moveWorktree: true,
   reveal: true,
   openInEditor: true,
   promote: false,
@@ -96,7 +97,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   voice: 'voice',
   skills: 'skills',
   prWatch: 'prWatch',
-  review: 'review'
+  review: 'review',
+  moveWorktree: 'move'
 }
 
 /**
