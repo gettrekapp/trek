@@ -1,0 +1,20 @@
+/* The web client's own pieces (5c-3): the page shell, the projects list, the dialogs. */
+body.web-client { margin: 0; height: 100vh; }
+.web-app { height: 100vh; }
+.web-title-bar { padding: 0 8px; }
+.web-title-bar .title-side { display: flex; align-items: center; gap: 8px; min-width: 120px; }
+.web-title-right { justify-content: flex-end; }
+.web-signout { margin: 0; }
+.web-status { opacity: 0.8; font-size: 12px; }
+.web-projects { padding: 24px 32px; max-width: 640px; }
+.web-projects h2 { margin: 0 0 12px; font-size: 18px; }
+.web-project-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.web-project { width: 100%; text-align: left; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border, #444); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.web-project:hover { background: rgba(255, 255, 255, 0.06); }
+.web-dialog-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10000; }
+.web-dialog { background: var(--panel, #252526); color: inherit; border-radius: 8px; padding: 18px 20px; width: min(440px, calc(100vw - 32px)); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
+.web-dialog-title { margin: 0 0 8px; font-size: 15px; }
+.web-dialog-message { margin: 0 0 8px; white-space: pre-wrap; }
+.web-dialog-detail { margin: 0 0 12px; opacity: 0.8; white-space: pre-wrap; }
+.web-dialog-checkbox { display: block; margin: 8px 0 12px; }
+.web-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }

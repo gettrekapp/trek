@@ -8,7 +8,8 @@
   "scripts": {
     "postinstall": "npm --prefix server install",
     "dev": "npm run build:server && electron-vite dev",
-    "build": "electron-vite build && npm run build:server",
+    "build": "electron-vite build && npm run build:web && npm run build:server",
+    "build:web": "vite build --config vite.web.config.ts",
     "build:server": "npm --prefix server run build && node scripts/bundle-server.mjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
