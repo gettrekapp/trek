@@ -301,7 +301,11 @@ export interface MethodParamsV2 {
   'worktree.push': WorktreeRef & { setUpstream: boolean }
   /** `source` (5c-2, capability `review`) defaults to the branch against its base */
   'worktree.changes': WorktreeRef & { source?: ChangesSource }
-  'worktree.diff': WorktreeRef & { source?: ChangesSource }
+  'worktree.diff': WorktreeRef & {
+    source?: ChangesSource
+    /** Only these files' patches (5c-2, at most MAX_REVIEW_COMMENTS = 100, as a review comment names them); without it, every changed file */
+    paths?: string[]
+  }
   /** The newest 100 commits on the worktree's HEAD, newest first (5c-2) */
   'worktree.commits': WorktreeRef
   /** A fresh `git status --porcelain` of the worktree (the status poll's `dirty` may be up to 30 s old) */

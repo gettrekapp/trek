@@ -248,8 +248,20 @@ interface EditorText {
 
 const EditorTextContext = createContext<EditorText>({ text: '', setText: () => {} })
 
-interface ReviewActions {
+/**
+ * What changes as the user works on the review (the editor open, a request in flight). Read only by
+ * the parts that show it (comments, editors, the `+` buttons, the bar), so a save, delete or opened
+ * editor doesn't re-render every row of every expanded diff.
+ */
+interface ReviewState {
   editor: Editor | null
+  busy: boolean
+}
+
+const ReviewStateContext = createContext<ReviewState>({ editor: null, busy: false })
+
+/** The panel's review callbacks: one object while the panel's path and online state stay the same. */
+interface ReviewActions {
   open(editor: Editor, text: string): void
   /** Cancels the editor; focus goes back to its line's `+` or its comment's Edit */
   close(): void
@@ -257,7 +269,6 @@ interface ReviewActions {
   remove(comment: ReviewComment): void
   /** Whether a mounting editor takes the focus: one just opened, or one that remounted while it had it */
   claimFocus(): boolean
-  busy: boolean
   /** Line comments can be written: feature on, online */
   canWrite: boolean
 }
@@ -270,6 +281,7 @@ const SEND_NOT_CONFIRMED =
 
 function CommentEditor({ label, actions }: { label: string; actions: ReviewActions }): React.JSX.Element {
   const { text, setText } = useContext(EditorTextContext)
+  const { busy } = useContext(ReviewStateContext)
   const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -279,7 +291,7 @@ function CommentEditor({ label, actions }: { label: string; actions: ReviewActio
     // Only on mount: a remount (the line moved) takes the focus back, a re-render doesn't.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  const canSave = text.trim() !== '' && !actions.busy && actions.canWrite
+  const canSave = text.trim() !== '' && !busy && actions.canWrite
   const save = (): void => {
     if (canSave) void actions.save()
   }
@@ -314,7 +326,8 @@ function CommentEditor({ label, actions }: { label: string; actions: ReviewActio
 }
 
 function CommentView({ comment, actions, where }: { comment: ReviewComment; actions: ReviewActions; where?: string }): React.JSX.Element {
-  const editing = actions.editor?.kind === 'edit' && actions.editor.commentId === comment.id
+  const { editor, busy } = useContext(ReviewStateContext)
+  const editing = editor?.kind === 'edit' && editor.commentId === comment.id
   return (
     <div className="review-comment" data-comment-id={comment.id}>
       {where && <div className="review-comment-where">{where}</div>}
@@ -327,12 +340,12 @@ function CommentView({ comment, actions, where }: { comment: ReviewComment; acti
             <div className="review-comment-actions">
               <button
                 className="review-link review-edit"
-                disabled={actions.busy}
+                disabled={busy}
                 onClick={() => actions.open({ kind: 'edit', commentId: comment.id, startedFrom: comment.body }, comment.body)}
               >
                 Edit
               </button>
-              <button className="review-link" disabled={actions.busy} onClick={() => actions.remove(comment)}>
+              <button className="review-link" disabled={busy} onClick={() => actions.remove(comment)}>
                 Delete
               </button>
             </div>
@@ -357,7 +370,55 @@ function moveAmongAdds(e: React.KeyboardEvent<HTMLButtonElement>): void {
   next.focus()
 }
 
-const FileDiff = memo(function FileDiff({ file, patch, loading, unavailable, comments, source, actions }: {
+/** A line's `+`: disabled while a request is in flight (the only row part that reads ReviewStateContext). */
+function AddButton({ at, tabStop, onOpen }: { at: NewAt; tabStop: boolean; onOpen(at: NewAt): void }): React.JSX.Element {
+  const { busy } = useContext(ReviewStateContext)
+  return (
+    <button
+      className="review-add"
+      title="Comment on this line"
+      aria-label={`Comment on ${placeOf(at)}`}
+      tabIndex={tabStop ? 0 : -1}
+      disabled={busy}
+      onKeyDown={moveAmongAdds}
+      onClick={() => onOpen(at)}
+    >
+      +
+    </button>
+  )
+}
+
+/** One diff line with its comments (and the new comment's editor when it is written here). */
+const DiffRow = memo(function DiffRow({ line, path, comments, writingHere, tabStop, onOpen, actions }: {
+  line: NumberedLine
+  path: string
+  comments: readonly ReviewComment[] | undefined
+  writingHere: boolean
+  tabStop: boolean
+  onOpen(at: NewAt): void
+  actions: ReviewActions
+}): React.JSX.Element {
+  const at: NewAt | null =
+    line.side && line.line !== undefined ? { path, side: line.side, line: line.line, lineText: reviewLineText(line.text) } : null
+  const kind = line.kind === 'context' || line.kind === 'note' ? '' : line.kind
+  const marker = line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : line.kind === 'context' ? ' ' : ''
+  return (
+    <div className="changes-row">
+      <div className={`changes-line ${kind}`} data-side={at?.side} data-line={at?.line}>
+        {at && actions.canWrite && <AddButton at={at} tabStop={tabStop} onOpen={onOpen} />}
+        {line.kind === 'hunk' || line.kind === 'note' ? line.text || ' ' : `${marker}${line.text}` || ' '}
+      </div>
+      {comments?.map((c) => <CommentView key={c.id} comment={c} actions={actions} />)}
+      {writingHere && <CommentEditor label="Add comment" actions={actions} />}
+    </div>
+  )
+})
+
+/**
+ * Its props stay the same across a save, a delete or an opened edit (`writing` is the new comment's
+ * editor only for the file it is on), so only the comments and editors involved re-render.
+ */
+const FileDiff = memo(function FileDiff({ file, patch, loading, unavailable, comments, source, writing, actions }: {
   file: ChangedFile
   patch: string | undefined
   loading: boolean
@@ -366,6 +427,8 @@ const FileDiff = memo(function FileDiff({ file, patch, loading, unavailable, com
   comments: readonly ReviewComment[]
   /** The source shown */
   source: ChangesSource
+  /** The new comment being written on this file and source, if any */
+  writing: (Editor & { kind: 'new' }) | null
   actions: ReviewActions
 }): React.JSX.Element {
   const lines = useMemo(() => (patch === undefined ? [] : numberedLines(patchBody(patch))), [patch])
@@ -382,12 +445,10 @@ const FileDiff = memo(function FileDiff({ file, patch, loading, unavailable, com
   // Only a shown patch can say a comment's line changed; otherwise the box just holds them.
   const shown = patch !== undefined && note === null
   const outdated = patch === undefined ? comments : placed.outdated
-  const newAt = (l: NumberedLine): NewAt | null =>
-    l.side && l.line !== undefined ? { path: file.path, side: l.side, line: l.line, lineText: reviewLineText(l.text) } : null
+  const { open } = actions
+  const onOpen = useCallback((at: NewAt): void => open({ kind: 'new', source, ...at }, ''), [open, source])
   // A new comment being written on this file: under its line while the line still reads the same,
   // else in the box at the file's top (the poll changed it, or the patch is not shown).
-  const e = actions.editor
-  const writing = e?.kind === 'new' && e.path === file.path && sameSource(e.source, source) ? e : null
   const writingAt = writing && shown
     ? lines.findIndex((l) => l.side === writing.side && l.line === writing.line && reviewLineText(l.text) === writing.lineText)
     : -1
@@ -419,35 +480,19 @@ const FileDiff = memo(function FileDiff({ file, patch, loading, unavailable, com
       ) : (
         <div className="changes-diff">
           <div className="changes-diff-inner">
-            {lines.map((line, i) => {
-              const at = newAt(line)
-              const here = placed.byLine.get(i)
-              const kind = line.kind === 'context' || line.kind === 'note' ? '' : line.kind
-              const marker = line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : line.kind === 'context' ? ' ' : ''
+            {lines.map((line, i) => (
               // Keyed by side and number, so a line the poll moves keeps its row (and its editor).
-              return (
-                <div key={at ? `${at.side}${at.line}` : `${line.kind}${i}`} className="changes-row">
-                  <div className={`changes-line ${kind}`} data-side={at?.side} data-line={at?.line}>
-                    {at && actions.canWrite && (
-                      <button
-                        className="review-add"
-                        title="Comment on this line"
-                        aria-label={`Comment on ${placeOf(at)}`}
-                        tabIndex={i === firstAdd ? 0 : -1}
-                        disabled={actions.busy}
-                        onKeyDown={moveAmongAdds}
-                        onClick={() => actions.open({ kind: 'new', source, ...at }, '')}
-                      >
-                        +
-                      </button>
-                    )}
-                    {line.kind === 'hunk' || line.kind === 'note' ? line.text || ' ' : `${marker}${line.text}` || ' '}
-                  </div>
-                  {here?.map((c) => <CommentView key={c.id} comment={c} actions={actions} />)}
-                  {i === writingAt && <CommentEditor label="Add comment" actions={actions} />}
-                </div>
-              )
-            })}
+              <DiffRow
+                key={line.side && line.line !== undefined ? `${line.side}${line.line}` : `${line.kind}${i}`}
+                line={line}
+                path={file.path}
+                comments={placed.byLine.get(i)}
+                writingHere={i === writingAt}
+                tabStop={i === firstAdd}
+                onOpen={onOpen}
+                actions={actions}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -555,6 +600,7 @@ function ReviewBar({ draft, review, elsewhere, actions, onSend, onDiscard, error
   const [showElsewhere, setShowElsewhere] = useState(false)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const sendRef = useRef<HTMLButtonElement>(null)
+  const { editor, busy } = useContext(ReviewStateContext)
   const count = draft?.comments.length ?? 0
   useEffect(() => {
     setConfirmDiscard(false)
@@ -586,11 +632,11 @@ function ReviewBar({ draft, review, elsewhere, actions, onSend, onDiscard, error
     return () => clearTimeout(timer)
   }, [confirmDiscard])
   if (count === 0 && !error) return null
-  const canSend = count > 0 && review.targets.length > 0 && !review.offline && !actions.busy
+  const canSend = count > 0 && review.targets.length > 0 && !review.offline && !busy
   const sendTitle =
     count === 0 ? 'No comments to send' : review.targets.length === 0 ? review.noTargets : review.offline ? 'Server disconnected' : 'Queue the comments on a session as one prompt'
   // The comment being edited is shown even with the list folded.
-  const e = actions.editor
+  const e = editor
   const editingElsewhere = e?.kind === 'edit' && elsewhere.some((c) => c.id === e.commentId)
   return (
     <div className="review-bar">
@@ -631,14 +677,14 @@ function ReviewBar({ draft, review, elsewhere, actions, onSend, onDiscard, error
             <button
               autoFocus
               className="review-btn danger review-discard-confirm"
-              disabled={actions.busy || review.offline}
+              disabled={busy || review.offline}
               onBlur={() => setConfirmDiscard(false)}
               onClick={onDiscard}
             >
               Discard {count} {count === 1 ? 'comment' : 'comments'}?
             </button>
           ) : (
-            <button className="review-btn quiet review-discard" disabled={actions.busy || review.offline} onClick={() => setConfirmDiscard(true)}>
+            <button className="review-btn quiet review-discard" disabled={busy || review.offline} onClick={() => setConfirmDiscard(true)}>
               Discard
             </button>
           ))}
@@ -818,12 +864,14 @@ export const ChangesPanel = memo(function ChangesPanel({
   }, [])
 
   const canWrite = review.enabled && !review.offline
-  // One object while nothing it holds changes, so the memoised file diffs don't all re-render
-  // (typing changes only EditorTextContext).
+  // One object while the path and online state stay the same, so the memoised file diffs and rows
+  // don't re-render on a save, a delete or an opened editor (those change ReviewStateContext; typing
+  // changes only EditorTextContext).
   const actions = useMemo<ReviewActions>(
-    () => ({ editor, open, close, save, remove, claimFocus, busy, canWrite }),
-    [editor, open, close, save, remove, claimFocus, busy, canWrite]
+    () => ({ open, close, save, remove, claimFocus, canWrite }),
+    [open, close, save, remove, claimFocus, canWrite]
   )
+  const reviewState = useMemo<ReviewState>(() => ({ editor, busy }), [editor, busy])
   const editorTextValue = useMemo<EditorText>(() => ({ text: editorText, setText: setEditorText }), [editorText])
 
   // This source's comments by file; the rest are listed in the bar.
@@ -839,98 +887,101 @@ export const ChangesPanel = memo(function ChangesPanel({
   }, [draft, source, changes])
 
   return (
-    <EditorTextContext.Provider value={editorTextValue}>
-      <div ref={panelRef} className="notes-panel changes-panel" style={{ display: visible ? 'flex' : 'none' }}>
-        <div className="notes-header">
-          <span>Changes</span>
-          {review.enabled ? (
-            <SourcePicker path={path} source={source} onSource={onSource} base={changes?.base} />
-          ) : (
-            <span className="muted">
-              {changes && (changes.base ? `compared to ${changes.base}` : 'comparing uncommitted changes only')}
-              {review.needsUpdate && (
-                <span className="changes-needs-update" title="This server is older than Trek 5c-2">
-                  {changes ? ' · ' : ''}Update the server to pick a source and comment on lines
-                </span>
-              )}
-            </span>
+    <ReviewStateContext.Provider value={reviewState}>
+      <EditorTextContext.Provider value={editorTextValue}>
+        <div ref={panelRef} className="notes-panel changes-panel" style={{ display: visible ? 'flex' : 'none' }}>
+          <div className="notes-header">
+            <span>Changes</span>
+            {review.enabled ? (
+              <SourcePicker path={path} source={source} onSource={onSource} base={changes?.base} />
+            ) : (
+              <span className="muted">
+                {changes && (changes.base ? `compared to ${changes.base}` : 'comparing uncommitted changes only')}
+                {review.needsUpdate && (
+                  <span className="changes-needs-update" title="This server is older than Trek 5c-2">
+                    {changes ? ' · ' : ''}Update the server to pick a source and comment on lines
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
+          {visible && review.enabled && (
+            <ReviewBar
+              draft={draft}
+              review={review}
+              elsewhere={elsewhere}
+              actions={actions}
+              error={reviewError}
+              onSend={(target) => {
+                if (!draft) return
+                void run(`Could not send the review to ${target.title}`, () => getBackend().review.send(path, target.terminalId, draft.revision), SEND_NOT_CONFIRMED)
+              }}
+              onDiscard={() => {
+                if (!draft) return
+                void run('Could not discard the review', () => getBackend().review.clear(path, draft.revision))
+              }}
+            />
           )}
-        </div>
-        {visible && review.enabled && (
-          <ReviewBar
-            draft={draft}
-            review={review}
-            elsewhere={elsewhere}
-            actions={actions}
-            error={reviewError}
-            onSend={(target) => {
-              if (!draft) return
-              void run(`Could not send the review to ${target.title}`, () => getBackend().review.send(path, target.terminalId, draft.revision), SEND_NOT_CONFIRMED)
-            }}
-            onDiscard={() => {
-              if (!draft) return
-              void run('Could not discard the review', () => getBackend().review.clear(path, draft.revision))
-            }}
-          />
-        )}
-        {visible && (
-          <div className="changes-list">
-            {error && <div className="changes-note changes-error">{error}</div>}
-            {!error && diffError && (
-              <div className="changes-note changes-error">Couldn't load the diffs: {diffError}</div>
-            )}
-            {!error && !changes && (
-              <div className="changes-note">{paused ? 'Server disconnected' : 'Loading…'}</div>
-            )}
-            {!error && changes?.files.length === 0 && <div className="changes-note">No changes</div>}
-            {changes?.files.map((file) => {
-              const expanded = toggled[file.path] ?? autoExpanded.has(file.path)
-              const noteOnly = file.binary || file.tooLarge || file.unreadable
-              const fileComments = byPath.get(file.path) ?? NO_COMMENTS
-              return (
-                <div key={file.path} className="changes-file" data-path={file.path}>
-                  <div
-                    className="changes-file-row"
-                    onClick={() => setToggled((t) => ({ ...t, [file.path]: !expanded }))}
-                  >
-                    <span className="changes-chevron">{expanded ? '▾' : '▸'}</span>
-                    <span className={`changes-status ${file.status}`} title={file.status}>
-                      {STATUS_LETTER[file.status]}
-                    </span>
-                    <span className="changes-path" title={file.path}>
-                      {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-                    </span>
-                    {fileComments.length > 0 && (
-                      <span className="review-file-count" title="Review comments on this file">
-                        💬 {fileComments.length}
+          {visible && (
+            <div className="changes-list">
+              {error && <div className="changes-note changes-error">{error}</div>}
+              {!error && diffError && (
+                <div className="changes-note changes-error">Couldn't load the diffs: {diffError}</div>
+              )}
+              {!error && !changes && (
+                <div className="changes-note">{paused ? 'Server disconnected' : 'Loading…'}</div>
+              )}
+              {!error && changes?.files.length === 0 && <div className="changes-note">No changes</div>}
+              {changes?.files.map((file) => {
+                const expanded = toggled[file.path] ?? autoExpanded.has(file.path)
+                const noteOnly = file.binary || file.tooLarge || file.unreadable
+                const fileComments = byPath.get(file.path) ?? NO_COMMENTS
+                return (
+                  <div key={file.path} className="changes-file" data-path={file.path}>
+                    <div
+                      className="changes-file-row"
+                      onClick={() => setToggled((t) => ({ ...t, [file.path]: !expanded }))}
+                    >
+                      <span className="changes-chevron">{expanded ? '▾' : '▸'}</span>
+                      <span className={`changes-status ${file.status}`} title={file.status}>
+                        {STATUS_LETTER[file.status]}
                       </span>
-                    )}
-                    {!noteOnly && (
-                      <span className="changes-counts">
-                        <span className="add">+{file.added}</span>{' '}
-                        <span className="del">−{file.deleted}</span>
+                      <span className="changes-path" title={file.path}>
+                        {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
                       </span>
+                      {fileComments.length > 0 && (
+                        <span className="review-file-count" title="Review comments on this file">
+                          💬 {fileComments.length}
+                        </span>
+                      )}
+                      {!noteOnly && (
+                        <span className="changes-counts">
+                          <span className="add">+{file.added}</span>{' '}
+                          <span className="del">−{file.deleted}</span>
+                        </span>
+                      )}
+                    </div>
+                    {expanded && (
+                      <FileDiff
+                        file={file}
+                        patch={
+                          diffs && Object.hasOwn(diffs, file.path) ? diffs[file.path] : undefined
+                        }
+                        loading={diffsPending}
+                        unavailable={!!diffError}
+                        comments={fileComments}
+                        source={source}
+                        writing={editor?.kind === 'new' && editor.path === file.path && sameSource(editor.source, source) ? editor : null}
+                        actions={actions}
+                      />
                     )}
                   </div>
-                  {expanded && (
-                    <FileDiff
-                      file={file}
-                      patch={
-                        diffs && Object.hasOwn(diffs, file.path) ? diffs[file.path] : undefined
-                      }
-                      loading={diffsPending}
-                      unavailable={!!diffError}
-                      comments={fileComments}
-                      source={source}
-                      actions={actions}
-                    />
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </EditorTextContext.Provider>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </EditorTextContext.Provider>
+    </ReviewStateContext.Provider>
   )
 }, sameProps)
