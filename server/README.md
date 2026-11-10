@@ -217,6 +217,19 @@ is removed last. Both clones need an `origin` that names the same repository,
 and the source's server user must be able to push to it. See PROTOCOL.md, "Moving a worktree
 between servers".
 
+## Promote to primary
+
+With the `promote` capability, the app's **Promote to primary…** runs `worktree.promote` on the
+server, in one request: the main checkout (which must be clean) switches to the worktree's branch
+while the worktree still has it, the worktree's uncommitted work is applied there and checked
+against the worktree's own, and only then is the worktree removed. Claude and local-model sessions
+move to the main checkout, their histories renamed into its `~/.claude/projects` folder (the
+server user's), and resume there; others are closed. **Promote branch to worktree…**
+(`worktree.demote`) does the reverse, back to the default branch. A failure before the worktree is
+removed (or, for the reverse, before the main checkout leaves the branch) puts everything back.
+The `promote_to_primary` MCP tool asks the project's windows to confirm (`promote.request`) and
+waits up to 15 minutes for one to answer. See PROTOCOL.md, "Promote to primary".
+
 ## Web client
 
 `trek-server start --web` (or `"web": true` in the config, read at start) also serves

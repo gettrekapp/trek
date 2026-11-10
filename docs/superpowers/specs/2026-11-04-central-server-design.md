@@ -486,8 +486,16 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      Docker `.env` goes with the note, and a target without `env` lists it as not carried.
      Plan:
      `docs/superpowers/plans/2026-11-10-central-server-phase5d-move-worktrees.md`.
-   - **Later, in their own plans:** the bot (ported last, only when asked), promote to
-     primary, and Windows support for the supervisor.
+   - **5e: promote to primary**, and its reverse "Promote branch to worktree", behind a `promote`
+     capability: each one request on the server (`worktree.promote`, `worktree.demote`). User
+     decisions (2026-11-10): both actions come back; the promoted worktree's uncommitted work is
+     carried (5d's config-proof patch, checked by digest; the main checkout must be clean), and any
+     failure puts everything back; the main checkout's own sessions keep running on the new branch;
+     the trek-dev tool `promote_to_primary` returns, confirmed in a window that has the project
+     open (refused when none has). Plan:
+     `docs/superpowers/plans/2026-11-10-central-server-phase5e-promote.md`.
+   - **After phase 6** (user decision, 2026-11-10): Windows support for the supervisor, and the
+     bot (ported last, in its own plan, only when asked).
 6. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
 
 Remote projects can be opened after phase 3. After phase 4 every project is on a server and

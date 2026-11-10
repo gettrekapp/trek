@@ -244,7 +244,22 @@ other window on that project sees them live.
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.
-- **Not yet**: promote to primary and the project bot (phase 5).
+- **Promote to primary**: **Promote to primary…** in a worktree's menu checks its
+  branch out in the repository's main checkout (which must have no uncommitted
+  changes), with the worktree's uncommitted work (unstaged), then deletes the
+  worktree. Its Claude and local-model sessions move to the main checkout with their
+  histories and resume there; other agents' sessions are closed; the main checkout's
+  own sessions keep running on the new branch. The note, tags, ticket, pull request
+  and its watch are the branch's, so they stay with it; the review draft moves if the
+  main checkout has none. Its dev stack and VM go as with Delete (the same checkbox).
+  **Promote branch to worktree…** on the main checkout does the reverse: its branch
+  and uncommitted work go to a new worktree at `<repo>-<branch>`, the sessions that
+  can follow go with them, and the main checkout returns to the default branch. Each
+  is one request on the server: any failure puts both checkouts back as they were.
+  An agent can ask for a promote with the `promote_to_primary` MCP tool; every window
+  with the project open (the web client's too) shows the confirmation, and the tool
+  waits for the answer.
+- **Not yet**: the project bot (after the native client).
 
 ## Importing a .trekproj
 
@@ -449,6 +464,9 @@ one at a time:
   with a bare repository in a temp dir as both clones' origin: the dialog, the steps,
   the target's worktree, work and Claude session, the source's removal, its VM and
   stack torn down (stub colima and docker), and a move rolled back with `move.unreceive`;
+- `npm run smoke:server-promote`: Promote to primary and Promote branch to worktree from
+  a remote server's window (the work, the session and its history moved, the folders
+  and rows), and an agent's `promote_to_primary` confirmed, then declined, in the window;
 - `npm run smoke:server-web`: the web client: `trek-server start --web` driven from a
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the
