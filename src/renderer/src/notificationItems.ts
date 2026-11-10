@@ -63,7 +63,7 @@ export function menuEntries(
       kind: 'server',
       id: item.key,
       source: serverSource(item),
-      text: item.question ?? statusText(item.status),
+      text: item.pullRequest ?? item.question ?? statusText(item.status),
       at: item.askedAt ?? item.since,
       decision: item.question !== undefined,
       stale: item.stale === true

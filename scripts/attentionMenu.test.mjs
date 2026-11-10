@@ -105,3 +105,10 @@ test('labels: Global, no project name, stale, and the status texts', () => {
   assert.equal(menuEntries([], null, [item('s', { stale: true })], () => '')[0].stale, true)
   assert.deepEqual(['attention', 'done', 'idle'].map(statusText), ['Needs your attention', 'Finished', 'idle'])
 })
+
+test("a pull request notice (5c-1) is listed by what changed, as the worktree's, not a decision", () => {
+  const notice = item('', { key: JSON.stringify(['box', 'p1', 'worktree:w1']), title: 'PR #12', since: 400, pullRequest: 'Checks failed — prompt queued for Claude' })
+  assert.deepEqual(menuEntries([], null, [notice], () => ''), [
+    { kind: 'server', id: notice.key, source: 'Demo · Build box · PR #12', text: 'Checks failed — prompt queued for Claude', at: 400, decision: false, stale: false }
+  ])
+})

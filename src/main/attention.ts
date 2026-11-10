@@ -25,7 +25,7 @@ export interface AttentionSource {
   mirror: { subscribe(topic: 'attention', listener: MirrorListener<'attention'>): () => void }
 }
 
-export type AttentionKind = 'decision' | 'attention' | 'done'
+export type AttentionKind = 'decision' | 'attention' | 'done' | 'pullRequest'
 
 /** A new entry: what it is, and the item as listed. */
 export interface AttentionEvent {
@@ -81,6 +81,10 @@ export function attentionKey(serverEntryId: string, projectId: string, sessionId
   return JSON.stringify([serverEntryId, projectId, sessionId])
 }
 
+/** An entry's key: its session's, or for a pull request notice (no session, 5c-1) its worktree's. */
+const keyOfEntry = (serverEntryId: string, e: AttentionEntry): string =>
+  attentionKey(serverEntryId, e.projectId, e.sessionId || `worktree:${e.worktreeId ?? ''}`)
+
 const isFlagged = (status: unknown): boolean => status === 'attention' || status === 'done'
 
 /** A server's entry with the fields this needs; anything else is skipped. */
@@ -94,11 +98,16 @@ function wellFormed(e: unknown): e is AttentionEntry {
     const d = x.decision as Record<string, unknown> | null
     if (!d || typeof d.question !== 'string' || typeof d.at !== 'number') return false
   }
+  if (x.pullRequest !== undefined) {
+    const n = x.pullRequest as Record<string, unknown> | null
+    if (!n || typeof n.text !== 'string' || typeof x.worktreeId !== 'string') return false
+  } else if (x.sessionId === '') return false
   return true
 }
 
 /** The moment that makes an entry new, and its kind; null when it is listed for nothing new. */
 export function newMoment(entry: AttentionEntry, prev: Seen | undefined): AttentionKind | null {
+  if (entry.pullRequest) return entry.since !== (prev?.flagged ?? null) ? 'pullRequest' : null
   const decided = entry.decision?.at ?? null
   if (decided !== null && decided !== (prev?.decided ?? null)) return 'decision'
   const flagged = isFlagged(entry.status) ? entry.since : null
@@ -107,6 +116,7 @@ export function newMoment(entry: AttentionEntry, prev: Seen | undefined): Attent
 }
 
 function seenOf(entry: AttentionEntry): Seen {
+  if (entry.pullRequest) return { flagged: entry.since, decided: null }
   return { flagged: isFlagged(entry.status) ? entry.since : null, decided: entry.decision?.at ?? null }
 }
 
@@ -123,7 +133,7 @@ export function createAttention(deps: AttentionDeps): Attention {
   // Field by field: nothing from the server's entry is spread, so nothing else reaches a window.
   const item = (id: string, link: Linked, e: AttentionEntry): AttentionItem => {
     const out: AttentionItem = {
-      key: attentionKey(id, e.projectId, e.sessionId),
+      key: keyOfEntry(id, e),
       serverEntryId: id,
       serverName: deps.serverName(id),
       projectId: e.projectId,
@@ -138,6 +148,7 @@ export function createAttention(deps: AttentionDeps): Attention {
       out.question = e.decision.question
       out.askedAt = e.decision.at
     }
+    if (e.pullRequest) out.pullRequest = e.pullRequest.text
     if (link.failed || link.down) out.stale = true
     return out
   }
@@ -165,7 +176,7 @@ export function createAttention(deps: AttentionDeps): Attention {
     const events: AttentionEvent[] = []
     const seen = new Map<string, Seen>()
     for (const e of entries) {
-      const key = attentionKey(id, e.projectId, e.sessionId)
+      const key = keyOfEntry(id, e)
       const kind = link.baselined ? newMoment(e, link.seen.get(key)) : null
       if (kind) events.push({ kind, item: item(id, link, e), audioAlerts: e.audioAlerts === true })
       seen.set(key, seenOf(e))

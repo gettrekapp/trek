@@ -331,3 +331,27 @@ test('find by key; close unsubscribes everything and stops broadcasts', () => {
   attention.linked('box', fakeSource().source)
   assert.equal(changes.length, count)
 })
+
+test("a pull request notice (5c-1) is keyed by its worktree, raised once per report, and carries what changed", () => {
+  const { attention, raised, last } = setup()
+  const box = fakeSource()
+  attention.linked('box', box.source)
+  const notice = (since, text) => entry('', { title: 'PR #12', since, pullRequest: { text, url: 'https://github.com/o/r/pull/12' } })
+  box.snapshot([])
+  box.snapshot([notice(200, 'Checks failed — prompt queued for Claude'), entry('s1', { since: 150 })])
+  assert.deepEqual(raised.map((e) => [e.kind, e.item.key]), [
+    ['pullRequest', attentionKey('box', 'p1', 'worktree:w1')],
+    ['attention', attentionKey('box', 'p1', 's1')]
+  ])
+  assert.equal(last().items[0].pullRequest, 'Checks failed — prompt queued for Claude')
+  assert.equal('url' in last().items[0], false, 'only the text reaches a window')
+  // The same report again: nothing; a new one (its own at): raised again.
+  box.snapshot([notice(200, 'Checks failed — prompt queued for Claude')])
+  assert.equal(raised.length, 2)
+  box.snapshot([notice(300, 'Checks passed — prompt queued for Claude')])
+  assert.equal(raised.at(-1).kind, 'pullRequest')
+  assert.equal(newMoment(notice(300, 'x'), { flagged: 300, decided: null }), null)
+  // A session-less entry without a notice is malformed and skipped.
+  box.snapshot([entry('')])
+  assert.deepEqual(last().items, [])
+})

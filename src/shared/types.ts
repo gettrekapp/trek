@@ -186,7 +186,7 @@ export interface AppServersChanged {
  * server's `attention` entry and the server list's name: no token, no URL.
  */
 export interface AttentionItem {
-  /** `JSON.stringify([serverEntryId, projectId, sessionId])`: what a window sends back to open or dismiss it */
+  /** `JSON.stringify([serverEntryId, projectId, sessionId or 'worktree:<id>'])`: what a window sends back to open or dismiss it */
   key: string
   serverEntryId: string
   /** The user's name for the server entry */
@@ -205,6 +205,8 @@ export interface AttentionItem {
   question?: string
   /** When the decision was asked (epoch ms) */
   askedAt?: number
+  /** A worktree's pull request notice (5c-1): what changed. The entry has no session (`sessionId` ''). */
+  pullRequest?: string
   /** main's connection to the server is down or failed: this is the last state it saw */
   stale?: true
 }
@@ -283,6 +285,10 @@ export interface Repository {
   branchTickets?: Record<string, string>
   /** GitHub pull request URLs, keyed by branch name (survives promote/delete) */
   branchPullRequests?: Record<string, string>
+  /** Branches whose linked PR the server watches (5c-1) */
+  branchPrWatches?: Record<string, true>
+  /** The watched PR's last report, by the branch of the worktree that holds it (5c-1) */
+  branchPrNotices?: Record<string, string>
   /**
    * Environment variables for the branch's Docker environment, keyed by branch
    * name (survives promote/delete). Raw .env-style text ("KEY=value" lines) —

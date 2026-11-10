@@ -20,7 +20,8 @@ export interface FocusedWindow {
  * session is in view in the focused window. No window focused (another
  * app is frontmost), or another window focused: notified. Nothing is notified
  * while the app-wide "Show notifications" switch is off (`showNotifications`);
- * the bell and the alert sound do not follow it.
+ * the bell and the alert sound do not follow it. A pull request notice (5c-1)
+ * has no session, so it is notified as attention is for a session not in view.
  */
 export function shouldNotify(
   kind: AttentionKind,
@@ -41,6 +42,8 @@ export const placeOf = (item: AttentionItem): string => attentionPlace(item)
 
 /** As the legacy window words them, with the session's title for the agent's name. */
 export function notificationText(kind: AttentionKind, item: AttentionItem): { title: string; body: string } {
+  // A pull request notice (5c-1): "PR #12 changed", then where, then what changed.
+  if (kind === 'pullRequest') return { title: `${item.title} changed`, body: `${placeOf(item)}\n${item.pullRequest ?? ''}` }
   const title =
     kind === 'decision'
       ? `${item.title} needs a decision`
@@ -60,11 +63,16 @@ export function wantsAlert(events: readonly { audioAlerts: boolean }[]): boolean
   return events.some((e) => e.audioAlerts)
 }
 
-/** Dismissing an entry: its decision if it has one (the menu labels it by that), else it is marked seen. */
-export function dismissRequest(item: AttentionItem): {
-  method: 'session.dismissDecision' | 'session.seen'
-  params: { projectId: string; sessionId: string }
-} {
+/**
+ * Dismissing an entry: a pull request notice is cleared (5c-1); else its decision if it has one
+ * (the menu labels it by that), else it is marked seen.
+ */
+export function dismissRequest(item: AttentionItem):
+  | { method: 'session.dismissDecision' | 'session.seen'; params: { projectId: string; sessionId: string } }
+  | { method: 'prWatch.dismiss'; params: { projectId: string; worktreeId: string } } {
+  if (item.pullRequest !== undefined && item.worktreeId !== null) {
+    return { method: 'prWatch.dismiss', params: { projectId: item.projectId, worktreeId: item.worktreeId } }
+  }
   const params = { projectId: item.projectId, sessionId: item.sessionId }
   return item.question !== undefined ? { method: 'session.dismissDecision', params } : { method: 'session.seen', params }
 }

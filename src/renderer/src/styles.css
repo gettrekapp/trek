@@ -783,6 +783,32 @@ button:disabled {
   background: rgba(124, 102, 220, 0.3);
 }
 
+.chip-pr.notice {
+  box-shadow: inset 0 0 0 1px var(--attention);
+}
+
+.chip-pr-watch {
+  opacity: 0.75;
+}
+
+.chip-pr-notice {
+  background: rgba(255, 178, 36, 0.12);
+  color: var(--attention);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+
+.chip-dismiss {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  font: inherit;
+}
+
 .chip-git {
   background: rgba(255, 178, 36, 0.12);
   color: var(--attention);

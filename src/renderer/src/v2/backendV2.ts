@@ -571,6 +571,12 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       setPullRequest: async (repoId, branch, url) => {
         await request('branch.setPr', { ...branchRef(repoId, branch), pr: url })
       },
+      setPrWatch: async (repoId, branch, watch) => {
+        await request('branch.setPrWatch', { ...branchRef(repoId, branch), watch })
+      },
+      dismissPrNotice: async (path) => {
+        await request('prWatch.dismiss', { projectId, worktreeId: worktreeAt(path) })
+      },
       setEnvVars: async (repoId, branch, text) => {
         await request('branch.setEnv', { ...branchRef(repoId, branch), env: text || null })
       }

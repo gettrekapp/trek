@@ -525,3 +525,25 @@ test('error on an open socket waits for its close', () => {
   sock.serverClose(1006, '')
   assert.equal(conn.status, 'disconnected')
 })
+
+test("integrations.changed {prWatch} moves prWatch in the welcome's capabilities, as a new array, before listeners hear it (5c-1)", () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome()
+  const seen = []
+  conn.on('event', () => seen.push(conn.welcome.capabilities))
+  const before = conn.welcome.capabilities
+  sock.event('integrations.changed', { prWatch: true })
+  assert.deepEqual(conn.welcome.capabilities, ['mcp', 'prWatch'])
+  assert.notEqual(conn.welcome.capabilities, before)
+  assert.deepEqual(seen[0], ['mcp', 'prWatch'])
+  sock.event('integrations.changed', { prWatch: true })
+  assert.deepEqual(conn.welcome.capabilities, ['mcp', 'prWatch'], 'listed once')
+  sock.event('integrations.changed', { prWatch: false })
+  assert.deepEqual(conn.welcome.capabilities, ['mcp'])
+  sock.event('integrations.changed', { linear: true })
+  sock.event('integrations.changed', { prWatch: 'yes' })
+  assert.deepEqual(conn.welcome.capabilities, ['mcp'])
+})

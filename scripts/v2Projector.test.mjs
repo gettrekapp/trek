@@ -179,10 +179,23 @@ test('branch data becomes the six legacy maps; empty values are left out', () =>
   assert.deepEqual(one.branchTickets, { feat: 'TOW-1' })
   assert.deepEqual(one.branchPullRequests, { feat: 'https://github.com/o/r/pull/7' })
   assert.deepEqual(one.branchEnvVars, { feat: 'A=1' })
+  assert.deepEqual(one.branchPrWatches, {})
+  assert.deepEqual(one.branchPrNotices, {})
   assert.deepEqual(one.linkedDirs, ['.trek'])
   assert.deepEqual(two.branchNotes, {})
   assert.equal(two.linkedDirs, undefined)
   assert.equal('serverPaths' in one, false)
+})
+
+test("a watched PR (5c-1): the branch's watch, and its worktree's notice by branch", () => {
+  const p = fixture()
+  const repo = p.repositories[0]
+  repo.branchData.feat.prWatch = { seen: { checks: 'a none', conflict: false } }
+  const feat = repo.worktrees.find((w) => w.branch === 'feat')
+  feat.prNotice = { title: 'PR #7', text: 'Merged — no agent session to send it to', url: 'https://github.com/o/r/pull/7', at: 1 }
+  const [one] = projectV2(p).slice.project.repositories
+  assert.deepEqual(one.branchPrWatches, { feat: true })
+  assert.deepEqual(one.branchPrNotices, { feat: 'Merged — no agent session to send it to' })
 })
 
 test('settings spread into the project file; no servers', () => {

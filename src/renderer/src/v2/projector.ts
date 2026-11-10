@@ -161,6 +161,8 @@ type BranchMaps = Required<
     | 'branchCustomTags'
     | 'branchTickets'
     | 'branchPullRequests'
+    | 'branchPrWatches'
+    | 'branchPrNotices'
     | 'branchEnvVars'
   >
 >
@@ -172,6 +174,8 @@ function branchMaps(repo: V2Repository): BranchMaps {
     branchCustomTags: {},
     branchTickets: {},
     branchPullRequests: {},
+    branchPrWatches: {},
+    branchPrNotices: {},
     branchEnvVars: {}
   }
   for (const [branch, data] of Object.entries(repo.branchData)) {
@@ -180,8 +184,10 @@ function branchMaps(repo: V2Repository): BranchMaps {
     if (data.customTags?.length) maps.branchCustomTags[branch] = [...data.customTags]
     if (data.ticket) maps.branchTickets[branch] = data.ticket
     if (data.pr) maps.branchPullRequests[branch] = data.pr
+    if (data.prWatch) maps.branchPrWatches[branch] = true
     if (data.env) maps.branchEnvVars[branch] = data.env
   }
+  for (const w of repo.worktrees) if (w.prNotice && w.branch) maps.branchPrNotices[w.branch] = w.prNotice.text
   return maps
 }
 

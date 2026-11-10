@@ -199,6 +199,9 @@ export function WorktreeDetail({
   // promote/demote and worktree re-creation.
   const ticket = info.branch ? repo.branchTickets?.[info.branch] : undefined
   const pullRequest = info.branch ? repo.branchPullRequests?.[info.branch] : undefined
+  // The server watches it (5c-1); its last report stays on the chip until dismissed.
+  const watchingPr = !!pullRequest && !!info.branch && !!repo.branchPrWatches?.[info.branch]
+  const prNotice = info.branch ? repo.branchPrNotices?.[info.branch] : undefined
   const linearIssue = ticket ? linearIssues[ticket] : undefined
   const linkedTicketUrl = ticket ? ticketUrl(project, ticket, linearIssue) : null
 
@@ -402,11 +405,26 @@ export function WorktreeDetail({
             )}
             {pullRequest && (
               <span
-                className="chip chip-pr"
-                title={`Open pull request — ${pullRequest}`}
+                className={`chip chip-pr${prNotice ? ' notice' : ''}`}
+                title={`${prNotice ? `${prNotice}\n` : ''}Open pull request — ${pullRequest}`}
                 onClick={() => window.open(pullRequest)}
               >
                 PR {pullRequestLabel(pullRequest)}
+                {watchingPr && <span className="chip-pr-watch"> · watching</span>}
+              </span>
+            )}
+            {prNotice && (
+              <span className="chip chip-pr-notice" title="Dismiss">
+                {prNotice}
+                <button
+                  className="chip-dismiss"
+                  aria-label="Dismiss pull request notice"
+                  onClick={() => {
+                    if (!offline) void getBackend().branch.dismissPrNotice(info.path).catch((err: unknown) => getBackend().errors.report('Could not dismiss the notice', err))
+                  }}
+                >
+                  ×
+                </button>
               </span>
             )}
             {git && <span className="chip chip-git">{git}</span>}
@@ -543,6 +561,27 @@ export function WorktreeDetail({
                     Change or unlink the linked pull request
                   </div>
                 </div>
+                {pullRequest && info.branch && (features.prWatch || watchingPr) && (
+                  <div
+                    className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
+                    onClick={() => {
+                      const branch = info.branch
+                      if (offline || !branch) return
+                      void runAction(() =>
+                        getBackend()
+                          .branch.setPrWatch(repo.id, branch, !watchingPr)
+                          .catch((err: unknown) => getBackend().errors.report(watchingPr ? 'Could not stop watching the pull request' : 'Could not watch the pull request', err))
+                      )
+                    }}
+                  >
+                    <div className="detail-menu-name">{watchingPr ? 'Stop watching pull request' : 'Watch pull request'}</div>
+                    <div className="detail-menu-desc">
+                      {watchingPr
+                        ? 'The server stops following its checks and reviews'
+                        : "The server follows its checks, reviews and merge state, and queues a prompt on this worktree's newest session"}
+                    </div>
+                  </div>
+                )}
                 {(linkedTicketUrl || pullRequest) && (
                   <div
                     className="detail-menu-item"

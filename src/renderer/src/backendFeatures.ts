@@ -9,6 +9,7 @@ export type FeatureName =
   | 'linear'
   | 'voice'
   | 'skills'
+  | 'prWatch'
   | 'moveWorktree'
   | 'reveal'
   | 'openInEditor'
@@ -26,6 +27,7 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'linear',
   'voice',
   'skills',
+  'prWatch',
   'moveWorktree',
   'reveal',
   'openInEditor',
@@ -48,6 +50,8 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - Linear, voice and skills are the server's (5b): Linear and ElevenLabs
  *   with the server's own keys, the skills read on its disk; each needs its
  *   capability, on any server.
+ * - The pull request watch (5c-1) runs gh on the server's machine: it needs
+ *   `prWatch`, which the server lists only while gh is signed in there.
  * - The Global panel needs `mcp`.
  * - Docker, environments and stacks run on the server's machine (5a): each
  *   needs its capability, on any server.
@@ -62,6 +66,7 @@ export const V2_FEATURES: BackendFeatures = {
   linear: true,
   voice: true,
   skills: true,
+  prWatch: true,
   moveWorktree: false,
   reveal: true,
   openInEditor: true,
@@ -84,7 +89,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   stacks: 'stacks',
   linear: 'linear',
   voice: 'voice',
-  skills: 'skills'
+  skills: 'skills',
+  prWatch: 'prWatch'
 }
 
 /**

@@ -184,6 +184,10 @@ export interface WindowBackend {
     setNote(repoId: string, branch: string, text: string, expected?: string | null): Promise<void>
     setTicket(repoId: string, branch: string, ticketId: string | null): Promise<void>
     setPullRequest(repoId: string, branch: string, url: string | null): Promise<void>
+    /** The server watches the branch's linked PR (5c-1, `features.prWatch`) */
+    setPrWatch(repoId: string, branch: string, watch: boolean): Promise<void>
+    /** Clears the pull request notice of the worktree at `path` */
+    dismissPrNotice(path: string): Promise<void>
     setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
   /** Both report a failure in their own dialog and resolve. */
@@ -271,7 +275,16 @@ export const idleBackend: WindowBackend = {
     onChanged: () => () => {}
   },
   skills: { list: noProject },
-  branch: { setTag: noProject, setCustomTag: noProject, setNote: noProject, setTicket: noProject, setPullRequest: noProject, setEnvVars: noProject },
+  branch: {
+    setTag: noProject,
+    setCustomTag: noProject,
+    setNote: noProject,
+    setTicket: noProject,
+    setPullRequest: noProject,
+    setPrWatch: noProject,
+    dismissPrNotice: noProject,
+    setEnvVars: noProject
+  },
   repos: { add: noProject, remove: noProject },
   errors: {
     show: (title, message) => void window.api.showError(title, message),

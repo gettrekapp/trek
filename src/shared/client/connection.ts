@@ -350,6 +350,13 @@ export class ServerConnection {
       return
     }
     if (frame.type === 'event' && typeof frame.event === 'string') {
+      // `prWatch` comes and goes with gh's sign-in on the server (5c-1): the welcome's capabilities
+      // follow it, as a new array, before the event's listeners hear it.
+      const prWatch = frame.event === 'integrations.changed' ? (frame.payload as { prWatch?: unknown } | null)?.prWatch : undefined
+      if (typeof prWatch === 'boolean' && this.welcome) {
+        const others = this.welcome.capabilities.filter((c) => c !== 'prWatch')
+        this.welcome = { ...this.welcome, capabilities: prWatch ? [...others, 'prWatch'] : others }
+      }
       const ev: ServerEvent = { event: frame.event, payload: frame.payload }
       this.emit(this.eventListeners, ev, 'event')
     }

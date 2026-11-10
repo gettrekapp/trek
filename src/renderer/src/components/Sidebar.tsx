@@ -205,6 +205,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const pullRequest = info.branch
       ? repo.branchPullRequests?.[info.branch]
       : undefined
+    // A watched PR's report (5c-1) flags the row until it is dismissed.
+    const prNotice = info.branch ? repo.branchPrNotices?.[info.branch] : undefined
     const env = features.env ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
     const envIsBusy = env ? !!envBusy[env.profile] : false
     const isSelected =
@@ -246,8 +248,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         onClick={() => selectWorktree({ path: info.path }, instance?.id)}
         title={`${branchLabel(info)} — ${info.path}`}
       >
-        {dot === 'attention' ? (
-          <span className="wt-attn" title={DOT_TITLES.attention}>
+        {dot === 'attention' || prNotice ? (
+          <span className="wt-attn" title={dot === 'attention' ? DOT_TITLES.attention : prNotice}>
             !
           </span>
         ) : (
@@ -306,7 +308,9 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                   </span>
                 )}
                 {pullRequest && (
-                  <span className="mini-chip pr">{pullRequestLabel(pullRequest)}</span>
+                  <span className="mini-chip pr" title={prNotice}>
+                    {pullRequestLabel(pullRequest)}
+                  </span>
                 )}
                 {env && (
                   <span

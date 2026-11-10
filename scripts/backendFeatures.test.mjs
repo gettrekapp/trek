@@ -24,7 +24,12 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'linear', 'voice', 'skills', 'reveal', 'openInEditor', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on, ['docker', 'env', 'stacks', 'linear', 'voice', 'skills', 'prWatch', 'reveal', 'openInEditor', 'settingsEdit', 'globalPanel'])
+})
+
+test('the pull request watch follows prWatch (5c-1): listed only while gh is signed in on the server', () => {
+  assert.equal(v2Features(['prWatch']).prWatch, true)
+  assert.equal(v2Features(['mcp', 'local', 'linear'], { localEntry: true }).prWatch, false)
 })
 
 test('v2 features are the ceiling AND the welcome capabilities; settings need none', () => {
