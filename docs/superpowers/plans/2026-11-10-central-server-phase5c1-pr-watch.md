@@ -112,7 +112,7 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
     - **Main's handling:**
       - main keys it as `worktree:<id>`;
       - it raises it as a new kind, `pullRequest`, once per `at`;
-      - the notification reads "PR #12 changed", with the place and the notice's text as the body;
+      - the notification reads "PR #12 changed", with the place and the notice's text as the body; *app review fix:* a notice the server could not read (`Can’t be read: <reason>`) reads "PR #12 can’t be read", with the place and the reason;
       - the notification is shown even when the worktree is in view, because no session can stand for it;
       - its sound follows the project's `audioAlerts`;
       - it is dismissed through `prWatch.dismiss`.
@@ -120,15 +120,16 @@ The bot, moving worktrees between servers, promote, and the supervisor on Window
     - **A malformed entry** (`sessionId: ''` with no `pullRequest`) is skipped.
 17. **The app's surface.**
     - The … menu shows **Watch pull request** or **Stop watching pull request** when a PR is linked and either `features.prWatch` is on or the branch is already watched. That way a watch can still be stopped while gh is signed out.
-    - The PR chip shows "· watching" while the branch is watched.
-    - A notice adds a chip with a ×, puts a "!" on the sidebar row (its tooltip is the notice), and adds an entry to the notifications menu.
-    - The projector gives the store `branchPrWatches` and `branchPrNotices`, keyed by branch, as it does `branchPullRequests`.
-18. **`src/main/github.ts` stays.** It resolves a PR's head branch when the app creates a worktree from a PR, which has nothing to do with the watch.
+    - The PR chip shows "· watching" while the branch is watched. *App review fix:* while gh is signed out (`features.prWatch` off) a kept watch shows as "· watch paused — gh signed out". The menu item does nothing while another action is busy.
+    - A notice adds a chip with a × (titled Dismiss, disabled while offline), flags the sidebar row and adds an entry to the notifications menu. *App review fix:* the row's flag ("PR", its tooltip the notice) sits beside the status dot instead of replacing it, so a working session still shows; a collapsed repo header shows the flag too when any of its worktrees has a notice. The menu words a notice's entry as a notice: its × is "Dismiss", a failed dismiss says "Could not dismiss the notice", and the bell's title counts sessions and pull request notices apart (`MenuEntry.pullRequest`).
+    - The projector gives the store `branchPrWatches`, keyed by branch, as it does `branchPullRequests`. *App review fix:* notices are `worktreePrNotices`, keyed by the worktree's path, not its branch: keyed by branch, a `missing` worktree on the same branch could override the live one's notice, and the row's × then dismissed the live worktree, which had none.
+18. **`src/main/github.ts` stays.** It resolves a PR's head branch when the app creates a worktree from a PR, which has nothing to do with the watch. *App review fix:* it picks gh as the server does (`src/main/ghBinary.ts`): `TREK_SERVER_GH` when it is an absolute path, no gh (the public API fallback only) for any other value, and `gh` from the PATH only when it is unset. So no smoke reaches the real gh through main either.
 19. **No smoke runs the real gh.**
     - `TREK_SERVER_GH` (an absolute path) is the gh the server runs. Only an unset variable means `gh` from the PATH. *Review fix:* any other value (empty, relative) is logged and fails closed: the runner always rejects, so gh reads as not installed. Before, it fell back to the real gh on the PATH, so a typo in a test's stub path reached GitHub.
     - `TREK_SERVER_PR_POLL_MS` (at least 1000) sets the time between polls and between sign-in checks, for the smoke.
     - Every smoke imports `scripts/smokeGh.mjs` first. It writes a stub that is never signed in and sets `TREK_SERVER_GH` to it in `process.env`.
     - Every child inherits the variable, and main's `childEnv` keeps it for the Local server. `smoke:v2` and `smoke:local-features` check that the welcome has no `prWatch`, which proves the stub was the gh that ran.
+    - *App review fix:* `smoke:server-prwatch` runs the notification path end to end: main's `Notification` is stubbed (recorded, clickable) and its title and body checked, a menu entry and a notification click each select the worktree, the menu's × dismisses a second notice on the server, and at the end every gh call is checked to be the sign-in check or the watch's query. Its sign-out section records the window's connection status and the SDK connection's status and welcomes, so "without a reconnect" is asserted.
     - This lands in Task 2, with the first code that runs gh, so no smoke between tasks reaches the real one. This machine has `/opt/homebrew/bin/gh`.
 
 ## Conventions

@@ -21,6 +21,8 @@ export type MenuEntry =
       text: string
       at: number
       decision: boolean
+      /** A watched pull request's notice (5c-1): no session; dismissing it clears the notice */
+      pullRequest: boolean
       stale: boolean
     }
 
@@ -66,6 +68,7 @@ export function menuEntries(
       text: item.pullRequest ?? item.question ?? statusText(item.status),
       at: item.askedAt ?? item.since,
       decision: item.question !== undefined,
+      pullRequest: item.pullRequest !== undefined,
       stale: item.stale === true
     })
   }

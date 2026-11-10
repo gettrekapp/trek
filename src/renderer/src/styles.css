@@ -434,6 +434,18 @@ button:disabled {
   color: var(--text);
 }
 
+/* A watched pull request's notice (5c-1): shown beside the status dot, not in its place */
+.wt-pr-flag {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--attention);
+  color: var(--bg-darker);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+}
+
 /* Circled ! — a session in this worktree needs the user */
 .wt-attn {
   width: 15px;
@@ -807,6 +819,11 @@ button:disabled {
   cursor: pointer;
   padding: 0 2px;
   font: inherit;
+}
+
+.chip-dismiss:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 
 .chip-git {

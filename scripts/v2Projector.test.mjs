@@ -180,14 +180,14 @@ test('branch data becomes the six legacy maps; empty values are left out', () =>
   assert.deepEqual(one.branchPullRequests, { feat: 'https://github.com/o/r/pull/7' })
   assert.deepEqual(one.branchEnvVars, { feat: 'A=1' })
   assert.deepEqual(one.branchPrWatches, {})
-  assert.deepEqual(one.branchPrNotices, {})
+  assert.deepEqual(one.worktreePrNotices, {})
   assert.deepEqual(one.linkedDirs, ['.trek'])
   assert.deepEqual(two.branchNotes, {})
   assert.equal(two.linkedDirs, undefined)
   assert.equal('serverPaths' in one, false)
 })
 
-test("a watched PR (5c-1): the branch's watch, and its worktree's notice by branch", () => {
+test("a watched PR (5c-1): the branch's watch, and its worktree's notice by the worktree's path", () => {
   const p = fixture()
   const repo = p.repositories[0]
   repo.branchData.feat.prWatch = { seen: { checks: 'a none', conflict: false } }
@@ -195,7 +195,26 @@ test("a watched PR (5c-1): the branch's watch, and its worktree's notice by bran
   feat.prNotice = { title: 'PR #7', text: 'Merged — no agent session to send it to', url: 'https://github.com/o/r/pull/7', at: 1 }
   const [one] = projectV2(p).slice.project.repositories
   assert.deepEqual(one.branchPrWatches, { feat: true })
-  assert.deepEqual(one.branchPrNotices, { feat: 'Merged — no agent session to send it to' })
+  assert.deepEqual(one.worktreePrNotices, { '/r/one-feat': 'Merged — no agent session to send it to' })
+})
+
+test('a missing worktree on the same branch keeps its own PR notice; the live one is not overridden (5c-1)', () => {
+  const p = fixture()
+  const repo = p.repositories[0]
+  const gone = repo.worktrees.find((w) => w.id === 'w-gone')
+  gone.branch = 'feat'
+  gone.prNotice = { title: 'PR #7', text: 'old', url: 'https://github.com/o/r/pull/7', at: 1 }
+  const feat = repo.worktrees.find((w) => w.id === 'w-feat')
+  const order = [gone, feat]
+  repo.worktrees = repo.worktrees.filter((w) => !order.includes(w)).concat(order.reverse())
+  // The live worktree listed first, the missing one after it: a branch key would let the missing one win.
+  feat.prNotice = { title: 'PR #7', text: 'live', url: 'https://github.com/o/r/pull/7', at: 2 }
+  const { slice, ids } = projectV2(p)
+  const [one] = slice.project.repositories
+  assert.deepEqual(one.worktreePrNotices, { '/r/one-feat': 'live', '/r/one-gone': 'old' })
+  // Each row's × resolves its own path to its own worktree id.
+  assert.equal(ids.worktrees[ids.worktreeByPath['/r/one-feat']].worktreeId, 'w-feat')
+  assert.equal(ids.worktrees[ids.worktreeByPath['/r/one-gone']].worktreeId, 'w-gone')
 })
 
 test('settings spread into the project file; no servers', () => {

@@ -84,9 +84,9 @@ test("a file window lists its own decisions and every server's entries, newest f
   const local = [{ terminalId: 't1', question: 'Local?', requestedAt: 150 }]
   const entries = menuEntries(local, null, [item('s1', { since: 100 }), item('s2', { status: 'idle', since: 300, question: 'Ship?', askedAt: 300 })], (id) => `main · ${id}`)
   assert.deepEqual(entries, [
-    { kind: 'server', id: item('s2').key, source: 'Demo · Build box · Claude', text: 'Ship?', at: 300, decision: true, stale: false },
+    { kind: 'server', id: item('s2').key, source: 'Demo · Build box · Claude', text: 'Ship?', at: 300, decision: true, pullRequest: false, stale: false },
     { kind: 'local', id: 't1', source: 'main · t1', text: 'Local?', at: 150 },
-    { kind: 'server', id: item('s1').key, source: 'Demo · Build box · Claude', text: 'Needs your attention', at: 100, decision: false, stale: false }
+    { kind: 'server', id: item('s1').key, source: 'Demo · Build box · Claude', text: 'Needs your attention', at: 100, decision: false, pullRequest: false, stale: false }
   ])
 })
 
@@ -109,6 +109,6 @@ test('labels: Global, no project name, stale, and the status texts', () => {
 test("a pull request notice (5c-1) is listed by what changed, as the worktree's, not a decision", () => {
   const notice = item('', { key: JSON.stringify(['box', 'p1', 'worktree:w1']), title: 'PR #12', since: 400, pullRequest: 'Checks failed — prompt queued for Claude' })
   assert.deepEqual(menuEntries([], null, [notice], () => ''), [
-    { kind: 'server', id: notice.key, source: 'Demo · Build box · PR #12', text: 'Checks failed — prompt queued for Claude', at: 400, decision: false, stale: false }
+    { kind: 'server', id: notice.key, source: 'Demo · Build box · PR #12', text: 'Checks failed — prompt queued for Claude', at: 400, decision: false, pullRequest: true, stale: false }
   ])
 })

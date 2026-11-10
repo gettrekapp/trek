@@ -13,12 +13,17 @@
 //   - the welcome lists prWatch while gh is signed in, and the window's feature follows it;
 //   - the detail pane's "Watch pull request" turns the branch's watch on (saved on the server, polled
 //     at once with the linked URL); the PR chip says watching;
-//   - failing checks: a prompt is queued on the worktree's newest session, the worktree's notice is
-//     listed in the notifications menu and flags its sidebar row; the notice's × clears it;
+//   - failing checks: a prompt is queued on the worktree's newest session; main raises an OS
+//     notification ("PR #12 changed", where, what changed); the worktree's notice is listed in the
+//     notifications menu (worded as a notice) and its entry selects the worktree; the sidebar row
+//     flags it beside its status dot; the detail pane's × clears it;
 //   - watch_pull_request (MCP) turns the watch off and on;
-//   - merged with no session: the notice says nothing was queued, and the watch turns itself off;
+//   - merged with no session: the notice says nothing was queued, and the watch turns itself off; its
+//     OS notification is clicked (selects the worktree), and the menu's × dismisses it on the server;
 //   - gh signed out: a failed poll (HTTP 401) re-checks, a new connection's welcome has no prWatch, and the open
-//     window and connection follow (integrations.changed {prWatch}); signed in again, they follow back;
+//     window (its chip says the watch is paused) and connection follow (integrations.changed {prWatch})
+//     with the window's connection staying up; signed in again, they follow back;
+//   - every gh call was the sign-in check or the watch's query on the linked PR;
 //   - the renderer never holds the server token; no error dialogs, console or page errors.
 //
 // Prints SERVER PRWATCH SMOKE PASS (n checks) or SERVER PRWATCH SMOKE FAIL and exits 0 or 1.
@@ -119,12 +124,18 @@ writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [{ id: 'app', name:
 const mainStub = join(work, 'main-stub.cjs')
 writeFileSync(
   mainStub,
-  `const { dialog } = require('electron')
+  `const { dialog, Notification } = require('electron')
 globalThis.__dialogs = []
 dialog.showMessageBox = async (...args) => {
   const o = args.find((a) => a && typeof a === 'object' && 'message' in a) ?? {}
   globalThis.__dialogs.push({ type: o.type ?? null, message: o.message })
   return { response: 0, checkboxChecked: false }
+}
+// main's OS notifications are recorded, not shown; the smoke clicks one through __notes[i].n.
+globalThis.__notes = []
+Notification.isSupported = () => true
+Notification.prototype.show = function () {
+  globalThis.__notes.push({ title: this.title, body: this.body, n: this })
 }
 `
 )
@@ -269,7 +280,8 @@ try {
   await menuItem('Watch pull request').click()
   check("the branch's watch is on, saved on the server", await until(async () => (await branchData())?.prWatch !== undefined, true), true)
   check('polled at once, with the linked URL', await until(() => prViews().length > 0, true), true)
-  check('every poll ran the watch’s query on the linked PR', [...new Set(prViews())], [`api graphql -f query=${PR_QUERY} -f owner=acme -f name=app -F number=12`])
+  const prQuery = `api graphql -f query=${PR_QUERY} -f owner=acme -f name=app -F number=12`
+  check('the first poll ran the watch’s query (gh api graphql) on the linked PR', [...new Set(prViews())], [prQuery])
   check('the PR chip says watching', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watching'), 'PR #12 · watching')
   check('the baseline is saved: checks pending, no notice yet', [await until(async () => (await branchData())?.prWatch?.seen?.checks ?? null, 'aaa pending'), (await feature()).prNotice ?? null], ['aaa pending', null])
 
@@ -284,16 +296,29 @@ try {
   check('the prompt says what failed and how to look', (await queueOf(newest.sessionId))[0].split('\n').slice(0, 2), [`Pull request #12 (${PR_URL}) changed:`, `- Checks failed: lint. Look at them with \`gh pr checks ${PR_URL}\`, fix the cause, and push.`])
   const notice = 'Checks failed — prompt queued for Claude'
   check("the worktree's notice", await until(async () => (await feature()).prNotice?.text ?? null, notice), notice)
-  await win.locator('.notif-bell').click()
+  // main's OS notifications for the PR (the fake agents' own are left out).
+  const prNotes = () => app.evaluate(() => globalThis.__notes.filter((n) => n.title.startsWith('PR #12')).map(({ title, body }) => ({ title, body })))
+  const firstNote = { title: 'PR #12 changed', body: `prwatch · Remote\n${notice}` }
+  check('main raises one OS notification: title and body', await until(prNotes, [firstNote]), [firstNote])
+  // The entry selects the worktree: the primary is selected first.
+  await rows.filter({ hasText: 'PRIMARY' }).click()
+  check('(the primary worktree selected)', await until(() => detail.locator('.detail-path').textContent(), repo), repo)
+  const bell = win.locator('.notif-bell')
+  check('the bell counts the notice as a notice', await until(async () => /\b1 pull request notice waiting on you$/.test((await bell.getAttribute('title')) ?? ''), true), true)
+  await bell.click()
   const notifItem = win.locator('.notif-menu .notif-item', { hasText: 'PR #12' })
   check('the notifications menu lists it, saying what changed', await until(() => notifItem.locator('.notif-question').textContent().catch(() => null), notice), notice)
-  await win.keyboard.press('Escape')
-  await win.locator('.notif-bell').click().catch(() => {})
-  check("the sidebar flags the worktree's row", await until(() => featureRow.locator('.wt-attn').getAttribute('title').catch(() => null), notice), notice)
+  check('its × says Dismiss', await notifItem.locator('.notif-seen').getAttribute('title'), 'Dismiss')
+  await notifItem.locator('.notif-text').click()
+  check('clicking the entry selects the feature worktree', await until(() => detail.locator('.detail-path').textContent(), worktree), worktree)
+  check('and closes the menu', await until(() => win.locator('.notif-menu').count(), 0), 0)
+  check("the sidebar flags the worktree's row", await until(() => featureRow.locator('.wt-pr-flag').getAttribute('title').catch(() => null), notice), notice)
+  check('beside its status dot, which still shows', await featureRow.locator('.wt-dot').count(), 1)
   check('the detail pane shows the notice', await until(() => detail.locator('.chip-pr-notice').textContent().catch(() => null), `${notice}×`), `${notice}×`)
+  check("the notice's × says Dismiss", await detail.locator('.chip-pr-notice .chip-dismiss').getAttribute('title'), 'Dismiss')
   await detail.locator('.chip-pr-notice .chip-dismiss').click()
   check('its × clears the notice on the server', await until(async () => (await feature()).prNotice ?? null, null), null)
-  check('and the row is no longer flagged', await until(() => featureRow.locator('.wt-attn').count(), 0), 0)
+  check('and the row is no longer flagged', await until(() => featureRow.locator('.wt-pr-flag').count(), 0), 0)
 
   // ---- 5. watch_pull_request (MCP) --------------------------------------------------------------------
 
@@ -328,13 +353,39 @@ try {
   const merged = 'Merged — no agent session to send it to'
   check('merged with no session: the notice says nothing was queued', await until(async () => (await feature()).prNotice?.text ?? null, merged), merged)
   check('the watch turned itself off; the PR stays linked', await branchData(), { pr: PR_URL })
-  check("the window has it, by the worktree's branch", await until(() => win.evaluate(() => window.__store.getState().project?.repositories[0].branchPrNotices?.['feature-x'] ?? null), merged), merged)
+  check("the window has it, by the worktree's path", await until(() => win.evaluate((p) => window.__store.getState().project?.repositories[0].worktreePrNotices?.[p] ?? null, worktree), merged), merged)
+  const mergedNote = { title: 'PR #12 changed', body: `prwatch · Remote\n${merged}` }
+  check('main raises its OS notification', await until(async () => (await prNotes())[1] ?? null, mergedNote), mergedNote)
+  // Its click selects the worktree, as the menu's entry does.
+  await rows.filter({ hasText: 'PRIMARY' }).click()
+  await until(() => detail.locator('.detail-path').textContent(), repo)
+  await app.evaluate(() => globalThis.__notes.filter((n) => n.title.startsWith('PR #12'))[1].n.emit('click'))
+  check('clicking the notification selects the feature worktree', await until(() => detail.locator('.detail-path').textContent(), worktree), worktree)
+  await win.locator('.notif-bell').click()
+  const mergedItem = win.locator('.notif-menu .notif-item', { hasText: 'PR #12' })
+  check('the menu lists it', await until(() => mergedItem.locator('.notif-question').textContent().catch(() => null), merged), merged)
+  await mergedItem.locator('.notif-seen').click()
+  check("the menu's × dismisses it on the server", await until(async () => (await feature()).prNotice ?? null, null), null)
+  check('and the menu no longer lists it', await until(() => mergedItem.count(), 0), 0)
+  await win.keyboard.press('Escape')
 
   // ---- 7. gh signed out: a failed poll re-checks, and a new welcome has no prWatch ------------------
 
   pr()
   await sdk.request('branch.setPrWatch', { projectId, repoId, branch: 'feature-x', watch: true })
   await until(async () => (await branchData())?.prWatch?.seen?.checks ?? null, 'aaa pending')
+  check('(the chip says watching again)', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watching'), 'PR #12 · watching')
+  // The window's connection status, from here on: a reconnect would show as a change.
+  await win.evaluate(() => {
+    window.__links = []
+    window.__store.subscribe((st, prev) => {
+      if (st.serverLink !== prev.serverLink) window.__links.push(st.serverLink)
+    })
+  })
+  const sdkStatus = []
+  const offStatus = sdk.on('status', (c) => sdkStatus.push(c.status ?? c))
+  let sdkWelcomes = 0
+  const offWelcome = sdk.on('welcome', () => sdkWelcomes++)
   rmSync(signedIn)
   rmSync(prJson)
   const after = await until(async () => {
@@ -347,12 +398,20 @@ try {
   const refused = await sdk.request('branch.setPrWatch', { projectId, repoId, branch: 'feature-x', watch: true }).then(() => null, (e) => e.code)
   check('turning a watch on is refused then (TOOL_ERROR); the one on stays', [refused, (await branchData())?.prWatch !== undefined], ['TOOL_ERROR', true])
   // Pushed (integrations.changed {prWatch}): the open window and connection follow without reconnecting.
-  check("the open window's PR watch goes away, without a reconnect", await until(() => win.evaluate(() => window.__features().prWatch), false), false)
+  check("the open window's PR watch goes away", await until(() => win.evaluate(() => window.__features().prWatch), false), false)
+  check('the chip says the watch is paused', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watch paused — gh signed out'), 'PR #12 · watch paused — gh signed out')
   check("and the open SDK connection's capabilities follow", sdk.welcome.capabilities.includes('prWatch'), false)
   pr()
   writeFileSync(signedIn, '')
   check('gh signed in again: the open window shows it again (the next sign-in check)', await until(() => win.evaluate(() => window.__features().prWatch), true), true)
-  check('every connection heard each change', sdkChanges.filter((c) => 'prWatch' in c), [{ prWatch: false }, { prWatch: true }])
+  check('and its chip says watching', await until(() => detail.locator('.chip-pr').textContent().catch(() => ''), 'PR #12 · watching'), 'PR #12 · watching')
+  check("all without a reconnect: the window's connection never left connected", [await win.evaluate(() => window.__links), await win.evaluate(() => window.__store.getState().serverLink)], [[], 'connected'])
+  offStatus()
+  offWelcome()
+  check('nor the SDK connection: no status change and no new welcome', [sdk.status, sdkStatus, sdkWelcomes], ['connected', [], 0])
+  check('the open SDK connection heard integrations.changed once each way: off, then on', sdkChanges.filter((c) => 'prWatch' in c), [{ prWatch: false }, { prWatch: true }])
+  const ghLines = readFileSync(ghCalls, 'utf8').trim().split('\n')
+  check('every gh call, start to end, was the sign-in check or the watch’s query on the linked PR', [...new Set(ghLines)].sort(), ['auth status --hostname github.com', prQuery].sort())
 
   const held = await win.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))
   check("the renderer's store and page never hold the server token", held.includes(token), false)

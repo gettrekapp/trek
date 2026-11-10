@@ -75,6 +75,8 @@ test('the app-wide "Show notifications" switch off: nothing is notified, focus o
 test('a pull request notice (5c-1): "PR #12 changed" with what changed; a dismiss clears the notice', () => {
   const notice = item({ sessionId: '', title: 'PR #12', pullRequest: 'Merged — no agent session to send it to' })
   assert.deepEqual(notificationText('pullRequest', notice), { title: 'PR #12 changed', body: 'Demo · Build box\nMerged — no agent session to send it to' })
+  const unreadable = item({ sessionId: '', title: 'PR #12', pullRequest: 'Can’t be read: HTTP 404: Not Found' })
+  assert.deepEqual(notificationText('pullRequest', unreadable), { title: 'PR #12 can’t be read', body: 'Demo · Build box\nHTTP 404: Not Found' })
   assert.deepEqual(dismissRequest(notice), { method: 'prWatch.dismiss', params: { projectId: 'p1', worktreeId: 'w1' } })
   // No session in view can stand for it: notified even in its own focused window.
   assert.equal(shouldNotify('pullRequest', notice, { target: here, viewing: ['s1'] }), true)

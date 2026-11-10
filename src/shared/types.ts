@@ -287,8 +287,8 @@ export interface Repository {
   branchPullRequests?: Record<string, string>
   /** Branches whose linked PR the server watches (5c-1) */
   branchPrWatches?: Record<string, true>
-  /** The watched PR's last report, by the branch of the worktree that holds it (5c-1) */
-  branchPrNotices?: Record<string, string>
+  /** The watched PR's last report, by the path of the worktree that holds it (5c-1) */
+  worktreePrNotices?: Record<string, string>
   /**
    * Environment variables for the branch's Docker environment, keyed by branch
    * name (survives promote/delete). Raw .env-style text ("KEY=value" lines) —

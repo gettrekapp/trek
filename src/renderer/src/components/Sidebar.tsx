@@ -81,6 +81,15 @@ function dotKind(
   }
 }
 
+/** A watched pull request's notice (5c-1), beside the row's status dot (which still shows its sessions). */
+function PrNoticeFlag({ title }: { title: string }): React.JSX.Element {
+  return (
+    <span className="wt-pr-flag" title={title}>
+      PR
+    </span>
+  )
+}
+
 export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const linearIssues = useAppStore((s) => s.linearIssues)
@@ -206,7 +215,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       ? repo.branchPullRequests?.[info.branch]
       : undefined
     // A watched PR's report (5c-1) flags the row until it is dismissed.
-    const prNotice = info.branch ? repo.branchPrNotices?.[info.branch] : undefined
+    const prNotice = repo.worktreePrNotices?.[info.path]
     const env = features.env ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
     const envIsBusy = env ? !!envBusy[env.profile] : false
     const isSelected =
@@ -248,8 +257,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         onClick={() => selectWorktree({ path: info.path }, instance?.id)}
         title={`${branchLabel(info)} — ${info.path}`}
       >
-        {dot === 'attention' || prNotice ? (
-          <span className="wt-attn" title={dot === 'attention' ? DOT_TITLES.attention : prNotice}>
+        {dot === 'attention' ? (
+          <span className="wt-attn" title={DOT_TITLES.attention}>
             !
           </span>
         ) : (
@@ -268,6 +277,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                 ⚑
               </span>
             )}
+            {prNotice && <PrNoticeFlag title={prNotice} />}
             {info.isMain && <span className="primary-tag">PRIMARY</span>}
           </div>
           {prefix && <div className="wt-prefix-line">{prefix}</div>}
@@ -379,6 +389,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     if (filtering && repoRows.length === 0) return null
     const isCollapsed = !!collapsed[repo.id]
     const dot = repoDot(repo)
+    // A collapsed header flags its worktrees' PR notices (5c-1) beside its dot, as each row does.
+    const noticeCount = Object.keys(repo.worktreePrNotices ?? {}).length
     const block = repoMenuId === repo.id ? removalBlock(repo) : null
     return (
       <section className="repo-section" key={repo.id}>
@@ -399,6 +411,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
               ) : (
                 dot !== 'none' && <span className={`wt-dot ${dot}`} title={DOT_TITLES[dot]} />
               ))}
+            {isCollapsed && noticeCount > 0 && <PrNoticeFlag title={`${noticeCount} pull request notice${noticeCount === 1 ? '' : 's'}`} />}
           </button>
           <button
             className="repo-action"

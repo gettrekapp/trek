@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { ghBinary } from './ghBinary.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -18,10 +19,13 @@ async function prHeadBranch(owner: string, repo: string, number: number): Promis
   if (!SAFE_SEGMENT.test(owner) || !SAFE_SEGMENT.test(repo) || !Number.isInteger(number)) {
     return null
   }
-  // gh uses the user's existing auth, so private repos work.
+  // gh uses the user's existing auth, so private repos work. TREK_SERVER_GH picks it as the server does;
+  // a value that is not an absolute path means no gh.
+  const gh = ghBinary(process.env.TREK_SERVER_GH)
   try {
+    if (gh === null) throw new Error('TREK_SERVER_GH is not an absolute path')
     const { stdout } = await execFileAsync(
-      'gh',
+      gh,
       ['pr', 'view', String(number), '--repo', `${owner}/${repo}`, '--json', 'headRefName'],
       { timeout: 15_000 }
     )

@@ -40,10 +40,21 @@ export function shouldNotify(
 /** "Demo · Build box", with " · Global" for a Global panel session; the server alone without a project name. */
 export const placeOf = (item: AttentionItem): string => attentionPlace(item)
 
+/** How the server words a watched PR it could not read (server/src/prWatch/watcher.ts) */
+const UNREADABLE = 'Can’t be read:'
+
 /** As the legacy window words them, with the session's title for the agent's name. */
 export function notificationText(kind: AttentionKind, item: AttentionItem): { title: string; body: string } {
-  // A pull request notice (5c-1): "PR #12 changed", then where, then what changed.
-  if (kind === 'pullRequest') return { title: `${item.title} changed`, body: `${placeOf(item)}\n${item.pullRequest ?? ''}` }
+  // A pull request notice (5c-1): "PR #12 changed", then where, then what changed; one the server
+  // could not read (its text "Can’t be read: <reason>"): "PR #12 can’t be read", then where, then why.
+  if (kind === 'pullRequest') {
+    const text = item.pullRequest ?? ''
+    const unreadable = text.startsWith(UNREADABLE)
+    return {
+      title: `${item.title} ${unreadable ? 'can’t be read' : 'changed'}`,
+      body: `${placeOf(item)}\n${unreadable ? text.slice(UNREADABLE.length).trim() : text}`
+    }
+  }
   const title =
     kind === 'decision'
       ? `${item.title} needs a decision`

@@ -15,14 +15,25 @@ function timeAgo(at: number): string {
   return `${Math.floor(minutes / 60)}h ago`
 }
 
+/** "2 sessions and 1 pull request notice waiting on you" */
+function bellTitle(list: readonly MenuEntry[]): string {
+  const notices = list.filter((e) => e.kind === 'server' && e.pullRequest).length
+  const sessions = list.length - notices
+  const parts = [
+    ...(sessions ? [`${sessions} session${sessions === 1 ? '' : 's'}`] : []),
+    ...(notices ? [`${notices} pull request notice${notices === 1 ? '' : 's'}`] : [])
+  ]
+  return `${parts.join(' and ')} waiting on you`
+}
+
 /**
  * Bell in the sidebar listing the sessions waiting on the user: this window's
  * own decisions, and every app-wide server's sessions in attention, done or
  * with a decision (main's attention list), in every window. Clicking a
  * local entry opens its session here; a server entry asks main to focus or
  * open its project's window, which selects it. The flag (or ×) dismisses it:
- * a server entry's decision is dismissed, or the session marked seen, through
- * main's connection to that server.
+ * a server entry's decision is dismissed, a pull request notice cleared, or the
+ * session marked seen, through main's connection to that server.
  */
 export function NotificationsMenu(): React.JSX.Element {
   const decisions = useAppStore((s) => s.decisions)
@@ -79,7 +90,8 @@ export function NotificationsMenu(): React.JSX.Element {
       return
     }
     window.api.attention.dismiss(entry.id).catch((err: unknown) => {
-      void window.api.showError(entry.decision ? 'Could not dismiss the decision' : 'Could not mark the session seen', errorText(err))
+      const title = entry.pullRequest ? 'Could not dismiss the notice' : entry.decision ? 'Could not dismiss the decision' : 'Could not mark the session seen'
+      void window.api.showError(title, errorText(err))
     })
   }
 
@@ -88,7 +100,7 @@ export function NotificationsMenu(): React.JSX.Element {
       <button
         ref={triggerRef}
         className={`notif-bell ${list.length ? 'pending' : ''}`}
-        title={list.length ? `${list.length} session(s) waiting on you` : 'Nothing waiting on you'}
+        title={list.length ? bellTitle(list) : 'Nothing waiting on you'}
         onClick={toggle}
       >
         <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -115,7 +127,7 @@ export function NotificationsMenu(): React.JSX.Element {
                 >
                   <span
                     className={`${decision ? 'decision-icon' : 'notif-seen'} clickable`}
-                    title={decision ? 'Dismiss' : 'Mark seen'}
+                    title={decision || (entry.kind === 'server' && entry.pullRequest) ? 'Dismiss' : 'Mark seen'}
                     onClick={(e) => {
                       e.stopPropagation()
                       dismiss(entry)

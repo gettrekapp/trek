@@ -201,7 +201,7 @@ export function WorktreeDetail({
   const pullRequest = info.branch ? repo.branchPullRequests?.[info.branch] : undefined
   // The server watches it (5c-1); its last report stays on the chip until dismissed.
   const watchingPr = !!pullRequest && !!info.branch && !!repo.branchPrWatches?.[info.branch]
-  const prNotice = info.branch ? repo.branchPrNotices?.[info.branch] : undefined
+  const prNotice = repo.worktreePrNotices?.[info.path]
   const linearIssue = ticket ? linearIssues[ticket] : undefined
   const linkedTicketUrl = ticket ? ticketUrl(project, ticket, linearIssue) : null
 
@@ -410,15 +410,20 @@ export function WorktreeDetail({
                 onClick={() => window.open(pullRequest)}
               >
                 PR {pullRequestLabel(pullRequest)}
-                {watchingPr && <span className="chip-pr-watch"> · watching</span>}
+                {watchingPr && (
+                  // The server keeps the watch while gh is signed out, but polls nothing until it signs in again.
+                  <span className="chip-pr-watch">{features.prWatch ? ' · watching' : ' · watch paused — gh signed out'}</span>
+                )}
               </span>
             )}
             {prNotice && (
-              <span className="chip chip-pr-notice" title="Dismiss">
+              <span className="chip chip-pr-notice">
                 {prNotice}
                 <button
                   className="chip-dismiss"
+                  title="Dismiss"
                   aria-label="Dismiss pull request notice"
+                  disabled={offline}
                   onClick={() => {
                     if (!offline) void getBackend().branch.dismissPrNotice(info.path).catch((err: unknown) => getBackend().errors.report('Could not dismiss the notice', err))
                   }}
@@ -566,7 +571,7 @@ export function WorktreeDetail({
                     className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
                     onClick={() => {
                       const branch = info.branch
-                      if (offline || !branch) return
+                      if (busy || offline || !branch) return
                       void runAction(() =>
                         getBackend()
                           .branch.setPrWatch(repo.id, branch, !watchingPr)
