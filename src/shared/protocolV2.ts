@@ -3,6 +3,7 @@
 // domain commands and subscribe to topics (snapshot + JSON patches). See PROTOCOL.md. This file is
 // the single source of truth for frame shapes. (Protocol v1, the per-call git and pty methods of
 // the file windows, was retired in phase 4e: a v1 hello is refused with UPGRADE_CLIENT.)
+import type { MoveBranchData, MoveCandidate, MoveExport, MovePlan, MoveReceived, MoveSession } from './move.ts'
 import type {
   AttentionTopic,
   ProjectTopic,
@@ -204,7 +205,12 @@ export const CAPABILITY = {
    * `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line
    * comments and send them to one of its sessions as one queued prompt
    */
-  review: 'review'
+  review: 'review',
+  /**
+   * Moving a worktree between servers (5d): `move.prepare`, `move.export` and `move.finish` on the
+   * source, `move.candidates` and `move.receive` on the target; the app relays between them
+   */
+  move: 'move'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -450,6 +456,18 @@ export interface MethodParamsV2 {
   /** The worktree's `.claude/skills` and `.claude/commands`, then the server user's `~/.claude` ones */
   'skills.list': WorktreeRef
 
+  // Moving a worktree between servers (capability `move`, 5d)
+  /** Source, read only: what would move */
+  'move.prepare': WorktreeRef
+  /** Source: HEAD, the uncommitted work, the Claude histories and the branch data of an unloaded worktree */
+  'move.export': WorktreeRef
+  /** Source: removes the worktree if it is unchanged since `move.export` (its `fingerprint`); else CONFLICT */
+  'move.finish': WorktreeRef & { fingerprint: string }
+  /** Target: where a branch of a repository with this origin can go, in every project */
+  'move.candidates': { origin: string; branch: string }
+  /** Target: builds the worktree from origin and the export, or undoes all of it */
+  'move.receive': RepoRef & { branch: string; head: string; patch: string; sessions: MoveSession[]; branchData: MoveBranchData }
+
   // Subscriptions
   'sub.subscribe': { topic: Topic }
   'sub.unsubscribe': { topic: Topic }
@@ -565,6 +583,11 @@ export interface MethodResultsV2 {
   /** The mp3, base64 */
   'voice.synthesize': { audio: string }
   'skills.list': SkillInfo[]
+  'move.prepare': MovePlan
+  'move.export': MoveExport & { fingerprint: string }
+  'move.finish': null
+  'move.candidates': MoveCandidate[]
+  'move.receive': MoveReceived
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }

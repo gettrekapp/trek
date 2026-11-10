@@ -54,7 +54,7 @@ async function hasChanges(worktreePath: string): Promise<boolean> {
 }
 
 /** Only a real branch name: not a revision expression like @{-1}, nor HEAD, a tag or a SHA. */
-async function checkBranchName(repoPath: string, branch: string, mustExist: boolean): Promise<void> {
+export async function checkBranchName(repoPath: string, branch: string, mustExist: boolean): Promise<void> {
   if (branch.startsWith('-')) throw bad('branch must not start with "-"')
   if (branch === '@' || branch === 'HEAD') throw bad(`"${branch}" is not a valid branch name`)
   try {

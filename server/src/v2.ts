@@ -2,7 +2,8 @@
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
 // Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts), and the
-// pull request watch (prWatchHandlers.ts), and the Changes tab's review (reviewHandlers.ts).
+// pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
+// moving a worktree between servers (moveHandlers.ts).
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
@@ -17,6 +18,7 @@ import { machineHandlers, type EventSink, type Machine } from './integrations/ma
 import { integrationHandlers } from './integrations/integrationHandlers.ts'
 import { prWatchHandlers } from './prWatch/prWatchHandlers.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
+import { moveHandlers } from './move/moveHandlers.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
@@ -305,7 +307,8 @@ const handlers: Record<string, Handler> = {
   ...machineHandlers,
   ...integrationHandlers,
   ...prWatchHandlers,
-  ...reviewHandlers
+  ...reviewHandlers,
+  ...moveHandlers
 }
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */

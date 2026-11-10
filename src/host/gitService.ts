@@ -1,6 +1,7 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
-import { lstat, mkdir, open, readFile, symlink } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type {
@@ -246,20 +247,38 @@ export async function checkout(repoPath: string, branch: string): Promise<void> 
 }
 
 /**
- * Uncommitted + untracked changes as one binary patch. `add -N` (intent-to-add)
- * makes untracked files appear in the diff; the trailing `reset -q` undoes it,
- * so the worktree is left exactly as found. Ignored files never appear.
+ * Uncommitted + untracked changes as one binary patch against HEAD (a worktree move, 5d). It is
+ * built in a throwaway copy of the index (GIT_INDEX_FILE), so the worktree's own index, its
+ * staged changes included, is never touched. Ignored files never appear. The patch puts every
+ * change back unstaged.
  */
 export async function exportDirtyPatch(
   worktreePath: string
 ): Promise<{ patch: string; headSha: string }> {
-  const headSha = (await git(worktreePath, ['rev-parse', 'HEAD'])).trim()
-  await git(worktreePath, ['add', '-N', '.'])
+  const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
+  const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
+  const dir = await mkdtemp(join(tmpdir(), 'trek-move-index-'))
+  const index = join(dir, 'index')
   try {
-    const patch = await git(worktreePath, ['diff', 'HEAD', '--binary'])
-    return { patch, headSha }
+    await copyFile(gitIndex, index).catch(() => {})
+    const env = { ...process.env, GIT_INDEX_FILE: index }
+    const run = (args: string[]) =>
+      execFileAsync('git', ['-C', worktreePath, ...args], { env, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
+    await run(['add', '-A', '--', '.'])
+    const { stdout } = await run(['diff', '--cached', '--binary', '--no-color', '--no-ext-diff', 'HEAD'])
+    return { patch: stdout, headSha }
   } finally {
-    await git(worktreePath, ['reset', '-q'])
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+/** `git remote get-url origin`; null when the repository has no origin. */
+export async function originUrl(repoPath: string): Promise<string | null> {
+  try {
+    const url = (await git(repoPath, ['remote', 'get-url', 'origin'])).trim()
+    return url || null
+  } catch {
+    return null
   }
 }
 
