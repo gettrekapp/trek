@@ -10,6 +10,7 @@ import { assertNotRepository, findRegistered, repoIn } from './projects/model.ts
 import { realOrResolved as real } from './repos.ts'
 import { requireAbsolutePath, requireBoolean, requireBranch, requireString } from './validate.ts'
 import type { V2Context } from './v2.ts'
+import { checkSource } from './review/draft.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -74,7 +75,7 @@ async function checkBranchName(repoPath: string, branch: string, mustExist: bool
 }
 
 /** The worktree with this id and its repository; NOT_FOUND if unknown. */
-function locate(project: Project, worktreeId: unknown): { repo: Repository; worktree: Worktree } {
+export function locate(project: Project, worktreeId: unknown): { repo: Repository; worktree: Worktree } {
   const id = requireString(worktreeId, 'worktreeId')
   for (const repo of project.repositories) {
     const worktree = repo.worktrees.find((w) => w.id === id)
@@ -234,14 +235,23 @@ export const worktreeHandlers: Record<string, Handler> = {
     return null
   },
 
+  // `source` (5c-2): the branch against its base (the default), the uncommitted work, or one commit.
   'worktree.changes': async (p, ctx) => {
+    const source = checkSource(p.source)
     const { worktree } = present(ctx, p)
-    return viaGit(() => gitService.worktreeChanges(worktree.path))
+    return viaGit(() => gitService.worktreeChanges(worktree.path, source))
   },
 
   'worktree.diff': async (p, ctx) => {
+    const source = checkSource(p.source)
     const { worktree } = present(ctx, p)
-    return viaGit(() => gitService.worktreeDiff(worktree.path))
+    return viaGit(() => gitService.worktreeDiff(worktree.path, source))
+  },
+
+  /** The newest commits on its HEAD, for the Changes tab's commit picker (5c-2) */
+  'worktree.commits': async (p, ctx) => {
+    const { worktree } = present(ctx, p)
+    return viaGit(() => gitService.worktreeCommits(worktree.path))
   },
 
   // A delete's fresh check before it destroys a worktree's dev stack or VM (the poll's `dirty` can be 30 s old).

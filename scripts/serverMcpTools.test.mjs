@@ -6,6 +6,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
@@ -109,7 +110,7 @@ async function toolSetup(t, opts = {}) {
 
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_stack',
+    'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack',
     'list_session_types', 'list_worktrees', 'load_worktree', 'read_stack_log', 'read_terminal', 'remove_queued_prompt',
     'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'speak_summary', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
@@ -141,6 +142,31 @@ test('branch data tools: tag by name, custom tag, note, ticket, pull request', a
   const data = s.projects.require(s.projectId).repositories[0].branchData.main
   assert.deepEqual([data.tag, data.customTags, data.note, data.ticket, data.pr], ['todo', ['hot'], 'hi', 'TOW-5', 'https://github.com/o/r/pull/9'])
   assert.equal(s.projects.require(s.projectId).settings.linearWorkspace, 'acme')
+})
+
+test("get_review_comments: the worktree's draft, each comment outdated or not against its own source now (5c-2)", async (t) => {
+  const s = await toolSetup(t)
+  assert.deepEqual(await s.call('get_review_comments', { worktree: 'main' }), { worktree: s.projects.require(s.projectId).repositories[0].worktrees[0].id, revision: null, comments: [] })
+  writeFileSync(join(s.a, 'a.txt'), 'one\ntwo\n')
+  const comment = (id, over) => ({ id, source: { kind: 'uncommitted' }, path: 'a.txt', side: 'new', line: 2, lineText: 'two', body: `c ${id}`, at: 1, ...over })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].review = {
+      revision: 9,
+      comments: [
+        comment('fresh'),
+        comment('changed', { lineText: 'TWO' }),
+        comment('nofile', { path: 'gone.txt' }),
+        comment('nocommit', { source: { kind: 'commit', sha: 'f'.repeat(40) } })
+      ]
+    }
+  })
+  const res = await s.call('get_review_comments', { worktree: 'main' })
+  assert.equal(res.revision, 9)
+  assert.deepEqual(res.comments.map((c) => [c.id, c.outdated]), [['fresh', false], ['changed', true], ['nofile', true], ['nocommit', null]])
+  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
+  // Read-only: the draft is as it was.
+  assert.equal(s.projects.require(s.projectId).repositories[0].worktrees[0].review.comments.length, 4)
+  await assert.rejects(s.call('get_review_comments', { worktree: 'nope' }), (e) => e.code === 'NOT_FOUND')
 })
 
 test('watch_pull_request: on (polled at once), off, and its refusals', async (t) => {

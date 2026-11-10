@@ -29,6 +29,11 @@ import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
 import type { StackStatus } from '../../../src/shared/types'
 import { MAX_INITIAL_LOG } from '../../../src/host/stackService.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
+import { isOutdated, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
+import type { ChangesSource } from '../../../src/shared/types'
+
+/** The most distinct sources get_review_comments diffs to say which comments are outdated. */
+const MAX_OUTDATED_SOURCES = 5
 
 const WORKTREE_PARAM = {
   type: 'string',
@@ -354,6 +359,12 @@ export const MCP_TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'get_review_comments',
+    description:
+      "Read the user's draft review of a worktree: the line comments they wrote in Trek's Changes tab, not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
     name: 'watch_pull_request',
     description:
       "Watch (or stop watching) a worktree branch's linked GitHub pull request. The Trek server polls it with gh every few minutes; when its checks fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is merged or closed, a prompt saying so is queued on the worktree's newest agent session and the user is notified. The watch ends by itself after merged or closed. Link the PR first with set_worktree_pull_request. Needs gh signed in on the server's machine.",
@@ -369,7 +380,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   store: ConfigStore
@@ -790,6 +801,42 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const url = input ? pullRequestUrl(input, repo) : null
         await v2('branch.setPr', { repoId: repo.id, branch, pr: url })
         return { branch, pullRequest: url }
+      },
+
+      // Read-only (5c-2). Outdated is worked out against the comment's own source now: one
+      // worktree.diff per source (its path checks and limits), at most MAX_OUTDATED_SOURCES of them.
+      get_review_comments: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        const draft = worktree.review
+        if (!draft || draft.comments.length === 0) return { worktree: worktree.id, revision: null, comments: [] }
+        const sources = new Map<string, ChangesSource>()
+        for (const c of draft.comments) sources.set(sourceKey(c.source), c.source)
+        const diffs = new Map<string, Record<string, string> | null>()
+        for (const [key, source] of [...sources].slice(0, MAX_OUTDATED_SOURCES)) {
+          try {
+            diffs.set(key, (await v2('worktree.diff', { worktreeId: worktree.id, source })) as Record<string, string>)
+          } catch {
+            diffs.set(key, null) // a missing worktree, a commit gone: not checked
+          }
+        }
+        return {
+          worktree: worktree.id,
+          revision: draft.revision,
+          comments: draft.comments.map((c) => {
+            const diff = diffs.get(sourceKey(c.source))
+            return {
+              id: c.id,
+              file: c.path,
+              side: c.side,
+              line: c.line,
+              lineText: c.lineText,
+              comment: c.body,
+              source: c.source,
+              sourceLabel: sourceLabel(c.source),
+              outdated: diff ? isOutdated(c, Object.hasOwn(diff, c.path) ? diff[c.path] : undefined) : null
+            }
+          })
+        }
       },
 
       watch_pull_request: async (args, project) => {
