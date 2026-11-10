@@ -471,9 +471,18 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
        `src/shared/client/` over the browser's WebSocket; `packages/client` stays
        deferred), sessions are in memory (a restart signs browsers out), and with the web
        client on, a socket whose `Origin` is another site is refused.
-   - **Later, in their own plans:** the bot (ported last, only when asked), moving
-     worktrees between servers, promote to primary, and Windows support for the
-     supervisor.
+   - **5d, moving worktrees between servers:** client-relayed, behind a `move`
+     capability on both servers. User decisions (2026-11-10): the dialog lists the
+     target server's projects with a repository of the same origin, and the user picks
+     one; the commits travel by pushing through origin (the target checks its HEAD is
+     the source's); a real move: once the target's copy is in place the source's
+     worktree is removed, and any failure before that rolls the target back and leaves
+     the source as it was; Claude sessions' histories are copied (others are listed as
+     not carried), and the note, tags, ticket, PR link and PR watch go along, not the
+     review draft or queued prompts. Plan:
+     `docs/superpowers/plans/2026-11-10-central-server-phase5d-move-worktrees.md`.
+   - **Later, in their own plans:** the bot (ported last, only when asked), promote to
+     primary, and Windows support for the supervisor.
 6. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
 
 Remote projects can be opened after phase 3. After phase 4 every project is on a server and

@@ -224,11 +224,20 @@ other window on that project sees them live.
   service or dev stack is reached on: cookies are not port-scoped, so any other web
   server on that name (on loopback, any local web server the browser visits) sees
   the session cookie. See [trek-server's README](server/README.md#web-client).
+- **Move a worktree to another server**: **Move to another server…** in a worktree's
+  menu (in a window whose server has another server saved beside it in the app) picks
+  one of the app's other servers and a project there with a clone of the same
+  repository (the same origin). The branch is pushed to origin and checked out there,
+  the uncommitted work goes along as a patch (all of it unstaged), Claude sessions'
+  histories are copied so they resume there, and the note, tags, ticket, pull request
+  and its watch come too. Other agents' sessions, queued prompts and the review draft
+  do not. The old worktree is removed last, and only if nothing changed in it while it
+  was copied; a failure before that leaves it as it was. The web client never offers
+  it (it has one server).
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.
-- **Not yet**: promote to primary, moving worktrees between servers and the project
-  bot (phase 5).
+- **Not yet**: promote to primary and the project bot (phase 5).
 
 ## Importing a .trekproj
 
@@ -429,6 +438,9 @@ one at a time:
   source picker, line comments (one from another client, live; one outdated), an
   agent reading them with `get_review_comments`, edit and send conflicts, Send to
   session and Discard;
+- `npm run smoke:server-move`: a worktree moved between two servers from a window,
+  with a bare repository in a temp dir as both clones' origin: the dialog, the steps,
+  the target's worktree, work and Claude session, the source's removal;
 - `npm run smoke:server-web`: the web client: `trek-server start --web` driven from a
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the

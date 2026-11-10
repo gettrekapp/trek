@@ -203,6 +203,19 @@ prompt (100,000 characters). A worktree git no longer lists is kept, as missing,
 while it holds a draft. Agents can read a draft with the `get_review_comments`
 MCP tool, which never changes it. See PROTOCOL.md, "Changes tab review".
 
+## Moving a worktree between servers
+
+With the `move` capability on both servers, the app can move a worktree from one to another:
+**Move to another server…** in the worktree's menu. The app relays between the two servers (they
+never connect to each other, and no token reaches either window): the source pushes the branch to
+origin, the target's `move.receive` fetches and checks it out next to its clone of the same
+repository, applies the uncommitted work as one patch and writes the Claude sessions' histories
+under the new path (in the target server user's `~/.claude`), then the source removes its copy with
+`move.finish`, only if nothing changed there since it was copied. A failure on the target undoes
+all of it; the source is removed last. Both clones need an `origin` that names the same repository,
+and the source's server user must be able to push to it. See PROTOCOL.md, "Moving a worktree
+between servers".
+
 ## Web client
 
 `trek-server start --web` (or `"web": true` in the config, read at start) also serves
