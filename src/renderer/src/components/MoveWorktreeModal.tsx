@@ -126,6 +126,7 @@ export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Ele
       from,
       to: { projectId: chosen.projectId, repoId: chosen.repoId },
       loaded: plan.loaded,
+      targetCapabilities: server.connection.welcome?.capabilities ?? [],
       progress: (step, status, detail) => setSteps((prev) => ({ ...prev, [step]: { status, detail } })),
       cancelled: () => cancelled.current
     })
@@ -200,7 +201,7 @@ export function MoveWorktreeModal({ from, name, onClose }: Props): React.JSX.Ele
               {plan.reviewComments > 0 && <li className="warn">The {plan.reviewComments} unsent review comment(s) are not moved and are lost.</li>}
               {plan.queuedPrompts > 0 && <li className="warn">The {plan.queuedPrompts} queued prompt(s) are not moved and are lost.</li>}
               {plan.loaded && <li>Its running sessions are stopped first.</li>}
-              <li>The note, tags, ticket and pull request link go with it{plan.prWatch ? ', and the PR watch moves there' : ''}.</li>
+              <li>The note, tags, ticket, pull request link and Docker .env go with it{plan.prWatch ? ', and the PR watch moves there' : ''}.</li>
             </ul>
           </>
         )}

@@ -32,6 +32,8 @@ export interface MoveFlowDeps {
   to: { projectId: string; repoId: string }
   /** Its sessions are running: they are stopped first, and started again if the move fails */
   loaded: boolean
+  /** The target's welcome capabilities: without `env` the branch's `.env` text is not sent */
+  targetCapabilities: readonly string[]
   progress(step: MoveStepKey, status: MoveStepStatus, detail?: string): void
   /** Checked between steps, until the target starts building */
   cancelled(): boolean
@@ -87,8 +89,15 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
 
   // From here on there is no cancelling: the target is building it.
   let received: MethodResultsV2['move.receive']
+  const kept: string[] = []
   try {
-    const { branch, head, patch, sessions, branchData } = exported
+    const { branch, head, patch, sessions } = exported
+    let { branchData } = exported
+    if (branchData.env && !deps.targetCapabilities.includes('env')) {
+      const { env: _env, ...rest } = branchData
+      branchData = rest
+      kept.push("The branch's Docker .env was not carried: the target server has no environments")
+    }
     received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData }, { timeoutMs: STEP_MS })
   } catch (err) {
     deps.progress('receive', 'failed', errorText(err))
@@ -99,7 +108,7 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     await restore()
     return { kind: 'failed', step: 'receive', error: errorText(err) }
   }
-  const notes = [...exported.notCarried.map((line) => `Not carried: ${line}`), ...received.dropped]
+  const notes = [...exported.notCarried.map((line) => `Not carried: ${line}`), ...kept, ...received.dropped]
   deps.progress('receive', 'done', received.dropped.length > 0 ? `${received.dropped.length} thing(s) not carried over` : undefined)
 
   deps.progress('finish', 'active')

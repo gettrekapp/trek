@@ -13,7 +13,8 @@
 //     queued prompt that doesn't; a branch already checked out on B is a blocked place;
 //   - the move: the steps all done; origin has the branch; B has the worktree at the default path
 //     on the same commit with the uncommitted work (unstaged), the Claude session saved (not
-//     running) with its history under the new path in B's HOME, the note and the tag (by name);
+//     running) with its history under the new path in B's HOME, the note, the tag (by name) and the
+//     branch's .env;
 //   - A's worktree is gone from disk, its project and its window; A's history file is kept;
 //   - Open on B opens B's project window, which lists the moved worktree;
 //   - the renderer never holds either token; no error dialogs, console or page errors.
@@ -222,6 +223,7 @@ try {
   await a.sdk.request('session.enqueue', { projectId: pa, sessionId, text: 'a queued prompt' })
   await a.sdk.request('branch.setNote', { projectId: pa, repoId: repoA, branch: 'feature-x', note: 'moved note' })
   await a.sdk.request('branch.setTag', { projectId: pa, repoId: repoA, branch: 'feature-x', tag: 'x' })
+  await a.sdk.request('branch.setEnv', { projectId: pa, repoId: repoA, branch: 'feature-x', env: 'PORT=4100\n' })
   // A second worktree whose branch B already has checked out: a blocked place.
   await a.sdk.request('worktree.create', { projectId: pa, repoId: repoA, branch: 'feature-y', createBranch: true })
   git('-C', `${A.repo}-feature-y`, 'push', '-q', 'origin', 'feature-y')
@@ -300,7 +302,7 @@ try {
   const row = moved.worktrees.find((w) => w.path === targetPath)
   check("B's project lists it, unloaded, with the Claude session saved", [row?.loaded, row?.sessions.map((s) => [s.title, s.agentSessionId, s.queue.length])], [false, [['Claude moved', sessionId, 0]]])
   check("the session's history is under the new path in B's HOME", readFileSync(join(claudeDir(B.home, targetPath), `${sessionId}.jsonl`), 'utf8'), history)
-  check('the note and the tag (B\'s id for the same name) came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag], ['moved note', 'other-id'])
+  check('the note, the tag (B\'s id for the same name) and the .env came along', [moved.branchData['feature-x']?.note, moved.branchData['feature-x']?.tag, moved.branchData['feature-x']?.env], ['moved note', 'other-id', 'PORT=4100\n'])
   check("A's worktree is gone from disk and from A's project", [existsSync(sourcePath), (await a.project(pa)).repositories[0].worktrees.some((w) => w.id === worktreeId)], [false, false])
   check("and from A's window", await until(() => rows.filter({ hasText: 'feature-x' }).count(), 0), 0)
   check("A's copy of the history is kept (copied, not moved)", existsSync(join(claudeDir(A.home, sourcePath), `${sessionId}.jsonl`)), true)

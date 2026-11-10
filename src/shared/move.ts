@@ -61,6 +61,8 @@ export interface MoveBranchData {
   ticket?: string
   pr?: string
   prWatch?: boolean
+  /** The branch's Docker environment `.env` text (5d); a target without `env` doesn't take it */
+  env?: string
 }
 
 /** `move.export`'s answer: everything the target needs, read from an unloaded worktree. */

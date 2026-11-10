@@ -109,6 +109,7 @@ function exportBranchData(project: Project, data: BranchData | undefined): MoveB
   if (data.ticket) out.ticket = data.ticket
   if (data.pr) out.pr = data.pr
   if (data.prWatch) out.prWatch = true
+  if (data.env) out.env = data.env
   const tag = data.tag ? project.settings.worktreeTags?.find((t) => t.id === data.tag)?.name : undefined
   if (tag) out.tag = tag
   const custom = (data.customTags ?? [])
@@ -174,7 +175,7 @@ function checkBranchData(value: unknown): MoveBranchData {
   if (value === undefined) return {}
   if (!isRecord(value)) throw bad('branchData must be an object')
   const out: MoveBranchData = {}
-  const text = (key: 'note' | 'tag' | 'ticket' | 'pr', max: number): void => {
+  const text = (key: 'note' | 'tag' | 'ticket' | 'pr' | 'env', max: number): void => {
     const v = value[key]
     if (v === undefined) return
     if (typeof v !== 'string' || v.length > max) throw bad(`branchData.${key} must be a string of at most ${max} characters`)
@@ -184,6 +185,7 @@ function checkBranchData(value: unknown): MoveBranchData {
   text('tag', 200)
   text('ticket', 200)
   text('pr', 2000)
+  text('env', MAX_NOTE)
   if (value.customTags !== undefined) {
     if (!Array.isArray(value.customTags) || value.customTags.length > 100 || value.customTags.some((t) => typeof t !== 'string' || t.length > 200)) {
       throw bad('branchData.customTags must be at most 100 tag names')
@@ -200,6 +202,7 @@ function mergeBranchData(project: Project, existing: BranchData | undefined, inc
   const data: BranchData = { ...(existing ?? {}) }
   if (incoming.note) data.note = incoming.note
   if (incoming.ticket) data.ticket = incoming.ticket
+  if (incoming.env) data.env = incoming.env
   if (incoming.pr) {
     if (data.pr !== incoming.pr) delete data.prWatch
     data.pr = incoming.pr

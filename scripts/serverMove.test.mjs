@@ -88,7 +88,7 @@ async function setup(t) {
       { id: 'codex-1', title: 'Codex 1', llm: { provider: 'codex' }, queue: [], status: 'idle' }
     )
     d.settings.worktreeTags = [{ id: 'a-review', name: 'Review', color: '#ffffff' }, { id: 'a-only', name: 'Only on A', color: '#ffffff' }]
-    d.repositories[0].branchData.feat = { tag: 'a-review', note: 'the note', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3', prWatch: {} }
+    d.repositories[0].branchData.feat = { tag: 'a-review', note: 'the note', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3', prWatch: {}, env: 'PORT=1\n' }
   })
   B.projects.apply(B.projectId, (d) => {
     d.settings.worktreeTags = [{ id: 'b-review', name: 'Review', color: '#000000' }]
@@ -153,7 +153,7 @@ test('move.export refuses a loaded worktree and never touches the index', async 
   assert.equal(res.result.head, git(s.path, 'rev-parse', 'HEAD').trim())
   assert.deepEqual(res.result.sessions.map((x) => x.agentSessionId), [CLAUDE_ID])
   assert.equal(res.result.notCarried.length, 2)
-  assert.deepEqual(res.result.branchData, { note: 'the note', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3', prWatch: true, tag: 'Review' })
+  assert.deepEqual(res.result.branchData, { note: 'the note', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3', prWatch: true, env: 'PORT=1\n', tag: 'Review' })
 })
 
 test('move.candidates lists the repositories with the same origin, and why one is blocked', async (t) => {
@@ -188,7 +188,7 @@ test('a move builds the worktree on the target and removes the source', async (t
   assert.notEqual(row.sessions[0].id, CLAUDE_ID, 'a new server id')
   assert.equal(readFileSync(join(projectDir(target), `${CLAUDE_ID}.jsonl`), 'utf8'), '{"type":"user"}\n')
   const data = s.B.project().repositories[0].branchData.feat
-  assert.deepEqual({ ...data, prWatch: !!data.prWatch }, { tag: 'b-review', note: 'the note', ticket: 'TOW-1', pr: 'https://github.com/o/r/pull/3', prWatch: true })
+  assert.deepEqual({ ...data, prWatch: !!data.prWatch }, { tag: 'b-review', note: 'the note', ticket: 'TOW-1', env: 'PORT=1\n', pr: 'https://github.com/o/r/pull/3', prWatch: true })
   assert.deepEqual(received.result.dropped, [])
   assert.equal(s.B.polled.length, 1, 'the watch polls soon on the target')
   // The source: gone from git and the project, its watch ended, its history kept (copied, not moved).

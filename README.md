@@ -229,8 +229,8 @@ other window on that project sees them live.
   one of the app's other servers and a project there with a clone of the same
   repository (the same origin). The branch is pushed to origin and checked out there,
   the uncommitted work goes along as a patch (all of it unstaged), Claude sessions'
-  histories are copied so they resume there, and the note, tags, ticket, pull request
-  and its watch come too. Other agents' sessions, queued prompts and the review draft
+  histories are copied so they resume there, and the note, tags, ticket, pull request,
+  its watch and the branch's Docker .env come too. Other agents' sessions, queued prompts and the review draft
   do not. The old worktree is removed last, and only if nothing changed in it while it
   was copied; a failure before that leaves it as it was. The web client never offers
   it (it has one server).

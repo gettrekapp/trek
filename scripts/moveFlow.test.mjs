@@ -26,6 +26,7 @@ function run(source, target, over = {}) {
     from: { projectId: 'pa', worktreeId: 'wa' },
     to: { projectId: 'pb', repoId: 'rb' },
     loaded: true,
+    targetCapabilities: ['move', 'env'],
     progress: (step, status, detail) => steps.push([step, status, detail]),
     cancelled: () => false,
     ...over
@@ -106,4 +107,15 @@ test('move targets: the other entries with a token whose server takes a move', (
   assert.deepEqual(moveTargets(servers, 'own').map((s) => s.id), ['b', 'down'])
   assert.deepEqual(moveTargets([link('web')], 'web'), [], 'the web client has only its own server')
   assert.deepEqual(moveTargets(null, 'own'), [])
+})
+
+test("the branch's .env goes only to a target with environments", async () => {
+  const withEnv = { ...EXPORT, branchData: { note: 'n', env: 'A=1' } }
+  const t1 = fake({ 'move.receive': { worktreeId: 'wb', dropped: [] } })
+  await run(fake({ 'move.export': withEnv }), t1).outcome
+  assert.deepEqual(t1.calls[0][1].branchData, { note: 'n', env: 'A=1' })
+  const t2 = fake({ 'move.receive': { worktreeId: 'wb', dropped: [] } })
+  const result = await run(fake({ 'move.export': withEnv }), t2, { targetCapabilities: ['move'] }).outcome
+  assert.deepEqual(t2.calls[0][1].branchData, { note: 'n' })
+  assert.ok(result.notes.some((n) => n.includes('.env was not carried')))
 })
