@@ -469,8 +469,10 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       // The mirror already has them: no request.
       listWorktrees: async (repoId) => deps.state().hostWorktrees[`${repoId} ${hostKey()}`] ?? [],
       listBranches: (repoId) => request('repo.listBranches', { projectId, repoId }),
-      changes: async (loc) => request('worktree.changes', { projectId, worktreeId: worktreeAt(loc.path) }),
-      diff: async (loc) => request('worktree.diff', { projectId, worktreeId: worktreeAt(loc.path) }),
+      // A source only when one is asked for: an older server's params are the same as before.
+      changes: async (loc, source) => request('worktree.changes', { projectId, worktreeId: worktreeAt(loc.path), ...(source ? { source } : {}) }),
+      diff: async (loc, source) => request('worktree.diff', { projectId, worktreeId: worktreeAt(loc.path), ...(source ? { source } : {}) }),
+      commits: async (loc) => request('worktree.commits', { projectId, worktreeId: worktreeAt(loc.path) }),
       pull: async (loc) => {
         await request('worktree.pull', { projectId, worktreeId: worktreeAt(loc.path) })
       },
@@ -545,6 +547,22 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
     },
     skills: {
       list: async (loc) => request('skills.list', { projectId, worktreeId: worktreeAt(loc.path) })
+    },
+    // The draft is the worktree's `review` in the project topic: the patch is the answer.
+    review: {
+      add: async (path, comment) => (await request('review.add', { projectId, worktreeId: worktreeAt(path), ...comment })).commentId,
+      edit: async (path, commentId, body, expected) => {
+        await request('review.edit', { projectId, worktreeId: worktreeAt(path), commentId, body, expected })
+      },
+      remove: async (path, commentId) => {
+        await request('review.remove', { projectId, worktreeId: worktreeAt(path), commentId })
+      },
+      clear: async (path, revision) => {
+        await request('review.clear', { projectId, worktreeId: worktreeAt(path), revision })
+      },
+      send: async (path, terminalId, revision) => {
+        await request('review.send', { projectId, worktreeId: worktreeAt(path), sessionId: terminalId, revision })
+      }
     },
     branch: {
       setTag: async (repoId, branch, tagId) => {

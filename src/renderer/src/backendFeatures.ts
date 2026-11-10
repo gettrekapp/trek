@@ -10,6 +10,7 @@ export type FeatureName =
   | 'voice'
   | 'skills'
   | 'prWatch'
+  | 'review'
   | 'moveWorktree'
   | 'reveal'
   | 'openInEditor'
@@ -28,6 +29,7 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'voice',
   'skills',
   'prWatch',
+  'review',
   'moveWorktree',
   'reveal',
   'openInEditor',
@@ -52,6 +54,8 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  *   capability, on any server.
  * - The pull request watch (5c-1) runs gh on the server's machine: it needs
  *   `prWatch`, which the server lists only while gh is signed in there.
+ * - The Changes tab's sources and line comments (5c-2) need `review`: an older server's
+ *   `worktree.changes` knows only the branch against its base.
  * - The Global panel needs `mcp`.
  * - Docker, environments and stacks run on the server's machine (5a): each
  *   needs its capability, on any server.
@@ -67,6 +71,7 @@ export const V2_FEATURES: BackendFeatures = {
   voice: true,
   skills: true,
   prWatch: true,
+  review: true,
   moveWorktree: false,
   reveal: true,
   openInEditor: true,
@@ -90,7 +95,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   linear: 'linear',
   voice: 'voice',
   skills: 'skills',
-  prWatch: 'prWatch'
+  prWatch: 'prWatch',
+  review: 'review'
 }
 
 /**

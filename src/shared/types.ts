@@ -1,6 +1,7 @@
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
+import type { ReviewDraft } from './model/types'
 
 /** A workflow tag assignable to a branch's worktree, configured per project. */
 export interface WorktreeTag {
@@ -289,6 +290,8 @@ export interface Repository {
   branchPrWatches?: Record<string, true>
   /** The watched PR's last report, by the path of the worktree that holds it (5c-1) */
   worktreePrNotices?: Record<string, string>
+  /** The Changes tab's draft reviews, by the path of the worktree that holds each (5c-2) */
+  worktreeReviews?: Record<string, ReviewDraft>
   /**
    * Environment variables for the branch's Docker environment, keyed by branch
    * name (survives promote/delete). Raw .env-style text ("KEY=value" lines) —

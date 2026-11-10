@@ -1900,7 +1900,8 @@ button:disabled {
 }
 
 .changes-line {
-  padding: 0 10px;
+  /* Room on the left for the review's + (5c-2) */
+  padding: 0 10px 0 22px;
   white-space: pre;
 }
 
@@ -1926,6 +1927,219 @@ button:disabled {
 .changes-error {
   color: var(--danger);
   white-space: pre-wrap;
+}
+
+/* The Changes tab's review (5c-2): the source picker, line comments and the review bar. */
+.changes-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 400;
+}
+
+.changes-source select {
+  max-width: 260px;
+  background: var(--bg-lighter);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.changes-row {
+  position: relative;
+}
+
+.changes-line {
+  position: relative;
+}
+
+.review-add {
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.changes-line:hover .review-add,
+.review-add:focus-visible {
+  opacity: 1;
+}
+
+.review-comment,
+.review-editor {
+  margin: 4px 10px 6px 26px;
+  padding: 6px 10px;
+  max-width: 720px;
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--decision);
+  border-radius: 6px;
+  background: var(--panel);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.review-comment-where {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-comment-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.review-comment-actions,
+.review-editor-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.review-editor textarea {
+  width: 100%;
+  min-height: 56px;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--bg-darker);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 6px;
+  font: inherit;
+}
+
+.review-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.review-btn.quiet {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.review-btn.danger {
+  background: var(--danger);
+  color: #111;
+}
+
+.review-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.review-outdated {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-outdated-title {
+  padding: 0 10px 0 26px;
+  color: var(--attention);
+  font-size: 11px;
+}
+
+.review-bar {
+  margin: 0 16px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12px;
+}
+
+.review-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.review-bar-spacer {
+  flex: 1;
+}
+
+.review-count {
+  font-weight: 600;
+}
+
+.review-send-wrap {
+  position: relative;
+}
+
+.review-send-menu {
+  position: absolute;
+  right: 0;
+  top: 28px;
+  z-index: 20;
+  min-width: 180px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-lighter);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.review-send-target {
+  display: block;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-send-target:hover {
+  background: var(--surface);
+}
+
+.review-elsewhere .review-comment {
+  margin-left: 0;
+}
+
+.review-error {
+  margin-top: 4px;
+}
+
+.review-file-count {
+  color: var(--decision);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .branch-glyph {

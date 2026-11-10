@@ -217,6 +217,16 @@ test('a missing worktree on the same branch keeps its own PR notice; the live on
   assert.equal(ids.worktrees[ids.worktreeByPath['/r/one-gone']].worktreeId, 'w-gone')
 })
 
+test("a worktree's review draft (5c-2) is projected by the worktree's path, as the server has it", () => {
+  const p = fixture()
+  const feat = p.repositories[0].worktrees.find((w) => w.id === 'w-feat')
+  const review = { revision: 3, comments: [{ id: 'c1', source: { kind: 'branch' }, path: 'a.txt', side: 'new', line: 1, lineText: 'x', body: 'y', at: 1 }] }
+  feat.review = review
+  const [one, two] = projectV2(p).slice.project.repositories
+  assert.deepEqual(one.worktreeReviews, { '/r/one-feat': review })
+  assert.deepEqual(two.worktreeReviews, {})
+})
+
 test('settings spread into the project file; no servers', () => {
   const { project } = projectV2(fixture()).slice
   assert.equal(project.version, 3)

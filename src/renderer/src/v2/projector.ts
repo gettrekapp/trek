@@ -163,6 +163,7 @@ type BranchMaps = Required<
     | 'branchPullRequests'
     | 'branchPrWatches'
     | 'worktreePrNotices'
+    | 'worktreeReviews'
     | 'branchEnvVars'
   >
 >
@@ -176,6 +177,7 @@ function branchMaps(repo: V2Repository): BranchMaps {
     branchPullRequests: {},
     branchPrWatches: {},
     worktreePrNotices: {},
+    worktreeReviews: {},
     branchEnvVars: {}
   }
   for (const [branch, data] of Object.entries(repo.branchData)) {
@@ -189,7 +191,10 @@ function branchMaps(repo: V2Repository): BranchMaps {
   }
   // By the worktree's path, not its branch: a missing worktree on the same branch keeps its own notice,
   // and a row's × dismisses the worktree that holds it.
-  for (const w of repo.worktrees) if (w.prNotice) maps.worktreePrNotices[w.path] = w.prNotice.text
+  for (const w of repo.worktrees) {
+    if (w.prNotice) maps.worktreePrNotices[w.path] = w.prNotice.text
+    if (w.review) maps.worktreeReviews[w.path] = w.review
+  }
   return maps
 }
 

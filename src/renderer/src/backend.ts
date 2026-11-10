@@ -16,6 +16,8 @@ import { NO_FEATURES, type BackendFeatures } from './backendFeatures'
 import { errorText } from './v2/errors'
 import type { LlmSelection } from '../../shared/providers/types'
 import type {
+  ChangesSource,
+  CommitInfo,
   ComposeAction,
   ContainerAction,
   ContainerInfo,
@@ -43,6 +45,10 @@ import type {
   WorktreeLocator
 } from '../../shared/types'
 import type { VoiceSummaryEvent } from '../../shared/protocolV2'
+import type { ReviewComment } from '../../shared/model/types'
+
+/** What `review.add` takes: a comment before the server gives it an id and a time. */
+export type NewReviewComment = Omit<ReviewComment, 'id' | 'at'>
 
 export type { BackendFeatures, FeatureName } from './backendFeatures'
 
@@ -106,8 +112,11 @@ export interface WindowBackend {
   readonly git: {
     listWorktrees(repoId: string): Promise<GitWorktreeInfo[]>
     listBranches(repoId: string): Promise<string[]>
-    changes(loc: WorktreeLocator): Promise<WorktreeChanges>
-    diff(loc: WorktreeLocator): Promise<Record<string, string>>
+    /** `source` (feature `review`) defaults to the branch against its base */
+    changes(loc: WorktreeLocator, source?: ChangesSource): Promise<WorktreeChanges>
+    diff(loc: WorktreeLocator, source?: ChangesSource): Promise<Record<string, string>>
+    /** The newest 100 commits on the worktree's HEAD, newest first (feature `review`) */
+    commits(loc: WorktreeLocator): Promise<CommitInfo[]>
     pull(loc: WorktreeLocator, branch: string): Promise<void>
     push(loc: WorktreeLocator, branch: string): Promise<void>
     /** A fresh `git status` of the worktree on its server; null when git cannot read it */
@@ -172,6 +181,21 @@ export interface WindowBackend {
   /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
   readonly skills: {
     list(loc: WorktreeLocator): Promise<SkillInfo[]>
+  }
+  /**
+   * The Changes tab's draft review of the worktree at `path` (feature `review`, 5c-2). The draft
+   * itself arrives in the store (`worktreeReviews`) with the server's patch; these only ask.
+   */
+  readonly review: {
+    /** Resolves the new comment's id */
+    add(path: string, comment: NewReviewComment): Promise<string>
+    /** `expected`: the body the edit started from */
+    edit(path: string, commentId: string, body: string, expected: string): Promise<void>
+    remove(path: string, commentId: string): Promise<void>
+    /** `revision`: the draft as shown */
+    clear(path: string, revision: number): Promise<void>
+    /** Queues the draft on the session as one prompt and clears it; `revision`: the draft as shown */
+    send(path: string, terminalId: string, revision: number): Promise<void>
   }
   /** Branch data; null or an empty text clears the value */
   readonly branch: {
@@ -249,7 +273,7 @@ export const idleBackend: WindowBackend = {
     dismissDecision: noProject
   },
   worktrees: { load: noProject, unload: noProject, unloadAll: noProject, create: noProject, remove: noProject, setOrder: noProject },
-  git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, pull: noProject, push: noProject, dirty: noProject },
+  git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, commits: noProject, pull: noProject, push: noProject, dirty: noProject },
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
   env: {
     check: noProject,
@@ -275,6 +299,7 @@ export const idleBackend: WindowBackend = {
     onChanged: () => () => {}
   },
   skills: { list: noProject },
+  review: { add: noProject, edit: noProject, remove: noProject, clear: noProject, send: noProject },
   branch: {
     setTag: noProject,
     setCustomTag: noProject,

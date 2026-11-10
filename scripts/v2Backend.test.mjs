@@ -227,6 +227,41 @@ test("docker, env and stacks go to the server by id: a worktree by the store's p
   ])
 })
 
+test("the Changes tab's source, commits and review go to the window's server by the worktree's id (5c-2)", async () => {
+  const replies = {
+    'worktree.changes': { base: null, files: [] },
+    'worktree.diff': {},
+    'worktree.commits': [{ sha: 'a'.repeat(40), subject: 's', author: 't', at: 1 }],
+    'review.add': { commentId: 'c9' }
+  }
+  const { backend, calls } = setup({ replies })
+  const loc = { path: '/r-feat' }
+  const commit = { kind: 'commit', sha: 'a'.repeat(40) }
+  await backend.git.changes(loc)
+  await backend.git.changes(loc, { kind: 'uncommitted' })
+  await backend.git.diff(loc, commit)
+  assert.equal((await backend.git.commits(loc)).length, 1)
+  const comment = { source: commit, path: 'a.txt', side: 'new', line: 2, lineText: 'x', body: 'Why?' }
+  assert.equal(await backend.review.add('/r-feat', comment), 'c9')
+  await backend.review.edit('/r-feat', 'c9', 'Why not?', 'Why?')
+  await backend.review.remove('/r-feat', 'c9')
+  await backend.review.clear('/r-feat', 7)
+  await backend.review.send('/r-feat', 's1', 8)
+  const ref = { projectId: 'p1', worktreeId: 'w2' }
+  assert.deepEqual(calls, [
+    // No source: the params an older server already takes.
+    ['worktree.changes', ref],
+    ['worktree.changes', { ...ref, source: { kind: 'uncommitted' } }],
+    ['worktree.diff', { ...ref, source: commit }],
+    ['worktree.commits', ref],
+    ['review.add', { ...ref, ...comment }],
+    ['review.edit', { ...ref, commentId: 'c9', body: 'Why not?', expected: 'Why?' }],
+    ['review.remove', { ...ref, commentId: 'c9' }],
+    ['review.clear', { ...ref, revision: 7 }],
+    ['review.send', { ...ref, sessionId: 's1', revision: 8 }]
+  ])
+})
+
 test('a worktree path the projection does not know is refused here, and nothing is sent', async () => {
   const { backend, calls } = setup()
   await assert.rejects(backend.env.up({ path: '/elsewhere' }, { enabled: true }, undefined), (err) => err.code === 'NOT_FOUND')

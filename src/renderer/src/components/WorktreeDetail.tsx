@@ -27,7 +27,9 @@ import { EnvironmentPanel } from './EnvironmentPanel'
 import { StackPanel } from './StackPanel'
 import { STACK_STATE_LABELS, stackState, stackUrls } from '../../../shared/stacks'
 import { NotesPanel } from './NotesPanel'
-import { ChangesPanel, useWorktreeChanges } from './ChangesPanel'
+import { ChangesPanel, useWorktreeChanges, type ReviewTarget } from './ChangesPanel'
+import { BRANCH_SOURCE } from '../../../shared/review'
+import type { ChangesSource } from '../../../shared/types'
 import { changesTabLabel } from '../../../shared/changes'
 import { AllNotesPanel } from './AllNotesPanel'
 import { SettingsPanel } from './SettingsPanel'
@@ -131,10 +133,13 @@ export function WorktreeDetail({
   const path = info?.path
   // The stack runs on the server's machine (`features.stacks`, any server that has `stacks`).
   const [stack, refreshStack] = useStackStatus(path, !features.stacks)
-  const changesState = useWorktreeChanges(path, offline, panel === 'changes')
+  // What the Changes tab compares (5c-2): a server without `review` is asked without a source.
+  const [changesSource, setChangesSource] = useState<ChangesSource>(BRANCH_SOURCE)
+  const changesState = useWorktreeChanges(path, offline, panel === 'changes', features.review ? changesSource : undefined)
   useEffect(() => {
     // Selection changed: back to the sessions view, drop transient UI state.
     setPanel('sessions')
+    setChangesSource(BRANCH_SOURCE)
     setMenuOpen(false)
     setTagMenuOpen(false)
     setCustomTagMenuOpen(false)
@@ -202,6 +207,10 @@ export function WorktreeDetail({
   // The server watches it (5c-1); its last report stays on the chip until dismissed.
   const watchingPr = !!pullRequest && !!info.branch && !!repo.branchPrWatches?.[info.branch]
   const prNotice = repo.worktreePrNotices?.[info.path]
+  // Where the Changes tab's review can go (5c-2): the worktree's open sessions, newest first.
+  const reviewTargets: ReviewTarget[] = loaded
+    ? [...order].reverse().flatMap((id) => (terminals[id] ? [{ terminalId: id, title: terminals[id].title }] : []))
+    : []
   const linearIssue = ticket ? linearIssues[ticket] : undefined
   const linkedTicketUrl = ticket ? ticketUrl(project, ticket, linearIssue) : null
 
@@ -725,7 +734,7 @@ export function WorktreeDetail({
         )}
         <button
           className={`panel-btn ${panel === 'changes' ? 'active' : ''}`}
-          title="Changes compared to the default branch, including uncommitted work"
+          title={features.review ? 'Changes: the branch against its base, the uncommitted work or one commit, with line comments' : 'Changes compared to the default branch, including uncommitted work'}
           onClick={() => setPanel(panel === 'changes' ? 'sessions' : 'changes')}
         >
           {changesTabLabel(changesState.changes)}
@@ -843,6 +852,17 @@ export function WorktreeDetail({
           visible={panel === 'changes'}
           paused={offline}
           state={changesState}
+          path={info.path}
+          source={changesSource}
+          onSource={setChangesSource}
+          review={{
+            enabled: features.review,
+            needsUpdate: !features.review && !offline,
+            draft: repo.worktreeReviews?.[info.path],
+            targets: reviewTargets,
+            noTargets: loaded ? 'Start a session in this worktree to send the review to' : 'Load the worktree to send the review to one of its sessions',
+            offline
+          }}
         />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
         {info.isMain && <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />}
