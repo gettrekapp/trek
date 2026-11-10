@@ -188,6 +188,19 @@ path: any other value is logged and gh is treated as not installed. `TREK_SERVER
 (at least 1000) is the time between polls and between sign-in checks. Both are for
 tests, which run a stub gh; leave them unset.
 
+## Changes tab review
+
+With the `review` capability a client's Changes tab can compare the branch against
+its base, the uncommitted work alone, or one commit (`worktree.changes` and
+`worktree.diff` take a `source`; `worktree.commits` lists the newest 100), and keep
+draft line comments on a worktree (`review.*`). The draft is part of the project, so
+it is saved in the project file and every client sees it live; `review.send` queues
+it on one of the worktree's sessions as one prompt and clears it in the same change.
+Nothing is sent on its own, and the tab never stages or reverts. A draft holds at
+most 100 comments of at most 4000 characters, and no more than fits in one queued
+prompt (100,000 characters). Agents can read a draft with the `get_review_comments`
+MCP tool, which never changes it. See PROTOCOL.md, "Changes tab review".
+
 ## Projects
 
 Clients create projects from registered repos (`trek-server add`). Each

@@ -103,6 +103,7 @@ new optional field needs no capability: its absence says enough.
 | `voice` | `voice.*` keep the server's ElevenLabs key and voice; the MCP tool `speak_summary` sends each spoken summary to the project's subscribers as `voice.summary` |
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
 | `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
+| `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -171,7 +172,7 @@ server restarts. A server without this field simply leaves it out.
 |---|---|
 | Projects | `project.list`, `project.create`, `project.import`, `project.rename`, `project.delete`, `project.updateSettings` |
 | Repositories | `repo.add`, `repo.remove`, `repo.update`, `repo.listBranches` |
-| Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff`, `worktree.dirty` |
+| Worktrees | `worktree.create`, `worktree.remove`, `worktree.load`, `worktree.unload`, `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff`, `worktree.commits`, `worktree.dirty` |
 | Branch data | `branch.setTag`, `branch.setCustomTags`, `branch.setNote`, `branch.setTicket`, `branch.setPr`, `branch.setPrWatch`, `branch.setEnv` |
 | Sessions | `session.start`, `session.restart`, `session.close`, `session.rename`, `session.sendPrompt`, `session.enqueue`, `session.setQueue`, `session.dequeue`, `session.markComplete`, `session.seen`, `session.dismissDecision` |
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
@@ -184,6 +185,7 @@ server restarts. A server without this field simply leaves it out.
 | Voice | `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize` |
 | Skills | `skills.list` |
 | Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
+| Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -290,7 +292,8 @@ detached, when the worktree is now `missing`, or for a name like `--mirror`;
 `NOT_FOUND` when the row is gone), pass it to git as `refs/heads/<branch>`, and
 refresh the worktree's status before answering. `worktree.changes` and
 `worktree.diff` return the worktree's changes against its base branch (files with
-their added and removed line counts) and each file's unified diff. `worktree.pull`, `worktree.push`, `worktree.changes` and `worktree.diff` on
+their added and removed line counts) and each file's unified diff; with `review`
+they take a `source` (see [Changes tab review](#changes-tab-review)). `worktree.pull`, `worktree.push`, `worktree.changes`, `worktree.diff` and `worktree.commits` on
 a worktree whose path is outside the allowlist (a row from a hand-edited
 project file, say) fail with `PATH_DENIED` before running git. They (and the
 docker, env and stack methods) refuse a non-main worktree whose path is, or
@@ -527,6 +530,52 @@ read: <reason>`, once, and the next good poll withdraws it.
 
 `branch.setPr` with a different URL, or none, also removes the branch's watch: it watched the old
 pull request. The MCP tool `watch_pull_request` turns a watch on or off.
+
+## Changes tab review
+
+With the capability `review` (phase 5c-2), a client can pick what the Changes tab compares and
+write line comments on the diff, which go to one of the worktree's sessions as one queued prompt.
+The tab stays read-only: nothing stages or reverts.
+
+`worktree.changes` and `worktree.diff` take an optional `source`:
+
+| `source` | Compares |
+|---|---|
+| absent, or `{kind: 'branch'}` | The branch against its base: the merge-base with the default branch (`origin/HEAD`, else `origin/master`, `origin/main`, `master`, `main`) to the working tree, untracked files included. The only view a server without `review` has |
+| `{kind: 'uncommitted'}` | Staged, unstaged and untracked work against `HEAD` (the empty tree before the first commit); `base` is `null` |
+| `{kind: 'commit', sha}` | One commit against its first parent (the empty tree for a root commit), without the working tree; `base` is `null`. `sha` must be a full lowercase hex object id (40 or 64 characters, else `BAD_REQUEST`, before git runs) that names a commit in the repository (else `GIT_ERROR`) |
+
+`worktree.commits` `{projectId, worktreeId}` returns the newest 100 commits on the worktree's
+`HEAD`, newest first, as `{sha, subject, author, at}` (`at`: the author time, epoch ms; `subject`:
+the first line, at most 200 characters); none before the first commit. Merges are listed, and
+their diff is against their first parent. Any commit can be asked for, not only these.
+
+A worktree's draft is its `review` in the project topic, `{revision, comments}`, saved with the
+project (it survives a restart; one of the wrong shape is dropped at load and at `project.import`).
+Every client sees it, and every change to it, in the topic's patches. Each comment is `{id, source,
+path, side, line, lineText, body, at}`: the diff it was written on, the file's path there, `side`
+`old` (a removed line, numbered in the old file) or `new` (an added or unchanged line, in the new
+file), the 1-based line, the line as it read then (without the diff's `+`, `-` or space), the
+comment, and when it was written or last edited (the server's clock). The server never re-reads the
+line: a client shows a comment whose line no longer reads the same as outdated, and it is still sent
+with the text it was written on. `revision` goes up with every change, and never below the server's
+clock (epoch ms), so a draft begun after another was sent or discarded does not repeat a revision a
+client still holds. The draft goes away when its last comment does.
+
+| Method | Params | Result |
+|---|---|---|
+| `review.add` | `{projectId, worktreeId, source, path, side, line, lineText, body}` | `{commentId}`. `path`: one line, 1–4096 characters; `line`: 1–10,000,000; `lineText`: one line, at most 500 characters (clients cut a longer line, and drop its control characters); `body`: not blank, at most 4000 characters; at most 100 comments; and the prompt the draft would send must fit in one queued prompt (100,000 characters). Else `BAD_REQUEST` |
+| `review.edit` | `{projectId, worktreeId, commentId, body, expected?}` | `null`. `expected`: the body the edit started from (`CONFLICT` if it changed); the same limits as `review.add` |
+| `review.remove` | `{projectId, worktreeId, commentId}` | `null` (`NOT_FOUND` for an unknown comment) |
+| `review.clear` | `{projectId, worktreeId, revision}` | `null`: the draft is discarded. `revision`: the draft the client showed (`CONFLICT` if it changed) |
+| `review.send` | `{projectId, worktreeId, sessionId, revision}` | `null`: the draft is queued on `sessionId`, one of the worktree's sessions (`NOT_FOUND` otherwise), as one prompt, and cleared, in one change to the project (one patch). `revision`: the draft the client showed (`CONFLICT` if it changed, so nothing unseen is sent). `BAD_REQUEST` when the draft is empty or the session's queue is full (100 prompts); then nothing changes |
+
+The prompt lists every comment, grouped by the diff it was written on (`## Uncommitted changes`,
+`## The branch against its base`, `## Commit <sha7>`), then by file and line, each as `<path>, line
+<n>:` (or `removed line <n>`), the line quoted (`> <lineText>`) and the comment
+(`reviewPrompt` in `src/shared/review.ts`). Like every queued prompt it is not sent on its own: the
+user sends it from the session's queue. An agent can read a worktree's draft with the MCP tool
+`get_review_comments` (read-only, with each comment's `outdated`); no tool writes one.
 
 ## Sessions
 
@@ -894,6 +943,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `set_worktree_ticket` | `worktree`; `ticket?` (a Linear id or URL, or an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
 | `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
+| `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source |
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
@@ -903,7 +953,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
 | `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
 
-That is 28 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 29 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` takes the

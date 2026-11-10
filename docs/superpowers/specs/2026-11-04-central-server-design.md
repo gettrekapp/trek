@@ -450,7 +450,13 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
      - **Changes tab review:** a source picker (uncommitted only, the branch against its
        base, or one commit from the newest 100) and line comments on the diff. "Send to
        session" enqueues the comments, with their file and line, as one prompt. The tab
-       stays read-only: no staging or reverting.
+       stays read-only: no staging or reverting. User decisions (2026-11-10): the draft
+       comments live on the server, on the worktree (saved with the project, seen live by
+       every window and the coming web client); Send to session picks one of the
+       worktree's open agent sessions, newest first; the draft is cleared once sent; a
+       comment whose line changed is kept, shown as outdated, and still sent with the line
+       as it read. Behind a `review` capability. Plan:
+       `docs/superpowers/plans/2026-11-10-central-server-phase5c2-review.md` (5c-2).
      - **Web client:** trek-server serves a browser build of the v2 project window on
        `packages/client`, using the server's named tokens. The Electron-only actions
        (Open in VS Code, Reveal in Finder, folder pickers) are hidden there. It covers

@@ -201,6 +201,19 @@ other window on that project sees them live.
   installed and signed in (`gh auth login`) as the server's user; without that the
   menu item is not shown (a sign-in or sign-out on the server shows within about 10
   minutes).
+- **Changes tab review**: the Changes tab's picker compares the branch against its
+  base (the default), the uncommitted work only, or one of the newest 100 commits.
+  Hover a line and click **+** to comment on it; the draft review is kept on the
+  server, so every window on it (and a restart) sees the same comments, and it is
+  sent with **Send to session**, which lists the worktree's open sessions newest
+  first and queues every comment, with its file, line and the line's text, as one
+  prompt (sent from the queue like any other). A comment whose line has changed
+  since shows as outdated at the top of its file, and is still sent with the line
+  as it read. Comments on another source are listed in the review bar. The tab
+  stays read-only: nothing stages or reverts. Agents can read the draft with the
+  `get_review_comments` MCP tool (read-only; each comment says whether it is
+  outdated). A server older than this Trek (without the `review` capability) shows
+  only the branch against its base.
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.
@@ -397,6 +410,9 @@ one at a time:
 - `npm run smoke:server-prwatch`: a remote server window's pull request watch, against
   a stub `gh` (every smoke gives its servers a not-signed-in stub `gh`, `scripts/smokeGh.mjs`,
   so none runs the real one);
+- `npm run smoke:server-review`: a remote server window's Changes tab review: the
+  source picker, line comments (one from another client, live; one outdated), an
+  agent reading them with `get_review_comments`, Send to session and Discard;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;
