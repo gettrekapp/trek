@@ -18,6 +18,8 @@
 2. **The full project window.** The web client is the same v2 project window as the app (sessions, terminals, the queue, the Changes tab review, the PR watch, stacks, settings), plus a projects list to open one. Only the Electron-only actions are hidden.
 3. **Off by default.** `trek-server start --web` (or `"web": true` in the config) turns it on. The Local server never serves it.
 
+Answered later the same day (the plan's Questions 1, 2 and 4, plus Decision 14): browser sessions stay in memory, so a restart signs browsers out (Decision 4); 30 days from sign-in and 7 days unused are the lifetimes (Decision 5); the sign-in limit does not trust `X-Forwarded-For` (Decision 14); the page raises no browser notifications in 5c-3 (Decision 18).
+
 ## Decisions made in the plan (candidates for the user)
 
 4. **Sessions live in memory.** The server keeps only the cookie id's sha256, the token's hash and name, and two times. A server restart signs every browser out. Persisting them would mean a sessions file with its own permissions and revocation sweep for little gain (a restart is rare and signing in is one paste). *Question 1.*
@@ -56,12 +58,9 @@
 
 ## Questions
 
-1. Should browser sessions survive a server restart (a 0600 sessions file)? Recommendation: no, keep them in memory.
-2. Are 30 days from sign-in and 7 days unused the right lifetimes? Recommendation: yes.
-3. Should the projects list make projects (a typed path on the server, since there is no folder picker)? Recommendation: not in 5c-3.
-4. Should the page raise browser notifications (the Notification API, asked on first use) for what the bell lists? Recommendation: not in 5c-3.
+The user answered Questions 1, 2 and 4 (2026-11-10; see User decisions): sessions in memory, the lifetimes as planned, no browser notifications. Question 3 (making projects from the projects list) is left out of 5c-3 as recommended.
 
-None of them blocks the plan.
+None remain.
 
 ## File structure
 
