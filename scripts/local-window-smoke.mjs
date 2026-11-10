@@ -385,7 +385,9 @@ try {
   const fileRows = detail.locator('.changes-file-row')
   await fileRows.first().waitFor({ timeout: 10_000 })
   await detail.locator('.changes-line.add', { hasText: 'changed' }).waitFor({ timeout: 10_000 })
-  check('one row per file, the deleted line, the base', [await fileRows.count(), await detail.locator('.changes-line.del', { hasText: 'two' }).count(), (await detail.locator('.changes-panel .muted').first().textContent()).trim()], [3, 1, 'compared to main'])
+  // The base is named in the source picker (5c-2), on the branch against it.
+  const basePicked = detail.locator('.changes-panel .changes-source-kind option:checked')
+  check('one row per file, the deleted line, the base', [await fileRows.count(), await detail.locator('.changes-line.del', { hasText: 'two' }).count(), await until(async () => (await basePicked.textContent()).trim(), 'Branch vs main')], [3, 1, 'Branch vs main'])
   writeFileSync(join(apiFeature, 'edited.txt'), 'one\nREWRITTEN\n')
   await detail.locator('.changes-line.add', { hasText: 'REWRITTEN' }).waitFor({ timeout: 15_000 })
   check('a same-count edit replaces the patch', [await detail.locator('.changes-line.add', { hasText: 'REWRITTEN' }).count(), await detail.locator('.changes-line.add', { hasText: 'changed' }).count()], [1, 0])
