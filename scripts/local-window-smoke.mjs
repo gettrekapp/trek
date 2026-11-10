@@ -19,8 +19,8 @@
 //   - Notes and All Notes: a note saved on the server; a note on a branch with no worktree is
 //     listed as gone, and its two-step delete clears it on the server;
 //   - Settings: Audio alerts and the session mode, saved on the server;
-//   - the overflow menus: the primary's (Open in VS Code and Reveal; no Promote, Move or Delete)
-//     and a worktree's (Delete; no Promote or Move);
+//   - the overflow menus: the primary's (Open in VS Code, Reveal and Promote branch to worktree; no
+//     Move or Delete) and a worktree's (Delete and Promote to primary; no Move);
 //   - ⏏ unloads the worktree on the server (no tab, a dormant dot, ▸1, "1 saved session") and ▸1
 //     loads it again;
 //   - the Changes tab: Changes when clean; branch commits, edits and untracked files totalled
@@ -369,11 +369,11 @@ try {
     return items.map((t) => t.replace(/\s+/g, ' ').trim())
   }
   const primaryItems = await menuItems()
-  check("the primary's menu: Open in VS Code and Reveal, no Promote, Move or Delete", [primaryItems.includes('Open in VS Code'), primaryItems.includes('Reveal in Finder'), primaryItems.some((t) => /promote|move|delete/i.test(t))], [true, true, false])
+  check("the primary's menu: Open in VS Code, Reveal and Promote branch to worktree (5e), no Move or Delete", [primaryItems.includes('Open in VS Code'), primaryItems.includes('Reveal in Finder'), primaryItems.some((t) => t.startsWith('Promote branch to worktree…')), primaryItems.some((t) => t.startsWith('Move to another server') || t.startsWith('Delete worktree'))], [true, true, true, false])
   await apiFeatureRow.click()
   await detail.locator('.detail-title', { hasText: 'feature-auth' }).waitFor({ timeout: 5000 })
   const featureItems = await menuItems()
-  check("a worktree's menu: Delete, and no Promote or Move", [featureItems.some((t) => t.startsWith('Delete worktree')), featureItems.some((t) => /promote|move/i.test(t))], [true, false])
+  check("a worktree's menu: Delete and Promote to primary (5e), no Move", [featureItems.some((t) => t.startsWith('Delete worktree')), featureItems.some((t) => t.startsWith('Promote to primary…')), featureItems.some((t) => t.startsWith('Move to another server'))], [true, true, false])
 
   // ---- 8. The Changes tab -----------------------------------------------------------------------------
 

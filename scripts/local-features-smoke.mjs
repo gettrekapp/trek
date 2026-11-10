@@ -363,10 +363,10 @@ try {
   }, projectId)
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
-  check("the window's features: the machine-local ones, the server's Linear, voice and skills, and Move (5d)", await until(() => win.evaluate(() => {
+  check("the window's features: the machine-local ones, the server's Linear, voice and skills, Move (5d) and Promote (5e)", await until(() => win.evaluate(() => {
     const f = window.__features()
     return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear, f.bot, f.voice, f.promote, f.moveWorktree]
-  }), [true, true, true, true, true, true, true, false, true, false, true]), [true, true, true, true, true, true, true, false, true, false, true])
+  }), [true, true, true, true, true, true, true, false, true, true, true]), [true, true, true, true, true, true, true, false, true, true, true])
   check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
   const mainRow = rows.filter({ hasNotText: 'feature-x' })
