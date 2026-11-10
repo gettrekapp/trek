@@ -55,6 +55,7 @@ Answered later the same day (the plan's Questions 1, 2 and 4, plus Decision 14):
 8. **The hello names the client `trek-desktop`** (`serverClients.ts` hard-codes it); the server's log can't tell a browser from the app except by `web sign-in` in the same line.
 9. **A third-party browser tool that connected to a `--web` server with a token from its own origin** is now refused (Decision 8). None is known.
 10. **The bundle is served to anyone who can reach the port** (it is the same public code as the app's renderer); only the page and every socket need a sign-in.
+11. **Cookies are not port-scoped.** A browser sends the session cookie to every port on the host name it was set for, so any other web server reached on that name (another service behind the same name, a dev stack, a worktree's dev server an agent can edit) sees it and could replay it as this browser's sign-in. No cookie attribute fixes this (`__Host-` and SameSite scope by host and site, not port). The web client needs a host name no other service or dev stack is reached on (its own subdomain behind the proxy); on loopback (`127.0.0.1`/`localhost`), any other local web server the browser visits sees the cookie. Documented in PROTOCOL.md, both READMEs, and warned at start on a loopback bind. (Review fix: on a loopback bind the server also answers only a loopback `Host`, against DNS rebinding.)
 
 ## Questions
 

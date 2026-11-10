@@ -220,8 +220,10 @@ other window on that project sees them live.
   cookie, never the token), pick a project, and use it as in the app: sessions,
   terminals, the queue, the Changes tab review, the PR watch, stacks and settings.
   What needs the browser's own machine (Open in VS Code, Reveal in Finder, folder
-  pickers, the Local server) is not offered. See [trek-server's
-  README](server/README.md#web-client).
+  pickers, the Local server) is not offered. Serve it on a host name no other
+  service or dev stack is reached on: cookies are not port-scoped, so any other web
+  server on that name (on loopback, any local web server the browser visits) sees
+  the session cookie. See [trek-server's README](server/README.md#web-client).
 - **This machine's features, in Local windows only**: a window on the [Local
   server](#local-server) also has Open in VS Code and Reveal in Finder, since its
   paths are this machine's. A window on a remote server shows neither.

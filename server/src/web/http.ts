@@ -4,11 +4,13 @@
 // other answers HTTP with 426 as before. The WebSocket upgrade never comes
 // here: server.ts reads the same session cookie at hello.
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { clearedCookie, LoginLimiter, loginToken, parseCookies, sameOrigin, SESSION_COOKIE, sessionCookie, WebSessions } from './auth.ts'
+import { clearedCookie, LoginLimiter, loginToken, loopbackHost, parseCookies, sameOrigin, SESSION_COOKIE, sessionCookie, WebSessions } from './auth.ts'
 import type { WebBundle } from './bundle.ts'
 
 /** The sign-in form's body is one short field. */
 export const MAX_LOGIN_BODY = 4096
+/** How much more of an oversized body is read (and dropped) before its 413, so the answer isn't lost to a reset. */
+export const MAX_LOGIN_DRAIN = 1024 * 1024
 
 /**
  * On every answer. The page loads its scripts and styles from this server only
@@ -39,6 +41,11 @@ export interface WebDeps {
   serverName(): string
   /** A session was signed out: its sockets close */
   signedOut(key: string): void
+  /**
+   * The server is bound to loopback: only a request whose Host is loopback is answered
+   * (421 otherwise), so a page on a rebound DNS name can't reach it. Off behind a proxy.
+   */
+  loopback?: boolean
   now?: () => number
 }
 
@@ -57,29 +64,40 @@ export function createWebHandler(deps: WebDeps): Handler {
     send(res, 303, { location: to, 'cache-control': 'no-store', ...extra })
   const page = (res: ServerResponse, status: number, message?: string): void =>
     send(res, status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, loginPage(deps.serverName(), message))
-  const plain = (res: ServerResponse, status: number, text: string): void =>
-    send(res, status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }, `${text}\n`)
+  const plain = (res: ServerResponse, status: number, text: string, extra: Record<string, string> = {}): void =>
+    send(res, status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', ...extra }, `${text}\n`)
 
-  /** The form's body, at most MAX_LOGIN_BODY bytes, or null once it is over (the request is answered 413). */
+  /**
+   * The form's body, at most MAX_LOGIN_BODY bytes, or null once it is over: the rest
+   * (up to MAX_LOGIN_DRAIN more) is read and dropped, then it is answered 413 with
+   * `Connection: close`. Answering while the client still uploads would have the
+   * connection reset under it, losing the answer; past the drain limit it is cut anyway.
+   */
   const readBody = (req: IncomingMessage, res: ServerResponse): Promise<string | null> =>
     new Promise((resolve) => {
       const chunks: Buffer[] = []
       let size = 0
       let over = false
+      let answered = false
+      const tooLarge = (cut: boolean): void => {
+        if (answered) return
+        answered = true
+        if (cut) res.on('finish', () => req.destroy())
+        plain(res, 413, 'Too large', { connection: 'close' })
+      }
       req.on('data', (chunk: Buffer) => {
-        if (over) return
         size += chunk.length
-        if (size > MAX_LOGIN_BODY) {
+        if (!over && size > MAX_LOGIN_BODY) {
           over = true
-          plain(res, 413, 'Too large')
-          req.destroy()
+          chunks.length = 0
           resolve(null)
-          return
         }
-        chunks.push(chunk)
+        if (!over) chunks.push(chunk)
+        else if (size > MAX_LOGIN_BODY + MAX_LOGIN_DRAIN) tooLarge(true)
       })
       req.on('end', () => {
-        if (!over) resolve(Buffer.concat(chunks).toString('utf8'))
+        if (over) tooLarge(false)
+        else resolve(Buffer.concat(chunks).toString('utf8'))
       })
       req.on('error', () => {
         if (!over) resolve(null)
@@ -92,17 +110,18 @@ export function createWebHandler(deps: WebDeps): Handler {
     const type = (req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
     if (type !== 'application/x-www-form-urlencoded') return plain(res, 415, 'Unsupported Media Type')
     const address = req.socket.remoteAddress ?? ''
-    if (!deps.limiter.allow(address, now())) return page(res, 429, 'Too many failed sign-ins. Wait a minute, then try again.')
+    // Counted as a failure from here (so concurrent attempts are limited too) until it succeeds.
+    const at = now()
+    if (!deps.limiter.allow(address, at)) return page(res, 429, 'Too many failed sign-ins. Wait a minute, then try again.')
     const body = await readBody(req, res)
     if (body === null) return
     const token = loginToken(body)
     const entry = token ? deps.matchToken(token) : undefined
     if (!entry) {
-      deps.limiter.fail(address, now())
       console.warn(`[web] rejected a sign-in from ${address}`)
       return page(res, 401, 'That token was not accepted.')
     }
-    deps.limiter.succeed(address)
+    deps.limiter.succeed(address, at)
     // A cookie this browser already had is replaced: its session ends.
     const old = deps.sessions.end(cookieId(req))
     if (old) deps.signedOut(old)
@@ -132,6 +151,8 @@ export function createWebHandler(deps: WebDeps): Handler {
   }
 
   return (req, res) => {
+    // DNS rebinding: on loopback, a Host that isn't loopback is another site's name for us.
+    if (deps.loopback && !loopbackHost(req.headers.host)) return plain(res, 421, 'Misdirected Request')
     const method = req.method ?? 'GET'
     let path: string
     try {

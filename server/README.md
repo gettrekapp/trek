@@ -222,6 +222,14 @@ from the app or the CLI. Browsers keep the Secure cookie only over https or on
 `127.0.0.1`/`localhost`, so expose the web client through the TLS proxy, never with
 `--insecure`. See PROTOCOL.md, "Web client".
 
+Give the web client a host name of its own: no other service or dev stack may be
+reached on it (e.g. `trek.example.com`, not a name that also serves other sites).
+Cookies are not port-scoped, so a browser sends the session cookie to every port on
+that name, and any other web server there (a worktree's dev server an agent can edit
+included) sees it and could sign in as the browser. On loopback, any other local web
+server the browser visits on `127.0.0.1`/`localhost` sees it; the server warns at start.
+Bound to loopback, the server answers only a loopback `Host` (DNS rebinding).
+
 ## Projects
 
 Clients create projects from registered repos (`trek-server add`). Each
@@ -394,7 +402,10 @@ through, which the web client's same-origin checks compare with the browser's
   page's CSP allows only its own scripts, and a socket or a sign-in from another
   site's page is refused. Failed sign-ins are rate limited per address and in
   total; behind a proxy every browser shares the proxy's address, so a flood of bad
-  sign-ins can lock out sign-in (not open sessions) for a minute.
+  sign-ins can lock out sign-in (not open sessions) for a minute. Cookies are not
+  port-scoped: the web client needs a host name no other service or dev stack is
+  reached on, and on loopback any other local web server the browser visits sees
+  the cookie.
 - Auth failures are logged with the peer address; bad tokens get a delayed
   close to blunt brute force.
 - Never expose the plain `ws://` listener beyond loopback (`--insecure`

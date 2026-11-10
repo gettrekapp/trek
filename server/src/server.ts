@@ -32,8 +32,9 @@ import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
-import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
+import { LoginLimiter, loopbackHost, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
 import { createWebHandler } from './web/http'
+import { sweepEvery, WebSocketSignIns } from './web/sockets'
 import type { WebBundle } from './web/bundle'
 
 const HELLO_TIMEOUT_MS = 5000
@@ -74,7 +75,14 @@ export interface ServerOptions {
    * The web client (5c-3, `start --web`): its built files, served over HTTP with the sign-in
    * form, and browser sessions signed in by cookie. Without it HTTP answers 426 as before.
    */
-  web?: { bundle: WebBundle }
+  web?: {
+    bundle: WebBundle
+    /**
+     * The server is bound to loopback: HTTP requests and upgrades must name a loopback
+     * Host (DNS rebinding). Off for any other bind (a TLS proxy passes its own Host).
+     */
+    loopback?: boolean
+  }
 }
 
 export interface ProjectsSetup {
@@ -135,22 +143,36 @@ export function startServer(
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
-  /** The web sign-in each browser socket used (its session's key), so signing out closes it. */
-  const webSockets = new Map<WebSocket, string>()
-  const web = options.web
-    ? { sessions: new WebSessions(), limiter: new LoginLimiter(), bundle: options.web.bundle }
-    : undefined
-  /** A browser session ended (sign-out, its token revoked, a new sign-in in its place): its sockets close. */
-  const signedOut = (key: string): void => {
-    for (const [ws, k] of webSockets) {
-      if (k !== key) continue
-      webSockets.delete(ws)
-      authed.delete(ws)
-      ws.close(CLOSE_UNAUTHORIZED, 'signed out')
-    }
-  }
   /** Revoked sockets that have not finished closing yet; terminated if the close handshake stalls. */
   const revokeTimers = new Map<WebSocket, NodeJS.Timeout>()
+  /** Closes a socket whose sign-in ended (4003), terminating it if the close handshake stalls. */
+  const closeRevoked = (ws: WebSocket, reason: string): void => {
+    authed.delete(ws)
+    ws.close(CLOSE_UNAUTHORIZED, reason)
+    revokeTimers.set(
+      ws,
+      setTimeout(() => {
+        if (ws.readyState !== WebSocket.CLOSED) ws.terminate()
+      }, REVOKE_TERMINATE_MS)
+    )
+  }
+  /**
+   * The web sign-in each browser socket used (its session's key): a session that ends (sign-out,
+   * its token revoked, a new sign-in in its place, expiry, eviction) closes its sockets.
+   */
+  let webSignIns: WebSocketSignIns<WebSocket> | undefined
+  const web = options.web
+    ? {
+        sessions: new WebSessions({ onExpire: (key) => webSignIns?.signedOut(key) }),
+        limiter: new LoginLimiter(),
+        bundle: options.web.bundle,
+        loopback: options.web.loopback === true
+      }
+    : undefined
+  if (web) webSignIns = new WebSocketSignIns(web.sessions, (ws) => closeRevoked(ws, 'signed out'))
+  const signedOut = (key: string): void => webSignIns?.signedOut(key)
+  // Expired sessions end on the hour even if nothing looks them up, closing their sockets.
+  const stopSweep = web ? sweepEvery(web.sessions) : () => {}
   const onConfigChange = (): void => {
     const active = activeTokenHashes(store.config)
     // A revoked token's browser sessions end with it (their sockets close in the loop below).
@@ -158,14 +180,7 @@ export function startServer(
     for (const [ws, hash] of authed) {
       if (active.has(hash)) continue
       console.warn('[auth] token revoked; closing its connection')
-      authed.delete(ws)
-      ws.close(CLOSE_UNAUTHORIZED, 'token revoked')
-      revokeTimers.set(
-        ws,
-        setTimeout(() => {
-          if (ws.readyState !== WebSocket.CLOSED) ws.terminate()
-        }, REVOKE_TERMINATE_MS)
-      )
+      closeRevoked(ws, 'token revoked')
     }
   }
   // Registered before publishServerState's listener, so a revoked socket is
@@ -196,7 +211,8 @@ export function startServer(
             return entry ? { hash: entry.hash, name: entry.name } : undefined
           },
           serverName: () => store.config.name ?? '',
-          signedOut
+          signedOut,
+          loopback: web.loopback
         })
       : (_req, res) => {
           res.writeHead(426, { 'content-type': 'text/plain' })
@@ -208,11 +224,12 @@ export function startServer(
     maxPayload: MAX_FRAME_BYTES,
     // With the web client on, a browser page from another site never gets a socket (cross-site
     // WebSocket hijacking): a request with an Origin must come from this host. The app's relay and
-    // the CLI clients send no Origin.
+    // the CLI clients send no Origin. On loopback, the Host must be loopback too (DNS rebinding).
     verifyClient: web
       ? (info, done) => {
           const origin = info.req.headers.origin
-          if (origin !== undefined && !sameOrigin(origin, info.req.headers.host)) done(false, 403, 'Forbidden')
+          if (web.loopback && !loopbackHost(info.req.headers.host)) done(false, 403, 'Forbidden')
+          else if (origin !== undefined && !sameOrigin(origin, info.req.headers.host)) done(false, 403, 'Forbidden')
           else done(true)
         }
       : undefined
@@ -273,6 +290,8 @@ export function startServer(
     }, HEARTBEAT_INTERVAL_MS)
     ws.on('pong', () => {
       missedPongs = 0
+      // An open page is its session's use (noted at most once a minute).
+      webSignIns?.used(ws, Date.now())
     })
 
     const respond = (id: number, outcome: Outcome, rev?: TopicRev): void => {
@@ -342,7 +361,7 @@ export function startServer(
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
         const viaWeb = !token && webSession !== undefined
-        if (viaWeb) webSockets.set(ws, webSession.key)
+        if (viaWeb) webSignIns?.add(ws, webSession.key, Date.now())
         console.log(
           `[auth] ${String(frame.client)}/${String(frame.clientVersion)} (token "${entry.name}"${viaWeb ? ', web sign-in' : ''}, protocol ${protocolVersion}) ` +
             `connected from ${req.socket.remoteAddress}`
@@ -365,6 +384,7 @@ export function startServer(
         return
       }
       const id = frame.id
+      webSignIns?.used(ws, Date.now())
       const outcome = dispatchV2(frame.method, frame.params, {
         store,
         hub,
@@ -412,7 +432,7 @@ export function startServer(
       revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
-      webSockets.delete(ws)
+      webSignIns?.delete(ws)
       hub.unsubscribeAll(subscriber)
       // PTYs keep running — the client reattaches on its next connection.
       sessions.terminals.detachAll(terminal)
@@ -459,6 +479,7 @@ export function startServer(
 
   const shutdown = (reason: string): void => {
     stopped = true
+    stopSweep()
     void trek.mcp?.close()
     trek.mcp = undefined
     poller.stop()

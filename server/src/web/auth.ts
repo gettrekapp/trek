@@ -17,7 +17,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 export const SESSION_COOKIE = '__Host-trek-session'
 /** A session ends this long after sign-in, whatever its use. */
 export const SESSION_MAX_MS = 30 * 24 * 60 * 60 * 1000
-/** A session not used (no page load, no connection) for this long ends. */
+/** A session not used (no page load, no connection, no activity on an open one) for this long ends. */
 export const SESSION_IDLE_MS = 7 * 24 * 60 * 60 * 1000
 /** Sessions kept at once; signing in past it ends the least recently used. */
 export const MAX_SESSIONS = 1000
@@ -44,8 +44,22 @@ const digest = (id: string): string => createHash('sha256').update(id, 'utf8').d
 /** A cookie id: 32 random bytes, base64url (43 characters, no padding). */
 const ID_PATTERN = /^[A-Za-z0-9_-]{43}$/
 
+export interface WebSessionsOptions {
+  /**
+   * A session ended on its own: past its idle time or lifetime, or the least recently used
+   * evicted past MAX_SESSIONS. Its sockets must close (they were signed in by it). Not called
+   * for `end` or `prune`, whose callers get the keys back.
+   */
+  onExpire?: (key: string) => void
+}
+
 export class WebSessions {
   private readonly sessions = new Map<string, WebSession>()
+  private readonly onExpire: (key: string) => void
+
+  constructor(options: WebSessionsOptions = {}) {
+    this.onExpire = options.onExpire ?? (() => {})
+  }
 
   /** A new session for the token; returns the cookie's id (only the caller sees it). */
   create(tokenHash: string, tokenName: string, now: number): string {
@@ -54,7 +68,7 @@ export class WebSessions {
       let oldest: WebSession | undefined
       for (const s of this.sessions.values()) if (!oldest || s.lastSeen < oldest.lastSeen) oldest = s
       if (!oldest) break
-      this.sessions.delete(oldest.key)
+      this.expire(oldest.key)
     }
     const id = randomBytes(32).toString('base64url')
     const key = digest(id)
@@ -68,11 +82,26 @@ export class WebSessions {
     const session = this.sessions.get(digest(id))
     if (!session) return undefined
     if (expired(session, now)) {
-      this.sessions.delete(session.key)
+      this.expire(session.key)
       return undefined
     }
     session.lastSeen = now
     return session
+  }
+
+  /**
+   * A socket signed in by the session is in use: its idle time starts again (its lifetime
+   * does not). False if the session has ended (reported, if it had just expired).
+   */
+  touch(key: string, now: number): boolean {
+    const session = this.sessions.get(key)
+    if (!session) return false
+    if (expired(session, now)) {
+      this.expire(key)
+      return false
+    }
+    session.lastSeen = now
+    return true
   }
 
   /** Signs the cookie's session out; returns its key if there was one. */
@@ -98,7 +127,7 @@ export class WebSessions {
     const session = this.sessions.get(key)
     if (!session) return false
     if (!expired(session, now)) return true
-    this.sessions.delete(key)
+    this.expire(key)
     return false
   }
 
@@ -106,8 +135,19 @@ export class WebSessions {
     return this.sessions.size
   }
 
-  private sweep(now: number): void {
-    for (const s of this.sessions.values()) if (expired(s, now)) this.sessions.delete(s.key)
+  /** Ends every session past its idle time or lifetime; returns their keys (each also reported). */
+  sweep(now: number): string[] {
+    const ended: string[] = []
+    for (const s of this.sessions.values()) {
+      if (!expired(s, now)) continue
+      ended.push(s.key)
+      this.expire(s.key)
+    }
+    return ended
+  }
+
+  private expire(key: string): void {
+    if (this.sessions.delete(key)) this.onExpire(key)
   }
 }
 
@@ -145,7 +185,9 @@ export function clearedCookie(): string {
  * A browser request is same-origin when its Origin header names the host the
  * request was sent to (the Host header), port included. The scheme is not
  * compared: behind a TLS proxy the browser's origin is https while the
- * listener is plain http. A missing or opaque ("null") Origin is not same-origin.
+ * listener is plain http. The Origin's scheme's default port (80 for http, 443
+ * for https) is no port, on either side. A missing or opaque ("null") Origin is
+ * not same-origin.
  */
 export function sameOrigin(origin: string | undefined, host: string | undefined): boolean {
   if (!origin || !host || origin === 'null') return false
@@ -156,7 +198,21 @@ export function sameOrigin(origin: string | undefined, host: string | undefined)
     return false
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false
-  return equalText(url.host.toLowerCase(), host.trim().toLowerCase())
+  // URL drops the scheme's default port from the Origin; the Host header may still carry it.
+  const defaultPort = url.protocol === 'https:' ? ':443' : ':80'
+  let target = host.trim().toLowerCase()
+  if (target.endsWith(defaultPort)) target = target.slice(0, -defaultPort.length)
+  return equalText(url.host.toLowerCase(), target)
+}
+
+/**
+ * Whether a Host header names this machine's loopback: `127.0.0.1`, `localhost` or
+ * `[::1]`, with or without a port. A server bound to loopback answers only these, so a
+ * page on a rebound DNS name (evil.example resolving to 127.0.0.1) can't reach it.
+ */
+export function loopbackHost(host: string | undefined): boolean {
+  if (!host) return false
+  return /^(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$/.test(host.trim().toLowerCase())
 }
 
 const equalText = (a: string, b: string): boolean => {
@@ -176,37 +232,40 @@ export function loginToken(body: string): string | undefined {
 }
 
 /**
- * Failed sign-ins in a sliding window, per address and in total. A refused
- * attempt is not counted, so waiting out the window always lets the next one in.
+ * Failed sign-ins in a sliding window, per address and in total. An attempt is
+ * counted as a failure the moment it is allowed (before its body is read), so a
+ * burst of concurrent attempts is limited as if they came one by one; a good
+ * sign-in releases its count. A refused attempt is not counted, so waiting out
+ * the window always lets the next one in.
  */
 export class LoginLimiter {
   private readonly byAddress = new Map<string, number[]>()
   private total: number[] = []
 
-  /** Whether a sign-in from the address may be tried now. */
+  /** Whether a sign-in from the address may be tried now; if so, it counts as a failure until `succeed`. */
   allow(address: string, now: number): boolean {
     this.total = recent(this.total, now)
     if (this.total.length >= LOGIN_FAILS_TOTAL) return false
     const mine = recent(this.byAddress.get(address) ?? [], now)
-    if (mine.length === 0) this.byAddress.delete(address)
-    else this.byAddress.set(address, mine)
-    return mine.length < LOGIN_FAILS_PER_ADDRESS
-  }
-
-  fail(address: string, now: number): void {
+    if (mine.length >= LOGIN_FAILS_PER_ADDRESS) {
+      this.byAddress.set(address, mine)
+      return false
+    }
     this.total.push(now)
-    const mine = recent(this.byAddress.get(address) ?? [], now)
     mine.push(now)
     this.byAddress.set(address, mine)
     // Bounded: addresses with nothing recent are dropped.
     if (this.byAddress.size > 10_000) {
       for (const [a, times] of this.byAddress) if (recent(times, now).length === 0) this.byAddress.delete(a)
     }
+    return true
   }
 
-  /** A good sign-in clears the address's failures. */
-  succeed(address: string): void {
+  /** A good sign-in (allowed at `at`): its attempt is released, and its address's failures cleared. */
+  succeed(address: string, at: number): void {
     this.byAddress.delete(address)
+    const i = this.total.indexOf(at)
+    if (i !== -1) this.total.splice(i, 1)
   }
 }
 

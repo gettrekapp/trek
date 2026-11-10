@@ -370,27 +370,46 @@ served it; it never holds a token.
 | Path | |
 |---|---|
 | `GET /login` | The sign-in form (no script): paste a token. Signed in, it goes to `/` |
-| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB. The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `/` with the session cookie set. Else `401` and the form again. Five failures from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one clears its address's count |
+| `POST /login` | `application/x-www-form-urlencoded`, field `token`, body at most 4 KiB (else `413` with `Connection: close`, once up to 1 MiB more has been read and dropped; past that the connection is cut). The `Origin` must be this host (else `403`, before the body is read). A listed token: `303` to `/` with the session cookie set. Else `401` and the form again. Each attempt counts as a failure from the moment it is let in until it succeeds, so concurrent attempts are limited too: five from one address in a minute (or fifty from all) and every sign-in is `429` until the minute has passed; a good one releases its count and clears its address's |
 | `POST /logout` | Same-origin only (`403`). Ends the session, closes its sockets (`4003`, reason `signed out`), clears the cookie, `303` to `/login` |
 | `GET /`, `/p/<projectId>`, `/index.html` | The page, only with a live session; else `303` to `/login` |
 | `GET` a file of the build (`/assets/…`) | Served signed in or not (it is the same code for everyone); `/assets/…` is cached for good (Vite hashes the names). Only the build's own regular files, looked up by exact path (no symlinks; `..` and encoded slashes match nothing): any other `/assets/…` is `404` |
 | anything else | `405` for another method |
+
+On a loopback bind (`127.0.0.1`, `localhost`, `::1`), every request and upgrade must
+carry a loopback `Host` (`127.0.0.1`, `localhost` or `[::1]`, any port): any other is
+HTTP `421` (an upgrade `403`), so a page on a DNS name rebound to 127.0.0.1 can't reach
+the server. Any other bind (behind the TLS proxy) answers whatever `Host` the proxy
+passes.
 
 **The session.** Signing in makes a random 32-byte id, sent once in
 `Set-Cookie: __Host-trek-session=<id>; Path=/; HttpOnly; Secure; SameSite=Strict;
 Max-Age=2592000`. Page scripts cannot read it, no other host or path can set it, and a
 cross-site request never carries it. The server keeps only the id's sha256, the token's
 hash and name, and two times, in memory: a restart signs every browser out. A session
-ends 30 days after sign-in, after 7 days unused, when its token is revoked, when the
-browser signs out, or when it signs in again (the old one ends). At most 1000 are kept
-(the least recently used goes first). `Secure` always: behind the TLS proxy the page is
+ends 30 days after sign-in however it is used, after 7 days unused (a page load, a
+connection, or activity on an open socket, a request or a pong, noted at most once a
+minute, is use), when its token is revoked, when the browser signs out, or when it
+signs in again (the old one ends). At most 1000 are kept (the least recently used goes
+first). However a session ends, its open sockets close (`4003`, reason `signed out`);
+the server sweeps expired sessions every hour. `Secure` always: behind the TLS proxy the page is
 https, and a browser keeps a Secure cookie from `http://127.0.0.1` or `localhost` too;
 on any other plain-http address (`--insecure`) a browser drops it, so no sign-in sticks
 (the server warns at start).
 
+**One host name, the web client's alone.** Cookies are not port-scoped: a browser sends
+the session cookie to every port on the host name that set it, so any other web server
+reached on that name (another service, a dev stack, a worktree's dev server an agent can
+edit) sees it and could replay it. No cookie attribute prevents this. Serve the web
+client on a host name no other service or dev stack is reached on (its own subdomain
+behind the proxy). On loopback, any other local web server the browser visits on
+`127.0.0.1` or `localhost` sees the cookie (the server warns at start on a loopback
+bind).
+
 **The socket.** With the web client on, an upgrade that carries an `Origin` header
-must come from this host (the `Origin`'s host and port equal the `Host` header's; the
-scheme is not compared, since the proxy terminates TLS), else it is refused with HTTP
+must come from this host (the `Origin`'s host and port equal the `Host` header's, the
+`Origin` scheme's default port, 80 or 443, counting as none on either side; the scheme
+is not compared, since the proxy terminates TLS), else it is refused with HTTP
 `403` before any frame: a page on another site never gets a socket (cross-site
 WebSocket hijacking). Clients that send no `Origin` (the app's relay, the CLI, the SDK
 in Node) are unaffected. At `hello`, a frame with no token and no `Authorization` header

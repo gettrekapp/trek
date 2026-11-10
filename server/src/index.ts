@@ -405,7 +405,8 @@ if (local) {
 const host = local ? '127.0.0.1' : (args.host ?? store.config.host ?? '127.0.0.1')
 // The local server takes a port the OS picks; local.json says which.
 const port = local ? 0 : (args.port ?? store.config.port ?? DEFAULT_DAEMON_PORT)
-if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1' && !args.insecure) {
+const loopbackBind = host === '127.0.0.1' || host === 'localhost' || host === '::1'
+if (!loopbackBind && !args.insecure) {
   fail(
     `Refusing to bind ${host} without TLS. Put a TLS-terminating reverse proxy (Caddy) in front\n` +
       'of the loopback listener, or pass --insecure if you really know what you are doing.'
@@ -490,7 +491,7 @@ const server = startServer(
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
       recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)
     },
-    web: webBundle ? { bundle: webBundle } : undefined
+    web: webBundle ? { bundle: webBundle, loopback: loopbackBind } : undefined
   }
 )
 store.watch()
@@ -516,14 +517,18 @@ server.httpServer.listen(port, host, () => {
   )
   console.log(`projects: ${projectFiles.loaded.length} in ${projectFiles.dir}`)
   if (webBundle) {
-    const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1'
     console.log(
       `web client: http://${host.includes(':') ? `[${host}]` : host}:${bound}/` +
-        (loopback ? ' (reach it from other devices through your TLS proxy)' : '')
+        (loopbackBind ? ' (reach it from other devices through your TLS proxy)' : '')
     )
     // --insecure on another interface: the page loads, but a browser drops the Secure session
     // cookie on plain http there, so no sign-in ever sticks.
-    if (!loopback) console.warn('web client: browsers sign in only over https here; put a TLS proxy in front (see the README)')
+    if (!loopbackBind) console.warn('web client: browsers sign in only over https here; put a TLS proxy in front (see the README)')
+    // Cookies are not port-scoped: a browser sends this one to every server on the same host name.
+    else
+      console.warn(
+        'web client: cookies are not port-scoped: opened on 127.0.0.1/localhost, any other local web server the browser visits (a dev stack, a worktree\'s dev server) sees the session cookie; use a host name nothing else is reached on (see the README)'
+      )
   }
   if (local) void announceLocal(local, bound)
 })
