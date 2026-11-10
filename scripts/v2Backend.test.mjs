@@ -907,3 +907,77 @@ test('dismissDecision sends session.dismissDecision where the server has decisio
   await old.backend.sessions.dismissDecision('s1')
   assert.deepEqual(old.calls, [])
 })
+
+// ---- Promote to primary and its reverse (5e) ----
+
+const PLAN = {
+  branch: 'feat', mainPath: '/r', worktreePath: '/r-feat', mainBranch: 'main', dirty: true, loaded: false, otherLoaded: false,
+  sessions: [{ title: 'Claude 1', provider: 'claude', carried: true }], reviewComments: 0, reviewCarried: false,
+  ignored: [], ignoredCount: 0, hiddenChanges: [], hiddenChangesCount: 0
+}
+const FEAT = { path: '/r-feat', repoId: 'r1', branch: 'feat', isMain: false }
+
+test('worktrees.promote: the plan, the confirm, the stack and VM, then worktree.promote (slow)', async () => {
+  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: ['s1'], notes: [] }) }
+  const { backend, calls, ui, timeouts } = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks', 'env'], machine: { stack: 'feat', env: 'trek-feat' } })
+  const outcome = await backend.worktrees.promote(FEAT, undefined)
+  assert.deepEqual(outcome, { outcome: 'promoted', worktreeId: 'wm' })
+  assert.deepEqual(calls.map((c) => c[0]), ['worktree.promote', 'stack.sh destroy', 'colima delete', 'worktree.promote'])
+  assert.deepEqual(calls[0][1], { projectId: 'p1', worktreeId: 'w2', dryRun: true })
+  assert.deepEqual(calls[3][1], { projectId: 'p1', worktreeId: 'w2' })
+  const confirm = ui.find((u) => u[0] === 'confirm+stack')
+  assert.equal(confirm[1], 'Promote to Primary')
+  assert.match(confirm[2], /“feat” will be checked out in the main checkout at \/r \(now on main\)/)
+  assert.match(confirm[2], /Colima VM “trek-feat”/)
+  assert.ok(timeouts.some(([m]) => m === 'worktree.promote'))
+})
+
+test('worktrees.promote: declined sends nothing more; a refused plan is shown and nothing is torn down', async () => {
+  const declined = setup({ replies: { 'worktree.promote': PLAN }, confirms: [false], capabilities: ['promote'] })
+  assert.deepEqual(await declined.backend.worktrees.promote(FEAT, undefined), { outcome: 'declined' })
+  assert.deepEqual(declined.calls.map((c) => c[0]), ['worktree.promote'])
+  const refused = setup({ replies: { 'worktree.promote': new CodedError('CONFLICT', 'the main checkout /r has uncommitted changes') }, capabilities: ['promote', 'stacks'], machine: { stack: 'feat' } })
+  const outcome = await refused.backend.worktrees.promote(FEAT, undefined)
+  assert.equal(outcome.outcome, 'failed')
+  assert.deepEqual(refused.ui.filter((u) => u[0] === 'error').map((u) => u[1]), ['Could not promote worktree'])
+  assert.ok(!refused.calls.some((c) => c[0] === 'stack.sh destroy'))
+})
+
+test('worktrees.promote: a failed promote after the teardown says the stack is gone', async () => {
+  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : new CodedError('GIT_ERROR', 'locked')) }
+  const { backend, ui } = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks'], machine: { stack: 'feat' } })
+  const outcome = await backend.worktrees.promote(FEAT, undefined)
+  assert.equal(outcome.outcome, 'failed')
+  assert.match(ui.find((u) => u[0] === 'error')[2], /locked.*dev stack was already removed/)
+})
+
+test('worktrees.demote: the plan, the confirm, worktree.demote', async () => {
+  const replies = { 'worktree.demote': (p) => (p.dryRun ? { ...PLAN, worktreePath: '/r-feat' } : { worktreeId: 'w9', moved: [], notes: [] }) }
+  const { backend, calls, ui } = setup({ replies, confirms: [true], capabilities: ['promote'] })
+  await backend.worktrees.demote({ path: '/r', repoId: 'r1', branch: 'feat', isMain: true })
+  assert.deepEqual(calls, [
+    ['worktree.demote', { projectId: 'p1', repoId: 'r1', dryRun: true }],
+    ['worktree.demote', { projectId: 'p1', repoId: 'r1' }]
+  ])
+  assert.deepEqual(ui.find((u) => u[0] === 'confirm'), ['confirm', 'Promote Branch to Worktree', 'Move to Worktree'])
+})
+
+test('promote_to_primary in a window: a request runs the promote and answers; one settled elsewhere is skipped', async () => {
+  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: [] }), 'promote.answer': { accepted: true } }
+  const { backend, calls, listeners } = setup({
+    replies,
+    confirms: [true],
+    capabilities: ['promote'],
+    state: { hostWorktrees: { 'r1 local': [{ path: '/r', repoId: 'r1', isMain: true }, FEAT] } }
+  })
+  const off = backend.worktrees.followPromoteRequests()
+  listeners['promote.settled'][0]({ projectId: 'p1', requestId: 'gone' })
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'gone', worktreeId: 'w2', branch: 'feat' })
+  listeners['promote.request'][0]({ projectId: 'other', requestId: 'x', worktreeId: 'w2', branch: 'feat' })
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat', from: 'Claude 1' })
+  for (let i = 0; i < 20 && !calls.some((c) => c[0] === 'promote.answer'); i++) await new Promise((r) => setImmediate(r))
+  assert.deepEqual(calls.map((c) => c[0]), ['worktree.promote', 'worktree.promote', 'promote.answer'])
+  assert.deepEqual(calls[2][1], { projectId: 'p1', requestId: 'r1', outcome: 'promoted', worktreeId: 'wm' })
+  off()
+  assert.equal(listeners['promote.request'].length, 0)
+})

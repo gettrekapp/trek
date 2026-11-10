@@ -14,6 +14,8 @@
 //
 // Pure: the store, the connection, the dialogs and the terminals come in as
 // `V2BackendDeps` (built by installV2.ts), so `node --test` covers it.
+import type { PromoteOutcome, PromotePlan, PromoteResult } from '../../../shared/promote.ts'
+import { demotePrompt, followPromoteRequests, promotePrompt } from './promoteFlow.ts'
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
 import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
@@ -149,6 +151,8 @@ const REMOVE_FAILED = 'Could not delete worktree'
 const LONG_MS = 30 * 60_000
 /** colima stop and delete, a stack's down and destroy (each Ctrl-C's a running up and waits up to a minute) */
 const SLOW_MS = 10 * 60_000
+const PROMOTE_FAILED = 'Could not promote worktree'
+const DEMOTE_FAILED = 'Could not move the branch to a worktree'
 /** docker start, stop and restart (the server gives docker two minutes) */
 const CONTAINER_MS = 3 * 60_000
 /** A base64 text (an mp3 over the wire) as bytes. */
@@ -457,6 +461,91 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           await fail(forceErr)
         }
       },
+      // 5e. The plan first (the same checks as the real one, so nothing is torn down for a promote
+      // the server would refuse), then the confirmation, the stack and the VM (they need the
+      // worktree's files), then the promote itself in one request.
+      promote: async (info, instance, asked) => {
+        const legacyId = instance?.id ?? legacyIdAt(info.path)
+        const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
+        const failed = async (err: unknown, note = ''): Promise<PromoteOutcome> => {
+          const error = errorText(err) + note
+          await deps.showError(PROMOTE_FAILED, error)
+          return { outcome: 'failed', error }
+        }
+        if (!ref) return failed(new Error('This worktree is no longer in the project.'))
+        const { worktreeId } = ref
+        let plan: PromotePlan
+        try {
+          plan = (await request('worktree.promote', { projectId, worktreeId, dryRun: true })) as PromotePlan
+        } catch (err) {
+          return failed(err)
+        }
+        const machine = currentFeatures()
+        const env = machine.env ? deps.teardown.environment(info) : undefined
+        const prompt = promotePrompt(plan, { vm: env?.profile, asked })
+        const { confirmed, stackName } = machine.stacks
+          ? await deps.teardown.confirm(info, prompt, backend)
+          : { confirmed: await deps.confirm(prompt), stackName: undefined }
+        if (!confirmed) return { outcome: 'declined' }
+        // Another window answered the agent while this dialog was open: its answer stands.
+        if (asked && !asked.stillAsked()) {
+          await deps.showError(PROMOTE_FAILED, 'Another window already answered this request; nothing was done here.')
+          return { outcome: 'declined' }
+        }
+        if (stackName) await deps.teardown.destroyStack(info, stackName, backend)
+        if (env) await deps.teardown.destroyEnvironment(info, backend)
+        try {
+          const result = (await request('worktree.promote', { projectId, worktreeId }, { timeoutMs: SLOW_MS })) as PromoteResult
+          if (result.notes.length > 0) await deps.showError('Promoted, with notes', result.notes.join('\n'))
+          return { outcome: 'promoted', worktreeId: result.worktreeId }
+        } catch (err) {
+          return failed(err, tornDownNote(!!stackName, !!env))
+        }
+      },
+      demote: async (info) => {
+        const repoId = info.repoId
+        if (!repoId) {
+          await deps.showError(DEMOTE_FAILED, 'This checkout is no longer in the project.')
+          return
+        }
+        let plan: PromotePlan
+        try {
+          plan = (await request('worktree.demote', { projectId, repoId, dryRun: true })) as PromotePlan
+        } catch (err) {
+          await deps.showError(DEMOTE_FAILED, errorText(err))
+          return
+        }
+        if (!(await deps.confirm(demotePrompt(plan)))) return
+        try {
+          const result = (await request('worktree.demote', { projectId, repoId }, { timeoutMs: SLOW_MS })) as PromoteResult
+          if (result.notes.length > 0) await deps.showError('Moved, with notes', result.notes.join('\n'))
+        } catch (err) {
+          await deps.showError(DEMOTE_FAILED, errorText(err))
+        }
+      },
+      followPromoteRequests: () =>
+        followPromoteRequests({
+          onRequest: (listener) =>
+            deps.onEvent('promote.request', (event) => {
+              if (event.projectId === projectId) listener(event)
+            }),
+          onSettled: (listener) =>
+            deps.onEvent('promote.settled', (event) => {
+              if (event.projectId === projectId) listener(event)
+            }),
+          run: async (event, asked) => {
+            const legacyId = ids().legacyByWorktree[event.worktreeId]
+            const path = legacyId === undefined ? undefined : instancePath(legacyId)
+            const info = path === undefined ? undefined : Object.values(deps.state().hostWorktrees).flat().find((w) => w.path === path)
+            if (!info || legacyId === undefined) return { outcome: 'failed', error: "This window doesn't list that worktree" }
+            const instance = deps.state().project?.repositories.flatMap((r) => r.worktrees).find((w) => w.id === legacyId)
+            return backend.worktrees.promote(info, instance, asked)
+          },
+          answer: async (requestId, outcome) => {
+            await request('promote.answer', { projectId, requestId, ...outcome }).catch(() => {})
+          },
+          left: deps.left
+        }),
       moveRef: (path) => {
         const legacyId = legacyIdAt(path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]

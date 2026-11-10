@@ -44,9 +44,10 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
 /**
  * A server window (3c-2, 4c, 5a). The ceiling: the v2 backend's features are
  * these AND what `v2Features` asks of the server's welcome and the window's entry.
- * - Off: the bot (phase 5) and promote, which protocol v2 has no command for.
+ * - Off: the bot, which protocol v2 has no command for.
  * - Moving a worktree to another server (5d) needs `move` on this server (the target's is
  *   checked when it is picked).
+ * - Promote to primary and "Promote branch to worktree" (5e) need `promote`.
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
@@ -76,7 +77,7 @@ export const V2_FEATURES: BackendFeatures = {
   moveWorktree: true,
   reveal: true,
   openInEditor: true,
-  promote: false,
+  promote: true,
   settingsEdit: true,
   globalPanel: true
 }
@@ -98,7 +99,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   skills: 'skills',
   prWatch: 'prWatch',
   review: 'review',
-  moveWorktree: 'move'
+  moveWorktree: 'move',
+  promote: 'promote'
 }
 
 /**

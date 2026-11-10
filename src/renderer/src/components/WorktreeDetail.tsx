@@ -640,7 +640,37 @@ export function WorktreeDetail({
               </>
             )}
             <div className="detail-menu-divider" />
-            {/* Promote comes back with a server command of its own. */}
+            {/* 5e: worktree.promote and worktree.demote, each one request on the server. */}
+            {features.promote && info.branch && info.isMain && (
+              <div
+                className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
+                onClick={() => {
+                  if (busy || offline) return
+                  setMenuOpen(false)
+                  void runAction(() => getBackend().worktrees.demote({ ...info, repoId: info.repoId ?? repo.id }))
+                }}
+              >
+                <div className="detail-menu-name">Promote branch to worktree…</div>
+                <div className="detail-menu-desc">
+                  Move {info.branch} and its uncommitted work to its own worktree; the main checkout returns to the default branch
+                </div>
+              </div>
+            )}
+            {features.promote && info.branch && !info.isMain && (
+              <div
+                className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}
+                onClick={() => {
+                  if (busy || offline) return
+                  setMenuOpen(false)
+                  void runAction(async () => {
+                    await getBackend().worktrees.promote(info, instance)
+                  })
+                }}
+              >
+                <div className="detail-menu-name">Promote to primary…</div>
+                <div className="detail-menu-desc">Check out {info.branch} in the main checkout, with its uncommitted work and sessions</div>
+              </div>
+            )}
             {canMove && !info.isMain && info.branch && getBackend().worktrees.moveRef(info.path) && (
               <div
                 className={`detail-menu-item ${busy || offline ? 'disabled' : ''}`}

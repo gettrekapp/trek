@@ -46,6 +46,8 @@ import type {
 } from '../../shared/types'
 import type { VoiceSummaryEvent } from '../../shared/protocolV2'
 import type { ReviewComment } from '../../shared/model/types'
+import type { PromoteOutcome } from '../../shared/promote'
+import type { PromoteAsked } from './v2/promoteFlow'
 
 /** What `review.add` takes: a comment before the server gives it an id and a time. */
 export type NewReviewComment = Omit<ReviewComment, 'id' | 'at'>
@@ -110,6 +112,16 @@ export interface WindowBackend {
     setOrder(keys: string[]): Promise<void>
     /** The v2 worktree at this path, for a move to another server (feature `moveWorktree`); null if it isn't one */
     moveRef(path: string): { projectId: string; worktreeId: string } | null
+    /**
+     * Promote to primary (feature `promote`, 5e): the server's plan, the confirmation (with the
+     * dev stack's checkbox, as Delete), the teardown, then `worktree.promote`. Reports its own
+     * failures and resolves what came of it. `asked`: an agent's promote_to_primary asked.
+     */
+    promote(info: GitWorktreeInfo, instance: WorktreeInstance | undefined, asked?: PromoteAsked): Promise<PromoteOutcome>
+    /** "Promote branch to worktree" (feature `promote`): the main checkout's branch into a new worktree */
+    demote(info: GitWorktreeInfo): Promise<void>
+    /** promote_to_primary's requests to this window: each runs `promote` and answers; returns the unsubscribe */
+    followPromoteRequests(): () => void
   }
   readonly git: {
     listWorktrees(repoId: string): Promise<GitWorktreeInfo[]>
@@ -274,7 +286,18 @@ export const idleBackend: WindowBackend = {
     seen: noProject,
     dismissDecision: noProject
   },
-  worktrees: { load: noProject, unload: noProject, unloadAll: noProject, create: noProject, remove: noProject, setOrder: noProject, moveRef: () => null },
+  worktrees: {
+    load: noProject,
+    unload: noProject,
+    unloadAll: noProject,
+    create: noProject,
+    remove: noProject,
+    setOrder: noProject,
+    moveRef: () => null,
+    promote: noProject,
+    demote: noProject,
+    followPromoteRequests: () => () => {}
+  },
   git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, commits: noProject, pull: noProject, push: noProject, dirty: noProject },
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
   env: {
