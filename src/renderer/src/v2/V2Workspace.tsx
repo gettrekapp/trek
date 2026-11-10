@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { GLOBAL_WORKTREE_ID, mergedWorktrees, selectedWorktreeInfo, useAppStore } from '../store'
 import { globalPanelMode } from '../backendFeatures'
 import { useFeatures } from '../useFeatures'
+import { getBackend } from '../backend'
 import { useEnvironmentPoll } from '../useEnvironmentPoll'
 import { Sidebar } from '../components/Sidebar'
 import { WorktreeDetail } from '../components/WorktreeDetail'
@@ -27,6 +28,9 @@ export function V2Workspace(): React.JSX.Element {
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
   useEnvironmentPoll(features.env)
+  // promote_to_primary (5e): an agent's request shows this window's promote confirmation. Re-followed
+  // when the features change (the welcome's capabilities, a new backend), as the voice summaries are.
+  useEffect(() => (features.promote ? getBackend().worktrees.followPromoteRequests() : undefined), [features])
 
   // The link dropped: a focused field or button must not take Enter or typing meanwhile.
   useEffect(() => {

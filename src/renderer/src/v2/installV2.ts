@@ -147,9 +147,6 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     left: () => left
   })
 
-  // promote_to_primary (5e): an agent's request shows this window's promote confirmation.
-  const offPromote = backend.worktrees.followPromoteRequests()
-
   // Settings edits: one compare-and-set per field, shown as pending (the overlay) until the
   // mirror holds the server's answer; a CONFLICT asks Reload or Keep Mine (settingsWriter.ts).
   const topic = `project:${projectId}` as const
@@ -299,7 +296,6 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       settingsWriter.clear()
       setV2ProjectOverlay(null)
       offAgents()
-      offPromote()
       if (agentsRetry !== null) clearTimeout(agentsRetry)
       cancelRepoPath()
       cancelAll()
