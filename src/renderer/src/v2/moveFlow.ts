@@ -7,6 +7,7 @@
 import type { MethodNameV2, MethodParamsV2, MethodResultsV2 } from '../../../shared/protocolV2'
 import { errorCode, errorText } from './errors.ts'
 import type { AppServerLink } from '../../../shared/types'
+import { MOVE_RECEIVE_TIMEOUT_MS } from '../../../shared/move.ts'
 
 export type Requester = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M], options?: { timeoutMs?: number }) => Promise<MethodResultsV2[M]>
 
@@ -167,7 +168,8 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
       branchData = rest
       kept.push("The branch's Docker .env was not carried: the target server has no environments")
     }
-    received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData, ...(transferId ? { transferId } : {}) }, { timeoutMs: STEP_MS })
+    // Longer than the target's own fetch limit, so a slow fetch is the target's answer, not a lost one.
+    received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData, ...(transferId ? { transferId } : {}) }, { timeoutMs: MOVE_RECEIVE_TIMEOUT_MS })
   } catch (err) {
     progress('receive', 'failed', errorText(err))
     // A refusal undid itself on the target. A lost answer may not have.
@@ -209,10 +211,22 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     // Changed or loaded after the copy: the target's copy is stale and goes, unless the source's VM
     // and stack are already gone (then both are kept, for the user to compare).
     if ((code === 'CONFLICT' || code === 'IN_USE') && !tornDown) return undoTarget(err, 'finish')
-    if (code === 'CONFLICT' || code === 'IN_USE') {
-      return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, after its VM and dev stack were torn down: both servers have the worktree now. Compare them and delete one.`, notes }
+    // Both copies stay (or may): the source's sessions, stopped for the move, are started again.
+    const restored = await restore()
+    if (code === 'NOT_CONNECTED' || code === 'TIMEOUT') {
+      const sessions = restored ? '' : ' If it is still there, its sessions were stopped for the move: load it again.'
+      return {
+        kind: 'both',
+        worktreeId: received.worktreeId,
+        error: `The target has the worktree, but the answer from this server's removal of its copy was lost (${errorText(err)}): the copy here may or may not have been removed. Check this server's worktree list, and delete the copy here if it is still listed once you have checked the target.${sessions}`,
+        notes
+      }
     }
-    return { kind: 'both', worktreeId: received.worktreeId, error: `The target has the worktree, but the source's copy was not removed (${errorText(err)}). Delete it there once you have checked the target.`, notes }
+    const sessions = !unloaded ? '' : restored ? ' Its sessions were started again here.' : " Its sessions were stopped for the move and could not be started again: load it again."
+    if (code === 'CONFLICT' || code === 'IN_USE') {
+      return { kind: 'both', worktreeId: received.worktreeId, error: `${errorText(err)}, after its VM and dev stack were torn down: both servers have the worktree now. Compare them and delete one.${sessions}`, notes }
+    }
+    return { kind: 'both', worktreeId: received.worktreeId, error: `The target has the worktree, but the source's copy was not removed (${errorText(err)}). Delete it there once you have checked the target.${sessions}`, notes }
   }
 
   /**
@@ -229,7 +243,7 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
     )
     const restored = await restore()
     if (refused === null) return { kind: 'failed', step: at, error: errorText(err), cancelled: false, undone: true, restored }
-    const sessions = restored ? '' : " This worktree's sessions were stopped for the move: load it again."
+    const sessions = !unloaded ? '' : restored ? ' Its sessions were started again here.' : " This worktree's sessions were stopped for the move and could not be started again: load it again."
     return {
       kind: 'both',
       worktreeId: received.worktreeId,

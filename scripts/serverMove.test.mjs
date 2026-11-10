@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -18,6 +18,7 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { MAX_MOVE_CHUNK_BYTES, MOVE_TRANSFER_IDLE_MS, normalizeOrigin, sameOrigin } from '../src/shared/move.ts'
 import { MoveTransfers, sweepStaleMoveDirs } from '../server/src/move/transfers.ts'
+import { moveReceiving } from '../server/src/move/moveHandlers.ts'
 import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/host/gitService.ts'
 
 const gitEnv = {
@@ -450,7 +451,7 @@ test('move.export carries everything even when stored linkedDirs are empty or th
   assert.equal(res.ok, true, JSON.stringify(res))
   assert.match(res.result.patch, /README/)
   assert.match(res.result.patch, /staged\.txt/)
-  assert.doesNotMatch(res.result.patch, /untracked\.txt/, "' untracked.txt' is the linked dir untracked.txt")
+  assert.match(res.result.patch, /untracked\.txt/, "' untracked.txt' names the linked dir untracked.txt, but a real file there is carried (only a symlink is left out)")
 })
 
 test('move.prepare lists ignored files and assume-unchanged / skip-worktree files, which do not move', async (t) => {
@@ -584,8 +585,168 @@ test('sweepStaleMoveDirs removes only our own trek-move dirs older than an hour'
   for (const name of ['trek-move-abc123', 'trek-move-index-abc123', 'trek-move-fresh1', 'other-old']) {
     mkdirSync(join(root, name))
     writeFileSync(join(root, name, 'f'), 'x')
-    if (name !== 'trek-move-fresh1') utimesSync(join(root, name), old, old)
+    if (name !== 'trek-move-fresh1') {
+      utimesSync(join(root, name, 'f'), old, old)
+      utimesSync(join(root, name), old, old)
+    }
   }
   await sweepStaleMoveDirs(root)
   assert.deepEqual(readdirSync(root).sort(), ['other-old', 'trek-move-fresh1'])
+})
+
+// ---- final review ----
+
+/** Sets the repository's linkedDirs on both servers. */
+async function linkOnBoth(s, dirs) {
+  for (const side of [s.A, s.B]) {
+    const res = await side.call('repo.update', { projectId: side.projectId, repoId: side.repoId, linkedDirs: dirs })
+    assert.equal(res.ok, true, JSON.stringify(res))
+  }
+}
+
+test('C1: a linkedDirs entry that is a real tracked directory in the worktree is carried, not dropped', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(s.path, '.claude'))
+  writeFileSync(join(s.path, '.claude', 'settings.json'), '{}\n')
+  git(s.path, 'add', '.claude')
+  git(s.path, 'commit', '-q', '-m', 'claude settings')
+  writeFileSync(join(s.path, '.claude', 'settings.json'), '{"edited":true}\n')
+  await linkOnBoth(s, ['.claude'])
+  const { received, exported } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.match(exported.patch, /\.claude\/settings\.json/)
+  assert.equal(readFileSync(join(s.dir, 'b', 'app-feat', '.claude', 'settings.json'), 'utf8'), '{"edited":true}\n')
+})
+
+test('C1: an untracked real directory at a linkedDirs path is carried; a symlink into the main checkout is not', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(s.path, '.trek'))
+  writeFileSync(join(s.path, '.trek', 'notes.md'), 'mine\n')
+  mkdirSync(join(s.a, '.shared'))
+  writeFileSync(join(s.a, '.shared', 'secret'), 's\n')
+  symlinkSync(join(s.a, '.shared'), join(s.path, '.shared'))
+  await linkOnBoth(s, ['.trek', '.shared'])
+  const { received, exported } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.match(exported.patch, /\.trek\/notes\.md/)
+  assert.doesNotMatch(exported.patch, /\.shared/)
+  assert.equal(readFileSync(join(s.dir, 'b', 'app-feat', '.trek', 'notes.md'), 'utf8'), 'mine\n')
+})
+
+test('C1: a real directory on the source where the target links one refuses the move clearly, the source kept', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(s.path, '.trek'))
+  writeFileSync(join(s.path, '.trek', 'notes.md'), 'mine\n')
+  mkdirSync(join(s.b, '.trek'))
+  writeFileSync(join(s.b, '.trek', 'b.txt'), 'b\n')
+  await linkOnBoth(s, ['.trek'])
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.error?.code, 'GIT_ERROR', JSON.stringify(received))
+  assert.match(received.error.message, /\.trek/)
+  assert.match(received.error.message, /linked/)
+  assert.ok(!existsSync(join(s.dir, 'b', 'app-feat')))
+  assert.equal(readFileSync(join(s.path, '.trek', 'notes.md'), 'utf8'), 'mine\n')
+})
+
+test('C1: move.prepare lists an ignored real directory at a linkedDirs path (it is left behind)', async (t) => {
+  const s = await setup(t)
+  await linkOnBoth(s, ['build'])
+  writeFileSync(join(s.path, '.gitignore'), 'build/\n')
+  mkdirSync(join(s.path, 'build'))
+  writeFileSync(join(s.path, 'build', 'out.js'), 'x\n')
+  const res = await s.A.call('move.prepare', s.ref)
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(res.result.ignored, ['build/'])
+})
+
+test('M1: diff.suppressBlankEmpty set on the source does not change the patch', async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.path, 'blank.txt'), 'a\n\nb\nc\nd\n')
+  git(s.path, 'add', 'blank.txt')
+  git(s.path, 'commit', '-q', '-m', 'blank')
+  writeFileSync(join(s.path, 'blank.txt'), 'a\n\nb\nX\nd\n')
+  const file = join(s.dir, 'suppress.gitconfig')
+  writeFileSync(file, '[diff]\n\tsuppressBlankEmpty = true\n')
+  const before = process.env.GIT_CONFIG_GLOBAL
+  t.after(() => { process.env.GIT_CONFIG_GLOBAL = before })
+  process.env.GIT_CONFIG_GLOBAL = file
+  const exported = (await s.A.call('move.export', s.ref)).result
+  assert.ok(exported, 'exported')
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  process.env.GIT_CONFIG_GLOBAL = before
+  const { transferId } = await copyHistories(s, exported.sessions)
+  const received = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: exported.branch, head: exported.head, patch: exported.patch, sessions: exported.sessions, branchData: exported.branchData, transferId })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.equal(readFileSync(join(s.dir, 'b', 'app-feat', 'blank.txt'), 'utf8'), 'a\n\nb\nX\nd\n')
+})
+
+test('M2: an untracked nested repository is reported by move.prepare and refused by move.export', async (t) => {
+  const s = await setup(t)
+  const sub = join(s.path, 'vendor', 'lib')
+  mkdirSync(sub, { recursive: true })
+  execFileSync('git', ['init', '-q', sub], { env: gitEnv })
+  writeFileSync(join(sub, 'x'), 'x\n')
+  git(sub, 'add', 'x')
+  git(sub, 'commit', '-q', '-m', 'x')
+  const plan = await s.A.call('move.prepare', s.ref)
+  assert.equal(plan.ok, true, JSON.stringify(plan))
+  assert.deepEqual(plan.result.nestedRepos, ['vendor/lib'])
+  const res = await s.A.call('move.export', s.ref)
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res))
+  assert.match(res.error.message, /vendor\/lib/)
+  assert.match(res.error.message, /repository/)
+})
+
+test('M3: a patch whose JSON form would not fit a frame is "too big"', async (t) => {
+  const s = await setup(t)
+  // 3 MiB of control characters: under the 8 MiB patch limit, six times that escaped in JSON.
+  const line = '\x01'.repeat(1023) + '\n'
+  writeFileSync(join(s.path, 'ctl.txt'), line.repeat(3 * 1024))
+  const res = await s.A.call('move.export', s.ref)
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res).slice(0, 300))
+  assert.match(res.error.message, /too big/)
+})
+
+test('M5: move.unreceive waits its turn behind a receive of the same branch (CONFLICT)', async (t) => {
+  const s = await setup(t)
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const key = `${realpathSync(s.b)}\0feat`
+  moveReceiving.add(key)
+  const held = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken })
+  moveReceiving.delete(key)
+  assert.equal(held.error?.code, 'CONFLICT', JSON.stringify(held))
+  assert.ok(existsSync(join(s.dir, 'b', 'app-feat')))
+  const res = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken })
+  assert.equal(res.ok, true, JSON.stringify(res))
+})
+
+test('M6: a carried history that changed after the export makes move.finish CONFLICT', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  writeFileSync(join(projectDir(s.path), `${CLAUDE_ID}.jsonl`), '{"type":"user"}\n{"type":"assistant"}\n')
+  const res = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint })
+  assert.equal(res.error?.code, 'CONFLICT', JSON.stringify(res))
+  assert.ok(existsSync(s.path))
+})
+
+test('M10: a stale-looking trek-move dir with a fresh entry is kept; an append touches the transfer dir', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const old = (Date.now() - 2 * 3600_000) / 1000
+  mkdirSync(join(root, 'trek-move-busy01'))
+  writeFileSync(join(root, 'trek-move-busy01', 'f'), 'x')
+  utimesSync(join(root, 'trek-move-busy01'), old, old)
+  await sweepStaleMoveDirs(root)
+  assert.deepEqual(readdirSync(root), ['trek-move-busy01'], 'its file was written just now')
+  rmSync(join(root, 'trek-move-busy01'), { recursive: true })
+  const transfers = new MoveTransfers(Date.now, root)
+  t.after(() => transfers.clear())
+  const id = await transfers.begin('p', 'r')
+  const chunk = Buffer.from('abcd').toString('base64')
+  await transfers.append(id, CLAUDE_ID, 0, chunk)
+  const [dir] = readdirSync(root)
+  utimesSync(join(root, dir), old, old)
+  await transfers.append(id, CLAUDE_ID, 4, chunk)
+  assert.ok(Date.now() - statSync(join(root, dir)).mtimeMs < 60_000, 'the append touched the transfer dir')
 })

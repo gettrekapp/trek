@@ -1,7 +1,7 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rm, symlink } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -203,12 +203,6 @@ export async function addWorktree(
 }
 
 /**
- * Symlink shared paths from the main repository into a worktree (e.g. a
- * .trek/ folder holding database backups and secrets that aren't
- * committed). Best-effort per entry: a missing source or an already-present
- * target is skipped, so re-linking an existing worktree is a no-op.
- */
-/**
  * A linkedDirs entry as a path relative to the repository, or null for one that names nothing
  * inside it: trimmed, trailing slashes dropped, normalized; empty, the root itself (`.`), absolute
  * or escaping (`..`) entries are null. linkDirs, a move's export and repo.update all use it.
@@ -220,6 +214,39 @@ export function normalizeLinkedDir(entry: unknown): string | null {
   const rel = normalize(name).replace(/[/\\]+$/, '')
   if (!rel || rel === '.' || rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('../') || isAbsolute(rel)) return null
   return rel.split(sep).join('/')
+}
+
+/** The main checkout of the repository `worktreePath` belongs to (the parent of git's common dir). */
+async function mainCheckout(worktreePath: string): Promise<string> {
+  const common = (await git(worktreePath, ['rev-parse', '--git-common-dir'])).trim()
+  return dirname(resolve(worktreePath, common))
+}
+
+/**
+ * The linkedDirs entries (normalized) that are, in this worktree, what linkDirs makes of them: a
+ * symlink into the repository's main checkout. Only these are left out of a move: an entry that is
+ * a real (tracked or untracked) directory or file in the worktree was never linked (linkDirs
+ * leaves an existing path alone), so its contents are the worktree's own and are carried.
+ * `repoPath`: the main checkout (git's common dir's parent when not given).
+ */
+export async function linkedSymlinks(worktreePath: string, entries: readonly unknown[], repoPath?: string): Promise<string[]> {
+  const names = [...new Set(entries.map(normalizeLinkedDir).filter((d): d is string => d !== null))]
+  if (names.length === 0) return []
+  const main = resolve(repoPath ?? (await mainCheckout(worktreePath)))
+  const mainReal = await realpath(main).catch(() => main)
+  const out: string[] = []
+  for (const name of names) {
+    const link = join(worktreePath, name)
+    const info = await lstat(link).catch(() => null)
+    if (!info?.isSymbolicLink()) continue
+    const to = await readlink(link).catch(() => null)
+    if (to === null) continue
+    const pointed = resolve(dirname(link), to)
+    const into = (root: string, p: string): boolean => p === resolve(root, name)
+    const real = await realpath(link).catch(() => null)
+    if (into(main, pointed) || into(mainReal, pointed) || (real !== null && into(mainReal, real))) out.push(name)
+  }
+  return out
 }
 
 /**
@@ -273,6 +300,8 @@ export class NotUtf8PatchError extends Error {}
 export class PatchTooBigError extends Error {}
 /** Something holds uncommitted work the patch does not carry (a defence: it should never happen). */
 export class PatchIncompleteError extends Error {}
+/** The work tree has an untracked nested git repository, which a patch can't carry (it would be a bare gitlink). */
+export class NestedRepoError extends Error {}
 
 /** The most bytes of uncommitted work a move carries (MAX_MOVE_PATCH_BYTES in shared/move.ts). */
 const DEFAULT_MAX_PATCH_BYTES = 8 * 1024 * 1024
@@ -282,9 +311,15 @@ const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
  * Config that must not shape a move's patch or its apply, whatever the user's or repository's
  * git config says: paths unquoted, whitespace never "fixed" or ignored by apply. (Plumbing
  * diff-index already ignores diff.noprefix, diff.context, diff.renames, color and textconv; the
- * explicit flags below say so anyway.)
+ * explicit flags below say so anyway; diff.suppressBlankEmpty is read even by plumbing, so it is
+ * pinned off.)
  */
-const PATCH_CONFIG = ['-c', 'core.quotepath=false', '-c', 'apply.whitespace=nowarn', '-c', 'apply.ignoreWhitespace=no']
+const PATCH_CONFIG = [
+  '-c', 'core.quotepath=false',
+  '-c', 'diff.suppressBlankEmpty=false',
+  '-c', 'apply.whitespace=nowarn',
+  '-c', 'apply.ignoreWhitespace=no'
+]
 
 /** process.env without what would change git's diff output (GIT_EXTERNAL_DIFF, GIT_DIFF_OPTS). */
 function patchEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -299,6 +334,11 @@ function patchEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 /** NUL-separated git output (`-z`) as paths. */
 function zList(out: string): string[] {
   return out.split('\0').filter(Boolean)
+}
+
+/** The untracked nested git repositories in `untracked` (`ls-files --others` lists each as `dir/`), without the slash. */
+function nestedRepos(untracked: readonly string[]): string[] {
+  return untracked.filter((p) => p.endsWith('/')).map((p) => p.replace(/\/+$/, ''))
 }
 
 /** Whether `path` (repo-relative, `/`-separated, maybe with a trailing `/`) is one of `dirs` or inside one. */
@@ -319,20 +359,23 @@ function overflowed(err: unknown): boolean {
  * staged changes included, is never touched, and with plumbing (`git diff-index --cached
  * --binary -p`, explicit prefixes, context, no textconv, no renames, no external diff), so no
  * git config or .gitattributes diff driver changes what it says. Ignored files never appear,
- * nor do `exclude`'s linkedDirs entries (normalized as linkDirs does; the target links them
- * itself). The patch puts every change back unstaged. Refuses: untracked files together over
- * `maxBytes` (measured before git hashes them) or a patch over the buffer (PatchTooBigError); a
- * patch that is not valid UTF-8 (NotUtf8PatchError: a Latin-1 text file, say, would not
- * survive a JSON frame); an empty patch while the work tree differs from HEAD outside the
- * linked dirs (PatchIncompleteError: a bad exclude must never pass for "nothing to carry").
+ * nor do those of `exclude`'s linkedDirs entries that are symlinks into the main checkout here
+ * (linkedSymlinks: the target links them itself); an entry that is a real directory in the
+ * worktree is carried like any other. The patch puts every change back unstaged. Refuses:
+ * untracked files together over `maxBytes` (measured before git hashes them) or a patch over
+ * the buffer (PatchTooBigError); an untracked nested git repository (NestedRepoError: `add -A`
+ * would make it a gitlink, its files left behind); a patch that is not valid UTF-8
+ * (NotUtf8PatchError: a Latin-1 text file, say, would not survive a JSON frame); an empty patch
+ * while the work tree differs from HEAD outside the linked symlinks (PatchIncompleteError: a bad
+ * exclude must never pass for "nothing to carry").
  */
 export async function exportDirtyPatch(
   worktreePath: string,
   exclude: readonly string[] = [],
-  options: { maxBytes?: number } = {}
+  options: { maxBytes?: number; repoPath?: string } = {}
 ): Promise<{ patch: string; headSha: string }> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_PATCH_BYTES
-  const linked = [...new Set(exclude.map(normalizeLinkedDir).filter((d): d is string => d !== null))]
+  const linked = await linkedSymlinks(worktreePath, exclude, options.repoPath)
   const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]
@@ -347,6 +390,12 @@ export async function exportDirtyPatch(
   }
   // The untracked files' sizes first: `add -A` would hash every one into the object store.
   const untracked = zList((await run(['ls-files', '-z', '--others', '--exclude-standard', '--', ...pathspec], patchEnv())).toString('utf8'))
+  const nested = nestedRepos(untracked)
+  if (nested.length > 0) {
+    throw new NestedRepoError(
+      `${nested.slice(0, 3).join(', ')}${nested.length > 3 ? ` and ${nested.length - 3} more` : ''} ${nested.length === 1 ? 'is a git repository' : 'are git repositories'} of ${nested.length === 1 ? 'its' : 'their'} own inside the worktree, which a move can't carry; commit ${nested.length === 1 ? 'it' : 'them'} as a submodule, or move ${nested.length === 1 ? 'it' : 'them'} out, first`
+    )
+  }
   let untrackedBytes = 0
   for (const file of untracked) {
     const info = await lstat(join(worktreePath, file)).catch(() => null)
@@ -387,7 +436,7 @@ export async function exportDirtyPatch(
       throw new NotUtf8PatchError('the uncommitted changes include a text file that is not UTF-8; commit it (or remove it) first')
     }
     if (patch === '') {
-      // Defence in depth: an empty patch must mean the work tree is HEAD outside the linked dirs.
+      // Defence in depth: an empty patch must mean the work tree is HEAD outside the linked symlinks.
       // The same throwaway index, everything added (no exclude pathspecs), against HEAD.
       await run(['add', '-A', '--', '.'], env)
       const changed = zList((await run(['diff-index', '--cached', '--name-only', '-z', '--no-renames', '--ignore-submodules=dirty', 'HEAD', '--'], env)).toString('utf8'))
@@ -414,17 +463,22 @@ export function patchDigest(patch: string): string {
 
 /**
  * What a worktree holds that a move leaves behind (5d): ignored files and folders outside the
- * linkedDirs (`git ls-files --others --ignored --exclude-standard --directory`), and files
+ * linked symlinks (linkedSymlinks: a linkedDirs entry that is a real directory here is the
+ * worktree's own; `git ls-files --others --ignored --exclude-standard --directory`), files
  * flagged assume-unchanged or skip-worktree whose changes git never shows (only those present
- * on disk: a sparse checkout's skipped files are not there to lose). Each list at most `cap`
- * entries, sorted, with the full count.
+ * on disk: a sparse checkout's skipped files are not there to lose), and untracked nested git
+ * repositories (which exportDirtyPatch refuses). Each list at most `cap` entries, sorted, with
+ * the full count.
  */
 export async function leftBehind(
   worktreePath: string,
   linkedDirs: readonly string[] = [],
-  cap = 50
-): Promise<{ ignored: string[]; ignoredCount: number; hiddenChanges: string[]; hiddenChangesCount: number }> {
-  const linked = linkedDirs.map(normalizeLinkedDir).filter((d): d is string => d !== null)
+  cap = 50,
+  repoPath?: string
+): Promise<{ ignored: string[]; ignoredCount: number; hiddenChanges: string[]; hiddenChangesCount: number; nestedRepos: string[] }> {
+  const linked = await linkedSymlinks(worktreePath, linkedDirs, repoPath)
+  const excluded = linked.map((p) => `:(exclude,literal)${p}`)
+  const nested = nestedRepos(zList(await git(worktreePath, ['-c', 'core.quotepath=false', 'ls-files', '-z', '--others', '--exclude-standard', '--', '.', ...excluded]))).sort()
   const ignored = zList(await git(worktreePath, ['-c', 'core.quotepath=false', 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']))
     .filter((p) => !underAny(p, linked))
     .sort()
@@ -438,7 +492,7 @@ export async function leftBehind(
     if (await lstat(join(worktreePath, path)).then(() => true, () => false)) hidden.push(path)
   }
   hidden.sort()
-  return { ignored: ignored.slice(0, cap), ignoredCount: ignored.length, hiddenChanges: hidden.slice(0, cap), hiddenChangesCount: hidden.length }
+  return { ignored: ignored.slice(0, cap), ignoredCount: ignored.length, hiddenChanges: hidden.slice(0, cap), hiddenChangesCount: hidden.length, nestedRepos: nested.slice(0, cap) }
 }
 
 /** `git remote get-url origin`; null when the repository has no origin. */

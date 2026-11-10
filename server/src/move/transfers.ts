@@ -4,7 +4,7 @@
 // MOVE_TRANSFER_IDLE_MS is removed by the next call that sweeps (every move.* call does), so a
 // client that vanished mid-move leaves nothing for long.
 import { randomUUID } from 'node:crypto'
-import { lstat, mkdtemp, open, readdir, rm } from 'node:fs/promises'
+import { lstat, mkdtemp, open, readdir, rm, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -109,6 +109,10 @@ export class MoveTransfers {
       t.sizes.set(agentSessionId, at + bytes.length)
       t.total += bytes.length
       t.usedAt = this.now()
+      // An append to a file already there leaves the directory's mtime: touched, so a restarted
+      // server's sweepStaleMoveDirs sees the transfer as in use.
+      const touched = new Date()
+      await utimes(t.dir, touched, touched).catch(() => {})
       return at + bytes.length
     } finally {
       t.busy = false
@@ -165,7 +169,8 @@ export const STALE_MOVE_DIR_MS = 60 * 60_000
 /**
  * At startup: removes the `trek-move-*` directories (transfers and `trek-move-index-*` export
  * indexes) a killed server left in `root`, only real directories this user owns, untouched for
- * STALE_MOVE_DIR_MS (no live transfer sits idle that long, nor does an export run that long).
+ * STALE_MOVE_DIR_MS (no live transfer sits idle that long, nor does an export run that long):
+ * neither the directory (a transfer touches it on each append) nor its newest entry.
  */
 export async function sweepStaleMoveDirs(root: string = tmpdir(), now: number = Date.now()): Promise<void> {
   const names = await readdir(root).catch(() => [] as string[])
@@ -175,8 +180,19 @@ export async function sweepStaleMoveDirs(root: string = tmpdir(), now: number = 
     const dir = join(root, name)
     const info = await lstat(dir).catch(() => null)
     if (!info?.isDirectory() || (uid !== undefined && info.uid !== uid) || now - info.mtimeMs < STALE_MOVE_DIR_MS) continue
+    if (now - (await newestEntry(dir)) < STALE_MOVE_DIR_MS) continue
     await rm(dir, { recursive: true, force: true }).catch(() => {})
   }
+}
+
+/** The newest mtime among a directory's entries (0 when empty or unreadable) */
+async function newestEntry(dir: string): Promise<number> {
+  let newest = 0
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const info = await lstat(join(dir, name)).catch(() => null)
+    if (info && info.mtimeMs > newest) newest = info.mtimeMs
+  }
+  return newest
 }
 
 /** The server's one store of staged transfers */

@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { moveTargets, moveWorktree } from '../src/renderer/src/v2/moveFlow.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
+import { MOVE_FETCH_TIMEOUT_MS } from '../src/shared/move.ts'
 
 const SID = '11111111-2222-4333-8444-555555555555'
 const EXPORT = { branch: 'feat', head: 'a'.repeat(40), patch: 'diff', sessions: [{ title: 'c', agentSessionId: SID, historyBytes: 10, historySha256: 'e'.repeat(64) }], notCarried: ['Codex 1: only Claude sessions move'], branchData: { note: 'n' }, fingerprint: 'f'.repeat(64) }
@@ -10,13 +11,15 @@ const EXPORT = { branch: 'feat', head: 'a'.repeat(40), patch: 'diff', sessions: 
 /** A fake server: answers by method, records every call. */
 function fake(answers) {
   const calls = []
-  const request = async (method, params) => {
+  const options = []
+  const request = async (method, params, opts) => {
     calls.push([method, params])
+    options.push([method, opts])
     const answer = answers[method]
     if (answer instanceof Error) throw answer
     return typeof answer === 'function' ? answer(params) : answer ?? null
   }
-  return { calls, request, methods: () => calls.map(([m]) => m) }
+  return { calls, options, request, methods: () => calls.map(([m]) => m) }
 }
 
 /** A source whose history SID is 10 bytes, read 4 at a time ('YWJj' + ...) */
@@ -238,4 +241,38 @@ test('teardown warnings become notes; a change after the teardown keeps both cop
   assert.match(both.error, /torn down/)
   assert.ok(!target.methods().includes('worktree.remove'))
   assert.ok(!target.methods().includes('move.unreceive'), 'after a teardown both copies are kept')
+})
+
+test('M4: move.receive waits longer than the target\'s fetch may take', async () => {
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1' } })
+  await run(src(), target).outcome
+  const [, opts] = target.options.find(([m]) => m === 'move.receive')
+  assert.ok(opts.timeoutMs >= MOVE_FETCH_TIMEOUT_MS + 60_000, String(opts.timeoutMs))
+})
+
+test('M7: a finish that fails without an undo loads the source again and says so', async () => {
+  const source = src({ 'move.finish': new ClientError('GIT_ERROR', 'busy') })
+  const result = await run(source, tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1' } })).outcome
+  assert.equal(result.kind, 'both')
+  assert.equal(source.methods().at(-1), 'worktree.load')
+  assert.match(result.error, /sessions were started again/)
+  const failing = src({ 'move.finish': new ClientError('GIT_ERROR', 'busy'), 'worktree.load': new ClientError('GIT_ERROR', 'no') })
+  const r2 = await run(failing, tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1' } })).outcome
+  assert.match(r2.error, /load it again/)
+  // After a teardown, a change keeps both: the source's sessions are started again too.
+  const late = src({ 'move.finish': (p) => { if (!p.verifyOnly) throw new ClientError('CONFLICT', 'changed'); return null } })
+  const r3 = await run(late, tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1' } }), { teardown: async () => [] }).outcome
+  assert.equal(r3.kind, 'both')
+  assert.equal(late.methods().at(-1), 'worktree.load')
+  assert.match(r3.error, /sessions were started again/)
+})
+
+test('M7: a lost finish answer says the source may or may not have been removed', async () => {
+  for (const code of ['NOT_CONNECTED', 'TIMEOUT']) {
+    const source = src({ 'move.finish': new ClientError(code, 'gone') })
+    const result = await run(source, tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1' } })).outcome
+    assert.equal(result.kind, 'both', code)
+    assert.match(result.error, /may or may not have been removed/)
+    assert.match(result.error, /check/)
+  }
 })

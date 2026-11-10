@@ -10,6 +10,13 @@ import type { LlmSelection } from './providers/types.ts'
  */
 export const MAX_MOVE_PATCH_BYTES = 8 * 1024 * 1024
 /**
+ * `move.export`'s answer as JSON (and so `move.receive`'s params, which carry the same patch,
+ * sessions and branch data): at most this many bytes, a margin under the 16 MiB frame. JSON
+ * escaping can grow a patch under MAX_MOVE_PATCH_BYTES past the frame (a text file of control
+ * characters, six bytes each).
+ */
+export const MAX_MOVE_FRAME_JSON_BYTES = 14 * 1024 * 1024
+/**
  * Each Claude history travels in its own requests, in chunks of at most this many bytes (base64
  * in the frame, so a third larger): `move.history` reads one on the source, `move.upload` stages
  * it on the target.
@@ -31,6 +38,8 @@ export const MOVE_UNDO_MS = 60 * 60_000
 export const MAX_MOVE_LISTED_PATHS = 50
 /** `git fetch` of the moved branch on the target may take this long */
 export const MOVE_FETCH_TIMEOUT_MS = 5 * 60_000
+/** How long a client waits for `move.receive`: the fetch's limit and a margin for the rest of the build */
+export const MOVE_RECEIVE_TIMEOUT_MS = MOVE_FETCH_TIMEOUT_MS + 2 * 60_000
 
 /** A session `move.prepare` lists: carried (its history is copied) or not, and why not. */
 export interface MoveSessionInfo {
@@ -71,6 +80,12 @@ export interface MovePlan {
    */
   hiddenChanges: string[]
   hiddenChangesCount: number
+  /**
+   * Untracked nested git repositories in the worktree (`git ls-files --others` lists each as a
+   * folder), outside the linked symlinks: `move.export` refuses while there is one (a patch would
+   * carry only a gitlink, the files left behind). At most MAX_MOVE_LISTED_PATHS, sorted.
+   */
+  nestedRepos: string[]
 }
 
 /** A carried session as `move.export` hands it over and `move.receive` takes it. */

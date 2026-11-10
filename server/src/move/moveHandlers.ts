@@ -15,6 +15,7 @@ import { projectDir } from '../../../src/host/claudeSessionService.ts'
 import type { BranchData, Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import {
   MAX_MOVE_CHUNK_BYTES,
+  MAX_MOVE_FRAME_JSON_BYTES,
   MAX_MOVE_HISTORY_SESSION_BYTES,
   MAX_MOVE_LISTED_PATHS,
   MAX_MOVE_PATCH_BYTES,
@@ -61,23 +62,28 @@ function sha256File(file: string): Promise<string> {
   })
 }
 
-/** Same head and same patch: nothing changed in the worktree since it was exported. */
-function fingerprint(head: string, patch: string): string {
-  return createHash('sha256').update(head).update('\0').update(patch).digest('hex')
+/**
+ * Same head, same patch and the same carried histories (each one's session id, size and sha256):
+ * nothing changed in the worktree, nor in a conversation that moves, since it was exported.
+ */
+function fingerprint(head: string, patch: string, histories: readonly { agentSessionId: string; size: number; sha256: string }[]): string {
+  const hash = createHash('sha256').update(head).update('\0').update(patch)
+  for (const h of histories) hash.update('\0').update(`${h.agentSessionId} ${h.size} ${h.sha256}`)
+  return hash.digest('hex')
 }
 
 async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
   } catch (err) {
-    if (err instanceof gitService.NotUtf8PatchError || err instanceof gitService.PatchTooBigError) throw bad(err.message)
+    if (err instanceof gitService.NotUtf8PatchError || err instanceof gitService.PatchTooBigError || err instanceof gitService.NestedRepoError) throw bad(err.message)
     throw codedError('GIT_ERROR', (err as Error).message)
   }
 }
 
-/** The worktree's patch (exportDirtyPatch, MAX_MOVE_PATCH_BYTES), the repository's linkedDirs left out. */
+/** The worktree's patch (exportDirtyPatch, MAX_MOVE_PATCH_BYTES), the repository's linkedDirs that are symlinks here left out. */
 function dirtyPatch(path: string, repo: Repository): Promise<{ patch: string; headSha: string }> {
-  return viaGit(() => gitService.exportDirtyPatch(path, repo.linkedDirs ?? [], { maxBytes: MAX_MOVE_PATCH_BYTES }))
+  return viaGit(() => gitService.exportDirtyPatch(path, repo.linkedDirs ?? [], { maxBytes: MAX_MOVE_PATCH_BYTES, repoPath: repo.path }))
 }
 
 /**
@@ -112,8 +118,10 @@ function sweepReceipts(now = Date.now()): void {
   for (const [token, r] of receipts) if (r.expires <= now) receipts.delete(token)
 }
 
-/** Repositories (real path) with a branch being received right now: `${path}\0${branch}` */
+/** Repositories (real path) with a branch being received (or a receive of it undone) right now: `${path}\0${branch}` */
 const receiving = new Set<string>()
+/** For the tests: the receives in progress */
+export const moveReceiving: Set<string> = receiving
 
 /** A Claude session's history file under the worktree's path, if it has one, and its size. */
 async function historyOf(worktree: Worktree, session: Session): Promise<{ file: string; size: number } | null> {
@@ -159,6 +167,19 @@ async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionI
     info.push({ ...base, carried: true })
   }
   return { info, carried }
+}
+
+/** The carried sessions with each history's sha256 (null: it could not be read, so it is not carried). */
+async function hashedSessions(worktree: Worktree): Promise<{ info: MoveSessionInfo[]; carried: { session: Session; file: string; size: number; sha256: string | null }[] }> {
+  const { info, carried } = await carriedSessions(worktree)
+  const hashed = []
+  for (const c of carried) hashed.push({ ...c, sha256: await sha256File(c.file).catch(() => null) })
+  return { info, carried: hashed }
+}
+
+/** What the fingerprint takes of the carried histories: the readable ones, in order. */
+function fingerprinted(carried: readonly { session: Session; size: number; sha256: string | null }[]): { agentSessionId: string; size: number; sha256: string }[] {
+  return carried.filter((c) => c.sha256 !== null).map((c) => ({ agentSessionId: c.session.agentSessionId!, size: c.size, sha256: c.sha256! }))
 }
 
 /** The branch data that moves, its tags by name (each project has its own tag ids). */
@@ -300,7 +321,7 @@ export const moveHandlers: Record<string, Handler> = {
   'move.prepare': async (p, ctx): Promise<MovePlan> => {
     const { repo, worktree, branch } = await source(ctx, p)
     const { info } = await carriedSessions(worktree)
-    const left = await viaGit(() => gitService.leftBehind(worktree.path, repo.linkedDirs ?? [], MAX_MOVE_LISTED_PATHS))
+    const left = await viaGit(() => gitService.leftBehind(worktree.path, repo.linkedDirs ?? [], MAX_MOVE_LISTED_PATHS, repo.path))
     return {
       branch,
       origin: await gitService.originUrl(repo.path),
@@ -324,11 +345,10 @@ export const moveHandlers: Record<string, Handler> = {
     if (size > MAX_MOVE_PATCH_BYTES) {
       throw bad(`the uncommitted changes make a ${MB(size)} patch; a move carries at most ${MB(MAX_MOVE_PATCH_BYTES)}. Commit or remove the large files first`)
     }
-    const { info, carried } = await carriedSessions(worktree)
+    const { info, carried } = await hashedSessions(worktree)
     const sessions: MoveSession[] = []
     const notCarried = info.filter((s) => !s.carried).map((s) => `${s.title}: ${s.reason}`)
-    for (const { session, file, size } of carried) {
-      const historySha256 = await sha256File(file).catch(() => null)
+    for (const { session, size, sha256: historySha256 } of carried) {
       if (historySha256 === null) {
         notCarried.push(`${session.title}: its history could not be read`)
         continue
@@ -341,7 +361,14 @@ export const moveHandlers: Record<string, Handler> = {
       sessions.push(out)
     }
     const data = Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : undefined
-    return { branch, head: headSha, patch, sessions, notCarried, branchData: exportBranchData(project, data), fingerprint: fingerprint(headSha, patch) }
+    const out = { branch, head: headSha, patch, sessions, notCarried, branchData: exportBranchData(project, data), fingerprint: fingerprint(headSha, patch, fingerprinted(carried)) }
+    // The patch travels JSON-escaped, in this answer and again in move.receive's params: a text
+    // file of quotes or control characters can grow several times over, past the 16 MiB frame.
+    const framed = Buffer.byteLength(JSON.stringify(out))
+    if (framed > MAX_MOVE_FRAME_JSON_BYTES) {
+      throw bad(`the uncommitted changes make a patch too big to move (${MB(framed)} as the connection carries it; at most ${MB(MAX_MOVE_FRAME_JSON_BYTES)}). Commit or remove the large files first`)
+    }
+    return out
   },
 
   /**
@@ -405,7 +432,7 @@ export const moveHandlers: Record<string, Handler> = {
       const { patch, headSha } = await dirtyPatch(worktree.path, repo).catch((err: Error) => {
         throw codedError('CONFLICT', `${worktree.path} changed after it was copied (${err.message}); it is kept`)
       })
-      if (fingerprint(headSha, patch) !== expected) {
+      if (fingerprint(headSha, patch, fingerprinted((await hashedSessions(worktree)).carried)) !== expected) {
         throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
       }
       if (p.verifyOnly === true) return null
@@ -513,46 +540,72 @@ export const moveHandlers: Record<string, Handler> = {
     const row = repo.worktrees.find((w) => w.id === receipt.worktreeId)
     if (!row) throw codedError('NOT_FOUND', `${receipt.path} is no longer one of this repository's worktrees`)
     if (row.loaded) throw codedError('IN_USE', `${receipt.path} was loaded after the move; it is kept`)
-    const g = (args: string[]): Promise<string> => gitService.git(repo.path, args)
-    const unblock = ctx.sessions.blockPath(receipt.path)
+    // The receive's own lock: an undo must never run beside a receive of the same branch.
+    const key = `${real(repo.path)}\0${receipt.branch}`
+    if (receiving.has(key)) throw codedError('CONFLICT', `another move is bringing ${receipt.branch} into ${repo.path} right now; try again once it is done`)
+    receiving.add(key)
     try {
-      const now = await dirtyPatch(receipt.path, repo).then(
-        ({ patch, headSha }) => (headSha === receipt.head ? gitService.patchDigest(patch) : null),
-        () => null
-      )
-      if (now !== receipt.digest) throw codedError('CONFLICT', `${receipt.path} changed after the move; it is kept`)
-      await viaGit(() => gitService.removeWorktreeForce(repo.path, receipt.path))
-      receipts.delete(token)
+      await unreceive(ctx, project, repo, token, receipt, row)
     } finally {
-      unblock()
+      receiving.delete(key)
     }
-    const at = await g(['rev-parse', '--verify', '--quiet', `refs/heads/${receipt.branch}`]).then((s) => s.trim(), () => null)
-    if (at === receipt.head) {
-      if (receipt.createdBranch) await g(['branch', '-D', '--', receipt.branch]).catch(() => {})
-      else if (receipt.movedFrom) await g(['update-ref', `refs/heads/${receipt.branch}`, receipt.movedFrom, receipt.head]).catch(() => {})
-    }
-    await ctx.poller.refresh(repo.path).catch(() => false)
-    let endWatch = false
-    ctx.projects.apply(project.id, (d) => {
-      const r = repoIn(d, repo.id)
-      r.worktrees = r.worktrees.filter((w) => w.id !== receipt.worktreeId)
-      const orderKey = `${repo.id} ${row.path}`
-      if (d.settings.worktreeOrder) {
-        const order = d.settings.worktreeOrder.filter((k) => k !== orderKey)
-        if (order.length > 0) d.settings.worktreeOrder = order
-        else delete d.settings.worktreeOrder
-      }
-      const current = Object.hasOwn(r.branchData, receipt.branch) ? r.branchData[receipt.branch] : undefined
-      endWatch = !!current?.prWatch && !(receipt.previous?.prWatch && receipt.previous.pr === current.pr)
-      if (receipt.previous) r.branchData[receipt.branch] = structuredClone(receipt.previous)
-      else delete r.branchData[receipt.branch]
-    })
-    if (endWatch) ctx.prWatch?.forget(project.id, repo.id, receipt.branch)
-    for (const file of receipt.createdFiles) await rm(file, { force: true }).catch(() => {})
-    if (receipt.createdDir) await rmdir(receipt.createdDir).catch(() => {})
-    ctx.sessions.refreshAttention()
     return null
   }
+}
+
+/** move.unreceive's work, once it holds the branch's receive lock. */
+async function unreceive(ctx: V2Context, project: Project, repo: Repository, token: string, receipt: Receipt, row: Worktree): Promise<void> {
+  const g = (args: string[]): Promise<string> => gitService.git(repo.path, args)
+  const unblock = ctx.sessions.blockPath(receipt.path)
+  try {
+    const now = await dirtyPatch(receipt.path, repo).then(
+      ({ patch, headSha }) => (headSha === receipt.head ? gitService.patchDigest(patch) : null),
+      () => null
+    )
+    if (now !== receipt.digest) throw codedError('CONFLICT', `${receipt.path} changed after the move; it is kept`)
+    await viaGit(() => gitService.removeWorktreeForce(repo.path, receipt.path))
+    receipts.delete(token)
+  } finally {
+    unblock()
+  }
+  const at = await g(['rev-parse', '--verify', '--quiet', `refs/heads/${receipt.branch}`]).then((s) => s.trim(), () => null)
+  if (at === receipt.head) {
+    if (receipt.createdBranch) await g(['branch', '-D', '--', receipt.branch]).catch(() => {})
+    else if (receipt.movedFrom) await g(['update-ref', `refs/heads/${receipt.branch}`, receipt.movedFrom, receipt.head]).catch(() => {})
+  }
+  await ctx.poller.refresh(repo.path).catch(() => false)
+  let endWatch = false
+  ctx.projects.apply(project.id, (d) => {
+    const r = repoIn(d, repo.id)
+    r.worktrees = r.worktrees.filter((w) => w.id !== receipt.worktreeId)
+    const orderKey = `${repo.id} ${row.path}`
+    if (d.settings.worktreeOrder) {
+      const order = d.settings.worktreeOrder.filter((k) => k !== orderKey)
+      if (order.length > 0) d.settings.worktreeOrder = order
+      else delete d.settings.worktreeOrder
+    }
+    const current = Object.hasOwn(r.branchData, receipt.branch) ? r.branchData[receipt.branch] : undefined
+    endWatch = !!current?.prWatch && !(receipt.previous?.prWatch && receipt.previous.pr === current.pr)
+    if (receipt.previous) r.branchData[receipt.branch] = structuredClone(receipt.previous)
+    else delete r.branchData[receipt.branch]
+  })
+  if (endWatch) ctx.prWatch?.forget(project.id, repo.id, receipt.branch)
+  for (const file of receipt.createdFiles) await rm(file, { force: true }).catch(() => {})
+  if (receipt.createdDir) await rmdir(receipt.createdDir).catch(() => {})
+  ctx.sessions.refreshAttention()
+}
+
+/**
+ * git apply's refusal of a file under a symlink, said plainly: the source has a real folder (its
+ * files carried) where this server links one of the repository's linkedDirs from its main
+ * checkout. Null for any other apply error.
+ */
+function linkedApplyMessage(stderr: string, repo: Repository): string | null {
+  const m = /affected file '([^']+)' is beyond a symbolic link/.exec(stderr)
+  if (!m) return null
+  const file = m[1]
+  const dir = (repo.linkedDirs ?? []).map(gitService.normalizeLinkedDir).find((d) => d !== null && (file === d || file.startsWith(d + '/'))) ?? file.split('/')[0]
+  return `the uncommitted work has ${file}, inside ${dir}, which the source has as a folder of its own but this server links from ${repo.path} (the repository's linked folders); nothing was moved. Commit or move out what is in ${dir} on the source, or remove ${dir} from ${repo.path} here, first`
 }
 
 /** move.receive's work, once its params are checked and its transfer taken. */
@@ -634,7 +687,9 @@ async function build(
       await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
       const checked = await viaGit(() => gitService.revParseHead(target))
       if (checked !== head) throw codedError('GIT_ERROR', `${target} checked out ${checked.slice(0, 8)}, not ${head.slice(0, 8)}`)
-      if (patch !== '') await viaGit(() => gitService.applyPatch(target, patch))
+      if (patch !== '') await viaGit(() => gitService.applyPatch(target, patch).catch((err: Error) => {
+        throw new Error(linkedApplyMessage(err.message, repo) ?? err.message)
+      }))
       // The work as this server's git now sees it must be the source's, exactly: built the same
       // way, the same patch (hunk headers' function context aside).
       const applied = await dirtyPatch(target, repo)

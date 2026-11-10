@@ -107,6 +107,10 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const [frozen, setFrozen] = useState<Frozen | null>(null)
   const [steps, setSteps] = useState<Partial<Record<MoveStepKey, { status: MoveStepStatus; detail?: string }>>>({})
   const [outcome, setOutcome] = useState<MoveOutcome | null>(null)
+  /** The flow threw (a bug, not a refusal): what it said */
+  const [crash, setCrash] = useState<string | null>(null)
+  /** The running move, while it runs: an unmount mid-move leaves its connections and close guard to it */
+  const flow = useRef<Promise<void> | null>(null)
   const cancelled = useRef(false)
   const [cancelling, setCancelling] = useState(false)
   const opened = useRef(new Set<string>())
@@ -181,15 +185,20 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
     }
   }, [source, choosing, plan, from.projectId, from.worktreeId])
 
-  // Connections opened only for this dialog are closed with it; a move cut short by the window
-  // closing no longer holds the window's close.
-  useEffect(
-    () => () => {
-      for (const id of opened.current) dropServerEntry(id)
-      setRunningMove(null)
-    },
-    []
-  )
+  // Connections opened only for this dialog are closed with it, and the window's close guard ends;
+  // if the dialog goes while its move runs, only once that move settles (the flow still needs the
+  // target's connection, and the window is still mid-move).
+  useEffect(() => {
+    const ids = opened.current
+    return () => {
+      const release = (): void => {
+        for (const id of ids) dropServerEntry(id)
+        setRunningMove(null)
+      }
+      if (flow.current) void flow.current.finally(release)
+      else release()
+    }
+  }, [])
 
   // Escape closes it, except while the move runs. The dialog takes the focus, then the server picker.
   useEffect(() => {
@@ -246,26 +255,38 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const targetName = frozen?.targetName ?? servers.find((s) => s.id === entryId)?.name ?? 'the server'
 
   const start = async (): Promise<void> => {
-    if (phase !== 'choose' || !source || !chosen || !plan || stackUnknown || machineBlocks) return
+    if (phase !== 'choose' || !source || !chosen || !plan || stackUnknown || machineBlocks || (plan.nestedRepos ?? []).length > 0) return
     const server = registeredServerEntry(entryId)
     if (!server) return
     setFrozen({ entryId, targetName, projectId: chosen.projectId, projectName: chosen.projectName })
     setPhase('running')
     setRunningMove(`Moving “${name}” to ${targetName}. Closed now, it stops partway: this worktree stays, and ${targetName} may have a copy too.`)
-    const result = await moveWorktree({
-      source: requester(source),
-      target: requester(server),
-      from,
-      to: { projectId: chosen.projectId, repoId: chosen.repoId },
-      loaded: plan.loaded,
-      targetCapabilities: server.connection.welcome?.capabilities ?? [],
-      ...(machine && tearDown ? { teardown } : machine ? { teardownUnticked: true } : {}),
-      progress: (step, status, detail) => setSteps((prev) => ({ ...prev, [step]: { status, detail } })),
-      cancelled: () => cancelled.current
-    })
-    setRunningMove(null)
-    setOutcome(result)
-    setPhase('done')
+    const running = (async (): Promise<void> => {
+      try {
+        setOutcome(
+          await moveWorktree({
+            source: requester(source),
+            target: requester(server),
+            from,
+            to: { projectId: chosen.projectId, repoId: chosen.repoId },
+            loaded: plan.loaded,
+            targetCapabilities: server.connection.welcome?.capabilities ?? [],
+            ...(machine && tearDown ? { teardown } : machine ? { teardownUnticked: true } : {}),
+            progress: (step, status, detail) => setSteps((prev) => ({ ...prev, [step]: { status, detail } })),
+            cancelled: () => cancelled.current
+          })
+        )
+      } catch (err) {
+        // moveWorktree answers every refusal with an outcome: a throw is unexpected, shown as is.
+        setCrash(errorText(err))
+      } finally {
+        setRunningMove(null)
+        setPhase('done')
+      }
+    })()
+    flow.current = running
+    await running
+    flow.current = null
   }
 
   // The project picked at Move. The window opens on the project, the moved worktree in its list:
@@ -281,6 +302,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
   const reload = (restored: boolean): string =>
     restored ? '' : " Its sessions were stopped for the move and could not be started again: load it again."
 
+  const nested = plan?.nestedRepos ?? []
   const carried = plan?.sessions.filter((s) => s.carried) ?? []
   const left = plan?.sessions.filter((s) => !s.carried) ?? []
 
@@ -368,6 +390,13 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
                   <PathList paths={plan.hiddenChanges} count={plan.hiddenChangesCount} />
                 </li>
               )}
+              {nested.length > 0 && (
+                <li className="warn move-nested">
+                  {nested.length} folder(s) are git repositories of their own, which a move can't carry, so Move is off: commit them as submodules, or
+                  move them out, then open this again.
+                  <PathList paths={nested} count={nested.length} />
+                </li>
+              )}
               {plan.loaded && <li>Its running sessions are stopped first.</li>}
               {stackRead.kind === 'error' && (
                 <li className="warn move-stack-error">
@@ -439,12 +468,17 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
             </div>
           )}
           {outcome?.kind === 'both' && <div className="server-test-result fail">{outcome.error}</div>}
+          {crash && (
+            <div className="server-test-result fail move-crash">
+              The move stopped unexpectedly: {crash}. Check this worktree here and on {targetName} before moving it again.
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           {choosing && (
             <>
               <button onClick={onClose}>Cancel</button>
-              <button className="btn btn-accent" disabled={!chosen || machineBlocks || stackUnknown} onClick={() => void start()}>
+              <button className="btn btn-accent" disabled={!chosen || machineBlocks || stackUnknown || nested.length > 0} onClick={() => void start()}>
                 Move worktree
               </button>
             </>
@@ -471,7 +505,7 @@ export function MoveWorktreeModal({ from, info, name, onClose }: Props): React.J
           )}
           {phase === 'done' && (
             <>
-              {(outcome?.kind === 'moved' || outcome?.kind === 'both' || outcome?.kind === 'unknown') && (
+              {(outcome?.kind === 'moved' || outcome?.kind === 'both' || outcome?.kind === 'unknown' || crash) && (
                 <button className="btn btn-accent" onClick={openTarget}>
                   Open on {targetName}
                 </button>
