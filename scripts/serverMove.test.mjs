@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -17,7 +17,8 @@ import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { MAX_MOVE_CHUNK_BYTES, MOVE_TRANSFER_IDLE_MS, normalizeOrigin, sameOrigin } from '../src/shared/move.ts'
-import { MoveTransfers } from '../server/src/move/transfers.ts'
+import { MoveTransfers, sweepStaleMoveDirs } from '../server/src/move/transfers.ts'
+import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/host/gitService.ts'
 
 const gitEnv = {
   ...process.env,
@@ -257,6 +258,7 @@ test('move.receive undoes the worktree, the branch and the histories when the pa
   assert.ok(!existsSync(target))
   assert.equal(git(s.b, 'branch', '--list', 'feat').trim(), '')
   assert.ok(!existsSync(join(projectDir(target), `${CLAUDE_ID}.jsonl`)))
+  assert.ok(!existsSync(projectDir(target)), 'the history dir it created goes too')
   assert.equal(s.B.project().repositories[0].worktrees.length, 1)
   assert.equal(s.B.project().repositories[0].branchData.feat, undefined)
 })
@@ -376,4 +378,214 @@ test('transfers: chunks in order, the limits, abort, and an idle one swept', asy
   const ids = []
   for (let i = 0; i < 4; i++) ids.push(await transfers.begin('p', 'r'))
   await assert.rejects(transfers.begin('p', 'r'), /at most 4/)
+})
+
+/** Runs `fn` with a global git config holding `text` (restored after). */
+function withGlobalConfig(t, dir, text) {
+  const file = join(dir, 'gitconfig')
+  writeFileSync(file, text)
+  const before = process.env.GIT_CONFIG_GLOBAL
+  process.env.GIT_CONFIG_GLOBAL = file
+  t.after(() => { process.env.GIT_CONFIG_GLOBAL = before })
+}
+
+test('the patch ignores textconv drivers, diff.noprefix and diff.context: binary files arrive byte for byte', async (t) => {
+  const s = await setup(t)
+  const bin = Buffer.from([0, 1, 2, 3, 0xff, 0xfe, 10, 0, 42])
+  writeFileSync(join(s.path, '.gitattributes'), '*.bin diff=hex\n')
+  writeFileSync(join(s.path, 'data.bin'), bin)
+  git(s.path, 'add', '.gitattributes', 'data.bin')
+  git(s.path, 'commit', '-q', '-m', 'bin')
+  const changed = Buffer.concat([bin, Buffer.from([7, 0, 9])])
+  writeFileSync(join(s.path, 'data.bin'), changed)
+  writeFileSync(join(s.path, 'new.bin'), Buffer.from([0, 0, 5, 6, 0]))
+  withGlobalConfig(t, s.dir, '[diff "hex"]\n\ttextconv = od -An -tx1\n[diff]\n\tnoprefix = true\n\tcontext = 0\n\tmnemonicPrefix = true\n\trenames = copies\n[color]\n\tui = always\n')
+  const { received, exported } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.match(exported.patch, /^diff --git a\/README b\/README$/m)
+  assert.match(exported.patch, /GIT binary patch/)
+  const target = join(s.dir, 'b', 'app-feat')
+  assert.deepEqual(readFileSync(join(target, 'data.bin')), changed)
+  assert.deepEqual(readFileSync(join(target, 'new.bin')), Buffer.from([0, 0, 5, 6, 0]))
+  assert.equal(readFileSync(join(target, 'README'), 'utf8'), 'one\nchanged\n')
+  assert.ok(!existsSync(s.path), 'the source went only once the target matched')
+})
+
+test('move.receive undoes everything when the applied work does not match the source', async (t) => {
+  const s = await setup(t)
+  // On B, untracked.txt is ignored: after the apply it would vanish from the worktree's changes.
+  writeFileSync(join(s.b, '.git', 'info', 'exclude'), 'untracked.txt\n')
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.error?.code, 'GIT_ERROR', JSON.stringify(received))
+  assert.match(received.error.message, /does not match/)
+  const target = join(s.dir, 'b', 'app-feat')
+  assert.ok(!existsSync(target))
+  assert.equal(git(s.b, 'branch', '--list', 'feat').trim(), '')
+  assert.equal(s.B.project().repositories[0].branchData.feat, undefined)
+  assert.ok(existsSync(s.path), 'the source is untouched')
+})
+
+test('normalizeLinkedDir: trimmed, inside the repository, never the root itself', () => {
+  for (const bad of ['', ' ', '/', '//', '.', './', '..', '../x', 'a/../..', '/abs', '/abs/x']) {
+    assert.equal(normalizeLinkedDir(bad), null, JSON.stringify(bad))
+  }
+  assert.equal(normalizeLinkedDir(' .trek/ '), '.trek')
+  assert.equal(normalizeLinkedDir('./a/./b//'), 'a/b')
+  assert.equal(normalizeLinkedDir('a/../b'), 'b')
+})
+
+test('repo.update refuses linkedDirs that are empty, the root, absolute or escaping', async (t) => {
+  const s = await setup(t)
+  for (const bad of [[''], ['.'], ['./'], ['/'], ['../x'], ['/etc'], ['ok', ' ']]) {
+    const res = await s.A.call('repo.update', { projectId: s.A.projectId, repoId: s.A.repoId, linkedDirs: bad })
+    assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(bad))
+  }
+  assert.equal((await s.A.call('repo.update', { projectId: s.A.projectId, repoId: s.A.repoId, linkedDirs: [' .trek/ '] })).ok, true)
+})
+
+test('move.export carries everything even when stored linkedDirs are empty or the root', async (t) => {
+  const s = await setup(t)
+  s.A.projects.apply(s.A.projectId, (d) => { d.repositories[0].linkedDirs = ['', '.', './', '/', ' untracked.txt'] })
+  const res = await s.A.call('move.export', s.ref)
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.match(res.result.patch, /README/)
+  assert.match(res.result.patch, /staged\.txt/)
+  assert.doesNotMatch(res.result.patch, /untracked\.txt/, "' untracked.txt' is the linked dir untracked.txt")
+})
+
+test('move.prepare lists ignored files and assume-unchanged / skip-worktree files, which do not move', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(s.a, '.trek'))
+  await s.A.call('repo.update', { projectId: s.A.projectId, repoId: s.A.repoId, linkedDirs: ['.trek'] })
+  symlinkSync(join(s.a, '.trek'), join(s.path, '.trek'))
+  writeFileSync(join(s.path, '.gitignore'), '*.log\n.trek\nbuild/\n')
+  writeFileSync(join(s.path, 'debug.log'), 'x\n')
+  mkdirSync(join(s.path, 'build'))
+  writeFileSync(join(s.path, 'build', 'out.js'), 'x\n')
+  git(s.path, 'update-index', '--assume-unchanged', 'feat.txt')
+  git(s.path, 'update-index', '--skip-worktree', 'README')
+  const res = await s.A.call('move.prepare', s.ref)
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.deepEqual(res.result.ignored, ['build/', 'debug.log'])
+  assert.equal(res.result.ignoredCount, 2)
+  assert.deepEqual(res.result.hiddenChanges, ['README', 'feat.txt'])
+  assert.equal(res.result.hiddenChangesCount, 2)
+})
+
+test('move.unreceive undoes a receive: the worktree, its branch, the branch data, the PR watch, the histories', async (t) => {
+  const s = await setup(t)
+  s.B.projects.apply(s.B.projectId, (d) => { d.repositories[0].branchData.feat = { note: 'b note' } })
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const token = received.result.undoToken
+  assert.match(token, /^[0-9a-f-]{36}$/)
+  const target = join(s.dir, 'b', 'app-feat')
+  assert.equal(s.B.project().repositories[0].branchData.feat.note, 'the note')
+  const ref = { projectId: s.B.projectId, repoId: s.B.repoId }
+  assert.equal((await s.B.call('move.unreceive', { ...ref, undoToken: '00000000-0000-4000-8000-000000000000' })).error?.code, 'NOT_FOUND')
+  assert.equal((await s.B.call('move.unreceive', { ...ref, repoId: 'nope', undoToken: token })).error?.code, 'NOT_FOUND')
+  const res = await s.B.call('move.unreceive', { ...ref, undoToken: token })
+  assert.equal(res.ok, true, JSON.stringify(res))
+  assert.ok(!existsSync(target))
+  assert.equal(git(s.b, 'branch', '--list', 'feat').trim(), '', 'the branch it created goes')
+  assert.equal(s.B.project().repositories[0].worktrees.length, 1)
+  assert.deepEqual(s.B.project().repositories[0].branchData.feat, { note: 'b note' })
+  assert.equal(s.B.forgotten.length, 1, 'the watch it started ends')
+  assert.ok(!existsSync(projectDir(target)), 'the history dir it created goes')
+  assert.equal((await s.B.call('move.unreceive', { ...ref, undoToken: token })).error?.code, 'NOT_FOUND', 'once only')
+  assert.ok(existsSync(s.path), 'the source is untouched')
+})
+
+test('move.unreceive keeps a target copy that changed after the receive', async (t) => {
+  const s = await setup(t)
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const target = join(s.dir, 'b', 'app-feat')
+  writeFileSync(join(target, 'typed-on-b.txt'), 'x\n')
+  const res = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken })
+  assert.equal(res.error?.code, 'CONFLICT', JSON.stringify(res))
+  assert.ok(existsSync(join(target, 'typed-on-b.txt')))
+})
+
+test('the untracked files are measured before they are hashed; a patch over the buffer is "too big"', async (t) => {
+  const s = await setup(t)
+  writeFileSync(join(s.path, 'huge.bin'), Buffer.alloc(9 * 1024 * 1024, 1))
+  const res = await s.A.call('move.export', s.ref)
+  assert.equal(res.error?.code, 'BAD_REQUEST', JSON.stringify(res))
+  assert.match(res.error.message, /untracked files/)
+  rmSync(join(s.path, 'huge.bin'))
+  writeFileSync(join(s.path, 'README'), 'y\n'.repeat(100_000))
+  await assert.rejects(exportDirtyPatch(s.path, [], { maxBytes: 1024 }), (err) => err instanceof PatchTooBigError && /too big|at most/.test(err.message))
+})
+
+test('two sessions sharing one conversation are carried once', async (t) => {
+  const s = await setup(t)
+  s.A.projects.apply(s.A.projectId, (d) => {
+    d.repositories[0].worktrees.find((w) => w.id === s.worktreeId).sessions.push({ id: 'dup', agentSessionId: CLAUDE_ID, title: 'Claude 1 again', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  const plan = await s.A.call('move.prepare', s.ref)
+  const dup = plan.result.sessions.find((x) => x.title === 'Claude 1 again')
+  assert.equal(dup.carried, false)
+  assert.match(dup.reason, /Claude 1/)
+  const { received, exported } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  assert.equal(exported.sessions.length, 1)
+})
+
+test('move.receive limits sessionTypeName like a title; move.candidates blocks an invalid branch name', async (t) => {
+  const s = await setup(t)
+  const one = { title: 't', llm: { provider: 'claude' }, agentSessionId: CLAUDE_ID, historyBytes: 5, historySha256: 'a'.repeat(64), sessionTypeName: 'x'.repeat(201) }
+  const res = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: '', sessions: [one], branchData: {} })
+  assert.equal(res.error?.code, 'BAD_REQUEST')
+  assert.match(res.error.message, /sessionTypeName/)
+  const candidates = await s.B.call('move.candidates', { origin: s.origin, branch: 'a..b' })
+  assert.equal(candidates.ok, true, JSON.stringify(candidates))
+  assert.match(candidates.result[0].blocked, /not a valid branch name/)
+})
+
+test('two receives of one branch at once: one builds it, the other is refused and leaves it alone', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const one = await copyHistories(s, exported.sessions)
+  const two = await copyHistories(s, exported.sessions)
+  const params = (transferId) => ({ projectId: s.B.projectId, repoId: s.B.repoId, branch: exported.branch, head: exported.head, patch: exported.patch, sessions: exported.sessions, branchData: exported.branchData, transferId })
+  const results = await Promise.all([s.B.call('move.receive', params(one.transferId)), s.B.call('move.receive', params(two.transferId))])
+  const ok = results.filter((r) => r.ok)
+  assert.equal(ok.length, 1, JSON.stringify(results))
+  assert.equal(results.find((r) => !r.ok).error.code, 'CONFLICT')
+  const target = join(s.dir, 'b', 'app-feat')
+  assert.equal(readFileSync(join(target, 'untracked.txt'), 'utf8'), 'new\n')
+  assert.equal(readFileSync(join(projectDir(target), `${CLAUDE_ID}.jsonl`), 'utf8'), '{"type":"user"}\n')
+  assert.equal(git(s.b, 'branch', '--list', 'feat').trim().replace(/^[+*] /, ''), 'feat')
+})
+
+test('transfers: an abort during a write drops the transfer once the write ends', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const transfers = new MoveTransfers(Date.now, root)
+  const id = await transfers.begin('p', 'r')
+  const writing = transfers.append(id, CLAUDE_ID, 0, Buffer.alloc(MAX_MOVE_CHUNK_BYTES, 1).toString('base64'))
+  // Wait until the chunk is being written (the store's own record says so), then abort.
+  const record = transfers.transfers.get(id)
+  for (let i = 0; i < 1000 && !record.busy; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(record.busy, true, 'caught the write in progress')
+  await transfers.abort(id)
+  assert.equal(readdirSync(root).length, 1, 'kept while the write runs')
+  await writing
+  assert.deepEqual(readdirSync(root), [])
+  await assert.rejects(transfers.append(id, CLAUDE_ID, 4, 'AAAA'), /No such transfer/)
+})
+
+test('sweepStaleMoveDirs removes only our own trek-move dirs older than an hour', async (t) => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const old = (Date.now() - 2 * 3600_000) / 1000
+  for (const name of ['trek-move-abc123', 'trek-move-index-abc123', 'trek-move-fresh1', 'other-old']) {
+    mkdirSync(join(root, name))
+    writeFileSync(join(root, name, 'f'), 'x')
+    if (name !== 'trek-move-fresh1') utimesSync(join(root, name), old, old)
+  }
+  await sweepStaleMoveDirs(root)
+  assert.deepEqual(readdirSync(root).sort(), ['other-old', 'trek-move-fresh1'])
 })

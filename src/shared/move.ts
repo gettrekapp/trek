@@ -4,8 +4,9 @@
 import type { LlmSelection } from './providers/types.ts'
 
 /**
- * The uncommitted work travels as one `git diff --binary` patch inside `move.export`'s answer (a
- * frame is 16 MiB on the server).
+ * The uncommitted work travels as one binary patch (`git diff-index --cached -p --binary HEAD`,
+ * plumbing, so no git config shapes it) inside `move.export`'s answer (a frame is 16 MiB on the
+ * server). The untracked files are measured against it before git hashes them.
  */
 export const MAX_MOVE_PATCH_BYTES = 8 * 1024 * 1024
 /**
@@ -24,6 +25,12 @@ export const MAX_MOVE_TRANSFERS = 4
 export const MOVE_TRANSFER_IDLE_MS = 10 * 60_000
 /** Sessions one move carries (a project holds at most 500) */
 export const MAX_MOVE_SESSIONS = 50
+/** How long after `move.receive` its `undoToken` works for `move.unreceive` */
+export const MOVE_UNDO_MS = 60 * 60_000
+/** At most this many paths in each of `move.prepare`'s `ignored` and `hiddenChanges` (the counts are whole) */
+export const MAX_MOVE_LISTED_PATHS = 50
+/** `git fetch` of the moved branch on the target may take this long */
+export const MOVE_FETCH_TIMEOUT_MS = 5 * 60_000
 
 /** A session `move.prepare` lists: carried (its history is copied) or not, and why not. */
 export interface MoveSessionInfo {
@@ -50,6 +57,20 @@ export interface MovePlan {
   queuedPrompts: number
   /** The branch's PR watch is on */
   prWatch: boolean
+  /**
+   * Ignored files and folders in the worktree, outside the repository's linkedDirs (`git ls-files
+   * --others --ignored --exclude-standard --directory`; a folder ends in `/`): they do not move
+   * and are deleted with the source. At most MAX_MOVE_LISTED_PATHS, sorted; `ignoredCount` is all of them.
+   */
+  ignored: string[]
+  ignoredCount: number
+  /**
+   * Files flagged assume-unchanged or skip-worktree (`git ls-files -v`) and present on disk: git
+   * never shows their changes, so none of it moves, and it is deleted with the source. At most
+   * MAX_MOVE_LISTED_PATHS, sorted; `hiddenChangesCount` is all of them.
+   */
+  hiddenChanges: string[]
+  hiddenChangesCount: number
 }
 
 /** A carried session as `move.export` hands it over and `move.receive` takes it. */
@@ -83,7 +104,7 @@ export interface MoveExport {
   branch: string
   /** The commit the source has checked out; the target must check out the same one */
   head: string
-  /** `git diff --binary HEAD` of the work tree, untracked files included; '' when clean */
+  /** `git diff-index --cached -p --binary HEAD` of the work tree in a throwaway index, untracked files included; '' when clean */
   patch: string
   sessions: MoveSession[]
   /** Sessions not carried, one line each */
@@ -116,6 +137,12 @@ export interface MoveReceived {
   worktreeId: string
   /** What did not come across (a tag the project lacks, a PR watch without gh), one line each */
   dropped: string[]
+  /**
+   * For `move.unreceive` on the same server, within MOVE_UNDO_MS: undoes this receive whole (the
+   * client's rollback when the source's `move.finish` refuses). Kept in memory only: after a
+   * restart `move.unreceive` answers NOT_FOUND.
+   */
+  undoToken: string
 }
 
 /**

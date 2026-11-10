@@ -564,6 +564,8 @@ async function announceLocal(profile: LocalProfile, port: number): Promise<void>
 }
 
 const SHUTDOWN_FLUSH_MS = 200
+/** The longest the exit waits for a move's staged histories to be removed */
+const SHUTDOWN_CLEAR_MS = 2000
 let shuttingDown = false
 // SIGHUP: the terminal that ran `start --local` closed. Without a handler the
 // process dies with local.json (and its token) and the lock left behind.
@@ -575,14 +577,16 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     if (local) removeLocalInfo(local.infoPath, process.pid)
     console.log(`\n${signal} — shutting down (all agent sessions will end)`)
     store.close()
-    server.shutdown(signal)
+    // Settles once a move's staged histories are removed (bounded below, so a slow disk can't hold the exit).
+    const cleared = server.shutdown(signal)
     // close() flushes pending saves and returns the ids that could not be written.
     const failed = projectFiles.files.close()
     if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
     // Give the daemon.shutdown frames and close handshakes a moment to flush.
-    setTimeout(() => {
+    const flushed = delay(SHUTDOWN_FLUSH_MS)
+    void Promise.all([flushed, Promise.race([cleared, delay(SHUTDOWN_CLEAR_MS)])]).then(() => {
       server.sessions.terminals.forceKillAll()
       process.exit(0)
-    }, SHUTDOWN_FLUSH_MS)
+    })
   })
 }

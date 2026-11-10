@@ -208,8 +208,8 @@ export const CAPABILITY = {
   review: 'review',
   /**
    * Moving a worktree between servers (5d): `move.prepare`, `move.export`, `move.history` and
-   * `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort` and
-   * `move.receive` on the target; the app relays between them
+   * `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`,
+   * `move.receive` and `move.unreceive` on the target; the app relays between them
    */
   move: 'move'
 } as const
@@ -476,6 +476,8 @@ export interface MethodParamsV2 {
   'move.candidates': { origin: string; branch: string }
   /** Target: builds the worktree from origin and the export, or undoes all of it */
   'move.receive': RepoRef & { branch: string; head: string; patch: string; sessions: MoveSession[]; branchData: MoveBranchData; transferId?: string }
+  /** Target: undoes a `move.receive` whole (its `undoToken`): the worktree, the branch it made, the branch data, the PR watch, the histories */
+  'move.unreceive': RepoRef & { undoToken: string }
 
   // Subscriptions
   'sub.subscribe': { topic: Topic }
@@ -601,6 +603,7 @@ export interface MethodResultsV2 {
   'move.finish': null
   'move.candidates': MoveCandidate[]
   'move.receive': MoveReceived
+  'move.unreceive': null
   'sub.subscribe': SubscribeResult<ServerTopic | AttentionTopic | ProjectTopic>
   'sub.unsubscribe': null
   'sys.ping': { t: number }

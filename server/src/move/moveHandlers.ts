@@ -8,7 +8,7 @@
 // `move.finish` to remove its copy, only if nothing changed since the export.
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
-import { copyFile, chmod, mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, chmod, mkdir, open, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
 import { projectDir } from '../../../src/host/claudeSessionService.ts'
@@ -16,8 +16,11 @@ import type { BranchData, Project, Repository, Session, Worktree } from '../../.
 import {
   MAX_MOVE_CHUNK_BYTES,
   MAX_MOVE_HISTORY_SESSION_BYTES,
+  MAX_MOVE_LISTED_PATHS,
   MAX_MOVE_PATCH_BYTES,
   MAX_MOVE_SESSIONS,
+  MOVE_FETCH_TIMEOUT_MS,
+  MOVE_UNDO_MS,
   sameOrigin,
   type MoveBranchData,
   type MoveCandidate,
@@ -67,10 +70,50 @@ async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation()
   } catch (err) {
-    if (err instanceof gitService.NotUtf8PatchError) throw bad(err.message)
+    if (err instanceof gitService.NotUtf8PatchError || err instanceof gitService.PatchTooBigError) throw bad(err.message)
     throw codedError('GIT_ERROR', (err as Error).message)
   }
 }
+
+/** The worktree's patch (exportDirtyPatch, MAX_MOVE_PATCH_BYTES), the repository's linkedDirs left out. */
+function dirtyPatch(path: string, repo: Repository): Promise<{ patch: string; headSha: string }> {
+  return viaGit(() => gitService.exportDirtyPatch(path, repo.linkedDirs ?? [], { maxBytes: MAX_MOVE_PATCH_BYTES }))
+}
+
+/**
+ * What `move.unreceive` needs to undo one `move.receive`, kept in memory for MOVE_UNDO_MS under
+ * the receive's `undoToken`.
+ */
+interface Receipt {
+  projectId: string
+  repoId: string
+  branch: string
+  worktreeId: string
+  /** The new worktree's path (real) */
+  path: string
+  head: string
+  /** patchDigest of the work the receive checked in */
+  digest: string
+  /** The branch data the project had for the branch before (a copy); undefined: none */
+  previous: BranchData | undefined
+  /** The receive created the local branch (deleted again if still at head) */
+  createdBranch: boolean
+  /** The receive fast-forwarded the local branch from this commit (moved back if still at head) */
+  movedFrom: string | null
+  /** History files the receive created, and the history folder if it created that */
+  createdFiles: string[]
+  createdDir: string | null
+  expires: number
+}
+
+const receipts = new Map<string, Receipt>()
+
+function sweepReceipts(now = Date.now()): void {
+  for (const [token, r] of receipts) if (r.expires <= now) receipts.delete(token)
+}
+
+/** Repositories (real path) with a branch being received right now: `${path}\0${branch}` */
+const receiving = new Set<string>()
 
 /** A Claude session's history file under the worktree's path, if it has one, and its size. */
 async function historyOf(worktree: Worktree, session: Session): Promise<{ file: string; size: number } | null> {
@@ -89,6 +132,7 @@ async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionI
   const info: MoveSessionInfo[] = []
   const carried: { session: Session; file: string; size: number }[] = []
   for (const session of worktree.sessions) {
+    const same = carried.find((c) => c.session.agentSessionId === session.agentSessionId)
     const base = { title: session.title, provider: session.llm.provider }
     if (session.llm.provider !== 'claude') {
       info.push({ ...base, carried: false, reason: 'only Claude sessions move; this one stays behind and is closed' })
@@ -97,6 +141,10 @@ async function carriedSessions(worktree: Worktree): Promise<{ info: MoveSessionI
     const history = await historyOf(worktree, session)
     if (!history) {
       info.push({ ...base, carried: false, reason: 'it has no saved conversation yet' })
+      continue
+    }
+    if (same) {
+      info.push({ ...base, carried: false, reason: `it resumes the same conversation as “${same.session.title}”, which is carried` })
       continue
     }
     if (carried.length >= MAX_MOVE_SESSIONS) {
@@ -177,7 +225,9 @@ function checkSessions(value: unknown): MoveSession[] {
     const historySha256 = requireString(raw.historySha256, `sessions[${i}].historySha256`)
     if (!SHA256.test(historySha256)) throw bad(`sessions[${i}].historySha256 must be a sha256 in hex`)
     const session: MoveSession = { title, llm, agentSessionId, historyBytes: historyBytes as number, historySha256 }
-    if (raw.sessionTypeName !== undefined) session.sessionTypeName = requireString(raw.sessionTypeName, `sessions[${i}].sessionTypeName`)
+    if (raw.sessionTypeName !== undefined) {
+      session.sessionTypeName = checkTitle(requireString(raw.sessionTypeName, `sessions[${i}].sessionTypeName`), `sessions[${i}].sessionTypeName`)
+    }
     if (raw.systemPrompt !== undefined) {
       const prompt = requireString(raw.systemPrompt, `sessions[${i}].systemPrompt`)
       if (prompt.length > MAX_SYSTEM_PROMPT) throw bad(`sessions[${i}].systemPrompt must be at most ${MAX_SYSTEM_PROMPT} characters`)
@@ -250,6 +300,7 @@ export const moveHandlers: Record<string, Handler> = {
   'move.prepare': async (p, ctx): Promise<MovePlan> => {
     const { repo, worktree, branch } = await source(ctx, p)
     const { info } = await carriedSessions(worktree)
+    const left = await viaGit(() => gitService.leftBehind(worktree.path, repo.linkedDirs ?? [], MAX_MOVE_LISTED_PATHS))
     return {
       branch,
       origin: await gitService.originUrl(repo.path),
@@ -259,7 +310,8 @@ export const moveHandlers: Record<string, Handler> = {
       sessions: info,
       reviewComments: worktree.review?.comments.length ?? 0,
       queuedPrompts: worktree.sessions.reduce((n, s) => n + s.queue.length, 0),
-      prWatch: !!(Object.hasOwn(repo.branchData, branch) && repo.branchData[branch].prWatch)
+      prWatch: !!(Object.hasOwn(repo.branchData, branch) && repo.branchData[branch].prWatch),
+      ...left
     }
   },
 
@@ -267,7 +319,7 @@ export const moveHandlers: Record<string, Handler> = {
   'move.export': async (p, ctx): Promise<MoveExport & { fingerprint: string }> => {
     const { project, repo, worktree, branch } = await source(ctx, p)
     if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} has running sessions; unload it first`)
-    const { patch, headSha } = await viaGit(() => gitService.exportDirtyPatch(worktree.path, repo.linkedDirs ?? []))
+    const { patch, headSha } = await dirtyPatch(worktree.path, repo)
     const size = Buffer.byteLength(patch)
     if (size > MAX_MOVE_PATCH_BYTES) {
       throw bad(`the uncommitted changes make a ${MB(size)} patch; a move carries at most ${MB(MAX_MOVE_PATCH_BYTES)}. Commit or remove the large files first`)
@@ -349,7 +401,10 @@ export const moveHandlers: Record<string, Handler> = {
     if (worktree.loaded) throw codedError('IN_USE', `${worktree.path} was loaded again after it was copied; it is kept`)
     const unblock = ctx.sessions.blockPath(worktree.path)
     try {
-      const { patch, headSha } = await viaGit(() => gitService.exportDirtyPatch(worktree.path, repo.linkedDirs ?? []))
+      // A patch that can no longer be built (too big, not UTF-8 now) is a change since the export too.
+      const { patch, headSha } = await dirtyPatch(worktree.path, repo).catch((err: Error) => {
+        throw codedError('CONFLICT', `${worktree.path} changed after it was copied (${err.message}); it is kept`)
+      })
       if (fingerprint(headSha, patch) !== expected) {
         throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
       }
@@ -399,7 +454,8 @@ export const moveHandlers: Record<string, Handler> = {
         if (!origins.has(repo.path)) origins.set(repo.path, await gitService.originUrl(repo.path))
         if (!sameOrigin(origins.get(repo.path), origin)) continue
         const path = defaultWorktreePath(repo.path, branch)
-        const blocked = await blockedReason(ctx, repo, branch, path)
+        const invalid = await checkBranchName(repo.path, branch, false).then(() => undefined, (err: Error) => err.message)
+        const blocked = invalid ?? (await blockedReason(ctx, repo, branch, path))
         out.push({ projectId: project.id, projectName: project.name, repoId: repo.id, repoName: repo.name, path, ...(blocked ? { blocked } : {}) })
       }
     }
@@ -434,6 +490,68 @@ export const moveHandlers: Record<string, Handler> = {
     } finally {
       await staged?.discard()
     }
+  },
+
+  /**
+   * Target: undoes one `move.receive` whole, by its `undoToken` (within MOVE_UNDO_MS, once): the
+   * client's rollback when the source's `move.finish` refuses. Only while the new worktree is
+   * unloaded (IN_USE) and unchanged since the receive (CONFLICT; then nothing changes). Removes
+   * it (force) and its row, deletes the branch it created (or moves back the one it
+   * fast-forwarded) if still at the moved head, puts the branch data back as it was (a PR watch
+   * it started ends), and removes the history files and folder it created.
+   */
+  'move.unreceive': async (p, ctx): Promise<null> => {
+    const project = ctx.projects.require(p.projectId)
+    const repo = repoIn(project, p.repoId)
+    const token = requireString(p.undoToken, 'undoToken')
+    sweepReceipts()
+    const receipt = receipts.get(token)
+    if (!receipt || receipt.projectId !== project.id || receipt.repoId !== repo.id) {
+      throw codedError('NOT_FOUND', 'No such receive to undo (it was undone already, is over an hour old, or this server restarted since)')
+    }
+    findRegistered(ctx.store.config.repos, repo.path)
+    const row = repo.worktrees.find((w) => w.id === receipt.worktreeId)
+    if (!row) throw codedError('NOT_FOUND', `${receipt.path} is no longer one of this repository's worktrees`)
+    if (row.loaded) throw codedError('IN_USE', `${receipt.path} was loaded after the move; it is kept`)
+    const g = (args: string[]): Promise<string> => gitService.git(repo.path, args)
+    const unblock = ctx.sessions.blockPath(receipt.path)
+    try {
+      const now = await dirtyPatch(receipt.path, repo).then(
+        ({ patch, headSha }) => (headSha === receipt.head ? gitService.patchDigest(patch) : null),
+        () => null
+      )
+      if (now !== receipt.digest) throw codedError('CONFLICT', `${receipt.path} changed after the move; it is kept`)
+      await viaGit(() => gitService.removeWorktreeForce(repo.path, receipt.path))
+      receipts.delete(token)
+    } finally {
+      unblock()
+    }
+    const at = await g(['rev-parse', '--verify', '--quiet', `refs/heads/${receipt.branch}`]).then((s) => s.trim(), () => null)
+    if (at === receipt.head) {
+      if (receipt.createdBranch) await g(['branch', '-D', '--', receipt.branch]).catch(() => {})
+      else if (receipt.movedFrom) await g(['update-ref', `refs/heads/${receipt.branch}`, receipt.movedFrom, receipt.head]).catch(() => {})
+    }
+    await ctx.poller.refresh(repo.path).catch(() => false)
+    let endWatch = false
+    ctx.projects.apply(project.id, (d) => {
+      const r = repoIn(d, repo.id)
+      r.worktrees = r.worktrees.filter((w) => w.id !== receipt.worktreeId)
+      const orderKey = `${repo.id} ${row.path}`
+      if (d.settings.worktreeOrder) {
+        const order = d.settings.worktreeOrder.filter((k) => k !== orderKey)
+        if (order.length > 0) d.settings.worktreeOrder = order
+        else delete d.settings.worktreeOrder
+      }
+      const current = Object.hasOwn(r.branchData, receipt.branch) ? r.branchData[receipt.branch] : undefined
+      endWatch = !!current?.prWatch && !(receipt.previous?.prWatch && receipt.previous.pr === current.pr)
+      if (receipt.previous) r.branchData[receipt.branch] = structuredClone(receipt.previous)
+      else delete r.branchData[receipt.branch]
+    })
+    if (endWatch) ctx.prWatch?.forget(project.id, repo.id, receipt.branch)
+    for (const file of receipt.createdFiles) await rm(file, { force: true }).catch(() => {})
+    if (receipt.createdDir) await rmdir(receipt.createdDir).catch(() => {})
+    ctx.sessions.refreshAttention()
+    return null
   }
 }
 
@@ -450,88 +568,162 @@ async function receive(
   incoming: MoveBranchData,
   staged: StagedHistories | undefined
 ): Promise<MoveReceived> {
-  {
-    const records = project.globalSessions.length + project.repositories.reduce((n, r) => n + r.worktrees.reduce((m, w) => m + w.sessions.length, 0), 0)
-    if (records + sessions.length > MAX_SESSIONS_PER_PROJECT) throw codedError('CAPACITY', `a project holds at most ${MAX_SESSIONS_PER_PROJECT} sessions`)
+  const records = project.globalSessions.length + project.repositories.reduce((n, r) => n + r.worktrees.reduce((m, w) => m + w.sessions.length, 0), 0)
+  if (records + sessions.length > MAX_SESSIONS_PER_PROJECT) throw codedError('CAPACITY', `a project holds at most ${MAX_SESSIONS_PER_PROJECT} sessions`)
 
-    const target = ctx.store.guard.check(defaultWorktreePath(repo.path, branch))
-    assertNotRepository(ctx.store.config.repos, target, 'path')
-    const blocked = await blockedReason(ctx, repo, branch, target)
-    if (blocked) throw codedError('CONFLICT', blocked)
+  const target = ctx.store.guard.check(defaultWorktreePath(repo.path, branch))
+  assertNotRepository(ctx.store.config.repos, target, 'path')
+  // One receive of a branch into a repository at a time: a second would race the first's
+  // checks and could undo what the first built.
+  const key = `${real(repo.path)}\0${branch}`
+  if (receiving.has(key)) throw codedError('CONFLICT', `another move is bringing ${branch} into ${repo.path} right now`)
+  receiving.add(key)
+  try {
+    return await build(ctx, p, project, repo, branch, head, patch, sessions, incoming, staged, target)
+  } finally {
+    receiving.delete(key)
+  }
+}
 
-    const undo: (() => Promise<unknown>)[] = []
-    const g = (args: string[]): Promise<string> => gitService.git(repo.path, args)
-    try {
-      await viaGit(() => g(['fetch', '--no-tags', 'origin', '--', `+refs/heads/${branch}:refs/remotes/origin/${branch}`]))
-      const fetched = (await viaGit(() => g(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`]))).trim()
-      if (fetched !== head) throw codedError('CONFLICT', `origin's ${branch} is at ${fetched.slice(0, 8)}, not the source's ${head.slice(0, 8)}: did something else push to it?`)
-      const local = await g(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then((s) => s.trim(), () => null)
-      if (local === null) {
-        await viaGit(() => g(['branch', '--track', '--', branch, `refs/remotes/origin/${branch}`]))
-        undo.push(() => g(['branch', '-D', '--', branch]))
-      } else if (local !== head) {
-        const behind = await g(['merge-base', '--is-ancestor', local, head]).then(() => true, () => false)
-        if (!behind) throw codedError('CONFLICT', `this server's own ${branch} has commits the source's doesn't; reconcile them first`)
-        await viaGit(() => g(['update-ref', `refs/heads/${branch}`, head, local]))
-        undo.push(() => g(['update-ref', `refs/heads/${branch}`, local, head]))
-      }
-      const unblock = ctx.sessions.blockPath(target)
-      try {
-        await viaGit(() => gitService.addWorktreeAt(repo.path, target, branch))
-        undo.push(() => gitService.removeWorktreeForce(repo.path, target))
-        await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
-        const checked = await viaGit(() => gitService.revParseHead(target))
-        if (checked !== head) throw codedError('GIT_ERROR', `${target} checked out ${checked.slice(0, 8)}, not ${head.slice(0, 8)}`)
-        if (patch.trim()) {
-          await viaGit(() => gitService.applyPatch(target, patch))
-          if ((await gitService.worktreeDirty(target)) === false) throw codedError('GIT_ERROR', 'the uncommitted changes did not apply')
-        }
-      } finally {
-        unblock()
-      }
-      const dir = projectDir(target)
-      for (const s of sessions) {
-        const from = staged?.file(s.agentSessionId)
-        if (!from || staged!.size(s.agentSessionId) !== s.historyBytes || (await sha256File(from)) !== s.historySha256) {
-          throw bad(`the history of “${s.title}” did not arrive whole (${staged?.size(s.agentSessionId) ?? 0} of ${s.historyBytes} bytes, or another hash)`)
-        }
-        const file = join(dir, `${s.agentSessionId}.jsonl`)
-        const before = await readFile(file).catch(() => null)
-        await mkdir(dir, { recursive: true })
-        await copyFile(from, file)
-        await chmod(file, 0o600)
-        undo.push(() => (before === null ? rm(file, { force: true }) : writeFile(file, before)))
-      }
-      if (!(await ctx.poller.refresh(repo.path))) {
-        throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
-      }
-      const dropped: string[] = []
-      const watchable = ctx.prWatch?.available() ?? false
-      const worktreeId = ctx.projects.apply(p.projectId, (d) => {
-        const r = repoIn(d, repo.id)
-        const created = r.worktrees.find((w) => !w.isMain && real(w.path) === target)
-        if (!created) throw codedError('GIT_ERROR', `git created ${target} but does not list it`)
-        for (const s of sessions) {
-          const row: Session = { id: randomUUID(), agentSessionId: s.agentSessionId, title: s.title, llm: s.llm, queue: [], status: s.complete ? 'complete' : 'idle' }
-          const type = s.sessionTypeName ? d.settings.sessionTypes?.find((t) => t.name === s.sessionTypeName) : undefined
-          if (type) row.sessionTypeId = type.id
-          else if (s.sessionTypeName) dropped.push(`The session type “${s.sessionTypeName}” of “${s.title}” is not one of this project's`)
-          if (s.systemPrompt) row.systemPrompt = s.systemPrompt
-          created.sessions.push(row)
-        }
-        const existing = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
-        const data = mergeBranchData(d, existing, incoming, watchable, dropped)
-        if (Object.keys(data).length > 0) r.branchData[branch] = data
-        return created.id
-      })
-      const watched = Object.hasOwn(repoIn(ctx.projects.require(p.projectId), repo.id).branchData, branch) &&
-        !!repoIn(ctx.projects.require(p.projectId), repo.id).branchData[branch].prWatch
-      if (watched) ctx.prWatch?.pollSoon(project.id, repo.id, branch)
-      return { worktreeId, dropped }
-    } catch (err) {
-      for (const step of undo.reverse()) await step().catch(() => {})
-      await ctx.poller.refresh(repo.path).catch(() => false)
-      throw err
+/** move.receive's building, once it holds the repository's branch. */
+async function build(
+  ctx: V2Context,
+  p: any,
+  project: Project,
+  repo: Repository,
+  branch: string,
+  head: string,
+  patch: string,
+  sessions: MoveSession[],
+  incoming: MoveBranchData,
+  staged: StagedHistories | undefined,
+  target: string
+): Promise<MoveReceived> {
+  const blocked = await blockedReason(ctx, repo, branch, target)
+  if (blocked) throw codedError('CONFLICT', blocked)
+
+  const undo: (() => Promise<unknown>)[] = []
+  const g = (args: string[], options?: { timeout?: number }): Promise<string> => gitService.git(repo.path, args, options)
+  let createdBranch = false
+  let movedFrom: string | null = null
+  let digest = ''
+  const createdFiles: string[] = []
+  let createdDir: string | null = null
+  /** Run once the receive succeeded (dropping the backups of histories it replaced) */
+  const later: (() => Promise<unknown>)[] = []
+  try {
+    await viaGit(() => g(['fetch', '--no-tags', 'origin', '--', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { timeout: MOVE_FETCH_TIMEOUT_MS }))
+    const fetched = (await viaGit(() => g(['rev-parse', '--verify', `refs/remotes/origin/${branch}^{commit}`]))).trim()
+    if (fetched !== head) throw codedError('CONFLICT', `origin's ${branch} is at ${fetched.slice(0, 8)}, not the source's ${head.slice(0, 8)}: did something else push to it?`)
+    const local = await g(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]).then((s) => s.trim(), () => null)
+    if (local === null) {
+      await viaGit(() => g(['branch', '--track', '--', branch, `refs/remotes/origin/${branch}`]))
+      createdBranch = true
+      undo.push(() => g(['branch', '-D', '--', branch]))
+    } else if (local !== head) {
+      const behind = await g(['merge-base', '--is-ancestor', local, head]).then(() => true, () => false)
+      if (!behind) throw codedError('CONFLICT', `this server's own ${branch} has commits the source's doesn't; reconcile them first`)
+      await viaGit(() => g(['update-ref', `refs/heads/${branch}`, head, local]))
+      movedFrom = local
+      undo.push(() => g(['update-ref', `refs/heads/${branch}`, local, head]))
     }
+    const unblock = ctx.sessions.blockPath(target)
+    try {
+      await viaGit(() => gitService.addWorktreeAt(repo.path, target, branch))
+      undo.push(() => gitService.removeWorktreeForce(repo.path, target))
+      await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+      const checked = await viaGit(() => gitService.revParseHead(target))
+      if (checked !== head) throw codedError('GIT_ERROR', `${target} checked out ${checked.slice(0, 8)}, not ${head.slice(0, 8)}`)
+      if (patch !== '') await viaGit(() => gitService.applyPatch(target, patch))
+      // The work as this server's git now sees it must be the source's, exactly: built the same
+      // way, the same patch (hunk headers' function context aside).
+      const applied = await dirtyPatch(target, repo)
+      digest = gitService.patchDigest(applied.patch)
+      if (digest !== gitService.patchDigest(patch)) {
+        throw codedError(
+          'GIT_ERROR',
+          "the uncommitted work here does not match the source's after the apply (does this server's git config differ: core.autocrlf, an excludes file, a filter?); nothing was moved"
+        )
+      }
+    } finally {
+      unblock()
+    }
+    const dir = projectDir(target)
+    if (sessions.length > 0 && !existsSync(dir)) {
+      await mkdir(dir, { recursive: true })
+      createdDir = dir
+      undo.push(() => rmdir(dir))
+    }
+    for (const s of sessions) {
+      const from = staged?.file(s.agentSessionId)
+      if (!from || staged!.size(s.agentSessionId) !== s.historyBytes || (await sha256File(from)) !== s.historySha256) {
+        throw bad(`the history of “${s.title}” did not arrive whole (${staged?.size(s.agentSessionId) ?? 0} of ${s.historyBytes} bytes, or another hash)`)
+      }
+      const file = join(dir, `${s.agentSessionId}.jsonl`)
+      const backup = existsSync(file) ? `${file}.trek-move-${randomUUID()}` : null
+      if (backup) await copyFile(file, backup)
+      await mkdir(dir, { recursive: true })
+      await copyFile(from, file)
+      await chmod(file, 0o600)
+      if (backup) {
+        // Undone in reverse: the old file back, then its backup gone.
+        undo.push(() => rm(backup, { force: true }))
+        undo.push(() => copyFile(backup, file))
+        later.push(() => rm(backup, { force: true }))
+      } else {
+        createdFiles.push(file)
+        undo.push(() => rm(file, { force: true }))
+      }
+    }
+    if (!(await ctx.poller.refresh(repo.path))) {
+      throw codedError('GIT_ERROR', `could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
+    }
+    const dropped: string[] = []
+    const watchable = ctx.prWatch?.available() ?? false
+    let previous: BranchData | undefined
+    const worktreeId = ctx.projects.apply(p.projectId, (d) => {
+      const r = repoIn(d, repo.id)
+      const created = r.worktrees.find((w) => !w.isMain && real(w.path) === target)
+      if (!created) throw codedError('GIT_ERROR', `git created ${target} but does not list it`)
+      for (const s of sessions) {
+        const row: Session = { id: randomUUID(), agentSessionId: s.agentSessionId, title: s.title, llm: s.llm, queue: [], status: s.complete ? 'complete' : 'idle' }
+        const type = s.sessionTypeName ? d.settings.sessionTypes?.find((t) => t.name === s.sessionTypeName) : undefined
+        if (type) row.sessionTypeId = type.id
+        else if (s.sessionTypeName) dropped.push(`The session type “${s.sessionTypeName}” of “${s.title}” is not one of this project's`)
+        if (s.systemPrompt) row.systemPrompt = s.systemPrompt
+        created.sessions.push(row)
+      }
+      const existing = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
+      previous = existing ? structuredClone(existing) : undefined
+      const data = mergeBranchData(d, existing, incoming, watchable, dropped)
+      if (Object.keys(data).length > 0) r.branchData[branch] = data
+      return created.id
+    })
+    const watched = Object.hasOwn(repoIn(ctx.projects.require(p.projectId), repo.id).branchData, branch) &&
+      !!repoIn(ctx.projects.require(p.projectId), repo.id).branchData[branch].prWatch
+    if (watched) ctx.prWatch?.pollSoon(project.id, repo.id, branch)
+    for (const step of later) await step().catch(() => {})
+    sweepReceipts()
+    const undoToken = randomUUID()
+    receipts.set(undoToken, {
+      projectId: project.id,
+      repoId: repo.id,
+      branch,
+      worktreeId,
+      path: target,
+      head,
+      digest,
+      previous,
+      createdBranch,
+      movedFrom,
+      createdFiles,
+      createdDir,
+      expires: Date.now() + MOVE_UNDO_MS
+    })
+    return { worktreeId, dropped, undoToken }
+  } catch (err) {
+    for (const step of undo.reverse()) await step().catch(() => {})
+    await ctx.poller.refresh(repo.path).catch(() => false)
+    throw err
   }
 }

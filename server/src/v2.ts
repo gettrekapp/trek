@@ -9,7 +9,7 @@ import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protoc
 import type { ConfigStore } from './configStore'
 import { codedError, toWireError, type Outcome } from './errors.ts'
 import type { Subscriber, TopicHub } from './topicHub'
-import { listBranches } from '../../src/host/gitService.ts'
+import { listBranches, normalizeLinkedDir } from '../../src/host/gitService.ts'
 import type { BranchData, Repository } from '../../src/shared/model/types'
 import type { GitPoller } from './git/poller.ts'
 import { worktreeHandlers } from './worktreeHandlers.ts'
@@ -213,6 +213,12 @@ const handlers: Record<string, Handler> = {
   'repo.update': (p, ctx) => {
     const name = optionalName(p.name, 'name')
     const linkedDirs = p.linkedDirs === null ? null : optionalStringArray(p.linkedDirs, 'linkedDirs')
+    // Each must name a path inside the repository, as linkDirs and a move's export read it.
+    linkedDirs?.forEach((entry, i) => {
+      if (normalizeLinkedDir(entry) === null) {
+        throw codedError('BAD_REQUEST', `linkedDirs[${i}] must be a relative path inside the repository (not empty, ".", absolute or with "..")`)
+      }
+    })
     const environments = p.environments === null || p.environments === undefined ? p.environments : requireRecord(p.environments, 'environments')
     if (environments) assertNoProtoKeys(environments, 'environments')
     const expected = p.expected === undefined ? {} : requireRecord(p.expected, 'expected')

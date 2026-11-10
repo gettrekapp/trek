@@ -36,7 +36,7 @@ import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } f
 import { createWebHandler } from './web/http'
 import { sweepEvery, WebSocketSignIns } from './web/sockets'
 import type { WebBundle } from './web/bundle'
-import { moveTransfers } from './move/transfers'
+import { moveTransfers, sweepStaleMoveDirs } from './move/transfers'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -58,7 +58,8 @@ export interface TrekServer {
    * a welcome sent after it lists `mcp` if the server will have it. Never rejects.
    */
   ready: Promise<void>
-  shutdown(reason: string): void
+  /** Stops everything at once; settles when what it removes from disk (a move's staged histories) is gone */
+  shutdown(reason: string): Promise<void>
 }
 
 export interface ServerOptions {
@@ -95,6 +96,8 @@ export function startServer(
   options: ServerOptions = {}
 ): TrekServer {
   const hub = new TopicHub()
+  // What a killed server left in the temp directory: its moves' staged histories and throwaway indexes (5d).
+  void sweepStaleMoveDirs().catch(() => {})
   let refreshServerTopic = (): void => {}
   const projects = projectsSetup.create(hub, () => refreshServerTopic())
   store.setUsage((repo) => projects.usage(repo.path))
@@ -471,7 +474,7 @@ export function startServer(
     trek.ready = Promise.all([prWatchReady, trek.ready]).then(() => undefined)
   }
 
-  const shutdown = (reason: string): void => {
+  const shutdown = (reason: string): Promise<void> => {
     stopped = true
     stopSweep()
     void trek.mcp?.close()
@@ -480,7 +483,7 @@ export function startServer(
     prWatch?.stop()
     sessions.stopAll()
     // A move's staged histories (5d) are only of use to the connection that was sending them.
-    void moveTransfers.clear()
+    const cleared = moveTransfers.clear().catch(() => {})
     store.off('change', onConfigChange)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
@@ -490,6 +493,7 @@ export function startServer(
     }
     wss.close()
     httpServer.close()
+    return cleared
   }
 
   return trek

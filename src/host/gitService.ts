@@ -1,8 +1,9 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   ChangedFile,
@@ -42,9 +43,9 @@ export function assertSafeBranch(branch: string): void {
   if (bad) throw new Error(`invalid branch name: ${JSON.stringify(branch)}`)
 }
 
-export async function git(repoPath: string, args: string[]): Promise<string> {
+export async function git(repoPath: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
-    timeout: 60_000,
+    timeout: options.timeout ?? 60_000,
     maxBuffer: 64 * 1024 * 1024 // dirty patches (git diff --binary) can be large
   })
   return stdout
@@ -207,6 +208,26 @@ export async function addWorktree(
  * committed). Best-effort per entry: a missing source or an already-present
  * target is skipped, so re-linking an existing worktree is a no-op.
  */
+/**
+ * A linkedDirs entry as a path relative to the repository, or null for one that names nothing
+ * inside it: trimmed, trailing slashes dropped, normalized; empty, the root itself (`.`), absolute
+ * or escaping (`..`) entries are null. linkDirs, a move's export and repo.update all use it.
+ */
+export function normalizeLinkedDir(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null
+  const name = entry.trim().replace(/[/\\]+$/, '')
+  if (!name || isAbsolute(name)) return null
+  const rel = normalize(name).replace(/[/\\]+$/, '')
+  if (!rel || rel === '.' || rel === '..' || rel.startsWith('..' + sep) || rel.startsWith('../') || isAbsolute(rel)) return null
+  return rel.split(sep).join('/')
+}
+
+/**
+ * Symlink shared paths from the main repository into a worktree (e.g. a
+ * .trek/ folder holding database backups and secrets that aren't
+ * committed). Best-effort per entry: a missing source or an already-present
+ * target is skipped, so re-linking an existing worktree is a no-op.
+ */
 export async function linkDirs(
   repoPath: string,
   worktreePath: string,
@@ -215,11 +236,11 @@ export async function linkDirs(
   const repoRoot = resolve(repoPath)
   const worktreeRoot = resolve(worktreePath)
   for (const entry of entries) {
-    const name = entry.trim().replace(/\/+$/, '')
+    // Entries are user-typed settings: anything empty, the root or escaping it is skipped.
+    const name = normalizeLinkedDir(entry)
     if (!name) continue
     const source = resolve(repoRoot, name)
     const target = resolve(worktreeRoot, name)
-    // Entries are user-typed settings — refuse anything escaping either root.
     if (!source.startsWith(repoRoot + sep) || !target.startsWith(worktreeRoot + sep)) continue
     try {
       await lstat(source)
@@ -248,42 +269,176 @@ export async function checkout(repoPath: string, branch: string): Promise<void> 
 
 /** The uncommitted work has a text file git diffs as text but that is not UTF-8 (a worktree move carries the patch as a string). */
 export class NotUtf8PatchError extends Error {}
+/** The uncommitted work is more than a worktree move carries. */
+export class PatchTooBigError extends Error {}
+/** Something holds uncommitted work the patch does not carry (a defence: it should never happen). */
+export class PatchIncompleteError extends Error {}
+
+/** The most bytes of uncommitted work a move carries (MAX_MOVE_PATCH_BYTES in shared/move.ts). */
+const DEFAULT_MAX_PATCH_BYTES = 8 * 1024 * 1024
+const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
+
+/**
+ * Config that must not shape a move's patch or its apply, whatever the user's or repository's
+ * git config says: paths unquoted, whitespace never "fixed" or ignored by apply. (Plumbing
+ * diff-index already ignores diff.noprefix, diff.context, diff.renames, color and textconv; the
+ * explicit flags below say so anyway.)
+ */
+const PATCH_CONFIG = ['-c', 'core.quotepath=false', '-c', 'apply.whitespace=nowarn', '-c', 'apply.ignoreWhitespace=no']
+
+/** process.env without what would change git's diff output (GIT_EXTERNAL_DIFF, GIT_DIFF_OPTS). */
+function patchEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  delete env.GIT_EXTERNAL_DIFF
+  delete env.GIT_DIFF_OPTS
+  delete env.GIT_DIFF_PATH_COUNTER
+  delete env.GIT_DIFF_PATH_TOTAL
+  return env
+}
+
+/** NUL-separated git output (`-z`) as paths. */
+function zList(out: string): string[] {
+  return out.split('\0').filter(Boolean)
+}
+
+/** Whether `path` (repo-relative, `/`-separated, maybe with a trailing `/`) is one of `dirs` or inside one. */
+function underAny(path: string, dirs: readonly string[]): boolean {
+  const p = path.replace(/\/+$/, '')
+  return dirs.some((d) => p === d || p.startsWith(d + '/'))
+}
+
+/** A git process's maxBuffer overflow, as execFile reports it. */
+function overflowed(err: unknown): boolean {
+  const code = (err as { code?: unknown })?.code
+  return code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer/i.test((err as Error)?.message ?? '')
+}
 
 /**
  * Uncommitted + untracked changes as one binary patch against HEAD (a worktree move, 5d). It is
  * built in a throwaway copy of the index (GIT_INDEX_FILE), so the worktree's own index, its
- * staged changes included, is never touched. Ignored files never appear, nor do `exclude`'s
- * repo-relative paths (the repository's linkedDirs, which the target links itself). The patch
- * puts every change back unstaged. A patch that is not valid UTF-8 (a Latin-1 text file, say)
- * would not survive a JSON frame: NotUtf8PatchError.
+ * staged changes included, is never touched, and with plumbing (`git diff-index --cached
+ * --binary -p`, explicit prefixes, context, no textconv, no renames, no external diff), so no
+ * git config or .gitattributes diff driver changes what it says. Ignored files never appear,
+ * nor do `exclude`'s linkedDirs entries (normalized as linkDirs does; the target links them
+ * itself). The patch puts every change back unstaged. Refuses: untracked files together over
+ * `maxBytes` (measured before git hashes them) or a patch over the buffer (PatchTooBigError); a
+ * patch that is not valid UTF-8 (NotUtf8PatchError: a Latin-1 text file, say, would not
+ * survive a JSON frame); an empty patch while the work tree differs from HEAD outside the
+ * linked dirs (PatchIncompleteError: a bad exclude must never pass for "nothing to carry").
  */
 export async function exportDirtyPatch(
   worktreePath: string,
-  exclude: readonly string[] = []
+  exclude: readonly string[] = [],
+  options: { maxBytes?: number } = {}
 ): Promise<{ patch: string; headSha: string }> {
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_PATCH_BYTES
+  const linked = [...new Set(exclude.map(normalizeLinkedDir).filter((d): d is string => d !== null))]
   const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
+  const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]
+  const run = async (args: string[], env: NodeJS.ProcessEnv, maxBuffer = 64 * 1024 * 1024): Promise<Buffer> => {
+    const { stdout } = await execFileAsync('git', [...PATCH_CONFIG, '-C', worktreePath, ...args], {
+      env,
+      timeout: 60_000,
+      maxBuffer,
+      encoding: 'buffer'
+    })
+    return stdout
+  }
+  // The untracked files' sizes first: `add -A` would hash every one into the object store.
+  const untracked = zList((await run(['ls-files', '-z', '--others', '--exclude-standard', '--', ...pathspec], patchEnv())).toString('utf8'))
+  let untrackedBytes = 0
+  for (const file of untracked) {
+    const info = await lstat(join(worktreePath, file)).catch(() => null)
+    if (info?.isFile()) untrackedBytes += info.size
+  }
+  if (untrackedBytes > maxBytes) {
+    throw new PatchTooBigError(`the untracked files come to ${mb(untrackedBytes)}; a move carries at most ${mb(maxBytes)} of uncommitted changes. Commit or remove the large files first`)
+  }
   const dir = await mkdtemp(join(tmpdir(), 'trek-move-index-'))
   const index = join(dir, 'index')
-  const pathspec = ['.', ...exclude.map((p) => `:(exclude,literal)${p.replace(/\/+$/, '')}`)]
+  let patch: string
   try {
-    await copyFile(gitIndex, index).catch(() => {})
-    const env = { ...process.env, GIT_INDEX_FILE: index }
-    const options = { env, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }
-    await execFileAsync('git', ['-C', worktreePath, 'add', '-A', '--', ...pathspec], options)
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', worktreePath, 'diff', '--cached', '--binary', '--no-color', '--no-ext-diff', 'HEAD', '--', ...pathspec],
-      { ...options, encoding: 'buffer' }
-    )
     try {
-      return { patch: new TextDecoder('utf-8', { fatal: true }).decode(stdout), headSha }
+      await copyFile(gitIndex, index)
+    } catch (err) {
+      // No index yet (nothing ever staged) is fine; anything else would build a wrong patch.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+    const env = patchEnv({ GIT_INDEX_FILE: index })
+    await run(['add', '-A', '--', ...pathspec], env)
+    let stdout: Buffer
+    try {
+      stdout = await run(
+        [
+          'diff-index', '--cached', '-p', '--binary', '--full-index', '--no-color', '--no-ext-diff', '--no-textconv',
+          '--no-renames', '--src-prefix=a/', '--dst-prefix=b/', '-U3', '--ignore-submodules=none', 'HEAD', '--', ...pathspec
+        ],
+        env,
+        maxBytes * 4 + 64 * 1024
+      )
+    } catch (err) {
+      if (overflowed(err)) throw new PatchTooBigError(`the uncommitted changes make a patch too big to move; a move carries at most ${mb(maxBytes)}. Commit or remove the large files first`)
+      throw err
+    }
+    try {
+      patch = new TextDecoder('utf-8', { fatal: true }).decode(stdout)
     } catch {
       throw new NotUtf8PatchError('the uncommitted changes include a text file that is not UTF-8; commit it (or remove it) first')
+    }
+    if (patch === '') {
+      // Defence in depth: an empty patch must mean the work tree is HEAD outside the linked dirs.
+      // The same throwaway index, everything added (no exclude pathspecs), against HEAD.
+      await run(['add', '-A', '--', '.'], env)
+      const changed = zList((await run(['diff-index', '--cached', '--name-only', '-z', '--no-renames', '--ignore-submodules=dirty', 'HEAD', '--'], env)).toString('utf8'))
+      const left = changed.filter((p) => !underAny(p, linked))
+      if (left.length > 0) {
+        throw new PatchIncompleteError(`the work tree has changes (${left.slice(0, 3).join(', ')}) that the patch does not carry; nothing was moved`)
+      }
     }
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+  return { patch, headSha }
+}
+
+/**
+ * The patch's sha256 with each hunk header's trailing function context dropped (`@@ -1,2 +1,3 @@
+ * fn` → `@@ -1,2 +1,3 @@`): that text comes from a diff driver's xfuncname, which each server's
+ * config may set differently, and changes nothing a patch does.
+ */
+export function patchDigest(patch: string): string {
+  const normalized = patch.replace(/^(@@ -\S+ \+\S+ @@).*$/gm, '$1')
+  return createHash('sha256').update(normalized).digest('hex')
+}
+
+/**
+ * What a worktree holds that a move leaves behind (5d): ignored files and folders outside the
+ * linkedDirs (`git ls-files --others --ignored --exclude-standard --directory`), and files
+ * flagged assume-unchanged or skip-worktree whose changes git never shows (only those present
+ * on disk: a sparse checkout's skipped files are not there to lose). Each list at most `cap`
+ * entries, sorted, with the full count.
+ */
+export async function leftBehind(
+  worktreePath: string,
+  linkedDirs: readonly string[] = [],
+  cap = 50
+): Promise<{ ignored: string[]; ignoredCount: number; hiddenChanges: string[]; hiddenChangesCount: number }> {
+  const linked = linkedDirs.map(normalizeLinkedDir).filter((d): d is string => d !== null)
+  const ignored = zList(await git(worktreePath, ['-c', 'core.quotepath=false', 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']))
+    .filter((p) => !underAny(p, linked))
+    .sort()
+  const hidden: string[] = []
+  for (const entry of zList(await git(worktreePath, ['-c', 'core.quotepath=false', 'ls-files', '-z', '-v']))) {
+    const tag = entry[0]
+    const path = entry.slice(2)
+    // Lower case: assume-unchanged; S: skip-worktree.
+    if (!(tag === 'S' || (tag >= 'a' && tag <= 'z'))) continue
+    if (underAny(path, linked)) continue
+    if (await lstat(join(worktreePath, path)).then(() => true, () => false)) hidden.push(path)
+  }
+  hidden.sort()
+  return { ignored: ignored.slice(0, cap), ignoredCount: ignored.length, hiddenChanges: hidden.slice(0, cap), hiddenChangesCount: hidden.length }
 }
 
 /** `git remote get-url origin`; null when the repository has no origin. */
@@ -300,8 +455,8 @@ export async function applyPatch(worktreePath: string, patch: string): Promise<v
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
       'git',
-      ['-C', worktreePath, 'apply', '--binary', '--whitespace=nowarn', '-'],
-      { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      [...PATCH_CONFIG, '-C', worktreePath, 'apply', '--binary', '--whitespace=nowarn', '-p1', '-'],
+      { env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
     )
     child.stdin!.end(patch)

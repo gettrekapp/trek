@@ -4,7 +4,7 @@
 // MOVE_TRANSFER_IDLE_MS is removed by the next call that sweeps (every move.* call does), so a
 // client that vanished mid-move leaves nothing for long.
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, open, rm } from 'node:fs/promises'
+import { lstat, mkdtemp, open, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -32,6 +32,8 @@ interface Transfer {
   usedAt: number
   /** An upload is writing: a second one for the transfer waits its turn by being refused */
   busy: boolean
+  /** Aborted (or cleared) while an upload was writing: its directory goes once the write ends */
+  dropped?: boolean
 }
 
 /** What `move.receive` takes: the staged files, by agent session id. */
@@ -45,9 +47,12 @@ export interface StagedHistories {
 export class MoveTransfers {
   private readonly transfers = new Map<string, Transfer>()
   private readonly now: () => number
+  private readonly root: string
 
-  constructor(now: () => number = Date.now) {
+  /** `root`: where the transfers' directories go (the OS temp directory) */
+  constructor(now: () => number = Date.now, root: string = tmpdir()) {
     this.now = now
+    this.root = root
   }
 
   /** Drops every transfer idle for longer than MOVE_TRANSFER_IDLE_MS. */
@@ -65,7 +70,7 @@ export class MoveTransfers {
     await this.sweep()
     if (this.transfers.size >= MAX_MOVE_TRANSFERS) throw codedError('CAPACITY', `at most ${MAX_MOVE_TRANSFERS} moves can upload at once; try again shortly`)
     const id = randomUUID()
-    const dir = await mkdtemp(join(tmpdir(), 'trek-move-'))
+    const dir = await mkdtemp(join(this.root, 'trek-move-'))
     this.transfers.set(id, { dir, projectId, repoId, sizes: new Map(), total: 0, usedAt: this.now(), busy: false })
     return id
   }
@@ -107,6 +112,7 @@ export class MoveTransfers {
       return at + bytes.length
     } finally {
       t.busy = false
+      if (t.dropped) await rm(t.dir, { recursive: true, force: true })
     }
   }
 
@@ -123,13 +129,22 @@ export class MoveTransfers {
     }
   }
 
-  /** Drops a transfer; an unknown or finished one is fine (the client may abort after a lost answer). */
+  /**
+   * Drops a transfer; an unknown or finished one is fine (the client may abort after a lost
+   * answer). One with a chunk being written is gone at once for every later call, and its
+   * directory goes when that write ends.
+   */
   async abort(transferId: unknown): Promise<void> {
     if (typeof transferId !== 'string') return
     const t = this.transfers.get(transferId)
-    if (!t || t.busy) return
+    if (!t) return
     this.transfers.delete(transferId)
-    await rm(t.dir, { recursive: true, force: true })
+    await this.drop(t)
+  }
+
+  private async drop(t: Transfer): Promise<void> {
+    if (t.busy) t.dropped = true
+    else await rm(t.dir, { recursive: true, force: true })
   }
 
   /** Every staged directory, for shutdown */
@@ -141,6 +156,26 @@ export class MoveTransfers {
 
   get size(): number {
     return this.transfers.size
+  }
+}
+
+/** A `trek-move-*` directory (a transfer, or `trek-move-index-*`, an export's throwaway index) older than this is stale at startup */
+export const STALE_MOVE_DIR_MS = 60 * 60_000
+
+/**
+ * At startup: removes the `trek-move-*` directories (transfers and `trek-move-index-*` export
+ * indexes) a killed server left in `root`, only real directories this user owns, untouched for
+ * STALE_MOVE_DIR_MS (no live transfer sits idle that long, nor does an export run that long).
+ */
+export async function sweepStaleMoveDirs(root: string = tmpdir(), now: number = Date.now()): Promise<void> {
+  const names = await readdir(root).catch(() => [] as string[])
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined
+  for (const name of names) {
+    if (!/^trek-move-(?:index-)?[A-Za-z0-9]{6}$/.test(name)) continue
+    const dir = join(root, name)
+    const info = await lstat(dir).catch(() => null)
+    if (!info?.isDirectory() || (uid !== undefined && info.uid !== uid) || now - info.mtimeMs < STALE_MOVE_DIR_MS) continue
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
   }
 }
 
