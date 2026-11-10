@@ -14,6 +14,7 @@ import type {
 import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
+import type { PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type {
   ComposeAction,
   ContainerAction,
@@ -211,7 +212,13 @@ export const CAPABILITY = {
    * `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`,
    * `move.receive` and `move.unreceive` on the target; the app relays between them
    */
-  move: 'move'
+  move: 'move',
+  /**
+   * Promote to primary and its reverse (5e): `worktree.promote` and `worktree.demote` (each with
+   * `dryRun`), and the trek-dev tool promote_to_primary's confirmation: `promote.request` to the
+   * project's subscribers, answered by one window's `promote.answer`, then `promote.settled`
+   */
+  promote: 'promote'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -317,6 +324,19 @@ export interface MethodParamsV2 {
   'worktree.commits': WorktreeRef
   /** A fresh `git status --porcelain` of the worktree (the status poll's `dirty` may be up to 30 s old) */
   'worktree.dirty': WorktreeRef
+  /**
+   * 5e: a worktree's branch into the main checkout (which must be clean), its uncommitted work
+   * carried, the worktree removed last; its Claude and Local sessions move and resume there.
+   * `dryRun` answers the plan. One request: any failure before the removal puts everything back.
+   */
+  'worktree.promote': WorktreeRef & { dryRun?: boolean }
+  /**
+   * 5e ("Promote branch to worktree"): the main checkout's branch, and its uncommitted work, into a
+   * new worktree at the default path; the main checkout goes back to the default branch.
+   */
+  'worktree.demote': RepoRef & { dryRun?: boolean }
+  /** 5e: a window's answer to `promote.request` (the first one wins; `accepted` false if late) */
+  'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'promoted' | 'failed'; worktreeId?: string; error?: string }
   // Branch data (null clears)
   'branch.setTag': BranchRef & { tag: string | null }
   'branch.setCustomTags': BranchRef & { customTags: string[] | null }
@@ -531,6 +551,9 @@ export interface MethodResultsV2 {
   'worktree.diff': Record<string, string>
   /** null when git cannot read the worktree's status */
   'worktree.dirty': boolean | null
+  'worktree.promote': PromotePlan | PromoteResult
+  'worktree.demote': PromotePlan | PromoteResult
+  'promote.answer': { accepted: boolean }
   'worktree.commits': CommitInfo[]
   'branch.setTag': null
   'branch.setCustomTags': null
@@ -658,6 +681,10 @@ export interface EventPayloadsV2 {
    * every authenticated connection: re-read `linear.status` / `voice.settings`
    */
   'integrations.changed': IntegrationsChangedEvent
+  /** 5e: promote_to_primary asks the project's subscribers to confirm; one answers with `promote.answer` */
+  'promote.request': PromoteRequestEvent
+  /** 5e: the request was answered (or ended): close its dialog */
+  'promote.settled': PromoteSettledEvent
 }
 
 export interface IntegrationsChangedEvent {

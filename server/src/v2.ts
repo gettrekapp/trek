@@ -19,6 +19,8 @@ import { integrationHandlers } from './integrations/integrationHandlers.ts'
 import { prWatchHandlers } from './prWatch/prWatchHandlers.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
 import { moveHandlers } from './move/moveHandlers.ts'
+import { promoteHandlers } from './promote/promoteHandlers.ts'
+import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
@@ -65,6 +67,8 @@ export interface V2Context {
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
   /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
   prWatch?: PrWatcher
+  /** promote_to_primary's confirmations (5e): `promote.answer` settles one */
+  promoteRequests?: PromoteRequests
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -314,7 +318,8 @@ const handlers: Record<string, Handler> = {
   ...integrationHandlers,
   ...prWatchHandlers,
   ...reviewHandlers,
-  ...moveHandlers
+  ...moveHandlers,
+  ...promoteHandlers
 }
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */

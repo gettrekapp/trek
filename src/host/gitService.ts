@@ -372,10 +372,12 @@ function overflowed(err: unknown): boolean {
 export async function exportDirtyPatch(
   worktreePath: string,
   exclude: readonly string[] = [],
-  options: { maxBytes?: number; repoPath?: string } = {}
+  options: { maxBytes?: number; repoPath?: string; linked?: readonly string[] } = {}
 ): Promise<{ patch: string; headSha: string }> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_PATCH_BYTES
-  const linked = await linkedSymlinks(worktreePath, exclude, options.repoPath)
+  // `linked` (5e's demote): the paths to leave out, given — the main checkout's linkedDirs are real
+  // folders there, and only those the new worktree links stay behind.
+  const linked = options.linked ? [...options.linked] : await linkedSymlinks(worktreePath, exclude, options.repoPath)
   const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]
@@ -520,6 +522,60 @@ export async function applyPatch(worktreePath: string, patch: string): Promise<v
     )
     child.stdin!.end(patch)
   })
+}
+
+/** applyPatch backwards (the same config-proof apply, `-R`): a promote's undo of the work it carried. */
+export async function reverseApplyPatch(worktreePath: string, patch: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = execFile(
+      'git',
+      [...PATCH_CONFIG, '-C', worktreePath, 'apply', '-R', '--binary', '--whitespace=nowarn', '-p1', '-'],
+      { env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
+    )
+    child.stdin!.end(patch)
+  })
+}
+
+/** What a checkout has checked out: its branch (null on a detached HEAD) and its commit. */
+export async function headState(path: string): Promise<{ branch: string | null; sha: string }> {
+  const sha = (await git(path, ['rev-parse', '--verify', 'HEAD'])).trim()
+  const branch = await git(path, ['symbolic-ref', '--quiet', '--short', 'HEAD']).then((s) => s.trim() || null, () => null)
+  return { branch, sha }
+}
+
+/**
+ * Checks a branch out in the main checkout although a worktree still has it (5e's promote: the
+ * worktree goes only once the main checkout holds the branch and its work).
+ */
+export async function checkoutIgnoringOtherWorktrees(repoPath: string, branch: string): Promise<void> {
+  assertSafeBranch(branch)
+  // switch, not checkout: a branch name that is also a path is never read as one.
+  await git(repoPath, ['switch', '--no-guess', '--ignore-other-worktrees', branch])
+}
+
+/**
+ * Back to what headState read, the branch or the commit detached, discarding what the tracked files
+ * hold (5e's undo of a switch, which may have failed part way: git writes the files before HEAD).
+ * Only for a checkout whose own work is safe elsewhere (a promote's clean main checkout; a demote's
+ * main checkout, whose work the new worktree holds and the undo puts back).
+ */
+export async function forceCheckoutHead(repoPath: string, head: { branch: string | null; sha: string }): Promise<void> {
+  if (head.branch) {
+    assertSafeBranch(head.branch)
+    await git(repoPath, ['switch', '--discard-changes', '--no-guess', '--ignore-other-worktrees', head.branch])
+  } else {
+    await git(repoPath, ['switch', '--discard-changes', '--detach', head.sha])
+  }
+}
+
+/**
+ * A new worktree for a branch the main checkout still has (5e's demote: the main checkout leaves
+ * it only once the worktree holds it and its work). `--force` overrides only that refusal here.
+ */
+export async function addWorktreeOfCheckedOut(repoPath: string, worktreePath: string, branch: string): Promise<void> {
+  assertSafeBranch(branch)
+  await git(repoPath, ['worktree', 'add', '--force', '--', worktreePath, branch])
 }
 
 export async function revParseHead(worktreePath: string): Promise<string> {

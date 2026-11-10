@@ -432,6 +432,66 @@ export class SessionManager {
     return null
   }
 
+  /**
+   * Stops these sessions' agents (5e: a promote or demote hands them to the other checkout) as
+   * unloadWorktree does for a whole worktree: their records stay, idle, with no pty.
+   */
+  suspendSessions(projectId: string, sessionIds: readonly string[]): void {
+    const project = this.deps.projects.require(projectId)
+    const ids = new Set(sessionIds)
+    for (const repo of project.repositories) {
+      for (const worktree of repo.worktrees) {
+        for (const session of worktree.sessions) {
+          if (!ids.has(session.id)) continue
+          this.stopDiscovery(session.id)
+          this.killSession(session)
+        }
+      }
+    }
+    this.deps.projects.apply(
+      projectId,
+      (d) => {
+        for (const repo of d.repositories) {
+          for (const worktree of repo.worktrees) {
+            for (const s of worktree.sessions) {
+              if (!ids.has(s.id)) continue
+              delete s.ptyId
+              delete s.exitCode
+              delete s.decision
+              if (s.status !== 'complete') s.status = 'idle'
+            }
+          }
+        }
+      },
+      { persist: false }
+    )
+    this.publishAttention()
+  }
+
+  /**
+   * Resumes these sessions where their records now are (5e: in the checkout a promote or demote
+   * handed them to, already loaded). One that can't start shows as exited, as loadWorktree's do.
+   */
+  resumeSessions(projectId: string, sessionIds: readonly string[]): void {
+    this.assertRunning()
+    for (const id of sessionIds) {
+      try {
+        this.spawnSession(projectId, id, { cols: LOAD_COLS, rows: LOAD_ROWS })
+      } catch (err) {
+        console.error(`could not resume session ${id}`, err)
+        try {
+          this.mutate(projectId, id, (s) => {
+            delete s.ptyId
+            s.status = 'exited'
+            s.exitCode = -1
+          }, false)
+        } catch {
+          // the session is gone
+        }
+      }
+    }
+  }
+
   unloadWorktree(p: any): null {
     const project = this.deps.projects.require(p.projectId)
     const { worktree } = findWorktree(project, p.worktreeId)

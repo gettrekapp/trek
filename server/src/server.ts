@@ -32,6 +32,7 @@ import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
+import { PromoteRequests } from './promote/requests'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
 import { createWebHandler } from './web/http'
 import { sweepEvery, WebSocketSignIns } from './web/sockets'
@@ -139,6 +140,8 @@ export function startServer(
       })
     : undefined
   prWatch?.start()
+  // promote_to_primary's confirmations (5e): asked of the project's windows.
+  const promoteRequests = new PromoteRequests(hub)
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -395,6 +398,7 @@ export function startServer(
         integrations: options.integrations,
         integrationsChanged,
         prWatch,
+        promoteRequests,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -481,6 +485,7 @@ export function startServer(
     trek.mcp = undefined
     poller.stop()
     prWatch?.stop()
+    promoteRequests.stop()
     sessions.stopAll()
     // A move's staged histories (5d) are only of use to the connection that was sending them.
     const cleared = moveTransfers.clear().catch(() => {})
