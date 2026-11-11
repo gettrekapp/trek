@@ -1,0 +1,25 @@
+{
+  "name": "trek-relay",
+  "version": "0.1.0",
+  "description": "Trek push relay: holds the APNs key and FCM credentials and forwards trek-server attention to paired phones",
+  "private": true,
+  "bin": {
+    "trek-relay": "dist/trek-relay.cjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node src/index.ts start",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.6.0"
+  }
+}
