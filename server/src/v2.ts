@@ -67,8 +67,10 @@ export interface V2Context {
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
   /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
   prWatch?: PrWatcher
-  /** promote_to_primary's confirmations (5e): `promote.answer` settles one */
+  /** promote_to_primary's confirmations (5e): `promote.listen`, `promote.claim`, `promote.answer` and `worktree.promote {requestId}` */
   promoteRequests?: PromoteRequests
+  /** Where a promote or demote saves a copy of the work it carries (5e; default: the temp dir) */
+  promoteRecoveryDir?: string
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown

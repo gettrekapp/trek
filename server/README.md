@@ -222,13 +222,17 @@ between servers".
 With the `promote` capability, the app's **Promote to primary…** runs `worktree.promote` on the
 server, in one request: the main checkout (which must be clean) switches to the worktree's branch
 while the worktree still has it, the worktree's uncommitted work is applied there and checked
-against the worktree's own, and only then is the worktree removed. Claude and local-model sessions
-move to the main checkout, their histories renamed into its `~/.claude/projects` folder (the
-server user's), and resume there; others are closed. **Promote branch to worktree…**
-(`worktree.demote`) does the reverse, back to the default branch. A failure before the worktree is
-removed (or, for the reverse, before the main checkout leaves the branch) puts everything back.
-The `promote_to_primary` MCP tool asks the project's windows to confirm (`promote.request`) and
-waits up to 15 minutes for one to answer. See PROTOCOL.md, "Promote to primary".
+against the worktree's own: the point of commitment. The worktree is removed after it (a folder
+that can't be fully removed is a note, never an undo). Claude and local-model sessions move to the
+main checkout, their histories (and Claude's per-conversation folders) renamed into its
+`~/.claude/projects` folder (the server user's), and resume there; others are closed. **Promote
+branch to worktree…** (`worktree.demote`) does the reverse, back to the default branch. A failure
+before the commitment puts everything back, except a checkout one of its own running sessions
+changed meanwhile, which is left as it is (`CONFLICT`). The carried work is saved first to
+`<data dir>/promote-recovery/` (0600), deleted once all went well and named in any failure.
+The `promote_to_primary` MCP tool asks the windows that listen (`promote.listen`) to confirm
+(`promote.request`); the first that confirms claims it (`promote.claim`) and its
+`worktree.promote {requestId}` settles it; the tool waits up to 15 minutes for one to answer. See PROTOCOL.md, "Promote to primary".
 
 ## Web client
 

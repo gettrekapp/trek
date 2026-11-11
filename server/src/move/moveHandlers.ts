@@ -35,6 +35,7 @@ import {
 import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { codedError } from '../errors.ts'
+import { assertNotPromoting } from '../promote/changing.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
 import { realOrResolved as real } from '../repos.ts'
 import { MAX_SESSIONS_PER_PROJECT, checkTitle } from '../sessions/limits.ts'
@@ -205,6 +206,7 @@ async function source(ctx: V2Context, p: any): Promise<{ project: Project; repo:
   const { worktree: row } = present(ctx, p)
   if (row.isMain) throw bad("a repository's main checkout cannot be moved; move a worktree")
   const { repo, worktree, branch } = await checkedOut(ctx, p)
+  assertNotPromoting(repo.path)
   return { project: ctx.projects.require(p.projectId), repo, worktree, branch }
 }
 
@@ -498,6 +500,7 @@ export const moveHandlers: Record<string, Handler> = {
     const project = ctx.projects.require(p.projectId)
     const repo = repoIn(project, p.repoId)
     findRegistered(ctx.store.config.repos, repo.path)
+    assertNotPromoting(repo.path)
     const branch = requireBranch(p.branch)
     await checkBranchName(repo.path, branch, false)
     const head = requireString(p.head, 'head')
@@ -540,6 +543,7 @@ export const moveHandlers: Record<string, Handler> = {
     const row = repo.worktrees.find((w) => w.id === receipt.worktreeId)
     if (!row) throw codedError('NOT_FOUND', `${receipt.path} is no longer one of this repository's worktrees`)
     if (row.loaded) throw codedError('IN_USE', `${receipt.path} was loaded after the move; it is kept`)
+    assertNotPromoting(repo.path)
     // The receive's own lock: an undo must never run beside a receive of the same branch.
     const key = `${real(repo.path)}\0${receipt.branch}`
     if (receiving.has(key)) throw codedError('CONFLICT', `another move is bringing ${receipt.branch} into ${repo.path} right now; try again once it is done`)

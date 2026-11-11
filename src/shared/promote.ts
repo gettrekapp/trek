@@ -4,7 +4,9 @@
 // worktree; `worktree.demote` ("Promote branch to worktree") moves the main checkout's branch, and
 // its uncommitted work, into a new worktree and puts the main checkout back on the default branch.
 // Each takes `dryRun: true` for the plan the confirmation shows. The trek-dev MCP tool
-// `promote_to_primary` asks a window to confirm (`promote.request`), and waits for its
+// `promote_to_primary` asks the windows that listen (`promote.listen`) to confirm
+// (`promote.request`); the first to confirm claims it (`promote.claim`) and runs
+// `worktree.promote` with its `requestId`, whose own result settles the request; a decline is
 // `promote.answer`.
 
 /** The most uncommitted work a promote carries (one machine, nothing on the wire but the request) */
@@ -13,6 +15,8 @@ export const MAX_PROMOTE_PATCH_BYTES = 64 * 1024 * 1024
 export const PROMOTE_ANSWER_TIMEOUT_MS = 15 * 60 * 1000
 /** How often promote_to_primary checks that a window still has the project open while it waits */
 export const PROMOTE_WINDOW_CHECK_MS = 5_000
+/** How long a claimed request waits for its window's `worktree.promote` (the teardown runs first) */
+export const PROMOTE_CLAIM_TIMEOUT_MS = 5 * 60 * 1000
 /** Paths a plan lists at most per list (the counts are complete) */
 export const MAX_PROMOTE_LISTED_PATHS = 50
 
@@ -52,6 +56,15 @@ export interface PromotePlan {
   /** Promote: files flagged assume-unchanged or skip-worktree in the worktree, whose changes are lost */
   hiddenChanges: string[]
   hiddenChangesCount: number
+  /** Ignored files and folders in the main checkout: they stay there (a demote's new worktree doesn't get them) */
+  mainIgnored: string[]
+  mainIgnoredCount: number
+  /**
+   * The main checkout's ignored files that its switch overwrites (git does so without asking): files
+   * the branch it switches to tracks (promote: the worktree's branch; demote: the default branch)
+   */
+  overwrittenIgnored: string[]
+  overwrittenIgnoredCount: number
 }
 
 /** A promote or a demote that went through. */
@@ -60,8 +73,13 @@ export interface PromoteResult {
   worktreeId: string
   /** The sessions that moved (their ids, unchanged) */
   moved: string[]
-  /** What did not come along, said plainly (closed sessions, a dropped review draft, a history not moved) */
+  /**
+   * What did not come along, said plainly (closed sessions, a dropped review draft, a history not
+   * moved, a worktree folder that could not be fully removed)
+   */
   notes: string[]
+  /** A copy of the carried work kept on the server's disk (named in a note), when a step after the commitment failed */
+  recoveryFile?: string
 }
 
 /** `promote.request`: an agent's promote_to_primary asks the project's windows to confirm. */
@@ -74,13 +92,23 @@ export interface PromoteRequestEvent {
   from?: string
 }
 
-/** `promote.settled`: a window answered (or the request ended): the others close their dialog. */
+/**
+ * `promote.settled`: the request ended (declined, promoted, failed, or nobody answered), or a
+ * window claimed it (`claimed: true`): every other window closes its dialog; the claimant carries on.
+ */
 export interface PromoteSettledEvent {
   projectId: string
   requestId: string
+  /** A window confirmed it and is running the promote (the request ends once it has) */
+  claimed?: true
 }
 
-/** What a window answers: the user declined, or the promote it ran went through or failed. */
+/**
+ * How a request ends: the user declined (`promote.answer`), or the claimant's `worktree.promote`
+ * went through (the server's own result) or failed (or the claimant answered `failed` before it
+ * could start). `promoted` is never accepted from a window (`promote.answer` refuses it): the
+ * server settles it from `worktree.promote {requestId}`.
+ */
 export type PromoteOutcome =
   | { outcome: 'declined' }
   | { outcome: 'promoted'; worktreeId: string }

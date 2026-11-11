@@ -477,6 +477,7 @@ const server = startServer(
   // Absolute: agents read the config file from their own worktree's directory.
   {
     mcpDir: resolve(serverDataDir, 'mcp'),
+    promoteRecoveryDir: resolve(serverDataDir, 'promote-recovery'),
     local: local !== undefined,
     machine: createMachine(serverDataDir, { local: local !== undefined }),
     integrations: createIntegrations({

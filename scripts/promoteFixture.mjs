@@ -44,7 +44,7 @@ function fakeSpawner() {
  * in progress (changed, staged, untracked), a Claude session with a history, a Codex session, a
  * review draft and branch data; the main checkout has a Claude session of its own.
  */
-export async function setup(t) {
+export async function setup(t, options = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-promote-')))
   const home = process.env.HOME
   process.env.HOME = join(dir, 'home')
@@ -68,10 +68,13 @@ export async function setup(t) {
   const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {}, onAttentionChange: () => {} })
   const { spawned, spawner } = fakeSpawner()
   const sessions = new SessionManager({ projects, store, hub, spawner, schedule: () => ({ cancel() {} }), discover: async () => undefined })
-  const promoteRequests = new PromoteRequests(hub, { timeoutMs: 2000, checkMs: 20 })
+  const promoteRequests = new PromoteRequests(hub, { timeoutMs: 2000, checkMs: 20, ...(options.requests ?? {}) })
   t.after(() => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close() })
-  const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, promoteRequests }
+  const recoveryDir = join(dir, 'recovery')
+  const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, promoteRequests, promoteRecoveryDir: recoveryDir }
   const call = (method, params) => dispatchV2(method, params, ctx)
+  /** A call from another connection (a window): its own subscriber */
+  const callAs = (subscriber, method, params) => dispatchV2(method, params, { ...ctx, subscriber })
   const created = await call('project.create', { name: 'P', repositories: [{ path: app }] })
   const projectId = created.result.projectId
   await poller.refresh(app)
@@ -93,6 +96,9 @@ export async function setup(t) {
   writeFileSync(join(path, 'ignored', 'local.db'), 'x')
   mkdirSync(projectDir(path), { recursive: true })
   writeFileSync(join(projectDir(path), `${CLAUDE_ID}.jsonl`), '{"type":"user"}\n')
+  // Claude's folder of the session's subagent transcripts and tool results
+  mkdirSync(join(projectDir(path), CLAUDE_ID, 'subagents'), { recursive: true })
+  writeFileSync(join(projectDir(path), CLAUDE_ID, 'subagents', 'agent-1.jsonl'), '{}\n')
   const mainId = repo().worktrees.find((w) => w.isMain).id
   projects.apply(projectId, (d) => {
     const r = d.repositories[0]
@@ -104,7 +110,7 @@ export async function setup(t) {
     r.worktrees.find((w) => w.id === mainId).sessions.push({ id: MAIN_ID, agentSessionId: MAIN_ID, title: 'Main Claude', llm: { provider: 'claude' }, queue: [], status: 'idle' })
     r.branchData.feat = { ...(r.branchData.feat ?? {}), note: 'the note' }
   })
-  return { dir, app, call, projects, poller, sessions, hub, spawned, projectId, repoId, worktreeId, mainId, path, project, repo, promoteRequests, ctx }
+  return { dir, app, call, callAs, recoveryDir, projects, poller, sessions, hub, spawned, projectId, repoId, worktreeId, mainId, path, project, repo, promoteRequests, ctx }
 }
 
 export const status = (cwd) => git(cwd, 'status', '--porcelain').split('\n').filter(Boolean).sort()

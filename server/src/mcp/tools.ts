@@ -381,7 +381,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'promote_to_primary',
     description:
-      "Ask the user to promote a worktree to the primary checkout: its branch is checked out in the repository's main checkout (which must have no uncommitted changes), its own uncommitted work is carried there, and the worktree is removed. Its Claude and local-model sessions move to the main checkout and resume; others are closed. Every Trek window with this project open shows a confirmation; the call waits (up to 15 minutes) for the user's answer and fails if they decline, if the promote fails, or if no window has the project open. Returns the main checkout in the same shape as a list_worktrees entry. Pass your $TREK_TERMINAL_ID as terminalId so the dialog can say who asked.",
+      "Ask the user to promote a worktree to the primary checkout: its branch is checked out in the repository's main checkout (which must have no uncommitted changes), its own uncommitted work is carried there, and the worktree is removed. Its Claude and local-model sessions move to the main checkout and resume; others are closed. Every Trek window with this project open shows a confirmation; the call waits (up to 15 minutes) for the user's answer and fails if they decline, if the promote fails, or if no window has the project open. A second call for the same worktree while one waits gets the same answer. Returns the main checkout in the same shape as a list_worktrees entry. Pass your $TREK_TERMINAL_ID as terminalId so the dialog can say who asked. If you run in the worktree being promoted, you are stopped and resumed in the main checkout, so this call never returns to you: a prompt saying how it went is queued in your session's Queue panel instead (not sent; the user sends it).",
     inputSchema: {
       type: 'object',
       properties: { worktree: WORKTREE_PARAM, terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID (optional)' } },
@@ -872,23 +872,41 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (worktree.isMain) throw bad('That worktree is already the primary checkout')
         if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD); it can't be promoted`)
         let from: string | undefined
+        let callerId: string | undefined
         if (typeof args.terminalId === 'string' && args.terminalId) {
           try {
-            from = sessionIn(args.terminalId, project).session.title
+            const caller = sessionIn(args.terminalId, project).session
+            from = caller.title
+            callerId = caller.id
           } catch {
             // an unknown terminal only loses the dialog's "asked by"
           }
         }
         const nobody = 'No Trek window has this project open to confirm the promote, so nothing was changed. Ask the user to open the project, or to promote it themselves.'
         if (!deps.promoteRequests) throw codedError('BAD_REQUEST', nobody)
-        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch: worktree.branch, ...(from ? { from } : {}) }, signal)
+        const branch = worktree.branch
+        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch, ...(from ? { from } : {}) }, signal)
+        // The caller went away while a window ran the promote (it was the worktree's agent, stopped
+        // and resumed elsewhere): its session hears how it went from its queue (never sent by itself).
+        if (signal?.aborted && callerId && (answer.outcome === 'promoted' || answer.outcome === 'failed')) {
+          try {
+            const text =
+              answer.outcome === 'promoted'
+                ? `The promote you asked for (promote_to_primary) went through: ${branch} is now checked out in the main checkout at ${describeById(answer.worktreeId).path}, and the worktree's Claude and local-model sessions (this one included, if it ran there) now run there.`
+                : `The promote you asked for (promote_to_primary) failed: ${answer.error}`
+            deps.sessions.enqueue({ projectId, sessionId: callerId, text: text.slice(0, MAX_QUEUE_ENTRY) })
+            deps.sessions.refreshAttention()
+          } catch (err) {
+            console.warn(`[promote] could not queue the outcome for session ${callerId}: ${(err as Error).message}`)
+          }
+        }
         switch (answer.outcome) {
           case 'promoted':
             return { promoted: true, primary: describeById(answer.worktreeId) }
           case 'declined':
             throw bad('The user declined the promote; nothing was changed. Do not ask again unless they say so.')
           case 'failed':
-            throw codedError('GIT_ERROR', `The promote failed and nothing was changed: ${answer.error}`)
+            throw codedError('GIT_ERROR', `The promote failed: ${answer.error}`)
           case 'no-window':
             throw bad(nobody)
           case 'timeout':

@@ -1,5 +1,5 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -23,6 +23,11 @@ function assertSessionId(sessionId: string): void {
   }
 }
 
+/**
+ * Moves a session's history to another cwd's project directory: its `<id>.jsonl` and, when it has
+ * one, its `<id>/` folder (subagent transcripts, tool results). True when either moved. A folder
+ * that already exists at the destination is left where it is (nothing is overwritten).
+ */
 export async function migrateSession(
   sessionId: string,
   fromCwd: string,
@@ -30,14 +35,18 @@ export async function migrateSession(
 ): Promise<boolean> {
   assertSessionId(sessionId)
   const source = join(projectDir(fromCwd), `${sessionId}.jsonl`)
-  try {
-    await access(source)
-  } catch {
-    return false // no session recorded in the old directory (never used, or already moved)
-  }
+  const folder = join(projectDir(fromCwd), sessionId)
+  const hasFile = await access(source).then(() => true, () => false)
+  const hasFolder = await stat(folder).then((s) => s.isDirectory(), () => false)
+  // no session recorded in the old directory (never used, or already moved)
+  if (!hasFile && !hasFolder) return false
   const destDir = projectDir(toCwd)
   await mkdir(destDir, { recursive: true })
-  await rename(source, join(destDir, `${sessionId}.jsonl`))
+  if (hasFile) await rename(source, join(destDir, `${sessionId}.jsonl`))
+  if (hasFolder) {
+    const destFolder = join(destDir, sessionId)
+    if (!(await access(destFolder).then(() => true, () => false))) await rename(folder, destFolder)
+  }
   return true
 }
 

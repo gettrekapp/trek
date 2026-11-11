@@ -55,6 +55,11 @@ export class TopicHub {
     return count
   }
 
+  /** Whether `subscriber` is on the topic now. */
+  isSubscribed(topic: Topic, subscriber: Subscriber): boolean {
+    return this.topics.get(topic)?.subscribers.has(subscriber) ?? false
+  }
+
   /** Sets the topic's state. The first publish starts at rev 0; an unchanged snapshot sends nothing. */
   publish(topic: Topic, snapshot: unknown): void {
     const entry = this.topics.get(topic)

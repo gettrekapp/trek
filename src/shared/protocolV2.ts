@@ -216,7 +216,9 @@ export const CAPABILITY = {
   /**
    * Promote to primary and its reverse (5e): `worktree.promote` and `worktree.demote` (each with
    * `dryRun`), and the trek-dev tool promote_to_primary's confirmation: `promote.request` to the
-   * project's subscribers, answered by one window's `promote.answer`, then `promote.settled`
+   * windows that listen (`promote.listen`), claimed by the first that confirms (`promote.claim`)
+   * and settled by its `worktree.promote {requestId}`, or declined (`promote.answer`); then
+   * `promote.settled`
    */
   promote: 'promote'
 } as const
@@ -327,16 +329,26 @@ export interface MethodParamsV2 {
   /**
    * 5e: a worktree's branch into the main checkout (which must be clean), its uncommitted work
    * carried, the worktree removed last; its Claude and Local sessions move and resume there.
-   * `dryRun` answers the plan. One request: any failure before the removal puts everything back.
+   * `dryRun` answers the plan. One request: any failure before the commitment puts everything back.
+   * `requestId`: the promote_to_primary request this answers (claimed by this connection, or
+   * claimed now); the server settles it with this promote's result.
    */
-  'worktree.promote': WorktreeRef & { dryRun?: boolean }
+  'worktree.promote': WorktreeRef & { dryRun?: boolean; requestId?: string }
   /**
    * 5e ("Promote branch to worktree"): the main checkout's branch, and its uncommitted work, into a
    * new worktree at the default path; the main checkout goes back to the default branch.
    */
   'worktree.demote': RepoRef & { dryRun?: boolean }
-  /** 5e: a window's answer to `promote.request` (the first one wins; `accepted` false if late) */
+  /**
+   * 5e: a window declines a `promote.request` (while nobody claimed it), or its claimant says it
+   * failed before its promote could start (a teardown). `promoted` is refused (BAD_REQUEST): the
+   * claimant's `worktree.promote {requestId}` settles it. `accepted` false if late or not the claimant's.
+   */
   'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'promoted' | 'failed'; worktreeId?: string; error?: string }
+  /** 5e: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer) */
+  'promote.listen': { projectId: string; listen?: boolean }
+  /** 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown */
+  'promote.claim': { projectId: string; requestId: string }
   // Branch data (null clears)
   'branch.setTag': BranchRef & { tag: string | null }
   'branch.setCustomTags': BranchRef & { customTags: string[] | null }
@@ -554,6 +566,8 @@ export interface MethodResultsV2 {
   'worktree.promote': PromotePlan | PromoteResult
   'worktree.demote': PromotePlan | PromoteResult
   'promote.answer': { accepted: boolean }
+  'promote.listen': null
+  'promote.claim': { accepted: boolean }
   'worktree.commits': CommitInfo[]
   'branch.setTag': null
   'branch.setCustomTags': null
@@ -681,9 +695,9 @@ export interface EventPayloadsV2 {
    * every authenticated connection: re-read `linear.status` / `voice.settings`
    */
   'integrations.changed': IntegrationsChangedEvent
-  /** 5e: promote_to_primary asks the project's subscribers to confirm; one answers with `promote.answer` */
+  /** 5e: promote_to_primary asks the project's listening windows to confirm (`promote.claim` / `promote.answer`) */
   'promote.request': PromoteRequestEvent
-  /** 5e: the request was answered (or ended): close its dialog */
+  /** 5e: the request ended, or another window claimed it (`claimed`): close its dialog (the claimant carries on) */
   'promote.settled': PromoteSettledEvent
 }
 

@@ -272,6 +272,33 @@ export class TerminalHost {
     record.proc.kill()
   }
 
+  /**
+   * Resolves once every one of these ptys' processes has exited (killed ones included), or after
+   * `timeoutMs` with SIGKILL sent to those still running and a further `graceMs` for them to go.
+   * True when all are gone. 5e: a promote's agents must have stopped writing before their work is
+   * packed.
+   */
+  async whenGone(ptyIds: readonly string[], timeoutMs = 5000, graceMs = 1000): Promise<boolean> {
+    const alive = (): PtyRecord[] => ptyIds.map((id) => this.records.get(id)).filter((r): r is PtyRecord => r !== undefined)
+    const wait = async (ms: number): Promise<boolean> => {
+      const until = Date.now() + ms
+      while (alive().length > 0) {
+        if (Date.now() >= until) return false
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      return true
+    }
+    if (await wait(timeoutMs)) return true
+    for (const record of alive()) {
+      try {
+        record.proc.kill('SIGKILL')
+      } catch {
+        // already gone
+      }
+    }
+    return wait(graceMs)
+  }
+
   disposeAll(): void {
     for (const record of [...this.records.values()]) {
       if (!record.killed) this.kill(record.ptyId)

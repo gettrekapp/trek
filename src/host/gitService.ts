@@ -502,6 +502,34 @@ export async function leftBehind(
   return { ignored: ignored.slice(0, cap), ignoredCount: ignored.length, hiddenChanges: hidden.slice(0, cap), hiddenChangesCount: hidden.length, nestedRepos: nested.slice(0, cap) }
 }
 
+/**
+ * The ignored files in a checkout that switching it to `ref` would overwrite (5e): files `ref`
+ * tracks that HEAD does not, present here and ignored (git overwrites ignored files without
+ * asking). At most `cap`, sorted, with the full count.
+ */
+export async function ignoredOverwrittenBy(path: string, ref: string, cap = 50): Promise<{ paths: string[]; count: number }> {
+  assertSafeBranch(ref)
+  const added = zList(await git(path, ['-c', 'core.quotepath=false', 'diff', '--name-only', '-z', '--no-renames', '--diff-filter=A', 'HEAD', `refs/heads/${ref}`, '--']))
+  const present: string[] = []
+  for (const p of added) if (await lstat(join(path, p)).then(() => true, () => false)) present.push(p)
+  if (present.length === 0) return { paths: [], count: 0 }
+  const ignored = await new Promise<string[]>((resolve, reject) => {
+    const child = execFile(
+      'git',
+      ['-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
+      { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      (err, stdout) => {
+        // 1: none of them is ignored
+        if (err && (err as { code?: unknown }).code !== 1) reject(err)
+        else resolve(zList(String(stdout)))
+      }
+    )
+    child.stdin!.end(present.join('\0') + '\0')
+  })
+  ignored.sort()
+  return { paths: ignored.slice(0, cap), count: ignored.length }
+}
+
 /** `git remote get-url origin`; null when the repository has no origin. */
 export async function originUrl(repoPath: string): Promise<string | null> {
   try {

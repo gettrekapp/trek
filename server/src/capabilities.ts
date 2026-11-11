@@ -7,8 +7,9 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
  * `linear` and `voice` say it serves `linear.*` and `voice.*`; whether it has a key is
  * `linear.status`'s and `voice.settings`' answer. `review` (5c-2): the Changes tab's sources and
  * draft line comments. `move` (5d): `move.*`, a worktree's
- * move to or from another server. `promote` (5e): `worktree.promote`, `worktree.demote` and
- * `promote.answer`, and promote_to_primary's `promote.request` / `promote.settled`.
+ * move to or from another server. `promote` (5e): `worktree.promote`, `worktree.demote`,
+ * `promote.listen`, `promote.claim` and `promote.answer`, and promote_to_primary's
+ * `promote.request` / `promote.settled`.
  */
 export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.topicEnd,

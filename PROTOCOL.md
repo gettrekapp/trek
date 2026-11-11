@@ -107,7 +107,7 @@ new optional field needs no capability: its absence says enough.
 | `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
 | `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`, `move.receive` and `move.unreceive` on the target |
-| `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the project's subscribers, `promote.answer` from one of them, then `promote.settled` |
+| `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -746,7 +746,7 @@ The client's order, and what each step leaves behind when it fails:
 |---|---|---|
 | `move.prepare` | `{projectId, worktreeId}` | `{branch, origin, repoName, dirty, loaded, sessions, reviewComments, queuedPrompts, prWatch, ignored, ignoredCount, hiddenChanges, hiddenChangesCount, nestedRepos}`. `origin`: `git remote get-url origin` of its repository, or `null`. `sessions`: each `{title, provider, carried, reason?}`; a second session resuming the same `agentSessionId` as a carried one is not carried. `ignored`: the worktree's ignored files and folders outside its linked symlinks (the `linkedDirs` entries that are, in this worktree, symlinks into the main checkout; one that is a real folder here is the worktree's own and is listed like any other) (`git ls-files --others --ignored --exclude-standard --directory`, a folder ending in `/`), `hiddenChanges`: its files flagged assume-unchanged or skip-worktree and present on disk (`git ls-files -v`); neither moves, and both are deleted with the source. Each at most 50 paths, sorted; the counts are all of them. `nestedRepos`: its untracked folders that are git repositories of their own (`git ls-files --others` lists them as folders), without the trailing `/`, at most 50, sorted: `move.export` refuses while there is one. `BAD_REQUEST` for a main checkout or a detached HEAD |
 | `move.export` | `{projectId, worktreeId}` | `{branch, head, patch, sessions, notCarried, branchData, fingerprint}`. `patch`: every change against HEAD, untracked files included and ignored ones not, built in a throwaway copy of the index (`GIT_INDEX_FILE`: `git add -A`, then the plumbing `git diff-index --cached -p --binary --full-index --no-textconv --no-ext-diff --no-renames --src-prefix=a/ --dst-prefix=b/ -U3 HEAD`, with `core.quotepath=false` and `diff.suppressBlankEmpty=false`), so the worktree's own index is never touched and no git config or `.gitattributes` diff driver (textconv, `diff.noprefix`, `diff.context`, `diff.suppressBlankEmpty`, renames, color) shapes it; of the repository's `linkedDirs` (normalized as for `repo.update`), those that are in this worktree symlinks into the main checkout (what worktree creation links) are left out, since the target links them itself; one that is a real folder or file here (checked in, or never linked) is carried like any other path, and a target that links it instead refuses the move (`move.receive` below); `''` when clean, and refused (`GIT_ERROR`) when it is empty while the work tree differs from HEAD outside the linked symlinks. At most 8 MiB, the untracked files measured before git hashes them (`BAD_REQUEST`, as is a patch too big to read), valid UTF-8 (a text file in another encoding would not survive the frame), no untracked nested git repository (`git add -A` would carry only a gitlink; the message names it), and the whole answer at most 14 MiB as JSON (the escaping of quotes and control characters can grow a patch past the 16 MiB frame, and `move.receive` carries it again), else `BAD_REQUEST`. `sessions`: the carried ones, each `{title, llm, agentSessionId, historyBytes, historySha256, sessionTypeName?, systemPrompt?, complete?}` (the history's bytes travel by `move.history`). `notCarried`: one line per session left behind. `branchData`: `{note?, tag?, customTags?, ticket?, pr?, prWatch?, env?}`, the tags by name, `env` the branch's Docker `.env` text (a client leaves it out for a target without `env`). `fingerprint`: a hash of `head`, `patch` and each carried history's `agentSessionId`, size and sha256. `IN_USE` while loaded |
-| `move.history` | `{projectId, worktreeId, agentSessionId, offset}` | `{data, offset, total, done}`: base64 of at most 4 MiB of the session's history from byte `offset`; `done` once `offset` plus the chunk reaches `total`. Only a carried session (a Claude one with a saved history of at most 64 MiB) of an unloaded worktree (`IN_USE`; `NOT_FOUND` for another session; `BAD_REQUEST` for an offset past the end) |
+| `move.history` | `{projectId, worktreeId, agentSessionId, offset}` | `{data, offset, total, done}`: base64 of at most 4 MiB of the session's history from byte `offset`; `done` once `offset` plus the chunk reaches `total`. Only a carried session (a Claude one with a saved history of at most 64 MiB) of an unloaded worktree (`IN_USE`; `NOT_FOUND` for another session; `BAD_REQUEST` for an offset past the end). Only the conversation's `<id>.jsonl` travels: Claude's `<id>/` folder beside it (subagent transcripts, tool results) stays in the source machine's `~/.claude`; the resumed conversation still reads, but its subagents' transcripts are not there |
 | `move.finish` | `{projectId, worktreeId, fingerprint, verifyOnly?}` | `null`: with `verifyOnly`, only the checks below, nothing removed; else the worktree is removed (`git worktree remove --force`, then from the project, with its sessions and its review draft), and the branch's PR watch ends. `CONFLICT` if its HEAD, its uncommitted work or a carried session's history changed since `move.export` (`fingerprint`; a patch that can no longer be built, too big or not UTF-8, counts as changed), `IN_USE` if it was loaded again; then nothing changes |
 | `move.candidates` | `{origin, branch}` | `[{projectId, projectName, repoId, repoName, path, blocked?}]`: each project's registered repository whose origin names the same repository (ssh, https and `file://` forms compare equal: `normalizeOrigin` in `src/shared/move.ts`), with the default worktree path (`<repo>-<branch>`), and `blocked` when the branch name is not valid there (`git check-ref-format`), the branch is checked out there already, the path exists, or the path is outside what the server may use |
 | `move.begin` | `{projectId, repoId}` | `{transferId}`: a staged upload for one move into this repository: a 0700 temp directory on the target. At most 4 at once (`CAPACITY`); one nobody has written to for 10 minutes is removed (swept by every later `move.begin`, `move.upload` and `move.receive`) |
@@ -791,50 +791,89 @@ after the same checks, and changes nothing.
 
 | Method | Params | Result |
 |---|---|---|
-| `worktree.promote` | `{projectId, worktreeId, dryRun?}` | With `dryRun`, the plan: `{branch, mainPath, worktreePath, mainBranch, dirty, loaded, otherLoaded, sessions, reviewComments, reviewCarried, ignored, ignoredCount, hiddenChanges, hiddenChangesCount}` (`mainBranch`: what the main checkout is on now, `null` when detached; `sessions`: each `{title, provider, carried, reason?}`; `ignored` and `hiddenChanges` as `move.prepare`'s: they are deleted with the worktree). Else `{worktreeId, moved, notes}`: the main checkout's worktree id, the ids of the sessions that moved, and one line per thing that did not come along. `BAD_REQUEST` for a main checkout, a detached HEAD, an untracked nested git repository, or uncommitted work over 64 MiB or not UTF-8; `CONFLICT` when the main checkout has uncommitted changes, or while another promote or demote changes the repository |
-| `worktree.demote` | `{projectId, repoId, dryRun?}` | The same plan (`worktreePath`: the new worktree, `<repo>-<branch>`; `mainBranch`: the default branch the main checkout goes back to; no `ignored` or `hiddenChanges`: the main checkout keeps them), else `{worktreeId, moved, notes}` with the new worktree's id. `BAD_REQUEST` when the main checkout is on the default branch, on a detached HEAD, or the default branch can't be told (`origin/HEAD`, else `master`/`main`); `CONFLICT` when the default branch is checked out in another worktree, the path exists, or another promote or demote runs |
-| `promote.answer` | `{projectId, requestId, outcome, worktreeId?, error?}` | `{accepted}`: a window's answer to a `promote.request` (`outcome` `declined`, `promoted` with the main checkout's `worktreeId`, or `failed` with an `error` of at most 2000 characters); `false` when the request is unknown or another window answered first |
+| `worktree.promote` | `{projectId, worktreeId, dryRun?, requestId?}` | With `dryRun`, the plan: `{branch, mainPath, worktreePath, mainBranch, dirty, loaded, otherLoaded, sessions, reviewComments, reviewCarried, ignored, ignoredCount, hiddenChanges, hiddenChangesCount, mainIgnored, mainIgnoredCount, overwrittenIgnored, overwrittenIgnoredCount}` (`mainBranch`: what the main checkout is on now, `null` when detached; `sessions`: each `{title, provider, carried, reason?}`; `ignored` and `hiddenChanges` as `move.prepare`'s: they are deleted with the worktree; `mainIgnored`: the main checkout's ignored files and folders, which stay; `overwrittenIgnored`: those of its ignored files the branch tracks, which the switch overwrites, as git does without asking; each list at most 50, the counts complete). Else `{worktreeId, moved, notes, recoveryFile?}`: the main checkout's worktree id, the ids of the sessions that moved, one line per thing that did not come along, and the copy of the work kept when the worktree's folder could not be fully removed. `requestId`: the `promote.request` this promote answers (see below): it must be this project's and this worktree's (`NOT_FOUND`, `BAD_REQUEST`), not claimed by another connection or already running (`CONFLICT`); the server settles it with this promote's result. `BAD_REQUEST` for a main checkout, a detached HEAD, an untracked nested git repository, or uncommitted work over 64 MiB or not UTF-8; `CONFLICT` when the main checkout has uncommitted changes, the worktree is locked (`git worktree lock`), something changed while it ran (see below), or while another promote or demote changes the repository; `IN_USE` when another project has the worktree loaded |
+| `worktree.demote` | `{projectId, repoId, dryRun?}` | The same plan (`worktreePath`: the new worktree, `<repo>-<branch>`; `mainBranch`: the default branch the main checkout goes back to; no `ignored` or `hiddenChanges`: the main checkout keeps them; `mainIgnored`: its ignored files, which stay there, so the new worktree does not have them; `overwrittenIgnored`: those the default branch tracks), else `{worktreeId, moved, notes}` with the new worktree's id (the main checkout's, with `moved` empty and a note, when the worktrees could not be re-read after the commitment). `BAD_REQUEST` when the main checkout is on the default branch, on a detached HEAD, or the default branch can't be told (`origin/HEAD`, else `master`/`main`); `CONFLICT` when the default branch, or the branch itself, is checked out in another worktree, the path exists, something changed while it ran, or another promote or demote runs; `IN_USE` when another project has the main checkout loaded |
+| `promote.listen` | `{projectId, listen?}` | `null`: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer). Only listening connections that are subscribed to the project's topic count as windows and get `promote.request`; a closed connection stops listening |
+| `promote.claim` | `{projectId, requestId}` | `{accepted}`: the user confirmed a `promote.request`. Sent before anything else (the teardown included); the first claim wins, `false` when the request is unknown, ended or claimed already |
+| `promote.answer` | `{projectId, requestId, outcome, error?}` | `{accepted}`: `outcome` `declined` (while nobody has claimed the request, or by its claimant before its promote starts), or `failed` with an `error` of at most 2000 characters (only by its claimant, before its promote starts: a teardown that failed). `promoted` is refused (`BAD_REQUEST`): the claimant's `worktree.promote {requestId}` settles it. `false` when late, or not the claimant's |
+
+While a promote or demote runs, `worktree.remove`, `worktree.pull` and the `move.*` methods that read
+or change a checkout of that repository (`prepare`, `export`, `history`, `finish`, `receive`,
+`unreceive`) answer `CONFLICT`.
 
 `worktree.promote`, in order, with the worktree's and the main checkout's paths blocked for
-`session.start` and `worktree.load` throughout: the worktree's sessions stop if it is loaded; its
-uncommitted work is packed as `move.export`'s patch is (the same config-proof plumbing, its
-linked symlinks left out); the main checkout switches to the branch (`git switch
---ignore-other-worktrees`: the worktree still has it); the patch is applied there (all unstaged);
-the main checkout's own patch, built the same way, must match it (by `patchDigest`), else
-`GIT_ERROR`; then the worktree is removed (`git worktree remove --force`), the point of
-commitment. A failure before that switches the main checkout back (discarding what the switch
-wrote: it was clean), takes the applied work off again (`git apply -R`), loads the worktree again
-if it was loaded, and answers the error; the worktree is as it was. After it: the sessions whose
-agent can follow a folder change (Claude and Local: their history moves, `rename`, from
-`~/.claude/projects/<the worktree's path>` to the main checkout's) move to the main checkout's row
-with their queues, types and prompts; others are closed and named in `notes`. They resume there
-when either checkout was loaded (the main checkout is loaded if it was not, which resumes its own
-saved sessions too); the main checkout's own sessions keep running, now on the branch. The review
-draft moves when the main checkout has none (else it is dropped, in `notes`); the branch data and
-the PR watch are the branch's, so they stay; a PR notice moves to the main checkout.
+`session.start` and `worktree.load` from before its checks are made again (the worktree's until its
+row is gone, the main checkout's until the sessions resume): the worktree is unloaded (whatever the
+check read) and the server waits for its agents' processes to exit (5 s, then SIGKILL, then 1 s
+more; one still running is `CONFLICT`); its uncommitted work is packed as `move.export`'s patch is
+(the same config-proof plumbing, its linked symlinks left out) and saved to a recovery file,
+`<data dir>/promote-recovery/<repo>-<branch>-<time>.patch` (0600); the main checkout switches to
+the branch (`git switch --ignore-other-worktrees`: the worktree still has it); the patch is applied
+there (all unstaged); the main checkout's own patch, built the same way, must match it (by
+`patchDigest`), else `GIT_ERROR`; and the worktree's must still match it, else `CONFLICT` (it
+changed). That is the point of commitment. Then the worktree is removed (`git worktree remove
+--force`): a removal that fails (a folder it may not delete) is a note (`could not be fully
+removed …; its work is in the main checkout; remove it yourself`, naming the recovery file, which
+is kept and returned as `recoveryFile`), and everything else goes on. A failure before the
+commitment puts things back, but never discards what the promote did not write itself: the main
+checkout is put back (the applied work taken off with `git apply -R`, then switched back with
+`--discard-changes`) only while its uncommitted work is exactly the patch (or nothing, before the
+apply); otherwise one of its own running sessions changed it, and it is left as it is, on the
+branch with the work and those changes: the error is `CONFLICT` and says so. The worktree is
+untouched either way and loaded again if it was loaded. Every failure names the recovery file;
+it is deleted once all went well. After the commitment: the sessions whose agent can follow a
+folder change (Claude and Local: their history moves, `rename`, from `~/.claude/projects/<the
+worktree's path>` to the main checkout's, the conversation's `<id>.jsonl` and its `<id>/` folder of
+subagent transcripts and tool results) move to the main checkout's row with their queues, types and
+prompts; others are closed and named in `notes`. They resume there when either checkout was loaded
+(the main checkout is loaded if it was not, which resumes its own saved sessions too); the main
+checkout's own sessions keep running, now on the branch. The review draft moves when the main
+checkout has none (else it is dropped, in `notes`); the branch data and the PR watch are the
+branch's, so they stay; a PR notice moves to the main checkout.
 
 `worktree.demote`, in order, with both paths blocked: the main checkout's sessions that can follow
-stop (the others keep running); a worktree is added for the branch at `<repo>-<branch>` (`git
-worktree add --force`: the main checkout still has it) and the repository's `linkedDirs` are
-linked into it; the main checkout's uncommitted work is packed (leaving out what the new worktree
-links: that is shared, and stays), applied in the new worktree and checked by digest; it is taken
-off the main checkout (`git apply -R`, then its index reset with `git reset -- .`, a copy of it
-kept); and the main checkout switches to the default branch, the point of commitment. A failure
-before that puts the main checkout back (its branch, its index, its work), removes the new
-worktree and resumes the stopped sessions. After it: the sessions that can follow move to the new
-worktree's row (resumed if the main checkout was loaded), the review draft and a PR notice move
-too, and the branch gets the first workflow tag if it has none, as `worktree.create` does.
+stop and the server waits for them to exit (the others keep running); a worktree is added for the
+branch at `<repo>-<branch>` (`git worktree add --force`: the main checkout still has it) and the
+repository's `linkedDirs` are linked into it; the main checkout's uncommitted work is packed
+(leaving out what the new worktree links: that is shared, and stays), saved to a recovery file,
+applied in the new worktree and checked by digest; the main checkout's must still match it
+(`CONFLICT`: one of its sessions changed it); it is taken off the main checkout (`git apply -R`,
+then its index reset with `git reset -- .`, a copy of it kept); and the main checkout switches to
+the default branch, the point of commitment. A failure before that puts the main checkout back
+(its branch, its index, its work), removes the new worktree and resumes the stopped sessions;
+but a main checkout that holds anything but its branch's files when its switch failed (a write by
+a session that stayed, or a switch that failed part way) is left as it is and the new worktree,
+which has its work, is kept: `CONFLICT`, saying so. After it: the sessions that can follow move to
+the new worktree's row (resumed if the main checkout was loaded), the review draft and a PR notice
+move too, and the branch gets the first workflow tag if it has none, as `worktree.create` does.
+If the worktrees can't be re-read after the commitment, the sessions stay in the main checkout
+(resumed if they ran) and the answer is the main checkout's id with a note.
 
-**promote_to_primary.** The trek-dev tool asks the project's windows: the server sends
-`promote.request` `{projectId, requestId, worktreeId, branch, from?}` (`from`: the title of the
-session that asked) to every connection subscribed to the project's topic. A window shows the
-same confirmation its menu item does and, once the user answers, runs the promote itself
-(`worktree.promote`), then answers `promote.answer` with what came of it. The first answer
-settles the request, and every subscriber hears `promote.settled` `{projectId, requestId}`: a
-window whose dialog is still open does nothing with its user's answer (the Trek app says another
-window answered). The tool fails when nobody has the project open (at the call, or later: the
-server checks every 5 s), when nobody answers within 15 minutes, when the user declines, or when
-the promote fails; it returns `{promoted: true, primary}`, `primary` a `list_worktrees` entry.
+**promote_to_primary.** A window that can confirm a promote says so with `promote.listen
+{projectId}` (the Trek app's windows and the web client, while they have the `promote` feature).
+The trek-dev tool asks those windows: the server sends `promote.request` `{projectId, requestId,
+worktreeId, branch, from?}` (`from`: the title of the session that asked) to every listening
+connection still subscribed to the project's topic. A window shows the same confirmation its
+menu item does. When its user confirms, it sends `promote.claim` first, before any teardown: the
+first claim wins (`accepted: false` for the others), and every subscriber hears `promote.settled`
+`{projectId, requestId, claimed: true}`, on which the other windows close their dialog (their
+answers do nothing now); the claimant carries on. The claimant tears the dev stack and VM down,
+then sends `worktree.promote {projectId, worktreeId, requestId}`; the server settles the request
+with that promote's own result (the main checkout's id, or its error). If its teardown fails, it
+answers `promote.answer {outcome: 'failed', error}`. A claim with no `worktree.promote` within 5
+minutes, or whose connection closes before it, fails the request. A user who declines answers
+`promote.answer {outcome: 'declined'}`. When the request ends, every subscriber hears
+`promote.settled {projectId, requestId}`.
+
+One request per worktree at a time: a second call for it while one waits joins it and gets the
+same outcome. The tool fails when no window listens (at the call, or later before a claim: the
+server checks every 5 s), when nobody claims or declines within 15 minutes, when the user
+declines, or when the promote fails; it returns `{promoted: true, primary}`, `primary` a
+`list_worktrees` entry. Its callers going away (their MCP calls dropped) cancels the request only
+before a claim. Once one is claimed it settles as the promote does: an asking agent that ran in
+the worktree is stopped by the promote, so its call drops; when the request settles, a prompt
+saying how it went (`The promote you asked for (promote_to_primary) went through: …` or `… failed:
+…`) is queued on the asking session (`terminalId`), wherever it now is, and never sent by itself.
 
 ## Sessions
 
@@ -1213,7 +1252,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `start_stack` | `worktree`; `starter?` (boolean) | the stack as `get_stack` describes it, once `stack.sh up` is started; `BAD_REQUEST` when it is not stopped |
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
 | `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
-| `promote_to_primary` | `worktree`; `terminalId?` (named in the dialog) | `{promoted: true, primary}` once a window confirmed and promoted (see [Promote to primary](#promote-to-primary)); `BAD_REQUEST` when the user declines, nobody answers in 15 minutes, or no window has the project open; `GIT_ERROR` when the promote failed |
+| `promote_to_primary` | `worktree`; `terminalId?` (named in the dialog; the session that hears the outcome in its queue if its call drops) | `{promoted: true, primary}` once a window confirmed and promoted (see [Promote to primary](#promote-to-primary)); a second call for the same worktree joins the first; `BAD_REQUEST` when the user declines, nobody answers in 15 minutes, or no window listens; `GIT_ERROR` when the promote failed |
 
 That is 30 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
@@ -1279,8 +1318,8 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
 | `voice.summary` | `{projectId, sessionId, text, audio}`: a session's spoken summary (`speak_summary`), an mp3 in base64, to every connection subscribed to the project's topic (not one more than 4 MiB behind) |
-| `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's subscribers to confirm a promote; one answers with `promote.answer` (see [Promote to primary](#promote-to-primary)) |
-| `promote.settled` | `{projectId, requestId}`: that request was answered or ended; close its dialog |
+| `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
+| `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
 | `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: the server's Linear or ElevenLabs key, or its voice settings, changed (by any client), to every authenticated connection; re-read `linear.status` / `voice.settings` (see [Linear, voice and skills](#linear-voice-and-skills)). `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 
 ## Several clients

@@ -12,6 +12,7 @@ import { requireAbsolutePath, requireBoolean, requireBranch, requireString } fro
 import type { V2Context } from './v2.ts'
 import { checkPath, checkSource } from './review/draft.ts'
 import { MAX_REVIEW_COMMENTS } from '../../src/shared/review.ts'
+import { assertNotPromoting } from './promote/changing.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -186,6 +187,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     const force = p.force === undefined ? false : requireBoolean(p.force, 'force')
     const { repo, worktree } = locate(ctx.projects.require(p.projectId), p.worktreeId)
     if (worktree.isMain) throw bad('the main worktree cannot be removed')
+    assertNotPromoting(repo.path)
     const key = real(worktree.path)
     const running = [...ctx.projects.all()]
       .filter((project) => project.repositories.some((r) => r.worktrees.some((w) => w.loaded && real(w.path) === key)))
@@ -231,6 +233,7 @@ export const worktreeHandlers: Record<string, Handler> = {
 
   'worktree.pull': async (p, ctx) => {
     const { repo, worktree, branch } = await checkedOut(ctx, p)
+    assertNotPromoting(repo.path)
     await viaGit(() => gitService.pull(worktree.path, branch))
     await ctx.poller.refresh(repo.path, { status: true })
     return null

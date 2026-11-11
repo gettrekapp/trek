@@ -74,6 +74,8 @@ export interface ServerOptions {
   integrations?: Integrations
   /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
   prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
+  /** Where a promote or demote saves a copy of the work it carries (5e, `<dataDir>/promote-recovery`; default: the temp dir) */
+  promoteRecoveryDir?: string
   /**
    * The web client (5c-3, `start --web`): its built files, served over HTTP with the sign-in
    * form, and browser sessions signed in by cookie. Without it HTTP answers 426 as before.
@@ -399,6 +401,7 @@ export function startServer(
         integrationsChanged,
         prWatch,
         promoteRequests,
+        promoteRecoveryDir: options.promoteRecoveryDir,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -435,6 +438,8 @@ export function startServer(
       authed.delete(ws)
       webSignIns?.delete(ws)
       hub.unsubscribeAll(subscriber)
+      // A promote_to_primary request this window claimed but had not started fails.
+      promoteRequests.forget(subscriber)
       // PTYs keep running — the client reattaches on its next connection.
       sessions.terminals.detachAll(terminal)
     })
