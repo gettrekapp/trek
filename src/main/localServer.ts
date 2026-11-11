@@ -16,7 +16,6 @@ import {
   copyFileSync,
   existsSync,
   fstatSync,
-  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
@@ -32,7 +31,7 @@ import {
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
-import { parseLocalInfo, type LocalInfo } from '../shared/localServer.ts'
+import { parseLocalInfo, parseLockText, type LocalInfo } from '../shared/localServer.ts'
 import { globalSocketFactory } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import {
@@ -137,16 +136,16 @@ function readInfo(): LocalInfo | undefined {
   }
 }
 
-/** local.lock's pid, its mtime, and which file it is (fstat of the file read, as the server's readLock). */
-function readLock(): ({ pid: number; mtimeMs: number } & FileId) | undefined {
+/** local.lock's pid and nonce, its mtime, and which file it is (fstat of the file read, as the server's readLock). */
+function readLock(): ({ pid: number; nonce: string | undefined; mtimeMs: number } & FileId) | undefined {
   try {
     const fd = openSync(profile().lock, 'r')
     try {
       const st = fstatSync(fd)
       if (!st.isFile()) return undefined
-      const text = readFileSync(fd, 'utf8').trim()
-      if (!/^\d+$/.test(text)) return undefined
-      return { pid: Number(text), mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino, ctimeMs: st.ctimeMs }
+      const parsed = parseLockText(readFileSync(fd, 'utf8'))
+      if (!parsed) return undefined
+      return { ...parsed, mtimeMs: st.mtimeMs, dev: st.dev, ino: st.ino, ctimeMs: st.ctimeMs }
     } finally {
       closeSync(fd)
     }
@@ -528,9 +527,11 @@ async function reset(): Promise<void> {
     return
   }
   if (decision === 'reset' && lock) {
-    // Only the lock judged above (same device, inode and ctime): a start that took it meanwhile keeps it.
+    // Only the lock judged above (read again: the same pid and nonce in the same file), so a
+    // start that took it meanwhile keeps it, even if its file got the old one's inode and ctime.
     try {
-      if (sameFile(lock, lstatSync(profile().lock))) unlinkSync(profile().lock)
+      const now = readLock()
+      if (now && now.pid === lock.pid && now.nonce === lock.nonce && sameFile(lock, now)) unlinkSync(profile().lock)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         fail(`Could not remove the lock (${profile().lock}): ${(err as Error).message}`, true)

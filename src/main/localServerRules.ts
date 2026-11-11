@@ -344,8 +344,9 @@ export interface FileId {
 }
 
 /**
- * The same file: device, inode and ctime (as the server's localLock.ts sameFile). Reset
- * unlinks the lock only if it is still the one it judged, not one a start wrote meanwhile.
+ * The same file: device, inode and ctime (part of the server's localLock.ts sameLock). Reset
+ * unlinks the lock only if it is still the one it judged, not one a start wrote meanwhile:
+ * this and the same pid and nonce (a filesystem may give the new file the old one's inode and ctime).
  */
 export function sameFile(a: FileId, b: FileId): boolean {
   return a.dev === b.dev && a.ino === b.ino && a.ctimeMs === b.ctimeMs

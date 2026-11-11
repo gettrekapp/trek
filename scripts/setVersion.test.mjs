@@ -35,3 +35,19 @@ test('compareVersions: numeric parts, and a prerelease below its release', () =>
   assert.ok(compareVersions('0.3.0', '0.2.0') > 0)
   assert.ok(compareVersions('0.3.0-rc.1', '0.3.0-rc.2') < 0)
 })
+
+test('compareVersions: prereleases by semver precedence', () => {
+  // The semver spec's own example, in order.
+  const order = ['1.0.0-alpha', '1.0.0-alpha.1', '1.0.0-alpha.beta', '1.0.0-beta', '1.0.0-beta.2', '1.0.0-beta.11', '1.0.0-rc.1', '1.0.0']
+  for (let i = 0; i < order.length; i++) {
+    for (let j = 0; j < order.length; j++) {
+      const c = compareVersions(order[i], order[j])
+      assert.ok(Math.sign(c) === Math.sign(i - j), `${order[i]} vs ${order[j]}: ${c}`)
+    }
+  }
+  assert.ok(compareVersions('0.3.0-rc.2', '0.3.0-rc.10') < 0, 'numeric identifiers numerically')
+  assert.ok(compareVersions('0.3.0-rc.10', '0.3.0-rc.10.1') < 0, 'more identifiers: higher')
+  assert.ok(compareVersions('0.3.0-rc-1', '0.3.0-rc-2') < 0, 'a hyphen inside the prerelease is kept')
+  assert.ok(compareVersions('0.3.0-x-1.2', '0.3.0-x-1.10') < 0, 'everything after the first hyphen')
+  assert.equal(compareVersions('0.3.0-rc.1', '0.3.0-rc.1'), 0)
+})

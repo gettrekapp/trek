@@ -1,4 +1,4 @@
-// scripts/fix-pty-helper.mjs — run by postinstall.
+// scripts/fix-pty-helper.mjs — run by postinstall (scripts/postinstall.mjs).
 //
 // node-pty's prebuilt `spawn-helper` binaries can arrive from npm without their execute bit, and
 // every pty spawned from plain Node (trek-server, the unit tests) then fails with

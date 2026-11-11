@@ -39,6 +39,30 @@ export const LOCAL_CONFIG_FILE = 'config.json'
 export const LOCAL_INFO_FILE = 'local.json'
 /** Holds the local server's pid from before it reads its config until it exits */
 export const LOCAL_LOCK_FILE = 'local.lock'
+
+/** A lock's contents: its pid, and the nonce the start that wrote it chose (undefined in an older server's lock). */
+export interface LockText {
+  pid: number
+  nonce: string | undefined
+}
+
+/**
+ * local.lock's text: `<pid>\n<nonce>\n` (the nonce is 32 hex digits, random per start), or an
+ * older server's `<pid>\n`. The nonce tells two locks apart that a filesystem gave the same
+ * inode and ctime (ext4 reuses a deleted file's inode at once, and its ctime is coarse).
+ * Anything else, a pid that is not all digits included, is undefined: the lock holds no pid.
+ */
+export function parseLockText(text: string): LockText | undefined {
+  const m = /^(\d+)(?:[ \t]*\r?\n[ \t]*([0-9a-f]{32}))?$/.exec(text.trim())
+  if (!m) return undefined
+  const pid = Number(m[1])
+  return Number.isSafeInteger(pid) && pid > 0 ? { pid, nonce: m[2] } : undefined
+}
+
+/** The text a start writes into local.lock. */
+export function lockText(pid: number, nonce: string): string {
+  return `${pid}\n${nonce}\n`
+}
 /** The name the local server's generated token is saved under in its config */
 export const LOCAL_TOKEN_NAME = 'local'
 /** `trek-server start --local` exits with this when another local server holds the lock */

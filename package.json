@@ -6,7 +6,7 @@
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
-    "postinstall": "node scripts/fix-pty-helper.mjs && npm --prefix server install && npm --prefix relay install",
+    "postinstall": "node scripts/postinstall.mjs",
     "dev": "npm run build:server && electron-vite dev",
     "build": "electron-vite build && npm run build:web && npm run build:server",
     "build:web": "vite build --config vite.web.config.ts",

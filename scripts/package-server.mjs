@@ -47,7 +47,10 @@ if ! command -v "$node" >/dev/null 2>&1; then
   exit 127
 fi
 major=$("$node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-if [ "$major" -lt 22 ] 2>/dev/null; then
+# Anything but digits (not a Node, a wrapper printing more) counts as too old: \`[ -lt ]\` would
+# fail on it and let it through.
+case $major in ''|*[!0-9]*) major=0 ;; esac
+if [ "$major" -lt 22 ]; then
   echo "trek-server: Node.js 22 or later is needed; $("$node" --version 2>/dev/null) is $(command -v "$node")" >&2
   exit 1
 fi

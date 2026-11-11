@@ -12,10 +12,12 @@ import {
   holdsLock,
   lockDecision,
   pidAlive,
+  readLock,
   readLockPid,
   releaseLock,
   removeStaleTemps
 } from '../server/src/localLock.ts'
+import { lockText, parseLockText } from '../src/shared/localServer.ts'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-lock-')))
@@ -49,7 +51,7 @@ test('acquireLock creates a 0700 directory and a 0600 lock holding the pid, with
   const dir = join(tempDir(t), 'profile')
   const path = join(dir, 'local.lock')
   assert.deepEqual(acquireLock(path, 100, alive), { ok: true })
-  assert.equal(readFileSync(path, 'utf8'), '100\n')
+  assert.match(readFileSync(path, 'utf8'), /^100\n[0-9a-f]{32}\n$/, 'the pid, then a nonce')
   assert.equal(statSync(path).mode & 0o777, 0o600)
   assert.equal(statSync(dir).mode & 0o777, 0o700)
   assert.deepEqual(readdirSync(dir), ['local.lock'])
@@ -98,6 +100,27 @@ test('a lock holding garbage around digits is not a pid', (t) => {
   }
   writeFileSync(path, ' 42 \n')
   assert.equal(readLockPid(path), 42)
+  for (const text of ['42\nxyz', '42\n' + 'a'.repeat(31), '42\n' + 'A'.repeat(32), '42\n' + 'a'.repeat(32) + '\nmore']) {
+    writeFileSync(path, text)
+    assert.equal(readLockPid(path), undefined, JSON.stringify(text))
+  }
+})
+
+test('the lock text: the pid and a nonce; an older server\'s lock (the pid alone) still reads', (t) => {
+  const nonce = '0123456789abcdef0123456789abcdef'
+  assert.deepEqual(parseLockText(lockText(4242, nonce)), { pid: 4242, nonce })
+  assert.deepEqual(parseLockText('4242\n'), { pid: 4242, nonce: undefined })
+  assert.deepEqual(parseLockText(`4242\r\n${nonce}\r\n`), { pid: 4242, nonce })
+  assert.equal(parseLockText('0\n'), undefined)
+  const path = join(tempDir(t), 'local.lock')
+  writeFileSync(path, '4242\n')
+  assert.equal(readLock(path).pid, 4242)
+  assert.equal(readLock(path).nonce, undefined)
+  // Two starts write different nonces.
+  const dir = tempDir(t)
+  acquireLock(join(dir, 'x.lock'), 1, alive)
+  acquireLock(join(dir, 'y.lock'), 1, alive)
+  assert.notEqual(readLock(join(dir, 'x.lock')).nonce, readLock(join(dir, 'y.lock')).nonce)
 })
 
 test('acquireLock keeps the profile directory 0700 even if it already existed looser', (t) => {
@@ -132,6 +155,33 @@ test('two starts taking over the same stale lock: only one wins, and the loser h
   assert.equal(holdsLock(path, 300), false)
   assert.deepEqual(readdirSync(join(path, '..')), ['local.lock'], 'no temp file is left')
 })
+
+// ext4 and overlayfs give a new file a just-deleted file's inode at once, with the same coarse
+// ctime: the re-read below reports the replacement with the stale lock's dev, ino and ctime,
+// as such a filesystem would. Only the nonce tells them apart (the pid is the same too: the
+// stale lock is from before the last boot, and its pid now belongs to the start that replaced it).
+for (const [what, stale] of [['a lock with a nonce', lockText(100, 'f'.repeat(32))], ["an older server's lock", '100\n']]) {
+  test(`a start that replaced the stale lock keeps it on a filesystem that reuses inodes (${what})`, (t) => {
+    const path = join(tempDir(t), 'local.lock')
+    writeFileSync(path, stale)
+    const now = Date.now()
+    const clock = { now: () => now, uptime: () => 600 }
+    utimesSync(path, new Date(now - 3600_000), new Date(now - 3600_000))
+    const judged = readLock(path)
+    let inner
+    const reread = (p) => {
+      // Between start 300's judging and its unlink, start 100 takes the stale lock over.
+      if (inner === undefined) inner = acquireLock(p, 100, alive, clock)
+      const found = readLock(p)
+      return found && { ...found, dev: judged.dev, ino: judged.ino, ctimeMs: judged.ctimeMs }
+    }
+    const outer = acquireLock(path, 300, (pid) => pid === 100, clock, reread)
+    assert.deepEqual(inner, { ok: true, tookOver: 100 })
+    assert.deepEqual(outer, { ok: false, holder: 100 })
+    assert.equal(holdsLock(path, 100), true)
+    assert.deepEqual(readdirSync(join(path, '..')), ['local.lock'], 'no temp file is left')
+  })
+}
 
 test('a lock from before the last boot is taken over even if its pid is alive', (t) => {
   const path = join(tempDir(t), 'local.lock')

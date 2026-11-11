@@ -5,14 +5,18 @@
 #   version      the tag matches the three package.json versions
 #   ci           ci.yml (typecheck, unit tests, build, Node smokes, the phone's export)   ┐ gate
 #   macos-smokes macos-smokes.yml (the Electron smokes, one at a time)                    ┘
-#   mac-app      Trek-X.Y.Z-arm64.dmg: signed (Developer ID), hardened runtime, notarized and
-#                stapled; verified, then the packaged-app smokes run against it
+#   mac-app      Trek-X.Y.Z-arm64.dmg: the app signed (Developer ID), hardened runtime, notarized
+#                and stapled, and the dmg notarized and stapled too; verified, then the
+#                packaged-app smokes run against it. The only job with the signing secrets: they
+#                live in the `release` environment (limited to v* tags), not the repository.
 #   server       trek-server-X.Y.Z-<os>-<arch>.tar.gz on a native runner for each platform,
 #                each unpacked and run (scripts/server-tarball-smoke.mjs)
 #   relay        trek-relay-X.Y.Z.cjs (+ .sha256)
-#   release      SHA256SUMS over everything, then `gh release create --draft`
+#   release      SHA256SUMS over everything, then `gh release create --draft` (a re-run that finds
+#                the draft already there uploads into it with --clobber instead)
 #
-# The builds run beside the gate; only `release` waits for all of it.
+# Every job waits for `version`, so a malformed tag stops the run early. The builds then run
+# beside the gate; only `release` waits for all of it.
 name: Release
 
 on:
@@ -57,12 +61,14 @@ jobs:
 
   ci:
     name: 'Gate: CI'
+    needs: version
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
 
   macos-smokes:
     name: 'Gate: macOS smokes'
+    needs: version
     permissions:
       contents: read
     uses: ./.github/workflows/macos-smokes.yml
@@ -71,7 +77,10 @@ jobs:
     name: Trek.app (signed, notarized)
     needs: version
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    # The signing and notarization secrets are the `release` environment's (docs/RELEASING.md):
+    # only this job, on a v* tag the environment allows, can read them.
+    environment: release
     permissions:
       contents: read
     env:
@@ -97,7 +106,7 @@ jobs:
             fi
           fi
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error title=Release not signed::The release builds a signed, notarized Trek.app and refuses to ship an unsigned one. Missing repository secrets: ${missing[*]}. See docs/RELEASING.md."
+            echo "::error title=Release not signed::The release builds a signed, notarized Trek.app and refuses to ship an unsigned one. Missing secrets in the release environment: ${missing[*]}. See docs/RELEASING.md."
             exit 1
           fi
           if [ "$HAS_API_KEY" = true ]; then echo "Notarizing with the App Store Connect API key"; else echo "Notarizing with the Apple ID"; fi
@@ -120,6 +129,9 @@ jobs:
       # hardened runtime and build/entitlements.mac*.plist, notarizes the app and staples it, then
       # makes the dmg. The bundled trek-server (out/server, JavaScript inside app.asar) runs on the
       # signed Electron binary (ELECTRON_RUN_AS_NODE), so it has nothing of its own to sign.
+      # Then the dmg itself is notarized and stapled (notarytool, the same credentials), so a
+      # downloaded dmg opens without Gatekeeper going online. The dmg is not signed: electron-builder
+      # advises against it (dmg.sign), and the stapled ticket is what Gatekeeper checks.
       - name: Package, sign and notarize
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -131,16 +143,34 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
           if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
             # The API key wins: electron-builder would use the Apple ID first if both were set.
             unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
             key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            # Removed however this step ends, electron-builder or the notary failing included.
+            trap 'rm -f "$RUNNER_TEMP"/AuthKey_*.p8' EXIT
             (umask 077; printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
             export APPLE_API_KEY="$key"
+            notary=(--key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+          else
+            notary=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
           fi
           unset APPLE_API_KEY_P8
           npx electron-builder --mac --arm64 --publish never
-          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+
+          dmg="dist/Trek-$VERSION-arm64.dmg"
+          # Judged by the status it reports, not its exit code; a failure prints the notary's log.
+          result=$(xcrun notarytool submit "$dmg" "${notary[@]}" --wait --timeout 45m --output-format json) || true
+          echo "$result"
+          status=$(node -e 'try { process.stdout.write(String(JSON.parse(process.argv[1]).status)) } catch { process.stdout.write("no answer") }' "$result")
+          if [ "$status" != Accepted ]; then
+            id=$(node -e 'try { process.stdout.write(String(JSON.parse(process.argv[1]).id ?? "")) } catch {}' "$result")
+            [ -z "$id" ] || xcrun notarytool log "$id" "${notary[@]}" || true
+            echo "::error title=dmg not notarized::The notary service says \"$status\" for $dmg (its log is above)"
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
       - name: Verify the signature, hardened runtime, notarization and node-pty
         run: |
           set -euo pipefail
@@ -148,19 +178,24 @@ jobs:
           dmg="dist/Trek-$VERSION-arm64.dmg"
           test -d "$app" && test -f "$dmg"
           codesign --verify --deep --strict --verbose=2 "$app"
+          # Each output is captured, then grepped from a here-string: `cmd | grep -q` under pipefail
+          # can fail when grep exits at its first match and cmd gets SIGPIPE.
           info=$(codesign -dv --verbose=4 "$app" 2>&1)
-          echo "$info" | grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp|CodeDirectory)'
-          echo "$info" | grep -q '^Authority=Developer ID Application' || { echo "::error::Trek.app is not signed with a Developer ID Application certificate"; exit 1; }
-          echo "$info" | grep -Eq 'flags=.*runtime' || { echo "::error::Trek.app is not signed with the hardened runtime"; exit 1; }
-          codesign -d --entitlements - "$app" 2>/dev/null | grep -q 'com.apple.security.automation.apple-events' || { echo "::error::Trek.app lacks its entitlements"; exit 1; }
+          grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp|CodeDirectory)' <<<"$info"
+          grep -q '^Authority=Developer ID Application' <<<"$info" || { echo "::error::Trek.app is not signed with a Developer ID Application certificate"; exit 1; }
+          grep -Eq 'flags=.*runtime' <<<"$info" || { echo "::error::Trek.app is not signed with the hardened runtime"; exit 1; }
+          entitlements=$(codesign -d --entitlements - "$app" 2>/dev/null)
+          grep -q 'com.apple.security.automation.apple-events' <<<"$entitlements" || { echo "::error::Trek.app lacks its entitlements"; exit 1; }
           # Every Mach-O under app.asar.unpacked (node-pty): signed, hardened, and spawn-helper executable.
           unpacked="$app/Contents/Resources/app.asar.unpacked"
           found=0
           while IFS= read -r f; do
-            if file -b "$f" | grep -q Mach-O; then
+            kind=$(file -b "$f")
+            if grep -q Mach-O <<<"$kind"; then
               found=$((found + 1))
               codesign --verify --strict "$f"
-              codesign -dv "$f" 2>&1 | grep -Eq 'flags=.*runtime' || { echo "::error::$f is not signed with the hardened runtime"; exit 1; }
+              sig=$(codesign -dv "$f" 2>&1)
+              grep -Eq 'flags=.*runtime' <<<"$sig" || { echo "::error::$f is not signed with the hardened runtime"; exit 1; }
               case $f in */spawn-helper) [ -x "$f" ] || { echo "::error::$f is not executable"; exit 1; } ;; esac
               echo "signed: ${f#"$unpacked/"}"
             fi
@@ -168,6 +203,8 @@ jobs:
           [ "$found" -gt 0 ] || { echo "::error::no native files under app.asar.unpacked: node-pty is missing"; exit 1; }
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=4 "$app"
+          # The dmg carries its own notarization ticket.
+          xcrun stapler validate "$dmg"
           # The app inside the dmg is the stapled one.
           mnt="$RUNNER_TEMP/trek-dmg"
           hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
@@ -310,6 +347,18 @@ jobs:
 
           The phone app is built and shipped with EAS, not here.
           EOF
+          # A re-run (the draft was made, then a later step or the run failed): upload into the
+          # existing draft, replacing same-named assets. A published release is never touched.
+          if draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$draft" != true ]; then
+              echo "::error::The release $TAG is already published: not replacing its assets"
+              exit 1
+            fi
+            echo "The draft release $TAG exists: uploading into it (--clobber)"
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber artifacts/*
+            exit 0
+          fi
+          # notes.md comes first in the release notes, then GitHub's generated ones.
           flags=(--draft --verify-tag --title "Trek $VERSION" --notes-file notes.md --generate-notes)
-          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}" artifacts/*

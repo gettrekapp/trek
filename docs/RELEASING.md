@@ -4,9 +4,9 @@ Three GitHub Actions workflows live in `.github/workflows/`:
 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
-| `ci.yml` (CI) | every push to a branch, every pull request; called by `release.yml` | Linux (ubuntu-latest, Node 22): typecheck the app, trek-server and trek-relay; `npm test`; `npm run build` and `npm run build:relay`; the Node-only smokes (`server` smoke on the built bundle, `smoke:client`, `smoke:push`); the phone app's typecheck and `expo export` for iOS and Android. A newer push to the same branch or PR cancels the older run (not on `main`). |
+| `ci.yml` (CI) | every pull request, every push to `main`, by hand (Run workflow); called by `release.yml` | Linux (ubuntu-latest, Node 22): `npm ci`, which runs `npm ci` in `server/` and `relay/` too (`scripts/postinstall.mjs`), so every lockfile is enforced; typecheck the app, trek-server and trek-relay; `npm test`; `npm run build` and `npm run build:relay`; the Node-only smokes (`server` smoke on the built bundle, `smoke:client`, `smoke:push`); the phone app's typecheck and `expo export` for iOS and Android. A newer push to the same PR cancels the older run (not on `main`). A push to any other branch runs nothing by itself (open a PR, or Run workflow), so a PR's branch is not tested twice per push. |
 | `macos-smokes.yml` (macOS smokes) | nightly at 07:17 UTC, by hand, and called by `release.yml` | macOS arm64: `npm test` (with the macOS-only sandbox tests), one `npm run build`, then every Electron smoke one at a time (`smoke:local`, `windows`, `providers`, `v2`, `local-app`, `local-window`, `local-features`, `server-env`, `server-integrations`, `server-prwatch`, `server-review`, `server-web`, `server-move`, `server-promote`, `server-pairing`, `import`). Each smoke runs even if an earlier one failed, so one run shows every failure. |
-| `release.yml` (Release) | a pushed tag `v*` | Checks the version, runs both workflows above as its gate, builds and checks every artifact, and creates a **draft** GitHub Release. |
+| `release.yml` (Release) | a pushed tag `v*` | Checks the version (every other job waits for it, so a malformed tag stops there), runs both workflows above as its gate, builds and checks every artifact, and creates a **draft** GitHub Release. |
 
 The phone app (`apps/mobile`) is not released here: EAS builds and submits it (see
 `apps/mobile/README.md`). CI only checks that it typechecks and bundles.
@@ -38,18 +38,24 @@ version (0.2.0 today). A version with a prerelease part (`0.3.0-rc.1`) makes a p
 
 3. Watch **Actions → Release**. It takes the longest of: the macOS smokes (about an hour), the
    signed app (notarization usually takes 5–15 minutes), the server tarballs.
-4. When it is green, open the draft under **Releases**, edit the notes (they start from GitHub's
-   generated notes), and publish it.
+   The `mac-app` job runs in the `release` environment: if you gave it a required reviewer, it
+   waits for an approval (**Review deployments** on the run's page) before it starts.
+4. When it is green, open the draft under **Releases**, edit the notes, and publish it. The
+   notes start with the workflow's own (the list of files and how to check them), followed by
+   GitHub's generated notes (the merged PRs since the last release).
 
 If the release fails, fix the cause on `main`, delete the tag (`git push --delete origin vX.Y.Z`,
 `git tag -d vX.Y.Z`) and any draft it made, and tag again. Re-running the failed jobs on the same
-tag also works when the cause was outside the repo (a flaky smoke, Apple's notary service).
+tag also works when the cause was outside the repo (a flaky smoke, Apple's notary service). A
+re-run whose `release` job finds the draft already there uploads the files into that draft
+(`gh release upload --clobber`, replacing same-named ones) instead of failing; its notes are
+left as they were. It refuses to touch a release that is already published.
 
 ## What the release builds
 
 | Artifact | Built on | Checked by |
 | --- | --- | --- |
-| `Trek-X.Y.Z-arm64.dmg` | macos-latest (arm64) | `codesign --verify --deep --strict`; a Developer ID Application signature with the hardened runtime and the entitlements; every Mach-O under `app.asar.unpacked` (node-pty's `pty.node` and `spawn-helper`) signed with the hardened runtime and `spawn-helper` executable; `stapler validate` and `spctl --assess` on the app and on the app inside the dmg; then `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` on the signed app |
+| `Trek-X.Y.Z-arm64.dmg` | macos-latest (arm64) | `codesign --verify --deep --strict`; a Developer ID Application signature with the hardened runtime and the entitlements; every Mach-O under `app.asar.unpacked` (node-pty's `pty.node` and `spawn-helper`) signed with the hardened runtime and `spawn-helper` executable; `stapler validate` and `spctl --assess` on the app, `stapler validate` on the notarized dmg and on the app inside it; then `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` on the signed app |
 | `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `scripts/server-tarball-smoke.mjs` |
 | `trek-server-X.Y.Z-darwin-x64.tar.gz` | macos-15-intel | 〃 |
 | `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | 〃 |
@@ -69,8 +75,13 @@ binaries). The bundled Local trek-server (`out/server/trek-server.cjs`) is JavaS
 `app.asar`, run by the signed Electron binary with `ELECTRON_RUN_AS_NODE`, so it has no
 signature of its own; node-pty's `pty.node` and `spawn-helper` are in `app.asar.unpacked` and are
 signed with everything else. electron-builder notarizes the app and staples the ticket before it
-makes the dmg; the dmg itself is not signed or notarized separately (the stapled app inside is
-what Gatekeeper checks).
+makes the dmg. Then the workflow notarizes the dmg too (`xcrun notarytool submit --wait`, with
+the same API key or Apple ID; a status other than Accepted fails the job and prints the notary's
+log) and staples its ticket (`xcrun stapler staple`), so a downloaded dmg opens offline without
+Gatekeeper asking Apple; `stapler validate` checks both tickets. The dmg itself is not
+code-signed: electron-builder advises against it (`dmg.sign`), and the stapled ticket is what
+Gatekeeper checks. If Apple ever refuses an unsigned dmg, set `"dmg": { "sign": true }` in
+`package.json`'s `build`.
 
 **The trek-server tarballs** come from `scripts/package-server.mjs`, run on a native runner of
 each platform (node-pty is built for the platform it runs on: compiled from source on Linux,
@@ -91,11 +102,45 @@ node scripts/package-server.mjs --out dist-release
 node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-<os>-<arch>.tar.gz
 ```
 
-## Repository secrets
+## One-time GitHub setup
 
-Settings → Secrets and variables → Actions → **New repository secret**. The release fails at its
-first step, naming what is missing, unless the certificate and one notarization method are set;
-it never ships an unsigned app.
+The signing and notarization secrets live in a GitHub **environment** named `release`, not in the
+repository's secrets: only the `mac-app` job names that environment, and the environment only
+lets a `v*` tag use it, so no branch, pull request or other workflow can read them. A tag ruleset
+then limits who can create a `v*` tag.
+
+1. **The environment.** Settings → Environments → **New environment** → name it `release`
+   (exactly) → Configure environment:
+   - **Deployment branches and tags** → *Selected branches and tags* → **Add deployment branch or
+     tag rule** → Ref type **Tag**, name pattern `v*`. (Leave no branch rule: the release runs
+     only on tags.)
+   - Optional: **Required reviewers** → add yourself (or the release managers). The `mac-app`
+     job then waits for an approval on each release run. Leave *Prevent self-review* off if you
+     are the only reviewer and you push the tags yourself.
+   - Optional: leave *Allow administrators to bypass configured protection rules* unchecked.
+
+   Create it before the first release tag: a workflow that names an environment that does not
+   exist makes an empty one with no rules (the release would then stop at its secrets check).
+2. **The secrets**, in that environment: Settings → Environments → `release` → **Environment
+   secrets** → **Add environment secret**, once for each secret in the table below (the
+   certificate's two and one notarization method's three; all eight is fine). Don't add them as
+   repository secrets as well; if they already are, delete those (Settings → Secrets and
+   variables → Actions → Repository secrets).
+3. **The tag ruleset.** Settings → Rules → Rulesets → **New ruleset** → **New tag ruleset**:
+   - Name: `release tags`; Enforcement status: **Active**.
+   - Bypass list: **Add bypass** → the people or role allowed to release (e.g. *Repository
+     admin*), "Always allow".
+   - Target tags → **Add target** → **Include by pattern** → `v*`.
+   - Rules: **Restrict creations**, **Restrict updates** and **Restrict deletions** (and *Block
+     force pushes*). Create.
+
+   Now only the bypass list can push, move or delete a `v*` tag, so only they can start a release.
+   (Deleting a failed release's tag, under "Cutting a release", is then theirs to do too.)
+
+## The secrets
+
+The release fails at its first step, naming what is missing, unless the certificate and one
+notarization method are set in the `release` environment; it never ships an unsigned app.
 
 | Secret | What it is |
 | --- | --- |
@@ -109,8 +154,10 @@ it never ships an unsigned app.
 | `APPLE_TEAM_ID` | The team ID (10 characters); needed with `APPLE_ID` |
 
 With all three `APPLE_API_*` secrets set, the API key is used even if the Apple ID ones are set
-too. The workflow writes the `.p8` to a file only for the packaging step (`APPLE_API_KEY`, the
-path electron-builder wants) and deletes it after.
+too. The workflow writes the `.p8` to a file in the runner's temp directory (mode 0600) only for
+the packaging step (`APPLE_API_KEY`, the path electron-builder wants, then notarytool for the dmg),
+and a shell `trap` on the step's exit deletes it however the step ends, a failed
+electron-builder or notarization included.
 
 ### The Developer ID Application certificate (`CSC_LINK`, `CSC_KEY_PASSWORD`)
 
@@ -174,4 +221,5 @@ on a Mac whose keychain holds a signing identity you don't want used.
 The workflows were checked locally (YAML parsing, the action schema, actionlint, shellcheck on
 every `run:` script, the packaging and tarball scripts, `dist:dir`), but these run only on
 GitHub: the Linux unit tests and node-pty's Linux builds, the Electron smokes on a runner,
-signing with the real certificate, notarization, and `gh release create`.
+signing with the real certificate, notarization of the app and the dmg, the `release`
+environment's tag rule and reviewers, and `gh release create` / `upload --clobber`.

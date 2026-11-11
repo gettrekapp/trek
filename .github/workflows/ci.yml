@@ -1,5 +1,8 @@
-# CI: every push to a branch and every pull request, on Linux. Also called by release.yml as
-# part of its gate (workflow_call). Tags are left to release.yml, so a tag push runs this once.
+# CI, on Linux: every pull request (its head as merged into the base), every push to main, by hand
+# (Actions → CI → Run workflow, any branch), and called by release.yml as part of its gate
+# (workflow_call). A push to another branch runs nothing on its own: open a PR (or run it by
+# hand). So a PR from a branch in this repository runs once per push, not once for the push and
+# again for the PR. Tags are left to release.yml.
 #
 # Jobs (in parallel):
 #   test    typecheck the app, trek-server and trek-relay; the unit tests (npm test)
@@ -11,8 +14,9 @@ name: CI
 
 on:
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
+  workflow_dispatch:
   workflow_call:
 
 permissions:
@@ -46,7 +50,8 @@ jobs:
             package-lock.json
             server/package-lock.json
             relay/package-lock.json
-      # Also installs server/ and relay/ (postinstall); node-pty compiles from source on Linux.
+      # Also runs `npm ci` in server/ and relay/ (scripts/postinstall.mjs), so all three lockfiles
+      # are enforced; node-pty compiles from source on Linux.
       - run: npm ci --no-audit --no-fund
       - name: Typecheck the app
         run: npm run typecheck

@@ -442,7 +442,7 @@ them all.
 ## Development
 
 ```bash
-npm install       # also installs server/ (postinstall: npm --prefix server install)
+npm install       # also installs server/ and relay/ (postinstall; `npm ci` there under a root `npm ci`)
 npm run rebuild   # rebuild node-pty against Electron's Node headers
 npm run dev       # launch in dev mode with HMR
 npm run build     # production build into out/

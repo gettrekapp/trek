@@ -34,17 +34,42 @@ export function currentVersions(base = root) {
   return PACKAGES.map((dir) => [`${dir}package.json`, JSON.parse(readFileSync(`${base}${dir}package.json`, 'utf8')).version])
 }
 
-/** <0, 0 or >0 as a is below, equal to or above b, by X.Y.Z (a prerelease is below its release). */
+/** Splits `X.Y.Z-pre.release` at its first '-': the prerelease is everything after it (undefined if none). */
+function splitVersion(v) {
+  const dash = v.indexOf('-')
+  return dash < 0 ? [v, undefined] : [v.slice(0, dash), v.slice(dash + 1)]
+}
+
+/** Two prerelease identifiers, per semver: numeric ones numerically and below alphanumeric ones, which compare as ASCII. */
+function compareIdentifiers(a, b) {
+  const numA = /^\d+$/.test(a)
+  const numB = /^\d+$/.test(b)
+  if (numA && numB) return a.length !== b.length ? a.length - b.length : a < b ? -1 : a > b ? 1 : 0
+  if (numA) return -1
+  if (numB) return 1
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/**
+ * <0, 0 or >0 as a is below, equal to or above b, by semver precedence: X.Y.Z numerically, a
+ * prerelease below its release, and prereleases identifier by identifier (rc.2 < rc.10 < rc.10.1).
+ */
 export function compareVersions(a, b) {
-  const [ma, pa] = a.split('-', 2)
-  const [mb, pb] = b.split('-', 2)
+  const [ma, pa] = splitVersion(a)
+  const [mb, pb] = splitVersion(b)
   const na = ma.split('.').map(Number)
   const nb = mb.split('.').map(Number)
   for (let i = 0; i < 3; i++) if (na[i] !== nb[i]) return na[i] - nb[i]
   if (pa === pb) return 0
   if (pa === undefined) return 1
   if (pb === undefined) return -1
-  return pa < pb ? -1 : 1
+  const ia = pa.split('.')
+  const ib = pb.split('.')
+  for (let i = 0; i < Math.min(ia.length, ib.length); i++) {
+    const c = compareIdentifiers(ia[i], ib[i])
+    if (c !== 0) return c
+  }
+  return ia.length - ib.length
 }
 
 /** The files whose version is not `version`, as "file: found". */

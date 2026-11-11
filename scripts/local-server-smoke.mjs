@@ -130,7 +130,8 @@ async function suite(rt) {
       return undefined
     }
   }
-  const lockPid = (path = lockPath) => (existsSync(path) ? Number(readFileSync(path, 'utf8').trim()) : undefined)
+  // local.lock is `<pid>\n<nonce>\n`: the pid is its first line.
+  const lockPid = (path = lockPath) => (existsSync(path) ? Number(readFileSync(path, 'utf8').split('\n')[0].trim()) : undefined)
   const connect = async (port, token, name) => {
     const conn = new ServerConnection({ url: `ws://127.0.0.1:${port}`, token, createSocket: globalSocketFactory, client: `local-smoke-${name}` })
     conns.push(conn)

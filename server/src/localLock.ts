@@ -1,5 +1,6 @@
 // The local server's pid lock: one `trek-server start --local` per profile. The
-// lock file holds the server's pid. A lock whose pid is dead (a crash, a
+// lock file holds the server's pid and a random nonce (an older server's, the pid
+// alone). A lock whose pid is dead (a crash, a
 // SIGKILL), or that was written before the machine last booted (its pid may
 // since have been reused), is stale and is taken over; a live one refuses the start.
 import {
@@ -17,8 +18,10 @@ import {
   writeFileSync,
   type Stats
 } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { uptime as osUptime } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { lockText, parseLockText } from '../../src/shared/localServer.ts'
 
 export type LockAction = 'take' | 'refuse'
 
@@ -70,31 +73,30 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/** A lock file as one open saw it: its pid, and its identity for a later compare. */
+/** A lock file as one open saw it: its pid and nonce, and its identity for a later compare. */
 export interface LockFile {
   /** undefined if it holds no pid, or is not a regular file */
   pid: number | undefined
+  /** the nonce its start wrote; undefined in an older server's lock, or if it holds no pid */
+  nonce: string | undefined
   mtimeMs: number
   dev: number
   ino: number
   ctimeMs: number
 }
 
-/** "4242\n" → 4242; anything but digits (and surrounding whitespace) → undefined. */
-function parsePid(text: string): number | undefined {
-  const trimmed = text.trim()
-  if (!/^\d+$/.test(trimmed)) return undefined
-  const pid = Number(trimmed)
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+/** The lock as `st` and its text (none: it holds no pid we can read) show it. */
+function lockFile(st: Stats, text?: string): LockFile {
+  const parsed = text === undefined ? undefined : parseLockText(text)
+  return {
+    pid: parsed?.pid,
+    nonce: parsed?.nonce,
+    mtimeMs: st.mtimeMs,
+    dev: st.dev,
+    ino: st.ino,
+    ctimeMs: st.ctimeMs
+  }
 }
-
-const lockFile = (st: Stats, pid: number | undefined): LockFile => ({
-  pid,
-  mtimeMs: st.mtimeMs,
-  dev: st.dev,
-  ino: st.ino,
-  ctimeMs: st.ctimeMs
-})
 
 /**
  * Reads the lock through one open fd, so its pid and its identity (fstat) are the
@@ -110,15 +112,15 @@ export function readLock(path: string): LockFile | undefined {
     if (code === 'ENOENT') return undefined
     // ELOOP: a symlink. Anything else unreadable: it holds no pid we can trust.
     try {
-      return lockFile(lstatSync(path), undefined)
+      return lockFile(lstatSync(path))
     } catch {
       return undefined
     }
   }
   try {
     const st = fstatSync(fd)
-    if (!st.isFile()) return lockFile(st, undefined)
-    return lockFile(st, parsePid(readFileSync(fd, 'utf8')))
+    if (!st.isFile()) return lockFile(st)
+    return lockFile(st, readFileSync(fd, 'utf8'))
   } finally {
     closeSync(fd)
   }
@@ -138,24 +140,37 @@ export type LockResult =
 /** A start gives up after this many stale locks in a row: other starts are racing it. */
 const TAKEOVER_ATTEMPTS = 3
 
-const sameFile = (a: LockFile, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino && a.ctimeMs === b.ctimeMs
+/**
+ * The same lock: the same contents (pid and nonce) in the same file (device, inode and
+ * ctime). The nonce is what tells a new start's lock from the stale one it replaced on a
+ * filesystem that gave the new file the old one's inode and ctime (ext4 and overlayfs
+ * reuse a deleted inode at once; ctime is coarse). Two older-server locks (no nonce) fall
+ * back to the pid and the file identity; a lock this version writes always has a nonce.
+ */
+export const sameLock = (a: LockFile, b: LockFile): boolean =>
+  a.pid === b.pid && a.nonce === b.nonce && a.dev === b.dev && a.ino === b.ino && a.ctimeMs === b.ctimeMs
+
+/** A new random nonce for a lock: 32 hex digits. */
+export const newNonce = (): string => randomBytes(16).toString('hex')
 
 /**
- * Creates the lock holding `pid`. The pid is written to a temp file that is then
- * hard-linked into place, so the lock never exists without its pid, and the link
- * fails if a lock is already there. The directory is created and kept 0700.
+ * Creates the lock holding `pid` and a fresh nonce. They are written to a temp file
+ * that is then hard-linked into place, so the lock never exists without its pid, and
+ * the link fails if a lock is already there. The directory is created and kept 0700.
  *
- * A stale lock is unlinked only if the path is still the file this start judged
- * stale (same device, inode and ctime). Otherwise another start has replaced it
- * meanwhile, and this one looks again: two starts that find the same stale lock
- * cannot both take it over. Throws on a filesystem error (a directory where the
- * lock goes, no hard links).
+ * A stale lock is unlinked only if it is read again just before and is still the lock
+ * this start judged stale (sameLock: pid, nonce, device, inode and ctime). Otherwise
+ * another start has replaced it meanwhile, and this one looks again: two starts that
+ * find the same stale lock cannot both take it over. Throws on a filesystem error (a
+ * directory where the lock goes, no hard links). `reread` is readLock; tests replace
+ * it to simulate a filesystem that reuses inodes.
  */
 export function acquireLock(
   path: string,
   pid: number = process.pid,
   alive: (pid: number) => boolean = pidAlive,
-  clock: Clock = systemClock
+  clock: Clock = systemClock,
+  reread: (path: string) => LockFile | undefined = readLock
 ): LockResult {
   const dir = dirname(path)
   mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -168,14 +183,9 @@ export function acquireLock(
     if (lockDecision(seen.pid, pid, alive, beforeBoot(seen.mtimeMs, clock)) === 'refuse') {
       return { ok: false, holder: seen.pid as number }
     }
-    let now: Stats
-    try {
-      now = lstatSync(path)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
-      throw err
-    }
-    if (!sameFile(seen, now)) continue // another start replaced it: judge the new one
+    const now = reread(path)
+    if (now === undefined) continue // removed meanwhile: try the link again
+    if (!sameLock(seen, now)) continue // another start replaced it: judge the new one
     tookOver = seen.pid
     try {
       unlinkSync(path)
@@ -237,7 +247,7 @@ function linkLock(path: string, pid: number): boolean {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
   }
-  writeFileSync(tmp, `${pid}\n`, { flag: 'wx', mode: 0o600 })
+  writeFileSync(tmp, lockText(pid, newNonce()), { flag: 'wx', mode: 0o600 })
   try {
     linkSync(tmp, path)
     return true
