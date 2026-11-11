@@ -9,6 +9,8 @@ export interface TokenEntry {
   hash: string
   /** ISO timestamp; empty for a token migrated from v1's single tokenHash */
   createdAt: string
+  /** A phone's token (6a): the name of the token whose connection asked for the pairing code. A record only: revoking that token leaves this one. */
+  pairedBy?: string
 }
 
 export const DEFAULT_TOKEN_NAME = 'default'
@@ -44,14 +46,14 @@ export function migrateLegacyToken(config: TrekServerConfig): boolean {
 }
 
 /** Creates the token `name`, replacing any token of that name. Returns the plaintext, shown once. */
-export function addToken(config: TrekServerConfig, name: string, now: Date = new Date()): string {
+export function addToken(config: TrekServerConfig, name: string, now: Date = new Date(), extra: { pairedBy?: string } = {}): string {
   if (!NAME_RE.test(name)) {
     throw new Error(`Invalid token name "${name}" (letters, digits, ".", "_", "-"; up to 64)`)
   }
   migrateLegacyToken(config)
   const token = randomBytes(32).toString('base64url')
   const tokens = (config.tokens ?? []).filter((t) => t.name !== name)
-  tokens.push({ name, hash: hashToken(token), createdAt: now.toISOString() })
+  tokens.push({ name, hash: hashToken(token), createdAt: now.toISOString(), ...(extra.pairedBy ? { pairedBy: extra.pairedBy } : {}) })
   config.tokens = tokens
   return token
 }
@@ -79,8 +81,11 @@ export function matchToken(config: TrekServerConfig, token: string): TokenEntry 
 export function formatTokenList(tokens: TokenEntry[]): string {
   if (tokens.length === 0) return 'No tokens. Run `trek-server token add <name>`.'
   const width = Math.max(4, ...tokens.map((t) => t.name.length))
+  const created = Math.max(7, ...tokens.map((t) => (t.createdAt || 'unknown').length))
+  // A hand-edited pairedBy that isn't a string is left out.
+  const pairedBy = (t: TokenEntry): string => (typeof t.pairedBy === 'string' ? t.pairedBy : '')
   return [
-    `${'NAME'.padEnd(width)}  CREATED`,
-    ...tokens.map((t) => `${t.name.padEnd(width)}  ${t.createdAt || 'unknown'}`)
+    `${'NAME'.padEnd(width)}  ${'CREATED'.padEnd(created)}  PAIRED BY`,
+    ...tokens.map((t) => `${t.name.padEnd(width)}  ${(t.createdAt || 'unknown').padEnd(created)}  ${pairedBy(t)}`.trimEnd())
   ].join('\n')
 }

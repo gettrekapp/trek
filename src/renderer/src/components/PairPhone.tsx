@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'qrcode'
 import { errorText } from '../v2/errors'
 import type { AppServerPairing } from '../../../shared/types'
@@ -7,25 +7,49 @@ import type { AppServerPairing } from '../../../shared/types'
  * "Pair a phone…" (6a): a one-time code from the server, shown as a QR of
  * `trek://pair?url=…&code=…` and as text, with its countdown. The code is not a token: the phone
  * redeems it once for its own. Main asks the server for it (window.api.appServers.pairPhone).
+ * New code and closing the panel cancel the code shown, and a code that arrives after the panel
+ * moved on (React StrictMode's second mount, a New code clicked meanwhile) is cancelled at once.
  */
 export function PairPhone({ serverId, onClose }: { serverId: string; onClose: () => void }): React.JSX.Element {
   const [pairing, setPairing] = useState<AppServerPairing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
+  /** The code shown now, to cancel; and which ask is current (bumped by every ask and on unmount). */
+  const shown = useRef<string | null>(null)
+  const generation = useRef(0)
+
+  const cancelShown = useCallback(() => {
+    const code = shown.current
+    shown.current = null
+    if (code) void window.api.appServers.cancelPairing(serverId, code).catch(() => false)
+  }, [serverId])
+
   const ask = useCallback(async () => {
+    const mine = ++generation.current
+    cancelShown()
     setError(null)
     setPairing(null)
     try {
-      setPairing(await window.api.appServers.pairPhone(serverId))
+      const got = await window.api.appServers.pairPhone(serverId)
+      if (mine !== generation.current) {
+        void window.api.appServers.cancelPairing(serverId, got.code).catch(() => false)
+        return
+      }
+      shown.current = got.code
+      setPairing(got)
     } catch (err) {
-      setError(errorText(err))
+      if (mine === generation.current) setError(errorText(err))
     }
-  }, [serverId])
+  }, [serverId, cancelShown])
 
   useEffect(() => {
     void ask()
-  }, [ask])
+    return () => {
+      generation.current++
+      cancelShown()
+    }
+  }, [ask, cancelShown])
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)

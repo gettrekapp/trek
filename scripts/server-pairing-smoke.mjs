@@ -6,13 +6,16 @@
 //
 // A plain `trek-server start` (no `local`) with its own HOME and the not-signed-in stub gh every
 // smoke gets (smokeGh.mjs). The built app runs with a temp HOME and --user-data-dir and no Local
-// server. The server is saved in the app under an IPv4-mapped address (`[::ffff:127.0.0.1]`): it
-// reaches this machine's loopback, but isn't one of the loopback names the button is hidden for.
-// Through the DOM and the SDK it checks:
+// server. The server listens only on this machine's first non-internal IPv4 address (--host, with
+// --insecure: plain ws on a LAN address) and is saved in the app under that address, which a phone
+// could reach; a machine with no such address fails the smoke at once (every loopback form,
+// IPv4-mapped included, hides the button). Through the DOM and the SDK it checks:
 //   - Pair a phone… shows for the connected remote server (and not for a loopback URL);
 //   - its QR and text carry the code and the URL, and nothing in the window holds a token;
 //   - the code redeems once, at hello, for a named token phone-<device> that then signs in;
 //   - a second redeem of the same code is refused, saying it was used;
+//   - New code cancels the code shown (it no longer redeems), and so does closing the panel;
+//   - `token list` shows the phone's token PAIRED BY the desktop's token;
 //   - revoking the token (the server's CLI) closes the phone's connection and refuses it after;
 //   - no error dialogs, console or page errors.
 import './smokeGh.mjs'
@@ -21,7 +24,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
+import { networkInterfaces, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory, parsePairingLink, redeemPairingCode } from '../src/shared/client/index.ts'
 import { closeApp } from './smokeTeardown.mjs'
@@ -74,11 +77,25 @@ dialog.showMessageBox = async (...args) => {
 `
 )
 
+/** This machine's first non-internal IPv4 address, or null. */
+const lanAddress = () => {
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const a of addresses ?? []) if (a.family === 'IPv4' && !a.internal) return a.address
+  }
+  return null
+}
+const lan = lanAddress()
+if (!lan) {
+  console.error('SERVER PAIRING SMOKE FAIL: this machine has no non-internal IPv4 address (os.networkInterfaces()); the smoke needs one to bind the server where a phone could reach it')
+  rmSync(work, { recursive: true, force: true })
+  process.exit(1)
+}
+
 const freePort = () =>
   new Promise((resolve, reject) => {
     const s = createServer()
     s.once('error', reject)
-    s.listen(0, '127.0.0.1', () => {
+    s.listen(0, lan, () => {
       const { port } = s.address()
       s.close(() => resolve(port))
     })
@@ -120,7 +137,8 @@ try {
   const port = await freePort()
   const serverEnv = { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' }
   await new Promise((resolve, reject) => {
-    const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data], {
+    // Only on the LAN address: never 0.0.0.0.
+    const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--host', lan, '--insecure', '--data-dir', data], {
       cwd: join(root, 'server'),
       env: serverEnv,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -141,7 +159,15 @@ try {
     })
     d.once('exit', (code) => reject(new Error(`trek-server exited (${code}):\n${output}`)))
   })
-  const url = `ws://[::ffff:127.0.0.1]:${port}`
+  const url = `ws://${lan}:${port}`
+  check('the server listens on the LAN address only, not loopback', await new Promise((resolve) => {
+    const probe = new WebSocket(`ws://127.0.0.1:${port}`)
+    probe.onopen = () => {
+      probe.close()
+      resolve('loopback answered')
+    }
+    probe.onerror = () => resolve('loopback refused')
+  }), 'loopback refused')
   const cli = (...args) => execFileSync(process.execPath, ['dist/trek-server.cjs', ...args, '--config', configPath], { cwd: join(root, 'server'), env: serverEnv, encoding: 'utf8' })
 
   // ---- 2. The app, with the server saved, on the Servers view ---------------------------------------
@@ -153,17 +179,18 @@ try {
   watch(win)
   await win.waitForLoadState('domcontentloaded')
   const entry = await win.evaluate(([u, t]) => window.api.appServers.save({ name: 'Remote', url: u, token: t }), [url, token])
-  // A loopback URL for the same server: the button is hidden there.
+  // Loopback URLs (the server listens on the LAN address only, so they never connect): no button, and main refuses.
   const loopback = await win.evaluate(([u, t]) => window.api.appServers.save({ name: 'Loopback', url: u, token: t }), [`ws://127.0.0.1:${port}`, token])
   const linkStatus = (id) => async () => (await win.evaluate(() => window.api.appServers.links())).servers.find((s) => s.id === id)?.status ?? null
   check("main's connection to the server is up", await until(linkStatus(entry.id), 'connected'), 'connected')
-  await until(linkStatus(loopback.id), 'connected')
   await win.locator('.start-actions button', { hasText: 'Open on server…' }).click()
   const item = (name) => win.locator('.connect-server-item', { has: win.locator('.connect-server-name', { hasText: new RegExp(`^${name}$`) }) })
   await item('Remote').waitFor({ timeout: 10_000 })
   const pairButton = (name) => item(name).locator('button', { hasText: 'Pair a phone…' })
   check('Pair a phone… shows for the remote server', await until(() => pairButton('Remote').count(), 1), 1)
   check('and not for the same server at a loopback URL', await pairButton('Loopback').count(), 0)
+  const mapped = await win.evaluate(([u, t]) => window.api.appServers.save({ name: 'Mapped', url: u, token: t }), [`ws://[::ffff:127.0.0.1]:${port}`, token])
+  check('main refuses it for an IPv4-mapped loopback URL', await win.evaluate((id) => window.api.appServers.pairPhone(id).then(() => 'paired', (e) => String(e.message ?? e)), mapped.id).then((m) => /loopback/.test(m)), true)
   check('main refuses it for a loopback URL too', await win.evaluate((id) => window.api.appServers.pairPhone(id).then(() => 'paired', (e) => String(e.message ?? e)), loopback.id).then((m) => /loopback/.test(m)), true)
 
   // ---- 3. The code ----------------------------------------------------------------------------------
@@ -187,7 +214,7 @@ try {
   const code = shownCode
   const paired = await redeemPairingCode({ url, code, deviceName: 'Smoke Phone', createSocket: globalSocketFactory, client: 'pairing-smoke' })
   check('the phone redeems the code for its own named token', [paired.tokenName, paired.token.length > 20, paired.token !== token], ['phone-Smoke-Phone', true, true])
-  check('the server lists the token', /phone-Smoke-Phone/.test(cli('token', 'list')), true)
+  check('the server lists the token, paired by the desktop\'s token', /^phone-Smoke-Phone\s+\S+\s+default$/m.test(cli('token', 'list')), true)
   phone = new ServerConnection({ url, token: paired.token, createSocket: globalSocketFactory, client: 'pairing-smoke-phone' })
   phone.connect()
   check('the phone signs in with it', await until(() => phone.status, 'connected', 5000), 'connected')
@@ -198,7 +225,29 @@ try {
     check('a second phone named the same gets a numbered token', r.tokenName, 'phone-Smoke-Phone-2')
   })
 
-  // ---- 5. Revocation --------------------------------------------------------------------------------
+  // ---- 5. Cancelling: New code, and closing the panel ---------------------------------------------
+  const codeShown = async () => ((await panel.locator('[data-testid="pair-code"]').textContent()) ?? '').trim()
+  // The code shown was redeemed above: New code twice, so the one replaced was still waiting.
+  const newCode = async () => {
+    const before = await codeShown()
+    await panel.locator('button', { hasText: 'New code' }).click()
+    const changed = await until(async () => {
+      const c = await codeShown().catch(() => '')
+      return c !== '' && c !== before
+    }, true)
+    return changed ? await codeShown() : null
+  }
+  const beforeNew = await newCode()
+  check('New code shows another code', (await newCode()) !== null && beforeNew !== null, true)
+  const redeemKind = (c) => redeemPairingCode({ url, code: c, deviceName: 'Late', createSocket: globalSocketFactory }).then(() => 'paired', (e) => e.kind)
+  check('the code New code replaced no longer redeems', await redeemKind(beforeNew), 'expired')
+  const lastShown = await codeShown()
+  await panel.locator('button', { hasText: 'Done' }).click()
+  await panel.waitFor({ state: 'detached', timeout: 5000 })
+  await sleep(500)
+  check('closing the panel cancels the code it showed', await redeemKind(lastShown), 'expired')
+
+  // ---- 6. Revocation --------------------------------------------------------------------------------
   cli('token', 'revoke', 'phone-Smoke-Phone')
   check("revoking the token closes the phone's connection", await until(() => phone.status, 'needs-auth', 8000), 'needs-auth')
 

@@ -33,14 +33,24 @@ export function originOf(url: string): string | null {
   }
 }
 
-/** localhost, 127.0.0.1 or ::1. */
+/**
+ * Whether the URL's host is this machine's loopback, or the any-address (which, dialled, reaches
+ * it): localhost and *.localhost, 127.0.0.0/8, ::1, the IPv4-mapped forms of those
+ * (`[::ffff:7f00:1]`), 0.0.0.0 and `[::]`. Leans on URL's normalising: `127.1`, `2130706433`,
+ * `[0:0:0:0:0:0:0:1]` and `[::ffff:127.0.0.1]` all reach here in one of those forms.
+ */
 export function isLoopbackUrl(url: string): boolean {
+  let host: string
   try {
-    const host = new URL(url.trim()).hostname
-    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+    host = new URL(url.trim()).hostname.toLowerCase().replace(/\.$/, '')
   } catch {
     return false
   }
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === '0.0.0.0') return true
+  if (host === '[::1]' || host === '[::]') return true
+  // IPv4-mapped: 127.x.y.z is ::ffff:7fxx:yyzz once normalised; 0.0.0.0 is ::ffff:0:0.
+  return /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(host) || host === '[::ffff:0:0]'
 }
 
 /** The Local server's state in a line: the server list, the menu's status item. */

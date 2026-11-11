@@ -375,14 +375,24 @@ redeems the code at `hello`.
 
 | Method | Params | Result |
 |---|---|---|
-| `pairing.create` | `{name?}` | `{code, expiresAt}` |
+| `pairing.create` | `{name?}` | `{code, expiresAt, expiresInMs}` |
+| `pairing.cancel` | `{code}` | `{cancelled}` |
 
 - **The code:** 128 random bits as 26 base32 characters (`A`–`Z`, `2`–`7`). Case, spaces and
   dashes are ignored when it comes back, so it can be shown in groups of five. It is redeemable
   once, for 5 minutes. The server keeps only its sha256, in memory (a restart drops the waiting
-  codes), and at most 20 wait at once: one more drops the oldest. Any authenticated connection may
-  ask, since a token already holds shell-level power on the server's machine. `name` is a hint for
-  the token's name. The local server answers `NOT_FOUND`.
+  codes), and at most 20 wait at once: one more drops the oldest. Any signed-in connection may
+  ask (the desktop, a web client's browser session, or a paired phone), since a token already holds
+  shell-level power on the server's machine; the name of the token it signed in with (a browser
+  session's token, for a browser) is recorded on the phone's token as `pairedBy`. `name` is a hint
+  for the token's name. `expiresAt` is by the server's clock; `expiresInMs` is the code's lifetime
+  (300000), so a client whose clock is off counts down from its own clock on arrival. The local
+  server answers `NOT_FOUND`.
+- **Cancelling:** `pairing.cancel {code}` drops a waiting code, which is then refused as
+  `pairing code expired`; `cancelled` is false for a code that was unknown, spent or expired
+  already. Any signed-in connection that knows the code may cancel it (whoever holds a code could
+  redeem it, which is more). The desktop cancels the code shown on **New code** and when the panel
+  closes.
 - **Redeeming:** the phone's `hello` carries `pairingCode` and `deviceName` and no token:
 
   ```json
@@ -392,7 +402,11 @@ redeems the code at `hello`.
 
   A good code mints a named token `phone-<deviceName>` (the device name in token-name characters,
   `-2`, `-3`… if taken; the spec's "phone: <device>" can't be a token name), writes it to the
-  config like `trek-server token add`, and the welcome carries it this once:
+  config like `trek-server token add` (the name chosen from the config as it is on disk at that
+  moment, so a `token add` of the same name that just landed is numbered around, not replaced),
+  with `pairedBy` (the token that asked for the code, shown by `trek-server token list` under
+  PAIRED BY; a record only: revoking that token leaves the phone's), and the welcome carries it
+  this once:
 
   ```json
   { "type": "welcome", …, "pairedToken": "…", "pairedTokenName": "phone-Greg-s-iPhone" }
@@ -408,14 +422,16 @@ redeems the code at `hello`.
   | `pairing code expired` | its 5 minutes passed |
   | `pairing code already used` | it was redeemed before |
   | `pairing code not recognised` | no such code (or the local server) |
-  | `too many pairing attempts` | 5 failed redeems from the address in a minute, or 50 in all: the web sign-in's limits, shared with it when the web client is on |
+  | `too many pairing attempts` | 5 failed redeems from the address in a minute (pairing's own limit, per address only: nothing shared with the web sign-in, no total). Behind a reverse proxy every phone has the proxy's address, so they all share those 5 |
+  | `the server could not save the new token` | the code was good but writing the config failed (the server logs why); the code is spent all the same, so the phone needs a new one |
 
   A spent or expired code is remembered (its hash) for 30 minutes, so the reason can say which.
-- **The QR** holds `trek://pair?url=<the server's URL, as the desktop reaches it>&code=<code>`: a
-  code, never a token. The desktop shows **Pair a phone…** only for a connected server whose
-  welcome lists `pairing`, never for the Local server or a loopback URL (`localhost`, `127.0.0.1`,
-  `::1`). On the phone a `trek://pair` link only fills the Add server form; nothing is redeemed
-  until the user taps Pair.
+- **The QR** holds `trek://pair?url=<the server's URL, as the desktop reaches it, without any user
+  name or password>&code=<code>`: a code, never a token. The desktop shows **Pair a phone…** only
+  for a connected server whose welcome lists `pairing`, never for the Local server or a loopback
+  URL (`localhost` and `*.localhost`, `127.0.0.0/8`, `::1`, their IPv4-mapped forms such as
+  `[::ffff:127.0.0.1]`, and the any-address `0.0.0.0` / `[::]`). On the phone a `trek://pair`
+  link only fills the Add server form; nothing is redeemed until the user taps Pair.
 
 ## Web client
 
@@ -1210,6 +1226,9 @@ connection is congested; try again"). Nothing about the pty changed, so this is
 not a failure of the terminal: a reconnecting client should attach one pty at a
 time, and retry a refused attach after a delay, once its own backlog has
 drained. `session.sendPrompt` needs no attach.
+`pty.resized {ptyId, cols, rows}` goes to every attached connection (the one that resized
+included) whenever a `pty.resize` changes the size; one that leaves it as it was sends nothing. A
+client that never resizes (the phone) follows it.
 `pty.exit` goes to every attached connection, also when the server killed the pty.
 A kill sends SIGHUP, and SIGKILL 3 s later if the process is still running;
 meanwhile the pty counts as gone. Every pty is a session's: there is no bare
@@ -1399,6 +1418,7 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `topic.ended` | `{topic, reason}`; `reason` is `deleted` (see Subscriptions) |
 | `pty.data` | `{ptyId, seq, data, replay?}`, only to connections attached to the pty; `replay: true` chunks are ring-buffer re-sends. Session status is computed on the server from live bytes, never from replay |
 | `pty.exit` | `{ptyId, exitCode}`: the process exited (a dropped socket is not an exit) |
+| `pty.resized` | `{ptyId, cols, rows}`, to connections attached to the pty: a `pty.resize` changed its size (6a) |
 | `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |

@@ -9,6 +9,8 @@ import {
   parseAppServers,
   reinsertAt,
   rejectDuplicateServer,
+  pairingDeadline,
+  pairingUrl,
   rejectLocalServerUrl,
   shouldClearToken,
   shouldRetryAfterTest,
@@ -64,6 +66,43 @@ test('isLoopbackUrl', () => {
   assert.equal(isLoopbackUrl('ws://box.tailnet:7400'), false)
   assert.equal(isLoopbackUrl(' ws://localhost:7400 '), true, 'trimmed')
   assert.equal(isLoopbackUrl('not a url'), false)
+})
+
+test('isLoopbackUrl: every loopback and any-address form, and nothing else', () => {
+  const loopback = [
+    'ws://127.0.0.2:7400',
+    'ws://127.255.255.254:7400',
+    'ws://127.1:7400',
+    'ws://2130706433:7400',
+    'ws://[::1]:7400',
+    'ws://[0:0:0:0:0:0:0:1]:7400',
+    'ws://[::ffff:127.0.0.1]:7400',
+    'ws://[::ffff:127.9.8.7]:7400',
+    'ws://[::ffff:7f00:1]:7400',
+    'ws://0.0.0.0:7400',
+    'ws://0:7400',
+    'ws://[::]:7400',
+    'ws://[0::0]:7400',
+    'ws://[::ffff:0.0.0.0]:7400',
+    'ws://LOCALHOST:7400',
+    'ws://localhost.:7400',
+    'ws://box.localhost:7400',
+    'wss://a.b.localhost'
+  ]
+  const remote = [
+    'ws://128.0.0.1:7400',
+    'ws://10.0.0.5:7400',
+    'ws://192.168.1.20:7400',
+    'ws://[::ffff:10.0.0.5]:7400',
+    'ws://[::2]:7400',
+    'ws://[fe80::1]:7400',
+    'ws://localhost.example.com:7400',
+    'ws://notlocalhost:7400',
+    'ws://127.0.0.1.nip.io:7400',
+    'wss://box.tailnet'
+  ]
+  for (const u of loopback) assert.equal(isLoopbackUrl(u), true, u)
+  for (const u of remote) assert.equal(isLoopbackUrl(u), false, u)
 })
 
 test('originOf: scheme, host and port; null when the URL does not parse', () => {
@@ -178,6 +217,10 @@ test("rejectLocalServerUrl refuses an entry for Local's current URL, by any loop
   assert.throws(() => rejectLocalServerUrl('ws://127.0.0.1:51234/', local), refused, 'a trailing slash')
   assert.throws(() => rejectLocalServerUrl('ws://localhost:51234', local), refused, 'localhost')
   assert.throws(() => rejectLocalServerUrl('ws://[::1]:51234', local), refused, '::1')
+  assert.throws(() => rejectLocalServerUrl('ws://[::ffff:127.0.0.1]:51234', local), refused, 'IPv4-mapped')
+  assert.throws(() => rejectLocalServerUrl('ws://127.0.0.2:51234', local), refused, '127/8')
+  assert.throws(() => rejectLocalServerUrl('ws://0.0.0.0:51234', local), refused, 'the any-address')
+  assert.throws(() => rejectLocalServerUrl('ws://box.localhost:51234', local), refused, '*.localhost')
   assert.doesNotThrow(() => rejectLocalServerUrl('ws://127.0.0.1:51235', local), 'another port')
   assert.doesNotThrow(() => rejectLocalServerUrl('wss://127.0.0.1:51234', local), 'another scheme')
   assert.doesNotThrow(() => rejectLocalServerUrl('ws://box:51234', local), 'another host')
@@ -217,4 +260,24 @@ test('mayAdoptToken: a saved entry still at the URL the token was matched to; ne
 test('isLocalEntryId: the built-in Local entry only (4c Note 4: every Local check goes through it)', () => {
   assert.equal(isLocalEntryId(LOCAL_ENTRY_ID), true)
   for (const id of ['', 'Local', 'local-dev', '3f6c1c9e-6d1a-4b8e-9a1e-2f1d6c0b7a11']) assert.equal(isLocalEntryId(id), false, id)
+})
+
+test("pairingUrl: the QR's server URL drops a user name and password, and is otherwise kept as written", () => {
+  assert.equal(pairingUrl('wss://box.example:7400'), 'wss://box.example:7400')
+  assert.equal(pairingUrl(' wss://box.example:7400/trek '), 'wss://box.example:7400/trek')
+  assert.equal(pairingUrl('wss://user:secret@box.example:7400'), 'wss://box.example:7400')
+  assert.equal(pairingUrl('wss://user@box.example/trek?x=1'), 'wss://box.example/trek?x=1')
+  assert.equal(pairingUrl('ws://:pw@10.0.0.5:7400/'), 'ws://10.0.0.5:7400/')
+  assert.ok(!pairingUrl('wss://u:p@b').includes('p@'))
+})
+
+test("pairingDeadline: from the code's lifetime and this machine's clock (a server clock that is off doesn't matter)", () => {
+  const now = 1_000_000
+  // The server's clock is an hour ahead: its expiresAt would show 65 minutes.
+  assert.equal(pairingDeadline({ expiresAt: now + 3_600_000 + 300_000, expiresInMs: 300_000 }, now), now + 300_000)
+  // An older server without expiresInMs: its expiresAt.
+  assert.equal(pairingDeadline({ expiresAt: now + 5 }, now), now + 5)
+  for (const bad of [-1, Number.NaN, Infinity, '300000', 25 * 3_600_000]) {
+    assert.equal(pairingDeadline({ expiresAt: now + 7, expiresInMs: bad }, now), now + 7, String(bad))
+  }
 })

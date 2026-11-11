@@ -16,6 +16,8 @@ import {
   parseAppServers,
   reinsertAt,
   rejectDuplicateServer,
+  pairingDeadline,
+  pairingUrl,
   rejectLocalServerUrl,
   shouldClearToken,
   shouldRetryAfterTest,
@@ -334,8 +336,28 @@ async function pairPhone(id: unknown): Promise<AppServerPairing> {
   const welcome = link?.connection.welcome
   if (!link || link.connection.status !== 'connected' || !welcome) throw new Error('Not connected to this server')
   if (!welcome.capabilities.includes('pairing')) throw new Error('This server does not pair phones; update it')
-  const { code, expiresAt } = await link.connection.request('pairing.create', { name: '' })
-  return { url: server.url, code, expiresAt, link: pairingLink(server.url, code) }
+  const created = await link.connection.request('pairing.create', { name: '' })
+  // The countdown runs on this machine's clock: the server's may be off.
+  const expiresAt = pairingDeadline(created, Date.now())
+  const url = pairingUrl(server.url)
+  return { url, code: created.code, expiresAt, link: pairingLink(url, created.code) }
+}
+
+/**
+ * The panel's New code, or the panel closing (6a): the server drops the code it gave, so a QR
+ * left on screen (or a code asked for twice by React's StrictMode) redeems nothing. Best effort:
+ * false when it can't be told (not connected, or the code was spent or expired already).
+ */
+async function cancelPairing(id: unknown, code: unknown): Promise<boolean> {
+  if (typeof code !== 'string' || code === '' || code.length > 64) return false
+  if (typeof id !== 'string') return false
+  const link = links?.get(id)
+  if (!link || link.connection.status !== 'connected' || !link.connection.welcome?.capabilities.includes('pairing')) return false
+  try {
+    return (await link.connection.request('pairing.cancel', { code })).cancelled === true
+  } catch {
+    return false
+  }
 }
 
 /** Quit: main's connections close for good. */
@@ -396,4 +418,5 @@ export function registerAppServerHandlers(
   ipcMain.handle('appServers:remove', (_event, id: unknown) => remove(id))
   ipcMain.handle('appServers:test', (_event, id: unknown) => test(id))
   ipcMain.handle('appServers:pairPhone', (_event, id: unknown) => pairPhone(id))
+  ipcMain.handle('appServers:cancelPairing', (_event, id: unknown, code: unknown) => cancelPairing(id, code))
 }

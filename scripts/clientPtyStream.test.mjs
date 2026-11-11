@@ -429,3 +429,22 @@ test('with onClosed, close() during an in-flight re-attach reports closed exactl
   assert.deepEqual(a.log, [['reset'], ['closed', 'closed']])
   assert.equal(ptys.isAttached('p1'), false)
 })
+
+test('pty.resized reaches the attached pty\'s onResize (only that pty; malformed sizes dropped; no handler is fine)', async () => {
+  const { ptys, sock } = setup()
+  const sizes = []
+  const h = { ...handlers(), onResize: (i) => sizes.push(i) }
+  const attached = ptys.attach('p1', h)
+  sock.reply(sock.lastReq('pty.attach'), info('p1'))
+  await attached
+  const plain = ptys.attach('p2', handlers())
+  sock.reply(sock.lastReq('pty.attach'), info('p2'))
+  await plain
+  sock.event('pty.resized', { ptyId: 'p1', cols: 120, rows: 40 })
+  sock.event('pty.resized', { ptyId: 'other', cols: 1, rows: 1 })
+  sock.event('pty.resized', { ptyId: 'p1', cols: 'x', rows: 40 })
+  sock.event('pty.resized', { ptyId: 'p2', cols: 90, rows: 30 })
+  assert.deepEqual(sizes, [{ ptyId: 'p1', cols: 120, rows: 40 }])
+  assert.equal(ptys.isAttached('p1'), true)
+  assert.equal(ptys.isAttached('p2'), true)
+})

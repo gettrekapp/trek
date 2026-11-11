@@ -86,9 +86,36 @@ test('formatTokenList aligns names and shows unknown dates', () => {
       { name: 'default', hash: 'x', createdAt: '' },
       { name: 'ph', hash: 'y', createdAt: '2026-11-05T10:00:00.000Z' }
     ]),
-    ['NAME     CREATED', 'default  unknown', 'ph       2026-11-05T10:00:00.000Z'].join('\n')
+    [
+      'NAME     CREATED                   PAIRED BY',
+      'default  unknown',
+      'ph       2026-11-05T10:00:00.000Z'
+    ].join('\n')
   )
   assert.match(formatTokenList([]), /No tokens/)
+})
+
+test('a paired token (6a) keeps who paired it: addToken records it, listTokens keeps it, the list shows it', () => {
+  const config = { repos: [] }
+  addToken(config, 'laptop')
+  addToken(config, 'phone-pixel', new Date('2026-11-11T00:00:00.000Z'), { pairedBy: 'laptop' })
+  assert.equal(listTokens(config).find((t) => t.name === 'phone-pixel').pairedBy, 'laptop')
+  assert.equal('pairedBy' in listTokens(config).find((t) => t.name === 'laptop'), false)
+  const text = formatTokenList([
+    { name: 'phone-pixel', hash: 'x', createdAt: '2026-11-11T00:00:00.000Z', pairedBy: 'laptop' },
+    { name: 'odd', hash: 'y', createdAt: '2026-11-11T00:00:00.000Z', pairedBy: { evil: 1 } }
+  ])
+  assert.equal(
+    text,
+    [
+      'NAME         CREATED                   PAIRED BY',
+      'phone-pixel  2026-11-11T00:00:00.000Z  laptop',
+      'odd          2026-11-11T00:00:00.000Z'
+    ].join('\n')
+  )
+  // Revoking the token that paired it leaves the phone's.
+  revokeToken(config, 'laptop')
+  assert.deepEqual(listTokens(config).map((t) => t.name), ['phone-pixel'])
 })
 
 test('malformed token entries are skipped, not thrown on', () => {

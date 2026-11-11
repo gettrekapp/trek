@@ -19,8 +19,8 @@ import type { ConfigStore } from './configStore'
 import type { ProjectState } from './projects/state'
 import type { ProjectStore } from './projects/store'
 import { publishServerState } from './serverState'
-import { activeTokenHashes, addToken, listTokens, matchToken } from './tokens'
-import { PairingCodes, phoneTokenName } from './pairing'
+import { activeTokenHashes, listTokens, matchToken } from './tokens'
+import { PairingCodes, PairingLimiter, redeemForPhone } from './pairing'
 import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2, responseRev } from './v2'
 import { GitPoller } from './git/poller'
@@ -176,10 +176,10 @@ export function startServer(
     : undefined
   if (web) webSignIns = new WebSocketSignIns(web.sessions, (ws) => closeRevoked(ws, 'signed out'))
   const signedOut = (key: string): void => webSignIns?.signedOut(key)
-  // Phone pairing (6a), on any server but the local one. Failed redeems count against the web
-  // sign-in's limits (shared with it when the web client is on).
+  // Phone pairing (6a), on any server but the local one. Failed redeems have their own limit, per
+  // address (nothing shared with the web sign-in's).
   const pairing = options.local ? undefined : new PairingCodes()
-  const pairingLimiter = web?.limiter ?? new LoginLimiter()
+  const pairingLimiter = new PairingLimiter()
   // Expired sessions end on the hour even if nothing looks them up, closing their sockets.
   const stopSweep = web ? sweepEvery(web.sessions) : () => {}
   const onConfigChange = (): void => {
@@ -249,6 +249,8 @@ export function startServer(
     let missedPongs = 0
     /** Set when hello is rejected: every later frame is ignored until the delayed close. */
     let rejected = false
+    /** The token this connection signed in with (a web session's, for a browser): `pairing.create` records it as pairedBy */
+    let callerTokenName = ''
     let rejectTimer: NodeJS.Timeout | undefined
     /** This connection as a receiver of v2 pty events */
     const terminal: TerminalSink = {
@@ -367,22 +369,17 @@ export function startServer(
             rejectTimer = setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, reason), BAD_TOKEN_CLOSE_DELAY_MS)
           }
           const address = req.socket.remoteAddress ?? ''
-          const at = Date.now()
           if (!pairing) return refuse(PAIRING_CLOSE_REASON.unknown)
-          if (!pairingLimiter.allow(address, at)) return refuse(PAIRING_CLOSE_REASON.limited)
-          const redeemed = pairing.redeem(frame.pairingCode, at)
-          if (!redeemed.ok) return refuse(PAIRING_CLOSE_REASON[redeemed.reason])
-          pairingLimiter.succeed(address, at)
-          const name = phoneTokenName(
-            typeof frame.deviceName === 'string' && frame.deviceName.trim() ? frame.deviceName.trim() : redeemed.name,
-            new Set(listTokens(store.config).map((t) => t.name))
-          )
-          let token = ''
-          store.update((c) => {
-            token = addToken(c, name)
-          })
-          paired = { token, name }
-          console.log(`[auth] paired a phone as token "${name}" from ${address}`)
+          const deviceName = typeof frame.deviceName === 'string' ? frame.deviceName : ''
+          const outcome = redeemForPhone({ codes: pairing, limiter: pairingLimiter, store }, frame.pairingCode, deviceName, address, Date.now())
+          if (!outcome.ok) {
+            if (outcome.reason === 'unsaved') {
+              console.error(`[auth] pairing from ${address}: the code was good (and is now spent) but the config could not be written: ${(outcome.error as Error)?.message ?? String(outcome.error)}`)
+            }
+            return refuse(PAIRING_CLOSE_REASON[outcome.reason])
+          }
+          paired = { token: outcome.token, name: outcome.name }
+          console.log(`[auth] paired a phone as token "${outcome.name}" from ${address}${outcome.pairedBy ? ` (code from token "${outcome.pairedBy}")` : ''}`)
         }
         // An empty frame token falls back to the Authorization header, then to the web sign-in:
         // its session must still be live and its token still listed.
@@ -400,6 +397,7 @@ export function startServer(
         }
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
+        callerTokenName = entry.name
         const viaWeb = !token && webSession !== undefined
         if (viaWeb) webSignIns?.add(ws, webSession.key, Date.now())
         console.log(
@@ -442,6 +440,7 @@ export function startServer(
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
+        tokenName: callerTokenName,
         mcpAccess: access
           ? {
               revoke: (id) => {

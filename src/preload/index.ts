@@ -80,6 +80,8 @@ const api = {
     test: (id: string): Promise<AppServerTest> => ipcRenderer.invoke('appServers:test', id),
     /** A one-time phone pairing code for the QR (6a); never a token */
     pairPhone: (id: string): Promise<AppServerPairing> => ipcRenderer.invoke('appServers:pairPhone', id),
+    /** Drops a pairing code the server gave (New code, or the panel closing): it no longer redeems */
+    cancelPairing: (id: string, code: string): Promise<boolean> => ipcRenderer.invoke('appServers:cancelPairing', id, code),
     /** The list with main's connection statuses (never a token); `onChanged` hears every change after it. */
     links: (): Promise<AppServersChanged> => ipcRenderer.invoke('appServers:links'),
     onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>

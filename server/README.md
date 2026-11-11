@@ -239,10 +239,16 @@ The `promote_to_primary` MCP tool asks the windows that listen (`promote.listen`
 The Trek phone app (6a) gets its own token from a one-time code: a signed-in client asks
 for one (`pairing.create`; the desktop's **Pair a phone…** shows it as a QR), and the phone
 redeems it once, within 5 minutes, at `hello`. The server mints a named token
-`phone-<device>` (listed by `trek-server token list`) and sends it to the phone that once.
-Revoke it like any token. Codes live only in memory, as hashes; failed redeems share the
-web sign-in's limits (5 a minute per address, 50 in all). The local server doesn't pair
-phones. See PROTOCOL.md, "Phone pairing".
+`phone-<device>` (listed by `trek-server token list`, with the token that asked for the
+code under PAIRED BY) and sends it to the phone that once. Revoke it like any token;
+revoking the token that paired it leaves the phone's. Any signed-in client may ask for a
+code (the desktop, a `--web` browser session, a paired phone); `pairing.cancel` drops one
+(the desktop does on New code and when its panel closes). Codes live only in memory, as
+hashes. Failed redeems have their own limit, 5 a minute per address (nothing shared with
+the web sign-in): behind a reverse proxy every phone has the proxy's address, so they all
+share it. If the config can't be written the phone is refused ("the server could not
+save the new token", with the reason in the log) and the code stays spent. The local
+server doesn't pair phones. See PROTOCOL.md, "Phone pairing".
 
 ## Web client
 

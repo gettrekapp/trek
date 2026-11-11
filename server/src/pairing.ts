@@ -3,6 +3,8 @@
 // restart drops the pending codes. Spent and expired codes are remembered (hashes only) for a while,
 // so a second try can be told "already used" or "expired" instead of "unknown".
 import { createHash, randomBytes } from 'node:crypto'
+import type { TrekServerConfig } from './config'
+import { addToken, listTokens } from './tokens.ts'
 
 /** How long a code stays redeemable. */
 export const PAIRING_CODE_TTL_MS = 5 * 60_000
@@ -40,12 +42,14 @@ export function normalizePairingCode(code: string): string {
 
 const hashCode = (code: string): string => createHash('sha256').update(normalizePairingCode(code), 'utf8').digest('hex')
 
-export type RedeemOutcome = { ok: true; name: string } | { ok: false; reason: 'expired' | 'used' | 'unknown' }
+export type RedeemOutcome = { ok: true; name: string; pairedBy: string } | { ok: false; reason: 'expired' | 'used' | 'unknown' }
 
 interface Pending {
   expiresAt: number
   /** The name the code was asked for with (a hint for the token's name); '' for none */
   name: string
+  /** The token name of the connection that asked for the code; '' when unknown */
+  pairedBy: string
 }
 
 export class PairingCodes {
@@ -53,7 +57,11 @@ export class PairingCodes {
   /** Spent or expired: hash → why, and until when it is remembered */
   private readonly spent = new Map<string, { reason: 'expired' | 'used'; until: number }>()
 
-  create(name: string, now: number): { code: string; expiresAt: number } {
+  /**
+   * `expiresInMs` is the code's lifetime, so a client whose clock is off can count down from its
+   * own clock; `expiresAt` is the server's clock.
+   */
+  create(name: string, now: number, pairedBy = ''): { code: string; expiresAt: number; expiresInMs: number } {
     this.sweep(now)
     while (this.pending.size >= MAX_PENDING_PAIRING_CODES) {
       const oldest = this.pending.keys().next().value as string
@@ -61,8 +69,21 @@ export class PairingCodes {
     }
     const code = newPairingCode()
     const expiresAt = now + PAIRING_CODE_TTL_MS
-    this.pending.set(hashCode(code), { expiresAt, name: name.slice(0, MAX_DEVICE_NAME) })
-    return { code, expiresAt }
+    this.pending.set(hashCode(code), { expiresAt, name: name.slice(0, MAX_DEVICE_NAME), pairedBy })
+    return { code, expiresAt, expiresInMs: PAIRING_CODE_TTL_MS }
+  }
+
+  /**
+   * Drops a waiting code (the desktop's New code, or its panel closing). Knowing the code is
+   * enough: whoever holds it could redeem it, which is more. A cancelled code is then refused as
+   * expired. True if a waiting code was dropped.
+   */
+  cancel(code: string, now: number): boolean {
+    this.sweep(now)
+    const hash = hashCode(code)
+    if (!this.pending.delete(hash)) return false
+    this.remember(hash, 'expired', now)
+    return true
   }
 
   /** Spends the code: true at most once per code. */
@@ -73,7 +94,7 @@ export class PairingCodes {
     if (entry) {
       this.pending.delete(hash)
       this.remember(hash, 'used', now)
-      return { ok: true, name: entry.name }
+      return { ok: true, name: entry.name, pairedBy: entry.pairedBy }
     }
     const known = this.spent.get(hash)
     return { ok: false, reason: known ? known.reason : 'unknown' }
@@ -120,4 +141,79 @@ export function phoneTokenName(deviceName: string, taken: ReadonlySet<string>): 
     const name = `${base.slice(0, TOKEN_NAME_MAX - suffix.length)}${suffix}`
     if (!taken.has(name)) return name
   }
+}
+
+/** Failed redeems allowed per address in a window, before it is refused for the rest of it. */
+export const PAIRING_FAILS_PER_ADDRESS = 5
+export const PAIRING_WINDOW_MS = 60_000
+
+/**
+ * Failed redeems in a sliding window, per address only (pairing's own: nothing shared with the web
+ * sign-in, and no total, so a burst from one address never locks out another). An attempt counts
+ * as a failure the moment it is allowed; a good redeem clears its address. Behind a reverse proxy
+ * every client has the proxy's address, so they all share one allowance.
+ */
+export class PairingLimiter {
+  private readonly byAddress = new Map<string, number[]>()
+
+  allow(address: string, now: number): boolean {
+    const mine = (this.byAddress.get(address) ?? []).filter((t) => now - t < PAIRING_WINDOW_MS)
+    if (mine.length >= PAIRING_FAILS_PER_ADDRESS) {
+      this.byAddress.set(address, mine)
+      return false
+    }
+    mine.push(now)
+    this.byAddress.set(address, mine)
+    if (this.byAddress.size > 10_000) {
+      for (const [a, times] of this.byAddress) if (times.every((t) => now - t >= PAIRING_WINDOW_MS)) this.byAddress.delete(a)
+    }
+    return true
+  }
+
+  succeed(address: string): void {
+    this.byAddress.delete(address)
+  }
+}
+
+/** What the hello handler needs of the config store. */
+export interface PairingStore {
+  readonly config: TrekServerConfig
+  update(mutate: (config: TrekServerConfig) => void): void
+}
+
+export type PhoneRedeem =
+  | { ok: true; token: string; name: string; pairedBy: string }
+  | { ok: false; reason: 'expired' | 'used' | 'unknown' | 'limited' }
+  /** The code was good (and is spent) but the config could not be written */
+  | { ok: false; reason: 'unsaved'; error: unknown }
+
+/**
+ * A phone's hello with a pairing code: limited per address, the code spent, and the phone's token
+ * minted. The token's name is chosen inside the config update, from the config as it is on disk
+ * then, so a `token add` of the same name that landed meanwhile is numbered around, not replaced.
+ * A failed write leaves the code spent (it can't be put back safely): the phone needs a new one.
+ */
+export function redeemForPhone(
+  deps: { codes: PairingCodes; limiter: PairingLimiter; store: PairingStore },
+  code: string,
+  deviceName: string,
+  address: string,
+  now: number
+): PhoneRedeem {
+  if (!deps.limiter.allow(address, now)) return { ok: false, reason: 'limited' }
+  const redeemed = deps.codes.redeem(code, now)
+  if (!redeemed.ok) return redeemed
+  deps.limiter.succeed(address)
+  const device = deviceName.trim() || redeemed.name
+  let token = ''
+  let name = ''
+  try {
+    deps.store.update((c) => {
+      name = phoneTokenName(device, new Set(listTokens(c).map((t) => t.name)))
+      token = addToken(c, name, new Date(now), { pairedBy: redeemed.pairedBy })
+    })
+  } catch (error) {
+    return { ok: false, reason: 'unsaved', error }
+  }
+  return { ok: true, token, name, pairedBy: redeemed.pairedBy }
 }

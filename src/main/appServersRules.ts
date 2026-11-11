@@ -176,3 +176,37 @@ export function testTokenRefusal(url: string, now: AppServer | undefined): { sta
 export function shouldRetryAfterTest(result: { status: string }, url: string, now: AppServer | undefined, removing: boolean): boolean {
   return result.status === 'connected' && now?.url === url && !removing
 }
+
+/**
+ * The server URL a pairing QR carries (6a): as this app reaches the server, without a user name or
+ * password (a saved URL can't hold them, but an older entry might). Otherwise as written.
+ */
+export function pairingUrl(url: string): string {
+  const trimmed = url.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return trimmed
+  }
+  if (!parsed.username && !parsed.password) return trimmed
+  parsed.username = ''
+  parsed.password = ''
+  const out = parsed.toString()
+  // URL adds a "/" to a bare origin; keep the original's shape.
+  return parsed.pathname === '/' && !parsed.search && !parsed.hash && !/\/$/.test(trimmed) ? out.replace(/\/$/, '') : out
+}
+
+/** A day: a pairing lifetime past this is not believed. */
+const MAX_PAIRING_LIFETIME_MS = 24 * 3_600_000
+
+/**
+ * When a pairing code expires by this machine's clock (6a): `now` plus the server's `expiresInMs`,
+ * so a server whose clock is off doesn't skew the countdown. An older server's (no
+ * `expiresInMs`, or a nonsense one): its `expiresAt`.
+ */
+export function pairingDeadline(result: { expiresAt: number; expiresInMs?: unknown }, now: number): number {
+  const ms = result.expiresInMs
+  if (typeof ms === 'number' && Number.isFinite(ms) && ms >= 0 && ms <= MAX_PAIRING_LIFETIME_MS) return now + ms
+  return result.expiresAt
+}

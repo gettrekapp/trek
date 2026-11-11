@@ -5,7 +5,7 @@
 import { CLOSE_UNAUTHORIZED, PAIRING_CLOSE_REASON, PROTOCOL_VERSION_V2 } from '../protocolV2.ts'
 import { realTimers, type SocketFactory, type Timers } from './socket.ts'
 
-export type PairingFailure = 'expired' | 'used' | 'unknown' | 'limited' | 'unreachable' | 'refused' | 'timeout'
+export type PairingFailure = 'expired' | 'used' | 'unknown' | 'limited' | 'unsaved' | 'unreachable' | 'refused' | 'timeout'
 
 export class PairingError extends Error {
   readonly kind: PairingFailure
@@ -40,6 +40,7 @@ const MESSAGES: Record<PairingFailure, string> = {
   used: 'That pairing code was already used. Ask for a new one on the desktop.',
   unknown: 'The server does not recognise that pairing code. Check it, or ask for a new one.',
   limited: 'Too many pairing attempts. Wait a minute and try again.',
+  unsaved: 'The server could not save the new token, and the code is now used up. Check the server (its log says why), then ask for a new code on the desktop.',
   unreachable: 'Could not reach the server.',
   refused: 'The server refused the pairing.',
   timeout: 'The server did not answer in time.'

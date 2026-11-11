@@ -501,7 +501,9 @@ one at a time:
   sign-in limit;
 - `npm run smoke:server-pairing`: Pair a phone… for a remote server: the QR's code (no
   token in the window), a phone (the SDK in Node) redeeming it once for its own named
-  token, and that token's revocation;
+  token, New code and closing the panel cancelling the code, and that token's revocation;
+  the server listens on this machine's first non-internal IPv4 address (the smoke fails
+  without one);
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

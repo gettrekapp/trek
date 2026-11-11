@@ -74,6 +74,8 @@ export interface V2Context {
   promoteRecoveryDir?: string
   /** Phone pairing's one-time codes (6a); absent on the local server */
   pairing?: PairingCodes
+  /** The name of the token this connection signed in with (a web session's token, for a browser) */
+  tokenName?: string
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -326,12 +328,22 @@ const handlers: Record<string, Handler> = {
   ...moveHandlers,
   ...promoteHandlers,
 
-  // A one-time code a phone redeems at hello for its own token (6a). Any signed-in client may ask:
-  // a token already holds shell-level power on this machine. Only the code's hash is kept.
+  // A one-time code a phone redeems at hello for its own token (6a). Any signed-in connection may
+  // ask (a web session or a paired phone included): a token already holds shell-level power on
+  // this machine. The caller's token name is recorded as the phone token's pairedBy. Only the
+  // code's hash is kept.
   'pairing.create': (p, ctx) => {
     if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
     if (p.name !== undefined && typeof p.name !== 'string') throw codedError('BAD_REQUEST', 'name must be a string')
-    return ctx.pairing.create(((p.name as string | undefined) ?? '').trim(), Date.now())
+    return ctx.pairing.create(((p.name as string | undefined) ?? '').trim(), Date.now(), ctx.tokenName ?? '')
+  },
+
+  // Drops a waiting code. Any signed-in connection that knows the code may: whoever holds it
+  // could redeem it, which is more.
+  'pairing.cancel': (p, ctx) => {
+    if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
+    if (typeof p.code !== 'string' || p.code.length > 64) throw codedError('BAD_REQUEST', 'code must be a string')
+    return { cancelled: ctx.pairing.cancel(p.code, Date.now()) }
   }
 }
 

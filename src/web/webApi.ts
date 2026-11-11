@@ -148,6 +148,7 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
       remove: refuse,
       test: refuse,
       pairPhone: refuse,
+      cancelPairing: async () => false,
       links: async () => links(),
       onChanged: (cb) => {
         linkListeners.add(cb)

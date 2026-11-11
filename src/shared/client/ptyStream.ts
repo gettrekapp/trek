@@ -1,6 +1,6 @@
 // Terminal streams over a ServerConnection: attach (with replay), live data,
 // exit, reattach after a reconnect, write/resize/detach.
-import type { PtyInfo } from '../protocolV2.ts'
+import type { PtyInfo, PtyResizedEventWire } from '../protocolV2.ts'
 import { ClientError, type ServerConnection } from './connection.ts'
 
 export interface PtyHandlers {
@@ -26,6 +26,11 @@ export interface PtyHandlers {
   onClosed?(reason: 'closed' | 'gone'): void
   /** A re-attach after a reconnect succeeded, after its replay: the pty as it is now (size included). */
   onReattach?(info: PtyInfo): void
+  /**
+   * An attached connection's `pty.resize` changed the pty's size (6a's `pty.resized`, this
+   * connection's own included). A client that never resizes (the phone) follows it.
+   */
+  onResize?(info: PtyResizedEventWire): void
 }
 
 interface PtyEventPayload {
@@ -33,6 +38,8 @@ interface PtyEventPayload {
   data?: unknown
   replay?: unknown
   exitCode?: unknown
+  cols?: unknown
+  rows?: unknown
 }
 
 /** A re-attach refused as CONGESTED is retried after 250 ms, doubling to 5 s, up to 10 times. */
@@ -53,13 +60,18 @@ export class PtyStream {
   constructor(conn: ServerConnection) {
     this.conn = conn
     conn.on('event', ({ event, payload }) => {
-      if (event !== 'pty.data' && event !== 'pty.exit') return
+      if (event !== 'pty.data' && event !== 'pty.exit' && event !== 'pty.resized') return
       const p = (payload ?? {}) as PtyEventPayload
       if (typeof p.ptyId !== 'string') return
       const h = this.attached.get(p.ptyId)
       if (!h) return
       if (event === 'pty.data') {
         this.call(h, () => h.onData(typeof p.data === 'string' ? p.data : '', p.replay === true))
+      } else if (event === 'pty.resized') {
+        const { cols, rows } = p
+        if (!Number.isInteger(cols) || !Number.isInteger(rows) || (cols as number) < 1 || (rows as number) < 1) return
+        const ptyId = p.ptyId
+        if (h.onResize) this.call(h, () => h.onResize?.({ ptyId, cols: cols as number, rows: rows as number }))
       } else {
         this.attached.delete(p.ptyId)
         const code = typeof p.exitCode === 'number' ? p.exitCode : -1

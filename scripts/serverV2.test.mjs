@@ -553,3 +553,21 @@ test('project.delete and repo.remove end their sessions, and only once the remov
   await call('project.delete', { projectId })
   assert.equal(forgotten.length, 3, 'an unknown project ends nothing')
 })
+
+test('pairing.create records the caller\'s token name and says how long the code lives; pairing.cancel drops it', async (t) => {
+  const { PairingCodes, PAIRING_CODE_TTL_MS } = await import('../server/src/pairing.ts')
+  const { store, hub, projects } = setup(t)
+  const pairing = new PairingCodes()
+  const ctx = { store, hub, subscriber: { send() {}, ended() {} }, projects, sessions: {}, pairing, tokenName: 'laptop' }
+  const created = await dispatchV2('pairing.create', {}, ctx)
+  assert.equal(created.ok, true)
+  assert.equal(created.result.expiresInMs, PAIRING_CODE_TTL_MS)
+  assert.ok(created.result.expiresAt > Date.now())
+  assert.deepEqual(pairing.redeem(created.result.code, Date.now()), { ok: true, name: '', pairedBy: 'laptop' })
+  const other = (await dispatchV2('pairing.create', { name: 'kitchen' }, ctx)).result.code
+  assert.deepEqual(await dispatchV2('pairing.cancel', { code: other }, ctx), { ok: true, result: { cancelled: true } })
+  assert.deepEqual(await dispatchV2('pairing.cancel', { code: other }, ctx), { ok: true, result: { cancelled: false } })
+  assert.equal(pairing.redeem(other, Date.now()).reason, 'expired')
+  assert.equal((await dispatchV2('pairing.cancel', { code: 5 }, ctx)).error.code, 'BAD_REQUEST')
+  assert.equal((await dispatchV2('pairing.cancel', { code: 'x' }, { ...ctx, pairing: undefined })).error.code, 'NOT_FOUND')
+})

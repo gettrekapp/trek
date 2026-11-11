@@ -169,6 +169,13 @@ export interface PtyExitEventWire {
   exitCode: number
 }
 
+/** The pty's new size, after a `pty.resize` that changed it (6a). */
+export interface PtyResizedEventWire {
+  ptyId: string
+  cols: number
+  rows: number
+}
+
 /**
  * `welcome.capabilities` values: the features a client cannot otherwise tell a
  * server has (a method or an event). Clients hide or work around what is missing.
@@ -240,7 +247,9 @@ export const PAIRING_CLOSE_REASON = {
   expired: 'pairing code expired',
   used: 'pairing code already used',
   unknown: 'pairing code not recognised',
-  limited: 'too many pairing attempts'
+  limited: 'too many pairing attempts',
+  /** The code was good, and is spent, but the server could not write the new token to its config */
+  unsaved: 'the server could not save the new token'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -375,6 +384,8 @@ export interface MethodParamsV2 {
   /** 5e: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer) */
   'promote.listen': { projectId: string; listen?: boolean }
   'pairing.create': { name?: string }
+  /** 6a: drops a waiting code (the desktop's New code, or its panel closing); it is then refused as expired */
+  'pairing.cancel': { code: string }
   /**
    * 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown.
    * Repeated by the claimant (or with its `claimToken` from a new connection) it refreshes the claim.
@@ -598,7 +609,10 @@ export interface MethodResultsV2 {
   'worktree.demote': PromotePlan | PromoteResult
   'promote.answer': { accepted: boolean }
   'promote.listen': null
-  'pairing.create': { code: string; expiresAt: number }
+  /** `expiresAt` by the server's clock; `expiresInMs` the code's lifetime, to count down by the client's own clock */
+  'pairing.create': { code: string; expiresAt: number; expiresInMs: number }
+  /** Whether a waiting code was dropped (false: unknown, spent or expired already) */
+  'pairing.cancel': { cancelled: boolean }
   'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null
@@ -708,6 +722,8 @@ export interface StatePatchPayload extends StatePatch {
 export interface EventPayloadsV2 {
   'pty.data': PtyDataEventWire
   'pty.exit': PtyExitEventWire
+  /** 6a: an attached connection's `pty.resize` changed the pty's size; to every connection attached to it */
+  'pty.resized': PtyResizedEventWire
   'daemon.shutdown': { reason: string }
   'state.patch': StatePatchPayload
   /** Sent to a topic's subscribers just before it stops; nothing more comes for it */

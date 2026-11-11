@@ -71,7 +71,7 @@ export type PtySpawner = (opts: SpawnOptions) => PtyProcess
 
 /** One client connection, as a receiver of pty events. */
 export interface TerminalSink {
-  send<E extends 'pty.data' | 'pty.exit'>(event: E, payload: EventPayloadsV2[E]): void
+  send<E extends 'pty.data' | 'pty.exit' | 'pty.resized'>(event: E, payload: EventPayloadsV2[E]): void
   /** Bytes queued on the connection but not yet sent (a WebSocket's bufferedAmount) */
   bufferedAmount(): number
 }
@@ -262,10 +262,21 @@ export class TerminalHost {
   resize(ptyId: string, cols: number, rows: number): void {
     validateSize(cols, rows)
     const record = this.requireLive(ptyId)
+    const changed = record.cols !== cols || record.rows !== rows
     record.cols = cols
     record.rows = rows
     record.proc.resize(cols, rows)
     record.screen.resize(cols, rows)
+    if (!changed) return
+    // Every attached connection learns the new size (6a: the phone never resizes, it follows).
+    for (const sink of [...record.sinks]) {
+      try {
+        sink.send('pty.resized', { ptyId, cols, rows })
+      } catch (err) {
+        console.warn(`pty ${ptyId}: dropping a client after send failed`, err)
+        record.sinks.delete(sink)
+      }
+    }
   }
 
   /**
