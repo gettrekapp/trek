@@ -5,6 +5,7 @@ import {
   CLOSE_REASON_UPGRADE_CLIENT,
   CLOSE_UNAUTHORIZED,
   CLOSE_UNSUPPORTED_VERSION,
+  PAIRING_CLOSE_REASON,
   PROTOCOL_VERSION_V2,
   SUPPORTED_PROTOCOL_VERSIONS,
   type IntegrationsChangedEvent,
@@ -18,7 +19,8 @@ import type { ConfigStore } from './configStore'
 import type { ProjectState } from './projects/state'
 import type { ProjectStore } from './projects/store'
 import { publishServerState } from './serverState'
-import { activeTokenHashes, listTokens, matchToken } from './tokens'
+import { activeTokenHashes, addToken, listTokens, matchToken } from './tokens'
+import { PairingCodes, phoneTokenName } from './pairing'
 import { TopicHub, type Subscriber } from './topicHub'
 import { dispatchV2, responseRev } from './v2'
 import { GitPoller } from './git/poller'
@@ -174,6 +176,10 @@ export function startServer(
     : undefined
   if (web) webSignIns = new WebSocketSignIns(web.sessions, (ws) => closeRevoked(ws, 'signed out'))
   const signedOut = (key: string): void => webSignIns?.signedOut(key)
+  // Phone pairing (6a), on any server but the local one. Failed redeems count against the web
+  // sign-in's limits (shared with it when the web client is on).
+  const pairing = options.local ? undefined : new PairingCodes()
+  const pairingLimiter = web?.limiter ?? new LoginLimiter()
   // Expired sessions end on the hour even if nothing looks them up, closing their sockets.
   const stopSweep = web ? sweepEvery(web.sessions) : () => {}
   const onConfigChange = (): void => {
@@ -334,7 +340,12 @@ export function startServer(
           return
         }
         clearTimeout(helloTimer)
-        if (typeof frame.protocolVersion !== 'number' || (frame.token !== undefined && typeof frame.token !== 'string')) {
+        if (
+          typeof frame.protocolVersion !== 'number' ||
+          (frame.token !== undefined && typeof frame.token !== 'string') ||
+          (frame.pairingCode !== undefined && (typeof frame.pairingCode !== 'string' || frame.pairingCode.length > 64)) ||
+          (frame.deviceName !== undefined && (typeof frame.deviceName !== 'string' || frame.deviceName.length > 200))
+        ) {
           ws.close(1002, 'invalid hello')
           return
         }
@@ -346,9 +357,36 @@ export function startServer(
           ws.close(CLOSE_UNSUPPORTED_VERSION, frame.protocolVersion < PROTOCOL_VERSION_V2 ? CLOSE_REASON_UPGRADE_CLIENT : 'unsupported protocol version')
           return
         }
+        // A phone pairing (6a): a one-time code in place of a token. A good one mints the phone's
+        // own named token, sent once in the welcome; a bad one closes like a bad token, with why.
+        let paired: { token: string; name: string } | undefined
+        if (typeof frame.pairingCode === 'string' && !frame.token && !headerToken) {
+          const refuse = (reason: string): void => {
+            console.warn(`[auth] pairing refused (${reason}) from ${req.socket.remoteAddress}`)
+            rejected = true
+            rejectTimer = setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, reason), BAD_TOKEN_CLOSE_DELAY_MS)
+          }
+          const address = req.socket.remoteAddress ?? ''
+          const at = Date.now()
+          if (!pairing) return refuse(PAIRING_CLOSE_REASON.unknown)
+          if (!pairingLimiter.allow(address, at)) return refuse(PAIRING_CLOSE_REASON.limited)
+          const redeemed = pairing.redeem(frame.pairingCode, at)
+          if (!redeemed.ok) return refuse(PAIRING_CLOSE_REASON[redeemed.reason])
+          pairingLimiter.succeed(address, at)
+          const name = phoneTokenName(
+            typeof frame.deviceName === 'string' && frame.deviceName.trim() ? frame.deviceName.trim() : redeemed.name,
+            new Set(listTokens(store.config).map((t) => t.name))
+          )
+          let token = ''
+          store.update((c) => {
+            token = addToken(c, name)
+          })
+          paired = { token, name }
+          console.log(`[auth] paired a phone as token "${name}" from ${address}`)
+        }
         // An empty frame token falls back to the Authorization header, then to the web sign-in:
         // its session must still be live and its token still listed.
-        const token = (frame.token as string | undefined) || headerToken
+        const token = paired?.token || (frame.token as string | undefined) || headerToken
         const entry = token
           ? matchToken(store.config, token)
           : webSession && web?.sessions.has(webSession.key, Date.now())
@@ -374,7 +412,8 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true)
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true),
+          ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
         })
         return
       }
@@ -402,6 +441,7 @@ export function startServer(
         prWatch,
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
+        pairing,
         mcpAccess: access
           ? {
               revoke: (id) => {

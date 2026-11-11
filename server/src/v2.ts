@@ -4,6 +4,7 @@
 // Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
 // moving a worktree between servers (moveHandlers.ts).
+import type { PairingCodes } from './pairing'
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
@@ -71,6 +72,8 @@ export interface V2Context {
   promoteRequests?: PromoteRequests
   /** Where a promote or demote saves a copy of the work it carries (5e; default: the temp dir) */
   promoteRecoveryDir?: string
+  /** Phone pairing's one-time codes (6a); absent on the local server */
+  pairing?: PairingCodes
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -321,7 +324,15 @@ const handlers: Record<string, Handler> = {
   ...prWatchHandlers,
   ...reviewHandlers,
   ...moveHandlers,
-  ...promoteHandlers
+  ...promoteHandlers,
+
+  // A one-time code a phone redeems at hello for its own token (6a). Any signed-in client may ask:
+  // a token already holds shell-level power on this machine. Only the code's hash is kept.
+  'pairing.create': (p, ctx) => {
+    if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
+    if (p.name !== undefined && typeof p.name !== 'string') throw codedError('BAD_REQUEST', 'name must be a string')
+    return ctx.pairing.create(((p.name as string | undefined) ?? '').trim(), Date.now())
+  }
 }
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */

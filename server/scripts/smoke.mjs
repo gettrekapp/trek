@@ -289,6 +289,59 @@ if (!snap.ok || !snap.result.snapshot.repos.some((r) => r.id === 'repo3')) {
 if (phone2.frames.some((f) => f.type === 'res' && f.id === 99)) fail('revoked socket got a response')
 checker.sock.close()
 
+// --- phone pairing (6a): a one-time code from pairing.create, redeemed once at hello for a named token ---
+const pairHello = async (code, deviceName) => {
+  const sock = new WebSocket(`ws://127.0.0.1:${PORT}`)
+  const frames = []
+  sock.on('message', (raw) => frames.push(JSON.parse(raw.toString())))
+  const closed = new Promise((r) => sock.on('close', (c, reason) => r({ code: c, reason: reason.toString() })))
+  await new Promise((r) => sock.on('open', r))
+  sock.send(JSON.stringify({ type: 'hello', protocolVersion: 2, client: 'smoke-phone', clientVersion: '0', pairingCode: code, deviceName }))
+  await waitFor(() => frames.length > 0, 3000)
+  return { sock, frames, closed }
+}
+{
+  const desk = await connect(2, token)
+  if (!desk.welcome?.capabilities.includes('pairing')) fail(`welcome lacks pairing: ${JSON.stringify(desk.welcome?.capabilities)}`)
+  else ok('the welcome lists pairing')
+  const created = await desk.req('pairing.create', { name: 'smoke' })
+  const code = created.result?.code
+  if (!created.ok || !/^[A-Z2-7]{26}$/.test(code ?? '') || !(created.result.expiresAt > Date.now())) fail(`pairing.create: ${JSON.stringify(created)}`)
+  else ok('pairing.create gives a 26-character base32 code that expires later')
+  // Typed back with lower case and dashes, as a person might.
+  const typed = code.toLowerCase().replace(/(.{5})/g, '$1-')
+  const redeem = await pairHello(typed, 'Smoke iPhone')
+  const welcome = redeem.frames.find((f) => f.type === 'welcome')
+  if (!welcome?.pairedToken || welcome.pairedTokenName !== 'phone-Smoke-iPhone') fail(`pairing redeem: ${JSON.stringify(redeem.frames)}`)
+  else ok('a redeemed code mints the phone\'s own token "phone-Smoke-iPhone", sent once in the welcome')
+  redeem.sock.close()
+  const tokenList = cli('token', 'list')
+  if (!/phone-Smoke-iPhone/.test(tokenList)) fail(`token list after pairing: ${tokenList}`)
+  else ok('the paired token is listed by `token list`')
+  const paired = await connect(2, welcome?.pairedToken)
+  if (paired.welcome?.protocolVersion !== 2 || paired.welcome.pairedToken !== undefined) fail(`paired token login: ${JSON.stringify(paired.frames)}`)
+  else ok('the paired token authenticates, and an ordinary welcome carries no token')
+  const again = await pairHello(code, 'Other')
+  const againClose = await raceTimeout(again.closed, 4000)
+  if (againClose.code !== 4003 || againClose.reason !== 'pairing code already used' || again.frames.length !== 0) fail(`reused code: ${JSON.stringify(againClose)} ${JSON.stringify(again.frames)}`)
+  else ok('a code redeems once: a second try closes 4003 "pairing code already used", with no frame')
+  for (let i = 0; i < 4; i++) {
+    const bad = await pairHello('AAAAAAAAAAAAAAAAAAAAAAAAAA', 'x')
+    const badClose = await raceTimeout(bad.closed, 4000)
+    if (i === 0 && (badClose.code !== 4003 || badClose.reason !== 'pairing code not recognised')) fail(`unknown code: ${JSON.stringify(badClose)}`)
+    else if (i === 0) ok('an unknown code closes 4003 "pairing code not recognised"')
+  }
+  const limited = await pairHello('AAAAAAAAAAAAAAAAAAAAAAAAAA', 'x')
+  const limitedClose = await raceTimeout(limited.closed, 4000)
+  if (limitedClose.code !== 4003 || limitedClose.reason !== 'too many pairing attempts') fail(`pairing limit: ${JSON.stringify(limitedClose)}`)
+  else ok('five failed redeems from one address in a minute: the sixth closes "too many pairing attempts"')
+  cli('token', 'revoke', 'phone-Smoke-iPhone')
+  const pairedClosed = await raceTimeout(paired.closed, 4000)
+  if (pairedClosed !== 4003) fail(`revoked paired token: ${pairedClosed}`)
+  else ok('revoking the paired token closes the phone\'s connection (4003)')
+  desk.sock.close()
+}
+
 // Malformed frames close the socket with 1002 and do not crash the server.
 for (const bad of ['null', '"x"', '[]', JSON.stringify({ type: 'hello', protocolVersion: 2, token: 5 }),
   JSON.stringify({ type: 'hello', protocolVersion: '2', token: 'TOKEN' })]) {

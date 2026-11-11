@@ -119,6 +119,13 @@ export interface HelloFrame {
   token?: string
   client: string
   clientVersion: string
+  /**
+   * A phone pairing (6a): a one-time code from `pairing.create`, redeemed in place of a token (with
+   * no token). The server mints the phone's own named token and sends it once in the welcome.
+   */
+  pairingCode?: string
+  /** With `pairingCode`: the device's name, for the token's name (`phone-<deviceName>`) */
+  deviceName?: string
 }
 
 export interface ReqFrame {
@@ -220,7 +227,20 @@ export const CAPABILITY = {
    * and settled by its `worktree.promote {requestId}`, or declined (`promote.answer`); then
    * `promote.settled`
    */
-  promote: 'promote'
+  promote: 'promote',
+  /**
+   * Phone pairing (6a): `pairing.create` gives a signed-in client a one-time code (5 minutes) that
+   * a phone redeems once at hello (`pairingCode`) for its own named token (`welcome.pairedToken`)
+   */
+  pairing: 'pairing'
+} as const
+
+/** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
+export const PAIRING_CLOSE_REASON = {
+  expired: 'pairing code expired',
+  used: 'pairing code already used',
+  unknown: 'pairing code not recognised',
+  limited: 'too many pairing attempts'
 } as const
 
 /** Why a topic ended (`topic.ended`). */
@@ -240,6 +260,10 @@ export interface WelcomeFrameV2 {
   serverName: string
   /** Optional features, e.g. "mcp", "bot", "docker"; clients hide what is missing */
   capabilities: string[]
+  /** Only to a hello that redeemed a `pairingCode` (6a): the phone's new token, sent this once */
+  pairedToken?: string
+  /** With `pairedToken`: the name the server gave it (`phone-<device>`) */
+  pairedTokenName?: string
 }
 
 interface ProjectRef {
@@ -350,6 +374,7 @@ export interface MethodParamsV2 {
   'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'failed' | 'unknown-worktree'; error?: string; claimToken?: string }
   /** 5e: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer) */
   'promote.listen': { projectId: string; listen?: boolean }
+  'pairing.create': { name?: string }
   /**
    * 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown.
    * Repeated by the claimant (or with its `claimToken` from a new connection) it refreshes the claim.
@@ -573,6 +598,7 @@ export interface MethodResultsV2 {
   'worktree.demote': PromotePlan | PromoteResult
   'promote.answer': { accepted: boolean }
   'promote.listen': null
+  'pairing.create': { code: string; expiresAt: number }
   'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null
