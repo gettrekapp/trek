@@ -4,6 +4,7 @@
 // protocol. A grant the relay refused (401/404/410) keeps its settings and why, without its secret,
 // so `push.status` can tell the phone to grant again.
 import { ALL_PUSH_KINDS_ON, type PushKinds } from '../../../src/shared/push.ts'
+import { isLoopbackUrl } from '../../../src/shared/appServerRules.ts'
 import { codedError } from '../errors.ts'
 import type { SecretFile } from '../secrets.ts'
 
@@ -31,9 +32,10 @@ const PREFIX = 'push:'
 export const MAX_RELAY_URL = 512
 export const MAX_GRANT_SECRET = 128
 
-const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
-
-/** A relay is reached over https; http only to loopback (a relay on the same machine, or a test). */
+/**
+ * A relay is reached over https; http only to loopback (a relay on the same machine, or a test),
+ * by 6a's rule for what counts as loopback (src/shared/appServerRules.ts).
+ */
 export function checkRelayUrl(value: unknown): string {
   if (typeof value !== 'string' || !value || value.length > MAX_RELAY_URL) throw codedError('BAD_REQUEST', 'relayUrl must be a URL')
   let url: URL
@@ -43,7 +45,7 @@ export function checkRelayUrl(value: unknown): string {
     throw codedError('BAD_REQUEST', 'relayUrl must be a URL')
   }
   if (url.username || url.password || url.search || url.hash) throw codedError('BAD_REQUEST', 'relayUrl must be a plain origin (and path)')
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK.has(url.hostname))) {
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLoopbackUrl(url.href))) {
     throw codedError('BAD_REQUEST', 'relayUrl must be https:// (http:// only on this machine)')
   }
   return url.href.replace(/\/+$/, '')
@@ -133,15 +135,20 @@ export class PushGrants {
     return [...this.load()].filter(([, g]) => g.grantSecret !== '')
   }
 
-  /** The relay refused the grant: forget its secret, keep its settings and why */
-  refused(name: string, why: string): void {
+  /**
+   * The relay refused the grant: forget its secret, keep its settings and why. Only when the
+   * stored grant still has `secretUsed`: a phone that set a new grant while the refused push was
+   * on its way keeps the new one.
+   */
+  refused(name: string, why: string, secretUsed: string): void {
     const g = this.get(name)
-    if (g) this.write(name, { ...g, grantSecret: '', lastError: why })
+    if (g && g.grantSecret === secretUsed) this.write(name, { ...g, grantSecret: '', lastError: why })
   }
 
-  pushed(name: string, at: number, error?: string): void {
+  /** A push with `secretUsed` ended (`error` unset: delivered). Ignored once the grant was replaced. */
+  pushed(name: string, at: number, secretUsed: string, error?: string): void {
     const g = this.get(name)
-    if (!g) return
+    if (!g || g.grantSecret !== secretUsed) return
     // Only `lastPushAt` changes on success; it is kept in memory, not rewritten to disk each push.
     if (error === undefined) {
       g.lastPushAt = at

@@ -454,8 +454,14 @@ never sees them, nor the phone's push token.
   `phone-<device>`), one per token: `push.setGrant` replaces the one before. It is kept in the
   server's `secrets.json` (0600) under `push:<token name>`, and `push.status` never returns the
   secret. Revoking the token drops its grant. `kinds` default to all on and `paused` to false.
-- **The relay address** must be `https://`, or `http://` to `127.0.0.1`, `localhost` or `[::1]`
-  (a relay on the server's machine, or a test), with no user name, password, query or fragment.
+- **The relay address** must be `https://`, or `http://` to this machine's loopback (6a's rule,
+  `isLoopbackUrl` in `src/shared/appServerRules.ts`: `localhost`, `127.0.0.0/8`, `[::1]` and
+  their forms; a relay on the server's machine, or a test), with no user name, password, query or
+  fragment. **Note:** any token can set a grant, so a token can make the server POST (a fixed
+  JSON body, its own bearer secret) to any `https://` URL it names: server-side request forgery in
+  principle. Tokens are unscoped (each already holds shell-level power on the server's machine),
+  so this gives a token holder nothing new; the server never follows a relay's redirect
+  (`redirect: 'error'`) and reads nothing of the answer but its status and `Retry-After`.
 - **What is pushed:** a new attention entry whose kind the grant has on.
   - `decisions`: a session's `request_decision` (kind `decision`).
   - `sessions`: a session waiting for the user, in `attention` or `done` (`session-finished`), or
@@ -470,14 +476,29 @@ never sees them, nor the phone's push token.
   What was already listed when the server started is never pushed.
 - **When not:** never while the grant is `paused`, and never while any connection signed in with
   that token is open (the phone shows it already). One push per (token, project, kind) in 30
-  seconds, so a burst is one push.
+  seconds, so a burst is one push; the two session kinds count as one kind here, and a session
+  push waits 2 seconds first, so a session that exits right after it went "waiting" is pushed
+  once, as `session-stopped`.
+- **After a disconnect:** an attention entry that arrived while the token was connected (and
+  whose kind the grant has on) is remembered, up to 50 per token; when the token's last
+  connection closes, those still listed are pushed (by the rules above). iOS suspends an app
+  seconds after it leaves the screen, but its socket stays open until the heartbeat drops it, so
+  without this a decision asked in that gap would never reach the lock screen.
 - **The push:** `POST <relayUrl>/v1/push` with the grant secret as the bearer, and only
   `{kind, project: <the project's name>, data: {serverId, projectId, worktreeId?, sessionId?}}`.
-  The relay builds the words from the kind (`relay/README.md`). Network errors and `5xx` are
-  retried 3 times (1, 3 and 10 seconds apart). `401`, `404` or `410` mean the relay no longer has
-  the grant, or the phone is gone: the server keeps the grant's settings without its secret,
-  `push.status` answers `active: false` with `lastError`, and the phone takes a new grant. A `429`
-  is recorded in `lastError` and that push is dropped.
+  The relay builds the words from the kind (`relay/README.md`). The relay's answers:
+  - `202`: sent (or dropped because the phone paused every push at the relay).
+  - `503` or a network error: retried 3 times (1, 3 and 10 seconds apart, or after the
+    `Retry-After` it gave, at most 30 seconds), then recorded in `lastError`.
+  - `422` (the push service refused this push), or any other status: not retried; recorded in
+    `lastError`.
+  - `401`, `404` or `410`: the relay no longer has the grant, or the phone is gone. The server
+    keeps the grant's settings without its secret, `push.status` answers `active: false` with
+    `lastError`, and the phone takes a new grant. A result for a secret the phone has since
+    replaced (with `push.setGrant`) changes nothing.
+  - `429`: recorded in `lastError`; that push is dropped.
+
+  Stopping the server aborts the pushes on their way.
 
 ## Web client
 

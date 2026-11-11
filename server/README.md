@@ -258,10 +258,14 @@ decision waiting, a session waiting or stopped, a watched pull request's report.
 the server a grant from the relay (`push.setGrant`), kept in `secrets.json` beside the config under
 `push:<token name>`, never shown again. The server posts only the kind, the project's name and
 ids, and only while that phone has no connection open, at most once per project and kind in 30
-seconds. The phone's three switches and Pause all are applied here, so a muted kind never leaves
-the server. Revoking the phone's token drops its grant; a grant the relay refuses (`401`/`404`/
-`410`) is dropped too and the phone takes a new one. The relay's address must be `https://` (or
-`http://` on this machine). See PROTOCOL.md, "Background push".
+seconds (a session's "waiting" and "stopped" count as one). What arrived while the phone was
+connected and is still open is pushed when its last connection closes (an iOS app is suspended
+long before its socket drops). The phone's three switches and Pause all are applied here, so a
+muted kind never leaves the server. Revoking the phone's token drops its grant; a grant the relay
+refuses (`401`/`404`/`410`) is dropped too and the phone takes a new one. A `503` (or no answer)
+is retried, honouring `Retry-After`; a `422` is not. The relay's address must be `https://` (or
+`http://` on this machine); redirects are never followed. Note that any token can point the
+server at any `https://` relay URL (see PROTOCOL.md, "Background push").
 
 ## Web client
 

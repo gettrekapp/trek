@@ -48,11 +48,17 @@ export const MAX_PUSH_PROJECT = 80
 /** Longest id in a push's `data` */
 export const MAX_PUSH_ID = 128
 
-/** Cuts a project name to MAX_PUSH_PROJECT and drops control characters. */
+/**
+ * Cuts a project name to MAX_PUSH_PROJECT code points (a surrogate pair is never split) and drops
+ * control characters and the invisible ones that can reorder or hide text: zero-width and bidi
+ * marks, the line and paragraph separators (U+2028/2029), the BOM (U+FEFF) and the invisible
+ * operators (U+2060–2064).
+ */
 export function pushProject(name: string): string {
   // eslint-disable-next-line no-control-regex
-  const clean = name.replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/g, '').trim()
-  return clean.length > MAX_PUSH_PROJECT ? `${clean.slice(0, MAX_PUSH_PROJECT - 1)}…` : clean
+  const clean = name.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, '').trim()
+  const points = Array.from(clean)
+  return points.length > MAX_PUSH_PROJECT ? `${points.slice(0, MAX_PUSH_PROJECT - 1).join('')}…` : clean
 }
 
 /** The words on the lock screen: "Trek · <project>" over the kind's fixed sentence. */

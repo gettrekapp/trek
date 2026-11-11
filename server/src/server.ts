@@ -512,7 +512,10 @@ export function startServer(
       revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
+      const tokenName = connectedTokens.get(ws)
       connectedTokens.delete(ws)
+      // Its last connection gone: what it was shown while connected and is still open is pushed now.
+      if (tokenName !== undefined && pusher && ![...connectedTokens.values()].includes(tokenName)) pusher.tokenDisconnected(tokenName)
       webSignIns?.delete(ws)
       hub.unsubscribeAll(subscriber)
       // A promote_to_primary request this window claimed but had not started fails.

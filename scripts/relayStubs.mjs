@@ -38,14 +38,17 @@ export function readJwt(jwt, publicKey, alg) {
 
 /**
  * APNs: records each push ({path, headers, body}); `respond(push)` picks the answer
- * ({status, reason}), default 200.
+ * ({status, reason}, or {hang: true} to never answer), default 200. `sessionsOpened()` counts the
+ * HTTP/2 connections made to it.
  */
 export async function startApnsStub() {
   const pushes = []
-  const stub = { pushes, respond: () => ({ status: 200 }) }
+  let opened = 0
+  const stub = { pushes, respond: () => ({ status: 200 }), sessionsOpened: () => opened }
   const server = createH2Server()
   const sessions = new Set()
   server.on('session', (s) => {
+    opened += 1
     sessions.add(s)
     s.on('close', () => sessions.delete(s))
   })
@@ -56,7 +59,9 @@ export async function startApnsStub() {
     stream.on('end', () => {
       const push = { path: headers[':path'], headers, body: body ? JSON.parse(body) : null }
       pushes.push(push)
-      const { status, reason } = stub.respond(push)
+      const answer = stub.respond(push)
+      if (answer.hang) return
+      const { status, reason } = answer
       stream.respond({ ':status': status, 'content-type': 'application/json' })
       stream.end(reason ? JSON.stringify({ reason }) : '')
     })
@@ -80,7 +85,8 @@ export async function startFcmStub() {
   const assertions = []
   const messages = []
   let issued = 0
-  const stub = { assertions, messages, respond: () => ({ status: 200 }), tokensIssued: () => issued }
+  // tokenDelayMs: how long the token endpoint takes to answer (a shared exchange is tested with it)
+  const stub = { assertions, messages, respond: () => ({ status: 200 }), tokensIssued: () => issued, tokenDelayMs: 0 }
   const server = createServer((req, res) => {
     let body = ''
     req.setEncoding('utf8')
@@ -90,8 +96,11 @@ export async function startFcmStub() {
         const form = new URLSearchParams(body)
         assertions.push(form.get('assertion'))
         issued += 1
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ access_token: `access-${issued}`, expires_in: 3600 }))
+        const n = issued
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ access_token: `access-${n}`, expires_in: 3600 }))
+        }, stub.tokenDelayMs)
         return
       }
       if (/^\/v1\/projects\/[^/]+\/messages:send$/.test(req.url ?? '')) {

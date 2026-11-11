@@ -17,6 +17,7 @@ export function createProviders(config: RelayConfig, log: (line: string) => void
       origin: config.apnsHost ?? (a.production ? APNS_PRODUCTION : APNS_SANDBOX),
       bundleId: a.bundleId,
       token: new ApnsToken(key, a.keyId, a.teamId),
+      production: a.production,
       log
     })
   }

@@ -347,8 +347,6 @@ const handlers: Record<string, Handler> = {
     return ctx.pairing.create(((p.name as string | undefined) ?? '').trim(), Date.now(), ctx.tokenName ?? '')
   },
 
-  // Drops a waiting code. Any signed-in connection that knows the code may: whoever holds it
-  // could redeem it, which is more.
   // Background push (6b): the calling token's relay grant. Write-only: status never returns the secret.
   'push.setGrant': (p, ctx) => {
     const grants = pushGrantsOf(ctx)
@@ -361,6 +359,8 @@ const handlers: Record<string, Handler> = {
   },
   'push.status': (_p, ctx) => pushGrantsOf(ctx).status(ctx.tokenName!),
 
+  // Drops a waiting code. Any signed-in connection that knows the code may: whoever holds it
+  // could redeem it, which is more.
   'pairing.cancel': (p, ctx) => {
     if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
     if (typeof p.code !== 'string' || p.code.length > 64) throw codedError('BAD_REQUEST', 'code must be a string')

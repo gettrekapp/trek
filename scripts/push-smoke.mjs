@@ -231,17 +231,18 @@ try {
   check('push.status shows the grant, never its secret', [status.active, status.paused, status.kinds, JSON.stringify(status).includes(grant.body.grantSecret)], [true, false, { decisions: true, sessions: true, prWatch: true }, false])
   check("the desktop's token has no grant of its own", await desktop.request('push.status', {}), null)
 
-  const decisionPushes = () => apns.pushes.filter((p) => p.body?.trek?.kind === 'decision')
-  const kindsPushed = () => apns.pushes.map((p) => p.body?.trek?.kind)
+  const decisionPushes = () => apns.pushes.filter((p) => p.body?.body?.kind === 'decision')
+  const kindsPushed = () => apns.pushes.map((p) => p.body?.body?.kind)
 
   // ---- 4. Away: a decision is pushed once, with only the kind and the project --------------------
   await phoneAway()
   check('the session asks a decision through its MCP tools', (await ask('Ship it to production?')).result?.isError, false)
   check('a decision reaches APNs once', await until(() => decisionPushes().length, 1), 1)
+  const firstDecisionAt = Date.now()
   const p = decisionPushes()[0]
   check("as an alert to the phone's token, for the app's bundle", [p?.path, p?.headers['apns-topic'], p?.headers['apns-push-type']], ['/3/device/abcdef0123456789', 'app.trek.smoke', 'alert'])
   check('saying only the project and the kind', p?.body?.aps?.alert, { title: 'Trek · push-app', body: 'A decision is waiting' })
-  check('with the ids to open it', [p?.body?.trek?.projectId, p?.body?.trek?.sessionId, p?.body?.trek?.serverId?.length > 0], [projectId, sessionId, true])
+  check('with the ids to open it', [p?.body?.body?.projectId, p?.body?.body?.sessionId, p?.body?.body?.serverId?.length > 0], [projectId, sessionId, true])
   check("the question never left the server", JSON.stringify(apns.pushes).includes('production'), false)
 
   // ---- 5. Decisions off: nothing --------------------------------------------------------------------
@@ -259,13 +260,17 @@ try {
   await ask('While you look?')
   await sleep(2000)
   check('with the phone connected, nothing is sent', apns.pushes.length, before)
+  // Past the 30 s coalescing of the first decision, the phone leaves with this one still open (as
+  // iOS suspends an app whose socket the server still sees): it is pushed when the socket closes.
+  await sleep(Math.max(0, firstDecisionAt + 31_000 - Date.now()))
   await phoneAway()
+  check('a decision asked while the phone was connected is pushed when it leaves', await until(() => decisionPushes().length, 2), 2)
 
   // ---- 7. A session that exits by itself --------------------------------------------------------------
   writeFileSync(join(repo, '.stop-agent'), '')
   check('a session that exits by itself pushes "A session stopped"', await until(() => kindsPushed().includes('session-stopped'), true), true)
-  const stopped = apns.pushes.find((x) => x.body?.trek?.kind === 'session-stopped')
-  check('for its project and session', [stopped?.body?.aps?.alert?.body, stopped?.body?.trek?.sessionId], ['A session stopped', sessionId])
+  const stopped = apns.pushes.find((x) => x.body?.body?.kind === 'session-stopped')
+  check('for its project and session', [stopped?.body?.aps?.alert?.body, stopped?.body?.body?.sessionId], ['A session stopped', sessionId])
 
   // ---- 8. A grant revoked at the relay is dropped by the server --------------------------------------
   check('the phone revokes its grant at the relay', (await relay('DELETE', `/v1/grants/${grant.body.grantId}`, undefined, reg.body.deviceSecret)).status, 200)
@@ -274,7 +279,8 @@ try {
   // The phone stays away until the session has exited and the server has tried to push it.
   const status2 = async () => (await mainOf(projectId2)).sessions.find((s) => s.id === sessionId2)?.status
   check('the other project\'s session exits by itself', await until(status2, 'exited'), 'exited')
-  await sleep(1500)
+  // A session push waits 2 s (SESSION_HOLD_MS: "stopped" wins over a "waiting" just before it).
+  await sleep(3500)
   await phoneOnline()
   const dropped = await until(async () => (await phone.request('push.status', {})).active, false)
   check('the next push finds it gone, and the server drops it', dropped, false)

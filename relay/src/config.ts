@@ -27,6 +27,18 @@ export interface RelayConfig {
   apns?: ApnsConfig
   fcm?: FcmConfig
   /**
+   * The relay is behind a proxy (Caddy) that appends the client's address to X-Forwarded-For:
+   * the per-address limits read its last hop. Off by default (the socket's address is used).
+   */
+  trustProxy?: boolean
+  /**
+   * When set, POST /v1/devices needs the header `x-trek-relay-key: <key>`, so only phones built
+   * with the key (the build's `extra.relayKey`) can register.
+   */
+  registrationKey?: string
+  /** The most devices the relay holds (default 10,000); registration answers 503 beyond it */
+  maxDevices?: number
+  /**
    * Tests only: the providers' origins (a local stub). APNs is reached over HTTP/2 at
    * `apnsHost`; `http://` means cleartext HTTP/2 (h2c), which only a stub speaks.
    */
@@ -43,13 +55,18 @@ const str = (v: unknown, what: string): string => {
   return v.trim()
 }
 
-/** The file's mode must give group and others nothing. */
+/** The file must belong to the user the relay runs as, and its mode give group and others nothing. */
 export function assertOwnerOnly(path: string, what: string): void {
   let mode: number
+  let uid: number
   try {
-    mode = statSync(path).mode
+    ;({ mode, uid } = statSync(path))
   } catch (err) {
     throw new Error(`${what} (${path}) cannot be read: ${(err as Error).message}`)
+  }
+  const me = process.getuid?.()
+  if (me !== undefined && uid !== me) {
+    throw new Error(`${what} (${path}) belongs to another user (uid ${uid}, the relay runs as ${me}); chown it to the relay's user`)
   }
   if ((mode & 0o077) !== 0) {
     throw new Error(`${what} (${path}) is readable by others (mode ${(mode & 0o777).toString(8)}); run chmod 600 on it`)
@@ -88,6 +105,19 @@ export function loadRelayConfig(path: string): RelayConfig {
     port: c.port === undefined ? DEFAULT_RELAY_PORT : Number(c.port)
   }
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) throw new Error('port must be 0–65535')
+  if (c.trustProxy !== undefined) {
+    if (typeof c.trustProxy !== 'boolean') throw new Error('trustProxy must be true or false')
+    config.trustProxy = c.trustProxy
+  }
+  if (c.registrationKey !== undefined) {
+    const key = str(c.registrationKey, 'registrationKey')
+    if (key.length < 16 || key.length > 256) throw new Error('registrationKey must be 16–256 characters')
+    config.registrationKey = key
+  }
+  if (c.maxDevices !== undefined) {
+    if (!Number.isInteger(c.maxDevices) || (c.maxDevices as number) < 1) throw new Error('maxDevices must be a positive integer')
+    config.maxDevices = c.maxDevices as number
+  }
   if (c.apns !== undefined) {
     const a = c.apns as Record<string, unknown>
     if (!a || typeof a !== 'object') throw new Error('apns must be an object')

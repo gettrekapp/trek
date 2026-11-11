@@ -28,8 +28,17 @@ You need at least one platform. A platform with no credentials is refused at reg
   account key (Project settings → Service accounts → Generate new private key). That JSON file is
   `serviceAccountPath`.
 
-Keep both files readable only by the relay's user (`chmod 600`). The relay refuses to start if
-they, or its config, can be read by group or others.
+Keep both files owned by, and readable only by, the relay's user (`chmod 600`). The relay
+refuses to start if they, or its config, belong to another user or can be read by group or
+others. It makes `dataDir` mode 0700 if it has to create it.
+
+**When APNs refuses the setup.** `DeviceTokenNotForTopic`, `BadTopic`, `TopicDisallowed` and the
+environment errors mean the relay's `apns.bundleId` or `apns.production` doesn't match the build
+(a development build's token works only with `"production": false`, a TestFlight or App Store
+build's only with `true`). So does `BadDeviceToken` for a token that has never had a push
+delivered. The relay logs these as `APNS CONFIG ERROR`, naming both settings, answers the server
+`422`, and keeps the device: fix the config and restart. `BadDeviceToken` for a token that has
+had a push delivered, and APNs' `410`, mean the token is gone.
 
 ## Configure and run
 
@@ -45,9 +54,24 @@ they, or its config, can be read by group or others.
     "keyPath": "/etc/trek-relay/AuthKey_ABC123DEFG.p8",
     "production": false
   },
-  "fcm": { "serviceAccountPath": "/etc/trek-relay/firebase-service-account.json" }
+  "fcm": { "serviceAccountPath": "/etc/trek-relay/firebase-service-account.json" },
+  "trustProxy": true,
+  "registrationKey": "a-long-random-string-baked-into-your-build",
+  "maxDevices": 10000
 }
 ```
+
+- `trustProxy` (default `false`): the relay is behind a proxy that appends the client's address
+  to `X-Forwarded-For` (Caddy does), and the per-address registration limit reads that header's
+  **last** hop, the one the proxy added. Only set it when the relay's port can't be reached but
+  through the proxy (it listens on `127.0.0.1` by default): otherwise a client can name any
+  address it likes.
+- `registrationKey` (optional, 16–256 characters): `POST /v1/devices` then needs the header
+  `x-trek-relay-key: <key>` (compared in constant time), so only your build can register. Bake it
+  into the build as `expo.extra.relayKey` in `apps/mobile/app.json`, next to `relayUrl`; the
+  phone sends it. Anyone with the app binary can read it, so it keeps out strangers who found the
+  relay's address, not a determined attacker.
+- `maxDevices` (default 10,000): beyond it, registration answers `503`.
 
 ```bash
 cd relay && npm ci && npm run build
@@ -65,36 +89,71 @@ push.example.com {
 }
 ```
 
+Caddy's `reverse_proxy` appends the client's address to `X-Forwarded-For`: set `"trustProxy":
+true` so the relay limits registrations per client rather than treating every phone as Caddy's
+`127.0.0.1` (which would let ten registrations a minute, from anyone, lock out everyone).
+
 Then build the phone app with that address: set `expo.extra.relayUrl` in `apps/mobile/app.json`
 (for example `"https://push.example.com"`) before building. A build without it shows no push
 settings and registers nothing.
 
 ## What it stores
 
-`<dataDir>/relay.json` (mode 0600): each phone's push token and platform, and its grants (one per
-paired server, labelled with the server's name). The phone's device secret and every grant's
-secret are kept only as sha256 hashes. A device whose token APNs or FCM reports as gone is marked
-dead: its grants answer `410` until the phone sends a new token. The relay logs the kind, the
-grant id and the push service's answer, never a push's words, tokens or secrets.
+`<dataDir>/relay.json` (mode 0600, in a 0700 directory): each phone's push token and platform,
+whether it paused its pushes, and its grants (one per paired server, labelled with the server's
+name). The phone's device secret and every grant's secret are kept only as sha256 hashes. A change
+that issues or revokes a secret is written (then renamed into place) before the relay answers;
+bookkeeping (a grant's last push, a token's first delivery) is written within a second, and on a
+clean shutdown, so a crash loses at most that. A device whose token APNs or FCM reports as gone
+is marked dead: its grants answer `410` to servers, and its own grant calls `410 {"error":
+"device-dead"}`, until the phone sends its token again. A device dead for 30 days is removed with
+its grants (checked at start and daily). The relay logs the kind, the grant id and the push
+service's answer, never a push's words, tokens or secrets.
+
+**A reinstalled app** loses its device secret, but the phone's push token often stays the same.
+Registering a (platform, token) the relay already has replaces that device: the old one and its
+grants are removed (its servers' next push answers `410` and they drop the grant; the phone grants
+again). Registration's limits (and the registration key, when set) apply as usual.
 
 ## API
 
-JSON over `/v1`, bodies at most 16 KiB. The phone's calls carry its device secret, a server's its
-grant secret, each as `Authorization: Bearer <secret>`.
+JSON over `/v1`, bodies at most 16 KiB (a larger `Content-Length` is answered `413` before the
+body is read; a body that streams past it is answered `413` and the connection closed). The
+phone's calls carry its device secret, a server's its grant secret, each as `Authorization:
+Bearer <secret>`.
 
 | Call | Who | Body | Answer |
 |---|---|---|---|
-| `POST /v1/devices` | phone | `{platform: 'ios'\|'android', pushToken}` | `201 {deviceId, deviceSecret}` |
-| `PUT /v1/devices/:id` | phone | `{pushToken}` | `200` (a rotated token; revives a dead device) |
+| `POST /v1/devices` | phone | `{platform: 'ios'\|'android', pushToken}`; header `x-trek-relay-key` when the relay has a `registrationKey` | `201 {deviceId, deviceSecret}` (replacing a device with the same token); `401` no or wrong key; `429` limited; `503` the relay is full |
+| `PUT /v1/devices/:id` | phone | `{pushToken?, paused?: boolean}` (at least one) | `200 {updated: true, paused}`. A `pushToken`, new or the same, revives a dead device |
 | `DELETE /v1/devices/:id` | phone | | `200` (the device and its grants) |
-| `POST /v1/grants` | phone | `{label}` (up to 80 characters) | `201 {grantId, grantSecret}` |
-| `GET /v1/grants` | phone | | `200 [{grantId, label, createdAt, lastPushAt}]` |
+| `POST /v1/grants` | phone | `{label}` (up to 80 characters) | `201 {grantId, grantSecret}`; `410 {error: 'device-dead'}`; `429` (10 a minute per device); `409` 50 grants already |
+| `GET /v1/grants` | phone | | `200 [{grantId, label, createdAt, lastPushAt}]`; `410 {error: 'device-dead'}` |
 | `DELETE /v1/grants/:id` | phone | | `200` |
-| `POST /v1/push` | server | `{kind, project, data: {serverId, projectId, worktreeId?, sessionId?}}` | `202`; `401` unknown grant; `410` the device is gone; `429` limited; `502` the push service refused |
+| `POST /v1/push` | server | `{kind, project, data: {serverId, projectId, worktreeId?, sessionId?}}` | `202 {accepted: true}` sent, or `{accepted: true, paused: true}` dropped (the phone paused); `401` unknown grant; `410` the device is gone; `422` the push service refused this push (not worth retrying); `429` limited; `503` with `Retry-After` the push service is unavailable, limiting or timed out |
 | `GET /v1/health` | anyone | | `200 {ok: true}` |
 
-Limits: 10 registrations a minute per address; 30 pushes a minute per grant and 120 an hour per
-device; 50 grants per device.
+**The phone's side.** On each launch (and each registration check), the phone sends its current
+push token with `PUT /v1/devices/:id`, even when it hasn't changed: that brings a device marked
+dead back. A `410 {error: 'device-dead'}` from the grant calls means the same: send the token,
+then retry. "Pause all pushes" is `PUT /v1/devices/:id {paused: true}`, which holds for every
+server, reachable or not.
+
+**What reaches the phone.** On iOS the notification is
+`{aps: {alert: {title, body}, sound: 'default'}, body: {kind, serverId, projectId, worktreeId?, sessionId?}}`
+(expo-notifications gives an app `userInfo.body` as the notification's data), with
+`apns-collapse-id: <serverId>:<projectId>:<kind>` (its sha256 when over 64 bytes), so a newer
+push of the same kind replaces the older one, and an hour's `apns-expiration`. On Android the FCM
+message has `notification: {title, body}`, `data` with the same string keys
+(`kind, serverId, projectId, worktreeId?, sessionId?`) and `android: {priority: 'high',
+notification: {channel_id: 'default'}}` (the channel the app creates).
+
+Limits: 10 registrations a minute per address; 10 grants a minute per device; 30 pushes a minute
+per grant and 120 an hour per device (a push refused by one limit counts against neither); 50
+grants per device; `maxDevices` devices.
+
+**The APNs connection.** One HTTP/2 session, closed after two minutes without a push and never
+reused past that; a push with no answer in 10 seconds destroys it, so the next push reconnects.
 
 ## Testing
 

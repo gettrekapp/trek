@@ -43,7 +43,10 @@ async function main(argv: string[]): Promise<void> {
   const relay = await startRelay(config, providers)
   console.log(`[relay] trek-relay ${VERSION} listening on http://${config.host}:${relay.port} (put your TLS proxy in front)`)
   const stop = (): void => {
-    void relay.close().then(() => process.exit(0))
+    void relay.close().then(() => {
+      for (const p of Object.values(providers)) p?.close?.()
+      process.exit(0)
+    })
   }
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)

@@ -3,9 +3,17 @@
 // pushes with its grant secret: the relay looks the grant up, builds the words from the kind and
 // project (src/shared/push.ts), and sends through APNs or FCM. Nothing a server sends reaches the
 // lock screen as free text, and the relay never logs a push's words, tokens or secrets.
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isPushKind, MAX_PUSH_ID, pushText, type PushData, type PushKind } from '../../src/shared/push.ts'
-import { PUSHES_PER_DEVICE_PER_HOUR, PUSHES_PER_GRANT_PER_MINUTE, REGISTRATIONS_PER_MINUTE, WindowLimiter } from './limits.ts'
+import {
+  GRANTS_PER_DEVICE_PER_MINUTE,
+  PUSHES_PER_DEVICE_PER_HOUR,
+  PUSHES_PER_GRANT_PER_MINUTE,
+  REGISTRATIONS_PER_MINUTE,
+  takeAll,
+  WindowLimiter
+} from './limits.ts'
 import { MAX_LABEL, MAX_PUSH_TOKEN, type Device, type Platform, type RelayStore } from './store.ts'
 
 export const MAX_BODY_BYTES = 16 * 1024
@@ -19,11 +27,21 @@ export interface PushMessage {
   data: PushData
 }
 
-/** 'sent'; 'dead' (the token is gone: unregistered); 'failed' (anything else, logged) */
-export type SendResult = 'sent' | 'dead' | 'failed'
+/**
+ * 'sent'; 'dead' (the token is gone: unregistered); 'rejected' (the service refused this push or
+ * the relay's credentials: retrying won't help, answered 422); 'unavailable' (the service is down,
+ * limiting, or timed out: answered 503 with Retry-After).
+ */
+export type SendResult = 'sent' | 'dead' | 'rejected' | 'unavailable'
+
+/** What a 503 tells a server to wait, in seconds */
+export const RETRY_AFTER_S = 30
+/** The header a build's registration key comes in */
+export const REGISTRATION_KEY_HEADER = 'x-trek-relay-key'
 
 export interface Provider {
   send(device: Device, message: PushMessage): Promise<SendResult>
+  close?(): void
 }
 
 export interface RelayDeps {
@@ -31,37 +49,55 @@ export interface RelayDeps {
   providers: Partial<Record<Platform, Provider>>
   now?: () => number
   log?: (line: string) => void
+  /** Read the client's address from X-Forwarded-For's last hop (behind Caddy) */
+  trustProxy?: boolean
+  /** POST /v1/devices needs this in REGISTRATION_KEY_HEADER */
+  registrationKey?: string
 }
 
 class HttpError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  readonly headers: Record<string, string>
+  /** The request is dropped once the answer is sent (a body over the cap) */
+  readonly drop: boolean
+  constructor(status: number, message: string, options: { headers?: Record<string, string>; drop?: boolean } = {}) {
     super(message)
     this.status = status
+    this.headers = options.headers ?? {}
+    this.drop = options.drop ?? false
   }
 }
 
-const json = (res: ServerResponse, status: number, body: unknown): void => {
+const json = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void => {
   const text = JSON.stringify(body)
-  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(text) })
+  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-length': Buffer.byteLength(text), ...headers })
   res.end(text)
 }
 
+const tooLarge = (): HttpError => new HttpError(413, 'body too large', { headers: { connection: 'close' }, drop: true })
+
+/** The JSON body, up to MAX_BODY_BYTES: a larger declared length is refused before reading, and a stream past it stops being read. */
 function readBody(req: IncomingMessage): Promise<unknown> {
+  const declared = Number(req.headers['content-length'])
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return Promise.reject(tooLarge())
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
-    let tooBig = false
-    req.on('data', (chunk: Buffer) => {
+    let over = false
+    const onData = (chunk: Buffer): void => {
       size += chunk.length
       if (size > MAX_BODY_BYTES) {
-        tooBig = true
+        over = true
+        req.off('data', onData)
+        req.pause()
+        reject(tooLarge())
         return
       }
-      if (!tooBig) chunks.push(chunk)
-    })
+      chunks.push(chunk)
+    }
+    req.on('data', onData)
     req.on('end', () => {
-      if (tooBig) return reject(new HttpError(413, 'body too large'))
+      if (over) return
       if (size === 0) return resolve({})
       try {
         resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
@@ -96,13 +132,34 @@ const idOf = (v: unknown, what: string, required: boolean): string | undefined =
   return v
 }
 
+/** Constant-time comparison of two strings (their sha256, so lengths don't leak either) */
+const sameSecret = (a: string, b: string): boolean =>
+  timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest())
+
 export function createRelayHandler(deps: RelayDeps): (req: IncomingMessage, res: ServerResponse) => void {
   const now = deps.now ?? Date.now
   const log = deps.log ?? ((line: string) => console.log(line))
   const registrations = new WindowLimiter(REGISTRATIONS_PER_MINUTE, 60_000)
+  const grantsMade = new WindowLimiter(GRANTS_PER_DEVICE_PER_MINUTE, 60_000)
   const perGrant = new WindowLimiter(PUSHES_PER_GRANT_PER_MINUTE, 60_000)
   const perDevice = new WindowLimiter(PUSHES_PER_DEVICE_PER_HOUR, 3_600_000)
   const { store } = deps
+
+  /** The client's address: the socket's, or behind a trusted proxy the last X-Forwarded-For hop (the one the proxy added) */
+  const clientAddress = (req: IncomingMessage): string => {
+    if (deps.trustProxy) {
+      const raw = req.headers['x-forwarded-for']
+      const hops = (Array.isArray(raw) ? raw.join(',') : (raw ?? '')).split(',').map((h) => h.trim()).filter(Boolean)
+      if (hops.length) return hops[hops.length - 1]
+    }
+    return req.socket.remoteAddress ?? ''
+  }
+
+  /** A dead device's phone must send its token again before it can manage grants */
+  const alive = (d: Device): Device => {
+    if (d.dead) throw new HttpError(410, 'device-dead')
+    return d
+  }
 
   const device = (req: IncomingMessage, id?: string): Device => {
     const d = store.deviceFor(bearer(req), id)
@@ -117,12 +174,21 @@ export function createRelayHandler(deps: RelayDeps): (req: IncomingMessage, res:
     if (path === '/v1/health' && method === 'GET') return json(res, 200, { ok: true })
 
     if (path === '/v1/devices' && method === 'POST') {
-      if (!registrations.take(req.socket.remoteAddress ?? '', now())) throw new HttpError(429, 'too many registrations')
+      if (!registrations.take(clientAddress(req), now())) throw new HttpError(429, 'too many registrations')
+      if (deps.registrationKey !== undefined) {
+        const given = req.headers[REGISTRATION_KEY_HEADER]
+        if (typeof given !== 'string' || !sameSecret(given, deps.registrationKey)) throw new HttpError(401, 'registration key required')
+      }
       const b = obj(await readBody(req))
       if (b.platform !== 'ios' && b.platform !== 'android') throw new HttpError(400, "platform must be 'ios' or 'android'")
       if (!deps.providers[b.platform]) throw new HttpError(400, `this relay does not push to ${b.platform}`)
-      const { device: d, secret } = store.addDevice(b.platform, pushTokenOf(b.pushToken))
-      log(`[relay] registered a ${d.platform} device ${d.id}`)
+      const made = store.addDevice(b.platform, pushTokenOf(b.pushToken))
+      if (made === 'full') {
+        log('[relay] refused a registration: the relay holds its most devices (maxDevices)')
+        throw new HttpError(503, 'the relay is full')
+      }
+      const { device: d, secret, replaced } = made
+      log(`[relay] registered a ${d.platform} device ${d.id}${replaced ? ' (replacing the device that had its token)' : ''}`)
       return json(res, 201, { deviceId: d.id, deviceSecret: secret })
     }
 
@@ -135,16 +201,21 @@ export function createRelayHandler(deps: RelayDeps): (req: IncomingMessage, res:
         return json(res, 200, { removed: true })
       }
       const b = obj(await readBody(req))
-      store.setPushToken(d.id, pushTokenOf(b.pushToken))
-      return json(res, 200, { updated: true })
+      if (b.pushToken === undefined && b.paused === undefined) throw new HttpError(400, 'send pushToken, paused, or both')
+      if (b.paused !== undefined && typeof b.paused !== 'boolean') throw new HttpError(400, 'paused must be true or false')
+      const token = b.pushToken === undefined ? undefined : pushTokenOf(b.pushToken)
+      if (token !== undefined) store.setPushToken(d.id, token)
+      if (typeof b.paused === 'boolean') store.setPaused(d.id, b.paused)
+      return json(res, 200, { updated: true, paused: d.paused === true })
     }
 
     if (path === '/v1/grants' && method === 'GET') {
-      const d = device(req)
+      const d = alive(device(req))
       return json(res, 200, store.grantsOf(d.id).map((g) => ({ grantId: g.id, label: g.label, createdAt: g.createdAt, lastPushAt: g.lastPushAt ?? null })))
     }
     if (path === '/v1/grants' && method === 'POST') {
-      const d = device(req)
+      const d = alive(device(req))
+      if (!grantsMade.take(d.id, now())) throw new HttpError(429, 'too many grants')
       const b = obj(await readBody(req))
       if (typeof b.label !== 'string' || b.label.length > MAX_LABEL) throw new HttpError(400, `label must be a string of up to ${MAX_LABEL} characters`)
       const made = store.addGrant(d.id, b.label.trim())
@@ -173,18 +244,25 @@ export function createRelayHandler(deps: RelayDeps): (req: IncomingMessage, res:
         ...(data.worktreeId !== undefined ? { worktreeId: idOf(data.worktreeId, 'worktreeId', false) } : {}),
         ...(data.sessionId !== undefined ? { sessionId: idOf(data.sessionId, 'sessionId', false) } : {})
       }
-      const t = now()
-      if (!perGrant.take(grant.id, t) || !perDevice.take(d.id, t)) throw new HttpError(429, 'too many pushes')
+      // The phone paused every push: accepted (the server has nothing to fix) and dropped.
+      if (d.paused) {
+        log(`[relay] push ${b.kind} grant ${grant.id}: paused`)
+        return json(res, 202, { accepted: true, paused: true })
+      }
+      if (!takeAll(now(), [perGrant, grant.id], [perDevice, d.id])) throw new HttpError(429, 'too many pushes')
       const provider = deps.providers[d.platform]
-      if (!provider) throw new HttpError(503, `this relay does not push to ${d.platform}`)
+      if (!provider) throw new HttpError(503, `this relay does not push to ${d.platform}`, { headers: { 'retry-after': String(RETRY_AFTER_S) } })
       const words = pushText(b.kind, b.project)
+      const tokenSent = d.pushToken
       const result = await provider.send(d, { ...words, kind: b.kind, data: pushData })
       log(`[relay] push ${b.kind} grant ${grant.id}: ${result}`)
       if (result === 'dead') {
-        store.markDead(d.id)
+        store.markDead(d.id, tokenSent)
         throw new HttpError(410, 'the device is gone')
       }
-      if (result === 'failed') throw new HttpError(502, 'the push service refused the push')
+      if (result === 'rejected') throw new HttpError(422, 'the push service refused the push')
+      if (result === 'unavailable') throw new HttpError(503, 'the push service is unavailable', { headers: { 'retry-after': String(RETRY_AFTER_S) } })
+      store.markDelivered(d.id, tokenSent)
       store.touchGrant(grant.id)
       return json(res, 202, { accepted: true })
     }
@@ -196,8 +274,11 @@ export function createRelayHandler(deps: RelayDeps): (req: IncomingMessage, res:
     route(req, res).catch((err) => {
       const status = err instanceof HttpError ? err.status : 500
       if (status === 500) log(`[relay] internal error: ${(err as Error).message}`)
-      if (!res.headersSent) json(res, status, { error: status === 500 ? 'internal error' : (err as Error).message })
-      else res.destroy()
+      if (res.headersSent) return void res.destroy()
+      const headers = err instanceof HttpError ? err.headers : {}
+      json(res, status, { error: status === 500 ? 'internal error' : (err as Error).message }, headers)
+      // A body over the cap: nothing more of it is read once the answer is out.
+      if (err instanceof HttpError && err.drop) res.on('finish', () => req.destroy())
     })
   }
 }
