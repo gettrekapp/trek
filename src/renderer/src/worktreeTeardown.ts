@@ -40,8 +40,8 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
       return { confirmed: result.confirmed, stackName: result.checked ? stackName : undefined }
     },
 
-    // stack.sh destroy, its failure shown without blocking the worktree's deletion.
-    destroyStack: async (info, stackName, backend) => {
+    // stack.sh destroy, its failure shown without blocking the worktree's deletion (or its promote).
+    destroyStack: async (info, stackName, backend, action = 'delete') => {
       let failure: string | undefined
       try {
         const code = await backend.stacks.destroy({ path: info.path })
@@ -52,7 +52,7 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
       if (failure) {
         await deps.showError(
           'Dev stack cleanup failed',
-          `${failure}\n\nThe worktree is deleted anyway. Remove the leftover stack from any checkout on the server's machine with:\n` +
+          `${failure}\n\n${action === 'promote' ? 'The promote goes on anyway (the worktree is deleted with it).' : 'The worktree is deleted anyway.'} Remove the leftover stack from any checkout on the server's machine with:\n` +
             `TREK_STACK_NAME=${stackName} docker/stack/stack.sh destroy`
         )
       }

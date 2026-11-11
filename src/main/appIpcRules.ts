@@ -53,3 +53,9 @@ export function checkboxConfirmOptions(raw: unknown): Omit<ConfirmOptions, 'canc
   const { title, message, detail, confirmLabel } = confirmOptions(o)
   return { title, message, detail, confirmLabel, checkboxLabel: text(o.checkboxLabel), checkboxChecked: o.checkboxChecked === true }
 }
+
+/** A confirmation's `dialogId` (`dialog:cancel` closes it): a short string, else none. */
+export function dialogIdOf(raw: unknown): string | undefined {
+  const id = raw && typeof raw === 'object' ? (raw as { dialogId?: unknown }).dialogId : raw
+  return typeof id === 'string' && id.length > 0 && id.length <= 200 ? id : undefined
+}

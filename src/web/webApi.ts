@@ -19,7 +19,7 @@ import { DEFAULT_LLM_SETTINGS, type LlmSettings } from '../shared/providers/type
 import type { AppServerLink, AppServersChanged, AttentionChanged, AttentionItem } from '../shared/types.ts'
 import type { RendererApi } from '../preload/index'
 import { browserRelay, socketUrl, type BrowserSocketClass } from './browserRelay.ts'
-import { webDialogs } from './dialogQueue.ts'
+import { cancelDialogById, webDialogs } from './dialogQueue.ts'
 
 /** The page's one server entry: the server that served it. */
 export const WEB_ENTRY_ID = 'web'
@@ -198,6 +198,7 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
     confirm: (opts) => webDialogs.confirm(opts),
     confirmWithCheckbox: (opts) => webDialogs.confirmWithCheckbox(opts),
     showError: (title, message) => webDialogs.showError(title, message),
+    cancelDialog: async (dialogId) => cancelDialogById(dialogId),
     onMenu: none
   }
 

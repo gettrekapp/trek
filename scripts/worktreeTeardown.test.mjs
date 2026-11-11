@@ -75,6 +75,15 @@ test("destroyStack: a non-zero exit or a failure is shown with the server-side c
   assert.match(refused.ui[0][2], /^Error: stack r-feat is starting\n/)
 })
 
+test('destroyStack: a promote says the promote goes on, a delete that the worktree is deleted anyway', async () => {
+  const promote = setup()
+  await promote.teardown.destroyStack(info, 'r-feat', backendWith({ destroy: 2 }), 'promote')
+  assert.match(promote.ui[0][2], /The promote goes on anyway/)
+  const remove = setup()
+  await remove.teardown.destroyStack(info, 'r-feat', backendWith({ destroy: 2 }))
+  assert.match(remove.ui[0][2], /The worktree is deleted anyway/)
+})
+
 test('destroyEnvironment: through the backend doing the remove; a warning is shown, pointing at the orphan list', async () => {
   const quiet = setup()
   await quiet.teardown.destroyEnvironment(info, backendWith())

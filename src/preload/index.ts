@@ -136,6 +136,8 @@ const api = {
     confirmLabel: string
     cancelLabel?: string
     defaultCancel?: boolean
+    /** Lets `cancelDialog` close it while it is open */
+    dialogId?: string
   }): Promise<boolean> => ipcRenderer.invoke('dialog:confirm', opts),
   confirmWithCheckbox: (opts: {
     title: string
@@ -144,8 +146,11 @@ const api = {
     confirmLabel: string
     checkboxLabel: string
     checkboxChecked: boolean
+    dialogId?: string
   }): Promise<{ confirmed: boolean; checked: boolean }> =>
     ipcRenderer.invoke('dialog:confirmWithCheckbox', opts),
+  /** Closes this window's open confirm (or checkbox confirm) with that `dialogId`, answered as cancelled */
+  cancelDialog: (dialogId: string): Promise<void> => ipcRenderer.invoke('dialog:cancel', dialogId),
   showError: (title: string, message: string): Promise<void> =>
     ipcRenderer.invoke('dialog:error', title, message),
 

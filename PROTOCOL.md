@@ -850,7 +850,8 @@ If the worktrees can't be re-read after the commitment, the sessions stay in the
 (resumed if they ran) and the answer is the main checkout's id with a note.
 
 **promote_to_primary.** A window that can confirm a promote says so with `promote.listen
-{projectId}` (the Trek app's windows and the web client, while they have the `promote` feature).
+{projectId}` (the Trek app's windows and the web client, while they have the `promote` feature,
+again after each reconnect: a closed connection stops listening).
 The trek-dev tool asks those windows: the server sends `promote.request` `{projectId, requestId,
 worktreeId, branch, from?}` (`from`: the title of the session that asked) to every listening
 connection still subscribed to the project's topic. A window shows the same confirmation its
@@ -863,7 +864,11 @@ with that promote's own result (the main checkout's id, or its error). If its te
 answers `promote.answer {outcome: 'failed', error}`. A claim with no `worktree.promote` within 5
 minutes, or whose connection closes before it, fails the request. A user who declines answers
 `promote.answer {outcome: 'declined'}`. When the request ends, every subscriber hears
-`promote.settled {projectId, requestId}`.
+`promote.settled {projectId, requestId}`; the claimant ignores it (its `worktree.promote` answers
+it). The claimant's own `claimed` event reaches it before the claim's answer. The Trek app makes
+the dry run first in each window: one that doesn't list the worktree stays silent, and the first to
+see the dry run refused claims the request and answers `failed` with the server's error, without a
+dialog. It never sends `promoted`.
 
 One request per worktree at a time: a second call for it while one waits joins it and gets the
 same outcome. The tool fails when no window listens (at the call, or later before a claim: the

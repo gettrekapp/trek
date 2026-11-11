@@ -56,8 +56,20 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     if (value instanceof Error) throw value
     return value ?? null
   }
+  // The window's side: dialogs closed by id, the connection's connects, the leave hooks, the log.
+  const closed = []
+  const connected = []
+  const leaveHooks = []
+  const logs = []
   const backend = createV2Backend({
     projectId: 'p1',
+    closeDialog: (id) => void closed.push(id),
+    onConnected: (listener) => {
+      connected.push(listener)
+      return () => connected.splice(connected.indexOf(listener), 1)
+    },
+    onLeave: (run) => void leaveHooks.push(run),
+    log: (message) => void logs.push(message),
     request,
     requestWithRev: async (method, params) => {
       const result = await request(method, params)
@@ -84,8 +96,9 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     focus: (id) => ui.push(['focus', id]),
     setActiveTerminal: (worktreeId, id) => ui.push(['active', worktreeId, id]),
     confirm: async (prompt) => {
-      ui.push(['confirm', prompt.title, prompt.confirmLabel])
-      return answers.shift() ?? false
+      ui.push(['confirm', prompt.title, prompt.confirmLabel, ...(prompt.dialogId ? [prompt.dialogId] : [])])
+      const answer = answers.shift()
+      return typeof answer === 'function' ? answer() : answer ?? false
     },
     // As installV2's: nothing shows once the window left.
     showError: async (title, message) => void (left() || ui.push(['error', title, message])),
@@ -128,7 +141,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     },
     left
   })
-  return { backend, calls, ui, st, reports, waits, timeouts, listeners, owners }
+  return { backend, calls, ui, st, reports, waits, timeouts, listeners, owners, closed, connected, leaveHooks, logs }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -962,22 +975,120 @@ test('worktrees.demote: the plan, the confirm, worktree.demote', async () => {
   assert.deepEqual(ui.find((u) => u[0] === 'confirm'), ['confirm', 'Promote Branch to Worktree', 'Move to Worktree'])
 })
 
-test('promote_to_primary in a window: a request runs the promote and answers; one settled elsewhere is skipped', async () => {
-  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: [] }), 'promote.answer': { accepted: true } }
-  const { backend, calls, listeners } = setup({
-    replies,
-    confirms: [true],
-    capabilities: ['promote'],
-    state: { hostWorktrees: { 'r1 local': [{ path: '/r', repoId: 'r1', isMain: true }, FEAT] } }
-  })
-  const off = backend.worktrees.followPromoteRequests()
+const tick = async (n = 30) => {
+  for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r))
+}
+const withFeat = { hostWorktrees: { 'r1 local': [{ path: '/r', repoId: 'r1', isMain: true }, FEAT] } }
+
+test('worktrees.promote: notes and the recovery file are shown; IN_USE and a checkout not put back say so', async () => {
+  const noted = setup({ replies: { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: ['could not be fully removed'], recoveryFile: '/d/promote-recovery/app-feat-1.patch' }) }, confirms: [true], capabilities: ['promote'] })
+  await noted.backend.worktrees.promote(FEAT, undefined)
+  const note = noted.ui.find((u) => u[0] === 'error')
+  assert.equal(note[1], 'Promoted, with notes')
+  assert.match(note[2], /could not be fully removed\nA copy of the carried work is kept at \/d\/promote-recovery\/app-feat-1\.patch/)
+  const inUse = setup({ replies: { 'worktree.promote': new CodedError('IN_USE', '/r-feat has running sessions in Other; unload it there first') }, capabilities: ['promote'] })
+  await inUse.backend.worktrees.promote(FEAT, undefined)
+  assert.match(inUse.ui.find((u) => u[0] === 'error')[2], /^Another project on the server has this checkout loaded/)
+  const message = 'the main checkout /r changed while the promote ran, so it was not put back: it is on feat …. A copy of the uncommitted work is saved at /d/promote-recovery/app-feat-2.patch'
+  const kept = setup({ replies: { 'worktree.promote': (p) => (p.dryRun ? PLAN : new CodedError('CONFLICT', message)) }, confirms: [true], capabilities: ['promote'] })
+  await kept.backend.worktrees.promote(FEAT, undefined)
+  const shown = kept.ui.find((u) => u[0] === 'error')[2]
+  assert.match(shown, /^The checkout was left as it is, not put back/)
+  assert.match(shown, /Recovery file \(the uncommitted work\): \/d\/promote-recovery\/app-feat-2\.patch$/)
+})
+
+test('worktrees.demote: a result on the main checkout with a note is shown', async () => {
+  const replies = { 'worktree.demote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: ['the worktrees could not be re-read; the sessions stay in the main checkout'] }) }
+  const { backend, ui } = setup({ replies, confirms: [true], capabilities: ['promote'] })
+  await backend.worktrees.demote({ path: '/r', repoId: 'r1', branch: 'feat', isMain: true })
+  assert.deepEqual(ui.find((u) => u[0] === 'error').slice(0, 2), ['error', 'Moved, with notes'])
+})
+
+test('promote_to_primary: listen on follow and on every connect, one follower per backend, listen:false on leave', async () => {
+  const { backend, calls, connected, leaveHooks, listeners } = setup({ capabilities: ['promote'] })
+  backend.worktrees.followPromoteRequests()
+  backend.worktrees.followPromoteRequests()
+  assert.deepEqual(calls, [['promote.listen', { projectId: 'p1' }]])
+  assert.equal(listeners['promote.request'].length, 1)
+  connected[0]()
+  assert.deepEqual(calls.map((c) => c[1]), [{ projectId: 'p1' }, { projectId: 'p1' }])
+  for (const run of leaveHooks) run()
+  assert.deepEqual(calls.at(-1), ['promote.listen', { projectId: 'p1', listen: false }])
+  assert.equal(listeners['promote.request'].length, 0)
+  assert.equal(connected.length, 0)
+})
+
+test('promote_to_primary: confirmed, the claim comes before the teardown, then worktree.promote {requestId}; never promote.answer', async () => {
+  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: [] }), 'promote.claim': { accepted: true } }
+  const { backend, calls, ui, listeners } = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks', 'env'], machine: { stack: 'feat', env: 'trek-feat' }, state: withFeat })
+  backend.worktrees.followPromoteRequests()
   listeners['promote.settled'][0]({ projectId: 'p1', requestId: 'gone' })
   listeners['promote.request'][0]({ projectId: 'p1', requestId: 'gone', worktreeId: 'w2', branch: 'feat' })
   listeners['promote.request'][0]({ projectId: 'other', requestId: 'x', worktreeId: 'w2', branch: 'feat' })
+  // The claim's own `claimed` event arrives before its answer: it is not "elsewhere".
+  replies['promote.claim'] = () => {
+    listeners['promote.settled'][0]({ projectId: 'p1', requestId: 'r1', claimed: true })
+    return { accepted: true }
+  }
   listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat', from: 'Claude 1' })
-  for (let i = 0; i < 20 && !calls.some((c) => c[0] === 'promote.answer'); i++) await new Promise((r) => setImmediate(r))
-  assert.deepEqual(calls.map((c) => c[0]), ['worktree.promote', 'worktree.promote', 'promote.answer'])
-  assert.deepEqual(calls[2][1], { projectId: 'p1', requestId: 'r1', outcome: 'promoted', worktreeId: 'wm' })
-  off()
-  assert.equal(listeners['promote.request'].length, 0)
+  await tick()
+  assert.deepEqual(calls.map((c) => c[0]), ['promote.listen', 'worktree.promote', 'promote.claim', 'stack.sh destroy', 'colima delete', 'worktree.promote'])
+  assert.deepEqual(calls[2][1], { projectId: 'p1', requestId: 'r1' })
+  assert.deepEqual(calls[5][1], { projectId: 'p1', worktreeId: 'w2', requestId: 'r1' })
+  assert.match(ui.find((u) => u[0] === 'confirm+stack')[2], /^“Claude 1” asked for this/)
+  assert.ok(!ui.some((u) => u[0] === 'error'))
+})
+
+test('promote_to_primary: a decline answers declined; a dialog closed by settled answers nothing', async () => {
+  const replies = { 'worktree.promote': PLAN, 'promote.answer': { accepted: true } }
+  let listenersRef
+  const confirms = [
+    false,
+    () => {
+      // Another window claimed it while this dialog was open: it is closed, as a cancel.
+      listenersRef['promote.settled'][0]({ projectId: 'p1', requestId: 'r2', claimed: true })
+      return false
+    }
+  ]
+  const { backend, calls, ui, listeners, closed } = setup({ replies, confirms, capabilities: ['promote'], state: withFeat })
+  listenersRef = listeners
+  backend.worktrees.followPromoteRequests()
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r2', worktreeId: 'w2', branch: 'feat' })
+  await tick()
+  assert.deepEqual(calls.filter((c) => c[0] === 'promote.answer').map((c) => c[1]), [{ projectId: 'p1', requestId: 'r1', outcome: 'declined' }])
+  assert.deepEqual(ui.filter((u) => u[0] === 'confirm').map((u) => u[3]), ['promote:r1', 'promote:r2'])
+  assert.deepEqual(closed, ['promote:r2'])
+})
+
+test('promote_to_primary: a claim another window won tears nothing down and says so', async () => {
+  const replies = { 'worktree.promote': PLAN, 'promote.claim': { accepted: false } }
+  const { backend, calls, ui, listeners } = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks'], machine: { stack: 'feat' }, state: withFeat })
+  backend.worktrees.followPromoteRequests()
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
+  await tick()
+  assert.deepEqual(calls.map((c) => c[0]), ['promote.listen', 'worktree.promote', 'promote.claim'])
+  assert.match(ui.find((u) => u[0] === 'error')[2], /This request has already ended \(answered elsewhere, or the agent stopped waiting\); nothing was done\./)
+})
+
+test('promote_to_primary: a refused dry run is claimed and answered failed without a dialog; an unlisted worktree stays silent', async () => {
+  const replies = { 'worktree.promote': new CodedError('CONFLICT', 'the main checkout /r has uncommitted changes'), 'promote.claim': { accepted: true }, 'promote.answer': { accepted: true } }
+  const { backend, calls, ui, listeners } = setup({ replies, capabilities: ['promote'], state: withFeat })
+  backend.worktrees.followPromoteRequests()
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r2', worktreeId: 'unknown', branch: 'zzz' })
+  await tick()
+  assert.deepEqual(calls.map((c) => c[0]), ['promote.listen', 'worktree.promote', 'promote.claim', 'promote.answer'])
+  assert.deepEqual(calls[3][1], { projectId: 'p1', requestId: 'r1', outcome: 'failed', error: 'the main checkout /r has uncommitted changes' })
+  assert.deepEqual(ui.filter((u) => u[0] === 'error' || u[0] === 'confirm'), [])
+})
+
+test('promote_to_primary: a lost answer is logged and shown', async () => {
+  const replies = { 'worktree.promote': PLAN, 'promote.answer': new CodedError('TIMEOUT', 'no answer') }
+  const { backend, ui, listeners, logs } = setup({ replies, confirms: [false], capabilities: ['promote'], state: withFeat })
+  backend.worktrees.followPromoteRequests()
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
+  await tick()
+  assert.match(logs[0], /promote\.answer \(declined\) for r1 was lost/)
+  assert.match(ui.find((u) => u[0] === 'error')[2], /Could not send this window's answer/)
 })

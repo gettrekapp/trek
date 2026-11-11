@@ -15,7 +15,15 @@
 // Pure: the store, the connection, the dialogs and the terminals come in as
 // `V2BackendDeps` (built by installV2.ts), so `node --test` covers it.
 import type { PromoteOutcome, PromotePlan, PromoteResult } from '../../../shared/promote.ts'
-import { demotePrompt, followPromoteRequests, promotePrompt } from './promoteFlow.ts'
+import {
+  demotePrompt,
+  followPromoteRequests,
+  markPromoting,
+  promoteErrorText,
+  promotePrompt,
+  resultNotes,
+  type PromoteFollower
+} from './promoteFlow.ts'
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
 import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
@@ -48,6 +56,8 @@ export interface ConfirmPrompt {
   message: string
   detail?: string
   confirmLabel: string
+  /** Lets `closeDialog` close it while it is open (an agent's promote request settled elsewhere) */
+  dialogId?: string
 }
 
 /**
@@ -60,8 +70,8 @@ export interface WorktreeTeardown {
   environment(info: GitWorktreeInfo): { profile: string } | undefined
   /** The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when that is ticked */
   confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt, backend: WindowBackend): Promise<{ confirmed: boolean; stackName?: string }>
-  /** `stack.sh destroy`; shows its own failure and never rejects */
-  destroyStack(info: GitWorktreeInfo, stackName: string, backend: WindowBackend): Promise<void>
+  /** `stack.sh destroy`; shows its own failure (saying the `action` goes on) and never rejects */
+  destroyStack(info: GitWorktreeInfo, stackName: string, backend: WindowBackend, action?: 'delete' | 'promote'): Promise<void>
   /** Deletes the VM; shows its own failure and never rejects */
   destroyEnvironment(info: GitWorktreeInfo, backend: WindowBackend): Promise<void>
   /**
@@ -119,6 +129,14 @@ export interface V2BackendDeps {
   reportEdit(title: string, err: unknown, notConfirmed?: string): void
   /** Whether the window has left this project: nothing it still has in flight shows */
   left(): boolean
+  /** Closes the confirmation with this `dialogId` if it is open (answered as cancelled) */
+  closeDialog(dialogId: string): void
+  /** Calls `listener` each time the window's connection comes up (a reconnect too); returns the unsubscribe */
+  onConnected(listener: () => void): () => void
+  /** Runs `run` when the window leaves the project (before `left()` turns true) */
+  onLeave(run: () => void): void
+  /** A failure only a developer sees (the console) */
+  log(message: string, err?: unknown): void
 }
 
 /**
@@ -233,6 +251,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
 
   const branchRef = (repoId: string, branch: string) => ({ projectId, repoId, branch })
 
+  let promoteFollower: PromoteFollower | null = null
   let features: { caps: readonly string[] | undefined; value: BackendFeatures } | null = null
   const can = (capability: string): boolean => deps.capabilities()?.includes(capability) ?? false
   const currentFeatures = (): BackendFeatures => {
@@ -462,44 +481,66 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         }
       },
       // 5e. The plan first (the same checks as the real one, so nothing is torn down for a promote
-      // the server would refuse), then the confirmation, the stack and the VM (they need the
-      // worktree's files), then the promote itself in one request.
+      // the server would refuse), then the confirmation, the claim of an agent's request (before
+      // anything is torn down), the stack and the VM (they need the worktree's files), then the
+      // promote itself in one request, which settles an agent's request on the server.
       promote: async (info, instance, asked) => {
         const legacyId = instance?.id ?? legacyIdAt(info.path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]
         const failed = async (err: unknown, note = ''): Promise<PromoteOutcome> => {
-          const error = errorText(err) + note
+          const error = promoteErrorText(err) + note
           await deps.showError(PROMOTE_FAILED, error)
           return { outcome: 'failed', error }
         }
-        if (!ref) return failed(new Error('This worktree is no longer in the project.'))
+        // An agent's request for a worktree this window doesn't list: another window answers it.
+        if (!ref) return asked ? { outcome: 'failed', error: 'not listed in this window' } : failed(new Error('This worktree is no longer in the project.'))
         const { worktreeId } = ref
         let plan: PromotePlan
         try {
           plan = (await request('worktree.promote', { projectId, worktreeId, dryRun: true })) as PromotePlan
         } catch (err) {
-          return failed(err)
+          if (!asked) return failed(err)
+          // The server refuses it: the first window to see that answers for all, without a dialog.
+          const error = errorText(err)
+          if (errorCode(err) !== 'NOT_CONNECTED' && (await asked.claim({ silent: true }))) await asked.answer({ outcome: 'failed', error })
+          return { outcome: 'failed', error }
         }
+        if (asked && !asked.stillAsked()) return { outcome: 'declined' }
         const machine = currentFeatures()
         const env = machine.env ? deps.teardown.environment(info) : undefined
         const prompt = promotePrompt(plan, { vm: env?.profile, asked })
         const { confirmed, stackName } = machine.stacks
           ? await deps.teardown.confirm(info, prompt, backend)
           : { confirmed: await deps.confirm(prompt), stackName: undefined }
-        if (!confirmed) return { outcome: 'declined' }
-        // Another window answered the agent while this dialog was open: its answer stands.
-        if (asked && !asked.stillAsked()) {
-          await deps.showError(PROMOTE_FAILED, 'Another window already answered this request; nothing was done here.')
+        if (!confirmed) {
+          // Closed because the request was settled elsewhere: nothing to answer.
+          if (asked?.stillAsked()) await asked.answer({ outcome: 'declined' })
           return { outcome: 'declined' }
         }
-        if (stackName) await deps.teardown.destroyStack(info, stackName, backend)
-        if (env) await deps.teardown.destroyEnvironment(info, backend)
+        // The claim first: the first window to confirm runs it; the others' dialogs close.
+        if (asked && !(await asked.claim())) return { outcome: 'declined' }
+        const release = markPromoting(info.path)
         try {
-          const result = (await request('worktree.promote', { projectId, worktreeId }, { timeoutMs: SLOW_MS })) as PromoteResult
-          if (result.notes.length > 0) await deps.showError('Promoted, with notes', result.notes.join('\n'))
-          return { outcome: 'promoted', worktreeId: result.worktreeId }
-        } catch (err) {
-          return failed(err, tornDownNote(!!stackName, !!env))
+          try {
+            if (stackName) await deps.teardown.destroyStack(info, stackName, backend, 'promote')
+            if (env) await deps.teardown.destroyEnvironment(info, backend)
+          } catch (err) {
+            const error = `The teardown before the promote failed: ${errorText(err)}. Nothing was promoted.${tornDownNote(!!stackName, false)}`
+            if (asked) await asked.answer({ outcome: 'failed', error })
+            await deps.showError(PROMOTE_FAILED, error)
+            return { outcome: 'failed', error }
+          }
+          try {
+            const params = { projectId, worktreeId, ...(asked ? { requestId: asked.requestId } : {}) }
+            const result = (await request('worktree.promote', params, { timeoutMs: SLOW_MS })) as PromoteResult
+            const notes = resultNotes(result)
+            if (notes) await deps.showError('Promoted, with notes', notes)
+            return { outcome: 'promoted', worktreeId: result.worktreeId }
+          } catch (err) {
+            return failed(err, tornDownNote(!!stackName, !!env))
+          }
+        } finally {
+          release()
         }
       },
       demote: async (info) => {
@@ -512,19 +553,29 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         try {
           plan = (await request('worktree.demote', { projectId, repoId, dryRun: true })) as PromotePlan
         } catch (err) {
-          await deps.showError(DEMOTE_FAILED, errorText(err))
+          await deps.showError(DEMOTE_FAILED, promoteErrorText(err))
           return
         }
         if (!(await deps.confirm(demotePrompt(plan)))) return
         try {
           const result = (await request('worktree.demote', { projectId, repoId }, { timeoutMs: SLOW_MS })) as PromoteResult
-          if (result.notes.length > 0) await deps.showError('Moved, with notes', result.notes.join('\n'))
+          const notes = resultNotes(result)
+          if (notes) await deps.showError('Moved, with notes', notes)
         } catch (err) {
-          await deps.showError(DEMOTE_FAILED, errorText(err))
+          await deps.showError(DEMOTE_FAILED, promoteErrorText(err))
         }
       },
-      followPromoteRequests: () =>
-        followPromoteRequests({
+      // One follower per backend: it lives until the window leaves the project (a reconnect, or a
+      // new welcome, keeps it and its open dialog), and says `promote.listen` again on every connect.
+      followPromoteRequests: () => {
+        if (promoteFollower || deps.left()) return
+        const listen = (): void => {
+          if (deps.left() || !currentFeatures().promote) return
+          request('promote.listen', { projectId }).catch((err: unknown) => {
+            if (errorCode(err) !== 'NOT_CONNECTED') deps.log('promote.listen failed: agents cannot ask this window to promote', err)
+          })
+        }
+        const follower: PromoteFollower = followPromoteRequests({
           onRequest: (listener) =>
             deps.onEvent('promote.request', (event) => {
               if (event.projectId === projectId) listener(event)
@@ -537,15 +588,27 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             const legacyId = ids().legacyByWorktree[event.worktreeId]
             const path = legacyId === undefined ? undefined : instancePath(legacyId)
             const info = path === undefined ? undefined : Object.values(deps.state().hostWorktrees).flat().find((w) => w.path === path)
-            if (!info || legacyId === undefined) return { outcome: 'failed', error: "This window doesn't list that worktree" }
+            // A window that can't find it stays silent: another one answers.
+            if (!info || legacyId === undefined) return
             const instance = deps.state().project?.repositories.flatMap((r) => r.worktrees).find((w) => w.id === legacyId)
-            return backend.worktrees.promote(info, instance, asked)
+            await backend.worktrees.promote(info, instance, asked)
           },
-          answer: async (requestId, outcome) => {
-            await request('promote.answer', { projectId, requestId, ...outcome }).catch(() => {})
-          },
+          claim: async (requestId) => (await request('promote.claim', { projectId, requestId })).accepted,
+          answer: async (requestId, outcome) => (await request('promote.answer', { projectId, requestId, ...outcome })).accepted,
+          closeDialog: deps.closeDialog,
+          showError: deps.showError,
+          log: deps.log,
           left: deps.left
-        }),
+        })
+        const offConnected = deps.onConnected(listen)
+        listen()
+        promoteFollower = follower
+        deps.onLeave(() => {
+          offConnected()
+          follower.stop()
+          request('promote.listen', { projectId, listen: false }).catch(() => {})
+        })
+      },
       moveRef: (path) => {
         const legacyId = legacyIdAt(path)
         const ref = legacyId === undefined ? undefined : ids().worktrees[legacyId]

@@ -14,6 +14,8 @@ export type DialogRequest =
       confirmLabel: string
       cancelLabel?: string
       defaultCancel?: boolean
+      /** Lets `cancelDialogById` close it */
+      dialogId?: string
       done: (ok: boolean) => void
     }
   | {
@@ -24,6 +26,7 @@ export type DialogRequest =
       confirmLabel: string
       checkboxLabel: string
       checkboxChecked: boolean
+      dialogId?: string
       done: (result: { confirmed: boolean; checked: boolean }) => void
     }
 
@@ -59,6 +62,14 @@ export function answerDialog(request: DialogRequest, ok: boolean, checked?: bool
   if (request.kind === 'error') request.done()
   else if (request.kind === 'confirm') request.done(ok)
   else request.done({ confirmed: ok, checked: checked ?? request.checkboxChecked })
+}
+
+/**
+ * The waiting confirm or checkbox dialog with this `dialogId` answered with its cancel, as
+ * Electron's `dialog:cancel` does (an agent's promote request settled in another window).
+ */
+export function cancelDialogById(dialogId: string): void {
+  for (const d of [...queue]) if (d.kind !== 'error' && d.dialogId === dialogId) answerDialog(d, false)
 }
 
 /** Every waiting dialog answered with its cancel (the shown project or route changed). */

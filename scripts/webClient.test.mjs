@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { pathOfProject, projectOfPath } from '../src/web/routes.ts'
 import { browserRelay, socketUrl } from '../src/web/browserRelay.ts'
-import { answerDialog, cancelDialogs, dialogId, pendingDialogs, shiftDialog, webDialogs } from '../src/web/dialogQueue.ts'
+import { answerDialog, cancelDialogById, cancelDialogs, dialogId, pendingDialogs, shiftDialog, webDialogs } from '../src/web/dialogQueue.ts'
 import { createWebApi, WEB_ENTRY_ID } from '../src/web/webApi.ts'
 
 test('routes: / is the list, /p/<id> a project; the round trip keeps odd ids', () => {
@@ -130,6 +130,17 @@ test('the dialog queue: cancelDialogs (the shown project changed) answers every 
   answerDialog(d3, true, false)
   assert.equal(pendingDialogs().length, 0)
   cancelDialogs()
+})
+
+test('the dialog queue: cancelDialogById closes that confirm alone (a promote request settled elsewhere, 5e)', async () => {
+  const other = webDialogs.confirm({ title: 'A', message: 'a?', confirmLabel: 'Delete' })
+  const asked = webDialogs.confirmWithCheckbox({ title: 'P', message: 'p?', confirmLabel: 'Promote', checkboxLabel: 'stack', checkboxChecked: true, dialogId: 'promote:r1' })
+  cancelDialogById('promote:r1')
+  cancelDialogById('promote:none')
+  assert.deepEqual(await asked, { confirmed: false, checked: true })
+  assert.equal(pendingDialogs().length, 1)
+  answerDialog(pendingDialogs()[0], true)
+  assert.equal(await other, true)
 })
 
 /** A RegisteredServer-like source for the api's attention. */

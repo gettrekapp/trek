@@ -1,7 +1,7 @@
 // scripts/appIpcRules.test.mjs — the checks on what a renderer sends the app's own IPC.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { absolutePath, checkboxConfirmOptions, confirmOptions, editorPath, errorDialogText, trekprojPath } from '../src/main/appIpcRules.ts'
+import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText, trekprojPath } from '../src/main/appIpcRules.ts'
 
 test('absolutePath takes an absolute path string only', () => {
   assert.equal(absolutePath('/Users/me/repo'), '/Users/me/repo')
@@ -43,4 +43,10 @@ test('checkboxConfirmOptions coerces as confirmOptions does; the box is ticked o
     title: '5', message: '', detail: undefined, confirmLabel: 'OK', checkboxLabel: '9', checkboxChecked: false
   })
   assert.deepEqual(checkboxConfirmOptions('nope'), { title: '', message: '', detail: undefined, confirmLabel: 'OK', checkboxLabel: '', checkboxChecked: false })
+})
+
+test('dialogIdOf: a short string, from the options or alone; else none', () => {
+  assert.equal(dialogIdOf({ dialogId: 'promote:r1' }), 'promote:r1')
+  assert.equal(dialogIdOf('promote:r1'), 'promote:r1')
+  for (const bad of [{}, { dialogId: 3 }, { dialogId: '' }, 'x'.repeat(201), null, undefined]) assert.equal(dialogIdOf(bad), undefined)
 })

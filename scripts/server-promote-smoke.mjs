@@ -3,21 +3,32 @@
 //
 // Run: npm run smoke:server-promote   (builds the app and the server, then runs this script)
 //
-// A plain `trek-server start` (no `local`) runs with its own HOME and the not-signed-in stub gh every
-// smoke gets (smokeGh.mjs); its agent is a fake one that lingers. The built app runs with a temp HOME
-// and --user-data-dir, no Local server, and main's dialogs stubbed (each confirm answered as the
-// smoke says). A worktree feature-x has a commit, uncommitted work and a running Claude session with
-// a saved history. Through the DOM, the SDK, git and the MCP endpoint it checks:
+// A plain `trek-server start` (no `local`) runs with its own HOME, a TMPDIR in the work dir, no git
+// config (GIT_CONFIG_GLOBAL=/dev/null, GIT_CONFIG_NOSYSTEM=1; the smoke's own git too), docker and
+// colima stubs first on its PATH, and the not-signed-in stub gh every smoke gets (smokeGh.mjs); its
+// agent is a fake one that lingers. The built app runs with a temp HOME and --user-data-dir, no
+// Local server, and main's dialogs stubbed (each confirm answered as the smoke says, or held open
+// until the smoke answers it or the app closes it). A worktree feature-x has a commit, uncommitted
+// work (a same-second same-size edit included), a running Claude session with a saved history, a
+// dev stack that has run and a running VM. A second SDK connection listens as another window.
+// Through the DOM, the SDK, git and the MCP endpoint it checks:
 //   - the welcome lists promote, and the window's feature follows it;
-//   - Promote to primary… asks first (what moves), then the main checkout is on feature-x with the
-//     work unstaged, the worktree's folder and row are gone, the session moved to the main checkout,
-//     resumed there, its history in the main checkout's Claude folder; the window shows one row;
+//   - Promote to primary… asks first (what moves, the dev stack's box, ticked, and the VM); the
+//     stack, then the VM, are destroyed before the promote, the worktree's folder still there and
+//     the main checkout still on main; then the main checkout is on feature-x with the work unstaged
+//     (the racily-clean file's content too), the worktree's folder and row gone, the session moved to
+//     the main checkout, resumed there, its history in the main checkout's Claude folder; the window
+//     selects the main checkout and shows its tab with the resumed agent's output;
 //   - Promote branch to worktree… on the main checkout puts feature-x and its work back in a worktree
 //     at the default path, the main checkout on main and clean, the session moved and running there;
 //   - an agent's promote_to_primary shows the confirmation in the window (saying who asked); confirmed,
-//     the window promotes and the tool returns the main checkout; declined, the tool says so and
-//     nothing changes;
-//   - the renderer never holds the server token; no error dialogs, console or page errors.
+//     the window claims it, the other window hears it claimed, and the tool returns the main checkout;
+//     claimed by the other window first, the window's open confirmation is closed and nothing
+//     changes; declined, the tool says so and nothing changes; confirmed and then the caller's MCP
+//     call drops, the promote still goes through and the asking session, resumed in the main
+//     checkout, has the outcome in its queue;
+//   - docker and colima ran only as the stubs; the renderer never holds the server token; no error
+//     dialogs, console or page errors.
 //
 // Prints SERVER PROMOTE SMOKE PASS (n checks) or SERVER PROMOTE SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
@@ -28,10 +39,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { deriveProfileName } from '../src/shared/environments.ts'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { closeApp, killIfOurs } from './smokeTeardown.mjs'
 
-const WATCHDOG_MS = 180_000
+const WATCHDOG_MS = 240_000
 const DAEMON_READY_MS = 15_000
 
 const checks = []
@@ -67,9 +79,20 @@ for (const dir of [serverHome, appHome, userData, data]) mkdirSync(dir, { recurs
 
 const repo = join(serverHome, 'repos', 'app')
 const worktree = `${repo}-feature-x`
-const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', ...args], { encoding: 'utf8' })
+const noGitConfig = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
+const git = (...args) => execFileSync('git', ['-c', 'user.name=c', '-c', 'user.email=c@c', ...args], { encoding: 'utf8', env: { ...process.env, ...noGitConfig } })
+// The server's temp dir: a folder in the work dir.
+const serverTmp = join(work, 'tmp')
+mkdirSync(serverTmp)
+// The teardown's order: stack.sh and colima delete each write a line saying whether the worktree's
+// folder was still there and what the main checkout had checked out then.
+const teardownLog = join(work, 'teardown.log')
+const mainHead = `$(sed 's#ref: refs/heads/##' '${repo}/.git/HEAD')`
 git('init', '-q', '-b', 'main', repo)
 writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\n')
+writeFileSync(join(repo, '.gitignore'), '.trek/\n')
+mkdirSync(join(repo, 'docker', 'stack'), { recursive: true })
+writeFileSync(join(repo, 'docker', 'stack', 'stack.sh'), `#!/bin/sh\necho "stack|$1|$( [ -d '${worktree}' ] && echo present )|${mainHead}" >> '${teardownLog}'\nexit 0\n`, { mode: 0o755 })
 git('-C', repo, 'add', '.')
 git('-C', repo, 'commit', '-q', '-m', 'init')
 const status = (cwd) => git('-C', cwd, 'status', '--porcelain').split('\n').filter(Boolean).sort()
@@ -77,23 +100,64 @@ const branchOf = (cwd) => git('-C', cwd, 'symbolic-ref', '--short', 'HEAD').trim
 /** The server's Claude folder for a working directory (claudeSessionService's projectDir, under its HOME) */
 const claudeDir = (cwd) => join(serverHome, '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
 
+// docker and colima stubs first on the server's PATH (no real docker or colima ever runs): docker ps
+// lists one container while `stack-running` exists (the dev stack reads as running); colima lists
+// feature-x's VM, running, until `colima delete` of it removes `vm-running`.
+const machineStubs = join(work, 'machine-stubs')
+const machineCalls = join(work, 'machine-calls.log')
+const stackRunning = join(work, 'stack-running')
+const vmRunning = join(work, 'vm-running')
+mkdirSync(machineStubs)
+const vmProfile = deriveProfileName(repo, 'feature-x')
+writeFileSync(join(data, 'environments.json'), JSON.stringify({ [vmProfile]: { repoPath: repo, branch: 'feature-x', worktreePath: worktree, composeFile: 'docker-compose.yml', createdAt: '2026-11-10T00:00:00.000Z' } }))
+writeFileSync(vmRunning, '')
+writeFileSync(
+  join(machineStubs, 'docker'),
+  `#!/bin/sh\nif [ "$1" = --version ]; then echo "Docker version 0.0.0-stub"; exit 0; fi\necho "docker $*" >> '${machineCalls}'\nif [ "$1" = ps ] && [ -e '${stackRunning}' ]; then echo c0ffee; fi\nexit 0\n`,
+  { mode: 0o755 }
+)
+writeFileSync(
+  join(machineStubs, 'colima'),
+  `#!/bin/sh
+if [ "$1" = --version ]; then echo "colima version 0.0.0-stub"; exit 0; fi
+echo "colima $*" >> '${machineCalls}'
+if [ "$1" = list ] && [ -e '${vmRunning}' ]; then echo '${JSON.stringify({ name: vmProfile, status: 'Running' })}'; fi
+if [ "$1" = delete ] && [ "$2" = '${vmProfile}' ]; then echo "vm|$( [ -d '${worktree}' ] && echo present )|${mainHead}" >> '${teardownLog}'; rm -f '${vmRunning}'; fi
+exit 0
+`,
+  { mode: 0o755 }
+)
+
 const fakeAgent = join(work, 'fake-agent.sh')
 const agentPids = join(work, 'agent-pids')
 writeFileSync(fakeAgent, `#!/bin/sh\necho $$ >> '${agentPids}'\necho "FAKE_AGENT"\nexec sleep 300\n`, { mode: 0o755 })
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [{ id: 'app', name: 'app', path: repo }], llm: { providers: { claude: { command: fakeAgent } } } }))
 
-// Each confirm is answered with globalThis.__answer (1: the confirm button; 0: Cancel).
+// Each confirm is answered with globalThis.__answer (1: the confirm button; 0: Cancel; 'hold': kept
+// open until __release(response), or closed by its `signal`, as Electron's is: then `closed`). A
+// checkbox is answered globalThis.__tick.
 const mainStub = join(work, 'main-stub.cjs')
 writeFileSync(
   mainStub,
   `const { dialog } = require('electron')
 globalThis.__dialogs = []
 globalThis.__answer = 1
+globalThis.__tick = true
+const held = []
+globalThis.__release = (response) => { for (const done of held.splice(0)) done(response) }
 dialog.showMessageBox = async (...args) => {
   const o = args.find((a) => a && typeof a === 'object' && 'message' in a) ?? {}
-  globalThis.__dialogs.push({ type: o.type ?? null, message: o.message, detail: o.detail ?? null })
-  return { response: o.type === 'error' ? 0 : globalThis.__answer, checkboxChecked: false }
+  const record = { type: o.type ?? null, message: o.message, detail: o.detail ?? null, checkbox: o.checkboxLabel ?? null, closed: false }
+  globalThis.__dialogs.push(record)
+  if (o.type === 'error') return { response: 0, checkboxChecked: false }
+  const checkboxChecked = o.checkboxLabel ? globalThis.__tick : false
+  if (globalThis.__answer !== 'hold') return { response: globalThis.__answer, checkboxChecked }
+  return new Promise((resolve) => {
+    const done = (response) => resolve({ response, checkboxChecked })
+    held.push(done)
+    o.signal?.addEventListener('abort', () => { record.closed = true; done(o.cancelId ?? 0) }, { once: true })
+  })
 }
 `
 )
@@ -111,6 +175,7 @@ const freePort = () =>
 let daemon = null
 let app = null
 let sdk = null
+let other = null
 const pageErrors = []
 const watch = (page) => {
   page.on('pageerror', (e) => pageErrors.push(`PAGEERROR: ${String(e)}`))
@@ -126,6 +191,7 @@ const finish = async (reason) => {
   finished = true
   if (reason) console.error(reason)
   sdk?.close()
+  other?.close()
   await closeApp(app)
   if (daemon && daemon.exitCode === null && daemon.signalCode === null) {
     daemon.kill()
@@ -149,7 +215,7 @@ try {
   await new Promise((resolve, reject) => {
     const d = spawn(process.execPath, ['dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', data], {
       cwd: join(root, 'server'),
-      env: { ...process.env, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh' },
+      env: { ...process.env, PATH: `${machineStubs}:${process.env.PATH}`, TMPDIR: serverTmp, HOME: serverHome, XDG_STATE_HOME: join(serverHome, '.local', 'state'), SHELL: '/bin/sh', ...noGitConfig },
       stdio: ['ignore', 'pipe', 'pipe']
     })
     daemon = d
@@ -181,7 +247,11 @@ try {
     return snapshot
   }
   const repoId = (await project()).repositories[0].id
+  await sdk.request('repo.update', { projectId, repoId, environments: { enabled: true } })
   await sdk.request('worktree.create', { projectId, repoId, branch: 'feature-x', createBranch: true })
+  // The dev stack has run here (.trek/stack, ignored) and is running (docker ps lists a container).
+  mkdirSync(join(worktree, '.trek', 'stack'), { recursive: true })
+  writeFileSync(stackRunning, '')
   writeFileSync(join(worktree, 'b.txt'), 'b\n')
   git('-C', worktree, 'add', '.')
   git('-C', worktree, 'commit', '-q', '-m', 'add b')
@@ -213,6 +283,19 @@ try {
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
   check("the window's promote feature follows the server's capability", await until(() => win.evaluate(() => window.__features().promote), true), true)
+  check("the environments poll lists feature-x's VM, running", await until(() => win.evaluate((p) => window.__store.getState().environments[p]?.vmState ?? null, vmProfile), 'running', 20_000), 'running')
+
+  // The other window: an SDK connection subscribed to the project that listens, recording what it hears.
+  other = new ServerConnection({ url, token, createSocket: globalSocketFactory, client: 'server-promote-smoke-other' })
+  other.connect()
+  await until(() => other.status, 'connected', 5000)
+  await other.request('sub.subscribe', { topic })
+  await other.request('promote.listen', { projectId })
+  const heard = []
+  other.on('event', (frame) => {
+    if (frame.event === 'promote.request' || frame.event === 'promote.settled') heard.push({ event: frame.event, ...frame.payload })
+  })
+  const heardOf = (requestId) => heard.filter((h) => h.requestId === requestId).map((h) => (h.event === 'promote.request' ? 'request' : h.claimed ? 'claimed' : 'settled'))
 
   const detail = win.locator('.server-window .detail')
   const menuItem = async (rowText, path, label) => {
@@ -224,18 +307,28 @@ try {
     return item
   }
   const dialogs = () => app.evaluate(() => globalThis.__dialogs)
+  const PROMOTE_MESSAGE = 'Promote “feature-x” to the primary checkout?'
   const confirmOf = async (message) => (await dialogs()).filter((d) => d.message === message)
+  const setAnswer = (answer) => app.evaluate((_e, a) => { globalThis.__answer = a }, answer)
+  const term = (id) => win.evaluate((x) => window.__terminals.readTerminal(x, 40) ?? '', id)
 
-  // ---- 3. Promote to primary -----------------------------------------------------------------------
+  // ---- 3. Promote to primary, with its dev stack and VM torn down first ----------------------------
 
   await (await menuItem('feature-x', worktree, 'Promote to primary…')).click()
   check('the main checkout switches to feature-x', await until(() => { try { return branchOf(repo) } catch { return null } }, 'feature-x'), 'feature-x')
-  const asked = await until(async () => (await confirmOf('Promote “feature-x” to the primary checkout?')).length, 1)
+  const asked = await until(async () => (await confirmOf(PROMOTE_MESSAGE)).length, 1)
   check('Promote asked first', asked, 1)
-  const promptText = (await confirmOf('Promote “feature-x” to the primary checkout?'))[0]?.detail ?? ''
-  check('the confirmation says the work and the session move', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText)], [true, true])
+  const first = (await confirmOf(PROMOTE_MESSAGE))[0] ?? {}
+  const promptText = first.detail ?? ''
+  check('the confirmation says the work and the session move, and the VM goes', [/uncommitted changes move with it/.test(promptText), /1 session \(Agent\) move to the main checkout and resume/.test(promptText), promptText.includes(`Colima VM “${vmProfile}”`)], [true, true, true])
+  check('it offers to destroy the dev stack (ticked here)', /^Also destroy its dev stack “trek-/.test(first.checkbox ?? ''), true)
+  check('it says the ignored .trek/ is deleted with the worktree', /Deleted with the worktree, never moved \(ignored by git\): \.trek\//.test(promptText), true)
+  check('the stack, then the VM, were destroyed before the promote: the worktree there, the main checkout still on main', readFileSync(teardownLog, 'utf8').split('\n').filter(Boolean), ['stack|destroy|present|main', 'vm|present|main'])
+  check("the VM is gone from the server's registry", Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), [])
+  rmSync(stackRunning, { force: true })
   check('the worktree folder is gone', await until(() => existsSync(worktree), false), false)
   check("the main checkout has the worktree's work, unstaged", status(repo), [' M a.txt', '?? c.txt'])
+  check('the racily-clean same-size edit came along, by content', readFileSync(join(repo, 'a.txt'), 'utf8'), 'one\nTWO\nthree\n')
   check("and the branch's commit", existsSync(join(repo, 'b.txt')), true)
   const afterPromote = await until(async () => (await rowsNow()).map((w) => w.id), [mainId])
   check('the project lists only the main checkout', afterPromote, [mainId])
@@ -243,6 +336,9 @@ try {
   check('the session moved to the main checkout, resumed there', [mainRow.sessions.map((s) => s.id), mainRow.loaded, !!mainRow.sessions[0]?.ptyId], [[sessionId], true, true])
   check("its history moved to the main checkout's Claude folder", [existsSync(join(claudeDir(repo), historyName)), existsSync(join(claudeDir(worktree), historyName))], [true, false])
   check('the window shows one row, on feature-x', await until(async () => [await rows.count(), (await rows.first().textContent())?.includes('feature-x')], [1, true]), [1, true])
+  check('the window selects the main checkout', await until(() => win.evaluate(() => window.__store.getState().selected?.path ?? null), repo), repo)
+  check("the main checkout's row shows the moved session's tab", await until(() => detail.locator('.session-tab', { hasText: 'Agent' }).count(), 1), 1)
+  check('with the resumed agent\'s output', await until(async () => (await term(sessionId)).includes('FAKE_AGENT'), true, 20_000), true)
 
   // ---- 4. Promote branch to worktree ---------------------------------------------------------------
 
@@ -251,6 +347,7 @@ try {
   check('the main checkout is back on main', await until(() => branchOf(repo), 'main'), 'main')
   check('and clean', await until(() => status(repo), []), [])
   check('the work is in the worktree, unstaged', status(worktree), [' M a.txt', '?? c.txt'])
+  check('the racily-clean edit by content too', readFileSync(join(worktree, 'a.txt'), 'utf8'), 'one\nTWO\nthree\n')
   const backRows = await until(async () => (await rowsNow()).length, 2)
   check('the project lists the main checkout and the worktree', backRows, 2)
   const backRow = (await rowsNow()).find((w) => !w.isMain)
@@ -258,33 +355,78 @@ try {
   check("its history in the worktree's Claude folder", existsSync(join(claudeDir(worktree), historyName)), true)
   check('the window shows both rows again', await until(() => rows.count(), 2), 2)
 
-  // ---- 5. An agent's promote_to_primary, confirmed in the window, then declined --------------------
+  // ---- 5. An agent's promote_to_primary --------------------------------------------------------------
 
   const mcpFile = join(data, 'mcp', `${projectId}.json`)
   const mcp = (await until(() => existsSync(mcpFile), true)) && JSON.parse(readFileSync(mcpFile, 'utf8')).mcpServers['trek-dev']
   let rpcId = 1
-  const rpc = async (method, params) => {
-    const res = await fetch(mcp.url, { method: 'POST', headers: { 'content-type': 'application/json', ...mcp.headers }, body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }) })
+  const rpc = async (method, params, signal) => {
+    const res = await fetch(mcp.url, { method: 'POST', headers: { 'content-type': 'application/json', ...mcp.headers }, body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method, params }), signal })
     return res.json()
   }
+  const callPromote = (args, signal) => rpc('tools/call', { name: 'promote_to_primary', arguments: args }, signal)
+  const lastRequest = () => [...heard].reverse().find((h) => h.event === 'promote.request')?.requestId ?? null
   await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'smoke', version: '0' } })
   const listed = (await rpc('tools/list', {})).result?.tools?.map((t) => t.name) ?? []
   check('the agent’s tools list promote_to_primary', listed.includes('promote_to_primary'), true)
-  const before = (await confirmOf('Promote “feature-x” to the primary checkout?')).length
-  const called = await rpc('tools/call', { name: 'promote_to_primary', arguments: { worktree: 'feature-x', terminalId: sessionId } })
+
+  // 5a. Confirmed in the window: it claims it, the other window hears so, the tool returns the main checkout.
+  const before = (await confirmOf(PROMOTE_MESSAGE)).length
+  const called = await callPromote({ worktree: 'feature-x', terminalId: sessionId })
   const result = JSON.parse(called.result?.content?.[0]?.text ?? '{}')
   check('confirmed in the window, the tool returns the main checkout', [called.result?.isError === true, result.promoted, result.primary?.primary, result.primary?.branch], [false, true, true, 'feature-x'])
-  const mcpPrompt = (await confirmOf('Promote “feature-x” to the primary checkout?')).slice(before)
+  const mcpPrompt = (await confirmOf(PROMOTE_MESSAGE)).slice(before)
   check('the window asked, saying which session asked', [mcpPrompt.length, /^“Agent” asked for this/.test(mcpPrompt[0]?.detail ?? '')], [1, true])
   check('the main checkout is on feature-x again, the worktree gone', [branchOf(repo), existsSync(worktree)], ['feature-x', false])
+  check('the other window heard the request, its claim, then its end', heardOf(lastRequest()), ['request', 'claimed', 'settled'])
 
-  await sdk.request('worktree.demote', { projectId, repoId })
-  await until(() => rows.count(), 2)
-  await app.evaluate(() => { globalThis.__answer = 0 })
-  const declined = await rpc('tools/call', { name: 'promote_to_primary', arguments: { worktree: 'feature-x' } })
-  check('declined in the window, the tool says so', [declined.result?.isError, /declined/.test(declined.result?.content?.[0]?.text ?? '')], [true, true])
+  const backToWorktree = async () => {
+    await sdk.request('worktree.demote', { projectId, repoId })
+    await until(() => rows.count(), 2)
+    await until(async () => !!(await rowsNow()).find((w) => !w.isMain)?.sessions[0]?.ptyId, true)
+  }
+  await backToWorktree()
+
+  // 5b. The other window claims it while the window's confirmation is open: that one is closed, nothing changes.
+  await setAnswer('hold')
+  const heldBefore = (await confirmOf(PROMOTE_MESSAGE)).length
+  const claimedElsewhere = callPromote({ worktree: 'feature-x' })
+  await until(async () => (await confirmOf(PROMOTE_MESSAGE)).length, heldBefore + 1)
+  const requestB = lastRequest()
+  check('the other window claims it first', (await other.request('promote.claim', { projectId, requestId: requestB })).accepted, true)
+  check("the window's open confirmation is closed", await until(async () => (await confirmOf(PROMOTE_MESSAGE)).at(-1)?.closed ?? null, true), true)
+  await other.request('promote.answer', { projectId, requestId: requestB, outcome: 'declined' })
+  const resultB = await claimedElsewhere
+  check('the tool hears the claimant’s decline', [resultB.result?.isError, /declined/.test(resultB.result?.content?.[0]?.text ?? '')], [true, true])
   check('and nothing changed', [branchOf(repo), existsSync(worktree), status(worktree)], ['main', true, [' M a.txt', '?? c.txt']])
 
+  // 5c. Declined in the window.
+  await setAnswer(0)
+  const declined = await callPromote({ worktree: 'feature-x' })
+  check('declined in the window, the tool says so', [declined.result?.isError, /declined/.test(declined.result?.content?.[0]?.text ?? '')], [true, true])
+  check('and nothing changed', [branchOf(repo), existsSync(worktree), status(worktree)], ['main', true, [' M a.txt', '?? c.txt']])
+  check('the other window heard each request end', heardOf(lastRequest()), ['request', 'settled'])
+
+  // 5d. Confirmed, then the caller's MCP call drops: the promote goes on, and the asking session hears.
+  await setAnswer('hold')
+  const heldD = (await confirmOf(PROMOTE_MESSAGE)).length
+  const drop = new AbortController()
+  const dropped = callPromote({ worktree: 'feature-x', terminalId: sessionId }, drop.signal).catch((err) => err)
+  await until(async () => (await confirmOf(PROMOTE_MESSAGE)).length, heldD + 1)
+  const requestD = lastRequest()
+  await app.evaluate(() => globalThis.__release(1))
+  check('the window claims it', await until(() => heardOf(requestD).includes('claimed'), true), true)
+  drop.abort()
+  check('the call dropped', (await dropped)?.name, 'AbortError')
+  check('the promote went through anyway', await until(() => [branchOf(repo), existsSync(worktree)], ['feature-x', false], 30_000), ['feature-x', false])
+  const queued = async () => (await rowsNow()).find((w) => w.isMain)?.sessions.find((x) => x.id === sessionId)?.queue ?? []
+  const queue = await until(async () => JSON.stringify(await queued()).includes('The promote you asked for (promote_to_primary) went through'), true)
+  check("the asking session, resumed in the main checkout, has the outcome in its queue", [queue, !!(await rowsNow()).find((w) => w.isMain)?.sessions.find((x) => x.id === sessionId)?.ptyId], [true, true])
+  await setAnswer(1)
+
+  const machineLines = existsSync(machineCalls) ? readFileSync(machineCalls, 'utf8').split('\n').filter(Boolean) : []
+  const unexpected = machineLines.filter((l) => !(l.startsWith('docker ps') || l.startsWith('colima list') || l === `colima delete ${vmProfile} --force` || (l.startsWith('docker ') && l.includes(' compose ') && l.endsWith(' down -v'))))
+  check("docker and colima ran only as the stubs: status, the VM's compose down and delete (never colima start)", unexpected, [])
   const held = await win.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))
   check("the renderer's store and page never hold the server token", held.includes(token), false)
   check('no error dialogs', (await dialogs()).filter((d) => d.type === 'error'), [])

@@ -344,7 +344,7 @@ export interface MethodParamsV2 {
    * failed before its promote could start (a teardown). `promoted` is refused (BAD_REQUEST): the
    * claimant's `worktree.promote {requestId}` settles it. `accepted` false if late or not the claimant's.
    */
-  'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'promoted' | 'failed'; worktreeId?: string; error?: string }
+  'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'failed'; error?: string }
   /** 5e: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer) */
   'promote.listen': { projectId: string; listen?: boolean }
   /** 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown */

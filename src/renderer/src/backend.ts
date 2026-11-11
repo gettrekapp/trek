@@ -115,13 +115,18 @@ export interface WindowBackend {
     /**
      * Promote to primary (feature `promote`, 5e): the server's plan, the confirmation (with the
      * dev stack's checkbox, as Delete), the teardown, then `worktree.promote`. Reports its own
-     * failures and resolves what came of it. `asked`: an agent's promote_to_primary asked.
+     * failures and resolves what came of it. `asked`: an agent's promote_to_primary asked (claimed
+     * before the teardown, settled by the server from `worktree.promote {requestId}`).
      */
     promote(info: GitWorktreeInfo, instance: WorktreeInstance | undefined, asked?: PromoteAsked): Promise<PromoteOutcome>
     /** "Promote branch to worktree" (feature `promote`): the main checkout's branch into a new worktree */
     demote(info: GitWorktreeInfo): Promise<void>
-    /** promote_to_primary's requests to this window: each runs `promote` and answers; returns the unsubscribe */
-    followPromoteRequests(): () => void
+    /**
+     * promote_to_primary's requests to this window: each runs `promote`. Starts the backend's one
+     * follower (later calls do nothing); it lives until the window leaves the project, through
+     * reconnects, and says `promote.listen` on each connect.
+     */
+    followPromoteRequests(): void
   }
   readonly git: {
     listWorktrees(repoId: string): Promise<GitWorktreeInfo[]>
@@ -296,7 +301,7 @@ export const idleBackend: WindowBackend = {
     moveRef: () => null,
     promote: noProject,
     demote: noProject,
-    followPromoteRequests: () => () => {}
+    followPromoteRequests: () => {}
   },
   git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, commits: noProject, pull: noProject, push: noProject, dirty: noProject },
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },

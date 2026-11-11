@@ -324,6 +324,15 @@ test('reconcileView falls back to the first main checkout and fixes active tabs'
   assert.deepEqual(view.activeTerminal, { '__primary__:r1': 's2', __global__: 'g2' })
 })
 
+test('reconcileView: a gone worktree falls back to its own repository main checkout (a promote, 5e)', () => {
+  const view = reconcileView({ activeWorktreeId: 'w-x', selected: { path: '/r/two-promoted', repoId: 'r2' }, activeTerminal: {} }, projectV2(fixture()))
+  assert.deepEqual(view.selected, { path: '/r/two', repoId: 'r2' })
+  assert.equal(view.activeWorktreeId, '__primary__:r2')
+  // A repository that went too: the first one's.
+  const gone = reconcileView({ activeWorktreeId: 'w-x', selected: { path: '/r/nine-x', repoId: 'r9' }, activeTerminal: {} }, projectV2(fixture()))
+  assert.deepEqual(gone.selected, { path: '/r/one', repoId: 'r1' })
+})
+
 test('ordering round-trips: legacy keys back to the v2 settings order', () => {
   const p = fixture()
   const { slice, ids } = projectV2(p)

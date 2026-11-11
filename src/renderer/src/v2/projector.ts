@@ -359,7 +359,8 @@ export interface ViewState {
 
 /**
  * Keeps the selection and each worktree's active tab where they still exist.
- * A gone selection falls back to the first repository's main checkout, a gone
+ * A gone selection falls back to its repository's main checkout (else the
+ * first repository's), a gone
  * tab to the worktree's last one. The selection and
  * the active-tab map keep their objects when nothing about them changed, so
  * selectors do not re-render on every patch.
@@ -383,11 +384,14 @@ export function reconcileView(prev: ViewState, projection: V2Projection): ViewSt
       activeTerminal
     }
   }
-  const first = slice.project.repositories[0]
-  if (!first) return { activeWorktreeId: null, selected: null, activeTerminal }
+  // A gone worktree's own repository's main checkout first: after a promote that is the checkout
+  // its branch is now on (in every window that had it selected; the others keep their selection).
+  const own = prev.selected?.repoId ? slice.project.repositories.find((r) => r.id === prev.selected!.repoId) : undefined
+  const fallback = own ?? slice.project.repositories[0]
+  if (!fallback) return { activeWorktreeId: null, selected: null, activeTerminal }
   return {
-    activeWorktreeId: primaryWorktreeId(first.id),
-    selected: { path: first.path, repoId: first.id },
+    activeWorktreeId: primaryWorktreeId(fallback.id),
+    selected: { path: fallback.path, repoId: fallback.id },
     activeTerminal
   }
 }

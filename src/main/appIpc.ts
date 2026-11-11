@@ -8,10 +8,43 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { RecentEntry } from '../shared/types'
 import { getRecents, removeRecent } from './recents'
-import { absolutePath, checkboxConfirmOptions, confirmOptions, editorPath, errorDialogText } from './appIpcRules'
+import { absolutePath, checkboxConfirmOptions, confirmOptions, dialogIdOf, editorPath, errorDialogText } from './appIpcRules'
 import { parseRecentRef } from './recentsRules'
 
 const execFileAsync = promisify(execFile)
+
+/** How long a `dialog:cancel` for a confirmation not open yet is remembered (the IPC keeps order; this is a backstop) */
+const EARLY_CANCEL_MS = 30_000
+
+/**
+ * The open confirmations that have a `dialogId`, per window (`${webContents id}:${dialogId}`): a
+ * renderer closes one with `dialog:cancel` (an agent's promote request settled in another window),
+ * answered as if cancelled. Only the window that opened it can close it.
+ */
+const openDialogs = new Map<string, AbortController>()
+const earlyCancels = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** The signal that closes the confirmation `raw` names, and its release once it is answered. */
+function dialogSignal(senderId: number, raw: unknown): { signal?: AbortSignal; done: () => void } {
+  const id = dialogIdOf(raw)
+  if (!id) return { done: () => {} }
+  const key = `${senderId}:${id}`
+  const controller = new AbortController()
+  const early = earlyCancels.get(key)
+  if (early !== undefined) {
+    clearTimeout(early)
+    earlyCancels.delete(key)
+    controller.abort()
+  }
+  openDialogs.get(key)?.abort()
+  openDialogs.set(key, controller)
+  return {
+    signal: controller.signal,
+    done: () => {
+      if (openDialogs.get(key) === controller) openDialogs.delete(key)
+    }
+  }
+}
 
 export function registerAppIpc(): void {
   ipcMain.handle('dialog:selectDirectory', async (event, title: string) => {
@@ -39,33 +72,64 @@ export function registerAppIpc(): void {
     const win = BrowserWindow.fromWebContents(event.sender)!
     // From a renderer: anything but text is made text, so a bad call never throws in the dialog.
     const opts = confirmOptions(raw)
-    const result = await dialog.showMessageBox(win, {
-      type: 'warning',
-      title: opts.title,
-      message: opts.message,
-      detail: opts.detail,
-      buttons: [opts.cancelLabel, opts.confirmLabel],
-      defaultId: opts.defaultCancel ? 0 : 1,
-      cancelId: 0
-    })
-    return result.response === 1
+    const { signal, done } = dialogSignal(event.sender.id, raw)
+    try {
+      if (signal?.aborted) return false
+      const result = await dialog.showMessageBox(win, {
+        type: 'warning',
+        title: opts.title,
+        message: opts.message,
+        detail: opts.detail,
+        buttons: [opts.cancelLabel, opts.confirmLabel],
+        defaultId: opts.defaultCancel ? 0 : 1,
+        cancelId: 0,
+        ...(signal ? { signal } : {})
+      })
+      return result.response === 1 && !signal?.aborted
+    } finally {
+      done()
+    }
   })
 
   ipcMain.handle('dialog:confirmWithCheckbox', async (event, raw: unknown): Promise<{ confirmed: boolean; checked: boolean }> => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     const opts = checkboxConfirmOptions(raw)
-    const result = await dialog.showMessageBox(win, {
-      type: 'warning',
-      title: opts.title,
-      message: opts.message,
-      detail: opts.detail,
-      buttons: ['Cancel', opts.confirmLabel],
-      defaultId: 1,
-      cancelId: 0,
-      checkboxLabel: opts.checkboxLabel,
-      checkboxChecked: opts.checkboxChecked
-    })
-    return { confirmed: result.response === 1, checked: result.checkboxChecked }
+    const { signal, done } = dialogSignal(event.sender.id, raw)
+    try {
+      if (signal?.aborted) return { confirmed: false, checked: opts.checkboxChecked }
+      const result = await dialog.showMessageBox(win, {
+        type: 'warning',
+        title: opts.title,
+        message: opts.message,
+        detail: opts.detail,
+        buttons: ['Cancel', opts.confirmLabel],
+        defaultId: 1,
+        cancelId: 0,
+        checkboxLabel: opts.checkboxLabel,
+        checkboxChecked: opts.checkboxChecked,
+        ...(signal ? { signal } : {})
+      })
+      return { confirmed: result.response === 1 && !signal?.aborted, checked: result.checkboxChecked }
+    } finally {
+      done()
+    }
+  })
+
+  // Closes this window's open confirmation with that `dialogId`, answered as cancelled; one not
+  // open yet is closed as soon as it opens (within EARLY_CANCEL_MS).
+  ipcMain.handle('dialog:cancel', (event, raw: unknown): void => {
+    const id = dialogIdOf(raw)
+    if (!id) return
+    const key = `${event.sender.id}:${id}`
+    const open = openDialogs.get(key)
+    if (open) {
+      open.abort()
+      return
+    }
+    clearTimeout(earlyCancels.get(key))
+    const timer = setTimeout(() => earlyCancels.delete(key), EARLY_CANCEL_MS)
+    timer.unref?.()
+    earlyCancels.set(key, timer)
   })
 
   ipcMain.handle('dialog:error', async (event, rawTitle: unknown, rawMessage: unknown): Promise<void> => {

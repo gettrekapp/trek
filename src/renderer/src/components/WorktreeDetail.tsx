@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import {
   baseName,
   branchCustomTags,
@@ -39,6 +39,7 @@ import { PullRequestModal } from './PullRequestModal'
 import { MoveWorktreeModal } from './MoveWorktreeModal'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { moveTargets } from '../v2/moveFlow'
+import { isPromoting, subscribePromoting } from '../v2/promoteFlow'
 import { envRepoKey } from '../../../shared/environments'
 import { getProvider } from '../../../shared/providers/registry'
 import { describeLlm } from '../../../shared/providers/selection'
@@ -119,7 +120,11 @@ export function WorktreeDetail({
   const [menuOpen, setMenuOpen] = useState(false)
   const [tagMenuOpen, setTagMenuOpen] = useState(false)
   const [customTagMenuOpen, setCustomTagMenuOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const [menuBusy, setBusy] = useState(false)
+  // A promote runs on this worktree in this window (an agent's request included, 5e): its
+  // Delete, Move and Promote are disabled until it is done.
+  const promoting = useSyncExternalStore(subscribePromoting, () => (info ? isPromoting(info.path) : false))
+  const busy = menuBusy || promoting
   const [syncBusy, setSyncBusy] = useState<'pull' | 'push' | null>(null)
   const [showTicket, setShowTicket] = useState(false)
   const [showPR, setShowPR] = useState(false)
@@ -689,7 +694,7 @@ export function WorktreeDetail({
               <div
                 className={`detail-menu-item danger ${busy || offline ? 'disabled' : ''}`}
                 onClick={() => {
-                  if (!offline) void runAction(() => getBackend().worktrees.remove(info, instance))
+                  if (!offline && !busy) void runAction(() => getBackend().worktrees.remove(info, instance))
                 }}
               >
                 <div className="detail-menu-name">Delete worktree…</div>

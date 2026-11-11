@@ -41,6 +41,8 @@ export interface V2Window {
 export function installV2Window(entryId: string, projectId: string): V2Window {
   /** Set by `leave()`: whatever starts afterwards (a chained second request, a new wait) stops at once. */
   let left = false
+  /** The backend's `onLeave`: run by `leave()` while requests still go out */
+  const leaveHooks: (() => void)[] = []
   // Never connects: ServerProjectWindow does, once it knows the entry still exists.
   const registered = () => registeredServerEntry(entryId)
   /**
@@ -144,7 +146,17 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     teardown,
     report,
     reportEdit,
-    left: () => left
+    left: () => left,
+    closeDialog: (dialogId) => void window.api.cancelDialog(dialogId).catch(() => {}),
+    onConnected: (listener) => {
+      const connection = left ? undefined : registered()?.connection
+      if (!connection) return () => {}
+      return connection.on('status', (change) => {
+        if (!left && change.status === 'connected') listener()
+      })
+    },
+    onLeave: (run) => void leaveHooks.push(run),
+    log: (message, err) => console.error(`[promote] ${message}`, err ?? '')
   })
 
   // Settings edits: one compare-and-set per field, shown as pending (the overlay) until the
@@ -292,6 +304,13 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       drafts.leave()
       setV2NoteDrafts(null)
       offDrafts()
+      for (const run of leaveHooks.splice(0)) {
+        try {
+          run()
+        } catch (err) {
+          console.error('a leave hook failed', err)
+        }
+      }
       left = true
       settingsWriter.clear()
       setV2ProjectOverlay(null)
