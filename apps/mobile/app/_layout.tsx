@@ -1,9 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { router, Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as Notifications from 'expo-notifications'
 import { notificationRoute } from '../src/logic/attention.ts'
 import { ServersProvider } from '../src/state/ServersProvider.tsx'
+import { PushProvider, usePush } from '../src/state/PushProvider.tsx'
 import { colors } from '../src/ui/theme.ts'
 
 // A notification that arrives while the app is open is shown as a banner, without sound.
@@ -17,6 +18,10 @@ export const unstable_settings = { initialRouteName: 'index' }
 
 /** Tapping a notification opens its session (or worktree): while running, and on a cold start. */
 function NotificationRouting(): null {
+  // A push (6b) names the server by its own id: mapped to the phone's entry for it.
+  const { routeData } = usePush()
+  const routeRef = useRef(routeData)
+  routeRef.current = routeData
   useEffect(() => {
     const handled = new Set<string>()
     const open = (response: Notifications.NotificationResponse | null): void => {
@@ -24,7 +29,7 @@ function NotificationRouting(): null {
       const id = response.notification.request.identifier
       if (handled.has(id)) return
       handled.add(id)
-      const route = notificationRoute(response.notification.request.content.data)
+      const route = notificationRoute(routeRef.current(response.notification.request.content.data))
       if (route) router.push(route)
     }
     // The tap that started the app, once navigation is up.
@@ -48,6 +53,7 @@ function NotificationRouting(): null {
 export default function RootLayout(): React.JSX.Element {
   return (
     <ServersProvider>
+      <PushProvider>
       <StatusBar style="light" />
       <NotificationRouting />
       <Stack
@@ -62,7 +68,9 @@ export default function RootLayout(): React.JSX.Element {
         <Stack.Screen name="add-server" options={{ title: 'Add server', presentation: 'modal' }} />
         <Stack.Screen name="pair" options={{ title: 'Add server' }} />
         <Stack.Screen name="projects" options={{ title: 'Projects' }} />
+        <Stack.Screen name="push/[serverId]" options={{ title: 'Push notifications' }} />
       </Stack>
+      </PushProvider>
     </ServersProvider>
   )
 }

@@ -182,3 +182,54 @@ test('ref counts: on for the first user, off after the last', () => {
   assert.equal(counts.release('p'), false)
   assert.equal(counts.acquire('p'), true)
 })
+
+// ---- Background push (6b): apps/mobile/src/logic/push.ts ----
+import { deviceAction, needsGrant, pushRouteData, relay, relayUrlOf, setGrantParams } from '../apps/mobile/src/logic/push.ts'
+
+test('push: the build relay is https, or http to this device or a private address; nothing else', () => {
+  assert.equal(relayUrlOf('https://relay.example/'), 'https://relay.example')
+  assert.equal(relayUrlOf('http://192.168.1.5:7346'), 'http://192.168.1.5:7346')
+  for (const bad of ['', '  ', 'http://relay.example', 'https://u:p@relay.example', 'https://relay.example?x=1', 'nope', 42, undefined]) assert.equal(relayUrlOf(bad), null, String(bad))
+})
+
+test('push: register once, send a rotated token, register again for another relay', () => {
+  const saved = { relayUrl: 'https://r', deviceId: 'd', deviceSecret: 's', platform: 'ios', pushToken: 'a' }
+  assert.equal(deviceAction(null, 'https://r', 'ios', 'a'), 'register')
+  assert.equal(deviceAction(saved, 'https://r', 'ios', 'a'), 'none')
+  assert.equal(deviceAction(saved, 'https://r', 'ios', 'b'), 'update')
+  assert.equal(deviceAction(saved, 'https://other', 'ios', 'a'), 'register')
+})
+
+test('push: a new grant when the phone has none or the relay refused it; the old one again when the server forgot it', () => {
+  const push = { grantId: 'g', grantSecret: 'x', kinds: { decisions: true, sessions: false, prWatch: true }, serverId: 's' }
+  assert.equal(needsGrant(null, null), true)
+  assert.equal(needsGrant(push, { active: false }), true)
+  assert.equal(needsGrant(push, { active: true }), false)
+  assert.equal(needsGrant(push, null), false)
+  assert.deepEqual(setGrantParams('https://r', push, true), { relayUrl: 'https://r', grantSecret: 'x', kinds: { decisions: true, sessions: false, prWatch: true }, paused: true })
+})
+
+test("push: the relay's calls carry the device secret, and its errors say what it answered", async () => {
+  const calls = []
+  const fetch = async (url, init) => {
+    calls.push({ url, ...init })
+    if (url.endsWith('/v1/grants')) return { status: 409, json: async () => ({ error: 'this device has too many grants' }) }
+    return { status: 201, json: async () => ({ deviceId: 'd1', deviceSecret: 'sec' }) }
+  }
+  const reg = await relay.register(fetch, 'https://r', 'android', 'tok')
+  assert.deepEqual(reg, { deviceId: 'd1', deviceSecret: 'sec' })
+  assert.deepEqual(JSON.parse(calls[0].body), { platform: 'android', pushToken: 'tok' })
+  await assert.rejects(relay.grant(fetch, { relayUrl: 'https://r', deviceId: 'd1', deviceSecret: 'sec' }, 'x'.repeat(200)), /too many grants/)
+  assert.equal(calls[1].headers.authorization, 'Bearer sec')
+  assert.equal(JSON.parse(calls[1].body).label.length, 80)
+  await assert.rejects(relay.register(async () => { throw new Error('offline') }, 'https://r', 'ios', 't'), /could not be reached/)
+})
+
+test("push: a tapped push names the server's own id (under trek on iOS, at the top on Android): mapped to the entry", () => {
+  const entryFor = (id) => (id === 'srv-1' ? 'entry-1' : undefined)
+  assert.deepEqual(pushRouteData({ trek: { kind: 'decision', serverId: 'srv-1', projectId: 'p', sessionId: 's' } }, entryFor), { kind: 'decision', serverId: 'entry-1', projectId: 'p', sessionId: 's' })
+  assert.deepEqual(pushRouteData({ kind: 'pr-merged', serverId: 'srv-1', projectId: 'p', worktreeId: 'w' }, entryFor), { kind: 'pr-merged', serverId: 'entry-1', projectId: 'p', worktreeId: 'w' })
+  assert.equal(pushRouteData({ kind: 'decision', serverId: 'unknown', projectId: 'p' }, entryFor), null)
+  const local = { serverId: 'entry-1', projectId: 'p', sessionId: 's' }
+  assert.equal(pushRouteData(local, entryFor), local, "a local notification (6a) already names the entry")
+})
