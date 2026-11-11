@@ -26,6 +26,7 @@ import { ghFromEnv } from './prWatch/gh'
 import { loadWebBundle, type WebBundle } from './web/bundle'
 import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
+import { pruneRecoveryFiles } from './promote/promoteHandlers'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -456,6 +457,10 @@ try {
 }
 const { version, build } = buildInfo()
 const serverDataDir = resolve(args.dataDir ?? store.config.dataDir ?? defaultDataDir())
+// Promote recovery files (5e) are kept 30 days after a failure, then deleted at startup.
+void pruneRecoveryFiles(resolve(serverDataDir, 'promote-recovery')).then((removed) => {
+  if (removed.length > 0) console.log(`deleted ${removed.length} promote recovery file(s) older than 30 days`)
+})
 if (args.importEnvFrom !== undefined) {
   try {
     const seed = seedEnvironmentsFromApp(args.importEnvFrom, serverDataDir)

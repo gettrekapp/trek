@@ -21,6 +21,7 @@ import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
 import { describeWorktree, resolveWorktree } from './describe.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
+import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { ToolDefinition } from './protocol.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import type { VoiceService } from '../../../src/host/voiceService.ts'
@@ -868,11 +869,14 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       // 5e: a window confirms and runs the promote; this waits for its answer.
       promote_to_primary: async (args, project, signal) => {
-        const { worktree } = resolveWorktree(project, args.worktree)
+        const { repo, worktree } = resolveWorktree(project, args.worktree)
         if (worktree.isMain) throw bad('That worktree is already the primary checkout')
+        const mainPath = repo.worktrees.find((w) => w.isMain)?.path ?? repo.path
         if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD); it can't be promoted`)
         let from: string | undefined
         let callerId: string | undefined
+        // The asking session is only looked up in this project (for the dialog's text, and the
+        // queue that hears the outcome if the call drops); nothing else is checked of it.
         if (typeof args.terminalId === 'string' && args.terminalId) {
           try {
             const caller = sessionIn(args.terminalId, project).session
@@ -886,14 +890,23 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (!deps.promoteRequests) throw codedError('BAD_REQUEST', nobody)
         const branch = worktree.branch
         const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch, ...(from ? { from } : {}) }, signal)
+        // The promote went through: describing the main checkout must never turn it into an error.
+        const primaryOf = (worktreeId: string): ReturnType<typeof describeById> | undefined => {
+          try {
+            return describeById(worktreeId)
+          } catch (err) {
+            console.warn(`[promote] could not describe the main checkout ${worktreeId}: ${(err as Error).message}`)
+            return undefined
+          }
+        }
         // The caller went away while a window ran the promote (it was the worktree's agent, stopped
         // and resumed elsewhere): its session hears how it went from its queue (never sent by itself).
         if (signal?.aborted && callerId && (answer.outcome === 'promoted' || answer.outcome === 'failed')) {
           try {
             const text =
               answer.outcome === 'promoted'
-                ? `The promote you asked for (promote_to_primary) went through: ${branch} is now checked out in the main checkout at ${describeById(answer.worktreeId).path}, and the worktree's Claude and local-model sessions (this one included, if it ran there) now run there.`
-                : `The promote you asked for (promote_to_primary) failed: ${answer.error}`
+                ? `The promote you asked for (promote_to_primary) went through: ${branch} is now checked out in the main checkout at ${primaryOf(answer.worktreeId)?.path ?? mainPath}, and the worktree's Claude and local-model sessions (this one included, if it ran there) now run there.`
+                : `The promote you asked for (promote_to_primary) failed: ${answer.error.slice(0, MAX_PROMOTE_QUEUED_ERROR)}`
             deps.sessions.enqueue({ projectId, sessionId: callerId, text: text.slice(0, MAX_QUEUE_ENTRY) })
             deps.sessions.refreshAttention()
           } catch (err) {
@@ -901,8 +914,10 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           }
         }
         switch (answer.outcome) {
-          case 'promoted':
-            return { promoted: true, primary: describeById(answer.worktreeId) }
+          case 'promoted': {
+            const primary = primaryOf(answer.worktreeId)
+            return primary ? { promoted: true, primary } : { promoted: true, path: mainPath }
+          }
           case 'declined':
             throw bad('The user declined the promote; nothing was changed. Do not ask again unless they say so.')
           case 'failed':

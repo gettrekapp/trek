@@ -21,7 +21,7 @@
 // changed meanwhile (the main checkout's own sessions keep running) is left as it is (CONFLICT).
 //
 // `dryRun: true` answers the plan the confirmation shows, after the same checks.
-import { chmod, copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
@@ -33,10 +33,11 @@ import { getProvider } from '../../../src/shared/providers/registry.ts'
 import {
   MAX_PROMOTE_LISTED_PATHS,
   MAX_PROMOTE_PATCH_BYTES,
-  type PromoteOutcome,
+  type PromoteClaimResult,
   type PromotePlan,
   type PromoteResult,
-  type PromoteSessionInfo
+  type PromoteSessionInfo,
+  type PromoteWindowAnswer
 } from '../../../src/shared/promote.ts'
 import { codedError } from '../errors.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
@@ -56,6 +57,8 @@ export const promoteChanging: Set<string> = changing
 
 /** For the tests: called between the steps named, to change a checkout as a running agent would */
 export const promoteTestHooks: {
+  /** Promote: just before the main checkout switches to the branch (after its last clean check) */
+  beforePromoteSwitch?: (mainPath: string) => Promise<void> | void
   /** Promote: the worktree's work is applied in the main checkout, not yet checked */
   afterApply?: (mainPath: string) => Promise<void> | void
   /** Demote: the main checkout's work is off it, just before it switches to the default branch */
@@ -141,7 +144,10 @@ async function moveHistories(sessions: readonly Session[], from: string, to: str
   for (const s of sessions) {
     if (!s.agentSessionId) continue
     try {
-      await migrateSession(s.agentSessionId, from, to)
+      const { folderKept } = await migrateSession(s.agentSessionId, from, to)
+      if (folderKept) {
+        notes.push(`The subagent transcripts and tool results of “${s.title}” were left at ${folderKept}: its new folder already had a folder of that name`)
+      }
     } catch (err) {
       notes.push(`The history of “${s.title}” could not be moved (${(err as Error).message}); it starts afresh`)
     }
@@ -188,6 +194,13 @@ async function locked<T>(repo: Repository, work: () => Promise<T>): Promise<T> {
   }
 }
 
+/** CONFLICT when another operation (a remove, a move, another promote) has one of the paths blocked. */
+function assertNotBlocked(ctx: V2Context, paths: readonly string[]): void {
+  for (const path of paths) {
+    if (ctx.sessions.isBlocked(path)) throw codedError('CONFLICT', `${path} is being changed by another operation right now; try again once it is done`)
+  }
+}
+
 /** The ptys these sessions run in now (to wait for their exit once they are stopped). */
 function ptysOf(sessions: readonly Session[]): string[] {
   return sessions.map((s) => s.ptyId).filter((id): id is string => !!id)
@@ -219,6 +232,28 @@ async function saveRecovery(ctx: V2Context, repo: Repository, branch: string, pa
     throw codedError('INTERNAL', `could not save a copy of the uncommitted work to ${file} (${(err as Error).message}); nothing was changed`)
   }
   return file
+}
+
+/** How long a recovery file is kept: older ones are deleted when the server starts */
+export const PROMOTE_RECOVERY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+
+/** Deletes the recovery files (`*.patch`) in `dir` older than `maxAgeMs`; what it deleted. Never throws. */
+export async function pruneRecoveryFiles(dir: string, maxAgeMs = PROMOTE_RECOVERY_MAX_AGE_MS, now = Date.now()): Promise<string[]> {
+  const removed: string[] = []
+  const names = await readdir(dir).catch(() => [] as string[])
+  for (const name of names) {
+    if (!name.endsWith('.patch')) continue
+    const file = join(dir, name)
+    try {
+      const info = await stat(file)
+      if (!info.isFile() || now - info.mtimeMs <= maxAgeMs) continue
+      await rm(file, { force: true })
+      removed.push(file)
+    } catch {
+      // gone meanwhile, or unreadable: left alone
+    }
+  }
+  return removed
 }
 
 /** An undo step that finds the checkout changed by someone else: the undo stops there, nothing more is put back. */
@@ -294,7 +329,8 @@ interface PromoteChecked {
   plan: PromotePlan
 }
 
-async function checkPromote(ctx: V2Context, p: any): Promise<PromoteChecked> {
+/** `blocked`: refuse paths another operation has blocked (false for the re-check inside the lock, which blocked them itself). */
+async function checkPromote(ctx: V2Context, p: any, blocked = true): Promise<PromoteChecked> {
   const { worktree: row } = present(ctx, p)
   if (row.isMain) throw bad('this is already the main checkout')
   const { repo, worktree, branch } = await checkedOut(ctx, p)
@@ -302,6 +338,7 @@ async function checkPromote(ctx: V2Context, p: any): Promise<PromoteChecked> {
   assertNotLoadedElsewhere(ctx, projectId, worktree.path)
   if (await isLocked(repo.path, worktree.path)) throw codedError('CONFLICT', `${worktree.path} is locked (git worktree lock); unlock it first`)
   const main = mainOf(ctx, projectId, repo)
+  if (blocked) assertNotBlocked(ctx, [worktree.path, main.path])
   const mainHead = await viaGit(() => gitService.headState(main.path))
   if (await isDirty(main.path)) {
     throw codedError('CONFLICT', `the main checkout ${main.path} has uncommitted changes; commit or stash them there first`)
@@ -354,17 +391,24 @@ async function promote(ctx: V2Context, c: PromoteChecked, unblock: { main: () =>
     await agentsGone(ctx, ptys)
     const { patch } = await patchOf(worktree.path, repo)
     recovery = await saveRecovery(ctx, repo, branch, patch)
+    // The main checkout's own sessions keep running: it is checked once more just before the switch.
+    if (await isDirty(main.path)) {
+      throw codedError('CONFLICT', `the main checkout ${main.path} has uncommitted changes (one of its sessions wrote to it while the promote ran); commit or stash them there first`)
+    }
     // Pushed before the switch: one that fails part way has written files already. The main
-    // checkout was clean; once the switch went through, only a main checkout that still holds
-    // nothing but what this promote wrote is forced back (its own sessions keep running).
-    let switched = false
+    // checkout was clean; whether the switch went through or not, only a main checkout that still
+    // holds nothing uncommitted is forced back, and only when its HEAD moved (a switch git refused
+    // because one of its sessions edited a file meanwhile is left as it is, with that edit).
     const changed = `the main checkout ${main.path} changed while the promote ran, so it was not put back: it is on ${branch} with the worktree's uncommitted work and those changes (check it with git status); the worktree ${worktree.path} is unchanged`
+    const changedUnswitched = `the main checkout ${main.path} changed while the promote ran (one of its own sessions wrote to it), so it was not put back: it is left as it is, with those changes (check it with git status); the worktree ${worktree.path} is unchanged`
     undo.push(async () => {
-      if (switched && !(await holdsExactly(main.path, repo, ''))) throw new StopUndo(changed)
-      await gitService.forceCheckoutHead(main.path, mainHead)
+      const head = await gitService.headState(main.path).catch(() => null)
+      const moved = !head || head.branch !== mainHead.branch || head.sha !== mainHead.sha
+      if (!(await holdsExactly(main.path, repo, ''))) throw new StopUndo(moved ? changed : changedUnswitched)
+      if (moved) await gitService.forceCheckoutHead(main.path, mainHead)
     })
+    await promoteTestHooks.beforePromoteSwitch?.(main.path)
     await viaGit(() => gitService.checkoutIgnoringOtherWorktrees(main.path, branch))
-    switched = true
     if (patch !== '') {
       await viaGit(() => gitService.applyPatch(main.path, patch))
       undo.push(async () => {
@@ -415,23 +459,29 @@ async function promote(ctx: V2Context, c: PromoteChecked, unblock: { main: () =>
   const { moving } = splitSessions(from, 'it is closed')
   notes.push(...(await moveHistories(moving, worktree.path, main.path)))
   for (const s of from) if (!sessionMigrates(s)) notes.push(`“${s.title}” was closed: ${getProvider(s.llm.provider).label} can't follow a worktree to another folder`)
-  const movedIds = moving.map((s) => s.id)
+  let movedIds = moving.map((s) => s.id)
   let mainLoaded = false
-  ctx.projects.apply(project.id, (d) => {
-    const r = repoIn(d, repo.id)
-    const fromRow = r.worktrees.find((w) => w.id === worktree.id)
-    const to = r.worktrees.find((w) => w.id === main.id)
-    if (to && fromRow) {
-      to.sessions.push(...fromRow.sessions.filter((s) => movedIds.includes(s.id)).map(handedOver))
-      if (fromRow.review && fromRow.review.comments.length > 0 && !carryReview(fromRow, to)) {
-        notes.push(`The worktree's review draft (${fromRow.review.comments.length} comments) was dropped: the main checkout has a draft of its own`)
+  // After the commitment nothing throws: records that can't be updated are a note.
+  try {
+    ctx.projects.apply(project.id, (d) => {
+      const r = repoIn(d, repo.id)
+      const fromRow = r.worktrees.find((w) => w.id === worktree.id)
+      const to = r.worktrees.find((w) => w.id === main.id)
+      if (to && fromRow) {
+        to.sessions.push(...fromRow.sessions.filter((s) => movedIds.includes(s.id)).map(handedOver))
+        if (fromRow.review && fromRow.review.comments.length > 0 && !carryReview(fromRow, to)) {
+          notes.push(`The worktree's review draft (${fromRow.review.comments.length} comments) was dropped: the main checkout has a draft of its own`)
+        }
+        if (fromRow.prNotice && !to.prNotice) to.prNotice = fromRow.prNotice
+        mainLoaded = to.loaded
       }
-      if (fromRow.prNotice && !to.prNotice) to.prNotice = fromRow.prNotice
-      mainLoaded = to.loaded
-    }
-    r.worktrees = r.worktrees.filter((w) => w.id !== worktree.id)
-    dropOrderKey(d, repo.id, worktree.path)
-  })
+      r.worktrees = r.worktrees.filter((w) => w.id !== worktree.id)
+      dropOrderKey(d, repo.id, worktree.path)
+    })
+  } catch (err) {
+    movedIds = []
+    notes.push(`${branch} is now in the main checkout, but the project's records could not be updated (${(err as Error).message}); its sessions did not move: reopen the project`)
+  }
   unblock.worktree()
   unblock.main()
   // The sessions resume where they now are when either checkout was running.
@@ -459,7 +509,8 @@ interface DemoteChecked {
   plan: PromotePlan
 }
 
-async function checkDemote(ctx: V2Context, p: any): Promise<DemoteChecked> {
+/** `blocked` as checkPromote's. */
+async function checkDemote(ctx: V2Context, p: any, blocked = true): Promise<DemoteChecked> {
   const projectId = requireString(p.projectId, 'projectId')
   const project = ctx.projects.require(projectId)
   const repo = repoIn(project, p.repoId)
@@ -480,6 +531,7 @@ async function checkDemote(ctx: V2Context, p: any): Promise<DemoteChecked> {
   const requested = defaultWorktreePath(repo.path, branch)
   const target = ctx.store.guard.check(requested)
   assertNotRepository(ctx.store.config.repos, target, 'path', requested)
+  if (blocked) assertNotBlocked(ctx, [main.path, target])
   if (existsSync(target)) throw codedError('CONFLICT', `${requested} already exists`)
   const inside = (root: string): boolean => target.startsWith(real(root) + sep)
   if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
@@ -526,11 +578,22 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
       await agentsGone(ctx, ptys)
     }
     await viaGit(() => gitService.addWorktreeOfCheckedOut(repo.path, target, branch))
-    undo.push(() => gitService.removeWorktreeForce(repo.path, target))
+    // The new worktree is removed only once the main checkout has its work back (it may be the
+    // only copy besides the recovery file): else the undo stops there and keeps it.
+    let carried: { patch: string; linked: string[] } | undefined
+    undo.push(async () => {
+      if (carried && carried.patch !== '' && !(await holdsExactly(main.path, repo, carried.patch, carried.linked))) {
+        throw new StopUndo(
+          `the main checkout ${main.path} does not have its uncommitted work back (it changed, or putting it back failed), so it was not put back and the new worktree ${target}, which has the work, was kept (check both with git status)`
+        )
+      }
+      await gitService.removeWorktreeForce(repo.path, target)
+    })
     await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
     // What the new worktree links from the main checkout stays there (it is shared, not carried).
     const linked = await gitService.linkedSymlinks(target, repo.linkedDirs ?? [], repo.path)
     const { patch } = await patchOf(main.path, repo, linked)
+    carried = { patch, linked }
     recovery = await saveRecovery(ctx, repo, branch, patch)
     if (patch !== '') {
       await viaGit(() => gitService.applyPatch(target, patch).catch((err: Error) => {
@@ -609,52 +672,66 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
   }
   notes.push(...(await moveHistories(moving, main.path, target)))
   const worktreeId = created.id
-  ctx.projects.apply(project.id, (d) => {
-    const r = repoIn(d, repo.id)
-    const from = r.worktrees.find((w) => w.id === main.id)
-    const to = r.worktrees.find((w) => w.id === worktreeId)
-    if (!to) return
-    if (from) {
-      to.sessions.push(...from.sessions.filter((s) => movingIds.includes(s.id)).map(handedOver))
-      from.sessions = from.sessions.filter((s) => !movingIds.includes(s.id))
-      if (from.review && from.review.comments.length > 0 && carryReview(from, to)) delete from.review
-      if (from.prNotice) {
-        to.prNotice = from.prNotice
-        delete from.prNotice
+  let moved = movingIds
+  try {
+    ctx.projects.apply(project.id, (d) => {
+      const r = repoIn(d, repo.id)
+      const from = r.worktrees.find((w) => w.id === main.id)
+      const to = r.worktrees.find((w) => w.id === worktreeId)
+      if (!to) return
+      if (from) {
+        to.sessions.push(...from.sessions.filter((s) => movingIds.includes(s.id)).map(handedOver))
+        from.sessions = from.sessions.filter((s) => !movingIds.includes(s.id))
+        if (from.review && from.review.comments.length > 0 && carryReview(from, to)) delete from.review
+        if (from.prNotice) {
+          to.prNotice = from.prNotice
+          delete from.prNotice
+        }
       }
-    }
-    // As worktree.create: a branch without a tag gets the first workflow tag.
-    const firstTag = d.settings.worktreeTags?.[0]?.id
-    const data = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
-    if (firstTag && !data?.tag && to.branch === branch) r.branchData[branch] = { ...data, tag: firstTag }
-  })
+      // As worktree.create: a branch without a tag gets the first workflow tag.
+      const firstTag = d.settings.worktreeTags?.[0]?.id
+      const data = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
+      if (firstTag && !data?.tag && to.branch === branch) r.branchData[branch] = { ...data, tag: firstTag }
+    })
+  } catch (err) {
+    moved = []
+    notes.push(`${branch} is now at ${target}, but the project's records could not be updated (${(err as Error).message}); its sessions stayed in the main checkout`)
+  }
   if (wasLoaded && movingIds.length > 0) {
     try {
-      ctx.sessions.loadWorktree({ projectId: project.id, worktreeId })
+      if (moved.length > 0) ctx.sessions.loadWorktree({ projectId: project.id, worktreeId })
+      else ctx.sessions.resumeSessions(project.id, movingIds)
     } catch (err) {
-      notes.push(`The sessions moved but could not be resumed: ${(err as Error).message}`)
+      notes.push(`The sessions could not be resumed: ${(err as Error).message}`)
     }
   }
   ctx.sessions.refreshAttention()
   if (recovery) await rm(recovery, { force: true }).catch(() => {})
-  return { worktreeId, moved: movingIds, notes }
+  return { worktreeId, moved, notes }
 }
 
-/** promote.answer's outcome, checked: a window declines, or (its claimant) says its teardown failed. */
-function checkOutcome(p: any): Exclude<PromoteOutcome, { outcome: 'promoted' }> {
+/** promote.answer's outcome, checked: a window declines, doesn't list the worktree, or (its claimant) says its teardown failed. */
+function checkOutcome(p: any): PromoteWindowAnswer {
   const outcome = requireString(p.outcome, 'outcome')
-  if (outcome === 'declined') return { outcome }
+  if (outcome === 'declined' || outcome === 'unknown-worktree') return { outcome }
   if (outcome === 'failed') {
     const error = requireString(p.error, 'error')
     return { outcome, error: error.slice(0, 2000) }
   }
   if (outcome === 'promoted') throw bad('a promote settles its request itself: send worktree.promote with the requestId')
-  throw bad('outcome must be declined or failed')
+  throw bad('outcome must be declined, failed or unknown-worktree')
 }
 
 function optionalRequestId(value: unknown): string | undefined {
   if (value === undefined) return undefined
   return requireString(value, 'requestId')
+}
+
+function optionalClaimToken(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  const token = requireString(value, 'claimToken')
+  if (token.length > 100) throw bad('claimToken is too long')
+  return token
 }
 
 export const promoteHandlers: Record<string, Handler> = {
@@ -671,15 +748,17 @@ export const promoteHandlers: Record<string, Handler> = {
       const projectId = requireString(p.projectId, 'projectId')
       ctx.projects.require(projectId)
       if (!ctx.promoteRequests) throw codedError('NOT_FOUND', 'No such promote request')
-      binding = ctx.promoteRequests.bind(projectId, requestId, requireString(p.worktreeId, 'worktreeId'), ctx.subscriber)
+      binding = ctx.promoteRequests.bind(projectId, requestId, requireString(p.worktreeId, 'worktreeId'), ctx.subscriber, optionalClaimToken(p.claimToken))
     }
     try {
       const first = await checkPromote(ctx, p)
       const result = await locked(first.repo, async () => {
+        // Again, with no await since: no other operation blocks them between this and ours.
+        assertNotBlocked(ctx, [first.worktree.path, first.main.path])
         const unblockWorktree = ctx.sessions.blockPath(first.worktree.path)
         const unblockMain = ctx.sessions.blockPath(first.main.path)
         try {
-          return await promote(ctx, await checkPromote(ctx, p), { main: unblockMain, worktree: unblockWorktree })
+          return await promote(ctx, await checkPromote(ctx, p, false), { main: unblockMain, worktree: unblockWorktree })
         } finally {
           unblockMain()
           unblockWorktree()
@@ -698,6 +777,7 @@ export const promoteHandlers: Record<string, Handler> = {
     const first = await checkDemote(ctx, p)
     if (dryRun) return first.plan
     return locked(first.repo, async () => {
+      assertNotBlocked(ctx, [first.main.path, first.target])
       const unblockMain = ctx.sessions.blockPath(first.main.path)
       const unblockTarget = ctx.sessions.blockPath(first.target)
       const unblock = (): void => {
@@ -705,7 +785,7 @@ export const promoteHandlers: Record<string, Handler> = {
         unblockMain()
       }
       try {
-        return await demote(ctx, await checkDemote(ctx, p), unblock)
+        return await demote(ctx, await checkDemote(ctx, p, false), unblock)
       } finally {
         unblock()
       }
@@ -722,12 +802,16 @@ export const promoteHandlers: Record<string, Handler> = {
     return null
   },
 
-  /** A window's user confirmed a `promote.request`: the first claim wins (before any teardown). */
-  'promote.claim': (p, ctx): { accepted: boolean } => {
+  /**
+   * A window's user confirmed a `promote.request`: the first claim wins (before any teardown), with
+   * a `claimToken`. Repeated by the claimant (or with the token from its new connection) it refreshes the claim.
+   */
+  'promote.claim': (p, ctx): PromoteClaimResult => {
     const projectId = requireString(p.projectId, 'projectId')
     ctx.projects.require(projectId)
     const requestId = requireString(p.requestId, 'requestId')
-    return { accepted: ctx.promoteRequests?.claim(projectId, requestId, ctx.subscriber) ?? false }
+    const claimToken = optionalClaimToken(p.claimToken)
+    return ctx.promoteRequests?.claim(projectId, requestId, ctx.subscriber, claimToken) ?? { accepted: false }
   },
 
   /** A window's decline (or, from its claimant before its promote starts, a teardown that failed). */
@@ -736,6 +820,7 @@ export const promoteHandlers: Record<string, Handler> = {
     ctx.projects.require(projectId)
     const requestId = requireString(p.requestId, 'requestId')
     const outcome = checkOutcome(p)
-    return { accepted: ctx.promoteRequests?.answer(projectId, requestId, outcome, ctx.subscriber) ?? false }
+    const claimToken = optionalClaimToken(p.claimToken)
+    return { accepted: ctx.promoteRequests?.answer(projectId, requestId, outcome, ctx.subscriber, claimToken) ?? false }
   }
 }

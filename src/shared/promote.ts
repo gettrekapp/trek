@@ -15,8 +15,18 @@ export const MAX_PROMOTE_PATCH_BYTES = 64 * 1024 * 1024
 export const PROMOTE_ANSWER_TIMEOUT_MS = 15 * 60 * 1000
 /** How often promote_to_primary checks that a window still has the project open while it waits */
 export const PROMOTE_WINDOW_CHECK_MS = 5_000
-/** How long a claimed request waits for its window's `worktree.promote` (the teardown runs first) */
-export const PROMOTE_CLAIM_TIMEOUT_MS = 5 * 60 * 1000
+/**
+ * How long a claimed request waits for its window's `worktree.promote` (the teardown runs first):
+ * a repeat `promote.claim` from the claimant re-arms it, which the app does every
+ * PROMOTE_CLAIM_REFRESH_MS until it sends the promote
+ */
+export const PROMOTE_CLAIM_TIMEOUT_MS = 2 * 60 * 1000
+/** How often the claimant refreshes its claim while its teardown runs */
+export const PROMOTE_CLAIM_REFRESH_MS = 60_000
+/** How long a claim outlives its claimant's connection: a new connection with the claim's token takes it back */
+export const PROMOTE_CLAIM_GRACE_MS = 60_000
+/** The most of a claimant's own error text queued on the asking session */
+export const MAX_PROMOTE_QUEUED_ERROR = 500
 /** Paths a plan lists at most per list (the counts are complete) */
 export const MAX_PROMOTE_LISTED_PATHS = 50
 
@@ -113,3 +123,16 @@ export type PromoteOutcome =
   | { outcome: 'declined' }
   | { outcome: 'promoted'; worktreeId: string }
   | { outcome: 'failed'; error: string }
+
+/**
+ * What a window answers itself (`promote.answer`): a decline, its claimant's failure before its
+ * promote starts, or `unknown-worktree` (it doesn't list the worktree; silent, no dialog: once
+ * every listening window has said so, the request fails).
+ */
+export type PromoteWindowAnswer = { outcome: 'declined' } | { outcome: 'failed'; error: string } | { outcome: 'unknown-worktree' }
+
+/** `promote.claim`'s answer: `claimToken` (when accepted) lets a new connection of the claimant take the claim back */
+export interface PromoteClaimResult {
+  accepted: boolean
+  claimToken?: string
+}

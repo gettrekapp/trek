@@ -143,6 +143,23 @@ test('the dialog queue: cancelDialogById closes that confirm alone (a promote re
   assert.equal(await other, true)
 })
 
+test('the dialog queue: a cancel that arrives before its dialog is queued closes it as soon as it is (within 30 s), once', async () => {
+  cancelDialogById('promote:early')
+  assert.equal(await webDialogs.confirm({ title: 'P', message: 'p?', confirmLabel: 'Promote', dialogId: 'promote:early' }), false)
+  assert.equal(pendingDialogs().length, 0)
+  // Used up: the next one with that id shows.
+  const again = webDialogs.confirm({ title: 'P', message: 'p?', confirmLabel: 'Promote', dialogId: 'promote:early' })
+  assert.equal(pendingDialogs().length, 1)
+  answerDialog(pendingDialogs()[0], true)
+  assert.equal(await again, true)
+  // Forgotten after 30 s.
+  cancelDialogById('promote:old', Date.now() - 31_000)
+  const later = webDialogs.confirmWithCheckbox({ title: 'P', message: 'p?', confirmLabel: 'Promote', checkboxLabel: 'stack', checkboxChecked: true, dialogId: 'promote:old' })
+  assert.equal(pendingDialogs().length, 1)
+  answerDialog(pendingDialogs()[0], false)
+  assert.deepEqual(await later, { confirmed: false, checked: true })
+})
+
 /** A RegisteredServer-like source for the api's attention. */
 function fakeConnection() {
   const statusListeners = new Set()

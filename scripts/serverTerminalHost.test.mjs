@@ -458,3 +458,42 @@ test('toWireError carries the details of a passed-through code: only an object, 
   const extra = Object.assign(codedError('GIT_ERROR', 'x'), { details: { reason: 'dirty', secret: 'y' } })
   assert.deepEqual(toWireError('worktree.remove', extra), { code: 'GIT_ERROR', message: 'x', details: { reason: 'dirty' } }, 'only the named fields')
 })
+
+test('whenGone SIGKILLs the pty\'s process group: a background child that ignores SIGHUP does not outlive it', { skip: process.platform === 'win32' }, async (t) => {
+  const { mkdtempSync, readFileSync, rmSync, existsSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'trek-whengone-'))
+  const pidFile = join(dir, 'child.pid')
+  let childPid
+  const alive = (pid) => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  t.after(() => {
+    if (childPid && alive(childPid)) process.kill(childPid, 'SIGKILL')
+    rmSync(dir, { recursive: true, force: true })
+  })
+  // The real node-pty: the shell is its session's leader; its background child ignores SIGHUP.
+  const host = new TerminalHost({ onExit: () => {} })
+  t.after(() => host.disposeAll())
+  host.spawn('real', {
+    file: '/bin/sh',
+    args: ['-c', `(trap '' HUP; exec sleep 30) & echo $! > '${pidFile}'; wait`],
+    cwd: dir,
+    env: {},
+    cols: 80,
+    rows: 24
+  })
+  for (let i = 0; i < 200 && !(existsSync(pidFile) && readFileSync(pidFile, 'utf8').trim()); i++) await new Promise((r) => setTimeout(r, 10))
+  childPid = Number(readFileSync(pidFile, 'utf8').trim())
+  assert.ok(alive(childPid))
+  host.kill('real')
+  assert.equal(await host.whenGone(['real'], 3000), true)
+  for (let i = 0; i < 100 && alive(childPid); i++) await new Promise((r) => setTimeout(r, 20))
+  assert.equal(alive(childPid), false, 'the background child is gone')
+})

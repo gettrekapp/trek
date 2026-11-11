@@ -25,29 +25,31 @@ function assertSessionId(sessionId: string): void {
 
 /**
  * Moves a session's history to another cwd's project directory: its `<id>.jsonl` and, when it has
- * one, its `<id>/` folder (subagent transcripts, tool results). True when either moved. A folder
- * that already exists at the destination is left where it is (nothing is overwritten).
+ * one, its `<id>/` folder (subagent transcripts, tool results). `moved` when either moved. A folder
+ * that already exists at the destination is never overwritten: the source folder stays where it
+ * is and `folderKept` names it, for the caller to say so.
  */
 export async function migrateSession(
   sessionId: string,
   fromCwd: string,
   toCwd: string
-): Promise<boolean> {
+): Promise<{ moved: boolean; folderKept?: string }> {
   assertSessionId(sessionId)
   const source = join(projectDir(fromCwd), `${sessionId}.jsonl`)
   const folder = join(projectDir(fromCwd), sessionId)
   const hasFile = await access(source).then(() => true, () => false)
   const hasFolder = await stat(folder).then((s) => s.isDirectory(), () => false)
   // no session recorded in the old directory (never used, or already moved)
-  if (!hasFile && !hasFolder) return false
+  if (!hasFile && !hasFolder) return { moved: false }
   const destDir = projectDir(toCwd)
   await mkdir(destDir, { recursive: true })
   if (hasFile) await rename(source, join(destDir, `${sessionId}.jsonl`))
   if (hasFolder) {
     const destFolder = join(destDir, sessionId)
-    if (!(await access(destFolder).then(() => true, () => false))) await rename(folder, destFolder)
+    if (await access(destFolder).then(() => true, () => false)) return { moved: true, folderKept: folder }
+    await rename(folder, destFolder)
   }
-  return true
+  return { moved: true }
 }
 
 /** Reads a session's .jsonl for transfer to another machine; null if absent. */

@@ -6,12 +6,22 @@
 // claims the request (`promote.claim`) before any teardown; the claimant's `worktree.promote
 // {requestId}` settles it on the server. The backend (backendV2.ts) does the requests; this file
 // has no store or window, so it runs under node --test.
-import type { PromotePlan, PromoteRequestEvent, PromoteSettledEvent } from '../../../shared/promote.ts'
+import {
+  PROMOTE_CLAIM_REFRESH_MS,
+  type PromoteClaimResult,
+  type PromotePlan,
+  type PromoteRequestEvent,
+  type PromoteSettledEvent,
+  type PromoteWindowAnswer
+} from '../../../shared/promote.ts'
 import type { ConfirmPrompt } from './backendV2.ts'
 import { errorCode, errorText } from './errors.ts'
 
-/** What a window answers itself (`promote.answer`): `promoted` is the server's, from `worktree.promote {requestId}`. */
-export type PromoteAnswer = { outcome: 'declined' } | { outcome: 'failed'; error: string }
+/**
+ * What a window answers itself (`promote.answer`): `promoted` is the server's, from
+ * `worktree.promote {requestId}`; `unknown-worktree` when it doesn't list the worktree (silent).
+ */
+export type PromoteAnswer = PromoteWindowAnswer
 
 /** The request an agent's promote_to_primary made, as the promote that runs it sees it. */
 export interface PromoteAsked {
@@ -28,12 +38,23 @@ export interface PromoteAsked {
    * so. A failed claim is logged and shown, and is false.
    */
   claim(options?: { silent?: boolean }): Promise<boolean>
-  /** `promote.answer`: a decline (before a claim) or, by the claimant, a failure before its promote. Never rejects. */
+  /** The token this window's claim was given (sent with `worktree.promote`, so a new connection still holds it) */
+  claimToken(): string | undefined
+  /**
+   * Keeps this window's claim while its teardown runs: `promote.claim` with the token again every
+   * PROMOTE_CLAIM_REFRESH_MS and on every reconnect. Returns the stop (once `worktree.promote` is sent).
+   */
+  holdClaim(): () => void
+  /** `promote.answer`: a decline (before a claim), `unknown-worktree`, or, by the claimant, a failure before its promote. Never rejects. */
   answer(outcome: PromoteAnswer): Promise<void>
 }
 
 /** Shown when the user confirmed a request that had ended meanwhile (or another window claimed first). */
 export const REQUEST_ENDED = 'This request has already ended (answered elsewhere, or the agent stopped waiting); nothing was done.'
+
+/** Shown when the claimant's `worktree.promote {requestId}` finds the request gone after its teardown. */
+export const PROMOTE_REQUEST_ENDED_IN_TEARDOWN =
+  "The agent's request ended while the dev stack/VM was being torn down; nothing was promoted. Use Promote to primary… to finish."
 
 const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
@@ -181,10 +202,14 @@ export interface PromoteRequestDeps {
   onSettled(listener: (event: PromoteSettledEvent) => void): () => void
   /** Runs the promote the request names (its dry run and confirmation first); it claims and answers through `asked` */
   run(event: PromoteRequestEvent, asked: PromoteAsked): Promise<unknown>
-  /** `promote.claim`; its `accepted` */
-  claim(requestId: string): Promise<boolean>
+  /** `promote.claim` (with this window's token when it refreshes or takes back its claim) */
+  claim(requestId: string, claimToken?: string): Promise<PromoteClaimResult>
   /** `promote.answer`; its `accepted` */
-  answer(requestId: string, outcome: PromoteAnswer): Promise<boolean>
+  answer(requestId: string, outcome: PromoteAnswer, claimToken?: string): Promise<boolean>
+  /** Calls the listener on every connect after the first; returns the unsubscribe */
+  onConnected?(listener: () => void): () => void
+  /** How often a held claim is refreshed (PROMOTE_CLAIM_REFRESH_MS) */
+  claimRefreshMs?: number
   /** Closes an open confirmation (as if cancelled): the request was settled or claimed elsewhere */
   closeDialog(dialogId: string): void
   /** Tells the user (a dialog) */
@@ -219,6 +244,8 @@ export function followPromoteRequests(deps: PromoteRequestDeps): PromoteFollower
   const claimedHere = new Set<string>()
   /** This window's claim is in flight: its own `claimed` event arrives before the answer, which decides */
   const claiming = new Set<string>()
+  /** This window's claims' tokens */
+  const tokens = new Map<string, string>()
   const seen: string[] = []
   let pending = 0
   let stopped = false
@@ -246,7 +273,9 @@ export function followPromoteRequests(deps: PromoteRequestDeps): PromoteFollower
         if (!ended()) {
           claiming.add(id)
           try {
-            accepted = await deps.claim(id)
+            const result = await deps.claim(id)
+            accepted = result.accepted
+            if (result.accepted && result.claimToken) tokens.set(id, result.claimToken)
           } catch (err) {
             deps.log(`promote.claim for ${id} failed`, err)
             if (!silent && !gone()) await deps.showError(PROMOTE_REQUEST, `Could not tell the server this window confirms the request: ${errorText(err)}. Nothing was done.`)
@@ -264,10 +293,34 @@ export function followPromoteRequests(deps: PromoteRequestDeps): PromoteFollower
         if (!silent && !gone()) await deps.showError(PROMOTE_REQUEST, REQUEST_ENDED)
         return false
       },
+      claimToken: () => tokens.get(id),
+      holdClaim: () => {
+        if (!claimedHere.has(id)) return () => {}
+        let held = true
+        const refresh = (): void => {
+          if (!held || gone()) return
+          deps.claim(id, tokens.get(id)).then(
+            (result) => {
+              if (held && !result.accepted) deps.log(`promote.claim (refresh) for ${id} was not accepted: the request had ended`)
+            },
+            (err: unknown) => {
+              if (errorCode(err) !== 'NOT_CONNECTED') deps.log(`promote.claim (refresh) for ${id} failed`, err)
+            }
+          )
+        }
+        const timer = setInterval(refresh, deps.claimRefreshMs ?? PROMOTE_CLAIM_REFRESH_MS)
+        const offConnected = deps.onConnected?.(refresh) ?? ((): void => {})
+        return () => {
+          if (!held) return
+          held = false
+          clearInterval(timer)
+          offConnected()
+        }
+      },
       answer: async (outcome) => {
         if (gone() || (!claimedHere.has(id) && settled.has(id))) return
         try {
-          const accepted = await deps.answer(id, outcome)
+          const accepted = await deps.answer(id, outcome, tokens.get(id))
           if (!accepted && outcome.outcome === 'failed') deps.log(`promote.answer (failed) for ${id} was not accepted: the request had ended`)
         } catch (err) {
           deps.log(`promote.answer (${outcome.outcome}) for ${id} was lost`, err)
@@ -298,6 +351,7 @@ export function followPromoteRequests(deps: PromoteRequestDeps): PromoteFollower
         if (pending === 0) {
           settled.clear()
           claimedHere.clear()
+          tokens.clear()
         }
       }
     })

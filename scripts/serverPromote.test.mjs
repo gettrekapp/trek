@@ -2,10 +2,11 @@
 // against real git in a temp dir and a session manager with a fake pty spawner (promoteFixture.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { projectDir } from '../src/host/claudeSessionService.ts'
-import { promoteChanging, promoteTestHooks } from '../server/src/promote/promoteHandlers.ts'
+import { promoteChanging, promoteTestHooks, pruneRecoveryFiles } from '../server/src/promote/promoteHandlers.ts'
 import { CLAUDE_ID, MAIN_ID, branchOf, git, setup, status } from './promoteFixture.mjs'
 
 test('worktree.promote dryRun: the plan, nothing changed', async (t) => {
@@ -425,3 +426,150 @@ test('promote.answer: an unknown request is not accepted', async (t) => {
   assert.ok(existsSync(s.path))
 })
 
+
+test('C1: a main checkout edited just before the switch (git refuses it) is left as it is, never discarded', async (t) => {
+  const s = await setup(t)
+  // A file main tracks and feat does not: the switch to feat would delete it.
+  writeFileSync(join(s.app, 'conf.txt'), 'main version\n')
+  git(s.app, 'add', 'conf.txt')
+  git(s.app, 'commit', '-q', '-m', 'conf')
+  // One of the main checkout's own sessions edits it after the last clean check.
+  promoteTestHooks.beforePromoteSwitch = (main) => writeFileSync(join(main, 'conf.txt'), 'edited by an agent in main\n')
+  t.after(() => { delete promoteTestHooks.beforePromoteSwitch })
+  const before = status(s.path)
+  const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
+  assert.equal(r.ok, false, JSON.stringify(r))
+  assert.equal(r.error.code, 'CONFLICT')
+  assert.match(r.error.message, /was not put back: it is left as it is/)
+  assert.equal(branchOf(s.app), 'main')
+  assert.equal(readFileSync(join(s.app, 'conf.txt'), 'utf8'), 'edited by an agent in main\n')
+  assert.deepEqual(status(s.path), before)
+  assert.equal(s.repo().worktrees.length, 2)
+})
+
+test('C1: a main checkout that became dirty after the in-lock check is refused before the switch', async (t) => {
+  const s = await setup(t)
+  const refresh = s.poller.refresh.bind(s.poller)
+  let calls = 0
+  s.poller.refresh = async (...args) => {
+    calls += 1
+    // After the in-lock re-check read it clean: a session in the main checkout writes a file.
+    if (calls === 2) setImmediate(() => writeFileSync(join(s.app, 'note.txt'), 'mine\n'))
+    return refresh(...args)
+  }
+  promoteTestHooks.beforePromoteSwitch = () => assert.fail('the switch was reached')
+  t.after(() => { delete promoteTestHooks.beforePromoteSwitch })
+  // The write lands before the stopped agents are awaited (the worktree has none running): wait a tick there.
+  const gone = s.sessions.terminals.whenGone.bind(s.sessions.terminals)
+  s.sessions.terminals.whenGone = async (...args) => {
+    await new Promise((res) => setTimeout(res, 20))
+    return gone(...args)
+  }
+  const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
+  assert.equal(r.ok, false, JSON.stringify(r))
+  assert.equal(r.error.code, 'CONFLICT', JSON.stringify(r))
+  assert.equal(branchOf(s.app), 'main')
+  assert.equal(readFileSync(join(s.app, 'note.txt'), 'utf8'), 'mine\n')
+  assert.ok(existsSync(s.path))
+})
+
+test('M1: a demote whose undo cannot give the main checkout its work back keeps the new worktree', async (t) => {
+  const s = await promoted(t)
+  // After the work is off the main checkout: a session that stays writes a file, and the demote fails.
+  promoteTestHooks.beforeSwitch = (main) => {
+    writeFileSync(join(main, 'extra.txt'), 'written meanwhile\n')
+    throw new Error('boom')
+  }
+  t.after(() => { delete promoteTestHooks.beforeSwitch })
+  const r = await s.call('worktree.demote', { projectId: s.projectId, repoId: s.repoId })
+  assert.equal(r.ok, false, JSON.stringify(r))
+  assert.equal(r.error.code, 'CONFLICT')
+  assert.match(r.error.message, /was kept/)
+  // The new worktree, with the work, is still there; the main checkout has its work back and the write.
+  assert.equal(branchOf(s.path), 'feat')
+  assert.deepEqual(status(s.path), [' M README', '?? staged.txt', '?? untracked.txt'])
+  assert.equal(readFileSync(join(s.app, 'extra.txt'), 'utf8'), 'written meanwhile\n')
+  assert.equal(readFileSync(join(s.app, 'untracked.txt'), 'utf8'), 'new\n')
+})
+
+test('M1: a demote that fails with the main checkout holding exactly its work again removes the new worktree', async (t) => {
+  const s = await promoted(t)
+  promoteTestHooks.beforeSwitch = () => { throw new Error('boom') }
+  t.after(() => { delete promoteTestHooks.beforeSwitch })
+  const before = status(s.app)
+  const r = await s.call('worktree.demote', { projectId: s.projectId, repoId: s.repoId })
+  assert.equal(r.ok, false, JSON.stringify(r))
+  assert.match(r.error.message, /boom/)
+  assert.ok(!existsSync(s.path))
+  assert.equal(branchOf(s.app), 'feat')
+  assert.deepEqual(status(s.app), before)
+})
+
+test('M3: worktree.promote and worktree.demote refuse paths another operation has blocked', async (t) => {
+  const s = await setup(t)
+  const release = s.sessions.blockPath(s.path)
+  for (const dryRun of [true, false]) {
+    const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId, dryRun })
+    assert.equal(r.ok, false, JSON.stringify(r))
+    assert.equal(r.error.code, 'CONFLICT')
+    assert.match(r.error.message, /another operation/)
+  }
+  release()
+  const releaseMain = s.sessions.blockPath(s.app)
+  const m = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
+  assert.equal(m.error?.code, 'CONFLICT')
+  releaseMain()
+  assert.equal(branchOf(s.app), 'main')
+  assert.equal((await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })).ok, true)
+  // The demote's target (the default worktree path) blocked.
+  const releaseTarget = s.sessions.blockPath(s.path)
+  const d = await s.call('worktree.demote', { projectId: s.projectId, repoId: s.repoId })
+  assert.equal(d.ok, false, JSON.stringify(d))
+  assert.equal(d.error.code, 'CONFLICT')
+  releaseTarget()
+  assert.equal(branchOf(s.app), 'feat')
+})
+
+test('M7: recovery files older than 30 days are pruned; newer ones and other files stay', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-recovery-prune-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  for (const name of ['old.patch', 'new.patch', 'old.txt']) writeFileSync(join(dir, name), 'x')
+  const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)
+  utimesSync(join(dir, 'old.patch'), old, old)
+  utimesSync(join(dir, 'old.txt'), old, old)
+  const removed = await pruneRecoveryFiles(dir)
+  assert.deepEqual(removed, [join(dir, 'old.patch')])
+  assert.deepEqual(readdirSync(dir).sort(), ['new.patch', 'old.txt'])
+  // A missing folder is nothing to prune.
+  assert.deepEqual(await pruneRecoveryFiles(join(dir, 'none')), [])
+})
+
+test('M8: a history folder the main checkout already has is left where it is, and said in a note', async (t) => {
+  const s = await setup(t)
+  mkdirSync(join(projectDir(s.app), CLAUDE_ID), { recursive: true })
+  writeFileSync(join(projectDir(s.app), CLAUDE_ID, 'theirs.txt'), 'x')
+  const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  const note = r.result.notes.find((n) => /were left at/.test(n))
+  assert.ok(note, JSON.stringify(r.result.notes))
+  assert.ok(note.includes(join(projectDir(s.path), CLAUDE_ID)))
+  assert.ok(existsSync(join(projectDir(s.path), CLAUDE_ID, 'subagents', 'agent-1.jsonl')))
+  assert.ok(existsSync(join(projectDir(s.app), CLAUDE_ID, 'theirs.txt')))
+  // The conversation itself moved.
+  assert.ok(existsSync(join(projectDir(s.app), `${CLAUDE_ID}.jsonl`)))
+})
+
+test('M9: records that cannot be updated after the commitment are a note; the promote went through', async (t) => {
+  const s = await setup(t)
+  const apply = s.projects.apply.bind(s.projects)
+  s.projects.apply = (id, fn, ...rest) => {
+    if (String(fn).includes('dropOrderKey')) throw new Error('disk full')
+    return apply(id, fn, ...rest)
+  }
+  const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.deepEqual(r.result.moved, [])
+  assert.ok(r.result.notes.some((n) => /records could not be updated \(disk full\)/.test(n)), JSON.stringify(r.result.notes))
+  assert.equal(branchOf(s.app), 'feat')
+  assert.ok(!existsSync(s.path))
+})

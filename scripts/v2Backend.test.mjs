@@ -1071,15 +1071,17 @@ test('promote_to_primary: a claim another window won tears nothing down and says
   assert.match(ui.find((u) => u[0] === 'error')[2], /This request has already ended \(answered elsewhere, or the agent stopped waiting\); nothing was done\./)
 })
 
-test('promote_to_primary: a refused dry run is claimed and answered failed without a dialog; an unlisted worktree stays silent', async () => {
+test('promote_to_primary: a refused dry run is claimed and answered failed without a dialog; an unlisted worktree answers unknown-worktree', async () => {
   const replies = { 'worktree.promote': new CodedError('CONFLICT', 'the main checkout /r has uncommitted changes'), 'promote.claim': { accepted: true }, 'promote.answer': { accepted: true } }
   const { backend, calls, ui, listeners } = setup({ replies, capabilities: ['promote'], state: withFeat })
   backend.worktrees.followPromoteRequests()
   listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
   listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r2', worktreeId: 'unknown', branch: 'zzz' })
   await tick()
-  assert.deepEqual(calls.map((c) => c[0]), ['promote.listen', 'worktree.promote', 'promote.claim', 'promote.answer'])
+  assert.deepEqual(calls.map((c) => c[0]), ['promote.listen', 'worktree.promote', 'promote.claim', 'promote.answer', 'promote.answer'])
   assert.deepEqual(calls[3][1], { projectId: 'p1', requestId: 'r1', outcome: 'failed', error: 'the main checkout /r has uncommitted changes' })
+  // The unlisted one says so, without a dialog (M10): once no window lists it, the server ends it.
+  assert.deepEqual(calls[4][1], { projectId: 'p1', requestId: 'r2', outcome: 'unknown-worktree' })
   assert.deepEqual(ui.filter((u) => u[0] === 'error' || u[0] === 'confirm'), [])
 })
 
@@ -1091,4 +1093,53 @@ test('promote_to_primary: a lost answer is logged and shown', async () => {
   await tick()
   assert.match(logs[0], /promote\.answer \(declined\) for r1 was lost/)
   assert.match(ui.find((u) => u[0] === 'error')[2], /Could not send this window's answer/)
+})
+
+test('promote_to_primary: the claim token goes with worktree.promote; a reconnect mid-teardown takes the claim back; held only until the promote is sent (I1)', async () => {
+  const replies = { 'worktree.promote': (p) => (p.dryRun ? PLAN : { worktreeId: 'wm', moved: [], notes: [] }), 'promote.claim': { accepted: true, claimToken: 'tok' } }
+  const { backend, calls, listeners, connected } = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks'], machine: { stack: 'feat' }, state: withFeat })
+  backend.worktrees.followPromoteRequests()
+  const before = connected.length
+  replies['worktree.promote'] = (p) => {
+    if (p.dryRun) return PLAN
+    return { worktreeId: 'wm', moved: [], notes: [] }
+  }
+  const origDestroy = calls.push.bind(calls)
+  // The connection drops and comes back while the stack is torn down.
+  let reconnected = false
+  calls.push = (entry) => {
+    const n = origDestroy(entry)
+    if (entry[0] === 'stack.sh destroy' && !reconnected) {
+      reconnected = true
+      for (const l of [...connected]) l()
+    }
+    return n
+  }
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
+  await tick()
+  const names = calls.map((c) => c[0])
+  assert.deepEqual(names.filter((n) => n !== 'promote.listen'), ['worktree.promote', 'promote.claim', 'stack.sh destroy', 'promote.claim', 'worktree.promote'])
+  assert.deepEqual(calls.filter((c) => c[0] === 'promote.claim')[1][1], { projectId: 'p1', requestId: 'r1', claimToken: 'tok' })
+  assert.deepEqual(calls.at(-1)[1], { projectId: 'p1', worktreeId: 'w2', requestId: 'r1', claimToken: 'tok' })
+  // Released once the promote was sent: a later connect claims nothing.
+  assert.equal(connected.length, before)
+  const count = calls.length
+  for (const l of [...connected]) l()
+  await tick()
+  assert.ok(calls.slice(count).every((c) => c[0] === 'promote.listen'))
+})
+
+test('promote_to_primary: a request that ended during the teardown says so plainly (I1)', async () => {
+  const replies = {
+    'worktree.promote': (p) => (p.dryRun ? PLAN : new CodedError('NOT_FOUND', 'No such promote request (it was answered, it ended, or the server restarted since)')),
+    'promote.claim': { accepted: true, claimToken: 'tok' }
+  }
+  const { backend, ui, listeners } = setup({ replies, confirms: [true], capabilities: ['promote', 'stacks'], machine: { stack: 'feat' }, state: withFeat })
+  backend.worktrees.followPromoteRequests()
+  listeners['promote.request'][0]({ projectId: 'p1', requestId: 'r1', worktreeId: 'w2', branch: 'feat' })
+  await tick()
+  assert.equal(
+    ui.find((u) => u[0] === 'error')[2],
+    "The agent's request ended while the dev stack/VM was being torn down; nothing was promoted. Use Promote to primary… to finish."
+  )
 })

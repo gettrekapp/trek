@@ -22,6 +22,7 @@ import {
   promoteErrorText,
   promotePrompt,
   resultNotes,
+  PROMOTE_REQUEST_ENDED_IN_TEARDOWN,
   type PromoteFollower
 } from './promoteFlow.ts'
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
@@ -68,8 +69,11 @@ export interface ConfirmPrompt {
 export interface WorktreeTeardown {
   /** The branch's Colima VM, if the environments poll lists one */
   environment(info: GitWorktreeInfo): { profile: string } | undefined
-  /** The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when that is ticked */
-  confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt, backend: WindowBackend): Promise<{ confirmed: boolean; stackName?: string }>
+  /**
+   * The confirm, with "Also destroy its dev stack" when its stack has run; the stack's name when
+   * that is ticked. `stillWanted` false right before the dialog would show: not shown, not confirmed.
+   */
+  confirm(info: GitWorktreeInfo, prompt: ConfirmPrompt, backend: WindowBackend, stillWanted?: () => boolean): Promise<{ confirmed: boolean; stackName?: string }>
   /** `stack.sh destroy`; shows its own failure (saying the `action` goes on) and never rejects */
   destroyStack(info: GitWorktreeInfo, stackName: string, backend: WindowBackend, action?: 'delete' | 'promote'): Promise<void>
   /** Deletes the VM; shows its own failure and never rejects */
@@ -492,8 +496,12 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           await deps.showError(PROMOTE_FAILED, error)
           return { outcome: 'failed', error }
         }
-        // An agent's request for a worktree this window doesn't list: another window answers it.
-        if (!ref) return asked ? { outcome: 'failed', error: 'not listed in this window' } : failed(new Error('This worktree is no longer in the project.'))
+        // An agent's request for a worktree this window doesn't list: it says so (silently); another window answers it.
+        if (!ref) {
+          if (!asked) return failed(new Error('This worktree is no longer in the project.'))
+          await asked.answer({ outcome: 'unknown-worktree' })
+          return { outcome: 'failed', error: 'not listed in this window' }
+        }
         const { worktreeId } = ref
         let plan: PromotePlan
         try {
@@ -509,9 +517,11 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         const machine = currentFeatures()
         const env = machine.env ? deps.teardown.environment(info) : undefined
         const prompt = promotePrompt(plan, { vm: env?.profile, asked })
+        // Checked again right before the dialog shows (the stack's status is read first).
+        const stillWanted = asked ? (): boolean => asked.stillAsked() : undefined
         const { confirmed, stackName } = machine.stacks
-          ? await deps.teardown.confirm(info, prompt, backend)
-          : { confirmed: await deps.confirm(prompt), stackName: undefined }
+          ? await deps.teardown.confirm(info, prompt, backend, stillWanted)
+          : { confirmed: stillWanted && !stillWanted() ? false : await deps.confirm(prompt), stackName: undefined }
         if (!confirmed) {
           // Closed because the request was settled elsewhere: nothing to answer.
           if (asked?.stillAsked()) await asked.answer({ outcome: 'declined' })
@@ -520,6 +530,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         // The claim first: the first window to confirm runs it; the others' dialogs close.
         if (asked && !(await asked.claim())) return { outcome: 'declined' }
         const release = markPromoting(info.path)
+        // The claim is refreshed while the teardown runs (and taken back after a reconnect).
+        const stopHolding = asked?.holdClaim() ?? ((): void => {})
         try {
           try {
             if (stackName) await deps.teardown.destroyStack(info, stackName, backend, 'promote')
@@ -531,15 +543,22 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             return { outcome: 'failed', error }
           }
           try {
-            const params = { projectId, worktreeId, ...(asked ? { requestId: asked.requestId } : {}) }
+            const claimToken = asked?.claimToken()
+            const params = { projectId, worktreeId, ...(asked ? { requestId: asked.requestId, ...(claimToken ? { claimToken } : {}) } : {}) }
             const result = (await request('worktree.promote', params, { timeoutMs: SLOW_MS })) as PromoteResult
             const notes = resultNotes(result)
             if (notes) await deps.showError('Promoted, with notes', notes)
             return { outcome: 'promoted', worktreeId: result.worktreeId }
           } catch (err) {
+            if (asked && (stackName || env) && errorCode(err) === 'NOT_FOUND' && /promote request/i.test(errorText(err))) {
+              const error = PROMOTE_REQUEST_ENDED_IN_TEARDOWN
+              await deps.showError(PROMOTE_FAILED, error)
+              return { outcome: 'failed', error }
+            }
             return failed(err, tornDownNote(!!stackName, !!env))
           }
         } finally {
+          stopHolding()
           release()
         }
       },
@@ -588,13 +607,22 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
             const legacyId = ids().legacyByWorktree[event.worktreeId]
             const path = legacyId === undefined ? undefined : instancePath(legacyId)
             const info = path === undefined ? undefined : Object.values(deps.state().hostWorktrees).flat().find((w) => w.path === path)
-            // A window that can't find it stays silent: another one answers.
-            if (!info || legacyId === undefined) return
+            // A window that can't find it says so, silently: another one answers (or, when none
+            // lists it, the server ends the request).
+            if (!info || legacyId === undefined) {
+              await asked.answer({ outcome: 'unknown-worktree' })
+              return
+            }
             const instance = deps.state().project?.repositories.flatMap((r) => r.worktrees).find((w) => w.id === legacyId)
             await backend.worktrees.promote(info, instance, asked)
           },
-          claim: async (requestId) => (await request('promote.claim', { projectId, requestId })).accepted,
-          answer: async (requestId, outcome) => (await request('promote.answer', { projectId, requestId, ...outcome })).accepted,
+          claim: async (requestId, claimToken) => {
+            const result = await request('promote.claim', { projectId, requestId, ...(claimToken ? { claimToken } : {}) })
+            return { accepted: result.accepted, ...(result.accepted && result.claimToken ? { claimToken: result.claimToken } : {}) }
+          },
+          answer: async (requestId, outcome, claimToken) =>
+            (await request('promote.answer', { projectId, requestId, ...outcome, ...(claimToken ? { claimToken } : {}) })).accepted,
+          onConnected: deps.onConnected,
           closeDialog: deps.closeDialog,
           showError: deps.showError,
           log: deps.log,

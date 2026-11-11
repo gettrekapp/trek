@@ -791,11 +791,11 @@ after the same checks, and changes nothing.
 
 | Method | Params | Result |
 |---|---|---|
-| `worktree.promote` | `{projectId, worktreeId, dryRun?, requestId?}` | With `dryRun`, the plan: `{branch, mainPath, worktreePath, mainBranch, dirty, loaded, otherLoaded, sessions, reviewComments, reviewCarried, ignored, ignoredCount, hiddenChanges, hiddenChangesCount, mainIgnored, mainIgnoredCount, overwrittenIgnored, overwrittenIgnoredCount}` (`mainBranch`: what the main checkout is on now, `null` when detached; `sessions`: each `{title, provider, carried, reason?}`; `ignored` and `hiddenChanges` as `move.prepare`'s: they are deleted with the worktree; `mainIgnored`: the main checkout's ignored files and folders, which stay; `overwrittenIgnored`: those of its ignored files the branch tracks, which the switch overwrites, as git does without asking; each list at most 50, the counts complete). Else `{worktreeId, moved, notes, recoveryFile?}`: the main checkout's worktree id, the ids of the sessions that moved, one line per thing that did not come along, and the copy of the work kept when the worktree's folder could not be fully removed. `requestId`: the `promote.request` this promote answers (see below): it must be this project's and this worktree's (`NOT_FOUND`, `BAD_REQUEST`), not claimed by another connection or already running (`CONFLICT`); the server settles it with this promote's result. `BAD_REQUEST` for a main checkout, a detached HEAD, an untracked nested git repository, or uncommitted work over 64 MiB or not UTF-8; `CONFLICT` when the main checkout has uncommitted changes, the worktree is locked (`git worktree lock`), something changed while it ran (see below), or while another promote or demote changes the repository; `IN_USE` when another project has the worktree loaded |
-| `worktree.demote` | `{projectId, repoId, dryRun?}` | The same plan (`worktreePath`: the new worktree, `<repo>-<branch>`; `mainBranch`: the default branch the main checkout goes back to; no `ignored` or `hiddenChanges`: the main checkout keeps them; `mainIgnored`: its ignored files, which stay there, so the new worktree does not have them; `overwrittenIgnored`: those the default branch tracks), else `{worktreeId, moved, notes}` with the new worktree's id (the main checkout's, with `moved` empty and a note, when the worktrees could not be re-read after the commitment). `BAD_REQUEST` when the main checkout is on the default branch, on a detached HEAD, or the default branch can't be told (`origin/HEAD`, else `master`/`main`); `CONFLICT` when the default branch, or the branch itself, is checked out in another worktree, the path exists, something changed while it ran, or another promote or demote runs; `IN_USE` when another project has the main checkout loaded |
+| `worktree.promote` | `{projectId, worktreeId, dryRun?, requestId?}` | With `dryRun`, the plan: `{branch, mainPath, worktreePath, mainBranch, dirty, loaded, otherLoaded, sessions, reviewComments, reviewCarried, ignored, ignoredCount, hiddenChanges, hiddenChangesCount, mainIgnored, mainIgnoredCount, overwrittenIgnored, overwrittenIgnoredCount}` (`mainBranch`: what the main checkout is on now, `null` when detached; `sessions`: each `{title, provider, carried, reason?}`; `ignored` and `hiddenChanges` as `move.prepare`'s: they are deleted with the worktree; `mainIgnored`: the main checkout's ignored files and folders, which stay; `overwrittenIgnored`: those of its ignored files the branch tracks, which the switch overwrites, as git does without asking; each list at most 50, the counts complete). Else `{worktreeId, moved, notes, recoveryFile?}`: the main checkout's worktree id, the ids of the sessions that moved, one line per thing that did not come along, and the copy of the work kept when the worktree's folder could not be fully removed. `requestId`: the `promote.request` this promote answers (see below): it must be this project's and this worktree's (`NOT_FOUND`, `BAD_REQUEST`), not claimed by another connection (unless `claimToken` is the claim's: a new connection of the claimant takes it back) or already running (`CONFLICT`); the server settles it with this promote's result. `BAD_REQUEST` for a main checkout, a detached HEAD, an untracked nested git repository, or uncommitted work over 64 MiB or not UTF-8; `CONFLICT` when the main checkout has uncommitted changes, the worktree is locked (`git worktree lock`), something changed while it ran (see below), while another promote or demote changes the repository, or while another operation (a remove, a move) has the worktree's or the main checkout's path blocked; `IN_USE` when another project has the worktree loaded |
+| `worktree.demote` | `{projectId, repoId, dryRun?}` | The same plan (`worktreePath`: the new worktree, `<repo>-<branch>`; `mainBranch`: the default branch the main checkout goes back to; no `ignored` or `hiddenChanges`: the main checkout keeps them; `mainIgnored`: its ignored files, which stay there, so the new worktree does not have them; `overwrittenIgnored`: those the default branch tracks), else `{worktreeId, moved, notes}` with the new worktree's id (the main checkout's, with `moved` empty and a note, when the worktrees could not be re-read after the commitment). `BAD_REQUEST` when the main checkout is on the default branch, on a detached HEAD, or the default branch can't be told (`origin/HEAD`, else `master`/`main`); `CONFLICT` when the default branch, or the branch itself, is checked out in another worktree, the path exists, something changed while it ran, another promote or demote runs, or another operation has the main checkout's or the new worktree's path blocked; `IN_USE` when another project has the main checkout loaded |
 | `promote.listen` | `{projectId, listen?}` | `null`: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer). Only listening connections that are subscribed to the project's topic count as windows and get `promote.request`; a closed connection stops listening |
-| `promote.claim` | `{projectId, requestId}` | `{accepted}`: the user confirmed a `promote.request`. Sent before anything else (the teardown included); the first claim wins, `false` when the request is unknown, ended or claimed already |
-| `promote.answer` | `{projectId, requestId, outcome, error?}` | `{accepted}`: `outcome` `declined` (while nobody has claimed the request, or by its claimant before its promote starts), or `failed` with an `error` of at most 2000 characters (only by its claimant, before its promote starts: a teardown that failed). `promoted` is refused (`BAD_REQUEST`): the claimant's `worktree.promote {requestId}` settles it. `false` when late, or not the claimant's |
+| `promote.claim` | `{projectId, requestId, claimToken?}` | `{accepted, claimToken?}`: the user confirmed a `promote.request`. Sent before anything else (the teardown included); the first claim wins and gets a `claimToken`. Sent again by the claimant (or with the token, from a new connection of it, which takes the claim back) before its promote starts, it refreshes the claim (the same token). `false` when the request is unknown, ended, started, or claimed by another connection |
+| `promote.answer` | `{projectId, requestId, outcome, error?, claimToken?}` | `{accepted}`: `outcome` `declined` (while nobody has claimed the request, or by its claimant before its promote starts), `failed` with an `error` of at most 2000 characters (only by its claimant, before its promote starts: a teardown that failed), or `unknown-worktree` (this window doesn't list the worktree; while nobody has claimed it: once every listening window has said so, the request fails with `no open window lists that worktree`). `claimToken` as `promote.claim`'s. `promoted` is refused (`BAD_REQUEST`): the claimant's `worktree.promote {requestId}` settles it. `false` when late, or not the claimant's |
 
 While a promote or demote runs, `worktree.remove`, `worktree.pull` and the `move.*` methods that read
 or change a checkout of that repository (`prepare`, `export`, `history`, `finish`, `receive`,
@@ -805,10 +805,13 @@ or change a checkout of that repository (`prepare`, `export`, `history`, `finish
 `session.start` and `worktree.load` from before its checks are made again (the worktree's until its
 row is gone, the main checkout's until the sessions resume): the worktree is unloaded (whatever the
 check read) and the server waits for its agents' processes to exit (5 s, then SIGKILL, then 1 s
-more; one still running is `CONFLICT`); its uncommitted work is packed as `move.export`'s patch is
+more; one still running is `CONFLICT`; each pty's process group gets SIGKILL too, so a background
+child that ignores SIGHUP does not write on: node-pty makes the agent its session's and group's
+leader on macOS and Linux); its uncommitted work is packed as `move.export`'s patch is
 (the same config-proof plumbing, its linked symlinks left out) and saved to a recovery file,
-`<data dir>/promote-recovery/<repo>-<branch>-<time>.patch` (0600); the main checkout switches to
-the branch (`git switch --ignore-other-worktrees`: the worktree still has it); the patch is applied
+`<data dir>/promote-recovery/<repo>-<branch>-<time>.patch` (0600; the server deletes those older
+than 30 days when it starts); the main checkout is checked once more for uncommitted changes (its
+own sessions keep running: `CONFLICT`), and switches to the branch (`git switch --ignore-other-worktrees`: the worktree still has it); the patch is applied
 there (all unstaged); the main checkout's own patch, built the same way, must match it (by
 `patchDigest`), else `GIT_ERROR`; and the worktree's must still match it, else `CONFLICT` (it
 changed). That is the point of commitment. Then the worktree is removed (`git worktree remove
@@ -817,14 +820,19 @@ removed …; its work is in the main checkout; remove it yourself`, naming the r
 is kept and returned as `recoveryFile`), and everything else goes on. A failure before the
 commitment puts things back, but never discards what the promote did not write itself: the main
 checkout is put back (the applied work taken off with `git apply -R`, then switched back with
-`--discard-changes`) only while its uncommitted work is exactly the patch (or nothing, before the
-apply); otherwise one of its own running sessions changed it, and it is left as it is, on the
-branch with the work and those changes: the error is `CONFLICT` and says so. The worktree is
+`--discard-changes`, only when its HEAD moved) only while its uncommitted work is exactly the patch
+(or nothing, before the apply), whether its switch went through or not; otherwise one of its own
+running sessions changed it, and it is left as it is (on the branch with the work and those
+changes, or, when git refused the switch because of such an edit, where it was with that edit):
+the error is `CONFLICT` and says so. (A write that lands between that comparison and the forced
+switch, a few milliseconds, can still be lost; the recovery file has the carried work, not that
+write.) The worktree is
 untouched either way and loaded again if it was loaded. Every failure names the recovery file;
 it is deleted once all went well. After the commitment: the sessions whose agent can follow a
 folder change (Claude and Local: their history moves, `rename`, from `~/.claude/projects/<the
 worktree's path>` to the main checkout's, the conversation's `<id>.jsonl` and its `<id>/` folder of
-subagent transcripts and tool results) move to the main checkout's row with their queues, types and
+subagent transcripts and tool results; a folder the destination already has is never overwritten:
+the source's stays where it is, named in `notes`) move to the main checkout's row with their queues, types and
 prompts; others are closed and named in `notes`. They resume there when either checkout was loaded
 (the main checkout is loaded if it was not, which resumes its own saved sessions too); the main
 checkout's own sessions keep running, now on the branch. The review draft moves when the main
@@ -840,10 +848,11 @@ applied in the new worktree and checked by digest; the main checkout's must stil
 (`CONFLICT`: one of its sessions changed it); it is taken off the main checkout (`git apply -R`,
 then its index reset with `git reset -- .`, a copy of it kept); and the main checkout switches to
 the default branch, the point of commitment. A failure before that puts the main checkout back
-(its branch, its index, its work), removes the new worktree and resumes the stopped sessions;
-but a main checkout that holds anything but its branch's files when its switch failed (a write by
-a session that stayed, or a switch that failed part way) is left as it is and the new worktree,
-which has its work, is kept: `CONFLICT`, saying so. After it: the sessions that can follow move to
+(its branch, its index, its work), removes the new worktree (only once the main checkout holds
+exactly its work again, by digest) and resumes the stopped sessions; but a main checkout that
+holds anything but its branch's files when its switch failed (a write by a session that stayed,
+or a switch that failed part way), or that does not have its work back, is left as it is and the
+new worktree, which has its work, is kept: `CONFLICT`, saying so. After it: the sessions that can follow move to
 the new worktree's row (resumed if the main checkout was loaded), the review draft and a PR notice
 move too, and the branch gets the first workflow tag if it has none, as `worktree.create` does.
 If the worktrees can't be re-read after the commitment, the sessions stay in the main checkout
@@ -859,26 +868,43 @@ menu item does. When its user confirms, it sends `promote.claim` first, before a
 first claim wins (`accepted: false` for the others), and every subscriber hears `promote.settled`
 `{projectId, requestId, claimed: true}`, on which the other windows close their dialog (their
 answers do nothing now); the claimant carries on. The claimant tears the dev stack and VM down,
-then sends `worktree.promote {projectId, worktreeId, requestId}`; the server settles the request
-with that promote's own result (the main checkout's id, or its error). If its teardown fails, it
-answers `promote.answer {outcome: 'failed', error}`. A claim with no `worktree.promote` within 5
-minutes, or whose connection closes before it, fails the request. A user who declines answers
+then sends `worktree.promote {projectId, worktreeId, requestId, claimToken}`; the server settles
+the request with that promote's own result (the main checkout's id, or its error; after the
+commitment, records that can't be updated are a note, never a failure). If its teardown fails, it
+answers `promote.answer {outcome: 'failed', error}`. A claim lasts 2 minutes, re-armed by each
+repeat `promote.claim` from the claimant: the Trek app sends one every 60 s while its teardown runs
+(a stack destroy can take 10 minutes) and on every reconnect, until it sends `worktree.promote`. A
+claim not refreshed in time fails the request. When the claimant's connection closes before its
+promote starts, the claim waits 60 s for a new connection with its `claimToken` (`promote.claim`
+or `worktree.promote`), then fails the request; the app then says "The agent's request ended while
+the dev stack/VM was being torn down; nothing was promoted. Use Promote to primary… to finish."
+when its `worktree.promote {requestId}` answers `NOT_FOUND` after its teardown. A user who declines answers
 `promote.answer {outcome: 'declined'}`. When the request ends, every subscriber hears
 `promote.settled {projectId, requestId}`; the claimant ignores it (its `worktree.promote` answers
 it). The claimant's own `claimed` event reaches it before the claim's answer. The Trek app makes
-the dry run first in each window: one that doesn't list the worktree stays silent, and the first to
-see the dry run refused claims the request and answers `failed` with the server's error, without a
-dialog. It never sends `promoted`.
+the dry run first in each window: one that doesn't list the worktree answers `unknown-worktree`
+(no dialog; when every listening window has, the request fails at once), and the first to see the
+dry run refused claims the request and answers `failed` with the server's error, without a
+dialog. It reads the request again right before it shows the confirmation (the stack's status is
+read first), and its dialogs remember a close that arrives before they open for 30 s (Electron's
+`dialog:cancel`, the web client's `cancelDialogById`). It never sends `promoted`.
+
+Who may claim: any connection that listens for the project (`promote.listen`, an authenticated
+client subscribed to the project's topic); the first wins. The asking session (`terminalId`) is
+only looked up in the project, for the dialog's "asked by" and the queue that hears the outcome;
+nothing else is checked of it.
 
 One request per worktree at a time: a second call for it while one waits joins it and gets the
 same outcome. The tool fails when no window listens (at the call, or later before a claim: the
 server checks every 5 s), when nobody claims or declines within 15 minutes, when the user
 declines, or when the promote fails; it returns `{promoted: true, primary}`, `primary` a
-`list_worktrees` entry. Its callers going away (their MCP calls dropped) cancels the request only
+`list_worktrees` entry (`{promoted: true, path}`, the main checkout's path, if it can't be
+described). Its callers going away (their MCP calls dropped) cancels the request only
 before a claim. Once one is claimed it settles as the promote does: an asking agent that ran in
 the worktree is stopped by the promote, so its call drops; when the request settles, a prompt
 saying how it went (`The promote you asked for (promote_to_primary) went through: …` or `… failed:
-…`) is queued on the asking session (`terminalId`), wherever it now is, and never sent by itself.
+…`, a claimant's own error cut to 500 characters) is queued on the asking session
+(`terminalId`), wherever it now is, and never sent by itself.
 
 ## Sessions
 
@@ -1257,7 +1283,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `start_stack` | `worktree`; `starter?` (boolean) | the stack as `get_stack` describes it, once `stack.sh up` is started; `BAD_REQUEST` when it is not stopped |
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
 | `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
-| `promote_to_primary` | `worktree`; `terminalId?` (named in the dialog; the session that hears the outcome in its queue if its call drops) | `{promoted: true, primary}` once a window confirmed and promoted (see [Promote to primary](#promote-to-primary)); a second call for the same worktree joins the first; `BAD_REQUEST` when the user declines, nobody answers in 15 minutes, or no window listens; `GIT_ERROR` when the promote failed |
+| `promote_to_primary` | `worktree`; `terminalId?` (named in the dialog; the session that hears the outcome in its queue if its call drops) | `{promoted: true, primary}` once a window confirmed and promoted (`{promoted: true, path}` if the main checkout can't be described; see [Promote to primary](#promote-to-primary)); a second call for the same worktree joins the first; `BAD_REQUEST` when the user declines, nobody answers in 15 minutes, or no window listens; `GIT_ERROR` when the promote failed (or no open window lists the worktree) |
 
 That is 30 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without

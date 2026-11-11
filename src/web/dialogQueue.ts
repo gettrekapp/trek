@@ -39,7 +39,24 @@ const listeners = new Set<() => void>()
 const changed = (): void => {
   for (const l of [...listeners]) l()
 }
+/** How long a cancel for a dialog not queued yet is remembered (as Electron's `dialog:cancel`) */
+export const EARLY_CANCEL_MS = 30_000
+/** dialogId → when its early cancel is forgotten */
+const earlyCancels = new Map<string, number>()
+/** Whether a dialog with this id was cancelled before it was queued (the cancel is used up). */
+function cancelledEarly(dialogId: string | undefined, now = Date.now()): boolean {
+  for (const [id, until] of earlyCancels) if (until <= now) earlyCancels.delete(id)
+  if (dialogId === undefined || !earlyCancels.has(dialogId)) return false
+  earlyCancels.delete(dialogId)
+  return true
+}
 const push = (d: DialogRequest): void => {
+  // One cancelled before it got here is answered with its cancel at once, never shown.
+  if (d.kind !== 'error' && cancelledEarly(d.dialogId)) {
+    if (d.kind === 'confirm') d.done(false)
+    else d.done({ confirmed: false, checked: d.checkboxChecked })
+    return
+  }
   ids.set(d, ++nextId)
   queue = [...queue, d]
   changed()
@@ -66,10 +83,18 @@ export function answerDialog(request: DialogRequest, ok: boolean, checked?: bool
 
 /**
  * The waiting confirm or checkbox dialog with this `dialogId` answered with its cancel, as
- * Electron's `dialog:cancel` does (an agent's promote request settled in another window).
+ * Electron's `dialog:cancel` does (an agent's promote request settled in another window). One not
+ * queued yet is answered with its cancel as soon as it is (within EARLY_CANCEL_MS).
  */
-export function cancelDialogById(dialogId: string): void {
-  for (const d of [...queue]) if (d.kind !== 'error' && d.dialogId === dialogId) answerDialog(d, false)
+export function cancelDialogById(dialogId: string, now = Date.now()): void {
+  let found = false
+  for (const d of [...queue]) {
+    if (d.kind !== 'error' && d.dialogId === dialogId) {
+      found = true
+      answerDialog(d, false)
+    }
+  }
+  if (!found) earlyCancels.set(dialogId, now + EARLY_CANCEL_MS)
 }
 
 /** Every waiting dialog answered with its cancel (the shown project or route changed). */

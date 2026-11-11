@@ -14,7 +14,7 @@ import type {
 import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
-import type { PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
+import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type {
   ComposeAction,
   ContainerAction,
@@ -331,9 +331,10 @@ export interface MethodParamsV2 {
    * carried, the worktree removed last; its Claude and Local sessions move and resume there.
    * `dryRun` answers the plan. One request: any failure before the commitment puts everything back.
    * `requestId`: the promote_to_primary request this answers (claimed by this connection, or
-   * claimed now); the server settles it with this promote's result.
+   * claimed now, or by an earlier connection of the claimant: `claimToken`); the server settles it
+   * with this promote's result.
    */
-  'worktree.promote': WorktreeRef & { dryRun?: boolean; requestId?: string }
+  'worktree.promote': WorktreeRef & { dryRun?: boolean; requestId?: string; claimToken?: string }
   /**
    * 5e ("Promote branch to worktree"): the main checkout's branch, and its uncommitted work, into a
    * new worktree at the default path; the main checkout goes back to the default branch.
@@ -342,13 +343,18 @@ export interface MethodParamsV2 {
   /**
    * 5e: a window declines a `promote.request` (while nobody claimed it), or its claimant says it
    * failed before its promote could start (a teardown). `promoted` is refused (BAD_REQUEST): the
-   * claimant's `worktree.promote {requestId}` settles it. `accepted` false if late or not the claimant's.
+   * claimant's `worktree.promote {requestId}` settles it. `unknown-worktree`: this window doesn't
+   * list the worktree (once every listener says so, the request fails). `accepted` false if late
+   * or not the claimant's.
    */
-  'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'failed'; error?: string }
+  'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'failed' | 'unknown-worktree'; error?: string; claimToken?: string }
   /** 5e: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer) */
   'promote.listen': { projectId: string; listen?: boolean }
-  /** 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown */
-  'promote.claim': { projectId: string; requestId: string }
+  /**
+   * 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown.
+   * Repeated by the claimant (or with its `claimToken` from a new connection) it refreshes the claim.
+   */
+  'promote.claim': { projectId: string; requestId: string; claimToken?: string }
   // Branch data (null clears)
   'branch.setTag': BranchRef & { tag: string | null }
   'branch.setCustomTags': BranchRef & { customTags: string[] | null }
@@ -567,7 +573,7 @@ export interface MethodResultsV2 {
   'worktree.demote': PromotePlan | PromoteResult
   'promote.answer': { accepted: boolean }
   'promote.listen': null
-  'promote.claim': { accepted: boolean }
+  'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null
   'branch.setCustomTags': null

@@ -40,6 +40,22 @@ export interface PtyProcess {
   kill(signal?: string): void
   pause(): void
   resume(): void
+  /**
+   * The process id, when known. node-pty makes it the leader of its own session and process group
+   * (macOS: posix_spawn with POSIX_SPAWN_SETSID; Linux: forkpty, which calls setsid), so
+   * `-pid` names everything it started that did not leave the group.
+   */
+  readonly pid?: number
+}
+
+/** SIGKILL to the process group `pid` leads, if there is one (none on Windows, or for a fake pty without a pid). */
+function killGroup(pid: number | undefined): void {
+  if (process.platform === 'win32' || pid === undefined || !Number.isInteger(pid) || pid <= 1) return
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    // gone already (ESRCH), or not ours to signal
+  }
 }
 
 export interface SpawnOptions {
@@ -113,7 +129,8 @@ export const nodePtySpawner: PtySpawner = (opts) => {
     resize: (cols, rows) => proc.resize(cols, rows),
     kill: (signal) => proc.kill(signal),
     pause: () => proc.pause(),
-    resume: () => proc.resume()
+    resume: () => proc.resume(),
+    pid: proc.pid
   }
 }
 
@@ -275,11 +292,18 @@ export class TerminalHost {
   /**
    * Resolves once every one of these ptys' processes has exited (killed ones included), or after
    * `timeoutMs` with SIGKILL sent to those still running and a further `graceMs` for them to go.
-   * True when all are gone. 5e: a promote's agents must have stopped writing before their work is
-   * packed.
+   * True when all are gone. Each pty's process group gets SIGKILL too once its leader is gone (or
+   * with it): a background child that ignores SIGHUP must not write on. 5e: a promote's agents
+   * must have stopped writing before their work is packed.
    */
   async whenGone(ptyIds: readonly string[], timeoutMs = 5000, graceMs = 1000): Promise<boolean> {
     const alive = (): PtyRecord[] => ptyIds.map((id) => this.records.get(id)).filter((r): r is PtyRecord => r !== undefined)
+    // Read while they run: a record is forgotten on exit. A group outlives its leader while any
+    // member runs, so its id is not reused meanwhile.
+    const groups = alive().map((r) => r.proc.pid)
+    const killGroups = (): void => {
+      for (const pid of groups) killGroup(pid)
+    }
     const wait = async (ms: number): Promise<boolean> => {
       const until = Date.now() + ms
       while (alive().length > 0) {
@@ -288,15 +312,22 @@ export class TerminalHost {
       }
       return true
     }
-    if (await wait(timeoutMs)) return true
+    if (await wait(timeoutMs)) {
+      killGroups()
+      return true
+    }
     for (const record of alive()) {
+      // The group, and the process itself (in case it is not a group leader).
+      killGroup(record.proc.pid)
       try {
         record.proc.kill('SIGKILL')
       } catch {
         // already gone
       }
     }
-    return wait(graceMs)
+    const gone = await wait(graceMs)
+    killGroups()
+    return gone
   }
 
   disposeAll(): void {

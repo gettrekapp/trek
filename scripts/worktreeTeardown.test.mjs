@@ -107,3 +107,11 @@ test("isDirty: the server's answer; null or a failure falls back to the cached f
     (err) => err.message === DIRTY_CHECK_TIMED_OUT
   )
 })
+
+test('confirm: an agent request that ended while the stack status was read shows no dialog (5e, M4)', async () => {
+  const { teardown, ui } = setup()
+  let wanted = true
+  const owner = backendWith({ status: () => { wanted = false; return Promise.resolve({ available: true, created: true, slug: 'r-feat' }) } })
+  assert.deepEqual(await teardown.confirm(info, { title: 'Promote to Primary' }, owner, () => wanted), { confirmed: false })
+  assert.deepEqual(ui, [])
+})

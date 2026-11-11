@@ -160,6 +160,11 @@ export class SessionManager {
     }
   }
 
+  /** Whether another operation has `path` blocked now (blockPath). */
+  isBlocked(path: string): boolean {
+    return this.blocked.has(real(path))
+  }
+
   start(p: any): { sessionId: string; ptyId: string } {
     this.assertRunning()
     const { cols, rows } = requireSize(p)

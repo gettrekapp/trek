@@ -74,16 +74,23 @@ test('markPromoting: a worktree is busy until each mark is released', () => {
 })
 
 /** A follower over fakes: `ask` sends a request, `settle` a settled event; `run` is the test's. */
-function follow({ run, claim = async () => true, answer = async () => true } = {}) {
-  const on = { request: [], settled: [] }
+function follow({ run, claim = async () => true, answer = async () => true, claimRefreshMs } = {}) {
+  const on = { request: [], settled: [], connected: [] }
   const out = { answers: [], closed: [], errors: [], logs: [], claims: [] }
   let left = false
   const follower = followPromoteRequests({
     onRequest: (l) => { on.request.push(l); return () => { on.request = [] } },
     onSettled: (l) => { on.settled.push(l); return () => { on.settled = [] } },
+    onConnected: (l) => { on.connected.push(l); return () => { on.connected = on.connected.filter((x) => x !== l) } },
+    ...(claimRefreshMs ? { claimRefreshMs } : {}),
     run,
-    claim: async (id) => { out.claims.push(id); return claim(id, on) },
-    answer: async (id, outcome) => { out.answers.push([id, outcome]); return answer(id, outcome) },
+    // A boolean from the test's claim is its `accepted`, with a token when accepted.
+    claim: async (id, token) => {
+      out.claims.push(token ? [id, token] : id)
+      const r = await claim(id, on, token)
+      return typeof r === 'boolean' ? { accepted: r, ...(r ? { claimToken: `tok-${id}` } : {}) } : r
+    },
+    answer: async (id, outcome, token) => { out.answers.push(token ? [id, outcome, token] : [id, outcome]); return answer(id, outcome) },
     closeDialog: (id) => void out.closed.push(id),
     showError: async (title, message) => void out.errors.push(message),
     log: (message) => void out.logs.push(message),
@@ -142,7 +149,7 @@ test("followPromoteRequests: this window's claim ignores its own claimed and set
   await drain()
   assert.equal(stillAfter, true)
   assert.deepEqual(f.out.closed, [])
-  assert.deepEqual(f.out.answers, [['a', { outcome: 'failed', error: 'kaput' }]])
+  assert.deepEqual(f.out.answers, [['a', { outcome: 'failed', error: 'kaput' }, 'tok-a']])
   assert.match(f.out.logs[0], /threw/)
 })
 
@@ -177,4 +184,61 @@ test('followPromoteRequests: stop closes what was asked and follows nothing more
   await drain()
   assert.deepEqual(ran, ['a'])
   assert.equal(f.on.request.length, 0)
+})
+
+test('followPromoteRequests: a held claim is refreshed with its token on a timer and on every reconnect, until released (I1)', async () => {
+  let release
+  let token
+  const f = follow({
+    claimRefreshMs: 20,
+    run: async (event, asked) => {
+      assert.equal(await asked.claim(), true)
+      token = asked.claimToken()
+      const stop = asked.holdClaim()
+      await new Promise((r) => { release = r })
+      stop()
+      stop()
+    }
+  })
+  f.ask('a')
+  await drain()
+  assert.equal(token, 'tok-a')
+  await new Promise((r) => setTimeout(r, 70))
+  for (const l of f.on.connected) l()
+  await drain()
+  const refreshes = f.out.claims.filter((c) => Array.isArray(c))
+  assert.ok(refreshes.length >= 3, JSON.stringify(f.out.claims))
+  assert.ok(refreshes.every(([id, t]) => id === 'a' && t === 'tok-a'))
+  release()
+  await drain()
+  const count = f.out.claims.length
+  await new Promise((r) => setTimeout(r, 50))
+  assert.equal(f.on.connected.length, 0)
+  assert.equal(f.out.claims.length, count)
+})
+
+test('followPromoteRequests: a refresh the server no longer accepts is logged; holding without a claim does nothing', async () => {
+  let calls = 0
+  let stopA
+  const f = follow({
+    claimRefreshMs: 15,
+    claim: async (id, _on, token) => (token ? { accepted: false } : (calls += 1, true)),
+    run: async (event, asked) => {
+      if (event.requestId === 'b') {
+        const stop = asked.holdClaim()
+        stop()
+        return
+      }
+      await asked.claim()
+      stopA = asked.holdClaim()
+      await new Promise((r) => setTimeout(r, 40))
+      stopA()
+    }
+  })
+  f.ask('a')
+  f.ask('b')
+  await new Promise((r) => setTimeout(r, 80))
+  assert.equal(calls, 1)
+  assert.match(f.out.logs[0], /promote\.claim \(refresh\) for a was not accepted/)
+  assert.ok(!f.out.claims.includes('b'))
 })

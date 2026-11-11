@@ -28,8 +28,11 @@ export function createWorktreeTeardown(deps: WorktreeTeardownDeps): WorktreeTear
     environment: (info) => deps.environment(info),
 
     // When the worktree's dev stack has run, the dialog offers to destroy it too; stackName is set when that was ticked.
-    confirm: async (info, prompt, backend) => {
+    // `stillWanted` false once the stack's status is read: no dialog, not confirmed.
+    confirm: async (info, prompt, backend, stillWanted) => {
       const stack = await backend.stacks.status({ path: info.path }).catch(() => null)
+      // Read again right before the dialog: an agent's request may have ended meanwhile.
+      if (stillWanted && !stillWanted()) return { confirmed: false }
       const stackName = stack?.available && stack.created ? stack.slug : undefined
       if (!stackName) return { confirmed: await deps.confirm(prompt) }
       const result = await deps.confirmWithCheckbox({
