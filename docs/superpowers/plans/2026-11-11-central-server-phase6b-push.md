@@ -57,7 +57,7 @@
 
 ## Questions
 
-1. **Android Firebase config.** Should the app's `app.json` point `android.googleServicesFile` at `./google-services.json` (git-ignored, supplied by whoever builds), so an Android build gets FCM tokens? **Recommendation:** yes: add the setting and the ignore rule, and document it in apps/mobile/README.md; without the file a build fails, so it would go in as an `app.config.js` that only sets it when the file exists.
+The user answered on 2026-11-11, as recommended: `google-services.json` is optional and git-ignored. An `app.config.js` sets `android.googleServicesFile` only when the file exists, the README says where to put it, and an Android build without it logs a warning and skips push registration (iOS is unaffected). **Not yet in the prototype:** Task 5 gains it when the plan is executed. None remain.
 
 ## File structure
 
