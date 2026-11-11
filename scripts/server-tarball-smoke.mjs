@@ -45,7 +45,8 @@ for (const file of ['bin/trek-server', 'trek-server.cjs', 'build.json', 'package
   check(`${file} is there`, existsSync(join(dir, file)))
 }
 const helpers = ['build/Release', `prebuilds/${os}-${arch}`].map((d) => join(dir, 'node_modules', 'node-pty', d, 'spawn-helper')).filter((p) => existsSync(p))
-check('node-pty has exactly one spawn-helper, executable', helpers.length === 1 && (statSync(helpers[0]).mode & 0o111) === 0o111, JSON.stringify(helpers))
+if (os === 'darwin') check('node-pty has exactly one spawn-helper, executable', helpers.length === 1 && (statSync(helpers[0]).mode & 0o111) === 0o111, JSON.stringify(helpers))
+else check('node-pty has no spawn-helper (node-pty uses it on macOS only)', helpers.length === 0, JSON.stringify(helpers))
 check('bin/trek-server is executable', (statSync(join(dir, 'bin', 'trek-server')).mode & 0o111) === 0o111)
 check('node_modules holds node-pty only', readdirSync(join(dir, 'node_modules')).filter((e) => !e.startsWith('.')).join() === 'node-pty')
 
@@ -64,7 +65,7 @@ mkdirSync(linkDir, { recursive: true })
 symlinkSync(launcher, join(linkDir, 'trek-server'))
 check('the launcher works through a symlink', execFileSync(join(linkDir, 'trek-server'), ['version'], { env, encoding: 'utf8' }).trim() === version)
 
-// A pty from the tarball's node-pty: the native addon loads, and spawn-helper runs.
+// A pty from the tarball's node-pty: the native addon loads, and (on macOS) spawn-helper runs.
 const ptyOut = execFileSync(process.execPath, ['-e', `
   const pty = require(${JSON.stringify(join(dir, 'node_modules', 'node-pty'))})
   const p = pty.spawn('/bin/sh', ['-c', 'echo pty-$((6 * 7))'], { cols: 80, rows: 24, env: { PATH: '/usr/bin:/bin' } })

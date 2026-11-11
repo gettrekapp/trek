@@ -144,12 +144,35 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          kc="$RUNNER_TEMP/trek-signing.keychain-db"
+          p12="$RUNNER_TEMP/trek-signing.p12"
+          # Removed however this step ends, electron-builder or the notary failing included.
+          trap 'rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$p12"; security delete-keychain "$kc" 2>/dev/null || true' EXIT
+
+          # The certificate goes into a keychain made here, not through CSC_LINK: electron-builder
+          # 26.15.3 runs `security set-key-partition-list -k <the .p12's password>` on its own temp
+          # keychain, whose password is a different, random one, and fails ("SecKeychainUnlock: The
+          # user name or passphrase you entered is not correct"). With CSC_LINK unset it signs from
+          # the keychain named by CSC_KEYCHAIN.
+          kcpass=$(openssl rand -base64 32)
+          security create-keychain -p "$kcpass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpass" "$kc"
+          (umask 077; printf '%s' "$CSC_LINK" | base64 --decode > "$p12")
+          security import "$p12" -k "$kc" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpass" "$kc" > /dev/null
+          # On the search list too, so codesign finds the identity's certificate chain.
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          identities=$(security find-identity -v -p codesigning "$kc")
+          case $identities in *'Developer ID Application'*) ;; *) echo "::error title=No signing identity::CSC_LINK holds no Developer ID Application identity"; exit 1 ;; esac
+          unset CSC_LINK CSC_KEY_PASSWORD kcpass
+          export CSC_KEYCHAIN="$kc"
+
           if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
             # The API key wins: electron-builder would use the Apple ID first if both were set.
             unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
             key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-            # Removed however this step ends, electron-builder or the notary failing included.
-            trap 'rm -f "$RUNNER_TEMP"/AuthKey_*.p8' EXIT
             (umask 077; printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
             export APPLE_API_KEY="$key"
             notary=(--key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")

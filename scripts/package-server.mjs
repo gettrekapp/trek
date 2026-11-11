@@ -11,8 +11,9 @@
 //   build.json             its version and build id
 //   web-client/            the web client (`trek-server start --web`)
 //   node_modules/node-pty  node-pty for this platform only: its lib/ and one native folder
-//                          (pty.node and an executable spawn-helper), compiled here on Linux,
-//                          node-pty's own prebuild on macOS
+//                          (pty.node, plus an executable spawn-helper on macOS: node-pty builds
+//                          that helper for macOS only), compiled here on Linux, node-pty's own
+//                          prebuild on macOS
 //   package.json, README.md, trek-server.service
 //
 // node-pty is a Node-API addon, so the tarball works with any Node >= 22 on the same os/arch. It
@@ -151,10 +152,13 @@ function prunePty(modules) {
     if (entry !== 'node-pty' && !entry.startsWith('.')) rmSync(join(modules, entry), { recursive: true, force: true })
   }
   rmSync(join(modules, '.package-lock.json'), { force: true })
+  // node-pty uses spawn-helper on macOS only (its binding.gyp builds it for OS=="mac"); Linux has none.
   const helper = join(native, 'spawn-helper')
-  if (!existsSync(helper)) fail(`node-pty's ${helper} is missing`)
-  // Prebuilt spawn-helpers can arrive without their execute bit (see scripts/fix-pty-helper.mjs).
-  chmodSync(helper, 0o755)
+  if (process.platform === 'darwin') {
+    if (!existsSync(helper)) fail(`node-pty's ${helper} is missing`)
+    // Prebuilt spawn-helpers can arrive without their execute bit (see scripts/fix-pty-helper.mjs).
+    chmodSync(helper, 0o755)
+  }
 }
 
 function removeTests(dir) {

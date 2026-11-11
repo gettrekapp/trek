@@ -159,6 +159,12 @@ the packaging step (`APPLE_API_KEY`, the path electron-builder wants, then notar
 and a shell `trap` on the step's exit deletes it however the step ends, a failed
 electron-builder or notarization included.
 
+The certificate is not handed to electron-builder as `CSC_LINK`: electron-builder 26.15.3 unlocks
+its own temp keychain with the `.p12`'s password and fails. The step instead imports the `.p12`
+into a keychain it creates in the runner's temp directory (random password), points
+electron-builder at it with `CSC_KEYCHAIN`, and the same `trap` deletes the decoded `.p12` and that
+keychain.
+
 ### The Developer ID Application certificate (`CSC_LINK`, `CSC_KEY_PASSWORD`)
 
 Only the team's Account Holder can create a Developer ID certificate.
