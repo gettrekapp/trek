@@ -1,0 +1,114 @@
+# CI: every push to a branch and every pull request, on Linux. Also called by release.yml as
+# part of its gate (workflow_call). Tags are left to release.yml, so a tag push runs this once.
+#
+# Jobs (in parallel):
+#   test    typecheck the app, trek-server and trek-relay; the unit tests (npm test)
+#   build   npm run build (app, web client, server) and the relay; the Node-only smokes
+#   mobile  the phone app: typecheck and an `expo export` for iOS and Android (no EAS, no signing)
+#
+# The Electron smokes need macOS and a GUI session: macos-smokes.yml runs them nightly.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A newer push to the same branch or PR cancels the run it supersedes; main keeps every run.
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # The Linux jobs never start Electron: skip its ~100 MB binary.
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  # Smokes and tests run TypeScript straight from src/ (Node's type stripping, Node >= 22.18).
+  NODE_VERSION: '22'
+
+jobs:
+  test:
+    name: Typecheck and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      # Also installs server/ and relay/ (postinstall); node-pty compiles from source on Linux.
+      - run: npm ci --no-audit --no-fund
+      - name: Typecheck the app
+        run: npm run typecheck
+      - name: Typecheck trek-server
+        run: npm --prefix server run typecheck
+      - name: Typecheck trek-relay
+        run: npm run typecheck:relay
+      - name: Unit tests
+        run: npm test
+
+  build:
+    name: Build and Node smokes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build the app, web client and server
+        run: npm run build
+      - name: Build the relay
+        run: npm run build:relay
+      - name: trek-server smoke (the built bundle)
+        working-directory: server
+        run: npm run smoke -- --built
+      - name: Client contract smoke
+        if: ${{ !cancelled() }}
+        run: npm run smoke:client
+      - name: Push smoke (relay + server + SDK phone)
+        if: ${{ !cancelled() }}
+        run: npm run smoke:push
+
+  mobile:
+    name: Phone app (typecheck, expo export)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Typecheck
+        run: npm run typecheck
+      # Bundles the JS for both platforms (Metro, with ../../src/shared), into a throwaway folder.
+      - name: expo export (iOS)
+        run: npx expo export --platform ios --output-dir "$RUNNER_TEMP/expo-ios"
+      - name: expo export (Android)
+        run: npx expo export --platform android --output-dir "$RUNNER_TEMP/expo-android"

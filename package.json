@@ -46,11 +46,14 @@
     "productName": "Trek",
     "publish": null,
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "out/**",
-      "resources/**"
+      "resources/**",
+      "!**/node_modules/node-pty/prebuilds/{win32-*,darwin-x64}/**",
+      "!**/node_modules/node-pty/{deps,third_party,src}/**"
     ],
     "fileAssociations": [
       {
@@ -71,6 +74,11 @@
       ],
       "icon": "resources/AppIcon.icns",
       "category": "public.app-category.developer-tools",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Trek Dev switches to an already-open Chrome tab when opening a link."
       }

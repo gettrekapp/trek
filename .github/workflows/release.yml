@@ -1,0 +1,315 @@
+# Release: a tag `vX.Y.Z` (the product version: package.json, server/ and relay/ must all say X.Y.Z,
+# see scripts/set-version.mjs) builds every artifact, runs the gate, and opens a DRAFT GitHub Release.
+# Nothing is published until someone publishes the draft. See docs/RELEASING.md.
+#
+#   version      the tag matches the three package.json versions
+#   ci           ci.yml (typecheck, unit tests, build, Node smokes, the phone's export)   ┐ gate
+#   macos-smokes macos-smokes.yml (the Electron smokes, one at a time)                    ┘
+#   mac-app      Trek-X.Y.Z-arm64.dmg: signed (Developer ID), hardened runtime, notarized and
+#                stapled; verified, then the packaged-app smokes run against it
+#   server       trek-server-X.Y.Z-<os>-<arch>.tar.gz on a native runner for each platform,
+#                each unpacked and run (scripts/server-tarball-smoke.mjs)
+#   relay        trek-relay-X.Y.Z.cjs (+ .sha256)
+#   release      SHA256SUMS over everything, then `gh release create --draft`
+#
+# The builds run beside the gate; only `release` waits for all of it.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  version:
+    name: Version check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - id: v
+        name: The tag is the version of the app, trek-server and trek-relay
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node scripts/set-version.mjs --check "$TAG")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case $version in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
+          echo "Releasing $version"
+
+  ci:
+    name: 'Gate: CI'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  macos-smokes:
+    name: 'Gate: macOS smokes'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/macos-smokes.yml
+
+  mac-app:
+    name: Trek.app (signed, notarized)
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      # Signed now, or not at all: a release never ships an unsigned app.
+      - name: Signing and notarization secrets are set
+        env:
+          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_API_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+          HAS_ANY_API_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' || secrets.APPLE_API_KEY_ID != '' || secrets.APPLE_API_ISSUER != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+        run: |
+          missing=()
+          [ "$HAS_CSC_LINK" = true ] || missing+=("CSC_LINK (the Developer ID Application certificate, .p12, base64)")
+          [ "$HAS_CSC_KEY_PASSWORD" = true ] || missing+=("CSC_KEY_PASSWORD (the .p12's password)")
+          if [ "$HAS_API_KEY" != true ] && [ "$HAS_APPLE_ID" != true ]; then
+            if [ "$HAS_ANY_API_KEY" = true ]; then
+              missing+=("all three of APPLE_API_KEY_P8, APPLE_API_KEY_ID and APPLE_API_ISSUER (only some are set)")
+            else
+              missing+=("APPLE_API_KEY_P8 + APPLE_API_KEY_ID + APPLE_API_ISSUER (App Store Connect API key; or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID)")
+            fi
+          fi
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Release not signed::The release builds a signed, notarized Trek.app and refuses to ship an unsigned one. Missing repository secrets: ${missing[*]}. See docs/RELEASING.md."
+            exit 1
+          fi
+          if [ "$HAS_API_KEY" = true ]; then echo "Notarizing with the App Store Connect API key"; else echo "Notarizing with the Apple ID"; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build (npm run build)
+        run: npm run build
+      # electron-builder: rebuilds node-pty for Electron, signs every Mach-O in the app (Electron's
+      # helpers and frameworks, node-pty's pty.node and spawn-helper in app.asar.unpacked) with the
+      # hardened runtime and build/entitlements.mac*.plist, notarizes the app and staples it, then
+      # makes the dmg. The bundled trek-server (out/server, JavaScript inside app.asar) runs on the
+      # signed Electron binary (ELECTRON_RUN_AS_NODE), so it has nothing of its own to sign.
+      - name: Package, sign and notarize
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
+            # The API key wins: electron-builder would use the Apple ID first if both were set.
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
+            key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            (umask 077; printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
+            export APPLE_API_KEY="$key"
+          fi
+          unset APPLE_API_KEY_P8
+          npx electron-builder --mac --arm64 --publish never
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+      - name: Verify the signature, hardened runtime, notarization and node-pty
+        run: |
+          set -euo pipefail
+          app=dist/mac-arm64/Trek.app
+          dmg="dist/Trek-$VERSION-arm64.dmg"
+          test -d "$app" && test -f "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          info=$(codesign -dv --verbose=4 "$app" 2>&1)
+          echo "$info" | grep -E '^(Identifier|Authority|TeamIdentifier|Timestamp|CodeDirectory)'
+          echo "$info" | grep -q '^Authority=Developer ID Application' || { echo "::error::Trek.app is not signed with a Developer ID Application certificate"; exit 1; }
+          echo "$info" | grep -Eq 'flags=.*runtime' || { echo "::error::Trek.app is not signed with the hardened runtime"; exit 1; }
+          codesign -d --entitlements - "$app" 2>/dev/null | grep -q 'com.apple.security.automation.apple-events' || { echo "::error::Trek.app lacks its entitlements"; exit 1; }
+          # Every Mach-O under app.asar.unpacked (node-pty): signed, hardened, and spawn-helper executable.
+          unpacked="$app/Contents/Resources/app.asar.unpacked"
+          found=0
+          while IFS= read -r f; do
+            if file -b "$f" | grep -q Mach-O; then
+              found=$((found + 1))
+              codesign --verify --strict "$f"
+              codesign -dv "$f" 2>&1 | grep -Eq 'flags=.*runtime' || { echo "::error::$f is not signed with the hardened runtime"; exit 1; }
+              case $f in */spawn-helper) [ -x "$f" ] || { echo "::error::$f is not executable"; exit 1; } ;; esac
+              echo "signed: ${f#"$unpacked/"}"
+            fi
+          done < <(find "$unpacked" -type f)
+          [ "$found" -gt 0 ] || { echo "::error::no native files under app.asar.unpacked: node-pty is missing"; exit 1; }
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          # The app inside the dmg is the stapled one.
+          mnt="$RUNNER_TEMP/trek-dmg"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          trap 'hdiutil detach "$mnt" -quiet || true' EXIT
+          codesign --verify --deep --strict "$mnt/Trek.app"
+          xcrun stapler validate "$mnt/Trek.app"
+      # smoke:packaged without its dist:dir: the signed app's own binary runs the bundled Local
+      # server (node-pty from app.asar.unpacked), then the app itself is driven.
+      - name: Packaged-app smokes
+        run: |
+          node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app
+          node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-app
+          path: dist/Trek-${{ env.VERSION }}-arm64.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  server:
+    name: trek-server ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-latest }
+          - { target: darwin-x64, runner: macos-15-intel }
+          # Ubuntu 22.04 (glibc 2.35): node-pty compiled there runs on older distros than 24.04's.
+          - { target: linux-x64, runner: ubuntu-22.04 }
+          - { target: linux-arm64, runner: ubuntu-22.04-arm }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build the web client and the server
+        run: |
+          npm run build:web
+          npm --prefix server run build
+      - name: Package
+        run: |
+          node scripts/package-server.mjs --out dist-release
+          test -f "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
+      - name: Unpack and run it
+        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-${{ matrix.target }}
+          path: dist-release/trek-server-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  relay:
+    name: trek-relay
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      # The relay has no runtime dependencies: only its own devDependencies (esbuild) are needed.
+      - run: npm --prefix relay ci --no-audit --no-fund
+      - name: Build and check
+        run: |
+          npm run build:relay
+          mkdir -p dist-release
+          out="trek-relay-$VERSION.cjs"
+          cp relay/dist/trek-relay.cjs "dist-release/$out"
+          printed=$(node "dist-release/$out" version)
+          [ "$printed" = "trek-relay $VERSION" ] || { echo "::error::$out says \"$printed\", not trek-relay $VERSION"; exit 1; }
+          (cd dist-release && sha256sum "$out" > "$out.sha256" && cat "$out.sha256")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: relay
+          path: dist-release/trek-relay-*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft GitHub Release
+    needs: [version, ci, macos-smokes, mac-app, server, relay]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: artifacts
+        run: |
+          expected=("Trek-$VERSION-arm64.dmg" "trek-relay-$VERSION.cjs" "trek-relay-$VERSION.cjs.sha256")
+          for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do expected+=("trek-server-$VERSION-$t.tar.gz"); done
+          for f in "${expected[@]}"; do [ -f "$f" ] || { echo "::error::missing artifact $f"; exit 1; }; done
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<EOF
+          **Trek $VERSION**
+
+          - \`Trek-$VERSION-arm64.dmg\`: the desktop app for Apple silicon Macs (signed and notarized).
+          - \`trek-server-$VERSION-<os>-<arch>.tar.gz\`: trek-server for macOS and Linux (x64, arm64); needs Node.js 22 or later. Unpack it and run \`bin/trek-server\` (see its README.md).
+          - \`trek-relay-$VERSION.cjs\`: the push relay (\`node trek-relay-$VERSION.cjs start --config <file>\`); see relay/README.md.
+          - \`SHA256SUMS\`: \`sha256sum -c SHA256SUMS\` (\`shasum -a 256 -c SHA256SUMS\` on macOS).
+
+          The phone app is built and shipped with EAS, not here.
+          EOF
+          flags=(--draft --verify-tag --title "Trek $VERSION" --notes-file notes.md --generate-notes)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" "${flags[@]}" artifacts/*

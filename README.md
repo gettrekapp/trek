@@ -525,3 +525,12 @@ The `.trekproj` format the importer reads lives in `src/shared/types.ts` (`Proje
 `src/shared/model/importProject.ts`. The renderer's xterm.js instances live in
 `src/renderer/src/terminals.ts`; a server window's store is projected from the
 server's `project:<id>` topic (`src/renderer/src/v2/`).
+
+## CI and releases
+
+GitHub Actions runs CI on every push and pull request (Linux: typechecks, `npm test`, the
+build, the Node-only smokes and the phone app's export) and the Electron smokes nightly on
+macOS. A `vX.Y.Z` tag builds a signed, notarized `Trek-X.Y.Z-arm64.dmg`, trek-server tarballs for
+macOS and Linux (x64 and arm64) and the trek-relay bundle, and opens a draft GitHub Release. How
+to cut a release, the signing secrets and how to run the macOS smokes by hand:
+[docs/RELEASING.md](docs/RELEASING.md). The phone app ships through EAS, not this workflow.

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Trek.app's main executable, under the hardened runtime (electron-builder: mac.entitlements).
+  - allow-jit, allow-unsigned-executable-memory: V8 in Electron. The same binary runs the bundled
+    Local trek-server with ELECTRON_RUN_AS_NODE=1, so it needs them as Node does.
+  - disable-library-validation: lets that Node load node-pty's pty.node (app.asar.unpacked) and any
+    other native addon even when its signature is not the app's team's.
+  - automation.apple-events: Trek switches to an open Chrome tab with Apple Events
+    (NSAppleEventsUsageDescription in package.json); the hardened runtime blocks them without it.
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>

@@ -25,6 +25,10 @@ keeps running on the server; the app reattaches when it reconnects.
 
 ## Install
 
+A release's `trek-server-<version>-<os>-<arch>.tar.gz` (macOS and Linux, x64 and arm64) needs
+no build tools: unpack it and run `bin/trek-server` with Node.js 22 or later (its README.md says
+more; see ../docs/RELEASING.md). From a checkout:
+
 ```sh
 git clone <this repo> ~/Trek.Developer
 cd ~/Trek.Developer

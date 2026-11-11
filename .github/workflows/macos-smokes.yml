@@ -1,0 +1,100 @@
+# The Electron smokes, on macOS: nightly, by hand (Actions → macOS smokes → Run workflow), and as
+# part of release.yml's gate (workflow_call). They drive the built app with Playwright, each in its
+# own temp HOME and user-data directory, with stub gh/docker/colima/code: nothing on the runner is
+# touched. One job, one smoke at a time (they must not overlap); every smoke runs even when an
+# earlier one failed, so one run shows every failure.
+#
+# Each `npm run smoke:<name>` is `npm run build && node scripts/<name>-smoke.mjs`: the job builds
+# once and runs the scripts. smoke:server-pairing needs a non-internal IPv4 address and prints
+# SKIP (and passes) without one. The macOS-only unit tests (the bot's sandbox-exec ones) run here
+# too: Linux CI skips them.
+name: macOS smokes
+
+on:
+  schedule:
+    - cron: '17 7 * * *' # daily, 07:17 UTC
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-smokes-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  smokes:
+    name: Electron smokes (macOS arm64)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      # node-pty against Electron's headers, as `npm run rebuild` does for a dev checkout.
+      - name: Rebuild node-pty for Electron
+        run: npm run rebuild
+      - name: Unit tests (with the macOS-only ones)
+        run: npm test
+      - name: Build (npm run build)
+        id: build
+        if: ${{ !cancelled() }}
+        run: npm run build
+      - name: smoke:local
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/local-server-smoke.mjs
+      - name: smoke:windows
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/windows-smoke.mjs
+      - name: smoke:providers
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/providers-smoke.mjs
+      - name: smoke:v2
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/v2-smoke.mjs
+      - name: smoke:local-app
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/local-app-smoke.mjs
+      - name: smoke:local-window
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/local-window-smoke.mjs
+      - name: smoke:local-features
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/local-features-smoke.mjs
+      - name: smoke:server-env
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-env-smoke.mjs
+      - name: smoke:server-integrations
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-integrations-smoke.mjs
+      - name: smoke:server-prwatch
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-prwatch-smoke.mjs
+      - name: smoke:server-review
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-review-smoke.mjs
+      - name: smoke:server-web
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-web-smoke.mjs
+      - name: smoke:server-move
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-move-smoke.mjs
+      - name: smoke:server-promote
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-promote-smoke.mjs
+      - name: smoke:server-pairing
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-pairing-smoke.mjs
+      - name: smoke:import
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/import-smoke.mjs
