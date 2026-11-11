@@ -347,7 +347,14 @@ try {
 
   // ---- Quit, relaunch: the windows come back -------------------------------------------------------------
 
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha').setBounds({ x: 40, y: 60, width: 1000, height: 700 }))
+  // A size that fits this display's work area (a CI Mac's virtual screen is small, and a restore
+  // clamps the window to the work area), so the check below sees what was set.
+  const alphaSize = await app.evaluate(({ BrowserWindow, screen }) => {
+    const area = screen.getPrimaryDisplay().workArea
+    const size = { width: Math.min(1000, area.width - 100), height: Math.min(700, area.height - 120) }
+    BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha').setBounds({ x: area.x + 40, y: area.y + 60, ...size })
+    return [size.width, size.height]
+  })
   // The new bounds are recorded on a debounce; quitting records them anyway.
   await sleep(800)
   await collectDialogs()
@@ -378,7 +385,7 @@ try {
   await rm.waitForLoadState('domcontentloaded')
   check('and keeps its target across a reload', await until(() => mainTarget(rm), missingTarget), missingTarget)
   const bounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha')?.getBounds() ?? null)
-  check('alpha keeps its size', bounds && [bounds.width, bounds.height], [1000, 700])
+  check('alpha keeps its size', bounds && [bounds.width, bounds.height], alphaSize)
   check("and lists its session again (it ran on the server meanwhile)", await until(() => sessionsIn(ra), [sa]), [sa])
   await ra.reload()
   await ra.waitForLoadState('domcontentloaded')
