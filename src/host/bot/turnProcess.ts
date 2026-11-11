@@ -73,11 +73,14 @@ export const TREK_TOOL_PREFIX = `mcp__${BOT_MCP_SERVER}__`
  * The bot's PreToolUse hook command: sends the hook's input to Trek's policy route. The token goes
  * to curl on stdin (`-H @-`, from `printf`, a shell builtin), so it is never in any argv; the
  * hook's own stdin moves to fd 3 for the body. Blocks the tool if Trek can't answer (curl --fail,
- * then exit 2). Needs only a POSIX sh and curl 7.55+.
+ * then exit 2). Needs only a POSIX sh, cat and curl 7.55+.
+ *
+ * The leading `cat |` makes that stdin a pipe: Node (the CLI) hands hooks a socket, and on Linux
+ * /dev/fd/3 is /proc/self/fd/3, which cannot be opened on a socket (ENXIO); macOS dups it either way.
  */
 export function botPolicyHook(port: number): string {
   return (
-    `{ printf 'Authorization: Bearer %s\\n' "$TREK_BOT_TOKEN" | ` +
+    `cat | { printf 'Authorization: Bearer %s\\n' "$TREK_BOT_TOKEN" | ` +
     `curl -sS --fail --max-time 10 -X POST -H @- --data-binary @/dev/fd/3 http://127.0.0.1:${port}/bot/policy; } 3<&0 || exit 2`
   )
 }
