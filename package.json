@@ -27,6 +27,7 @@
     "smoke:server-integrations": "npm run build && node scripts/server-integrations-smoke.mjs",
     "smoke:server-prwatch": "npm run build && node scripts/server-prwatch-smoke.mjs",
     "smoke:server-review": "npm run build && node scripts/server-review-smoke.mjs",
+    "smoke:server-pairing": "npm run build && node scripts/server-pairing-smoke.mjs",
     "smoke:server-move": "npm run build && node scripts/server-move-smoke.mjs",
     "smoke:server-promote": "npm run build && node scripts/server-promote-smoke.mjs",
     "smoke:server-web": "npm run build && node scripts/server-web-smoke.mjs",
@@ -78,6 +79,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "@types/node": "^26.1.1",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
@@ -87,6 +89,7 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "playwright-core": "^1.61.1",
+    "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^7.0.2",

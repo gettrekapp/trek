@@ -244,6 +244,19 @@ export interface AppServerTest {
   serverId?: string
 }
 
+/**
+ * "Pair a phone…" (6a): a one-time code from the server, for the QR. Never a token: the phone
+ * redeems the code for its own. `url` is the address this app uses for the server.
+ */
+export interface AppServerPairing {
+  url: string
+  code: string
+  /** ms since the epoch */
+  expiresAt: number
+  /** `trek://pair?url=…&code=…`, what the QR holds */
+  link: string
+}
+
 /** Identifies a worktree across machines — path alone is ambiguous. */
 export interface WorktreeLocator {
   serverId?: string

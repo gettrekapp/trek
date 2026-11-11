@@ -6,6 +6,7 @@ import type {
   AttentionChanged,
   SessionSelect,
   V2SocketOpenResult,
+  AppServerPairing,
   AppServerTest,
   InitialWindowState,
   RecentEntry,
@@ -77,6 +78,8 @@ const api = {
     setToken: (id: string, token: string): Promise<void> => ipcRenderer.invoke('appServers:setToken', id, token),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('appServers:remove', id),
     test: (id: string): Promise<AppServerTest> => ipcRenderer.invoke('appServers:test', id),
+    /** A one-time phone pairing code for the QR (6a); never a token */
+    pairPhone: (id: string): Promise<AppServerPairing> => ipcRenderer.invoke('appServers:pairPhone', id),
     /** The list with main's connection statuses (never a token); `onChanged` hears every change after it. */
     links: (): Promise<AppServersChanged> => ipcRenderer.invoke('appServers:links'),
     onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>

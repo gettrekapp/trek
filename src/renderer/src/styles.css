@@ -3271,6 +3271,47 @@ button:disabled {
   color: #f38ba8;
 }
 
+/* "Pair a phone…" (6a): the QR, the address and code, the countdown */
+.pair-phone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 10px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.pair-phone-qr {
+  flex: none;
+  border-radius: 6px;
+}
+
+.pair-phone-text {
+  flex: 1;
+  min-width: 220px;
+  font-size: 12px;
+}
+
+.pair-phone-field {
+  margin: 6px 0;
+}
+
+.pair-phone-field code {
+  font-size: 13px;
+  user-select: all;
+}
+
+.pair-phone-text .warn {
+  color: var(--attention);
+}
+
+.pair-phone-actions {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  justify-content: flex-end;
+}
+
 .server-form-actions {
   display: flex;
   align-items: center;

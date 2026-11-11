@@ -5,6 +5,7 @@ import { errorText } from '../v2/errors'
 import { shouldReconnect, shouldReconnectOnMove } from '../v2/appServerLinks'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
+import { PairPhone } from './PairPhone'
 import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
 import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
@@ -49,6 +50,14 @@ function unencryptedRemote(url: string): boolean {
   }
 }
 
+/**
+ * "Pair a phone…" (6a) shows for a connected server whose welcome lists `pairing`, but never for
+ * the Local server or a loopback URL: a phone can't reach those.
+ */
+export function canPairPhone(server: AppServerLink): boolean {
+  return !server.local && server.status === 'connected' && !isLoopbackUrl(server.url) && (server.capabilities ?? []).includes('pairing')
+}
+
 function needsTokenAgain(form: FormState): boolean {
   if (form.id === null || form.savedUrl === null) return false
   return originOf(form.savedUrl) !== originOf(form.url)
@@ -61,6 +70,7 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [tokenFor, setTokenFor] = useState<string | null>(null)
+  const [pairFor, setPairFor] = useState<string | null>(null)
   const [tokenValue, setTokenValue] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
@@ -249,6 +259,11 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
                 <button className="btn btn-ghost" disabled={testState?.busy} onClick={() => void test(server)}>
                   {testState?.busy ? 'Testing…' : 'Test'}
                 </button>
+                {canPairPhone(server) && (
+                  <button className="btn btn-ghost" onClick={() => setPairFor(pairFor === server.id ? null : server.id)}>
+                    Pair a phone…
+                  </button>
+                )}
                 <button className="btn btn-ghost" onClick={() => startEdit(server)}>
                   Edit
                 </button>
@@ -290,6 +305,8 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
                     : `${STATUS_LABELS[testState.result.status as ConnectionStatus] ?? testState.result.status}: ${testState.result.message}`}
               </div>
             )}
+
+            {pairFor === server.id && canPairPhone(server) && <PairPhone serverId={server.id} onClose={() => setPairFor(null)} />}
 
             {rowErrors[server.id] && <div className="error">{rowErrors[server.id]}</div>}
 

@@ -25,15 +25,15 @@ import {
   type AppServer,
   type RemovingEntry
 } from './appServersRules'
-import { SERVER_REMOVED_MESSAGE, globalSocketFactory } from '../shared/client/index.ts'
+import { SERVER_REMOVED_MESSAGE, globalSocketFactory, pairingLink } from '../shared/client/index.ts'
 import { probeServer } from './appServerProbe'
 import { closeForServer } from './v2relay'
 import { checkLocalServer, localEntry, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 import { LOCAL_ENTRY_ID } from './localServerRules'
-import { isLocalEntryId } from '../shared/appServerRules.ts'
+import { isLocalEntryId, isLoopbackUrl } from '../shared/appServerRules.ts'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
 import type { RegisteredServer } from '../shared/client/index.ts'
-import type { AppServerInfo, AppServersChanged, AppServerTest } from '../shared/types'
+import type { AppServerInfo, AppServerPairing, AppServersChanged, AppServerTest } from '../shared/types'
 
 const FILE_NAME = 'app-servers.json'
 
@@ -320,6 +320,24 @@ export async function adoptAppServerToken(id: string, url: string, token: string
   return stored
 }
 
+/**
+ * "Pair a phone…" (6a): asks the server, over main's own connection, for a one-time pairing code.
+ * The window gets the code, its expiry and the URL this app uses for the server: never a token.
+ * Refused for the Local server and a loopback URL (a phone can't reach either), and for a server
+ * whose welcome doesn't list `pairing`.
+ */
+async function pairPhone(id: unknown): Promise<AppServerPairing> {
+  const server = requireKnown(id)
+  if (isLocalEntryId(server.id)) throw new Error('A phone cannot reach the Local server')
+  if (isLoopbackUrl(server.url)) throw new Error('A phone cannot reach a server at a loopback address (localhost or 127.0.0.1)')
+  const link = links?.get(server.id)
+  const welcome = link?.connection.welcome
+  if (!link || link.connection.status !== 'connected' || !welcome) throw new Error('Not connected to this server')
+  if (!welcome.capabilities.includes('pairing')) throw new Error('This server does not pair phones; update it')
+  const { code, expiresAt } = await link.connection.request('pairing.create', { name: '' })
+  return { url: server.url, code, expiresAt, link: pairingLink(server.url, code) }
+}
+
 /** Quit: main's connections close for good. */
 export function closeServerLinks(): void {
   links?.close()
@@ -377,4 +395,5 @@ export function registerAppServerHandlers(
   ipcMain.handle('appServers:setToken', (_event, id: unknown, token: unknown) => setToken(id, token))
   ipcMain.handle('appServers:remove', (_event, id: unknown) => remove(id))
   ipcMain.handle('appServers:test', (_event, id: unknown) => test(id))
+  ipcMain.handle('appServers:pairPhone', (_event, id: unknown) => pairPhone(id))
 }
