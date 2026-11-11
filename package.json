@@ -33,6 +33,7 @@
     "smoke:server-move": "npm run build && node scripts/server-move-smoke.mjs",
     "smoke:server-promote": "npm run build && node scripts/server-promote-smoke.mjs",
     "smoke:server-web": "npm run build && node scripts/server-web-smoke.mjs",
+    "smoke:push": "npm --prefix server run build && npm --prefix relay run build && node scripts/push-smoke.mjs",
     "smoke:import": "npm run build && node scripts/import-smoke.mjs",
     "smoke:local-window": "npm run build && node scripts/local-window-smoke.mjs",
     "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app && node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app",
