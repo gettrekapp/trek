@@ -56,8 +56,7 @@ Also recorded (user, 2026-11-10): Windows support for the supervisor and the bot
 
 ## Questions
 
-1. **Demote carries the main checkout's uncommitted work** to the new worktree (decision 9), the mirror of decision 2. The alternative is the legacy rule: refuse while the main checkout has changes. **Recommendation:** keep carrying it.
-2. **A promote into an unloaded main checkout loads it** when the worktree was loaded (decision 12), which resumes the main checkout's own saved sessions too. The alternative is to resume only the moved sessions and leave the main checkout's others stopped (they would show as exited until restarted). **Recommendation:** keep loading it, as the legacy did.
+The user answered both on 2026-11-11, as recommended: demote carries the main checkout's uncommitted work to the new worktree (decision 9), and a promote into an unloaded main checkout loads it, resuming its own saved sessions too (decision 12). Task 4 (the 5d index-times fix) was merged to master on its own first, as a hotfix (47e2b6e), at the user's request; it is already in this branch's base, so executing this plan skips it. None remain.
 
 ## File structure
 
