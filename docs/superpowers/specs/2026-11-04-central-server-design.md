@@ -497,6 +497,10 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
    - **After phase 6** (user decision, 2026-11-10): Windows support for the supervisor, and the
      bot (ported last, in its own plan, only when asked).
 6. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
+   Split (user decisions, 2026-11-11): **6a** is a phone companion app (Expo, iOS and Android, in
+   `apps/mobile`, importing `src/shared/client`, `src/shared/model` and `protocolV2` directly; pairing
+   by a one-time code from the desktop app), spec `2026-11-11-phase6a-mobile-companion-design.md`;
+   **6b** is background push through a Trek push relay the user hosts.
 
 Remote projects can be opened after phase 3. After phase 4 every project is on a server and
 the legacy path is gone; phase 5 brings back the remaining features.
