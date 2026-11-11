@@ -57,8 +57,10 @@ remains the way to do everything else from a browser.
   - **Capability:** `pairing`.
 - **Desktop: "Pair a phone…".**
   - It is under Settings → Servers, on a server whose welcome lists `pairing`.
-  - Main asks that server for a code. The renderer gets only the code, the expiry and the
-    server's public `wss://` URL. It shows a QR of `trek://pair?url=<url>&code=<code>`, the code
+  - The URL in the QR is the one the desktop app itself uses for that server. "Pair a phone…" is
+    hidden for the Local server and for any server whose URL is loopback, since a phone can't
+    reach those.
+  - Main asks that server for a code. The renderer gets only the code, the expiry and that URL. It shows a QR of `trek://pair?url=<url>&code=<code>`, the code
     as text, and a countdown.
   - No token ever reaches the renderer or the QR.
 - **Phone: adding a server.**
