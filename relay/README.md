@@ -83,6 +83,7 @@ had a push delivered, and APNs' `410`, mean the token is gone.
 cd relay && npm ci && npm run build
 chmod 600 /etc/trek-relay/relay.json
 node dist/trek-relay.cjs start --config /etc/trek-relay/relay.json
+# or: npm start -- --config /etc/trek-relay/relay.json (runs the same built file)
 ```
 
 Relative paths in the config resolve against the config file's directory. `--host` and `--port`
@@ -109,18 +110,24 @@ settings and registers nothing.
 `<dataDir>/relay.json` (mode 0600, in a 0700 directory): each phone's push token and platform,
 whether it paused its pushes, and its grants (one per paired server, labelled with the server's
 name). The phone's device secret and every grant's secret are kept only as sha256 hashes. A change
-that issues or revokes a secret is written (then renamed into place) before the relay answers;
-bookkeeping (a grant's last push, a token's first delivery) is written within a second, and on a
-clean shutdown, so a crash loses at most that. A device whose token APNs or FCM reports as gone
+that issues or revokes a secret is written (then renamed into place) before the relay answers, and
+so is a token's first delivery (it decides whether `BadDeviceToken` means gone); bookkeeping (a
+grant's last push) is written within a second, and on a clean shutdown, so a crash loses at most
+that. A device whose token APNs or FCM reports as gone
 is marked dead: its grants answer `410` to servers, and its own grant calls `410 {"error":
 "device-dead"}`, until the phone sends its token again. A device dead for 30 days is removed with
-its grants (checked at start and daily). The relay logs the kind, the grant id and the push
+its grants, and so is a device with no grant for 7 days (registered and never granted, or every
+grant revoked) (both checked at start and daily). The relay logs the kind, the grant id and the push
 service's answer, never a push's words, tokens or secrets.
 
 **A reinstalled app** loses its device secret, but the phone's push token often stays the same.
 Registering a (platform, token) the relay already has replaces that device: the old one and its
 grants are removed (its servers' next push answers `410` and they drop the grant; the phone grants
-again). Registration's limits (and the registration key, when set) apply as usual.
+again). Registration's limits (and the registration key, when set) apply as usual. **Note:**
+anyone who knows a phone's push token (and the registration key, when set) can register it and so
+evict that phone's device. That is denial of service only: the new registration's secret pushes
+to the phone's token but can't read or manage the old device's grants, and the phone recovers on
+its next check (its device calls answer `401`, so it registers again and re-grants its servers).
 
 ## API
 
@@ -137,7 +144,7 @@ Bearer <secret>`.
 | `POST /v1/grants` | phone | `{label}` (up to 80 characters) | `201 {grantId, grantSecret}`; `410 {error: 'device-dead'}`; `429` (10 a minute per device); `409` 50 grants already |
 | `GET /v1/grants` | phone | | `200 [{grantId, label, createdAt, lastPushAt}]`; `410 {error: 'device-dead'}` |
 | `DELETE /v1/grants/:id` | phone | | `200` |
-| `POST /v1/push` | server | `{kind, project, data: {serverId, projectId, worktreeId?, sessionId?}}` | `202 {accepted: true}` sent, or `{accepted: true, paused: true}` dropped (the phone paused); `401` unknown grant; `410` the device is gone; `422` the push service refused this push (not worth retrying); `429` limited; `503` with `Retry-After` the push service is unavailable, limiting or timed out |
+| `POST /v1/push` | server | `{kind, project, data: {serverId, projectId, worktreeId?, sessionId?}}` | `202 {accepted: true}` sent, or `{accepted: true, paused: true}` dropped (the phone paused); `401` unknown grant; `410` the device is gone; `422` the push service refused this push (not worth retrying); `429` limited; `503` with `Retry-After: 30` the push service is unavailable, limiting or timed out |
 | `GET /v1/health` | anyone | | `200 {ok: true}` |
 
 **The phone's side.** On each launch (and each registration check), the phone sends its current
@@ -145,8 +152,10 @@ push token with `PUT /v1/devices/:id`, even when it hasn't changed: that brings 
 dead back. A `410 {error: 'device-dead'}` from the grant calls means the same: send the token,
 then retry (the phone does, once). A `401` to a device call means the relay no longer knows the
 device: the phone forgets it and registers again. Every phone call gives up after 10 s. "Pause
-all pushes" is `PUT /v1/devices/:id {paused: true}` (the phone sends it with the token on every
-check), which holds for every server, reachable or not.
+all pushes" is `PUT /v1/devices/:id {paused: true}`, and resuming `{paused: false}` (the phone
+sends its state with the token on every check): the relay holds it for every server, reachable or
+not, both ways, because the phone tells its servers `paused: false` while the relay holds it. Only
+while the relay can't be told does the phone pause its connected servers instead, until it can.
 
 **What reaches the phone.** On iOS the notification is
 `{aps: {alert: {title, body}, sound: 'default'}, body: {kind, serverId, projectId, worktreeId?, sessionId?}}`
@@ -155,7 +164,13 @@ check), which holds for every server, reachable or not.
 push of the same kind replaces the older one, and an hour's `apns-expiration`. On Android the FCM
 message has `notification: {title, body}`, `data` with the same string keys
 (`kind, serverId, projectId, worktreeId?, sessionId?`) and `android: {priority: 'high',
-notification: {channel_id: 'default'}}` (the channel the app creates).
+collapse_key, notification: {channel_id: 'default', tag}}` (the channel the app creates), the tag
+and `collapse_key` being the same collapse id as on iOS, so a newer push of a kind for a project
+replaces the older one there too.
+
+**Retry-After.** The relay always answers a `503` with `Retry-After: 30`. A server retries 3
+times honouring it, so a provider outage delays a push by up to about 90 seconds before the server
+records it as failed.
 
 Limits: 10 registrations a minute per address; 10 grants a minute per device; 30 pushes a minute
 per grant and 120 an hour per device (a push refused by one limit counts against neither); 50

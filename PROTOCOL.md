@@ -474,20 +474,28 @@ never sees them, nor the phone's push token.
     (`no-window`), so there is nothing for a phone to answer later.
 
   What was already listed when the server started is never pushed.
-- **When not:** never while the grant is `paused`, and never while any connection signed in with
-  that token is open (the phone shows it already). One push per (token, project, kind) in 30
+- **When not:** never while the grant is `paused`, and never while a phone connection signed in
+  with that token is open (the phone shows it already). Only connections whose hello says
+  `client: "trek-mobile"` (the phone app) count: a desktop window or a web tab signed in with the
+  phone's token doesn't hold its pushes back. One push per (token, project, kind) in 30
   seconds, so a burst is one push; the two session kinds count as one kind here, and a session
   push waits 2 seconds first, so a session that exits right after it went "waiting" is pushed
   once, as `session-stopped`.
 - **After a disconnect:** an attention entry that arrived while the token was connected (and
-  whose kind the grant has on) is remembered, up to 50 per token; when the token's last
-  connection closes, those still listed are pushed (by the rules above). iOS suspends an app
-  seconds after it leaves the screen, but its socket stays open until the heartbeat drops it, so
-  without this a decision asked in that gap would never reach the lock screen.
+  whose kind the grant has on) is remembered, up to 50 per token, with when it arrived. The server
+  also notes the last frame it heard from any of the token's phone connections: the hello, a pong
+  to its heartbeat ping, or any message (a request, `sys.ping`). When the token's last phone
+  connection closes, the remembered entries that are still listed and arrived after that last
+  frame are pushed (by the rules above); one heard from after reached an awake app, which showed
+  it. iOS suspends an app seconds after it leaves the screen, but its socket stays open until the
+  heartbeat drops it (about 45 seconds: three 15-second pings unanswered), so without this a
+  decision asked in that gap would never reach the lock screen.
 - **The push:** `POST <relayUrl>/v1/push` with the grant secret as the bearer, and only
   `{kind, project: <the project's name>, data: {serverId, projectId, worktreeId?, sessionId?}}`.
   The relay builds the words from the kind (`relay/README.md`). The relay's answers:
-  - `202`: sent (or dropped because the phone paused every push at the relay).
+  - `202`: sent. A `202 {accepted: true, paused: true}` means the relay dropped it (the phone
+    paused every push there): not counted as delivered (`lastPushAt` unchanged), `lastError`
+    says so until the next delivered push.
   - `503` or a network error: retried 3 times (1, 3 and 10 seconds apart, or after the
     `Retry-After` it gave, at most 30 seconds), then recorded in `lastError`.
   - `422` (the push service refused this push), or any other status: not retried; recorded in

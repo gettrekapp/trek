@@ -132,7 +132,8 @@ test('fcm: trades a signed assertion for an access token (cached), then sends th
   assert.equal(m.authorization, 'Bearer access-1')
   assert.deepEqual(m.body.message.notification, { title: 'Trek · app', body: 'A decision is waiting' })
   assert.deepEqual(m.body.message.data, { kind: 'decision', serverId: 's', projectId: 'p', sessionId: 'x' }, "the same keys as APNs' body")
-  assert.deepEqual(m.body.message.android, { priority: 'high', notification: { channel_id: 'default' } })
+  assert.deepEqual(m.body.message.android, { priority: 'high', collapse_key: 's:p:decision', notification: { channel_id: 'default', tag: 's:p:decision' } }, "tagged with APNs' collapse id")
+  assert.equal(collapseId('s', 'p', 'decision'), 's:p:decision')
   assert.equal(m.body.message.token, 'fcm-tok')
 })
 

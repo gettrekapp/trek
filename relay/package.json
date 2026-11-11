@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "start": "node src/index.ts start",
+    "start": "node dist/trek-relay.cjs start",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

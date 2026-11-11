@@ -189,6 +189,7 @@ import {
   deviceAction,
   ensureDevice,
   isDeadDevice,
+  keyedEpochs,
   keyedQueue,
   kindsEqual,
   needsGrant,
@@ -197,6 +198,7 @@ import {
   relayKeyOf,
   relayUrlOf,
   routeTap,
+  serverPaused,
   setGrantParams,
   syncPlan,
   withDevice,
@@ -380,6 +382,46 @@ test('push: one queue per key runs its jobs in order, a failure not stopping the
   assert.ok(log.indexOf('start b') < log.indexOf('end a'), 'another key does not wait')
   await assert.rejects(failing, /x/)
   assert.equal(await run('a', async () => 5), 5)
+})
+
+test('push: Pause all is the relay\'s: servers are told paused only while the relay does not hold it', () => {
+  assert.equal(serverPaused(true, true), false, 'held at the relay: servers unpaused, so resuming there resumes them all')
+  assert.equal(serverPaused(true, null), true, 'the relay could not be told: the servers hold it (fallback)')
+  assert.equal(serverPaused(true, false), true, 'the relay answered otherwise: fallback')
+  assert.equal(serverPaused(false, false), false)
+  assert.equal(serverPaused(false, null), false, 'resumed with the relay out of reach: servers resume')
+  assert.equal(serverPaused(false, true), false)
+  // A server left paused by the fallback is told false once the relay holds the pause.
+  const push = { grantId: 'g', grantSecret: 's', kinds: { decisions: true, sessions: true, prWatch: true }, serverId: 'srv', relayUrl: 'https://r', deviceId: 'd1' }
+  const status = { active: true, relayUrl: 'https://r', paused: true, kinds: push.kinds }
+  assert.equal(syncPlan(push, status, { relayUrl: 'https://r', deviceId: 'd1', paused: serverPaused(true, true) }), 'set')
+  assert.equal(setGrantParams('https://r', push, serverPaused(true, true)).paused, false)
+})
+
+test('push: a forget queued behind a sync runs after it, and the sync stops before its writes once forgotten', async () => {
+  const queue = keyedQueue()
+  const epochs = keyedEpochs()
+  const writes = []
+  let release
+  const gate = new Promise((r) => (release = r))
+  const current = epochs.guard('srv') // taken when the sync is asked for
+  const sync = queue('srv', async () => {
+    await gate // the server's push.status, the relay's grant…
+    if (!current()) return 'stopped'
+    writes.push('storage')
+    writes.push('setGrant')
+    return 'synced'
+  })
+  epochs.bump('srv') // Remove pressed while the sync waits
+  const forget = queue('srv', async () => void writes.push('clear'))
+  release()
+  assert.equal(await sync, 'stopped')
+  await forget
+  assert.deepEqual(writes, ['clear'], 'no grant written or handed over for a removed server; the clear last')
+  // A sync started after the forget sees no bump of its own; another key is untouched.
+  const other = epochs.guard('other')
+  epochs.bump('srv')
+  assert.equal(other(), true)
 })
 
 test("push: a tapped push names the server's own id (iOS: the payload's body as data; Android: data keys at the top); mapped to the entry", () => {

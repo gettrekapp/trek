@@ -7,13 +7,16 @@
 // The relay and the server each run with their own temp HOME; the server with the not-signed-in
 // stub gh every smoke gets (smokeGh.mjs), docker and colima stubs first on its PATH, and a fake
 // agent that waits until told to exit. A Node SDK client plays the desktop, and another (with its
-// own named token) the phone. It checks:
+// own named token, hello `client: 'trek-mobile'`) the phone. It checks:
 //   - the welcome lists push; the phone registers with the relay, takes a grant and hands it to
 //     the server (push.setGrant), and push.status shows it without the secret;
 //   - with the phone away, a decision reaches the APNs stub once, as an alert to the phone's
 //     token: "Trek · <project>" / "A decision is waiting" and the ids — never the question;
+//   - a web tab (or a desktop window) signed in with the phone's token doesn't hold its pushes back;
 //   - with Decisions switched off, a new decision sends nothing;
-//   - with the phone connected, nothing is sent;
+//   - with the phone connected, nothing is sent; a decision asked while the phone's socket stays
+//     open but its app no longer answers (suspended: a raw `ws` client with autoPong off) is pushed
+//     when the server's heartbeat drops it (about 45 s: three 15 s pings unanswered);
 //   - a session that exits by itself pushes "A session stopped";
 //   - a grant revoked at the relay is dropped by the server on its next push (push.status: not
 //     active, with why);
@@ -25,9 +28,11 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { ServerConnection, globalSocketFactory } from '../src/shared/client/index.ts'
 import { startApnsStub, testApnsKey } from './relayStubs.mjs'
 
+// The server's heartbeat drops a silent socket after about 45 s (section 6), so this runs ~70 s.
 const WATCHDOG_MS = 180_000
 const READY_MS = 15_000
 
@@ -51,6 +56,7 @@ const until = async (fn, expected, ms = 15_000) => {
 }
 
 const root = new URL('..', import.meta.url).pathname
+const WebSocket = createRequire(join(root, 'server', 'package.json'))('ws')
 const hashOf = (t) => createHash('sha256').update(t, 'utf8').digest('hex')
 const desktopToken = randomBytes(16).toString('base64url')
 const phoneToken = randomBytes(16).toString('base64url')
@@ -129,6 +135,8 @@ let daemon = null
 let apns = null
 let desktop = null
 let phone = null
+let suspended = null
+let webTab = null
 let exitCode = 1
 let finished = false
 const stop = async (p) => {
@@ -142,6 +150,8 @@ const finish = async (reason) => {
   if (reason) console.error(reason)
   desktop?.close()
   phone?.close()
+  webTab?.close()
+  suspended?.terminate()
   await stop(daemon)
   await stop(relayProc)
   await apns?.close()
@@ -216,7 +226,7 @@ try {
   const grant = await relay('POST', '/v1/grants', { label: 'push smoke server' }, reg.body.deviceSecret)
   check('and takes a grant for the server', grant.status, 201)
   const phoneOnline = async () => {
-    phone = new ServerConnection({ url, token: phoneToken, createSocket: globalSocketFactory, client: 'push-smoke-phone' })
+    phone = new ServerConnection({ url, token: phoneToken, createSocket: globalSocketFactory, client: 'trek-mobile' })
     phone.connect()
     await until(() => phone.status, 'connected', 5000)
   }
@@ -236,8 +246,14 @@ try {
 
   // ---- 4. Away: a decision is pushed once, with only the kind and the project --------------------
   await phoneAway()
+  // A web tab signed in with the phone's token stays open: only the phone app's sockets count.
+  webTab = new ServerConnection({ url, token: phoneToken, createSocket: globalSocketFactory, client: 'trek-web' })
+  webTab.connect()
+  await until(() => webTab.status, 'connected', 5000)
   check('the session asks a decision through its MCP tools', (await ask('Ship it to production?')).result?.isError, false)
-  check('a decision reaches APNs once', await until(() => decisionPushes().length, 1), 1)
+  check("a decision reaches APNs once (a web tab on the phone's token doesn't hold it back)", await until(() => decisionPushes().length, 1), 1)
+  webTab.close()
+  webTab = null
   const firstDecisionAt = Date.now()
   const p = decisionPushes()[0]
   check("as an alert to the phone's token, for the app's bundle", [p?.path, p?.headers['apns-topic'], p?.headers['apns-push-type']], ['/3/device/abcdef0123456789', 'app.trek.smoke', 'alert'])
@@ -253,18 +269,41 @@ try {
   await sleep(2000)
   check('with Decisions switched off, a new decision sends nothing', decisionPushes().length, 1)
 
-  // ---- 6. Connected: nothing ------------------------------------------------------------------------
+  // ---- 6. Connected: nothing; suspended (the socket open, nothing answered): pushed when dropped -----
   await phoneOnline()
   await phone.request('push.setGrant', { relayUrl, grantSecret: grant.body.grantSecret })
   const before = apns.pushes.length
   await ask('While you look?')
   await sleep(2000)
   check('with the phone connected, nothing is sent', apns.pushes.length, before)
-  // Past the 30 s coalescing of the first decision, the phone leaves with this one still open (as
-  // iOS suspends an app whose socket the server still sees): it is pushed when the socket closes.
+  // The server heard from it after that decision (a request; a pong or the SDK's sys.ping would do):
+  // the app was awake and showed it, so leaving now pushes nothing (past the first's 30 s coalescing).
+  await phone.request('push.status', {})
   await sleep(Math.max(0, firstDecisionAt + 31_000 - Date.now()))
   await phoneAway()
-  check('a decision asked while the phone was connected is pushed when it leaves', await until(() => decisionPushes().length, 2), 2)
+  await sleep(2000)
+  check('a decision the phone was heard from after is not pushed when it leaves', decisionPushes().length, 1)
+  // The phone again, as iOS leaves a suspended app: signed in, then silent, its pongs unanswered.
+  suspended = new WebSocket(url, { autoPong: false })
+  const welcomed = new Promise((resolve, reject) => {
+    suspended.once('error', reject)
+    suspended.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString())
+      if (frame.type === 'welcome') resolve(frame)
+    })
+  })
+  await new Promise((resolve, reject) => (suspended.once('open', resolve), suspended.once('error', reject)))
+  suspended.send(JSON.stringify({ type: 'hello', protocolVersion: 2, client: 'trek-mobile', clientVersion: 'smoke', token: phoneToken }))
+  await welcomed
+  const suspendedClosed = new Promise((resolve) => suspended.once('close', resolve))
+  await sleep(300)
+  await ask('While you sleep?')
+  await sleep(2000)
+  check('with the phone signed in (suspended), nothing is sent yet', decisionPushes().length, 1)
+  await Promise.race([suspendedClosed, sleep(60_000)])
+  check('the server drops the silent socket by its heartbeat', suspended.readyState, WebSocket.CLOSED)
+  suspended = null
+  check('a decision asked while the phone was suspended is pushed when it is dropped', await until(() => decisionPushes().length, 2), 2)
 
   // ---- 7. A session that exits by itself --------------------------------------------------------------
   writeFileSync(join(repo, '.stop-agent'), '')

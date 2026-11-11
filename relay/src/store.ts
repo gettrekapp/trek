@@ -2,8 +2,10 @@
 // directory 0700). A device is a phone's push token (the relay needs it to send); its secret and
 // every grant's secret are kept only as sha256 hashes, so the file alone can't be used to push or
 // to manage a phone's grants. A change that issues or revokes a secret is written before the
-// relay answers; bookkeeping (a grant's last push, a token's first delivery) is written within a
-// second, or on close. Devices dead for 30 days are pruned, on load and daily.
+// relay answers, and so is a token's first delivery (it decides whether APNs' BadDeviceToken
+// means gone); bookkeeping (a grant's last push) is written within a second, or on close. Devices
+// dead for 30 days, and devices with no grant for 7 days (registered, never granted, or every
+// grant revoked), are pruned, on load and daily.
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -25,6 +27,8 @@ export interface Device {
   delivered?: true
   /** The phone paused all pushes: the relay accepts and drops them */
   paused?: true
+  /** When its last grant was revoked (with none left; pruned UNGRANTED_PRUNE_MS later) */
+  ungrantedAt?: number
 }
 
 export interface Grant {
@@ -51,6 +55,8 @@ export const MAX_PUSH_TOKEN = 4096
 export const DEFAULT_MAX_DEVICES = 10_000
 /** A device dead this long is removed, with its grants */
 export const DEAD_PRUNE_MS = 30 * 24 * 3_600_000
+/** A device with no grant this long (since it registered, or its last grant went) is removed */
+export const UNGRANTED_PRUNE_MS = 7 * 24 * 3_600_000
 /** Bookkeeping is written at most this long after it changes */
 export const SAVE_DEBOUNCE_MS = 1_000
 
@@ -203,15 +209,24 @@ export class RelayStore {
     const d = this.devices.get(id)
     if (!d || d.delivered || d.pushToken !== tokenSent) return
     d.delivered = true
-    this.saveSoon()
+    // Written now: lost on a crash, a later BadDeviceToken would leave a gone token "alive".
+    this.save()
   }
 
-  /** Removes devices dead for DEAD_PRUNE_MS, with their grants. Returns how many. */
+  /**
+   * Removes devices dead for DEAD_PRUNE_MS, with their grants, and devices with no grant for
+   * UNGRANTED_PRUNE_MS (since they registered, or since their last grant was revoked). Returns how many.
+   */
   prune(): number {
-    const before = this.now() - DEAD_PRUNE_MS
+    const now = this.now()
+    const deadBefore = now - DEAD_PRUNE_MS
+    const ungrantedBefore = now - UNGRANTED_PRUNE_MS
+    const granted = new Set([...this.grants.values()].map((g) => g.deviceId))
     let pruned = 0
     for (const d of [...this.devices.values()]) {
-      if (d.dead && (d.deadAt ?? 0) <= before && this.dropDevice(d.id)) pruned += 1
+      const dead = d.dead && (d.deadAt ?? 0) <= deadBefore
+      const ungranted = !granted.has(d.id) && Math.max(d.createdAt, d.ungrantedAt ?? 0) <= ungrantedBefore
+      if ((dead || ungranted) && this.dropDevice(d.id)) pruned += 1
     }
     if (pruned) {
       this.reindex()
@@ -230,6 +245,8 @@ export class RelayStore {
     const grant: Grant = { id: randomUUID(), deviceId, label, secretHash: hashSecret(secret), createdAt: this.now() }
     this.grants.set(grant.id, grant)
     this.grantBySecret.set(grant.secretHash, grant.id)
+    const d = this.devices.get(deviceId)
+    if (d) delete d.ungrantedAt
     this.save()
     return { grant, secret }
   }
@@ -239,6 +256,8 @@ export class RelayStore {
     if (!g || g.deviceId !== deviceId) return false
     this.grants.delete(grantId)
     this.grantBySecret.delete(g.secretHash)
+    const d = this.devices.get(deviceId)
+    if (d && !this.grantsOf(deviceId).length) d.ungrantedAt = this.now()
     this.save()
     return true
   }

@@ -5,9 +5,12 @@
 // errors mean FCM is unavailable for now; any other refusal is final for this push.
 //
 // The message's data carries the same string keys as APNs' `body` (kind, serverId, projectId,
-// worktreeId?, sessionId?), and Android shows it on the channel the app creates ('default').
+// worktreeId?, sessionId?), and Android shows it on the channel the app creates ('default'). The
+// notification's tag and the collapse_key are APNs' collapse id (server, project, kind), so a newer
+// push of a kind for a project replaces the one before, as on iOS.
 import type { KeyObject } from 'node:crypto'
 import type { PushMessage, Provider, SendResult } from './api.ts'
+import { collapseId } from './apns.ts'
 import { loadPrivateKey, signJwt } from './jwt.ts'
 import type { Device } from './store.ts'
 
@@ -110,6 +113,7 @@ export class FcmProvider implements Provider {
   private async post(device: Device, message: PushMessage): Promise<{ status: number; codes: string[] }> {
     const origin = this.options.fcmOrigin ?? FCM_ORIGIN
     const data: Record<string, string> = { kind: message.kind }
+    const collapse = collapseId(message.data.serverId, message.data.projectId, message.kind)
     for (const [k, v] of Object.entries(message.data)) if (typeof v === 'string') data[k] = v
     const res = await fetch(`${origin}/v1/projects/${encodeURIComponent(this.options.account.project_id)}/messages:send`, {
       method: 'POST',
@@ -119,7 +123,7 @@ export class FcmProvider implements Provider {
           token: device.pushToken,
           notification: { title: message.title, body: message.body },
           data,
-          android: { priority: 'high', notification: { channel_id: ANDROID_CHANNEL_ID } }
+          android: { priority: 'high', collapse_key: collapse, notification: { channel_id: ANDROID_CHANNEL_ID, tag: collapse } }
         }
       }),
       redirect: 'error',

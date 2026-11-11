@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadRelayConfig } from '../relay/src/config.ts'
-import { RelayStore, hashSecret, MAX_GRANTS_PER_DEVICE, DEAD_PRUNE_MS } from '../relay/src/store.ts'
+import { RelayStore, hashSecret, MAX_GRANTS_PER_DEVICE, DEAD_PRUNE_MS, UNGRANTED_PRUNE_MS } from '../relay/src/store.ts'
 import { startRelay } from '../relay/src/relay.ts'
 import { MAX_BODY_BYTES, RETRY_AFTER_S } from '../relay/src/api.ts'
 import { WindowLimiter, takeAll } from '../relay/src/limits.ts'
@@ -299,6 +299,7 @@ test('store: devices dead for 30 days are pruned on load; bookkeeping is flushed
   const { device } = store.addDevice('ios', 'gone')
   const { device: alive } = store.addDevice('ios', 'here')
   const { grant } = store.addGrant(alive.id, 'g')
+  store.addGrant(device.id, 'g')
   store.markDead(device.id, 'gone')
   store.touchGrant(grant.id)
   store.flush()
@@ -312,6 +313,36 @@ test('store: devices dead for 30 days are pruned on load; bookkeeping is flushed
   const fresh = join(dir, 'sub')
   new RelayStore(fresh)
   assert.equal(statSync(fresh).mode & 0o777, 0o700, 'the data directory is made 0700')
+})
+
+test('store: a first delivery is written at once (not debounced)', (t) => {
+  const dir = temp(t)
+  const store = new RelayStore(dir)
+  const { device } = store.addDevice('ios', 'tok')
+  store.markDelivered(device.id, 'tok')
+  const saved = JSON.parse(readFileSync(join(dir, 'relay.json'), 'utf8'))
+  assert.equal(saved.devices[0].delivered, true, 'on disk before any flush')
+})
+
+test('store: devices with no grant for 7 days are pruned (since registering, or since the last grant went)', (t) => {
+  const dir = temp(t)
+  let now = 1_000_000
+  const store = new RelayStore(dir, { now: () => now })
+  store.addDevice('ios', 'never-granted')
+  const { device: revoked } = store.addDevice('ios', 'revoked')
+  const { device: kept } = store.addDevice('ios', 'granted')
+  store.addGrant(kept.id, 'g')
+  now += 3 * 24 * 3_600_000
+  const { grant } = store.addGrant(revoked.id, 'g')
+  store.removeGrant(revoked.id, grant.id) // no grant left from here
+  now = 1_000_000 + UNGRANTED_PRUNE_MS - 1
+  assert.equal(store.prune(), 0)
+  now += 1
+  assert.equal(store.prune(), 1, 'the one never granted')
+  assert.equal(store.deviceCount, 2)
+  now += 3 * 24 * 3_600_000
+  assert.equal(store.prune(), 1, 'the one whose last grant went 7 days ago')
+  assert.equal(new RelayStore(dir, { now: () => now }).deviceCount, 1, 'the granted one stays (and the prune was saved)')
 })
 
 test('limits: a push refused per device takes nothing from its grant; the sweep is amortised', () => {

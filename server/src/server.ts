@@ -47,6 +47,8 @@ import { Pusher } from './push/pusher'
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
 const HEARTBEAT_INTERVAL_MS = 15_000
+/** The hello `client` of the phone app (6a): only its sockets hold back its token's pushes (6b) */
+export const PHONE_CLIENT = 'trek-mobile'
 const REVOKE_TERMINATE_MS = 1000
 /** Largest accepted WebSocket frame. */
 const MAX_FRAME_BYTES = 16 * 1024 * 1024
@@ -157,8 +159,9 @@ export function startServer(
   // promote_to_primary's confirmations (5e): asked of the project's windows.
   const promoteRequests = new PromoteRequests(hub)
 
-  // Background push (6b). A token counts as connected while any of its sockets is open: its
-  // phone (or its window) already shows what would be pushed.
+  // Background push (6b). A token counts as connected while one of its phone sockets (hello
+  // `client: 'trek-mobile'`) is open: the phone already shows what would be pushed. A desktop window
+  // or a web tab signed in with the same token doesn't count: it would silence the phone.
   const connectedTokens = new Map<WebSocket, string>()
   const pushGrants = options.push ? new PushGrants(createSecretFile(options.push.secretsFile), () => listTokens(store.config).map((t) => t.name)) : undefined
   const pusher: Pusher | undefined = pushGrants
@@ -335,6 +338,9 @@ export function startServer(
     }, HEARTBEAT_INTERVAL_MS)
     ws.on('pong', () => {
       missedPongs = 0
+      // A phone that answers is awake: what it was sent so far reached it.
+      const phoneToken = connectedTokens.get(ws)
+      if (phoneToken !== undefined) pusher?.heardFrom(phoneToken)
       // An open page is its session's use (noted at most once a minute).
       webSignIns?.used(ws, Date.now())
     })
@@ -432,7 +438,10 @@ export function startServer(
         }
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
-        connectedTokens.set(ws, entry.name)
+        if (frame.client === PHONE_CLIENT) {
+          connectedTokens.set(ws, entry.name)
+          pusher?.heardFrom(entry.name)
+        }
         callerTokenName = entry.name
         const viaWeb = !token && webSession !== undefined
         if (viaWeb) webSignIns?.add(ws, webSession.key, Date.now())
@@ -453,6 +462,8 @@ export function startServer(
       }
 
       if (!authed.has(ws)) return
+      const phoneToken = connectedTokens.get(ws)
+      if (phoneToken !== undefined) pusher?.heardFrom(phoneToken)
       if (frame.type !== 'req') return
       if (typeof frame.id !== 'number' || typeof frame.method !== 'string') {
         ws.close(1002, 'invalid request')

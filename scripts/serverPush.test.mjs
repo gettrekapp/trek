@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile } from '../server/src/secrets.ts'
 import { PushGrants, checkRelayUrl, checkSetGrant } from '../server/src/push/grants.ts'
-import { COALESCE_MS, MAX_HELD_WHILE_CONNECTED, MAX_RETRY_AFTER_MS, Pusher, prPushKind } from '../server/src/push/pusher.ts'
+import { COALESCE_MS, MAX_HELD_WHILE_CONNECTED, MAX_RETRY_AFTER_MS, Pusher, RELAY_PAUSED_NOTE, prPushKind } from '../server/src/push/pusher.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 
@@ -295,6 +295,46 @@ test('pusher: what arrived while the token was connected is pushed when its last
   await capped.pusher.idle()
   assert.equal(capped.posts.length, MAX_HELD_WHILE_CONNECTED, 'bounded, the newest kept')
   assert.equal(capped.posts[0].body.data.sessionId, 's5')
+})
+
+test('pusher: an entry the phone was heard from after (a pong or a message) is not pushed on its disconnect', async (t) => {
+  const h = harness(t)
+  h.grants.set('phone-a', grant())
+  h.connected.add('phone-a')
+  h.pusher.heardFrom('phone-a') // signed in
+  h.attention([decisionEntry()])
+  h.pusher.heardFrom('phone-a') // a pong after it: the app was awake and showed it
+  h.connected.delete('phone-a')
+  h.pusher.tokenDisconnected('phone-a')
+  await h.pusher.idle()
+  assert.equal(h.posts.length, 0, 'shown already, not pushed')
+
+  // Connected again: an entry with nothing heard after it (the app suspended) is pushed on the drop.
+  h.connected.add('phone-a')
+  h.pusher.heardFrom('phone-a')
+  const other = { ...decisionEntry(8), sessionId: 's9' }
+  h.attention([decisionEntry(), other])
+  h.connected.delete('phone-a')
+  h.pusher.tokenDisconnected('phone-a')
+  await h.pusher.idle()
+  assert.deepEqual(h.posts.map((p) => [p.body.kind, p.body.data.sessionId]), [['decision', 's9']])
+})
+
+test('pusher: a 202 the relay dropped (the phone paused there) is not counted as delivered', async (t) => {
+  const paused = () => new Response(JSON.stringify({ accepted: true, paused: true }), { status: 202, headers: { 'content-type': 'application/json' } })
+  const h = harness(t, { respond: (n) => (n === 0 ? paused() : new Response(JSON.stringify({ accepted: true }), { status: 202 })) })
+  h.grants.set('phone-a', grant())
+  h.pusher.notify({ kind: 'decision', projectId: 'p1', projectName: 'a' })
+  await h.pusher.idle()
+  assert.equal(h.posts.length, 1, 'not retried')
+  const status = h.grants.status('phone-a')
+  assert.equal(status.lastPushAt, undefined, 'no lastPushAt')
+  assert.equal(status.lastError, RELAY_PAUSED_NOTE)
+  assert.equal(status.active, true, 'the grant stays')
+  h.pusher.notify({ kind: 'decision', projectId: 'p2', projectName: 'b' })
+  await h.pusher.idle()
+  const after = h.grants.status('phone-a')
+  assert.ok(after.lastPushAt > 0 && after.lastError === undefined, 'a delivered push clears the note')
 })
 
 test('pusher: follows attention again after the topic ends; stop() aborts a push on its way', async (t) => {

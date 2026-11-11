@@ -1,6 +1,6 @@
 // Starts the relay's HTTP server on the config's host and port. TLS is the proxy's job (Caddy in
-// front, as for trek-server); the relay speaks plain HTTP on its own address. Dead devices are
-// pruned daily; close() writes the store's pending bookkeeping.
+// front, as for trek-server); the relay speaks plain HTTP on its own address. Dead and ungranted
+// devices are pruned daily; close() writes the store's pending bookkeeping.
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createRelayHandler, type Provider } from './api.ts'
@@ -30,7 +30,7 @@ export function startRelay(
   const pruneTimer = setInterval(() => {
     try {
       const pruned = store.prune()
-      if (pruned) log(`[relay] pruned ${pruned} device(s) dead for 30 days`)
+      if (pruned) log(`[relay] pruned ${pruned} device(s) dead for 30 days or without a grant for 7`)
     } catch (err) {
       log(`[relay] pruning failed: ${(err as Error).message}`)
     }

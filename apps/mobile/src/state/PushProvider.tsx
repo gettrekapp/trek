@@ -3,9 +3,11 @@
 // an Expo token) with the relay, and on every launch, foreground and token change sends the
 // current token (and "Pause all") again, which revives a device the relay marked dead. For each
 // paired server whose welcome lists `push`, it takes a grant from the relay and hands it to the
-// server (`push.setGrant`), with the three switches and "Pause all"; a grant the relay refused
+// server (`push.setGrant`), with the three switches; "Pause all" is held at the relay (the source
+// of truth: servers are told `paused` only while the relay can't be told); a grant the relay refused
 // (the server's `push.status` says not active), or one from another relay or registration, is
-// replaced. Removing a server clears its grant there and revokes it at the relay (not waited on).
+// replaced. Removing a server clears its grant there and revokes it at the relay (not waited on),
+// after any sync of it on its way (in its queue; a sync started before checks it wasn't removed).
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AppState, Platform } from 'react-native'
 import Constants from 'expo-constants'
@@ -15,11 +17,13 @@ import {
   ALL_PUSH_KINDS_ON,
   NO_PUSH_CONFIG,
   ensureDevice,
+  keyedEpochs,
   keyedQueue,
   pushRouteData,
   relayClient,
   relayKeyOf,
   relayUrlOf,
+  serverPaused,
   setGrantParams,
   syncPlan,
   withDevice,
@@ -83,13 +87,17 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
   const [loadedFor, setLoadedFor] = useState<string | null>(null)
   const deviceRef = useRef<RelayDevice | null>(null)
   const pausedRef = useRef(false)
+  /** What the relay last answered for the pause (null: it couldn't be told) */
+  const relayPausedRef = useRef<boolean | null>(null)
+  /** The pause handed to servers: only while the relay doesn't hold it */
+  const toServers = (): boolean => serverPaused(pausedRef.current, relayPausedRef.current)
   const pausedLoaded = useRef<Promise<void> | null>(null)
   const pushesRef = useRef<Record<string, ServerPush>>({})
   pushesRef.current = pushes
   /** `${entryId}:${generation}` synced (or being synced); a failed sync removes its key so it is tried again */
   const synced = useRef(new Set<string>())
   /** Bumped when a server is forgotten: a sync started before it doesn't write its grant back */
-  const epochs = useRef(new Map<string, number>())
+  const epochs = useMemo(() => keyedEpochs(), [])
   const queue = useMemo(() => keyedQueue(), [])
 
   const problem = (entryId: string, message: string | undefined): void => setProblems((p) => ({ ...p, [entryId]: message }))
@@ -137,11 +145,13 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
           const { device: next, paused: atRelay } = await ensureDevice(client, saved, relayUrl, platform, pushToken, pausedRef.current)
           await pushStorage.setDevice(next)
           adopt(next)
+          relayPausedRef.current = atRelay
           setRelayPaused(atRelay)
           setRegistrationProblem(undefined)
           return next
         } catch (err) {
           setRegistrationProblem((err as Error).message)
+          relayPausedRef.current = null
           setRelayPaused(null)
           if (saved && !deviceRef.current) adopt(saved)
           throw err
@@ -203,16 +213,17 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
 
   /** Takes a grant if the server needs one, then hands the server its grant and switches. In the server's queue. */
   const sync = useCallback(
-    (entryId: string, label: string, force = false): Promise<void> =>
-      queue(entryId, async () => {
+    (entryId: string, label: string, force = false): Promise<void> => {
+      // Taken when it is asked for: a Remove after this, even before the job starts, stops it.
+      const current = epochs.guard(entryId)
+      return queue(entryId, async () => {
         const d = deviceRef.current
         const conn = get(entryId)?.connection
         if (!d || !relayUrl || !conn || !conn.welcome?.capabilities.includes(CAPABILITY.push)) return
-        const epoch = epochs.current.get(entryId) ?? 0
-        const current = (): boolean => (epochs.current.get(entryId) ?? 0) === epoch
         let saved = await pushStorage.server(entryId)
         const status = (await withTimeout(conn.request('push.status', {}), SERVER_TIMEOUT_MS, 'push.status')) as PushStatusResult | null
-        const plan = syncPlan(saved, status, { relayUrl, deviceId: d.deviceId, paused: pausedRef.current, force })
+        if (!current()) return
+        const plan = syncPlan(saved, status, { relayUrl, deviceId: d.deviceId, paused: toServers(), force })
         const serverId = conn.welcome.serverId
         if (plan === 'grant') {
           // The old grant, if this registration made it, isn't waited on.
@@ -228,16 +239,19 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
         } else if (saved!.serverId !== serverId) {
           // The server's own id, as its welcome says now: a push names it.
           saved = { ...saved!, serverId }
+          if (!current()) return
           await pushStorage.setServer(entryId, saved)
         }
         const push = saved!
-        if (plan !== 'none') await withTimeout(conn.request('push.setGrant', setGrantParams(relayUrl, push, pausedRef.current)), SERVER_TIMEOUT_MS, 'push.setGrant')
+        if (!current()) return
+        if (plan !== 'none') await withTimeout(conn.request('push.setGrant', setGrantParams(relayUrl, push, toServers())), SERVER_TIMEOUT_MS, 'push.setGrant')
         if (!current()) return
         // The switches as shown win: one changed during this sync is handed over by the next.
         setPushes((p) => ({ ...p, [entryId]: { ...push, kinds: p[entryId]?.kinds ?? push.kinds } }))
         problem(entryId, plan === 'none' ? status?.lastError : undefined)
-      }),
-    [get, queue, recover]
+      })
+    },
+    [get, queue, recover, epochs]
   )
 
   const trySync = useCallback(
@@ -262,20 +276,29 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
     }
   }, [servers, device, generationOf, trySync])
 
-  // "Pause all": held at the relay for this device (so for every server, reachable or not), and
-  // handed to each connected server too.
+  // "Pause all": held at the relay for this device (so for every server, reachable or not, both
+  // ways). The relay is told first; connected servers are then told `paused` only if it couldn't be
+  // (a fallback), and `false` otherwise.
   const setPaused = useCallback(
     async (next: boolean) => {
       setPausedState(next)
       pausedRef.current = next
       await pushStorage.setPaused(next).catch(() => {})
-      await Promise.all([
-        ensure().catch(() => {}),
-        ...servers.filter((s) => s.status === 'connected').map((s) => trySync(s.id, s.name, null, true))
-      ])
+      await ensure().catch(() => {})
+      await Promise.all(servers.filter((s) => s.status === 'connected').map((s) => trySync(s.id, s.name, null, true)))
     },
     [servers, ensure, trySync]
   )
+
+  // A check that changed what servers are told (the relay now holds the pause, or can't be
+  // reached any more): the connected servers are told again.
+  const serversPaused = serverPaused(paused, relayPaused)
+  const lastServersPaused = useRef(serversPaused)
+  useEffect(() => {
+    if (lastServersPaused.current === serversPaused) return
+    lastServersPaused.current = serversPaused
+    for (const s of servers) if (s.status === 'connected' && s.capabilities.includes(CAPABILITY.push)) void trySync(s.id, s.name, null)
+  }, [serversPaused, servers, trySync])
 
   const setKind = useCallback(
     async (entryId: string, group: PushGroup, on: boolean) => {
@@ -302,14 +325,17 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
 
   const forget = useCallback(
     async (entryId: string) => {
-      epochs.current.set(entryId, (epochs.current.get(entryId) ?? 0) + 1)
-      const saved = pushesRef.current[entryId] ?? (await pushStorage.server(entryId).catch(() => null))
-      const conn = get(entryId)?.connection
-      if (conn) await withTimeout(conn.request('push.clearGrant', {}), 5_000, 'push.clearGrant').catch(() => {})
-      const d = deviceRef.current
-      // Revoked at the relay without waiting (the relay call has its own timeout).
-      if (saved && d && (!saved.deviceId || saved.deviceId === d.deviceId)) void client.revoke(d, saved.grantId).catch(() => {})
-      await pushStorage.setServer(entryId, null).catch(() => {})
+      // Bumped now, so a sync on its way stops before its next write; the clear runs after it, in the queue.
+      epochs.bump(entryId)
+      await queue(entryId, async () => {
+        const saved = (await pushStorage.server(entryId).catch(() => null)) ?? pushesRef.current[entryId]
+        const conn = get(entryId)?.connection
+        if (conn) await withTimeout(conn.request('push.clearGrant', {}), 5_000, 'push.clearGrant').catch(() => {})
+        const d = deviceRef.current
+        // Revoked at the relay without waiting (the relay call has its own timeout).
+        if (saved && d && (!saved.deviceId || saved.deviceId === d.deviceId)) void client.revoke(d, saved.grantId).catch(() => {})
+        await pushStorage.setServer(entryId, null).catch(() => {})
+      }).catch(() => {})
       setPushes((p) => {
         const { [entryId]: _gone, ...rest } = p
         return rest
@@ -319,7 +345,7 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
         return rest
       })
     },
-    [get]
+    [get, queue, epochs]
   )
 
   const routeData = useCallback(

@@ -83,8 +83,10 @@ the device gets a new registration. For each paired server whose welcome lists `
 takes a grant from the relay and hands it to the server (`push.setGrant`); a grant from another
 relay or registration, or one the server says the relay refused, is replaced. Servers →
 **Push…** has the server's three switches (Decisions, Sessions, PR watch), saved to the server
-at once. **Pause all pushes** is held at the relay for this device, so it covers servers out of
-reach too, and is handed to each connected server; the Servers screen says when the relay
+at once. **Pause all pushes** is held at the relay for this device, so pausing and resuming
+both cover servers out of reach too: the servers are told `paused: false` while the relay holds
+it. Only while the relay can't be told does the phone hand the pause to each connected server
+instead (a fallback, undone once the relay holds it); the Servers screen says when the relay
 couldn't be told. Removing a server clears its grant there and revokes it at the relay (not
 waited on). Every relay call gives up after 10 s. The device secret and each grant's secret
 are kept in secure storage. A tapped push opens its session (or worktree), like a local

@@ -231,6 +231,32 @@ export function syncPlan(
   return 'none'
 }
 
+/**
+ * The `paused` the phone hands its servers: the relay is the source of truth for "Pause all", so
+ * once it holds the pause (`relayPaused`, what it last answered, equals `paused`) the servers are
+ * told `false` and resuming at the relay resumes every server at once, reachable or not. Only
+ * while the relay can't be told (null, or it answered otherwise) do the servers hold the pause, a
+ * fallback (they are told `false` again once the relay holds it).
+ */
+export function serverPaused(paused: boolean, relayPaused: boolean | null): boolean {
+  return paused && relayPaused !== paused
+}
+
+/**
+ * Per key, a count bumped when the key is forgotten: a job started before (a sync of a server
+ * being removed) checks `current()` before each write, so it can't leave a removed server a grant.
+ */
+export function keyedEpochs(): { bump(key: string): void; guard(key: string): () => boolean } {
+  const epochs = new Map<string, number>()
+  return {
+    bump: (key) => void epochs.set(key, (epochs.get(key) ?? 0) + 1),
+    guard: (key) => {
+      const at = epochs.get(key) ?? 0
+      return () => (epochs.get(key) ?? 0) === at
+    }
+  }
+}
+
 /** push.setGrant's params for a server */
 export function setGrantParams(relayUrl: string, push: ServerPush, paused: boolean): { relayUrl: string; grantSecret: string; kinds: PushKinds; paused: boolean } {
   return { relayUrl, grantSecret: push.grantSecret, kinds: { ...push.kinds }, paused }

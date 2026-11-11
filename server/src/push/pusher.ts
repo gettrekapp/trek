@@ -6,8 +6,9 @@
 // kinds counting as one (an exit right after "waiting" sends "stopped" only); a 503 or a network
 // error is retried (3 times, backing off, honouring Retry-After); a 422 is not; a 401/404/410 means
 // the grant is gone, so it is dropped. An attention entry that arrived while the token was
-// connected is pushed when its last connection closes, if it is still open (iOS suspends the app
-// long before the server sees its socket drop).
+// connected is pushed when its last connection closes, if it is still open and arrived after the
+// last frame the server heard from that token (iOS suspends the app long before the server sees its
+// socket drop; a pong or a request after the entry means the phone was awake to show it).
 import type { AttentionEntry } from '../../../src/shared/model/types.ts'
 import type { AttentionTopic } from '../../../src/shared/model/topics.ts'
 import type { PrEvent } from '../../../src/shared/prWatch.ts'
@@ -26,6 +27,8 @@ export const MAX_RETRY_AFTER_MS = 30_000
 /** Attention entries remembered per connected token, to push when it disconnects */
 export const MAX_HELD_WHILE_CONNECTED = 50
 const POST_TIMEOUT_MS = 10_000
+/** push.status's lastError for a push the relay accepted and dropped (202 `{paused: true}`) */
+export const RELAY_PAUSED_NOTE = 'the relay dropped it: the phone paused every push there'
 const RESUBSCRIBE_MS = 1_000
 
 export interface PushEvent {
@@ -41,7 +44,7 @@ export interface PushEvent {
 export interface PusherDeps {
   hub: TopicHub
   grants: PushGrants
-  /** Whether any connection signed in with this token is open now */
+  /** Whether any phone connection (hello `client: 'trek-mobile'`) signed in with this token is open now */
   isConnected(tokenName: string): boolean
   serverId(): string
   fetch?: typeof fetch
@@ -86,8 +89,12 @@ export class Pusher {
   private readonly lastSent = new Map<string, number>()
   /** A session push waiting out SESSION_HOLD_MS, per (token, project) */
   private readonly heldSession = new Map<string, { event: PushEvent }>()
-  /** Per connected token: the attention entries it would have been pushed */
-  private readonly whileConnected = new Map<string, Map<string, PushEvent>>()
+  /** Per connected token: the attention entries it would have been pushed, each with when it arrived */
+  private readonly whileConnected = new Map<string, Map<string, { event: PushEvent; at: number }>>()
+  /** Per connected token: when the server last heard a frame (a pong or a message) from it */
+  private readonly heardAt = new Map<string, number>()
+  /** The pusher's own clock for heardAt and remembered entries: strictly increasing, so ties can't happen */
+  private tick = 0
   private unsubscribe?: () => void
   private resubscribeTimer?: NodeJS.Timeout
   private stopped = false
@@ -175,10 +182,22 @@ export class Pusher {
    * and are still listed are pushed now (through the usual switches and coalescing).
    */
   tokenDisconnected(name: string): void {
+    if (this.deps.isConnected(name)) return
     const held = this.whileConnected.get(name)
+    const heard = this.heardAt.get(name) ?? -Infinity
     this.whileConnected.delete(name)
-    if (!held || this.stopped || this.deps.isConnected(name)) return
-    for (const [key, event] of held) if (this.seen.has(key)) this.notify(event, name)
+    this.heardAt.delete(name)
+    if (!held || this.stopped) return
+    // An entry the phone was heard from after had reached an awake app: it was shown, not pushed.
+    for (const [key, { event, at }] of held) if (at > heard && this.seen.has(key)) this.notify(event, name)
+  }
+
+  /**
+   * The server heard a frame (a pong or any message) from one of the token's phone connections:
+   * what it remembered for that token until now reached an awake app.
+   */
+  heardFrom(name: string): void {
+    this.heardAt.set(name, ++this.tick)
   }
 
   /** Sends `event` to every grant that wants it now (or only `onlyToken`'s). */
@@ -218,7 +237,7 @@ export class Pusher {
     let held = this.whileConnected.get(name)
     if (!held) this.whileConnected.set(name, (held = new Map()))
     held.delete(event.entryKey!)
-    held.set(event.entryKey!, event)
+    held.set(event.entryKey!, { event, at: ++this.tick })
     while (held.size > MAX_HELD_WHILE_CONNECTED) held.delete(held.keys().next().value!)
   }
 
@@ -272,6 +291,7 @@ export class Pusher {
       wait = BACKOFF_MS[Math.min(attempt, BACKOFF_MS.length - 1)]
       let status = 0
       let retryAfter: string | null = null
+      let droppedPaused = false
       try {
         const res = await doFetch(`${relayUrl}/v1/push`, {
           method: 'POST',
@@ -283,14 +303,24 @@ export class Pusher {
         })
         status = res.status
         retryAfter = res.headers.get('retry-after')
-        await res.body?.cancel().catch(() => {})
+        if (status >= 200 && status < 300) {
+          // `{accepted: true, paused: true}`: the relay dropped it (the phone paused every push there).
+          const text = await res.text().catch(() => '')
+          try {
+            droppedPaused = text.length <= 4096 && (JSON.parse(text) as { paused?: unknown })?.paused === true
+          } catch {
+            droppedPaused = false
+          }
+        } else await res.body?.cancel().catch(() => {})
       } catch (err) {
         if (this.stopped) return
         lastError = `the relay could not be reached: ${(err as Error).message}`
         continue
       }
       if (status >= 200 && status < 300) {
-        this.deps.grants.pushed(name, this.now(), secret)
+        // Dropped by the relay is not delivered: no lastPushAt, a note instead.
+        if (droppedPaused) this.deps.grants.pushed(name, this.now(), secret, RELAY_PAUSED_NOTE)
+        else this.deps.grants.pushed(name, this.now(), secret)
         return
       }
       if (status === 401 || status === 404 || status === 410) {

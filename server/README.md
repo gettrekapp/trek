@@ -257,10 +257,12 @@ With a push relay (6b, `relay/README.md`), a paired phone gets pushes while the 
 decision waiting, a session waiting or stopped, a watched pull request's report. The phone hands
 the server a grant from the relay (`push.setGrant`), kept in `secrets.json` beside the config under
 `push:<token name>`, never shown again. The server posts only the kind, the project's name and
-ids, and only while that phone has no connection open, at most once per project and kind in 30
-seconds (a session's "waiting" and "stopped" count as one). What arrived while the phone was
-connected and is still open is pushed when its last connection closes (an iOS app is suspended
-long before its socket drops). The phone's three switches and Pause all are applied here, so a
+ids, and only while that phone has no connection open (only the phone app's own connections,
+hello `client: "trek-mobile"`, count: a desktop window or web tab on the phone's token doesn't
+silence it), at most once per project and kind in 30 seconds (a session's "waiting" and "stopped"
+count as one). What arrived while the phone was connected, is still open, and arrived after the
+last frame the server heard from the phone (a pong or a message) is pushed when its last
+connection closes (an iOS app is suspended long before its socket drops). The phone's three switches and Pause all are applied here, so a
 muted kind never leaves the server. Revoking the phone's token drops its grant; a grant the relay
 refuses (`401`/`404`/`410`) is dropped too and the phone takes a new one. A `503` (or no answer)
 is retried, honouring `Retry-After`; a `422` is not. The relay's address must be `https://` (or
