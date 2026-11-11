@@ -349,11 +349,14 @@ try {
 
   // A size that fits this display's work area (a CI Mac's virtual screen is small, and a restore
   // clamps the window to the work area), so the check below sees what was set.
+  // The window's minimum is 900x600, so the size is between that and 1000x700, placed at the work
+  // area's corner, and what the window actually took is what the restore must give back.
   const alphaSize = await app.evaluate(({ BrowserWindow, screen }) => {
     const area = screen.getPrimaryDisplay().workArea
-    const size = { width: Math.min(1000, area.width - 100), height: Math.min(700, area.height - 120) }
-    BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha').setBounds({ x: area.x + 40, y: area.y + 60, ...size })
-    return [size.width, size.height]
+    const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha')
+    win.setBounds({ x: area.x, y: area.y, width: Math.max(900, Math.min(1000, area.width - 40)), height: Math.max(600, Math.min(700, area.height - 40)) })
+    const { width, height } = win.getBounds()
+    return { set: [width, height], area: [area.width, area.height] }
   })
   // The new bounds are recorded on a debounce; quitting records them anyway.
   await sleep(800)
@@ -385,7 +388,7 @@ try {
   await rm.waitForLoadState('domcontentloaded')
   check('and keeps its target across a reload', await until(() => mainTarget(rm), missingTarget), missingTarget)
   const bounds = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha')?.getBounds() ?? null)
-  check('alpha keeps its size', bounds && [bounds.width, bounds.height], alphaSize)
+  check(`alpha keeps its size (set ${alphaSize.set.join('x')} in a ${alphaSize.area.join('x')} work area)`, bounds && [bounds.width, bounds.height], alphaSize.set)
   check("and lists its session again (it ran on the server meanwhile)", await until(() => sessionsIn(ra), [sa]), [sa])
   await ra.reload()
   await ra.waitForLoadState('domcontentloaded')
