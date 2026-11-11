@@ -261,6 +261,34 @@ other window on that project sees them live.
   waits for the answer.
 - **Not yet**: the project bot (after the native client).
 
+## Phone companion
+
+The Trek phone app (`apps/mobile`, Expo, iOS and Android; phase 6a) is for watching and
+steering agents away from the desk. Its home tab lists what needs you on every paired
+server, newest first: decisions waiting (answered right there), sessions that finished
+or stopped, pull request notices. From there: a server's projects, a worktree (load or
+unload it, start a session with an agent or session type, close or restart one, its
+read-only Changes), and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
+arrows, y, n) and a prompt box that sends now or queues. While a project is open on
+the phone, an agent's `promote_to_primary` can be confirmed there, unless the
+worktree's dev stack or Docker VM is running (then only the desktop can, since it
+tears them down first).
+
+- **Pairing**: in **Open on server…**, a connected remote server has **Pair a phone…**.
+  It shows a QR and a one-time code (5 minutes, used once), never a token. Scan it in
+  the app's **Add server** (or type the server's address and the code): the phone
+  gets its own named token, `phone-<its name>`, kept in the phone's secure storage.
+  Revoke it with `trek-server token revoke phone-<name>` to unpair. Pair a phone… is
+  not offered for the Local server or a `localhost` / `127.0.0.1` address: a phone
+  can't reach those. Expose the server first (server/README.md, "Expose it with
+  Caddy").
+- **Addresses**: `wss://` always; plain `ws://` only to a private network address
+  (LAN, Tailscale, `.local`), with a warning.
+- **Not yet**: notifications while the app is closed (6b: a push relay), and
+  creating, moving or promoting worktrees from the phone.
+
+See `apps/mobile/README.md` to build and run it.
+
 ## Importing a .trekproj
 
 A `.trekproj` is the project file older Trek builds kept projects in. Trek no longer
@@ -471,6 +499,9 @@ one at a time:
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the
   sign-in limit;
+- `npm run smoke:server-pairing`: Pair a phone… for a remote server: the QR's code (no
+  token in the window), a phone (the SDK in Node) redeeming it once for its own named
+  token, and that token's revocation;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;

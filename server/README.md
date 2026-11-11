@@ -234,6 +234,16 @@ The `promote_to_primary` MCP tool asks the windows that listen (`promote.listen`
 (`promote.request`); the first that confirms claims it (`promote.claim`) and its
 `worktree.promote {requestId}` settles it; the tool waits up to 15 minutes for one to answer. See PROTOCOL.md, "Promote to primary".
 
+## Phone pairing
+
+The Trek phone app (6a) gets its own token from a one-time code: a signed-in client asks
+for one (`pairing.create`; the desktop's **Pair a phone…** shows it as a QR), and the phone
+redeems it once, within 5 minutes, at `hello`. The server mints a named token
+`phone-<device>` (listed by `trek-server token list`) and sends it to the phone that once.
+Revoke it like any token. Codes live only in memory, as hashes; failed redeems share the
+web sign-in's limits (5 a minute per address, 50 in all). The local server doesn't pair
+phones. See PROTOCOL.md, "Phone pairing".
+
 ## Web client
 
 `trek-server start --web` (or `"web": true` in the config, read at start) also serves

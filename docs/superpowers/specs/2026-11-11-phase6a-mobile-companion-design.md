@@ -46,8 +46,9 @@ remains the way to do everything else from a browser.
     pending; creating one past that drops the oldest.
   - **Redeem at hello:** `hello {pairingCode, deviceName}` is accepted before auth. If the code
     is valid, the server:
-    1. mints a named token `phone: <deviceName>`, with the device name cut to 60 characters and
-       a numeric suffix added if the name is taken;
+    1. mints a named token `phone-<deviceName>` (token names allow only letters, digits, `.`,
+       `_` and `-`, so "phone: <device>" became `phone-<device>` in the plan), with the device
+       name cut to 60 characters and a numeric suffix added if the name is taken;
     2. sends the token once in the welcome (`pairedToken`);
     3. spends the code.
 

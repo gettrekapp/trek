@@ -32,6 +32,9 @@ reconnecting with backoff, so it must be updated to talk to this server.
    `token` falls back to it too, then, on a server with the web client, to the
    browser's session cookie: "Web client" below).
 
+   A phone pairing (6a) sends a one-time `pairingCode` (and the phone's `deviceName`)
+   with no token instead: see [Phone pairing](#phone-pairing).
+
 2. The server replies with `welcome` on success (below).
 
 3. Failure closes the socket:
@@ -40,7 +43,7 @@ reconnecting with backoff, so it must be updated to talk to this server.
    |---|---|
    | `4001` | no `hello` within 5s, or another frame before it |
    | `4002` | unsupported `protocolVersion`; reason `UPGRADE_CLIENT` for an older client (v1) |
-   | `4003` | bad token (closed after a short delay; no detail given), or a revoked one |
+   | `4003` | bad token (closed after a short delay; no detail given), or a revoked one; a refused `pairingCode` says why in the reason |
    | `1002` | malformed JSON or frame |
    | `1003` | binary frame |
    | `1011` | internal error |
@@ -108,6 +111,7 @@ new optional field needs no capability: its absence says enough.
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
 | `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`, `move.receive` and `move.unreceive` on the target |
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
+| `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server but the local one (a phone can't reach this machine's loopback) |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -362,6 +366,56 @@ restart.
 Tokens are named, one per device (`trek-server token add <name>`). Revoking a
 token closes its open connections with `4003`, and ends the web client's browser
 sessions signed in with it.
+
+## Phone pairing
+
+Phase 6a. A phone gets its own named token without anyone typing one: a signed-in client (the
+desktop's **Pair a phone…**) asks the server for a one-time code, shows it as a QR, and the phone
+redeems the code at `hello`.
+
+| Method | Params | Result |
+|---|---|---|
+| `pairing.create` | `{name?}` | `{code, expiresAt}` |
+
+- **The code:** 128 random bits as 26 base32 characters (`A`–`Z`, `2`–`7`). Case, spaces and
+  dashes are ignored when it comes back, so it can be shown in groups of five. It is redeemable
+  once, for 5 minutes. The server keeps only its sha256, in memory (a restart drops the waiting
+  codes), and at most 20 wait at once: one more drops the oldest. Any authenticated connection may
+  ask, since a token already holds shell-level power on the server's machine. `name` is a hint for
+  the token's name. The local server answers `NOT_FOUND`.
+- **Redeeming:** the phone's `hello` carries `pairingCode` and `deviceName` and no token:
+
+  ```json
+  { "type": "hello", "protocolVersion": 2, "client": "trek-mobile", "clientVersion": "0.1.0",
+    "pairingCode": "ABCDE…", "deviceName": "Greg's iPhone" }
+  ```
+
+  A good code mints a named token `phone-<deviceName>` (the device name in token-name characters,
+  `-2`, `-3`… if taken; the spec's "phone: <device>" can't be a token name), writes it to the
+  config like `trek-server token add`, and the welcome carries it this once:
+
+  ```json
+  { "type": "welcome", …, "pairedToken": "…", "pairedTokenName": "phone-Greg-s-iPhone" }
+  ```
+
+  The connection is then signed in with that token. The phone keeps it and connects with it as any
+  client does; revoking it (`trek-server token revoke`, or the config) closes the phone's
+  connections and refuses it after.
+- **Refusals** close `4003` after the bad-token delay, with the reason:
+
+  | Reason | When |
+  |---|---|
+  | `pairing code expired` | its 5 minutes passed |
+  | `pairing code already used` | it was redeemed before |
+  | `pairing code not recognised` | no such code (or the local server) |
+  | `too many pairing attempts` | 5 failed redeems from the address in a minute, or 50 in all: the web sign-in's limits, shared with it when the web client is on |
+
+  A spent or expired code is remembered (its hash) for 30 minutes, so the reason can say which.
+- **The QR** holds `trek://pair?url=<the server's URL, as the desktop reaches it>&code=<code>`: a
+  code, never a token. The desktop shows **Pair a phone…** only for a connected server whose
+  welcome lists `pairing`, never for the Local server or a loopback URL (`localhost`, `127.0.0.1`,
+  `::1`). On the phone a `trek://pair` link only fills the Add server form; nothing is redeemed
+  until the user taps Pair.
 
 ## Web client
 
