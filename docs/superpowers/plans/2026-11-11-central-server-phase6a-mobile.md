@@ -105,13 +105,12 @@
 
 ## Questions
 
-1. **Should a token minted by pairing be tied to the token that asked for the code?**
-   - **Context:** today they are peers. Revoking the desktop's token leaves the phone's.
-   - **Recommendation:** record `pairedBy: <name>` in the new token's entry, and show it in `trek-server token list`, but don't cascade revocations. A phone shouldn't lose access because a laptop's token was rotated, and the list makes the link visible.
-2. **Should the phone ever resize a session's pty to fit its screen?**
-   - **Recommendation:** not in 6a. It reflows the desktop's view of the same session. Revisit with a "Fit to phone" toggle if the small font proves unusable.
-3. **Should the phone hear promote requests for every project of every server, not just the open one?**
-   - **Recommendation:** no. An agent asks the windows that have the project open, and the phone is one of them while it shows the project. Listening for every project would turn the phone into a confirmation target the user isn't looking at.
+The user answered all three on 2026-11-11, as recommended:
+1. A token minted by pairing records `pairedBy: <the asking token's name>`, shown in `trek-server token list`; revocations never cascade. **Not yet in the prototype:** Task 1 gains it when the plan is executed (the token entry's new optional field, set at redeem, kept by config reload, printed by `token list`, documented in PROTOCOL.md and server/README.md, tested).
+2. The phone never resizes a session's pty: it shows the desktop's width with a smaller font and sideways scroll.
+3. The phone confirms `promote_to_primary` only for the project it has open.
+
+None remain.
 
 ## File structure
 
