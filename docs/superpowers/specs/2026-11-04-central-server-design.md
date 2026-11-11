@@ -499,7 +499,8 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
 6. **Next phase:** React Native client on `packages/client` and `src/shared/model`.
    Split (user decisions, 2026-11-11): **6a** is a phone companion app (Expo, iOS and Android, in
    `apps/mobile`, importing `src/shared/client`, `src/shared/model` and `protocolV2` directly; pairing
-   by a one-time code from the desktop app), spec `2026-11-11-phase6a-mobile-companion-design.md`;
+   by a one-time code from the desktop app), spec `2026-11-11-phase6a-mobile-companion-design.md`, plan
+   `docs/superpowers/plans/2026-11-11-central-server-phase6a-mobile.md`;
    **6b** is background push through a Trek push relay the user hosts.
 
 Remote projects can be opened after phase 3. After phase 4 every project is on a server and
