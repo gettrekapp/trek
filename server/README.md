@@ -251,6 +251,18 @@ share it. If the config can't be written the phone is refused ("the server could
 save the new token", with the reason in the log) and the code stays spent. The local
 server doesn't pair phones. See PROTOCOL.md, "Phone pairing".
 
+## Background push
+
+With a push relay (6b, `relay/README.md`), a paired phone gets pushes while the app is closed: a
+decision waiting, a session waiting or stopped, a watched pull request's report. The phone hands
+the server a grant from the relay (`push.setGrant`), kept in `secrets.json` beside the config under
+`push:<token name>`, never shown again. The server posts only the kind, the project's name and
+ids, and only while that phone has no connection open, at most once per project and kind in 30
+seconds. The phone's three switches and Pause all are applied here, so a muted kind never leaves
+the server. Revoking the phone's token drops its grant; a grant the relay refuses (`401`/`404`/
+`410`) is dropped too and the phone takes a new one. The relay's address must be `https://` (or
+`http://` on this machine). See PROTOCOL.md, "Background push".
+
 ## Web client
 
 `trek-server start --web` (or `"web": true` in the config, read at start) also serves

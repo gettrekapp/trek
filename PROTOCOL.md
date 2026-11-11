@@ -437,6 +437,48 @@ redeems the code at `hello`.
   `[::ffff:127.0.0.1]`, and the any-address `0.0.0.0` / `[::]`). On the phone a `trek://pair`
   link only fills the Add server form; nothing is redeemed until the user taps Pair.
 
+## Background push
+
+Phase 6b, behind the `push` capability. A phone hands each paired server a grant from the user's
+push relay (`trek-relay`, `relay/README.md`), and the server posts the phone's attention to the
+relay while the phone isn't connected. The relay holds the APNs and FCM credentials; the server
+never sees them, nor the phone's push token.
+
+| Method | Params | Result |
+|---|---|---|
+| `push.setGrant` | `{relayUrl, grantSecret, kinds?: {decisions?, sessions?, prWatch?}, paused?}` | `null` |
+| `push.clearGrant` | `{}` | `null` |
+| `push.status` | `{}` | `{relayUrl, kinds, paused, active, lastError?, lastPushAt?}` or `null` |
+
+- **Per token:** a grant belongs to the token the connection signed in with (the phone's own
+  `phone-<device>`), one per token: `push.setGrant` replaces the one before. It is kept in the
+  server's `secrets.json` (0600) under `push:<token name>`, and `push.status` never returns the
+  secret. Revoking the token drops its grant. `kinds` default to all on and `paused` to false.
+- **The relay address** must be `https://`, or `http://` to `127.0.0.1`, `localhost` or `[::1]`
+  (a relay on the server's machine, or a test), with no user name, password, query or fragment.
+- **What is pushed:** a new attention entry whose kind the grant has on.
+  - `decisions`: a session's `request_decision` (kind `decision`).
+  - `sessions`: a session waiting for the user, in `attention` or `done` (`session-finished`), or
+    one whose process exited by itself (`session-stopped`; not one closed, restarted, unloaded or
+    moved).
+  - `prWatch`: a watched pull request's report (5c-1), as its most pressing event:
+    `pr-conflict`, `pr-checks-failed`, `pr-review`, `pr-merged`, `pr-closed`, then
+    `pr-checks-passed`. A "can't be read" notice isn't pushed.
+  - `promote_to_primary` requests aren't pushed: with no window listening they end at once
+    (`no-window`), so there is nothing for a phone to answer later.
+
+  What was already listed when the server started is never pushed.
+- **When not:** never while the grant is `paused`, and never while any connection signed in with
+  that token is open (the phone shows it already). One push per (token, project, kind) in 30
+  seconds, so a burst is one push.
+- **The push:** `POST <relayUrl>/v1/push` with the grant secret as the bearer, and only
+  `{kind, project: <the project's name>, data: {serverId, projectId, worktreeId?, sessionId?}}`.
+  The relay builds the words from the kind (`relay/README.md`). Network errors and `5xx` are
+  retried 3 times (1, 3 and 10 seconds apart). `401`, `404` or `410` mean the relay no longer has
+  the grant, or the phone is gone: the server keeps the grant's settings without its secret,
+  `push.status` answers `active: false` with `lastError`, and the phone takes a new grant. A `429`
+  is recorded in `lastError` and that push is dropped.
+
 ## Web client
 
 `trek-server start --web` (or `"web": true` in the config; never `--local`, which is a

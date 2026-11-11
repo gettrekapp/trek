@@ -1,8 +1,8 @@
 # Trek phone companion (`apps/mobile`)
 
-Phase 6a. An Expo app (SDK 58, Expo Router) for iOS and Android: what needs you on every
-paired trek-server, sessions and their terminals, prompts, decisions and read-only
-Changes. The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone
+Phase 6a (and 6b's background push). An Expo app (SDK 58, Expo Router) for iOS and
+Android: what needs you on every paired trek-server, sessions and their terminals,
+prompts, decisions and read-only Changes, and pushes while it is closed. The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone
 pairing") how it signs in.
 
 It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-exports
@@ -59,6 +59,32 @@ from outside it.
 
 The app's pure modules (`src/logic/`) are tested from the repo root
 (`scripts/mobileLogic.test.mjs`, part of `npm test`).
+
+## Push (6b)
+
+Background push goes through your own push relay (`relay/README.md`), which holds the APNs
+key and the FCM service account for this app's bundle id / package. Set its address in
+`app.json` before building:
+
+```json
+{ "expo": { "extra": { "relayUrl": "https://push.example.com" } } }
+```
+
+It must be `https://` (or `http://` to this device or a private address, for a relay on the
+LAN while developing). Empty (the default): no push settings, nothing registered.
+
+With a relay and notification permission, the app registers its native push token (APNs or
+FCM, not an Expo push token) with the relay once, and sends a new one when the OS rotates it.
+For each paired server whose welcome lists `push`, it takes a grant from the relay and hands
+it to the server (`push.setGrant`). Servers → **Push…** has the server's three switches
+(Decisions, Sessions, PR watch), saved to the server at once; **Pause all pushes** pauses
+every server. Removing a server clears its grant there and revokes it at the relay. The
+device secret and each grant's secret are kept in secure storage. A tapped push opens its
+session (or worktree), like a local notification.
+
+APNs and FCM only deliver to a real build: a development build on a device (EAS or
+`npx expo run:ios --device`) with the push entitlement, or an Android device with the
+app's `google-services.json`. The simulator gets no remote pushes.
 
 ## Run it
 
@@ -121,4 +147,18 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
 9. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
    Pairing again from there replaces the entry: the server is listed once.
 
-No real push services (APNs, FCM, Expo) are used: background push is 6b.
+10. **Push (6b), on a real device only** (a development build with the push entitlement, a
+    relay configured as in `relay/README.md`, its address in `extra.relayUrl`):
+    - Allow notifications. The relay's `relay.json` lists the device; Servers shows **Push…**
+      for the server.
+    - Close the app. A `request_decision` gives a push "Trek · <project>" / "A decision is
+      waiting", without the question. Tapping it opens that session.
+    - A session that exits by itself gives "A session stopped".
+    - Push… → Decisions off: the next decision gives nothing; Sessions still do.
+    - **Pause all pushes**: nothing from any server; off again: pushes return.
+    - With the app open on that server, nothing is pushed (the list shows it).
+    - Remove the server: the relay's grant is gone (`GET /v1/grants` no longer lists it).
+    - `trek-server token revoke phone-<name>`: the server drops the grant; no more pushes.
+
+The repo's checks use no real push service (APNs, FCM, Expo): `npm run smoke:push` runs
+against a local APNs stub.

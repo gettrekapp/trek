@@ -284,8 +284,13 @@ tears them down first).
   Caddy").
 - **Addresses**: `wss://` always; plain `ws://` only to a private network address
   (LAN, Tailscale, `.local`), with a warning.
-- **Not yet**: notifications while the app is closed (6b: a push relay), and
-  creating or moving worktrees, or starting a promote, from the phone.
+- **Push** (6b): with a push relay (`relay/README.md`, `trek-relay`) built into the app
+  (`expo.extra.relayUrl` in `apps/mobile/app.json`), the phone gets notifications while it is
+  closed: decisions, sessions waiting or stopped, pull request reports. Each server has three
+  switches on the phone (Servers → Push…), and the Servers screen has **Pause all pushes**. A push
+  says only the project and what happened. The relay holds the APNs key and the FCM credentials;
+  your servers never do.
+- **Not yet**: creating or moving worktrees, or starting a promote, from the phone.
 
 See `apps/mobile/README.md` to build and run it.
 
@@ -504,6 +509,10 @@ one at a time:
   token, New code withdrawing the code (Done keeps it), and that token's revocation;
   the server listens on this machine's first non-internal IPv4 address (the smoke prints
   SKIP and passes without one);
+- `npm run smoke:push`: background push (6b), without Electron: a trek-relay with a local
+  APNs stub, a trek-server and the SDK playing the desktop and the phone: the grant handed
+  over, a decision pushed with only its project and kind, nothing when muted or while the
+  phone is connected, a session's own exit pushed, a grant revoked at the relay dropped;
 - `npm run smoke:providers`: Codex and Gemini sessions on Local against fake CLIs;
 - `npm run smoke:windows`: one window per project, the File menu's New Project… and
   Open on Server…, window restore and the navigation guard;
