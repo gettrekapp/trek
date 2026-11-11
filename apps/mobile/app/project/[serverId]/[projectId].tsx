@@ -1,7 +1,9 @@
 // A project (6a): its repositories and worktrees, each with its branch, status and sessions.
+// While it is open, the phone also answers promote_to_primary's confirmations for it.
 import { ScrollView, Pressable, Text, View } from 'react-native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { useTopic } from '../../../src/state/hooks.ts'
+import { PromotePrompt } from '../../../src/ui/PromotePrompt.tsx'
 import { STATUS_TEXT, statusColor } from '../../../src/ui/status.ts'
 import { ui } from '../../../src/ui/theme.ts'
 
@@ -11,6 +13,7 @@ export default function ProjectScreen(): React.JSX.Element {
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad}>
       <Stack.Screen options={{ title: topic.state === 'ready' ? topic.snapshot.name : 'Project' }} />
+      <PromotePrompt serverId={serverId} projectId={projectId} project={topic.state === 'ready' ? topic.snapshot : null} />
       {topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
       {topic.state === 'loading' ? <Text style={ui.muted}>Loading…</Text> : null}
       {topic.state === 'ready'
