@@ -52,18 +52,31 @@ test('a code says how long it lives (for a client whose clock is off) and who as
   assert.deepEqual(codes.redeem(made.code, 6000), { ok: true, name: '', pairedBy: 'laptop' })
 })
 
-test('a cancelled code no longer redeems (refused as expired); cancelling an unknown or spent one is false', () => {
+test('a cancelled code no longer redeems (refused as withdrawn); cancelling an unknown or spent one is false', () => {
   const codes = new PairingCodes()
   const { code } = codes.create('', 0, 'laptop')
   assert.equal(codes.cancel(code.toLowerCase(), 1), true)
   assert.equal(codes.size(1), 0)
-  assert.deepEqual(codes.redeem(code, 2), { ok: false, reason: 'expired' })
+  assert.deepEqual(codes.redeem(code, 2), { ok: false, reason: 'withdrawn' })
   assert.equal(codes.cancel(code, 3), false)
   assert.equal(codes.cancel('A'.repeat(26), 3), false)
   const spent = codes.create('', 0).code
   codes.redeem(spent, 1)
   assert.equal(codes.cancel(spent, 2), false)
   assert.deepEqual(codes.redeem(spent, 3), { ok: false, reason: 'used' })
+})
+
+test('revoking a token drops the waiting codes it asked for (refused as expired); others stay', () => {
+  const codes = new PairingCodes()
+  const mine = codes.create('', 0, 'laptop').code
+  const theirs = codes.create('', 0, 'desk').code
+  const nobody = codes.create('', 0).code
+  assert.equal(codes.retainIssuedBy(new Set(['desk']), 1), 1)
+  assert.equal(codes.size(1), 2)
+  assert.deepEqual(codes.redeem(mine, 2), { ok: false, reason: 'expired' })
+  assert.equal(codes.redeem(theirs, 2).ok, true)
+  assert.equal(codes.redeem(nobody, 2).ok, true)
+  assert.equal(codes.retainIssuedBy(new Set(), 3), 0)
 })
 
 test("pairing's limiter: 5 failures a minute per address, with no total shared across addresses", () => {
@@ -199,6 +212,7 @@ test('redeem: a refusal says which, from the close reason', async () => {
     ['pairing code not recognised', 'unknown'],
     ['too many pairing attempts', 'limited'],
     ['the server could not save the new token', 'unsaved'],
+    ['pairing code was withdrawn on the desktop', 'withdrawn'],
     ['unauthorized', 'refused']
   ]) {
     const server = fakeServer()
@@ -209,6 +223,17 @@ test('redeem: a refusal says which, from the close reason', async () => {
     await assert.rejects(done, (err) => err instanceof PairingError && err.kind === kind)
   }
   assert.equal(pairingFailureOf(1006, ''), 'unreachable')
+})
+
+test('redeem: the welcome\'s serverId and serverName are kept only within limits', async () => {
+  const server = fakeServer()
+  const { timers } = fakeTimers()
+  const done = redeemPairingCode({ url: 'wss://s', code: 'CODE', deviceName: 'pixel', createSocket: server.factory, timers })
+  server.last().open()
+  server.last().welcome({ pairedToken: 'tok', serverId: 'x'.repeat(200), serverName: 'n'.repeat(300) })
+  const result = await done
+  assert.equal(result.serverId, '')
+  assert.equal(result.serverName, 'n'.repeat(80))
 })
 
 test('redeem: a welcome with no token (a server that ignored the code) is a refusal; no answer times out', async () => {

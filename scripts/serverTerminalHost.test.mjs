@@ -107,6 +107,51 @@ test('write, resize and a duplicate spawn', (t) => {
   assert.throws(() => host.resize('p1', 0, 10), (e) => e.code === 'BAD_REQUEST')
 })
 
+test('query replies: one client attached, its replies reach the pty', (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  const a = sink()
+  host.attach('p1', a)
+  assert.equal(host.writeFrom('p1', a, '\x1b[12;40R'), true)
+  assert.equal(host.writeFrom('p1', a, 'ls\r'), true)
+  assert.deepEqual(spawned[0].written, ['\x1b[12;40R', 'ls\r'])
+})
+
+test('query replies: with two clients only the reply owner (the earliest attached) answers; typing from either goes through', (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  const a = sink()
+  const b = sink()
+  host.attach('p1', a)
+  host.attach('p1', b)
+  assert.equal(host.writeFrom('p1', b, '\x1b[?1;2c'), false)
+  assert.equal(host.writeFrom('p1', a, '\x1b[?1;2c'), true)
+  assert.equal(host.writeFrom('p1', b, 'y'), true)
+  assert.equal(host.writeFrom('p1', b, '\x1b[<0;10;5M'), true, 'a mouse report is the user acting')
+  assert.equal(host.writeFrom('p1', b, '\x1b[A'), true)
+  // Re-attaching the owner (a re-subscribe) keeps it the owner.
+  host.attach('p1', a)
+  assert.equal(host.writeFrom('p1', b, '\x1b]11;rgb:0/0/0\x07'), false)
+  assert.deepEqual(spawned[0].written, ['\x1b[?1;2c', 'y', '\x1b[<0;10;5M', '\x1b[A'])
+})
+
+test('query replies: when the owner detaches, the next attached client owns them', (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  const a = sink()
+  const b = sink()
+  const c = sink()
+  host.attach('p1', a)
+  host.attach('p1', b)
+  host.attach('p1', c)
+  host.detach('p1', a)
+  assert.equal(host.writeFrom('p1', c, '\x1b[0n'), false)
+  assert.equal(host.writeFrom('p1', b, '\x1b[0n'), true)
+  host.detachAll(b)
+  assert.equal(host.writeFrom('p1', c, '\x1b[0n'), true)
+  assert.deepEqual(spawned[0].written, ['\x1b[0n', '\x1b[0n'])
+})
+
 test('the ring buffer keeps the newest output', (t) => {
   const { host, spawned } = setup(t)
   host.spawn('p1', opts)

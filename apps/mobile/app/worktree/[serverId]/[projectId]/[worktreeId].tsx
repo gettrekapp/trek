@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
 import { CAPABILITY, type AgentInfo, type Project, type SessionType, type Worktree } from '../../../../src/shared.ts'
-import { errorMessage, useServer, useTopic } from '../../../../src/state/hooks.ts'
+import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { ui } from '../../../../src/ui/theme.ts'
@@ -29,6 +29,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   const { serverId, projectId, worktreeId } = useLocalSearchParams<{ serverId: string; projectId: string; worktreeId: string }>()
   const server = useServer(serverId)
   const topic = useTopic(serverId, `project:${projectId}`)
+  const notice = useConnectionNotice(serverId)
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -84,7 +85,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad}>
       <Stack.Screen options={{ title: worktree ? (worktree.branch ?? worktree.name) : 'Worktree' }} />
-      {topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
+      {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
       {project && !worktree ? <Text style={ui.muted}>This worktree is gone.</Text> : null}
       {worktree ? (
         <>

@@ -4,7 +4,11 @@
 import * as SecureStore from 'expo-secure-store'
 
 export interface SavedServer {
-  /** The phone's id for the entry (the server's own serverId when known) */
+  /**
+   * The phone's own id for the entry, made when it is added (add-server.tsx), never the server's
+   * reported serverId: it keys the token in secure storage, so a server can't pick (or collide)
+   * the key. No migration: the app never shipped with entries keyed any other way.
+   */
   id: string
   name: string
   url: string

@@ -7,19 +7,21 @@ import type { AppServerPairing } from '../../../shared/types'
  * "Pair a phone…" (6a): a one-time code from the server, shown as a QR of
  * `trek://pair?url=…&code=…` and as text, with its countdown. The code is not a token: the phone
  * redeems it once for its own. Main asks the server for it (window.api.appServers.pairPhone).
- * New code and closing the panel cancel the code shown, and a code that arrives after the panel
- * moved on (React StrictMode's second mount, a New code clicked meanwhile) is cancelled at once.
+ * New code withdraws the code shown (the phone is told it was withdrawn). Done, or the panel
+ * closing, leaves it working for the rest of its five minutes: a phone that scanned it may still
+ * be redeeming it. A code that arrives after the panel moved on (React StrictMode's second mount,
+ * a New code clicked meanwhile) was never shown, and is cancelled at once.
  */
 export function PairPhone({ serverId, onClose }: { serverId: string; onClose: () => void }): React.JSX.Element {
   const [pairing, setPairing] = useState<AppServerPairing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
 
-  /** The code shown now, to cancel; and which ask is current (bumped by every ask and on unmount). */
+  /** The code shown now, which New code withdraws; and which ask is current (bumped by every ask and on unmount). */
   const shown = useRef<string | null>(null)
   const generation = useRef(0)
 
-  const cancelShown = useCallback(() => {
+  const withdrawShown = useCallback(() => {
     const code = shown.current
     shown.current = null
     if (code) void window.api.appServers.cancelPairing(serverId, code).catch(() => false)
@@ -27,7 +29,7 @@ export function PairPhone({ serverId, onClose }: { serverId: string; onClose: ()
 
   const ask = useCallback(async () => {
     const mine = ++generation.current
-    cancelShown()
+    withdrawShown()
     setError(null)
     setPairing(null)
     try {
@@ -41,15 +43,15 @@ export function PairPhone({ serverId, onClose }: { serverId: string; onClose: ()
     } catch (err) {
       if (mine === generation.current) setError(errorText(err))
     }
-  }, [serverId, cancelShown])
+  }, [serverId, withdrawShown])
 
+  // On unmount the code shown is left to expire (not withdrawn); one still on its way is cancelled.
   useEffect(() => {
     void ask()
     return () => {
       generation.current++
-      cancelShown()
     }
-  }, [ask, cancelShown])
+  }, [ask])
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -82,6 +84,9 @@ export function PairPhone({ serverId, onClose }: { serverId: string; onClose: ()
                 ? 'This code has expired.'
                 : `Works once, for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} more. The phone gets its own token, which you can revoke on the server.`}
             </p>
+            {!expired && (
+              <p className="muted">Done leaves this code working until it expires; New code withdraws it.</p>
+            )}
           </div>
         </>
       )}

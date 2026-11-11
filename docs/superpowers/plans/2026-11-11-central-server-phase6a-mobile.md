@@ -61,10 +61,13 @@
     - **`@xterm/xterm`:** a devDependency, since it is inlined into the terminal page at build time.
 12. **Navigation is a Stack only, no tabs** (`expo-router`'s `Tabs` is deprecated in SDK 58 in favour of `expo-router/js-tabs`). Attention is the home screen, with **Servers** and **Projects** in its header.
 13. **Storage:** the server list (id, name, URL) and each token live in `expo-secure-store`, with `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY`.
-    - The entry id is the server's `serverId` from the pairing welcome, or a random one for a manually added token.
+    - The entry id is the phone's own (128 random bits), never the server's reported `serverId`, so a server can't choose or collide the token's storage key; Pair again keeps the entry's id, and adding an address already saved replaces that entry. The SDK keeps the welcome's `serverId` only up to 128 characters and cuts `serverName` to 80 (final review). No migration: the app never shipped with entries keyed by `serverId`.
+    - A save that fails after a good redeem says the code is spent and to ask for a new one.
     - Removing forgets the token on the phone only.
 14. **Connections:** one `ServerRegistry` entry per server.
-    - **Leaving the foreground:** connections are closed 20 s after the app leaves the foreground, and made again on return. A `generation` counter makes screens resubscribe.
+    - **Leaving the foreground:** connections are closed 20 s after the app leaves the foreground, and made again on return. A per-server `generation` makes only that server's screens resubscribe (final review; it was global).
+    - **Screens show the connection:** the project, worktree and session screens say "Reconnecting…" (or "Connecting…") while their server isn't connected; the session screen on a cold start says "Connecting…", not "This session is gone".
+    - **Android 13+:** the `default` notification channel is made before the permission is asked for (Android asks only once a channel exists).
     - **The attention topic:** subscribed for every server, feeding the home list.
     - **Local notifications:** only for items the app hasn't seen, and only while it is not in the foreground. The foreground list is visible; the first snapshot after a launch counts as seen.
 15. **The phone never resizes the shared pty.** The terminal shows the pty at its own size (the desktop's), with the font fitted to the screen width (6–13 px) and sideways scrolling past that. Resizing would reflow every desktop view of the session (Question 2).
@@ -81,10 +84,14 @@
     - **When it listens:** only while that project's screen is open (`promote.listen`, again on every welcome; `listen: false` on leaving).
     - **How it asks:** with an in-app `Modal`, because React Native's `Alert` can't be closed when another window claims the request.
     - **A refused dry run:** claimed and answered `failed` silently, as the desktop does.
-    - **An unknown worktree:** answered `unknown-worktree`.
+    - **An unknown worktree:** answered `unknown-worktree`, but only against a loaded project snapshot: a request that arrives first waits for it (final review).
     - **A running dev stack** (`containers > 0` or `upRunning`) **or Docker VM** (`vmState: 'running'`): "Confirm on the desktop", and the phone neither claims nor answers.
 20. **Changes** shows the default source (the branch against its base, with the uncommitted work). Each file's patch is fetched on tap with `worktree.diff {paths: [path]}`.
 21. **The icons** are Expo's template placeholders; real artwork comes before any store build.
+22. **Terminal query replies have one answerer per pty** (final review). The server's headless screen never answers queries, so a phone attached alone must; with several attached, each terminal answers. `pty.write` data that is only query replies (CPR, DA/DA2, DSR, DECRPM, DECRQSS, window reports, OSC colour answers, focus in/out; `isQueryReply` in `server/src/sessions/status.ts`, without the mouse reports `isTerminalReply` also counts) is written only from the pty's **reply owner**, the earliest still-attached connection (`TerminalHost.writeFrom`); ownership moves on detach. Anything else goes through from every client. The phone no longer filters its replies.
+23. **Pairing codes and the desktop's Done** (final review). `pairing.cancel` (New code) refuses the code as `pairing code was withdrawn on the desktop`. Done, or the panel unmounting, no longer cancels: the code stays good for the rest of its 5 minutes, so a phone that scanned it while the panel closed can still pair. Revoking a token drops the waiting codes it asked for (`pairedBy`), refused as expired.
+24. **The WebView restarts on a crash** (final review): `onContentProcessDidTerminate` (iOS) and `onRenderProcessGone` (Android) remount it (its key), and its page's `ready` starts the stream over. The `onLoadStart` reset is gone: `ready` is enough.
+25. **A topic's view is held with its key** (final review): a screen switched to another server or topic sees loading at once, never the old snapshot for a render.
 
 ## Risks
 
@@ -102,6 +109,8 @@
 9. **Bundle size.** The terminal page adds about 490 KiB to the JS bundle.
 10. **Expo SDK churn.** SDK 58 moves fast (the template warns of renamed APIs). The prototype relied on the installed types, not memory; an SDK upgrade is its own task.
 11. **Promote confirmations need the project open.** With it closed, the phone doesn't show them (Decision 19; Question 3).
+12. **The reply owner may not be the client the user watches.** With the desktop attached first, the program's queries are answered by the desktop's terminal (its colours, its focus), even while the user types on the phone. Shift/Ctrl/Alt+F3 is byte-for-byte a cursor report, so it reaches the program only from the reply owner. A reply owner that has stopped answering (a frozen client still attached) leaves the program without answers until it detaches.
+13. **A closed panel's code still works** for the rest of its 5 minutes (Decision 23). Whoever photographed it can still redeem it until then; New code withdraws it, and revoking the desktop's token drops it.
 
 ## Questions
 

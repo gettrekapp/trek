@@ -5,7 +5,7 @@
 import { CLOSE_UNAUTHORIZED, PAIRING_CLOSE_REASON, PROTOCOL_VERSION_V2 } from '../protocolV2.ts'
 import { realTimers, type SocketFactory, type Timers } from './socket.ts'
 
-export type PairingFailure = 'expired' | 'used' | 'unknown' | 'limited' | 'unsaved' | 'unreachable' | 'refused' | 'timeout'
+export type PairingFailure = 'expired' | 'used' | 'withdrawn' | 'unknown' | 'limited' | 'unsaved' | 'unreachable' | 'refused' | 'timeout'
 
 export class PairingError extends Error {
   readonly kind: PairingFailure
@@ -35,9 +35,15 @@ export interface RedeemOptions {
   timers?: Timers
 }
 
+/** The longest serverId kept from the welcome (the server's own is a UUID); a longer one is dropped. */
+const MAX_SERVER_ID = 128
+/** The longest serverName kept from the welcome; a longer one is cut. */
+const MAX_SERVER_NAME = 80
+
 const MESSAGES: Record<PairingFailure, string> = {
   expired: 'That pairing code has expired. Ask for a new one on the desktop.',
   used: 'That pairing code was already used. Ask for a new one on the desktop.',
+  withdrawn: 'That pairing code was withdrawn on the desktop (New code). Scan the code it shows now.',
   unknown: 'The server does not recognise that pairing code. Check it, or ask for a new one.',
   limited: 'Too many pairing attempts. Wait a minute and try again.',
   unsaved: 'The server could not save the new token, and the code is now used up. Check the server (its log says why), then ask for a new code on the desktop.',
@@ -102,8 +108,8 @@ export function redeemPairingCode(opts: RedeemOptions): Promise<PairingResult> {
       finish(null, {
         token: frame.pairedToken,
         tokenName: typeof frame.pairedTokenName === 'string' ? frame.pairedTokenName : '',
-        serverId: typeof frame.serverId === 'string' ? frame.serverId : '',
-        serverName: typeof frame.serverName === 'string' ? frame.serverName : '',
+        serverId: typeof frame.serverId === 'string' && frame.serverId.length <= MAX_SERVER_ID ? frame.serverId : '',
+        serverName: typeof frame.serverName === 'string' ? frame.serverName.slice(0, MAX_SERVER_NAME) : '',
         capabilities: Array.isArray(frame.capabilities) ? frame.capabilities.filter((c): c is string => typeof c === 'string') : []
       })
     })

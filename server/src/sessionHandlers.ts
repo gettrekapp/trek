@@ -48,7 +48,8 @@ export const sessionHandlers: Record<string, Handler> = {
     const data = requireString(p.data, 'data')
     if (data.length > MAX_PTY_WRITE) throw codedError('BAD_REQUEST', `data must be at most ${MAX_PTY_WRITE} characters`)
     ctx.sessions.noteInput(ptyId, data)
-    ctx.sessions.terminals.write(ptyId, data)
+    // A query reply from a connection that is not the pty's reply owner is dropped (6a).
+    ctx.sessions.terminals.writeFrom(ptyId, ctx.terminal, data)
     return null
   },
   'pty.resize': (p, ctx) => {

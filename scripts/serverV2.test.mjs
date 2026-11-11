@@ -567,7 +567,7 @@ test('pairing.create records the caller\'s token name and says how long the code
   const other = (await dispatchV2('pairing.create', { name: 'kitchen' }, ctx)).result.code
   assert.deepEqual(await dispatchV2('pairing.cancel', { code: other }, ctx), { ok: true, result: { cancelled: true } })
   assert.deepEqual(await dispatchV2('pairing.cancel', { code: other }, ctx), { ok: true, result: { cancelled: false } })
-  assert.equal(pairing.redeem(other, Date.now()).reason, 'expired')
+  assert.equal(pairing.redeem(other, Date.now()).reason, 'withdrawn')
   assert.equal((await dispatchV2('pairing.cancel', { code: 5 }, ctx)).error.code, 'BAD_REQUEST')
   assert.equal((await dispatchV2('pairing.cancel', { code: 'x' }, { ...ctx, pairing: undefined })).error.code, 'NOT_FOUND')
 })

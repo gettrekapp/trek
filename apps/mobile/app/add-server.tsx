@@ -1,7 +1,8 @@
 // Add a server (6a): scan the desktop's QR (or type its address and code), and the phone redeems
 // the one-time code for its own token. Or type an address and an existing named token. A
 // trek://pair link only fills this form: nothing is sent until Pair is tapped. Pair again (from
-// the server list) passes the entry's id, so the new token replaces the old entry's.
+// the server list) passes the entry's id, so the new token replaces the old entry's. An entry's id
+// (which keys its token in secure storage) is always the phone's own, never the server's serverId.
 import { useEffect, useState } from 'react'
 import { Linking, ScrollView, Text, TextInput, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
@@ -13,11 +14,17 @@ import { useServers } from '../src/state/ServersProvider.tsx'
 import { Button } from '../src/ui/Button.tsx'
 import { ui } from '../src/ui/theme.ts'
 
-const randomId = (): string => Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+/** The entry's id, the phone's own: 128 random bits as hex. */
+const randomId = (): string => {
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === 'function') globalThis.crypto.getRandomValues(bytes)
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 export default function AddServer(): React.JSX.Element {
   const params = useLocalSearchParams<{ url?: string; code?: string; id?: string; name?: string }>()
-  const { add } = useServers()
+  const { add, servers } = useServers()
   const [mode, setMode] = useState<'code' | 'token'>('code')
   const [url, setUrl] = useState(params.url ?? '')
   const [code, setCode] = useState(params.code ?? '')
@@ -72,11 +79,19 @@ export default function AddServer(): React.JSX.Element {
     setError(null)
     try {
       const host = new URL(checked.url).hostname
+      // Pair again (its id), or the entry already saved for this address: replaced, not doubled.
+      const id = params.id || servers.find((s) => s.url === checked.url)?.id || randomId()
       if (mode === 'code') {
         const paired = await redeemPairingCode({ url: checked.url, code: code.trim(), deviceName: deviceName.trim() || 'phone', createSocket: globalSocketFactory, client: 'trek-mobile', clientVersion: '0.1.0' })
-        await add({ id: params.id || paired.serverId || randomId(), name: paired.serverName || params.name || host, url: checked.url }, paired.token)
+        try {
+          await add({ id, name: paired.serverName || params.name || host, url: checked.url }, paired.token)
+        } catch (err) {
+          // The server made the token, but the phone could not keep it: the code is spent.
+          setError(`Paired, but this phone could not save the server (${String(err)}). The code is now used up: ask for a new one on the desktop and pair again.`)
+          return
+        }
       } else {
-        await add({ id: params.id || randomId(), name: params.name || host, url: checked.url }, token.trim())
+        await add({ id, name: params.name || host, url: checked.url }, token.trim())
       }
       router.replace('/servers')
     } catch (err) {

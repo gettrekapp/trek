@@ -18,10 +18,17 @@ pty has: the attach's (and a re-attach's) answer, and `pty.resized` when the des
 window changes it. Output is held until the size is known, so the scrollback is drawn at
 the right width. The font shrinks to fit the width (down to 6 px; past that the page
 scrolls sideways). Links in the output (OSC 8) are never opened, and the WebView refuses
-every navigation and new window. xterm's own query replies (cursor position, device
-attributes) aren't sent: the desktop's terminal answers those. **Restart** passes the size
-the phone last saw the session's pty at (80×24 if it never saw it: `session.restart`
-needs one).
+every navigation and new window. Everything the terminal sends goes to the server, xterm's
+own query replies (cursor position, device attributes, colours) included: the server writes
+those to the program from one attached client per pty, the earliest attached (PROTOCOL.md,
+"Query replies and the reply owner"), so the phone answers when it's the only one watching
+and stays quiet when the desktop was there first. If the WebView's content process dies
+(iOS) or its renderer goes (Android), the page is loaded again and the stream starts over.
+
+**Restart** passes the size the phone last saw the session's pty at, remembered for this
+run of the app only; if it never saw that pty (the app was started since, or the session
+was never opened on the phone) it restarts at **80×24**, as `session.restart` needs a size.
+The desktop's window resizes it to its own size as soon as it attaches.
 
 ## Plain ws:// on Android
 
@@ -30,7 +37,8 @@ which Android release builds refuse by default. `app.json` turns it on through
 `expo-build-properties` (`android.usesCleartextTraffic`); the app's own address rule is
 what keeps plain `ws://` to a LAN, Tailscale or `.local` address. (iOS isn't checked on a
 device yet: App Transport Security may want `NSAllowsLocalNetworking` for a `.local`
-name, and iOS asks for local network access the first time.)
+name). iOS asks for local network access the first time, with the reason in `app.json`'s
+`ios.infoPlist.NSLocalNetworkUsageDescription`.
 
 ## Install
 

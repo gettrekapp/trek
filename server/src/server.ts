@@ -186,6 +186,11 @@ export function startServer(
     const active = activeTokenHashes(store.config)
     // A revoked token's browser sessions end with it (their sockets close in the loop below).
     for (const key of web?.sessions.prune(active) ?? []) signedOut(key)
+    // A revoked token's waiting pairing codes go with it: a code it asked for no longer pairs.
+    if (pairing) {
+      const dropped = pairing.retainIssuedBy(new Set(listTokens(store.config).map((t) => t.name)), Date.now())
+      if (dropped) console.warn(`[auth] dropped ${dropped} waiting pairing code(s) asked for by a revoked token`)
+    }
     for (const [ws, hash] of authed) {
       if (active.has(hash)) continue
       console.warn('[auth] token revoked; closing its connection')

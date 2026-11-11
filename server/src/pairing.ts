@@ -42,7 +42,10 @@ export function normalizePairingCode(code: string): string {
 
 const hashCode = (code: string): string => createHash('sha256').update(normalizePairingCode(code), 'utf8').digest('hex')
 
-export type RedeemOutcome = { ok: true; name: string; pairedBy: string } | { ok: false; reason: 'expired' | 'used' | 'unknown' }
+/** Why a code no longer redeems: its time ran out (or its asker's token was revoked), it was spent, or the desktop withdrew it. */
+type GoneReason = 'expired' | 'used' | 'withdrawn'
+
+export type RedeemOutcome = { ok: true; name: string; pairedBy: string } | { ok: false; reason: GoneReason | 'unknown' }
 
 interface Pending {
   expiresAt: number
@@ -55,7 +58,7 @@ interface Pending {
 export class PairingCodes {
   private readonly pending = new Map<string, Pending>()
   /** Spent or expired: hash → why, and until when it is remembered */
-  private readonly spent = new Map<string, { reason: 'expired' | 'used'; until: number }>()
+  private readonly spent = new Map<string, { reason: GoneReason; until: number }>()
 
   /**
    * `expiresInMs` is the code's lifetime, so a client whose clock is off can count down from its
@@ -74,16 +77,33 @@ export class PairingCodes {
   }
 
   /**
-   * Drops a waiting code (the desktop's New code, or its panel closing). Knowing the code is
-   * enough: whoever holds it could redeem it, which is more. A cancelled code is then refused as
-   * expired. True if a waiting code was dropped.
+   * Drops a waiting code (the desktop's New code). Knowing the code is enough: whoever holds it
+   * could redeem it, which is more. A cancelled code is then refused as withdrawn. True if a
+   * waiting code was dropped.
    */
   cancel(code: string, now: number): boolean {
     this.sweep(now)
     const hash = hashCode(code)
     if (!this.pending.delete(hash)) return false
-    this.remember(hash, 'expired', now)
+    this.remember(hash, 'withdrawn', now)
     return true
+  }
+
+  /**
+   * Drops the waiting codes asked for by a token that is no longer listed (it was revoked):
+   * `active` is the token names still listed. A code with no asker recorded stays. Refused as
+   * expired from then on. Answers how many were dropped.
+   */
+  retainIssuedBy(active: ReadonlySet<string>, now: number): number {
+    this.sweep(now)
+    let dropped = 0
+    for (const [hash, entry] of this.pending) {
+      if (!entry.pairedBy || active.has(entry.pairedBy)) continue
+      this.pending.delete(hash)
+      this.remember(hash, 'expired', now)
+      dropped++
+    }
+    return dropped
   }
 
   /** Spends the code: true at most once per code. */
@@ -116,7 +136,7 @@ export class PairingCodes {
     for (const [hash, s] of this.spent) if (s.until <= now) this.spent.delete(hash)
   }
 
-  private remember(hash: string, reason: 'expired' | 'used', now: number): void {
+  private remember(hash: string, reason: GoneReason, now: number): void {
     this.spent.set(hash, { reason, until: now + REMEMBER_MS })
     while (this.spent.size > REMEMBER_MAX) this.spent.delete(this.spent.keys().next().value as string)
   }
@@ -183,7 +203,7 @@ export interface PairingStore {
 
 export type PhoneRedeem =
   | { ok: true; token: string; name: string; pairedBy: string }
-  | { ok: false; reason: 'expired' | 'used' | 'unknown' | 'limited' }
+  | { ok: false; reason: GoneReason | 'unknown' | 'limited' }
   /** The code was good (and is spent) but the config could not be written */
   | { ok: false; reason: 'unsaved'; error: unknown }
 

@@ -2,7 +2,7 @@
 // While it is open, the phone also answers promote_to_primary's confirmations for it.
 import { ScrollView, Pressable, Text, View } from 'react-native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
-import { useTopic } from '../../../src/state/hooks.ts'
+import { useConnectionNotice, useTopic } from '../../../src/state/hooks.ts'
 import { PromotePrompt } from '../../../src/ui/PromotePrompt.tsx'
 import { STATUS_TEXT, statusColor } from '../../../src/ui/status.ts'
 import { ui } from '../../../src/ui/theme.ts'
@@ -10,11 +10,13 @@ import { ui } from '../../../src/ui/theme.ts'
 export default function ProjectScreen(): React.JSX.Element {
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
   const topic = useTopic(serverId, `project:${projectId}`)
+  // While the server is not connected the topic's error is that: the notice says it instead.
+  const notice = useConnectionNotice(serverId)
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
       <Stack.Screen options={{ title: topic.state === 'ready' ? topic.snapshot.name : 'Project' }} />
       <PromotePrompt serverId={serverId} projectId={projectId} project={topic.state === 'ready' ? topic.snapshot : null} />
-      {topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
+      {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
       {topic.state === 'loading' ? <Text style={ui.muted}>Loading…</Text> : null}
       {topic.state === 'ready'
         ? topic.snapshot.repositories.map((repo) => (

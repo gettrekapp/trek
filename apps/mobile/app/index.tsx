@@ -1,6 +1,6 @@
 // Home: what needs you across every paired server, newest first (6a). A decision is answered here.
 import { useEffect, useState } from 'react'
-import { FlatList, Pressable, Text, View } from 'react-native'
+import { FlatList, Platform, Pressable, Text, View } from 'react-native'
 import { Link, router, Stack } from 'expo-router'
 import * as Notifications from 'expo-notifications'
 import { useServers } from '../src/state/ServersProvider.tsx'
@@ -16,8 +16,13 @@ export default function AttentionScreen(): React.JSX.Element {
     return () => clearInterval(t)
   }, [])
   // Asked once: local notifications for what needs you while the app is in the background.
+  // Android 13+ asks only once a channel exists, so the channel is made first (Android only).
   useEffect(() => {
-    void Notifications.requestPermissionsAsync().catch(() => {})
+    const channel =
+      Platform.OS === 'android'
+        ? Notifications.setNotificationChannelAsync('default', { name: 'Needs you', importance: Notifications.AndroidImportance.DEFAULT }).catch(() => null)
+        : Promise.resolve(null)
+    void channel.then(() => Notifications.requestPermissionsAsync()).catch(() => {})
   }, [])
 
   const open = (item: AttentionItem): void => {

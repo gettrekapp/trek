@@ -1,13 +1,18 @@
 // The phone app's pure modules (6a, apps/mobile/src/logic): the server-address rule, the
 // attention list and its notifications, the key bar, the diff colouring, the terminal feed and
-// the ref counts.
+// the ref counts, the connection notices, the per-server generations, the held topic view and
+// the value a promote request waits for.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
 import { ago, attentionKey, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
-import { TerminalFeed, isTerminalReply, pageScript } from '../apps/mobile/src/logic/terminalFeed.ts'
+import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.ts'
+import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
+import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
+import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
+import { Latest } from '../apps/mobile/src/logic/latest.ts'
 import { RefCounts } from '../apps/mobile/src/logic/refCount.ts'
 
 test('wss:// is always allowed; ws:// only to a private address, with a warning', () => {
@@ -112,9 +117,57 @@ test("the page script applies a batch in order, in one call", () => {
   assert.doesNotThrow(() => new Function('window', script)({}))
 })
 
-test("xterm's own query replies are dropped; typing isn't", () => {
-  for (const reply of ['\x1b[12;40R', '\x1b[?1;2c', '\x1b[?62;22c', '\x1b[?c', '\x1b[>0;276;0c']) assert.equal(isTerminalReply(reply), true, JSON.stringify(reply))
-  for (const typed of ['a', '\r', '\x1b', '\x1b[A', '\x1b[1;5C', 'c', '12;40R', '\x1b[12;40Rx', '\x1b[200~paste\x1b[201~']) assert.equal(isTerminalReply(typed), false, JSON.stringify(typed))
+test('connection notices: none while connected; Connecting… before, Reconnecting… after a drop', () => {
+  assert.equal(connectionNotice('connected'), null)
+  assert.equal(connectionNotice(undefined), 'Connecting…')
+  assert.equal(connectionNotice('connecting'), 'Connecting…')
+  assert.equal(connectionNotice('disconnected'), 'Reconnecting…')
+  assert.equal(connectionNotice('error'), 'Reconnecting…')
+  assert.match(connectionNotice('needs-auth'), /pair this phone again/)
+  assert.match(connectionNotice('no-token'), /pair this phone again/)
+  assert.match(connectionNotice('incompatible'), /Update/)
+  assert.equal(connectionNotice('closed'), 'Not connected.')
+})
+
+test("the session placeholder: a cold start's not-connected topic is Connecting…, not gone", () => {
+  assert.equal(sessionPlaceholder({ hasSession: false, topic: 'error', status: undefined }), 'Connecting…')
+  assert.equal(sessionPlaceholder({ hasSession: false, topic: 'error', status: 'connecting' }), 'Connecting…')
+  assert.equal(sessionPlaceholder({ hasSession: false, topic: 'error', status: 'disconnected' }), 'Reconnecting…')
+  assert.equal(sessionPlaceholder({ hasSession: false, topic: 'error', status: 'connected' }), 'This session is gone.')
+  assert.equal(sessionPlaceholder({ hasSession: false, topic: 'ready', status: 'connected' }), 'This session is gone.')
+  assert.equal(sessionPlaceholder({ hasSession: false, topic: 'loading', status: 'connecting' }), 'Loading…')
+  assert.match(sessionPlaceholder({ hasSession: true, topic: 'ready', status: 'connected' }), /^Not running/)
+})
+
+test('generations are per server: bumping one leaves the others', () => {
+  const a = bumpGenerations({}, ['s1'])
+  assert.deepEqual(a, { s1: 1 })
+  const b = bumpGenerations(a, ['s2', 's1'])
+  assert.deepEqual(b, { s1: 2, s2: 1 })
+  assert.equal(bumpGenerations(b, []), b)
+  assert.deepEqual(a, { s1: 1 })
+})
+
+test('a held view shows only for its own key: another key is loading, never the old snapshot', () => {
+  const held = { key: 's\nproject:a', view: { state: 'ready', snapshot: { id: 'a' } } }
+  assert.equal(viewFor(held, 's\nproject:a'), held.view)
+  assert.deepEqual(viewFor(held, 's\nproject:b'), { state: 'loading' })
+  assert.deepEqual(viewFor(null, 's\nproject:a'), { state: 'loading' })
+  assert.deepEqual(viewFor(held, null), { state: 'loading' })
+})
+
+test('Latest: waits for the first value; null once closed', async () => {
+  const project = new Latest()
+  const early = project.when()
+  project.set(null)
+  project.set({ id: 'p' })
+  assert.deepEqual(await early, { id: 'p' })
+  assert.deepEqual(await project.when(), { id: 'p' })
+  const never = new Latest()
+  const waiting = never.when()
+  never.close()
+  assert.equal(await waiting, null)
+  assert.equal(await never.when(), null)
 })
 
 test('ref counts: on for the first user, off after the last', () => {

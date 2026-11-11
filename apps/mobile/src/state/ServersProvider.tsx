@@ -6,6 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState, type AppStateStatus } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import { ServerRegistry, globalSocketFactory, type ConnectionStatus, type RegisteredServer, type AttentionEntry } from '../shared.ts'
+import { bumpGenerations, type Generations } from '../logic/generations.ts'
 import { attentionKey, mergeAttention, newItems, notificationContent, type AttentionItem } from '../logic/attention.ts'
 import { forgetServer, loadServers, loadToken, saveServer, type SavedServer } from './storage.ts'
 
@@ -24,8 +25,8 @@ interface ServersValue {
   attention: AttentionItem[]
   /** The live connection to a server, while the app is in the foreground */
   get(id: string): RegisteredServer | undefined
-  /** Bumped each time a connection is added or removed: screens re-subscribe on it */
-  generation: number
+  /** Bumped each time that server's connection is added or removed: its screens re-subscribe on it */
+  generationOf(id: string): number
   add(server: SavedServer, token: string): Promise<void>
   remove(id: string): Promise<void>
 }
@@ -42,7 +43,8 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   const registry = useMemo(() => new ServerRegistry({ createSocket: globalSocketFactory, client: 'trek-mobile', clientVersion: '0.1.0' }), [])
   const [saved, setSaved] = useState<SavedServer[]>([])
   const [ready, setReady] = useState(false)
-  const [generation, setGeneration] = useState(0)
+  const [generations, setGenerations] = useState<Generations>({})
+  const bump = useCallback((ids: string[]) => setGenerations((g) => bumpGenerations(g, ids)), [])
   const [statuses, setStatuses] = useState<Record<string, { status: ServerView['status']; message: string; capabilities: string[] }>>({})
   const [attentionByServer, setAttentionByServer] = useState<Record<string, AttentionEntry[]>>({})
   const appState = useRef<AppStateStatus>((AppState.currentState as AppStateStatus | null | undefined) ?? 'active')
@@ -97,15 +99,14 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   )
 
   const connectAll = useCallback(async () => {
-    const added = await Promise.all(savedRef.current.map(connect))
-    if (added.some(Boolean)) setGeneration((g) => g + 1)
-  }, [connect])
+    const list = savedRef.current
+    const added = await Promise.all(list.map(connect))
+    bump(list.filter((_, i) => added[i]).map((s) => s.id))
+  }, [connect, bump])
 
   const disconnectAll = useCallback(() => {
-    let removed = false
-    for (const s of savedRef.current) removed = disconnect(s.id) || removed
-    if (removed) setGeneration((g) => g + 1)
-  }, [disconnect])
+    bump(savedRef.current.filter((s) => disconnect(s.id)).map((s) => s.id))
+  }, [disconnect, bump])
 
   useEffect(() => {
     void loadServers().then((list) => {
@@ -141,7 +142,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
 
   const servers: ServerView[] = saved.map((s) => {
     const st = statuses[s.id]
-    return { ...s, status: st?.status ?? 'disconnected', message: st?.message ?? '', capabilities: st?.capabilities ?? [] }
+    return { ...s, status: st?.status ?? 'connecting', message: st?.message ?? '', capabilities: st?.capabilities ?? [] }
   })
 
   const attention = useMemo(
@@ -172,15 +173,15 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
       savedRef.current = list
       setSaved(list)
       await connect(server)
-      // Its old connection (if any) went and a new one came: screens re-subscribe either way.
-      setGeneration((g) => g + 1)
+      // Its old connection (if any) went and a new one came: its screens re-subscribe either way.
+      bump([server.id])
     },
-    [connect, disconnect]
+    [connect, disconnect, bump]
   )
 
   const remove = useCallback(
     async (id: string) => {
-      if (disconnect(id)) setGeneration((g) => g + 1)
+      if (disconnect(id)) bump([id])
       await forgetServer(id)
       const list = savedRef.current.filter((s) => s.id !== id)
       savedRef.current = list
@@ -194,10 +195,10 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
         return rest
       })
     },
-    [disconnect]
+    [disconnect, bump]
   )
 
-  const value: ServersValue = { ready, servers, attention, get: (id) => registry.get(id), generation, add, remove }
+  const value: ServersValue = { ready, servers, attention, get: (id) => registry.get(id), generationOf: (id) => generations[id] ?? 0, add, remove }
   return <ServersContext.Provider value={value}>{children}</ServersContext.Provider>
 }
 

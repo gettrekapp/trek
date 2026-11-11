@@ -41,12 +41,3 @@ export class TerminalFeed {
 export function pageScript(messages: readonly PageMessage[]): string {
   return `(function(){var f=window.__trek;if(f){${JSON.stringify(messages)}.forEach(function(m){f(m)})}})(); true;`
 }
-
-/**
- * xterm's own answers to a terminal query (a cursor position report, device attributes). The
- * desktop's terminal answers those already; the phone's copy would answer twice, so its
- * replies are dropped. Anything else typed goes through.
- */
-export function isTerminalReply(data: string): boolean {
-  return /^\x1b\[([?>][\d;]*c|\d+;\d+R)$/.test(data)
-}

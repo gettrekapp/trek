@@ -12,6 +12,7 @@ import type { PtyInfo } from '../../../src/shared/protocolV2'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { MAX_COLS, MAX_ROWS } from './limits.ts'
+import { isQueryReply } from './status.ts'
 
 const { Terminal } = (xtermNamespace as { default?: typeof xtermNamespace }).default ?? xtermNamespace
 
@@ -257,6 +258,21 @@ export class TerminalHost {
 
   write(ptyId: string, data: string): void {
     this.requireLive(ptyId).proc.write(data)
+  }
+
+  /**
+   * A client's pty.write. Every attached terminal answers the program's queries (a cursor
+   * position report, device attributes, colours) and reports focus; the program must get one
+   * answer, so input that is only such replies goes through from the pty's reply owner alone:
+   * the earliest attached connection still attached (the sinks keep attach order; a re-attach
+   * keeps its place), and the next one once it detaches. Anything else, typing included, always
+   * goes through. Answers whether it was written.
+   */
+  writeFrom(ptyId: string, sink: TerminalSink, data: string): boolean {
+    const record = this.requireLive(ptyId)
+    if (isQueryReply(data) && record.sinks.values().next().value !== sink) return false
+    record.proc.write(data)
+    return true
   }
 
   resize(ptyId: string, cols: number, rows: number): void {

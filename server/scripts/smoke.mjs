@@ -308,13 +308,13 @@ const pairHello = async (code, deviceName) => {
   const code = created.result?.code
   if (!created.ok || !/^[A-Z2-7]{26}$/.test(code ?? '') || !(created.result.expiresAt > Date.now()) || created.result.expiresInMs !== 300_000) fail(`pairing.create: ${JSON.stringify(created)}`)
   else ok('pairing.create gives a 26-character base32 code that expires later, and its lifetime (expiresInMs)')
-  // A cancelled code no longer redeems.
+  // A cancelled (withdrawn) code no longer redeems.
   const dropped = (await desk.req('pairing.create', {})).result?.code
   const cancelled = await desk.req('pairing.cancel', { code: dropped })
   const droppedTry = await pairHello(dropped, 'Dropped')
   const droppedClose = await raceTimeout(droppedTry.closed, 4000)
-  if (!cancelled.ok || cancelled.result.cancelled !== true || droppedClose.code !== 4003 || droppedClose.reason !== 'pairing code expired') fail(`pairing.cancel: ${JSON.stringify(cancelled)} ${JSON.stringify(droppedClose)}`)
-  else ok('pairing.cancel drops a code: redeeming it then closes 4003 "pairing code expired"')
+  if (!cancelled.ok || cancelled.result.cancelled !== true || droppedClose.code !== 4003 || droppedClose.reason !== 'pairing code was withdrawn on the desktop') fail(`pairing.cancel: ${JSON.stringify(cancelled)} ${JSON.stringify(droppedClose)}`)
+  else ok('pairing.cancel withdraws a code: redeeming it then closes 4003 "pairing code was withdrawn on the desktop"')
   // Typed back with lower case and dashes, as a person might.
   const typed = code.toLowerCase().replace(/(.{5})/g, '$1-')
   const redeem = await pairHello(typed, 'Smoke iPhone')

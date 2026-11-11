@@ -242,8 +242,9 @@ redeems it once, within 5 minutes, at `hello`. The server mints a named token
 `phone-<device>` (listed by `trek-server token list`, with the token that asked for the
 code under PAIRED BY) and sends it to the phone that once. Revoke it like any token;
 revoking the token that paired it leaves the phone's. Any signed-in client may ask for a
-code (the desktop, a `--web` browser session, a paired phone); `pairing.cancel` drops one
-(the desktop does on New code and when its panel closes). Codes live only in memory, as
+code (the desktop, a `--web` browser session, a paired phone); `pairing.cancel` withdraws one
+(the desktop does on New code only: Done leaves the code working until it expires, for a phone
+that scanned it), and revoking a token drops the codes it asked for. Codes live only in memory, as
 hashes. Failed redeems have their own limit, 5 a minute per address (nothing shared with
 the web sign-in): behind a reverse proxy every phone has the proxy's address, so they all
 share it. If the config can't be written the phone is refused ("the server could not

@@ -248,6 +248,8 @@ export const PAIRING_CLOSE_REASON = {
   used: 'pairing code already used',
   unknown: 'pairing code not recognised',
   limited: 'too many pairing attempts',
+  /** The desktop withdrew the code (New code) before it was used */
+  withdrawn: 'pairing code was withdrawn on the desktop',
   /** The code was good, and is spent, but the server could not write the new token to its config */
   unsaved: 'the server could not save the new token'
 } as const

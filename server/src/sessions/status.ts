@@ -58,8 +58,10 @@ export function onInput(status: SessionStatus): SessionStatus {
 // reports (the desktop's onKey never counted those, and pointer motion must not
 // clear attention). Shift/Ctrl/Alt+F3 sends ESC[1;<mod>R, which is byte-for-byte
 // a cursor report, so that key is not seen as input.
-const REPLY =
-  /\x1b\[\??\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\d+n|\x1b\[\??\d+;\d+\$y|\x1bP[01]\$r[^\x1b]*\x1b\\|\x1b\[[468];\d+;\d+t|\x1b\[[IO]|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}|\x1b\]\d+;[^\x07\x1b]*(?:\x07|\x1b\\)/y
+const QUERY_REPLY_SOURCE =
+  /\x1b\[\??\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\d+n|\x1b\[\??\d+;\d+\$y|\x1bP[01]\$r[^\x1b]*\x1b\\|\x1b\[[468];\d+;\d+t|\x1b\[[IO]|\x1b\]\d+;[^\x07\x1b]*(?:\x07|\x1b\\)/.source
+const MOUSE_REPORT_SOURCE = /\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/.source
+const REPLY = new RegExp(`${QUERY_REPLY_SOURCE}|${MOUSE_REPORT_SOURCE}`, 'y')
 
 /** True when `data` is only terminal replies (or empty): not the user typing. */
 export function isTerminalReply(data: string): boolean {
@@ -68,6 +70,26 @@ export function isTerminalReply(data: string): boolean {
     REPLY.lastIndex = at
     if (!REPLY.test(data)) return false
     at = REPLY.lastIndex
+  }
+  return true
+}
+
+// The query replies of REPLY, without its mouse reports: answers to a query the program sent
+// (cursor position and DECXCPR, device attributes, status and mode reports, DECRQSS, window
+// reports, OSC colour answers) and focus in/out, what every attached terminal sends on its own.
+// The server's headless screen never answers, so one client must; with several attached, only the
+// pty's reply owner's get through (TerminalHost.writeFrom). Mouse reports are the user acting,
+// from whichever client.
+const QUERY_REPLY = new RegExp(QUERY_REPLY_SOURCE, 'y')
+
+/** True when `data` is only query replies (and focus reports), and not empty. */
+export function isQueryReply(data: string): boolean {
+  if (data === '') return false
+  let at = 0
+  while (at < data.length) {
+    QUERY_REPLY.lastIndex = at
+    if (!QUERY_REPLY.test(data)) return false
+    at = QUERY_REPLY.lastIndex
   }
   return true
 }

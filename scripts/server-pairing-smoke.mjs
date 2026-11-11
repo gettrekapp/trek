@@ -8,15 +8,17 @@
 // smoke gets (smokeGh.mjs). The built app runs with a temp HOME and --user-data-dir and no Local
 // server. The server listens only on this machine's first non-internal IPv4 address (--host, with
 // --insecure: plain ws on a LAN address) and is saved in the app under that address, which a phone
-// could reach; a machine with no such address fails the smoke at once (every loopback form,
-// IPv4-mapped included, hides the button). Through the DOM and the SDK it checks:
+// could reach; a machine with no such address skips the smoke (SKIP, exit 0) with why (every
+// loopback form, IPv4-mapped included, hides the button). Through the DOM and the SDK it checks:
 //   - Pair a phone… shows for the connected remote server (and not for a loopback URL);
 //   - its QR and text carry the code and the URL, and nothing in the window holds a token;
 //   - the code redeems once, at hello, for a named token phone-<device> that then signs in;
 //   - a second redeem of the same code is refused, saying it was used;
-//   - New code cancels the code shown (it no longer redeems), and so does closing the panel;
+//   - New code withdraws the code shown (refused as withdrawn); Done keeps it working until it
+//     expires (a phone that scanned it can still pair);
 //   - `token list` shows the phone's token PAIRED BY the desktop's token;
-//   - revoking the token (the server's CLI) closes the phone's connection and refuses it after;
+//   - revoking the token (the server's CLI) closes the phone's connection and refuses it after,
+//     and drops the waiting code that token asked for;
 //   - no error dialogs, console or page errors.
 import './smokeGh.mjs'
 import { _electron as electron } from 'playwright-core'
@@ -86,9 +88,9 @@ const lanAddress = () => {
 }
 const lan = lanAddress()
 if (!lan) {
-  console.error('SERVER PAIRING SMOKE FAIL: this machine has no non-internal IPv4 address (os.networkInterfaces()); the smoke needs one to bind the server where a phone could reach it')
+  console.log('SERVER PAIRING SMOKE SKIP: this machine has no non-internal IPv4 address (os.networkInterfaces()); the smoke needs one to bind the server where a phone could reach it')
   rmSync(work, { recursive: true, force: true })
-  process.exit(1)
+  process.exit(0)
 }
 
 const freePort = () =>
@@ -225,7 +227,7 @@ try {
     check('a second phone named the same gets a numbered token', r.tokenName, 'phone-Smoke-Phone-2')
   })
 
-  // ---- 5. Cancelling: New code, and closing the panel ---------------------------------------------
+  // ---- 5. New code withdraws the code shown; Done keeps it ----------------------------------------
   const codeShown = async () => ((await panel.locator('[data-testid="pair-code"]').textContent()) ?? '').trim()
   // The code shown was redeemed above: New code twice, so the one replaced was still waiting.
   const newCode = async () => {
@@ -240,16 +242,19 @@ try {
   const beforeNew = await newCode()
   check('New code shows another code', (await newCode()) !== null && beforeNew !== null, true)
   const redeemKind = (c) => redeemPairingCode({ url, code: c, deviceName: 'Late', createSocket: globalSocketFactory }).then(() => 'paired', (e) => e.kind)
-  check('the code New code replaced no longer redeems', await redeemKind(beforeNew), 'expired')
+  check('the code New code replaced no longer redeems: withdrawn', await redeemKind(beforeNew), 'withdrawn')
   const lastShown = await codeShown()
   await panel.locator('button', { hasText: 'Done' }).click()
   await panel.waitFor({ state: 'detached', timeout: 5000 })
   await sleep(500)
-  check('closing the panel cancels the code it showed', await redeemKind(lastShown), 'expired')
+  check('Done keeps the code it showed: a phone that scanned it still pairs', await redeemKind(lastShown), 'paired')
 
   // ---- 6. Revocation --------------------------------------------------------------------------------
+  // A code the phone's own token asked for goes with that token.
+  const phoneCode = (await phone.request('pairing.create', {})).code
   cli('token', 'revoke', 'phone-Smoke-Phone')
   check("revoking the token closes the phone's connection", await until(() => phone.status, 'needs-auth', 8000), 'needs-auth')
+  check('and drops the waiting code it asked for (refused as expired)', await redeemKind(phoneCode), 'expired')
 
   check('no error dialogs', await app.evaluate(() => globalThis.__dialogs.filter((d) => d.type === 'error')), [])
   check('no console or page errors', pageErrors, [])

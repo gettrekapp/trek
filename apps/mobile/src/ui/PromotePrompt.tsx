@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Modal, Text, View } from 'react-native'
 import { CAPABILITY, type Project, type PromoteRequestEvent, type PromoteSettledEvent, type ServerConnection } from '../shared.ts'
+import { Latest } from '../logic/latest.ts'
 import { RefCounts } from '../logic/refCount.ts'
 import { useServer, errorMessage } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
@@ -26,8 +27,10 @@ type Prompt =
 export function PromotePrompt({ serverId, projectId, project }: { serverId: string; projectId: string; project: Project | null }): React.JSX.Element | null {
   const server = useServer(serverId)
   const [prompt, setPrompt] = useState<Prompt | null>(null)
-  const projectRef = useRef(project)
-  projectRef.current = project
+  // The project's snapshot, which a request can arrive before (the screen just opened): the
+  // request waits for it, so a worktree is only called unknown against a loaded project.
+  const projectLatest = useRef(new Latest<Project>()).current
+  useEffect(() => projectLatest.set(project), [project, projectLatest])
   const promptRef = useRef(prompt)
   promptRef.current = prompt
 
@@ -81,8 +84,16 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
       promptRef.current = next
       setPrompt(next)
     }
+    let gone = false
+    let leave = (): void => {}
+    const left = new Promise<null>((resolve) => {
+      leave = () => resolve(null)
+    })
     const ask = async (request: PromoteRequestEvent): Promise<void> => {
-      const repo = projectRef.current?.repositories.find((r) => r.worktrees.some((w) => w.id === request.worktreeId))
+      const loaded = await Promise.race([projectLatest.when(), left])
+      // The screen went (or the project never loaded) before the snapshot came: another window answers.
+      if (gone || !loaded) return
+      const repo = loaded.repositories.find((r) => r.worktrees.some((w) => w.id === request.worktreeId))
       const worktree = repo?.worktrees.find((w) => w.id === request.worktreeId)
       if (!repo || !worktree) {
         await conn.request('promote.answer', { projectId, requestId: request.requestId, outcome: 'unknown-worktree' }).catch(() => {})
@@ -118,6 +129,8 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
       else show({ kind: 'confirm', request, summary })
     }
     return () => {
+      gone = true
+      leave()
       offWelcome()
       offEvent()
       if (counts.release(projectId)) listen(false)

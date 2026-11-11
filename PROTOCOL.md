@@ -388,11 +388,14 @@ redeems the code at `hello`.
   for the token's name. `expiresAt` is by the server's clock; `expiresInMs` is the code's lifetime
   (300000), so a client whose clock is off counts down from its own clock on arrival. The local
   server answers `NOT_FOUND`.
-- **Cancelling:** `pairing.cancel {code}` drops a waiting code, which is then refused as
-  `pairing code expired`; `cancelled` is false for a code that was unknown, spent or expired
-  already. Any signed-in connection that knows the code may cancel it (whoever holds a code could
-  redeem it, which is more). The desktop cancels the code shown on **New code** and when the panel
-  closes.
+- **Cancelling:** `pairing.cancel {code}` withdraws a waiting code, which is then refused as
+  `pairing code was withdrawn on the desktop`; `cancelled` is false for a code that was unknown,
+  spent or expired already. Any signed-in connection that knows the code may cancel it (whoever
+  holds a code could redeem it, which is more). The desktop withdraws the code shown on **New
+  code** only: **Done** (or the panel closing) leaves it working for the rest of its 5 minutes,
+  since a phone that scanned it may still be redeeming it.
+- **Revocation:** revoking a token drops the waiting codes it asked for (their `pairedBy`), which
+  are then refused as `pairing code expired`. Codes with no recorded asker stay.
 - **Redeeming:** the phone's `hello` carries `pairingCode` and `deviceName` and no token:
 
   ```json
@@ -419,8 +422,9 @@ redeems the code at `hello`.
 
   | Reason | When |
   |---|---|
-  | `pairing code expired` | its 5 minutes passed |
+  | `pairing code expired` | its 5 minutes passed, or the token that asked for it was revoked |
   | `pairing code already used` | it was redeemed before |
+  | `pairing code was withdrawn on the desktop` | `pairing.cancel` (the desktop's **New code**) withdrew it |
   | `pairing code not recognised` | no such code (or the local server) |
   | `too many pairing attempts` | 5 failed redeems from the address in a minute (pairing's own limit, per address only: nothing shared with the web sign-in, no total). Behind a reverse proxy every phone has the proxy's address, so they all share those 5 |
   | `the server could not save the new token` | the code was good but writing the config failed (the server logs why); the code is spent all the same, so the phone needs a new one |
@@ -1226,6 +1230,20 @@ connection is congested; try again"). Nothing about the pty changed, so this is
 not a failure of the terminal: a reconnecting client should attach one pty at a
 time, and retry a refused attach after a delay, once its own backlog has
 drained. `session.sendPrompt` needs no attach.
+**Query replies and the reply owner.** The server's headless screen never answers the
+program's terminal queries, so an attached client's terminal must; but every attached terminal
+answers, and the program should get one answer. A `pty.write` whose data is only query replies
+(cursor position reports `ESC [ n ; m R` and `ESC [ ? n ; m R`, device attributes `ESC [ ? ... c`
+and `ESC [ > ... c`, status reports `ESC [ n n`, mode reports `ESC [ ? m ; v $ y`, DECRQSS
+replies, window reports `ESC [ 4|6|8 ; n ; m t`, OSC colour answers `ESC ] n ; ... BEL|ST`) or
+focus in/out (`ESC [ I`, `ESC [ O`) is written to the pty only from its **reply owner**: the
+earliest attached connection that is still attached (a re-attach keeps its place), and the next
+one once it detaches or is dropped. From any other connection it is accepted and dropped. Any other
+data, mixed with replies or not, goes through from every connection (typing, pastes, keys, mouse
+reports). So a phone attached alone answers its program's queries; with the desktop attached
+first, the desktop's answers are the ones the program sees. One key is caught by this:
+Shift/Ctrl/Alt+F3 sends `ESC [ 1 ; <mod> R`, byte-for-byte a cursor report, so it reaches the
+program only from the reply owner.
 `pty.resized {ptyId, cols, rows}` goes to every attached connection (the one that resized
 included) whenever a `pty.resize` changes the size; one that leaves it as it was sends nothing. A
 client that never resizes (the phone) follows it.

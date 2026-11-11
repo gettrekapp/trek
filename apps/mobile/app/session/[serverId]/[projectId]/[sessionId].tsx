@@ -8,9 +8,10 @@ import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { WebView as RNWebView, type WebViewMessageEvent } from 'react-native-webview'
 import type { Project, Session } from '../../../../src/shared.ts'
-import { errorMessage, useServer, useTopic } from '../../../../src/state/hooks.ts'
+import { errorMessage, useConnectionNotice, useServer, useServerStatus, useTopic } from '../../../../src/state/hooks.ts'
 import { KEY_BAR } from '../../../../src/logic/keys.ts'
-import { TerminalFeed, isTerminalReply, pageScript, type PageMessage } from '../../../../src/logic/terminalFeed.ts'
+import { sessionPlaceholder } from '../../../../src/logic/connection.ts'
+import { TerminalFeed, pageScript, type PageMessage } from '../../../../src/logic/terminalFeed.ts'
 import { rememberPtySize } from '../../../../src/state/ptySizes.ts'
 import { TERMINAL_HTML } from '../../../../src/terminal/terminalHtml.generated.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
@@ -36,11 +37,20 @@ export default function SessionScreen(): React.JSX.Element {
   const topic = useTopic(serverId, `project:${projectId}`)
   const session = topic.state === 'ready' ? findSession(topic.snapshot, sessionId) : undefined
   const ptyId = session?.ptyId
+  const status = useServerStatus(serverId)
+  const notice = useConnectionNotice(serverId)
   const web = useRef<WebViewHandle>(null)
   const headerHeight = useHeaderHeight()
   // The page that said 'ready', and for which pty: a new pty remounts the WebView (keyed by it),
   // and a reload of the page says 'ready' again (n), so the stream starts over on a fresh page.
   const [page, setPage] = useState<{ ptyId: string; n: number } | null>(null)
+  // Bumped when the WebView's content process died (iOS) or its renderer went (Android): the
+  // WebView is remounted (keyed by it), and its page says 'ready' again.
+  const [reloads, setReloads] = useState(0)
+  const reload = useCallback(() => {
+    setPage(null)
+    setReloads((n) => n + 1)
+  }, [])
   const ptyRef = useRef(ptyId)
   ptyRef.current = ptyId
   const pageReady = !!ptyId && page?.ptyId === ptyId
@@ -96,10 +106,12 @@ export default function SessionScreen(): React.JSX.Element {
     } catch {
       return
     }
+    // Input is everything the page sends, xterm's own query replies included: the server forwards
+    // replies from one client per pty (its reply owner), so the phone answers when it's alone.
     if (m.type === 'ready') {
       const id = ptyRef.current
       if (id) setPage((p) => ({ ptyId: id, n: (p?.n ?? 0) + 1 }))
-    } else if (m.type === 'input' && typeof m.data === 'string' && !isTerminalReply(m.data)) write(m.data)
+    } else if (m.type === 'input' && typeof m.data === 'string') write(m.data)
   }
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
@@ -121,6 +133,7 @@ export default function SessionScreen(): React.JSX.Element {
   return (
     <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
       <Stack.Screen options={{ title: session?.title ?? 'Session' }} />
+      {notice ? <Text style={[ui.warn, { paddingHorizontal: 12, paddingTop: 6 }]}>{notice}</Text> : null}
       {session ? (
         <View style={{ paddingHorizontal: 12, paddingTop: 6 }}>
           <Text style={{ color: statusColor(session.status) }}>{STATUS_TEXT[session.status]}</Text>
@@ -135,7 +148,7 @@ export default function SessionScreen(): React.JSX.Element {
       <View style={{ flex: 1, margin: 8, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
         {ptyId ? (
           <WebView
-            key={ptyId}
+            key={`${ptyId}:${reloads}`}
             ref={web}
             source={source}
             originWhitelist={['about:*']}
@@ -144,7 +157,8 @@ export default function SessionScreen(): React.JSX.Element {
             // window.open goes nowhere either.
             onShouldStartLoadWithRequest={(r: { url: string }) => r.url.startsWith('about:')}
             onOpenWindow={() => {}}
-            onLoadStart={() => setPage(null)}
+            onContentProcessDidTerminate={reload}
+            onRenderProcessGone={reload}
             javaScriptEnabled
             domStorageEnabled={false}
             allowFileAccess={false}
@@ -157,7 +171,7 @@ export default function SessionScreen(): React.JSX.Element {
           />
         ) : (
           <View style={ui.pad}>
-            <Text style={ui.muted}>{session ? 'Not running. Restart it from the worktree, or load the worktree.' : topic.state === 'loading' ? 'Loading…' : 'This session is gone.'}</Text>
+            <Text style={ui.muted}>{sessionPlaceholder({ hasSession: !!session, topic: topic.state, status })}</Text>
           </View>
         )}
       </View>
