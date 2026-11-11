@@ -502,7 +502,8 @@ Each phase gets its own spec (or a section here, for phase 1), plan and implemen
    by a one-time code from the desktop app), spec `2026-11-11-phase6a-mobile-companion-design.md`, plan
    `docs/superpowers/plans/2026-11-11-central-server-phase6a-mobile.md`;
    **6b** is background push through a Trek push relay the user hosts, spec
-   `2026-11-11-phase6b-push-relay-design.md`.
+   `2026-11-11-phase6b-push-relay-design.md`, plan
+   `docs/superpowers/plans/2026-11-11-central-server-phase6b-push.md`.
 
 Remote projects can be opened after phase 3. After phase 4 every project is on a server and
 the legacy path is gone; phase 5 brings back the remaining features.
