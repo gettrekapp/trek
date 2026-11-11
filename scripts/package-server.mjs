@@ -2,7 +2,7 @@
 // trek-server-<version>-<os>-<arch>.tar.gz, run with a system Node >= 22.
 //
 //   npm run build:web && npm --prefix server run build     (server/dist: the .cjs, build.json, web-client)
-//   node scripts/package-server.mjs [--out <dir>]          (default: dist-release/)
+//   node scripts/package-server.mjs [--out <dir>] [--sign <identity>]   (default: dist-release/)
 //   node scripts/server-tarball-smoke.mjs <tarball>        (unpacks it and runs it)
 //
 // The tarball holds one folder, trek-server-<version>-<os>-<arch>/:
@@ -21,6 +21,13 @@
 // on a runner of each platform. node-pty's version is the one in the root package-lock.json, so the
 // tarball runs what the app and the tests run. Installing it needs network access (npm) and, on
 // Linux, python3, make and g++.
+//
+// --sign (macOS): signs node-pty's pty.node and spawn-helper with that codesign identity (a
+// Developer ID Application one), the hardened runtime and a secure timestamp, from the keychain
+// CSC_KEYCHAIN names when it is set. macOS refuses to load a quarantined native module (any file
+// unpacked from a browser download) unless it is signed and notarized; the release workflow
+// notarizes the signed files after this (see docs/RELEASING.md). Unsigned, node-pty keeps the
+// ad-hoc signature its linker gave it, which runs only when not quarantined.
 import { execFileSync } from 'node:child_process'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -68,6 +75,9 @@ function fail(message) {
 
 const outAt = process.argv.indexOf('--out')
 const out = resolve(outAt >= 0 ? (process.argv[outAt + 1] ?? fail('--out needs a directory')) : join(root, 'dist-release'))
+const signAt = process.argv.indexOf('--sign')
+const signIdentity = signAt >= 0 ? (process.argv[signAt + 1] ?? fail('--sign needs a codesign identity')) : undefined
+if (signIdentity !== undefined && process.platform !== 'darwin') fail('--sign is for macOS only')
 
 const OS = { darwin: 'darwin', linux: 'linux' }[process.platform]
 const ARCH = { x64: 'x64', arm64: 'arm64' }[process.arch]
@@ -111,7 +121,8 @@ try {
   const env = { ...process.env }
   delete env.npm_config_build_from_source
   execFileSync('npm', ['install', '--omit=dev', '--no-package-lock', '--no-audit', '--no-fund', '--loglevel=error'], { cwd: dir, env, stdio: ['ignore', 'inherit', 'inherit'] })
-  prunePty(join(dir, 'node_modules'))
+  const native = prunePty(join(dir, 'node_modules'))
+  if (signIdentity !== undefined) sign(native, signIdentity)
 
   mkdirSync(out, { recursive: true })
   const tarball = join(out, `${name}.tar.gz`)
@@ -128,7 +139,7 @@ try {
  * Keeps what node-pty loads at run time: package.json, LICENSE, lib/ (without its tests) and the
  * one native folder it would pick (lib/utils.js: build/Release, then prebuilds/<platform>-<arch>),
  * holding pty.node and spawn-helper. Drops its sources, other platforms' prebuilds and node-addon-api
- * (needed only to compile it).
+ * (needed only to compile it). Returns that native folder.
  */
 function prunePty(modules) {
   const pty = join(modules, 'node-pty')
@@ -158,6 +169,17 @@ function prunePty(modules) {
     if (!existsSync(helper)) fail(`node-pty's ${helper} is missing`)
     // Prebuilt spawn-helpers can arrive without their execute bit (see scripts/fix-pty-helper.mjs).
     chmodSync(helper, 0o755)
+  }
+  return native
+}
+
+/** codesign pty.node and spawn-helper: the identity, the hardened runtime, a secure timestamp. */
+function sign(native, identity) {
+  const keychain = process.env.CSC_KEYCHAIN ? ['--keychain', process.env.CSC_KEYCHAIN] : []
+  for (const file of ['pty.node', 'spawn-helper']) {
+    const path = join(native, file)
+    execFileSync('codesign', ['--force', '--options', 'runtime', '--timestamp', '--sign', identity, ...keychain, path], { stdio: 'inherit' })
+    execFileSync('codesign', ['--verify', '--strict', '--verbose=2', path], { stdio: 'inherit' })
   }
 }
 
@@ -199,9 +221,14 @@ trek-server start                  # serve (see --help for --host, --port, --web
 
 To upgrade, unpack the new version beside this one and move the symlink (and the unit's path);
 the configuration and data live in ~/.config/trek-server and the data folder, not here.
-${OS === 'darwin' ? `
+${OS !== 'darwin' ? '' : signIdentity !== undefined ? `
+On macOS, a tarball downloaded with a browser is quarantined, and so is what it unpacks. node-pty's
+native files here are signed and notarized, so macOS loads them anyway (it checks the notarization
+online the first time). If it still refuses (\`trek-server start\` then says "macOS refused to load
+it"), clear the flag: \`xattr -dr com.apple.quarantine ${name}\`.
+` : `
 On macOS, a tarball downloaded with a browser is quarantined, and so is what it unpacks; the
 native files here are not notarized, so clear the flag (or download with curl):
 \`xattr -dr com.apple.quarantine ${name}\`.
-` : ''}`
+`}`
 }

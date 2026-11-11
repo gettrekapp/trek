@@ -7,10 +7,14 @@
 #   macos-smokes macos-smokes.yml (the Electron smokes, one at a time)                    ┘
 #   mac-app      Trek-X.Y.Z-arm64.dmg: the app signed (Developer ID), hardened runtime, notarized
 #                and stapled, and the dmg notarized and stapled too; verified, then the
-#                packaged-app smokes run against it. The only job with the signing secrets: they
-#                live in the `release` environment (limited to v* tags), not the repository.
-#   server       trek-server-X.Y.Z-<os>-<arch>.tar.gz on a native runner for each platform,
-#                each unpacked and run (scripts/server-tarball-smoke.mjs)
+#                packaged-app smokes run against it. It and server-mac are the only jobs with the
+#                signing secrets: they live in the `release` environment (limited to v* tags), not
+#                the repository.
+#   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, each
+#                unpacked and run (scripts/server-tarball-smoke.mjs)
+#   server-mac   trek-server-X.Y.Z-darwin-<arch>.tar.gz the same way, with node-pty's pty.node and
+#                spawn-helper signed (Developer ID, hardened runtime) and notarized, the smoke
+#                unpacking it quarantined as a browser download is (--notarized)
 #   relay        trek-relay-X.Y.Z.cjs (+ .sha256)
 #   release      SHA256SUMS over everything, then `gh release create --draft` (a re-run that finds
 #                the draft already there uploads into it with --clobber instead)
@@ -79,7 +83,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     # The signing and notarization secrets are the `release` environment's (docs/RELEASING.md):
-    # only this job, on a v* tag the environment allows, can read them.
+    # only this job and server-mac, on a v* tag the environment allows, can read them.
     environment: release
     permissions:
       contents: read
@@ -143,56 +147,12 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          set -euo pipefail
-          kc="$RUNNER_TEMP/trek-signing.keychain-db"
-          p12="$RUNNER_TEMP/trek-signing.p12"
-          # Removed however this step ends, electron-builder or the notary failing included.
-          trap 'rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$p12"; security delete-keychain "$kc" 2>/dev/null || true' EXIT
-
-          # The certificate goes into a keychain made here, not through CSC_LINK: electron-builder
-          # 26.15.3 runs `security set-key-partition-list -k <the .p12's password>` on its own temp
-          # keychain, whose password is a different, random one, and fails ("SecKeychainUnlock: The
-          # user name or passphrase you entered is not correct"). With CSC_LINK unset it signs from
-          # the keychain named by CSC_KEYCHAIN.
-          kcpass=$(openssl rand -base64 32)
-          security create-keychain -p "$kcpass" "$kc"
-          security set-keychain-settings -lut 21600 "$kc"
-          security unlock-keychain -p "$kcpass" "$kc"
-          (umask 077; printf '%s' "$CSC_LINK" | base64 --decode > "$p12")
-          security import "$p12" -k "$kc" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
-          rm -f "$p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpass" "$kc" > /dev/null
-          # On the search list too, so codesign finds the identity's certificate chain.
-          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
-          identities=$(security find-identity -v -p codesigning "$kc")
-          case $identities in *'Developer ID Application'*) ;; *) echo "::error title=No signing identity::CSC_LINK holds no Developer ID Application identity"; exit 1 ;; esac
-          unset CSC_LINK CSC_KEY_PASSWORD kcpass
-          export CSC_KEYCHAIN="$kc"
-
-          if [ -n "$APPLE_API_KEY_P8" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
-            # The API key wins: electron-builder would use the Apple ID first if both were set.
-            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD
-            key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
-            (umask 077; printf '%s\n' "$APPLE_API_KEY_P8" > "$key")
-            export APPLE_API_KEY="$key"
-            notary=(--key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
-          else
-            notary=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
-          fi
-          unset APPLE_API_KEY_P8
+          # The signing keychain, the notary credentials and notarize(), removed however the step ends.
+          source scripts/macos-signing.sh
           npx electron-builder --mac --arm64 --publish never
 
           dmg="dist/Trek-$VERSION-arm64.dmg"
-          # Judged by the status it reports, not its exit code; a failure prints the notary's log.
-          result=$(xcrun notarytool submit "$dmg" "${notary[@]}" --wait --timeout 45m --output-format json) || true
-          echo "$result"
-          status=$(node -e 'try { process.stdout.write(String(JSON.parse(process.argv[1]).status)) } catch { process.stdout.write("no answer") }' "$result")
-          if [ "$status" != Accepted ]; then
-            id=$(node -e 'try { process.stdout.write(String(JSON.parse(process.argv[1]).id ?? "")) } catch {}' "$result")
-            [ -z "$id" ] || xcrun notarytool log "$id" "${notary[@]}" || true
-            echo "::error title=dmg not notarized::The notary service says \"$status\" for $dmg (its log is above)"
-            exit 1
-          fi
+          notarize "$dmg"
           xcrun stapler staple "$dmg"
       - name: Verify the signature, hardened runtime, notarization and node-pty
         run: |
@@ -258,8 +218,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: darwin-arm64, runner: macos-latest }
-          - { target: darwin-x64, runner: macos-15-intel }
           # Ubuntu 22.04 (glibc 2.35): node-pty compiled there runs on older distros than 24.04's.
           - { target: linux-x64, runner: ubuntu-22.04 }
           - { target: linux-arm64, runner: ubuntu-22.04-arm }
@@ -289,6 +247,104 @@ jobs:
           test -f "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
       - name: Unpack and run it
         run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-${{ matrix.target }}
+          path: dist-release/trek-server-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  # The macOS tarballs: node-pty's pty.node and spawn-helper signed (Developer ID, hardened runtime)
+  # and notarized. A browser download is quarantined and tar passes that on to every file it
+  # unpacks; macOS then loads a quarantined native module only if it is notarized ("library load
+  # disallowed by system policy" otherwise). A bare Mach-O cannot have a ticket stapled to it, so
+  # Gatekeeper looks the ticket up online the first time it loads it. The smoke unpacks the
+  # tarball quarantined (--notarized), so its pty check is Gatekeeper's.
+  server-mac:
+    name: trek-server ${{ matrix.target }} (signed, notarized)
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    # The signing secrets, as for mac-app.
+    environment: release
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-latest }
+          - { target: darwin-x64, runner: macos-15-intel }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      # Signed now, or not at all: a release never ships a tarball macOS refuses to load once downloaded.
+      - name: Signing and notarization secrets are set
+        env:
+          HAS_CSC_LINK: ${{ secrets.CSC_LINK != '' }}
+          HAS_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD != '' }}
+          HAS_API_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' }}
+          HAS_ANY_API_KEY: ${{ secrets.APPLE_API_KEY_P8 != '' || secrets.APPLE_API_KEY_ID != '' || secrets.APPLE_API_ISSUER != '' }}
+          HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+        run: |
+          missing=()
+          [ "$HAS_CSC_LINK" = true ] || missing+=("CSC_LINK (the Developer ID Application certificate, .p12, base64)")
+          [ "$HAS_CSC_KEY_PASSWORD" = true ] || missing+=("CSC_KEY_PASSWORD (the .p12's password)")
+          if [ "$HAS_API_KEY" != true ] && [ "$HAS_APPLE_ID" != true ]; then
+            if [ "$HAS_ANY_API_KEY" = true ]; then
+              missing+=("all three of APPLE_API_KEY_P8, APPLE_API_KEY_ID and APPLE_API_ISSUER (only some are set)")
+            else
+              missing+=("APPLE_API_KEY_P8 + APPLE_API_KEY_ID + APPLE_API_ISSUER (App Store Connect API key; or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID)")
+            fi
+          fi
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Release not signed::The macOS trek-server tarballs carry a signed, notarized node-pty, and the release refuses to ship them unsigned. Missing secrets in the release environment: ${missing[*]}. See docs/RELEASING.md."
+            exit 1
+          fi
+          if [ "$HAS_API_KEY" = true ]; then echo "Notarizing with the App Store Connect API key"; else echo "Notarizing with the Apple ID"; fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Build the web client and the server
+        run: |
+          npm run build:web
+          npm --prefix server run build
+      - name: Package, sign and notarize
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # The signing keychain, the notary credentials and notarize(), removed however the step ends.
+          source scripts/macos-signing.sh
+          node scripts/package-server.mjs --out dist-release --sign 'Developer ID Application'
+          tarball="dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
+          test -f "$tarball"
+          # The notary takes a zip; its ticket is for the signed files (their code hashes), so the
+          # same files in the tarball pass. node-pty's native folder holds just the two of them.
+          unpacked="$RUNNER_TEMP/trek-server-notarize"
+          rm -rf "$unpacked" && mkdir -p "$unpacked"
+          tar -xzf "$tarball" -C "$unpacked"
+          native=$(dirname "$(find "$unpacked" -path '*/node-pty/*' -name pty.node)")
+          ditto -c -k --keepParent "$native" "$RUNNER_TEMP/node-pty-native.zip"
+          notarize "$RUNNER_TEMP/node-pty-native.zip"
+      - name: Unpack it quarantined and run it
+        run: node scripts/server-tarball-smoke.mjs --notarized "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: server-${{ matrix.target }}
@@ -334,7 +390,7 @@ jobs:
 
   release:
     name: Draft GitHub Release
-    needs: [version, ci, macos-smokes, mac-app, server, relay]
+    needs: [version, ci, macos-smokes, mac-app, server, server-mac, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

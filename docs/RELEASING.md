@@ -38,8 +38,8 @@ version (0.2.0 today). A version with a prerelease part (`0.3.0-rc.1`) makes a p
 
 3. Watch **Actions → Release**. It takes the longest of: the macOS smokes (about an hour), the
    signed app (notarization usually takes 5–15 minutes), the server tarballs.
-   The `mac-app` job runs in the `release` environment: if you gave it a required reviewer, it
-   waits for an approval (**Review deployments** on the run's page) before it starts.
+   The `mac-app` and `server-mac` jobs run in the `release` environment: if you gave it a
+   required reviewer, each waits for an approval (**Review deployments** on the run's page) before it starts.
 4. When it is green, open the draft under **Releases**, edit the notes, and publish it. The
    notes start with the workflow's own (the list of files and how to check them), followed by
    GitHub's generated notes (the merged PRs since the last release).
@@ -56,9 +56,9 @@ left as they were. It refuses to touch a release that is already published.
 | Artifact | Built on | Checked by |
 | --- | --- | --- |
 | `Trek-X.Y.Z-arm64.dmg` | macos-latest (arm64) | `codesign --verify --deep --strict`; a Developer ID Application signature with the hardened runtime and the entitlements; every Mach-O under `app.asar.unpacked` (node-pty's `pty.node` and `spawn-helper`) signed with the hardened runtime and `spawn-helper` executable; `stapler validate` and `spctl --assess` on the app, `stapler validate` on the notarized dmg and on the app inside it; then `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` on the signed app |
-| `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `scripts/server-tarball-smoke.mjs` |
+| `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `codesign` (in `package-server.mjs --sign`) and `notarytool` on node-pty's `pty.node` and `spawn-helper`; `scripts/server-tarball-smoke.mjs --notarized` (Developer ID, hardened runtime, timestamp; unpacked quarantined) |
 | `trek-server-X.Y.Z-darwin-x64.tar.gz` | macos-15-intel | 〃 |
-| `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | 〃 |
+| `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | `scripts/server-tarball-smoke.mjs` |
 | `trek-server-X.Y.Z-linux-arm64.tar.gz` | ubuntu-22.04-arm | 〃 |
 | `trek-relay-X.Y.Z.cjs` and `.cjs.sha256` | ubuntu-latest | `node trek-relay-X.Y.Z.cjs version` |
 | `SHA256SUMS` | | every file above |
@@ -91,8 +91,19 @@ client, `node_modules/node-pty` for that platform only, `trek-server.service` an
 `scripts/server-tarball-smoke.mjs` unpacks it in a temp HOME and checks the layout, `--version`,
 a pty from its node-pty, the launcher through a symlink, `start` on loopback with a WebSocket
 client, and SIGTERM. The Linux tarballs are built on Ubuntu 22.04 so they run on glibc 2.35 and
-later. The macOS tarballs are not signed or notarized: a browser download quarantines them (the
-README inside says how to clear it); `curl` does not.
+later.
+
+**The macOS tarballs** are built by the `server-mac` job, which runs in the `release` environment
+like `mac-app`. A browser download is quarantined, tar passes the flag on to every file it
+unpacks, and macOS loads a quarantined native module only if it is notarized: an unsigned node-pty
+fails with "library load disallowed by system policy" (node-pty itself reports it as "Cannot find
+module './prebuilds/darwin-arm64//pty.node'"; `trek-server start` says what happened and how to
+clear the flag). So `package-server.mjs --sign 'Developer ID Application'` signs `pty.node` and
+`spawn-helper` with the hardened runtime and a timestamp, from the keychain
+`scripts/macos-signing.sh` makes (the script `mac-app` sources too), and the job notarizes the two
+(a zip of node-pty's native folder; a bare Mach-O cannot be stapled, so Gatekeeper fetches the
+ticket online on first load). `server-tarball-smoke.mjs --notarized` then checks both signatures
+and unpacks a quarantined copy, so its pty check and `start` go through Gatekeeper.
 
 To build and check one locally (for this machine's platform):
 
@@ -105,7 +116,7 @@ node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-<os>-<a
 ## One-time GitHub setup
 
 The signing and notarization secrets live in a GitHub **environment** named `release`, not in the
-repository's secrets: only the `mac-app` job names that environment, and the environment only
+repository's secrets: only the `mac-app` and `server-mac` jobs name that environment, and the environment only
 lets a `v*` tag use it, so no branch, pull request or other workflow can read them. A tag ruleset
 then limits who can create a `v*` tag.
 
@@ -140,7 +151,8 @@ then limits who can create a `v*` tag.
 ## The secrets
 
 The release fails at its first step, naming what is missing, unless the certificate and one
-notarization method are set in the `release` environment; it never ships an unsigned app.
+notarization method are set in the `release` environment; it never ships an unsigned app or
+macOS server tarball.
 
 | Secret | What it is |
 | --- | --- |
