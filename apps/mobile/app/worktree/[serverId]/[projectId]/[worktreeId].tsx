@@ -8,9 +8,17 @@ import { errorMessage, useServer, useTopic } from '../../../../src/state/hooks.t
 import { Button } from '../../../../src/ui/Button.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { ui } from '../../../../src/ui/theme.ts'
+import { knownPtySize } from '../../../../src/state/ptySizes.ts'
 
-/** A new session's first size; the terminal screen resizes it to the phone's once it attaches. */
+/**
+ * A new session's size: session.start and session.restart need one, and the phone never resizes
+ * a pty (the session screen follows the pty's own size). 80×24 until the desktop's terminal
+ * attaches and sizes it to its window.
+ */
 const START_SIZE = { cols: 80, rows: 24 }
+
+/** A restart keeps the size the phone last saw the session's pty at (else START_SIZE, as for a new one). */
+const restartSize = (serverId: string, sessionId: string): { cols: number; rows: number } => knownPtySize(serverId, sessionId) ?? START_SIZE
 
 function findWorktree(project: Project, worktreeId: string): Worktree | undefined {
   for (const repo of project.repositories) for (const wt of repo.worktrees) if (wt.id === worktreeId) return wt
@@ -127,7 +135,7 @@ export default function WorktreeScreen(): React.JSX.Element {
                 </Text>
               </Pressable>
               <View style={[ui.row, { marginTop: 6 }]}>
-                <Button ghost label="Restart" disabled={busy || !server} onPress={() => void run(() => req!.request('session.restart', { projectId, sessionId: s.id, ...START_SIZE }))} />
+                <Button ghost label="Restart" disabled={busy || !server} onPress={() => void run(() => req!.request('session.restart', { projectId, sessionId: s.id, ...restartSize(serverId, s.id) }))} />
                 <Button ghost danger label="Close" disabled={busy || !server} onPress={() => confirmClose(s.id, s.title)} />
               </View>
             </View>

@@ -1,13 +1,17 @@
 // A session (6a): its terminal (xterm.js in a WebView, fed by the pty stream, at the pty's own
-// size), a key bar, and a prompt box that sends now or queues, with the queue below it. A
-// decision the agent asked for is answered here too.
-import { useCallback, useEffect, useRef, useState } from 'react'
+// size: the phone never resizes the pty, it follows pty.resized from the desktop), a key bar,
+// and a prompt box that sends now or queues, with the queue below it. A decision the agent
+// asked for is answered here too.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { Stack, useLocalSearchParams } from 'expo-router'
+import { useHeaderHeight } from 'expo-router/react-navigation'
 import { WebView as RNWebView, type WebViewMessageEvent } from 'react-native-webview'
 import type { Project, Session } from '../../../../src/shared.ts'
 import { errorMessage, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { KEY_BAR } from '../../../../src/logic/keys.ts'
+import { TerminalFeed, isTerminalReply, pageScript, type PageMessage } from '../../../../src/logic/terminalFeed.ts'
+import { rememberPtySize } from '../../../../src/state/ptySizes.ts'
 import { TERMINAL_HTML } from '../../../../src/terminal/terminalHtml.generated.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { DecisionActions } from '../../../../src/ui/DecisionActions.tsx'
@@ -33,38 +37,53 @@ export default function SessionScreen(): React.JSX.Element {
   const session = topic.state === 'ready' ? findSession(topic.snapshot, sessionId) : undefined
   const ptyId = session?.ptyId
   const web = useRef<WebViewHandle>(null)
-  const [pageReady, setPageReady] = useState(false)
+  const headerHeight = useHeaderHeight()
+  // The page that said 'ready', and for which pty: a new pty remounts the WebView (keyed by it),
+  // and a reload of the page says 'ready' again (n), so the stream starts over on a fresh page.
+  const [page, setPage] = useState<{ ptyId: string; n: number } | null>(null)
+  const ptyRef = useRef(ptyId)
+  ptyRef.current = ptyId
+  const pageReady = !!ptyId && page?.ptyId === ptyId
   const [ended, setEnded] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const toPage = useCallback((message: unknown) => {
-    web.current?.injectJavaScript(`window.__trek && window.__trek(${JSON.stringify(message)}); true;`)
+  const toPage = useCallback((messages: PageMessage[]) => {
+    if (messages.length) web.current?.injectJavaScript(pageScript(messages))
   }, [])
 
   // The pty stream, while the screen shows it: the scrollback replays first, then live output.
+  // Output is held until the pty's size is known (TerminalFeed), so the replay is drawn at it.
   useEffect(() => {
     if (!server || !ptyId || !pageReady) return
     setEnded(null)
-    toPage({ type: 'reset' })
-    let attached = true
+    const feed = new TerminalFeed()
+    let live = true
+    const size = (cols: number, rows: number): void => {
+      if (!live) return
+      rememberPtySize(serverId, sessionId, cols, rows)
+      toPage(feed.size(cols, rows))
+    }
+    toPage(feed.reset())
     server.ptys
       .attach(ptyId, {
-        onData: (data) => toPage({ type: 'data', data }),
-        onReset: () => toPage({ type: 'reset' }),
+        onData: (data) => live && toPage(feed.data(data)),
+        onReset: () => live && toPage(feed.reset()),
         onExit: (code) => setEnded(`The process exited (${code}).`),
         onClosed: (reason) => setEnded(reason === 'gone' ? 'The session ended while the phone was away.' : 'Disconnected.'),
         onError: (err) => setEnded(errorMessage(err)),
-        onReattach: (info) => toPage({ type: 'size', cols: info.cols, rows: info.rows })
+        onReattach: (info) => size(info.cols, info.rows),
+        // Another client resized the pty (the desktop's window): follow it. The phone never resizes it.
+        onResize: (info) => size(info.cols, info.rows)
       })
-      .then((info) => toPage({ type: 'size', cols: info.cols, rows: info.rows }))
-      .catch((err) => setEnded(errorMessage(err)))
+      .then((info) => size(info.cols, info.rows))
+      .catch((err) => live && setEnded(errorMessage(err)))
     return () => {
-      if (attached) void server.ptys.detach(ptyId).catch(() => {})
-      attached = false
+      live = false
+      void server.ptys.detach(ptyId).catch(() => {})
     }
-  }, [server, ptyId, pageReady, toPage])
+  }, [server, ptyId, pageReady, page?.n, serverId, sessionId, toPage])
 
   const write = (data: string): void => {
     if (server && ptyId) void server.ptys.write(ptyId, data).catch((err) => setError(errorMessage(err)))
@@ -77,8 +96,10 @@ export default function SessionScreen(): React.JSX.Element {
     } catch {
       return
     }
-    if (m.type === 'ready') setPageReady(true)
-    else if (m.type === 'input' && typeof m.data === 'string') write(m.data)
+    if (m.type === 'ready') {
+      const id = ptyRef.current
+      if (id) setPage((p) => ({ ptyId: id, n: (p?.n ?? 0) + 1 }))
+    } else if (m.type === 'input' && typeof m.data === 'string' && !isTerminalReply(m.data)) write(m.data)
   }
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
@@ -95,9 +116,10 @@ export default function SessionScreen(): React.JSX.Element {
     }
   }
   const text = prompt.trim()
+  const source = useMemo(() => ({ html: TERMINAL_HTML }), [])
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
       <Stack.Screen options={{ title: session?.title ?? 'Session' }} />
       {session ? (
         <View style={{ paddingHorizontal: 12, paddingTop: 6 }}>
@@ -113,11 +135,16 @@ export default function SessionScreen(): React.JSX.Element {
       <View style={{ flex: 1, margin: 8, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
         {ptyId ? (
           <WebView
+            key={ptyId}
             ref={web}
-            source={{ html: TERMINAL_HTML }}
+            source={source}
             originWhitelist={['about:*']}
-            // The page loads nothing and goes nowhere: only its own about:blank.
+            // The page loads nothing and goes nowhere: only its own about:blank (the inline HTML's
+            // first load). Links in the output (OSC 8, URLs) are never opened (page.js), and a
+            // window.open goes nowhere either.
             onShouldStartLoadWithRequest={(r: { url: string }) => r.url.startsWith('about:')}
+            onOpenWindow={() => {}}
+            onLoadStart={() => setPage(null)}
             javaScriptEnabled
             domStorageEnabled={false}
             allowFileAccess={false}

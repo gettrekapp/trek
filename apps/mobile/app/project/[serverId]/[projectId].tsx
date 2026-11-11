@@ -11,7 +11,7 @@ export default function ProjectScreen(): React.JSX.Element {
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
   const topic = useTopic(serverId, `project:${projectId}`)
   return (
-    <ScrollView style={ui.screen} contentContainerStyle={ui.pad}>
+    <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
       <Stack.Screen options={{ title: topic.state === 'ready' ? topic.snapshot.name : 'Project' }} />
       <PromotePrompt serverId={serverId} projectId={projectId} project={topic.state === 'ready' ? topic.snapshot : null} />
       {topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}

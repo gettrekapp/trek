@@ -97,7 +97,7 @@ remains the way to do everything else from a browser.
     - The pty stream reaches it by `postMessage`.
     - Tapping the terminal opens the keyboard for direct typing.
   - **The key bar:** Enter, Esc, Tab, Ctrl-C, the four arrows, y, n.
-  - **The prompt box:** **Send**, or **Queue** (`session.enqueuePrompt`). It also shows the queue
+  - **The prompt box:** **Send**, or **Queue** (`session.enqueue`). It also shows the queue
     with remove.
 - **Decisions:**
   - **`request_decision`:** answered inline from Attention, with the same meaning as on the

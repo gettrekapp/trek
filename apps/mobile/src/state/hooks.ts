@@ -1,6 +1,6 @@
 // A topic's snapshot while a screen shows it, subscribed through the server's SDK mirror (and
 // unsubscribed when the screen goes); again after the connections are made again.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { RegisteredServer, Topic, TopicSnapshot } from '../shared.ts'
 import { useServers } from './ServersProvider.tsx'
 
@@ -9,14 +9,21 @@ export type TopicView<T extends Topic> = { state: 'loading' } | { state: 'ready'
 export function useTopic<T extends Topic>(serverId: string, topic: T | null): TopicView<T> {
   const { get, generation } = useServers()
   const [view, setView] = useState<TopicView<T>>({ state: 'loading' })
+  // Which server and topic the view shows: re-subscribing to the same one (a new connection)
+  // keeps the last snapshot on screen until the new one comes, instead of a flash of Loading
+  // (and, on the session screen, a remounted terminal).
+  const shown = useRef<string | null>(null)
   useEffect(() => {
     if (!topic) return
     const server = get(serverId)
     if (!server) {
+      shown.current = null
       setView({ state: 'error', message: 'Not connected' })
       return
     }
-    setView({ state: 'loading' })
+    const key = `${serverId}\n${topic}`
+    if (shown.current !== key) setView({ state: 'loading' })
+    shown.current = key
     return server.mirror.subscribe(topic, (update) => {
       if ('error' in update) setView({ state: 'error', message: update.error.message })
       else setView({ state: 'ready', snapshot: update.snapshot as TopicSnapshot<T> })

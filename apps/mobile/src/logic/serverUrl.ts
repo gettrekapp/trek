@@ -14,6 +14,10 @@ function ipv4(host: string): number[] | null {
 }
 
 /** Loopback, RFC 1918, link-local, Tailscale's 100.64/10, IPv6 ULA and link-local, and .local names. */
+// It judges the address as written (after URL parsing), never what a name resolves to, and
+// anything it doesn't recognise is refused for ws://: a MagicDNS name (*.ts.net) or another LAN
+// name, and the hex IPv4-mapped form URL gives `[::ffff:192.168.0.1]` (`[::ffff:c0a8:1]`). That
+// fails closed (wss://, or the plain IP, works), so it is left as is.
 export function isPrivateHost(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase()
   if (host === 'localhost' || host.endsWith('.local') || host === '::1') return true

@@ -6,7 +6,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState, type AppStateStatus } from 'react-native'
 import * as Notifications from 'expo-notifications'
 import { ServerRegistry, globalSocketFactory, type ConnectionStatus, type RegisteredServer, type AttentionEntry } from '../shared.ts'
-import { attentionText, mergeAttention, newItems, type AttentionItem } from '../logic/attention.ts'
+import { attentionKey, mergeAttention, newItems, notificationContent, type AttentionItem } from '../logic/attention.ts'
 import { forgetServer, loadServers, loadToken, saveServer, type SavedServer } from './storage.ts'
 
 /** How long the connections stay up after the app leaves the foreground (iOS suspends it soon after anyway). */
@@ -24,7 +24,7 @@ interface ServersValue {
   attention: AttentionItem[]
   /** The live connection to a server, while the app is in the foreground */
   get(id: string): RegisteredServer | undefined
-  /** Bumped each time the connections are made again: screens re-subscribe on it */
+  /** Bumped each time a connection is added or removed: screens re-subscribe on it */
   generation: number
   add(server: SavedServer, token: string): Promise<void>
   remove(id: string): Promise<void>
@@ -43,7 +43,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   const [saved, setSaved] = useState<SavedServer[]>([])
   const [ready, setReady] = useState(false)
   const [generation, setGeneration] = useState(0)
-  const [statuses, setStatuses] = useState<Record<string, { status: ConnectionStatus; message: string; capabilities: string[] }>>({})
+  const [statuses, setStatuses] = useState<Record<string, { status: ServerView['status']; message: string; capabilities: string[] }>>({})
   const [attentionByServer, setAttentionByServer] = useState<Record<string, AttentionEntry[]>>({})
   const appState = useRef<AppStateStatus>((AppState.currentState as AppStateStatus | null | undefined) ?? 'active')
   const notified = useRef(new Set<string>())
@@ -52,41 +52,59 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   const savedRef = useRef<SavedServer[]>([])
   savedRef.current = saved
 
-  const disconnect = useCallback((id: string) => {
+  /** True when there was a connection to close. */
+  const disconnect = useCallback((id: string): boolean => {
+    if (!registry.get(id)) return false
+    // Closed first, so its final 'closed' status reaches the list before the listener goes.
+    registry.remove(id)
     detachers.current.get(id)?.()
     detachers.current.delete(id)
-    registry.remove(id)
+    return true
   }, [registry])
 
+  /** True when a connection was added. */
   const connect = useCallback(
-    async (server: SavedServer) => {
-      if (registry.get(server.id)) return
+    async (server: SavedServer): Promise<boolean> => {
+      if (registry.get(server.id)) return false
       const token = await loadToken(server.id)
-      if (!token || registry.get(server.id)) return
+      if (registry.get(server.id)) return false
+      if (!token) {
+        setStatuses((s) => ({ ...s, [server.id]: { status: 'no-token', message: 'This phone has no token for it', capabilities: [] } }))
+        return false
+      }
       const registered = registry.add({ id: server.id, url: server.url, token })
-      const offStatus = registered.connection.on('status', ({ status, message }) =>
-        setStatuses((s) => ({ ...s, [server.id]: { status, message, capabilities: registered.connection.welcome?.capabilities ?? [] } }))
-      )
+      const conn = registered.connection
+      const report = (status: ConnectionStatus, message: string): void =>
+        setStatuses((s) => ({ ...s, [server.id]: { status, message, capabilities: conn.welcome?.capabilities ?? [] } }))
+      const offStatus = conn.on('status', ({ status, message }) => report(status, message))
+      // add() connects at once: the status it is in already went out before the listener.
+      report(conn.status, conn.statusMessage)
+      // The first snapshot after connecting is what was waiting already: seen, not notified.
+      let first = true
       const offAttention = registered.mirror.subscribe('attention', (update) => {
         if ('error' in update) return
+        if (first) for (const entry of update.snapshot.entries) notified.current.add(attentionKey(server.id, entry))
+        first = false
         setAttentionByServer((a) => ({ ...a, [server.id]: update.snapshot.entries }))
       })
       detachers.current.set(server.id, () => {
         offStatus()
         offAttention()
       })
+      return true
     },
     [registry]
   )
 
   const connectAll = useCallback(async () => {
-    await Promise.all(savedRef.current.map(connect))
-    setGeneration((g) => g + 1)
+    const added = await Promise.all(savedRef.current.map(connect))
+    if (added.some(Boolean)) setGeneration((g) => g + 1)
   }, [connect])
 
   const disconnectAll = useCallback(() => {
-    for (const s of savedRef.current) disconnect(s.id)
-    setGeneration((g) => g + 1)
+    let removed = false
+    for (const s of savedRef.current) removed = disconnect(s.id) || removed
+    if (removed) setGeneration((g) => g + 1)
   }, [disconnect])
 
   useEffect(() => {
@@ -135,16 +153,14 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
   )
 
   // A local notification for each new item, but only out of the foreground (the list is on screen
-  // otherwise). The first snapshot after connecting counts as seen.
+  // otherwise). Each server's first snapshot after connecting counts as seen (connect).
   useEffect(() => {
     const fresh = newItems(attention, notified.current)
     for (const item of attention) notified.current.add(item.key)
     if (appState.current === 'active') return
     for (const item of fresh) {
-      void Notifications.scheduleNotificationAsync({
-        content: { title: `${item.projectName}: ${item.title}`, body: attentionText(item), data: { serverId: item.serverId, projectId: item.projectId, sessionId: item.sessionId } },
-        trigger: null
-      }).catch(() => {})
+      const { title, body, data } = notificationContent(item)
+      void Notifications.scheduleNotificationAsync({ content: { title, body, data: { ...data } }, trigger: null }).catch(() => {})
     }
   }, [attention])
 
@@ -156,6 +172,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
       savedRef.current = list
       setSaved(list)
       await connect(server)
+      // Its old connection (if any) went and a new one came: screens re-subscribe either way.
       setGeneration((g) => g + 1)
     },
     [connect, disconnect]
@@ -163,13 +180,17 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
 
   const remove = useCallback(
     async (id: string) => {
-      disconnect(id)
+      if (disconnect(id)) setGeneration((g) => g + 1)
       await forgetServer(id)
       const list = savedRef.current.filter((s) => s.id !== id)
       savedRef.current = list
       setSaved(list)
       setAttentionByServer((a) => {
         const { [id]: _gone, ...rest } = a
+        return rest
+      })
+      setStatuses((st) => {
+        const { [id]: _gone, ...rest } = st
         return rest
       })
     },
@@ -192,10 +213,12 @@ export function statusLabel(status: ServerView['status']): string {
     case 'incompatible':
       return 'Update the server or the app'
     case 'no-token':
-      return 'No token'
+      return 'Pair again'
     case 'error':
     case 'disconnected':
       return 'Reconnecting…'
+    case 'closed':
+      return 'Not connected'
     default:
       return 'Not connected'
   }

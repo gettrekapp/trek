@@ -10,6 +10,28 @@ It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-expo
 (`metro.config.js`). That code must stay free of Node, Electron, DOM and packages:
 `scripts/sharedForMobile.test.mjs` (in the root's `npm test`) checks it.
 
+## The terminal
+
+The session screen's terminal is xterm.js in a WebView at the pty's own size: the phone
+**never resizes a pty** (it's shared with the desktop's view). It follows the size the
+pty has: the attach's (and a re-attach's) answer, and `pty.resized` when the desktop's
+window changes it. Output is held until the size is known, so the scrollback is drawn at
+the right width. The font shrinks to fit the width (down to 6 px; past that the page
+scrolls sideways). Links in the output (OSC 8) are never opened, and the WebView refuses
+every navigation and new window. xterm's own query replies (cursor position, device
+attributes) aren't sent: the desktop's terminal answers those. **Restart** passes the size
+the phone last saw the session's pty at (80×24 if it never saw it: `session.restart`
+needs one).
+
+## Plain ws:// on Android
+
+`ws://` (to a private address only: `src/logic/serverUrl.ts`) needs cleartext traffic,
+which Android release builds refuse by default. `app.json` turns it on through
+`expo-build-properties` (`android.usesCleartextTraffic`); the app's own address rule is
+what keeps plain `ws://` to a LAN, Tailscale or `.local` address. (iOS isn't checked on a
+device yet: App Transport Security may want `NSAllowsLocalNetworking` for a `.local`
+name, and iOS asks for local network access the first time.)
+
 ## Install
 
 The app has its own `package.json` and lockfile; the repo root's `npm install` doesn't
@@ -17,7 +39,7 @@ touch it.
 
 ```bash
 cd apps/mobile
-npm install            # also builds the terminal page (postinstall)
+npm ci                 # also builds the terminal page (postinstall)
 npm run typecheck
 npm run export         # JS bundles for iOS and Android into dist/ (no device needed)
 ```
@@ -54,9 +76,13 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - The server is listed as Connected. `trek-server token list` shows `phone-<name>`.
    - The same code again: "already used". After 5 minutes: "expired".
    - Opening `trek://pair?url=…&code=…` in Safari opens Add server filled in, without pairing.
+     With the app closed first, too; Back from there goes to Attention.
+   - Scanning a QR that isn't a pairing code says "Not a Trek pairing code".
+   - With camera access denied (Settings → Trek → Camera off), Add server offers Open Settings.
 2. **Attention:**
    - A session that rings the bell or finishes is listed with its project and age, newest first.
    - A `request_decision` shows its question. **Send answer** types it into the session; **Dismiss** clears it.
+     With the keyboard up, one tap on **Send answer** sends it.
 3. **Projects:**
    - The server's projects, repositories and worktrees, with their branches and sessions' states.
    - **Load** / **Unload** follow on the desktop.
@@ -65,15 +91,26 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - **Restart** and **Close** (Close asks first).
 5. **Terminal:**
    - The scrollback, then live output, in colour, at the desktop's width (the font shrinks).
+     The scrollback isn't wrapped at 80 columns first.
+   - Resize the desktop's window: the phone's terminal follows (`pty.resized`); the phone
+     never changes the desktop's size.
+   - Touch-scroll the scrollback up and back down (and sideways at a wide size).
    - Tap and type. Each key-bar key does what its label says.
+   - `printf '\e]8;;https://example.com\e\\link\e]8;;\e\\\n'` in the session: tapping
+     "link" opens nothing.
+   - With the keyboard up, the prompt box stays above it, below the header.
    - **Send** types the prompt now. **Queue** adds it to the queue below, where **Remove** takes it out.
 6. **Changes:** files with their status and counts. Tapping one shows its patch: additions green, deletions red.
 7. **Promote:**
    - With the project open, an agent's `promote_to_primary` shows the confirmation. **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
    - With the worktree's stack running, the phone says to confirm on the desktop.
 8. **Background:**
-   - Send the app to the background. A session needing you within ~20 s gives a notification.
+   - Send the app to the background. A session needing you within ~20 s gives a notification;
+     a decision's says "A decision is waiting in <project>", not its question.
+   - Tapping the notification opens that session (also with the app closed since).
+   - What was already waiting when the app connected gives no notification.
    - Back in the foreground, everything reconnects.
 9. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
+   Pairing again from there replaces the entry: the server is listed once.
 
 No real push services (APNs, FCM, Expo) are used: background push is 6b.

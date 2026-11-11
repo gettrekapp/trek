@@ -11,6 +11,10 @@
     fontSize: 11,
     scrollback: 5000,
     allowProposedApi: false,
+    // OSC 8 hyperlinks in the output are never opened: activating one does nothing (the page has
+    // no network and the WebView refuses any navigation anyway). No web-links addon is loaded,
+    // so plain URLs aren't links at all.
+    linkHandler: { activate: function () {}, allowNonHttpProtocols: false },
     theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc' }
   })
   term.open(document.getElementById('t'))
@@ -30,7 +34,7 @@
     else if (m.type === 'size') {
       fitFont(m.cols)
       term.resize(m.cols, m.rows)
-    } else if (m.type === 'focus') term.focus()
+    }
   }
   post({ type: 'ready' })
 })()

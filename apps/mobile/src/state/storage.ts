@@ -36,15 +36,28 @@ export async function loadToken(id: string): Promise<string | null> {
   return SecureStore.getItemAsync(tokenKey(id), OPTIONS)
 }
 
+// The list is read, changed and written back: one change at a time, so two that overlap (a
+// pairing while a removal is still writing) can't each write a list without the other's change.
+let writes: Promise<unknown> = Promise.resolve()
+function serially<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writes.then(fn, fn)
+  writes = run.catch(() => {})
+  return run
+}
+
 /** Adds or replaces the entry with that id, and stores its token. */
-export async function saveServer(server: SavedServer, token: string): Promise<void> {
-  await SecureStore.setItemAsync(tokenKey(server.id), token, OPTIONS)
-  const list = (await loadServers()).filter((s) => s.id !== server.id)
-  await saveList([...list, server])
+export function saveServer(server: SavedServer, token: string): Promise<void> {
+  return serially(async () => {
+    await SecureStore.setItemAsync(tokenKey(server.id), token, OPTIONS)
+    const list = (await loadServers()).filter((s) => s.id !== server.id)
+    await saveList([...list, server])
+  })
 }
 
 /** Forgets the entry and its token on this phone (the token stays valid on the server until revoked). */
-export async function forgetServer(id: string): Promise<void> {
-  await SecureStore.deleteItemAsync(tokenKey(id), OPTIONS)
-  await saveList((await loadServers()).filter((s) => s.id !== id))
+export function forgetServer(id: string): Promise<void> {
+  return serially(async () => {
+    await SecureStore.deleteItemAsync(tokenKey(id), OPTIONS)
+    await saveList((await loadServers()).filter((s) => s.id !== id))
+  })
 }

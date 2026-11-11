@@ -5,10 +5,17 @@
 // the desktop and neither claims nor answers. A request another window claims or ends closes here.
 import { useEffect, useRef, useState } from 'react'
 import { Modal, Text, View } from 'react-native'
-import { CAPABILITY, type Project, type PromoteRequestEvent, type PromoteSettledEvent } from '../shared.ts'
+import { CAPABILITY, type Project, type PromoteRequestEvent, type PromoteSettledEvent, type ServerConnection } from '../shared.ts'
+import { RefCounts } from '../logic/refCount.ts'
 import { useServer, errorMessage } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
 import { colors, ui } from './theme.ts'
+
+// promote.listen is per connection and project, but a project screen can be mounted more than
+// once (pushed again from a notification): listening goes off only when the last one goes, and a
+// request is taken by one of them (handling), not shown twice.
+const listeners = new WeakMap<ServerConnection, RefCounts>()
+const handling = new Set<string>()
 
 type Prompt =
   | { kind: 'confirm'; request: PromoteRequestEvent; summary: string }
@@ -31,22 +38,49 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
     const listen = (on: boolean): void => {
       if (can()) void conn.request('promote.listen', { projectId, listen: on }).catch(() => {})
     }
-    listen(true)
+    const counts = listeners.get(conn) ?? new RefCounts()
+    listeners.set(conn, counts)
+    if (counts.acquire(projectId)) listen(true)
+    // The request this screen is asking about (its dry run and checks), before a dialog shows.
+    let asking: string | null = null
+    const settledIds = new Set<string>()
     // Listening is per connection: again after a reconnect.
     const offWelcome = conn.on('welcome', () => listen(true))
     const offEvent = conn.on('event', ({ event, payload }) => {
       if (event === 'promote.settled') {
         const settled = payload as PromoteSettledEvent
+        if (settled.requestId === asking) settledIds.add(settled.requestId)
         const open = promptRef.current
         // Another window claimed or the request ended: close it, unless this phone is running it.
-        if (open && open.request.requestId === settled.requestId && open.kind !== 'running' && open.kind !== 'result') setPrompt(null)
+        if (open && open.request.requestId === settled.requestId && open.kind !== 'running' && open.kind !== 'result') {
+          handling.delete(settled.requestId)
+          promptRef.current = null
+          setPrompt(null)
+        }
         return
       }
       if (event !== 'promote.request') return
       const request = payload as PromoteRequestEvent
-      if (request.projectId !== projectId || promptRef.current) return
+      if (request.projectId !== projectId || promptRef.current || asking || handling.has(request.requestId)) return
+      asking = request.requestId
+      handling.add(request.requestId)
       void ask(request)
+        .catch(() => {})
+        .finally(() => {
+          asking = null
+          // Kept while its dialog is open; released when it closes (close()).
+          if (promptRef.current?.request.requestId !== request.requestId) handling.delete(request.requestId)
+        })
     })
+    // Refused, or not something the phone can show: one window answers it, without a dialog.
+    const fail = async (request: PromoteRequestEvent, error: string): Promise<void> => {
+      const claim = await conn.request('promote.claim', { projectId, requestId: request.requestId }).catch(() => null)
+      if (claim?.accepted) await conn.request('promote.answer', { projectId, requestId: request.requestId, outcome: 'failed', error: error.slice(0, 500) }).catch(() => {})
+    }
+    const show = (next: Prompt): void => {
+      promptRef.current = next
+      setPrompt(next)
+    }
     const ask = async (request: PromoteRequestEvent): Promise<void> => {
       const repo = projectRef.current?.repositories.find((r) => r.worktrees.some((w) => w.id === request.worktreeId))
       const worktree = repo?.worktrees.find((w) => w.id === request.worktreeId)
@@ -57,7 +91,10 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
       let summary: string
       try {
         const plan = await conn.request('worktree.promote', { projectId, worktreeId: request.worktreeId, dryRun: true })
-        if (!('mainPath' in plan)) return
+        if (!('mainPath' in plan)) {
+          await fail(request, "The phone could not read the promote's plan (its dry run returned no plan). Ask again with the desktop app open.")
+          return
+        }
         summary =
           `${plan.branch} is checked out in the main checkout (${plan.mainPath}) and this worktree is removed.` +
           (plan.dirty ? ' Its uncommitted work comes along, unstaged.' : '') +
@@ -66,30 +103,38 @@ export function PromotePrompt({ serverId, projectId, project }: { serverId: stri
           (plan.ignoredCount ? ` ${plan.ignoredCount} ignored file(s) in the worktree are deleted with it.` : '') +
           (plan.overwrittenIgnoredCount ? ` ${plan.overwrittenIgnoredCount} ignored file(s) in the main checkout are overwritten.` : '')
       } catch (err) {
-        // Refused (dirty main checkout, a lock…): one window answers it, without a dialog.
-        const claim = await conn.request('promote.claim', { projectId, requestId: request.requestId }).catch(() => null)
-        if (claim?.accepted) await conn.request('promote.answer', { projectId, requestId: request.requestId, outcome: 'failed', error: errorMessage(err).slice(0, 500) }).catch(() => {})
+        // Refused (dirty main checkout, a lock…).
+        await fail(request, errorMessage(err))
         return
       }
       const caps = conn.welcome?.capabilities ?? []
       const stack = caps.includes(CAPABILITY.stacks) ? await conn.request('stack.status', { projectId, worktreeId: worktree.id }).catch(() => null) : null
       const envs = caps.includes(CAPABILITY.env) ? await conn.request('env.list', { projectId, repoId: repo.id }).catch(() => []) : []
       const vm = envs.find((e) => e.worktreePath === worktree.path && e.vmState === 'running')
-      if (stack && (stack.containers > 0 || stack.upRunning)) setPrompt({ kind: 'desktop', request, why: 'its dev stack is running' })
-      else if (vm) setPrompt({ kind: 'desktop', request, why: `its Docker VM (${vm.profile}) is running` })
-      else setPrompt({ kind: 'confirm', request, summary })
+      // Settled meanwhile (another window, or the agent stopped waiting): no dialog.
+      if (settledIds.has(request.requestId)) return
+      if (stack && (stack.containers > 0 || stack.upRunning)) show({ kind: 'desktop', request, why: 'its dev stack is running' })
+      else if (vm) show({ kind: 'desktop', request, why: `its Docker VM (${vm.profile}) is running` })
+      else show({ kind: 'confirm', request, summary })
     }
     return () => {
       offWelcome()
       offEvent()
-      listen(false)
+      if (counts.release(projectId)) listen(false)
+      if (asking) handling.delete(asking)
+      const open = promptRef.current
+      if (open) handling.delete(open.request.requestId)
     }
   }, [server, projectId])
 
   if (!prompt || !server) return null
   const conn = server.connection
   const { request } = prompt
-  const close = (): void => setPrompt(null)
+  const close = (): void => {
+    handling.delete(request.requestId)
+    promptRef.current = null
+    setPrompt(null)
+  }
   const decline = (): void => {
     void conn.request('promote.answer', { projectId, requestId: request.requestId, outcome: 'declined' }).catch(() => {})
     close()

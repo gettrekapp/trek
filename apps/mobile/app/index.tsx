@@ -4,7 +4,7 @@ import { FlatList, Pressable, Text, View } from 'react-native'
 import { Link, router, Stack } from 'expo-router'
 import * as Notifications from 'expo-notifications'
 import { useServers } from '../src/state/ServersProvider.tsx'
-import { ago, attentionText, type AttentionItem } from '../src/logic/attention.ts'
+import { ago, attentionText, notificationRoute, type AttentionItem } from '../src/logic/attention.ts'
 import { DecisionActions } from '../src/ui/DecisionActions.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
 
@@ -21,8 +21,8 @@ export default function AttentionScreen(): React.JSX.Element {
   }, [])
 
   const open = (item: AttentionItem): void => {
-    if (item.sessionId) router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: item.serverId, projectId: item.projectId, sessionId: item.sessionId } })
-    else if (item.worktreeId) router.push({ pathname: '/worktree/[serverId]/[projectId]/[worktreeId]', params: { serverId: item.serverId, projectId: item.projectId, worktreeId: item.worktreeId } })
+    const route = notificationRoute(item)
+    if (route) router.push(route)
   }
 
   return (
@@ -52,6 +52,8 @@ export default function AttentionScreen(): React.JSX.Element {
       ) : (
         <FlatList
           contentContainerStyle={ui.pad}
+          // A decision's answer box is in the list: a tap on its Send lands while the keyboard is up.
+          keyboardShouldPersistTaps="handled"
           data={attention}
           keyExtractor={(i) => i.key}
           ListEmptyComponent={<Text style={ui.muted}>Nothing needs you.</Text>}

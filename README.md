@@ -285,7 +285,7 @@ tears them down first).
 - **Addresses**: `wss://` always; plain `ws://` only to a private network address
   (LAN, Tailscale, `.local`), with a warning.
 - **Not yet**: notifications while the app is closed (6b: a push relay), and
-  creating, moving or promoting worktrees from the phone.
+  creating or moving worktrees, or starting a promote, from the phone.
 
 See `apps/mobile/README.md` to build and run it.
 

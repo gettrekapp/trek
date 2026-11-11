@@ -2,9 +2,11 @@
 // phone only: it stays valid on the server until revoked there.
 import { Alert, FlatList, Text, View } from 'react-native'
 import { Link } from 'expo-router'
-import { statusLabel, useServers } from '../src/state/ServersProvider.tsx'
+import { statusLabel, useServers, type ServerView } from '../src/state/ServersProvider.tsx'
 import { Button } from '../src/ui/Button.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
+
+const needsPairing = (status: ServerView['status']): boolean => status === 'needs-auth' || status === 'no-token'
 
 export default function ServersScreen(): React.JSX.Element {
   const { servers, remove } = useServers()
@@ -29,13 +31,14 @@ export default function ServersScreen(): React.JSX.Element {
           <View style={ui.card}>
             <Text style={ui.title}>{item.name}</Text>
             <Text style={ui.muted}>{item.url}</Text>
-            <Text style={item.status === 'connected' ? { color: colors.ok } : item.status === 'needs-auth' ? ui.warn : ui.muted}>
+            <Text style={item.status === 'connected' ? { color: colors.ok } : needsPairing(item.status) ? ui.warn : ui.muted}>
               {statusLabel(item.status)}
               {item.message && item.status !== 'connected' ? ` · ${item.message}` : ''}
             </Text>
             <View style={[ui.row, { marginTop: 6 }]}>
-              {item.status === 'needs-auth' ? (
-                <Link href={{ pathname: '/add-server', params: { url: item.url } }} style={{ color: colors.accent }}>
+              {needsPairing(item.status) ? (
+                // The same entry, paired again: its id is kept, so it isn't listed twice.
+                <Link href={{ pathname: '/add-server', params: { url: item.url, id: item.id, name: item.name } }} style={{ color: colors.accent }}>
                   Pair again
                 </Link>
               ) : null}

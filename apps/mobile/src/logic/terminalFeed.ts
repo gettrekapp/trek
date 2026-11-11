@@ -1,0 +1,52 @@
+// What the session screen sends its terminal page (6a). Pure, so `node --test` covers it
+// (scripts/mobileLogic.test.mjs).
+//
+// The pty's output is held until its size is known: a replay drawn at xterm's default 80×24 and
+// then resized would wrap wrong. attach() resolves (and a re-attach's onReattach fires) after
+// the replay, with the size, so the size goes first and the held output after it, in one batch.
+// A reset (a reconnect is about to replay again) clears the page and holds output again until
+// the next size. A `pty.resized` from another client is applied as it comes.
+
+export type PageMessage = { type: 'data'; data: string } | { type: 'reset' } | { type: 'size'; cols: number; rows: number }
+
+export class TerminalFeed {
+  private sized = false
+  private held: string[] = []
+
+  /** Output from the pty: shown now, or held until the size is known. */
+  data(data: string): PageMessage[] {
+    if (this.sized) return [{ type: 'data', data }]
+    this.held.push(data)
+    return []
+  }
+
+  /** Clear the page; output is held again until the next size. */
+  reset(): PageMessage[] {
+    this.sized = false
+    this.held = []
+    return [{ type: 'reset' }]
+  }
+
+  /** The pty's size (attach, re-attach, or pty.resized): the size, then whatever was held. */
+  size(cols: number, rows: number): PageMessage[] {
+    this.sized = true
+    const out: PageMessage[] = [{ type: 'size', cols, rows }]
+    if (this.held.length) out.push({ type: 'data', data: this.held.join('') })
+    this.held = []
+    return out
+  }
+}
+
+/** The page's script for a batch: one injectJavaScript call, applied in order. */
+export function pageScript(messages: readonly PageMessage[]): string {
+  return `(function(){var f=window.__trek;if(f){${JSON.stringify(messages)}.forEach(function(m){f(m)})}})(); true;`
+}
+
+/**
+ * xterm's own answers to a terminal query (a cursor position report, device attributes). The
+ * desktop's terminal answers those already; the phone's copy would answer twice, so its
+ * replies are dropped. Anything else typed goes through.
+ */
+export function isTerminalReply(data: string): boolean {
+  return /^\x1b\[([?>][\d;]*c|\d+;\d+R)$/.test(data)
+}
