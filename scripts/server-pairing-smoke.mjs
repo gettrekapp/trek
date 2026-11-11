@@ -6,7 +6,7 @@
 //
 // A plain `trek-server start` (no `local`) with its own HOME and the not-signed-in stub gh every
 // smoke gets (smokeGh.mjs). The built app runs with a temp HOME and --user-data-dir and no Local
-// server. The server listens only on this machine's first non-internal IPv4 address (--host, with
+// server, its window unable to take the keyboard (keys typed into another app never reach it). The server listens only on this machine's first non-internal IPv4 address (--host, with
 // --insecure: plain ws on a LAN address) and is saved in the app under that address, which a phone
 // could reach; a machine with no such address skips the smoke (SKIP, exit 0) with why (every
 // loopback form, IPv4-mapped included, hides the button). Through the DOM and the SDK it checks:
@@ -14,8 +14,9 @@
 //   - its QR and text carry the code and the URL, and nothing in the window holds a token;
 //   - the code redeems once, at hello, for a named token phone-<device> that then signs in;
 //   - a second redeem of the same code is refused, saying it was used;
-//   - New code withdraws the code shown (refused as withdrawn); Done keeps it working until it
-//     expires (a phone that scanned it can still pair);
+//   - New code withdraws the code shown (refused as withdrawn); clicked twice in a row, the code
+//     left shown is live; Done keeps it working until it expires (a phone that scanned it can
+//     still pair);
 //   - `token list` shows the phone's token PAIRED BY the desktop's token;
 //   - revoking the token (the server's CLI) closes the phone's connection and refuses it after,
 //     and drops the waiting code that token asked for;
@@ -65,11 +66,14 @@ for (const dir of [serverHome, appHome, userData, data]) mkdirSync(dir, { recurs
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [] }))
 
-// Main's dialogs never reach the screen: they are recorded and answered "OK".
+// Main's dialogs never reach the screen: they are recorded and answered "OK". The window can't
+// take the keyboard: shown on the desktop while someone types elsewhere, it would get their keys
+// (a Space on the focused Pair a phone… closes the panel). Playwright's clicks don't need focus.
 const mainStub = join(work, 'main-stub.cjs')
 writeFileSync(
   mainStub,
-  `const { dialog } = require('electron')
+  `const { app, dialog } = require('electron')
+app.on('browser-window-created', (_event, win) => win.setFocusable(false))
 globalThis.__dialogs = []
 dialog.showMessageBox = async (...args) => {
   const o = args.find((a) => a && typeof a === 'object' && 'message' in a) ?? {}
@@ -180,6 +184,15 @@ try {
   const win = await app.firstWindow()
   watch(win)
   await win.waitForLoadState('domcontentloaded')
+  check('the window takes no keystrokes meant for another app (not focusable)', await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.isFocusable())), [false])
+  // For a failure's log: main's output, and every list broadcast the window heard (statuses only, never a token).
+  const mainOutput = []
+  for (const stream of [app.process().stdout, app.process().stderr]) stream?.on('data', (b) => mainOutput.push(String(b).trimEnd()))
+  await win.evaluate(() => {
+    window.__linkHistory = []
+    const t0 = Date.now()
+    window.api.appServers.onChanged((s) => window.__linkHistory.push([Date.now() - t0, s.seq, s.servers.map((x) => `${x.name}:${x.status}${x.hasToken ? '' : '(no token)'}`).join(' ')]))
+  })
   const entry = await win.evaluate(([u, t]) => window.api.appServers.save({ name: 'Remote', url: u, token: t }), [url, token])
   // Loopback URLs (the server listens on the LAN address only, so they never connect): no button, and main refuses.
   const loopback = await win.evaluate(([u, t]) => window.api.appServers.save({ name: 'Loopback', url: u, token: t }), [`ws://127.0.0.1:${port}`, token])
@@ -228,21 +241,48 @@ try {
   })
 
   // ---- 5. New code withdraws the code shown; Done keeps it ----------------------------------------
-  const codeShown = async () => ((await panel.locator('[data-testid="pair-code"]').textContent()) ?? '').trim()
+  // What the server's row shows (the panel's text included) and main's link, for a failure's log.
+  const rowState = async () => {
+    const text = await item('Remote').innerText({ timeout: 2000 }).catch((e) => `(no row: ${String(e.message ?? e).split('\n')[0]})`)
+    const link = await win.evaluate((id) => window.api.appServers.links().then((l) => l.servers.find((s) => s.id === id)), entry.id).catch(() => null)
+    const history = await win.evaluate(() => window.__linkHistory).catch(() => null)
+    return `row text: ${JSON.stringify(text)}; main's link: ${JSON.stringify(link)}; the list broadcasts the window heard: ${JSON.stringify(history?.slice(-30))}; main's output: ${JSON.stringify(mainOutput.slice(-20))}`
+  }
+  const codeShown = async () => {
+    try {
+      return ((await panel.locator('[data-testid="pair-code"]').textContent({ timeout: 10_000 })) ?? '').trim()
+    } catch (err) {
+      throw new Error(`no code in the panel (${String(err.message ?? err).split('\n')[0]}); ${await rowState()}`)
+    }
+  }
   // The code shown was redeemed above: New code twice, so the one replaced was still waiting.
   const newCode = async () => {
     const before = await codeShown()
     await panel.locator('button', { hasText: 'New code' }).click()
     const changed = await until(async () => {
-      const c = await codeShown().catch(() => '')
+      const c = await panel.locator('[data-testid="pair-code"]').textContent({ timeout: 1000 }).then((t) => (t ?? '').trim(), () => '')
       return c !== '' && c !== before
     }, true)
+    if (!changed) console.error(`New code: no new code in 15 s; ${await rowState()}`)
     return changed ? await codeShown() : null
   }
   const beforeNew = await newCode()
   check('New code shows another code', (await newCode()) !== null && beforeNew !== null, true)
   const redeemKind = (c) => redeemPairingCode({ url, code: c, deviceName: 'Late', createSocket: globalSocketFactory }).then(() => 'paired', (e) => e.kind)
   check('the code New code replaced no longer redeems: withdrawn', await redeemKind(beforeNew), 'withdrawn')
+  // Twice in a row, the first code still on its way: the code left shown is the second's, and live
+  // (the first is cancelled as it arrives, or withdrawn by the second). Done keeps it, below.
+  const beforeBurst = await codeShown()
+  const newCodeButton = panel.locator('button', { hasText: 'New code' })
+  await newCodeButton.click()
+  await newCodeButton.click()
+  const settled = await until(async () => {
+    const c = await panel.locator('[data-testid="pair-code"]').textContent({ timeout: 1000 }).then((t) => (t ?? '').trim(), () => '')
+    return c !== '' && c !== beforeBurst
+  }, true)
+  if (!settled) console.error(`New code twice: no new code in 15 s; ${await rowState()}`)
+  await sleep(500)
+  check('New code twice in a row shows one code', settled && (await codeShown()) !== beforeBurst, true)
   const lastShown = await codeShown()
   await panel.locator('button', { hasText: 'Done' }).click()
   await panel.waitFor({ state: 'detached', timeout: 5000 })
