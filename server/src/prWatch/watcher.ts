@@ -55,6 +55,8 @@ export interface PrWatcherDeps {
   gh: GhRunner
   /** gh's sign-in changed: the server tells every connection (`integrations.changed` `{prWatch}`) */
   onAvailability?: (available: boolean) => void
+  /** A round found something to report (its notice is set): the push (6b) */
+  onReport?: (p: { projectId: string; projectName: string; worktreeId: string; events: readonly PrEvent[] }) => void
   pollMs?: number
   recheckMs?: number
   now?: () => number
@@ -414,5 +416,11 @@ export class PrWatcher {
       }
     }
     this.setNotice(target, worktree.id, { title: `PR #${target.number}`, text: noticeText(events, outcome), url: target.url, at: this.now() })
+    try {
+      const projectName = [...this.deps.projects.all()].find((p) => p.id === target.projectId)?.name ?? ''
+      this.deps.onReport?.({ projectId: target.projectId, projectName, worktreeId: worktree.id, events })
+    } catch (err) {
+      console.warn('[prWatch] onReport failed', err)
+    }
   }
 }

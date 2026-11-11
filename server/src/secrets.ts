@@ -18,6 +18,8 @@ export interface SecretFile {
   set(name: string, value: string | null): void
   /** Stores `value` only while nothing is stored under `name`; true when it stored it. */
   setIfAbsent(name: string, value: string): boolean
+  /** Every stored key's name */
+  keys(): string[]
 }
 
 /**
@@ -57,6 +59,9 @@ export function createSecretFile(path: string): SecretFile {
         delete all[name]
       } else all[name] = value
       write(all)
+    },
+    keys() {
+      return Object.keys(readAll())
     },
     setIfAbsent(name, value) {
       const all = readAll()

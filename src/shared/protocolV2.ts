@@ -14,6 +14,7 @@ import type {
 import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
+import type { PushKinds } from './push.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type {
   ComposeAction,
@@ -239,7 +240,12 @@ export const CAPABILITY = {
    * Phone pairing (6a): `pairing.create` gives a signed-in client a one-time code (5 minutes) that
    * a phone redeems once at hello (`pairingCode`) for its own named token (`welcome.pairedToken`)
    */
-  pairing: 'pairing'
+  pairing: 'pairing',
+  /**
+   * Background push (6b): a phone hands the server its relay grant (`push.setGrant`, write-only),
+   * and the server posts the kinds it switched on to the relay while the phone isn't connected
+   */
+  push: 'push'
 } as const
 
 /** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
@@ -388,6 +394,12 @@ export interface MethodParamsV2 {
   'pairing.create': { name?: string }
   /** 6a: drops a waiting code (the desktop's New code, or its panel closing); it is then refused as expired */
   'pairing.cancel': { code: string }
+  /** 6b: this token's relay grant (replaces the one before); `kinds` defaults to all on, `paused` to false */
+  'push.setGrant': { relayUrl: string; grantSecret: string; kinds?: Partial<PushKinds>; paused?: boolean }
+  /** 6b: forget this token's relay grant */
+  'push.clearGrant': Record<string, never>
+  /** 6b: this token's grant, without its secret */
+  'push.status': Record<string, never>
   /**
    * 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown.
    * Repeated by the claimant (or with its `claimToken` from a new connection) it refreshes the claim.
@@ -615,6 +627,10 @@ export interface MethodResultsV2 {
   'pairing.create': { code: string; expiresAt: number; expiresInMs: number }
   /** Whether a waiting code was dropped (false: unknown, spent or expired already) */
   'pairing.cancel': { cancelled: boolean }
+  'push.setGrant': null
+  'push.clearGrant': null
+  /** null: no grant. `active` false: the relay refused it (`lastError` says why): grant again */
+  'push.status': PushStatusResult | null
   'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null
@@ -768,4 +784,14 @@ export interface VoiceSummaryEvent {
   text: string
   /** The mp3, base64 */
   audio: string
+}
+
+/** `push.status`'s answer (6b) */
+export interface PushStatusResult {
+  relayUrl: string
+  kinds: PushKinds
+  paused: boolean
+  active: boolean
+  lastError?: string
+  lastPushAt?: number
 }

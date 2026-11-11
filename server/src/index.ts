@@ -497,6 +497,8 @@ const server = startServer(
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
       recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)
     },
+    // Background push (6b): the phones' relay grants live in the same secrets file.
+    push: { secretsFile: secretsPathFor(resolve(args.configPath)) },
     web: webBundle ? { bundle: webBundle } : undefined
   }
 )

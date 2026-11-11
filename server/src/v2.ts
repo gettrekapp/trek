@@ -31,6 +31,7 @@ import type { ProjectState } from './projects/state.ts'
 import type { SessionManager } from './sessions/manager.ts'
 import { applySettingsPatch, isSettingsKey, pruneDeletedTags } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
+import { checkSetGrant, type PushGrants } from './push/grants.ts'
 import {
   assertNoProtoKeys,
   checkExpected,
@@ -76,9 +77,17 @@ export interface V2Context {
   pairing?: PairingCodes
   /** The name of the token this connection signed in with (a web session's token, for a browser) */
   tokenName?: string
+  /** Background push (6b): each token's relay grant */
+  push?: { grants: PushGrants }
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
+
+function pushGrantsOf(ctx: V2Context): PushGrants {
+  if (!ctx.push) throw codedError('NOT_FOUND', 'This server does not push')
+  if (!ctx.tokenName) throw codedError('BAD_REQUEST', 'push grants belong to a token')
+  return ctx.push.grants
+}
 
 /** A clearable string field: null or "" clears it; anything else must be a string. */
 function clearableString(value: unknown, field: string): string | null {
@@ -340,6 +349,18 @@ const handlers: Record<string, Handler> = {
 
   // Drops a waiting code. Any signed-in connection that knows the code may: whoever holds it
   // could redeem it, which is more.
+  // Background push (6b): the calling token's relay grant. Write-only: status never returns the secret.
+  'push.setGrant': (p, ctx) => {
+    const grants = pushGrantsOf(ctx)
+    grants.set(ctx.tokenName!, checkSetGrant(p))
+    return null
+  },
+  'push.clearGrant': (_p, ctx) => {
+    pushGrantsOf(ctx).clear(ctx.tokenName!)
+    return null
+  },
+  'push.status': (_p, ctx) => pushGrantsOf(ctx).status(ctx.tokenName!),
+
   'pairing.cancel': (p, ctx) => {
     if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
     if (typeof p.code !== 'string' || p.code.length > 64) throw codedError('BAD_REQUEST', 'code must be a string')

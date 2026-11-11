@@ -65,6 +65,8 @@ export interface SessionManagerDeps {
   voicePrompt?: () => string | undefined
   /** Whether a program resolves in the login shell (server.agents); default agentService.commandExists */
   commandExists?: (binary: string) => Promise<boolean>
+  /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
+  onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
@@ -733,15 +735,18 @@ export class SessionManager {
     this.dropActivity(owner.sessionId)
     // A Codex session that exited before its id was found is never bound (pickClaimant's rule).
     this.stopDiscovery(owner.sessionId)
+    let exited: { projectName: string; worktreeId: string | null } | undefined
     try {
       this.deps.projects.apply(
         owner.projectId,
         (d) => {
-          const s = findSession(d, owner.sessionId).session
+          const found = findSession(d, owner.sessionId)
+          const s = found.session
           if (s.ptyId !== ptyId) return
           delete s.ptyId
           s.status = 'exited'
           s.exitCode = exitCode
+          exited = { projectName: d.name, worktreeId: found.worktree?.id ?? null }
         },
         { persist: false }
       )
@@ -749,6 +754,13 @@ export class SessionManager {
       // the project or session is gone
     }
     this.publishAttention()
+    if (exited) {
+      try {
+        this.deps.onSessionExit?.({ projectId: owner.projectId, sessionId: owner.sessionId, ...exited })
+      } catch (err) {
+        console.warn('onSessionExit failed', err)
+      }
+    }
   }
 
   // ---- live status ----

@@ -40,6 +40,9 @@ import { createWebHandler } from './web/http'
 import { sweepEvery, WebSocketSignIns } from './web/sockets'
 import type { WebBundle } from './web/bundle'
 import { moveTransfers, sweepStaleMoveDirs } from './move/transfers'
+import { createSecretFile } from './secrets'
+import { PushGrants } from './push/grants'
+import { Pusher } from './push/pusher'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -85,6 +88,11 @@ export interface ServerOptions {
   web?: {
     bundle: WebBundle
   }
+  /**
+   * Background push (6b): the phones' relay grants, in the server's secrets file. Without it the
+   * server answers `push.*` with NOT_FOUND and pushes nothing. `fetch` is for tests.
+   */
+  push?: { secretsFile: string; fetch?: typeof fetch }
 }
 
 export interface ProjectsSetup {
@@ -128,7 +136,8 @@ export function startServer(
     store,
     hub,
     mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined,
-    voicePrompt: () => (options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined)
+    voicePrompt: () => (options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined),
+    onSessionExit: (p) => pusher?.notify({ kind: 'session-stopped', ...p })
   })
 
   // Set once the connections exist (below): gh's first answer comes after this function returns.
@@ -140,12 +149,27 @@ export function startServer(
         gh: options.prWatch.gh,
         pollMs: options.prWatch.pollMs,
         recheckMs: options.prWatch.recheckMs,
-        onAvailability: (available) => prWatchChanged(available)
+        onAvailability: (available) => prWatchChanged(available),
+        onReport: (p) => pusher?.prReport(p)
       })
     : undefined
   prWatch?.start()
   // promote_to_primary's confirmations (5e): asked of the project's windows.
   const promoteRequests = new PromoteRequests(hub)
+
+  // Background push (6b). A token counts as connected while any of its sockets is open: its
+  // phone (or its window) already shows what would be pushed.
+  const connectedTokens = new Map<WebSocket, string>()
+  const pushGrants = options.push ? new PushGrants(createSecretFile(options.push.secretsFile), () => listTokens(store.config).map((t) => t.name)) : undefined
+  const pusher: Pusher | undefined = pushGrants
+    ? new Pusher({
+        hub,
+        grants: pushGrants,
+        isConnected: (name) => [...connectedTokens.values()].includes(name),
+        serverId: () => store.config.serverId ?? '',
+        fetch: options.push?.fetch
+      })
+    : undefined
 
   /** The token hash each authenticated socket used, so revoking a token closes its sockets. */
   const authed = new Map<WebSocket, string>()
@@ -186,6 +210,11 @@ export function startServer(
     const active = activeTokenHashes(store.config)
     // A revoked token's browser sessions end with it (their sockets close in the loop below).
     for (const key of web?.sessions.prune(active) ?? []) signedOut(key)
+    // A revoked token's push grant goes with it.
+    if (pushGrants) {
+      const droppedGrants = pushGrants.retain(new Set(listTokens(store.config).map((t) => t.name)))
+      if (droppedGrants) console.warn(`[push] dropped ${droppedGrants} push grant(s) of a revoked token`)
+    }
     // A revoked token's waiting pairing codes go with it: a code it asked for no longer pairs.
     if (pairing) {
       const dropped = pairing.retainIssuedBy(new Set(listTokens(store.config).map((t) => t.name)), Date.now())
@@ -213,6 +242,7 @@ export function startServer(
   refreshServerTopic = serverState.refresh
   projectsSetup.store.on('health', serverState.refresh)
   poller.start()
+  pusher?.start()
 
   const httpServer = createServer(
     web
@@ -402,6 +432,7 @@ export function startServer(
         }
         protocolVersion = frame.protocolVersion
         authed.set(ws, entry.hash)
+        connectedTokens.set(ws, entry.name)
         callerTokenName = entry.name
         const viaWeb = !token && webSession !== undefined
         if (viaWeb) webSignIns?.add(ws, webSession.key, Date.now())
@@ -446,6 +477,7 @@ export function startServer(
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
         tokenName: callerTokenName,
+        push: pushGrants ? { grants: pushGrants } : undefined,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -480,6 +512,7 @@ export function startServer(
       revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
+      connectedTokens.delete(ws)
       webSignIns?.delete(ws)
       hub.unsubscribeAll(subscriber)
       // A promote_to_primary request this window claimed but had not started fails.
@@ -535,6 +568,7 @@ export function startServer(
     poller.stop()
     prWatch?.stop()
     promoteRequests.stop()
+    pusher?.stop()
     sessions.stopAll()
     // A move's staged histories (5d) are only of use to the connection that was sending them.
     const cleared = moveTransfers.clear().catch(() => {})
