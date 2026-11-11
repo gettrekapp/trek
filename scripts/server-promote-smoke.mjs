@@ -55,6 +55,14 @@ const check = (name, actual, expected) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}: ${JSON.stringify(actual)}`)
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+// A git read of a checkout the server is changing (a worktree half added, say) can fail: null, and the wait goes on.
+const orNull = (fn) => {
+  try {
+    return fn()
+  } catch {
+    return null
+  }
+}
 const until = async (fn, expected, ms = 15_000) => {
   const deadline = Date.now() + ms
   let value = await fn()
@@ -111,6 +119,16 @@ mkdirSync(machineStubs)
 const vmProfile = deriveProfileName(repo, 'feature-x')
 writeFileSync(join(data, 'environments.json'), JSON.stringify({ [vmProfile]: { repoPath: repo, branch: 'feature-x', worktreePath: worktree, composeFile: 'docker-compose.yml', createdAt: '2026-11-10T00:00:00.000Z' } }))
 writeFileSync(vmRunning, '')
+// git, slowed only where the server's poller reads a worktree's ahead/behind (worktreeStatuses'
+// rev-list): each status read takes a while, as on a loaded machine, so a promote's or demote's own
+// re-read (list applied, then statuses) always leaves a window where the project lists the rows
+// before the sessions have moved: the checks must wait for the outcome, not for the rows.
+const realGit = execFileSync('/bin/sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim()
+writeFileSync(
+  join(machineStubs, 'git'),
+  `#!/bin/sh\ncase "$*" in *'@{upstream}...HEAD'*) sleep 1.5 ;; esac\nexec '${realGit}' "$@"\n`,
+  { mode: 0o755 }
+)
 writeFileSync(
   join(machineStubs, 'docker'),
   `#!/bin/sh\nif [ "$1" = --version ]; then echo "Docker version 0.0.0-stub"; exit 0; fi\necho "docker $*" >> '${machineCalls}'\nif [ "$1" = ps ] && [ -e '${stackRunning}' ]; then echo c0ffee; fi\nexit 0\n`,
@@ -315,7 +333,7 @@ try {
   // ---- 3. Promote to primary, with its dev stack and VM torn down first ----------------------------
 
   await (await menuItem('feature-x', worktree, 'Promote to primary…')).click()
-  check('the main checkout switches to feature-x', await until(() => { try { return branchOf(repo) } catch { return null } }, 'feature-x'), 'feature-x')
+  check('the main checkout switches to feature-x', await until(() => orNull(() => branchOf(repo)), 'feature-x'), 'feature-x')
   const asked = await until(async () => (await confirmOf(PROMOTE_MESSAGE)).length, 1)
   check('Promote asked first', asked, 1)
   const first = (await confirmOf(PROMOTE_MESSAGE))[0] ?? {}
@@ -332,8 +350,11 @@ try {
   check("and the branch's commit", existsSync(join(repo, 'b.txt')), true)
   const afterPromote = await until(async () => (await rowsNow()).map((w) => w.id), [mainId])
   check('the project lists only the main checkout', afterPromote, [mainId])
-  const mainRow = (await rowsNow())[0]
-  check('the session moved to the main checkout, resumed there', [mainRow.sessions.map((s) => s.id), mainRow.loaded, !!mainRow.sessions[0]?.ptyId], [[sessionId], true, true])
+  const movedToMain = async () => {
+    const row = (await rowsNow())[0]
+    return [row?.sessions.map((s) => s.id), row?.loaded, !!row?.sessions[0]?.ptyId]
+  }
+  check('the session moved to the main checkout, resumed there', await until(movedToMain, [[sessionId], true, true], 30_000), [[sessionId], true, true])
   check("its history moved to the main checkout's Claude folder", [existsSync(join(claudeDir(repo), historyName)), existsSync(join(claudeDir(worktree), historyName))], [true, false])
   check('the window shows one row, on feature-x', await until(async () => [await rows.count(), (await rows.first().textContent())?.includes('feature-x')], [1, true]), [1, true])
   check('the window selects the main checkout', await until(() => win.evaluate(() => window.__store.getState().selected?.path ?? null), repo), repo)
@@ -343,16 +364,27 @@ try {
   // ---- 4. Promote branch to worktree ---------------------------------------------------------------
 
   await (await menuItem('feature-x', repo, 'Promote branch to worktree…')).click()
-  check('feature-x is back in a worktree at the default path', await until(() => existsSync(worktree) && branchOf(worktree), 'feature-x'), 'feature-x')
-  check('the main checkout is back on main', await until(() => branchOf(repo), 'main'), 'main')
-  check('and clean', await until(() => status(repo), []), [])
+  check('feature-x is back in a worktree at the default path', await until(() => orNull(() => existsSync(worktree) && branchOf(worktree)), 'feature-x'), 'feature-x')
+  check('the main checkout is back on main', await until(() => orNull(() => branchOf(repo)), 'main'), 'main')
+  check('and clean', await until(() => orNull(() => status(repo)), []), [])
   check('the work is in the worktree, unstaged', status(worktree), [' M a.txt', '?? c.txt'])
   check('the racily-clean edit by content too', readFileSync(join(worktree, 'a.txt'), 'utf8'), 'one\nTWO\nthree\n')
   const backRows = await until(async () => (await rowsNow()).length, 2)
   check('the project lists the main checkout and the worktree', backRows, 2)
-  const backRow = (await rowsNow()).find((w) => !w.isMain)
-  check('the session moved to the new worktree, running there', [backRow?.sessions.map((s) => s.id), backRow?.loaded, !!backRow?.sessions[0]?.ptyId], [[sessionId], true, true])
-  check("its history in the worktree's Claude folder", existsSync(join(claudeDir(worktree), historyName)), true)
+  // The row is listed (by the demote's own re-read, or the poller's) before the demote moves the
+  // session into it: the re-read applies the list, then reads the statuses, then the histories and
+  // the session move. So this waits for the demote to finish, not for the row.
+  const movedBack = async () => {
+    const row = (await rowsNow()).find((w) => !w.isMain)
+    return [row?.sessions.map((s) => s.id), row?.loaded, !!row?.sessions[0]?.ptyId]
+  }
+  const backSession = await until(movedBack, [[sessionId], true, true], 30_000)
+  check('the session moved to the new worktree, running there', backSession, [[sessionId], true, true])
+  check("its history in the worktree's Claude folder", await until(() => existsSync(join(claudeDir(worktree), historyName)), true), true)
+  if (JSON.stringify(backSession) !== JSON.stringify([[sessionId], true, true])) {
+    const noted = (await dialogs()).filter((d) => d.message === 'Moved, with notes' || d.type === 'error')
+    console.log(`     the demote's notes and errors shown: ${JSON.stringify(noted)}`)
+  }
   check('the window shows both rows again', await until(() => rows.count(), 2), 2)
 
   // ---- 5. An agent's promote_to_primary --------------------------------------------------------------
@@ -418,7 +450,7 @@ try {
   check('the window claims it', await until(() => heardOf(requestD).includes('claimed'), true), true)
   drop.abort()
   check('the call dropped', (await dropped)?.name, 'AbortError')
-  check('the promote went through anyway', await until(() => [branchOf(repo), existsSync(worktree)], ['feature-x', false], 30_000), ['feature-x', false])
+  check('the promote went through anyway', await until(() => [orNull(() => branchOf(repo)), existsSync(worktree)], ['feature-x', false], 30_000), ['feature-x', false])
   const queued = async () => (await rowsNow()).find((w) => w.isMain)?.sessions.find((x) => x.id === sessionId)?.queue ?? []
   const queue = await until(async () => JSON.stringify(await queued()).includes('The promote you asked for (promote_to_primary) went through'), true)
   check("the asking session, resumed in the main checkout, has the outcome in its queue", [queue, !!(await rowsNow()).find((w) => w.isMain)?.sessions.find((x) => x.id === sessionId)?.ptyId], [true, true])
