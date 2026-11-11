@@ -63,27 +63,49 @@ The app's pure modules (`src/logic/`) are tested from the repo root
 ## Push (6b)
 
 Background push goes through your own push relay (`relay/README.md`), which holds the APNs
-key and the FCM service account for this app's bundle id / package. Set its address in
-`app.json` before building:
+key and the FCM service account for this app's bundle id / package. Set its address (and its
+registration key, if the relay has one) in `app.json` before building:
 
 ```json
-{ "expo": { "extra": { "relayUrl": "https://push.example.com" } } }
+{ "expo": { "extra": { "relayUrl": "https://push.example.com", "relayKey": "" } } }
 ```
 
-It must be `https://` (or `http://` to this device or a private address, for a relay on the
-LAN while developing). Empty (the default): no push settings, nothing registered.
+or from the environment, which `app.config.js` prefers over `app.json`: `TREK_RELAY_URL`,
+`TREK_RELAY_KEY`. It must be `https://`: servers accept plain `http://` only on their own
+machine, which a phone's relay never is. Empty (the default) or anything else: no push
+settings, nothing registered.
 
 With a relay and notification permission, the app registers its native push token (APNs or
-FCM, not an Expo push token) with the relay once, and sends a new one when the OS rotates it.
-For each paired server whose welcome lists `push`, it takes a grant from the relay and hands
-it to the server (`push.setGrant`). Servers → **Push…** has the server's three switches
-(Decisions, Sessions, PR watch), saved to the server at once; **Pause all pushes** pauses
-every server. Removing a server clears its grant there and revokes it at the relay. The
-device secret and each grant's secret are kept in secure storage. A tapped push opens its
-session (or worktree), like a local notification.
+FCM, not an Expo push token) with the relay as soon as permission is granted (no restart), and
+on every launch and return to the foreground sends the current token again (which brings back
+a device the relay marked dead) along with **Pause all pushes**. A relay that no longer knows
+the device gets a new registration. For each paired server whose welcome lists `push`, it
+takes a grant from the relay and hands it to the server (`push.setGrant`); a grant from another
+relay or registration, or one the server says the relay refused, is replaced. Servers →
+**Push…** has the server's three switches (Decisions, Sessions, PR watch), saved to the server
+at once. **Pause all pushes** is held at the relay for this device, so it covers servers out of
+reach too, and is handed to each connected server; the Servers screen says when the relay
+couldn't be told. Removing a server clears its grant there and revokes it at the relay (not
+waited on). Every relay call gives up after 10 s. The device secret and each grant's secret
+are kept in secure storage. A tapped push opens its session (or worktree), like a local
+notification, also from a cold start.
+
+**Android: `google-services.json`.** FCM needs the Firebase project's `google-services.json`
+in the build. It is optional and git-ignored: put it at `apps/mobile/google-services.json`, or
+point `GOOGLE_SERVICES_JSON` at it. `app.config.js` sets `android.googleServicesFile` only when
+the file exists. For EAS, upload it as a secret **file** environment variable named
+`GOOGLE_SERVICES_JSON` (EAS gives the build its path). The Android app (package
+`dev.trek.mobile`, `android.package`) must be registered in the same Firebase project as the
+relay's service account. Without the file the build has no FCM token: the app shows "This build
+has no push config (Android: google-services.json)" and registers nothing (iOS is unaffected).
+
+**iOS: the APNs environment.** A development build gets sandbox tokens; TestFlight and App
+Store builds production ones. Build those with `TREK_APNS_MODE=production` (the
+expo-notifications plugin's `mode: 'production'`, the `aps-environment` entitlement), and use a
+relay with `"production": true` for them: one APNs environment per relay.
 
 APNs and FCM only deliver to a real build: a development build on a device (EAS or
-`npx expo run:ios --device`) with the push entitlement, or an Android device with the
+`npx expo run:ios --device`) with the push entitlement, or an Android device built with the
 app's `google-services.json`. The simulator gets no remote pushes.
 
 ## Run it
@@ -148,16 +170,27 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    Pairing again from there replaces the entry: the server is listed once.
 
 10. **Push (6b), on a real device only** (a development build with the push entitlement, a
-    relay configured as in `relay/README.md`, its address in `extra.relayUrl`):
-    - Allow notifications. The relay's `relay.json` lists the device; Servers shows **Push…**
-      for the server.
+    relay configured as in `relay/README.md`, its address in `extra.relayUrl` or
+    `TREK_RELAY_URL`):
+    - First launch of a fresh install: allow notifications when asked. Without restarting, the
+      relay's `relay.json` lists the device and Servers shows **Push…** for the server.
+    - Android: a build without `google-services.json` shows "This build has no push config
+      (Android: google-services.json)"; with it, the device registers.
     - Close the app. A `request_decision` gives a push "Trek · <project>" / "A decision is
       waiting", without the question. Tapping it opens that session.
+    - Kill the app (swipe it away), then tap a push: the app starts on that session. Check
+      on iOS and on Android.
+    - iOS: close the app and wait about a minute (iOS suspends it, its connection drops
+      silently), then raise a decision: a push arrives for it.
     - A session that exits by itself gives "A session stopped".
     - Push… → Decisions off: the next decision gives nothing; Sessions still do.
     - **Pause all pushes**: nothing from any server; off again: pushes return.
+    - **Pause all pushes** with a server out of reach (its machine asleep or off the network):
+      once it is back, it still pushes nothing while paused (the relay holds the pause).
+      With the relay out of reach, the Servers screen says it wasn't told.
     - With the app open on that server, nothing is pushed (the list shows it).
-    - Remove the server: the relay's grant is gone (`GET /v1/grants` no longer lists it).
+    - Remove the server: the relay's grant is gone (`GET /v1/grants` no longer lists it);
+      with the relay out of reach, the server is still removed at once.
     - `trek-server token revoke phone-<name>`: the server drops the grant; no more pushes.
 
 The repo's checks use no real push service (APNs, FCM, Expo): `npm run smoke:push` runs

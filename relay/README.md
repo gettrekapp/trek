@@ -22,11 +22,16 @@ You need at least one platform. A platform with no credentials is refused at reg
 - **APNs (iOS):** in the Apple Developer account that signs the app, create a key with Apple Push
   Notifications service enabled (Certificates, Identifiers & Profiles → Keys). Download the
   `AuthKey_<KEYID>.p8` file once, and note its Key ID and your Team ID. The bundle id is the app's
-  (`ios.bundleIdentifier` in `apps/mobile/app.json`). Use `"production": false` for development
-  builds (the APNs sandbox) and `true` for TestFlight and App Store builds.
-- **FCM (Android):** in the Firebase project the Android app is registered in, create a service
-  account key (Project settings → Service accounts → Generate new private key). That JSON file is
-  `serviceAccountPath`.
+  (`ios.bundleIdentifier` in `apps/mobile/app.json`), and its App ID needs the Push
+  Notifications capability. **One APNs environment per relay:** `"production": false` for
+  development builds (the APNs sandbox), `true` for TestFlight and App Store builds, which are
+  built with the expo-notifications plugin's `mode: 'production'` (`TREK_APNS_MODE=production`,
+  `apps/mobile/README.md`). A relay can't serve both kinds of build; run two if you need both.
+- **FCM (Android):** in the Firebase project the Android app (package `dev.trek.mobile`) is
+  registered in, with the Firebase Cloud Messaging API (V1) enabled, create a service account key
+  (Project settings → Service accounts → Generate new private key). That JSON file is
+  `serviceAccountPath`. The app's build needs the same project's `google-services.json`
+  (`apps/mobile/README.md`).
 
 Keep both files owned by, and readable only by, the relay's user (`chmod 600`). The relay
 refuses to start if they, or its config, belong to another user or can be read by group or
@@ -36,7 +41,8 @@ others. It makes `dataDir` mode 0700 if it has to create it.
 environment errors mean the relay's `apns.bundleId` or `apns.production` doesn't match the build
 (a development build's token works only with `"production": false`, a TestFlight or App Store
 build's only with `true`). So does `BadDeviceToken` for a token that has never had a push
-delivered. The relay logs these as `APNS CONFIG ERROR`, naming both settings, answers the server
+delivered: that is almost always a build/relay environment mismatch, a config error, not a dead
+token. The relay logs these as `APNS CONFIG ERROR`, naming both settings, answers the server
 `422`, and keeps the device: fix the config and restart. `BadDeviceToken` for a token that has
 had a push delivered, and APNs' `410`, mean the token is gone.
 
@@ -68,8 +74,8 @@ had a push delivered, and APNs' `410`, mean the token is gone.
   address it likes.
 - `registrationKey` (optional, 16–256 characters): `POST /v1/devices` then needs the header
   `x-trek-relay-key: <key>` (compared in constant time), so only your build can register. Bake it
-  into the build as `expo.extra.relayKey` in `apps/mobile/app.json`, next to `relayUrl`; the
-  phone sends it. Anyone with the app binary can read it, so it keeps out strangers who found the
+  into the build as `expo.extra.relayKey` in `apps/mobile/app.json`, next to `relayUrl` (or
+  `TREK_RELAY_KEY` when building); the phone sends it. Anyone with the app binary can read it, so it keeps out strangers who found the
   relay's address, not a determined attacker.
 - `maxDevices` (default 10,000): beyond it, registration answers `503`.
 
@@ -94,7 +100,8 @@ true` so the relay limits registrations per client rather than treating every ph
 `127.0.0.1` (which would let ten registrations a minute, from anyone, lock out everyone).
 
 Then build the phone app with that address: set `expo.extra.relayUrl` in `apps/mobile/app.json`
-(for example `"https://push.example.com"`) before building. A build without it shows no push
+(for example `"https://push.example.com"`), or `TREK_RELAY_URL`, before building. The phone, like
+the servers, takes only an `https://` address. A build without it shows no push
 settings and registers nothing.
 
 ## What it stores
@@ -136,8 +143,10 @@ Bearer <secret>`.
 **The phone's side.** On each launch (and each registration check), the phone sends its current
 push token with `PUT /v1/devices/:id`, even when it hasn't changed: that brings a device marked
 dead back. A `410 {error: 'device-dead'}` from the grant calls means the same: send the token,
-then retry. "Pause all pushes" is `PUT /v1/devices/:id {paused: true}`, which holds for every
-server, reachable or not.
+then retry (the phone does, once). A `401` to a device call means the relay no longer knows the
+device: the phone forgets it and registers again. Every phone call gives up after 10 s. "Pause
+all pushes" is `PUT /v1/devices/:id {paused: true}` (the phone sends it with the token on every
+check), which holds for every server, reachable or not.
 
 **What reaches the phone.** On iOS the notification is
 `{aps: {alert: {title, body}, sound: 'default'}, body: {kind, serverId, projectId, worktreeId?, sessionId?}}`

@@ -3,6 +3,7 @@ import { router, Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as Notifications from 'expo-notifications'
 import { notificationRoute } from '../src/logic/attention.ts'
+import { routeTap } from '../src/logic/push.ts'
 import { ServersProvider } from '../src/state/ServersProvider.tsx'
 import { PushProvider, usePush } from '../src/state/PushProvider.tsx'
 import { colors } from '../src/ui/theme.ts'
@@ -16,37 +17,67 @@ Notifications.setNotificationHandler({
 // or a notification: Back from there leads home.
 export const unstable_settings = { initialRouteName: 'index' }
 
-/** Tapping a notification opens its session (or worktree): while running, and on a cold start. */
+/**
+ * Tapping a notification opens its session (or worktree): while running, and on a cold start. A
+ * tap is held until the saved servers and their push records are loaded (a push names the
+ * server's own id, mapped to the phone's entry), and marked handled only once routed or found to
+ * have no route.
+ */
 function NotificationRouting(): null {
-  // A push (6b) names the server by its own id: mapped to the phone's entry for it.
-  const { routeData } = usePush()
-  const routeRef = useRef(routeData)
-  routeRef.current = routeData
+  const { ready, routeData } = usePush()
+  const pending = useRef<Notifications.NotificationResponse[]>([])
+  const handled = useRef(new Set<string>())
+  const cold = useRef<Notifications.NotificationResponse | null>(null)
+  const flushRef = useRef<() => void>(() => {})
+  flushRef.current = () => {
+    const still: Notifications.NotificationResponse[] = []
+    for (const response of pending.current) {
+      const route = routeTap(response.notification.request.content.data, ready, routeData, notificationRoute)
+      if (route === 'wait') {
+        still.push(response)
+        continue
+      }
+      handled.current.add(response.notification.request.identifier)
+      if (response === cold.current) {
+        cold.current = null
+        try {
+          Notifications.clearLastNotificationResponse()
+        } catch {
+          // Not available (no native module).
+        }
+      }
+      if (route) router.push(route)
+    }
+    pending.current = still
+  }
   useEffect(() => {
-    const handled = new Set<string>()
     const open = (response: Notifications.NotificationResponse | null): void => {
       if (!response || response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) return
       const id = response.notification.request.identifier
-      if (handled.has(id)) return
-      handled.add(id)
-      const route = notificationRoute(routeRef.current(response.notification.request.content.data))
-      if (route) router.push(route)
+      if (handled.current.has(id) || pending.current.some((r) => r.notification.request.identifier === id)) return
+      pending.current.push(response)
+      flushRef.current()
     }
     // The tap that started the app, once navigation is up.
-    const cold = setTimeout(() => {
+    const timer = setTimeout(() => {
       try {
-        open(Notifications.getLastNotificationResponse())
-        Notifications.clearLastNotificationResponse()
+        const last = Notifications.getLastNotificationResponse()
+        cold.current = last
+        open(last)
       } catch {
         // Not available (no native module): nothing to route.
       }
     }, 0)
     const sub = Notifications.addNotificationResponseReceivedListener(open)
     return () => {
-      clearTimeout(cold)
+      clearTimeout(timer)
       sub.remove()
     }
   }, [])
+  // Held taps, again once the phone can map them.
+  useEffect(() => {
+    flushRef.current()
+  }, [ready, routeData])
   return null
 }
 

@@ -1,31 +1,57 @@
 // Background push on the phone (6b). With a relay in the build's config (`extra.relayUrl`) and
 // notification permission granted, this device registers its native push token (APNs or FCM, not
-// an Expo token) with the relay once, and sends a rotated token. For each paired server whose
-// welcome lists `push`, it takes a grant from the relay and hands it to the server
-// (`push.setGrant`), with the three switches and "Pause all"; a grant the relay refused (the
-// server's `push.status` says not active) is replaced. Removing a server clears its grant there
-// and revokes it at the relay.
+// an Expo token) with the relay, and on every launch, foreground and token change sends the
+// current token (and "Pause all") again, which revives a device the relay marked dead. For each
+// paired server whose welcome lists `push`, it takes a grant from the relay and hands it to the
+// server (`push.setGrant`), with the three switches and "Pause all"; a grant the relay refused
+// (the server's `push.status` says not active), or one from another relay or registration, is
+// replaced. Removing a server clears its grant there and revokes it at the relay (not waited on).
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 import Constants from 'expo-constants'
 import * as Notifications from 'expo-notifications'
-import { CAPABILITY, type PushKinds, type PushStatusResult } from '../shared.ts'
-import { ALL_PUSH_KINDS_ON, deviceAction, needsGrant, pushRouteData, relay, relayUrlOf, setGrantParams, type RelayDevice, type ServerPush } from '../logic/push.ts'
+import { CAPABILITY, type PushGroup, type PushKinds, type PushStatusResult } from '../shared.ts'
+import {
+  ALL_PUSH_KINDS_ON,
+  NO_PUSH_CONFIG,
+  ensureDevice,
+  keyedQueue,
+  pushRouteData,
+  relayClient,
+  relayKeyOf,
+  relayUrlOf,
+  setGrantParams,
+  syncPlan,
+  withDevice,
+  withTimeout,
+  type RelayDevice,
+  type ServerPush
+} from '../logic/push.ts'
 import { pushStorage } from './pushStorage.ts'
 import { useServers } from './ServersProvider.tsx'
 
 interface PushValue {
   /** The build names a relay: the push settings are shown */
   enabled: boolean
-  /** This device is registered with the relay (permission granted) */
+  /** The saved servers and their push records are loaded: a tapped push can be routed */
+  ready: boolean
+  /** Notification permission is granted */
+  permitted: boolean
+  /** This device is registered with the relay */
   registered: boolean
+  /** Why this device couldn't register or reach the relay, last time it tried */
+  registrationProblem: string | undefined
+  /** Checks permission and registers (or sends the token again); call it once permission is granted */
+  ensureRegistered(): Promise<void>
   paused: boolean
+  /** "Pause all" is held at the relay too (so for servers out of reach); false while that call failed */
+  pauseHeld: boolean
   setPaused(paused: boolean): Promise<void>
   kindsOf(entryId: string): PushKinds
-  setKinds(entryId: string, kinds: PushKinds): Promise<void>
+  setKind(entryId: string, group: PushGroup, on: boolean): Promise<void>
   /** The server's last word on its grant (push.status), or the phone's own trouble reaching the relay */
   problemOf(entryId: string): string | undefined
-  /** Clears and revokes a server's grant before the server is removed from the phone */
+  /** Clears and revokes a server's grant before the server is removed from the phone (the relay isn't waited on) */
   forget(entryId: string): Promise<void>
   /** A tapped notification's data mapped to the phone's routes (a push names the server's own id) */
   routeData(data: unknown): unknown
@@ -40,101 +66,191 @@ export function usePush(): PushValue {
 }
 
 const relayUrl = relayUrlOf(Constants.expoConfig?.extra?.relayUrl)
+const client = relayClient(fetch, { relayKey: relayKeyOf(Constants.expoConfig?.extra?.relayKey) })
 const platform = Platform.OS === 'ios' || Platform.OS === 'android' ? Platform.OS : null
+const DEVICE_QUEUE = '\0device'
+const SERVER_TIMEOUT_MS = 10_000
 
 export function PushProvider({ children }: { children: ReactNode }): React.JSX.Element {
-  const { servers, get, generationOf } = useServers()
+  const { ready: serversReady, servers, get, generationOf } = useServers()
   const [device, setDevice] = useState<RelayDevice | null>(null)
+  const [permitted, setPermitted] = useState(false)
+  const [registrationProblem, setRegistrationProblem] = useState<string | undefined>(undefined)
   const [paused, setPausedState] = useState(false)
+  const [relayPaused, setRelayPaused] = useState<boolean | null>(null)
   const [pushes, setPushes] = useState<Record<string, ServerPush>>({})
   const [problems, setProblems] = useState<Record<string, string | undefined>>({})
+  const [loadedFor, setLoadedFor] = useState<string | null>(null)
   const deviceRef = useRef<RelayDevice | null>(null)
-  deviceRef.current = device
   const pausedRef = useRef(false)
-  pausedRef.current = paused
-  /** `${entryId}:${generation}` already synced */
+  const pausedLoaded = useRef<Promise<void> | null>(null)
+  const pushesRef = useRef<Record<string, ServerPush>>({})
+  pushesRef.current = pushes
+  /** `${entryId}:${generation}` synced (or being synced); a failed sync removes its key so it is tried again */
   const synced = useRef(new Set<string>())
+  /** Bumped when a server is forgotten: a sync started before it doesn't write its grant back */
+  const epochs = useRef(new Map<string, number>())
+  const queue = useMemo(() => keyedQueue(), [])
 
   const problem = (entryId: string, message: string | undefined): void => setProblems((p) => ({ ...p, [entryId]: message }))
+  const adopt = (next: RelayDevice | null): void => {
+    // A new registration: every server needs a grant from it.
+    if (next?.deviceId !== deviceRef.current?.deviceId) synced.current.clear()
+    deviceRef.current = next
+    setDevice(next)
+  }
 
-  // This device at the relay: registered once, the token sent again when the OS rotates it.
+  /**
+   * One registration check, in the device queue (so two can't register twice): permission, the
+   * OS's token (`token` when the listener gave it), then the relay. `forget` drops a device the
+   * relay no longer knows, unless another check already replaced it.
+   */
+  const ensure = useCallback(
+    (token?: string, forget?: RelayDevice): Promise<RelayDevice | null> =>
+      queue(DEVICE_QUEUE, async () => {
+        if (!relayUrl || !platform) return null
+        // "Pause all" as saved, before the first check sends it to the relay.
+        pausedLoaded.current ??= pushStorage.paused().then(
+          (p) => {
+            pausedRef.current = p
+            setPausedState(p)
+          },
+          () => {}
+        )
+        await pausedLoaded.current
+        const permission = await Notifications.getPermissionsAsync().catch(() => null)
+        setPermitted(permission?.granted === true)
+        if (!permission?.granted) return null
+        let pushToken = token
+        if (!pushToken) {
+          try {
+            pushToken = String((await Notifications.getDevicePushTokenAsync()).data)
+          } catch (err) {
+            console.warn(`[push] no push token: ${(err as Error).message}`)
+            setRegistrationProblem(NO_PUSH_CONFIG)
+            return null
+          }
+        }
+        let saved = deviceRef.current ?? (await pushStorage.device())
+        if (forget && saved?.deviceId === forget.deviceId) saved = null
+        try {
+          const { device: next, paused: atRelay } = await ensureDevice(client, saved, relayUrl, platform, pushToken, pausedRef.current)
+          await pushStorage.setDevice(next)
+          adopt(next)
+          setRelayPaused(atRelay)
+          setRegistrationProblem(undefined)
+          return next
+        } catch (err) {
+          setRegistrationProblem((err as Error).message)
+          setRelayPaused(null)
+          if (saved && !deviceRef.current) adopt(saved)
+          throw err
+        }
+      }),
+    [queue]
+  )
+
+  const ensureRegistered = useCallback(async (): Promise<void> => {
+    await ensure().catch((err) => console.warn(`[push] could not register with the relay: ${(err as Error).message}`))
+  }, [ensure])
+
+  // On launch, on each return to the foreground (permission may have been granted in Settings,
+  // a registration may have failed), and on each new token from the OS.
   useEffect(() => {
     if (!relayUrl || !platform) return
-    let live = true
-    const ensure = async (pushToken: string): Promise<void> => {
-      const saved = await pushStorage.device()
-      const action = deviceAction(saved, relayUrl, platform, pushToken)
-      let next = saved
-      if (action === 'register') {
-        const { deviceId, deviceSecret } = await relay.register(fetch, relayUrl, platform, pushToken)
-        next = { relayUrl, deviceId, deviceSecret, platform, pushToken }
-      } else if (action === 'update' && saved) {
-        await relay.updateToken(fetch, saved, pushToken)
-        next = { ...saved, pushToken }
-      }
-      if (next && action !== 'none') await pushStorage.setDevice(next)
-      if (live) setDevice(next)
-    }
-    void (async () => {
-      setPausedState(await pushStorage.paused())
-      const permission = await Notifications.getPermissionsAsync().catch(() => null)
-      if (!permission?.granted) return
-      const token = await Notifications.getDevicePushTokenAsync()
-      await ensure(String(token.data))
-    })().catch((err) => console.warn(`[push] could not register with the relay: ${(err as Error).message}`))
+    void ensureRegistered()
+    const appState = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void ensureRegistered()
+    })
     const sub = Notifications.addPushTokenListener((token) => {
+      // ensure() checks permission first: a token alone doesn't register this device.
       void ensure(String(token.data)).catch((err) => console.warn(`[push] could not send the new token: ${(err as Error).message}`))
     })
     return () => {
-      live = false
+      appState.remove()
       sub.remove()
     }
-  }, [])
+  }, [ensure, ensureRegistered])
+
+  /** A grant call recovering a dead device (its token sent again) or an unknown one (registered again) */
+  const recover = useCallback(
+    async (why: 'dead' | 'unknown', failed: RelayDevice): Promise<RelayDevice> => {
+      const next = await ensure(undefined, why === 'unknown' ? failed : undefined)
+      if (!next) throw new Error('This device is not registered with the push relay')
+      return next
+    },
+    [ensure]
+  )
 
   // What the phone knows of each saved server's push, before any connection is up: a push tapped
   // on a cold start is routed by the server id stored with its grant.
   const ids = servers.map((s) => s.id).join('\n')
   useEffect(() => {
     let live = true
-    void Promise.all(ids.split('\n').filter(Boolean).map(async (id) => [id, await pushStorage.server(id)] as const)).then((pairs) => {
+    void Promise.all(ids.split('\n').filter(Boolean).map(async (id) => [id, await pushStorage.server(id).catch(() => null)] as const)).then((pairs) => {
       if (!live) return
       setPushes((p) => {
         const next = { ...p }
         for (const [id, push] of pairs) if (push && !next[id]) next[id] = push
         return next
       })
+      setLoadedFor(ids)
     })
     return () => {
       live = false
     }
   }, [ids])
 
-  /** Takes a grant if the server needs one, then hands the server its grant and switches. */
+  /** Takes a grant if the server needs one, then hands the server its grant and switches. In the server's queue. */
   const sync = useCallback(
-    async (entryId: string, label: string, force = false): Promise<void> => {
-      const d = deviceRef.current
-      const conn = get(entryId)?.connection
-      if (!d || !relayUrl || !conn || !conn.welcome?.capabilities.includes(CAPABILITY.push)) return
-      let saved = await pushStorage.server(entryId)
-      const status = (await conn.request('push.status', {})) as PushStatusResult | null
-      if (needsGrant(saved, status)) {
-        if (saved) await relay.revoke(fetch, d, saved.grantId).catch(() => {})
-        const g = await relay.grant(fetch, d, label)
-        saved = { grantId: g.grantId, grantSecret: g.grantSecret, kinds: saved?.kinds ?? { ...ALL_PUSH_KINDS_ON }, serverId: conn.welcome.serverId }
-        await pushStorage.setServer(entryId, saved)
-      } else if (!force && status && status.paused === pausedRef.current && JSON.stringify(status.kinds) === JSON.stringify(saved!.kinds)) {
-        setPushes((p) => ({ ...p, [entryId]: saved! }))
-        problem(entryId, status.lastError)
-        return
-      }
-      await conn.request('push.setGrant', setGrantParams(relayUrl, saved!, pausedRef.current))
-      setPushes((p) => ({ ...p, [entryId]: saved! }))
-      problem(entryId, undefined)
-    },
-    [get]
+    (entryId: string, label: string, force = false): Promise<void> =>
+      queue(entryId, async () => {
+        const d = deviceRef.current
+        const conn = get(entryId)?.connection
+        if (!d || !relayUrl || !conn || !conn.welcome?.capabilities.includes(CAPABILITY.push)) return
+        const epoch = epochs.current.get(entryId) ?? 0
+        const current = (): boolean => (epochs.current.get(entryId) ?? 0) === epoch
+        let saved = await pushStorage.server(entryId)
+        const status = (await withTimeout(conn.request('push.status', {}), SERVER_TIMEOUT_MS, 'push.status')) as PushStatusResult | null
+        const plan = syncPlan(saved, status, { relayUrl, deviceId: d.deviceId, paused: pausedRef.current, force })
+        const serverId = conn.welcome.serverId
+        if (plan === 'grant') {
+          // The old grant, if this registration made it, isn't waited on.
+          if (saved && (!saved.deviceId || saved.deviceId === d.deviceId) && (!saved.relayUrl || saved.relayUrl === relayUrl)) void client.revoke(d, saved.grantId).catch(() => {})
+          const { result: g, device: by } = await withDevice(d, recover, (dev) => client.grant(dev, label))
+          if (!current()) {
+            void client.revoke(by, g.grantId).catch(() => {})
+            return
+          }
+          const kinds = pushesRef.current[entryId]?.kinds ?? saved?.kinds ?? { ...ALL_PUSH_KINDS_ON }
+          saved = { grantId: g.grantId, grantSecret: g.grantSecret, kinds, serverId, relayUrl, deviceId: by.deviceId }
+          await pushStorage.setServer(entryId, saved)
+        } else if (saved!.serverId !== serverId) {
+          // The server's own id, as its welcome says now: a push names it.
+          saved = { ...saved!, serverId }
+          await pushStorage.setServer(entryId, saved)
+        }
+        const push = saved!
+        if (plan !== 'none') await withTimeout(conn.request('push.setGrant', setGrantParams(relayUrl, push, pausedRef.current)), SERVER_TIMEOUT_MS, 'push.setGrant')
+        if (!current()) return
+        // The switches as shown win: one changed during this sync is handed over by the next.
+        setPushes((p) => ({ ...p, [entryId]: { ...push, kinds: p[entryId]?.kinds ?? push.kinds } }))
+        problem(entryId, plan === 'none' ? status?.lastError : undefined)
+      }),
+    [get, queue, recover]
   )
 
-  // Each connection (each generation of it) is synced once it is up.
+  const trySync = useCallback(
+    (entryId: string, label: string, key: string | null, force = false): Promise<void> =>
+      sync(entryId, label, force).catch((err) => {
+        if (key) synced.current.delete(key)
+        problem(entryId, (err as Error).message)
+      }),
+    [sync]
+  )
+
+  // Each connection (each generation of it) is synced once it is up; a failed one again on the
+  // next change (a foreground, a reconnect, a registration).
   useEffect(() => {
     if (!device) return
     for (const s of servers) {
@@ -142,54 +258,93 @@ export function PushProvider({ children }: { children: ReactNode }): React.JSX.E
       const key = `${s.id}:${generationOf(s.id)}`
       if (synced.current.has(key)) continue
       synced.current.add(key)
-      void sync(s.id, s.name).catch((err) => problem(s.id, (err as Error).message))
+      void trySync(s.id, s.name, key)
     }
-  }, [servers, device, generationOf, sync])
+  }, [servers, device, generationOf, trySync])
 
+  // "Pause all": held at the relay for this device (so for every server, reachable or not), and
+  // handed to each connected server too.
   const setPaused = useCallback(
     async (next: boolean) => {
       setPausedState(next)
       pausedRef.current = next
-      await pushStorage.setPaused(next)
-      await Promise.all(servers.filter((s) => s.status === 'connected').map((s) => sync(s.id, s.name, true).catch((err) => problem(s.id, (err as Error).message))))
+      await pushStorage.setPaused(next).catch(() => {})
+      await Promise.all([
+        ensure().catch(() => {}),
+        ...servers.filter((s) => s.status === 'connected').map((s) => trySync(s.id, s.name, null, true))
+      ])
     },
-    [servers, sync]
+    [servers, ensure, trySync]
   )
 
-  const setKinds = useCallback(
-    async (entryId: string, kinds: PushKinds) => {
-      const saved = await pushStorage.server(entryId)
-      if (!saved) return
-      const next = { ...saved, kinds }
-      await pushStorage.setServer(entryId, next)
-      setPushes((p) => ({ ...p, [entryId]: next }))
+  const setKind = useCallback(
+    async (entryId: string, group: PushGroup, on: boolean) => {
       const name = servers.find((s) => s.id === entryId)?.name ?? ''
-      await sync(entryId, name, true).catch((err) => problem(entryId, (err as Error).message))
+      const shown = pushesRef.current[entryId]
+      if (!shown) {
+        // No grant yet (its sync failed): try again.
+        await trySync(entryId, name, null)
+        return
+      }
+      // Shown at once and merged from the ref, so two quick switches both stick.
+      const kinds = { ...shown.kinds, [group]: on }
+      pushesRef.current = { ...pushesRef.current, [entryId]: { ...shown, kinds } }
+      setPushes((p) => (p[entryId] ? { ...p, [entryId]: { ...p[entryId], kinds: { ...p[entryId].kinds, [group]: on } } } : p))
+      await queue(entryId, async () => {
+        const saved = await pushStorage.server(entryId)
+        const latest = pushesRef.current[entryId]?.kinds
+        if (saved && latest) await pushStorage.setServer(entryId, { ...saved, kinds: latest })
+      }).catch(() => {})
+      await trySync(entryId, name, null, true)
     },
-    [servers, sync]
+    [servers, queue, trySync]
   )
 
-  const forget = useCallback(async (entryId: string) => {
-    const saved = await pushStorage.server(entryId)
-    await get(entryId)?.connection.request('push.clearGrant', {}).catch(() => {})
-    const d = deviceRef.current
-    if (saved && d) await relay.revoke(fetch, d, saved.grantId).catch(() => {})
-    await pushStorage.setServer(entryId, null)
-  }, [get])
+  const forget = useCallback(
+    async (entryId: string) => {
+      epochs.current.set(entryId, (epochs.current.get(entryId) ?? 0) + 1)
+      const saved = pushesRef.current[entryId] ?? (await pushStorage.server(entryId).catch(() => null))
+      const conn = get(entryId)?.connection
+      if (conn) await withTimeout(conn.request('push.clearGrant', {}), 5_000, 'push.clearGrant').catch(() => {})
+      const d = deviceRef.current
+      // Revoked at the relay without waiting (the relay call has its own timeout).
+      if (saved && d && (!saved.deviceId || saved.deviceId === d.deviceId)) void client.revoke(d, saved.grantId).catch(() => {})
+      await pushStorage.setServer(entryId, null).catch(() => {})
+      setPushes((p) => {
+        const { [entryId]: _gone, ...rest } = p
+        return rest
+      })
+      setProblems((p) => {
+        const { [entryId]: _gone, ...rest } = p
+        return rest
+      })
+    },
+    [get]
+  )
+
+  const routeData = useCallback(
+    (data: unknown) => pushRouteData(data, (serverId) => Object.entries(pushes).find(([, p]) => p.serverId === serverId)?.[0]),
+    [pushes]
+  )
 
   const value = useMemo<PushValue>(
     () => ({
       enabled: relayUrl !== null,
+      ready: serversReady && loadedFor === ids,
+      permitted,
       registered: device !== null,
+      registrationProblem,
+      ensureRegistered,
       paused,
+      pauseHeld: device !== null && relayPaused === paused,
       setPaused,
       kindsOf: (id) => pushes[id]?.kinds ?? ALL_PUSH_KINDS_ON,
-      setKinds,
+      setKind,
       problemOf: (id) => problems[id],
       forget,
-      routeData: (data) => pushRouteData(data, (serverId) => Object.entries(pushes).find(([, p]) => p.serverId === serverId)?.[0])
+      routeData
     }),
-    [device, paused, setPaused, pushes, setKinds, problems, forget]
+    [serversReady, loadedFor, ids, permitted, device, registrationProblem, ensureRegistered, paused, relayPaused, setPaused, pushes, setKind, problems, forget, routeData]
   )
   return <PushContext.Provider value={value}>{children}</PushContext.Provider>
 }

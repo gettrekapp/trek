@@ -25,7 +25,8 @@ export default function PushSettingsScreen(): React.JSX.Element {
   return (
     <View style={[ui.screen, ui.pad]}>
       <Text style={ui.title}>{server.name}</Text>
-      {!push.registered ? <Text style={ui.warn}>Allow notifications for Trek in Settings to get pushes.</Text> : null}
+      {!push.permitted ? <Text style={ui.warn}>Allow notifications for Trek in Settings to get pushes.</Text> : null}
+      {push.permitted && push.registrationProblem ? <Text style={ui.error}>{push.registrationProblem}</Text> : null}
       {server.status === 'connected' && !canPush ? <Text style={ui.warn}>This server doesn't push. Update trek-server to use push notifications.</Text> : null}
       {push.paused ? <Text style={ui.warn}>All pushes are paused (Servers screen).</Text> : null}
       {problem ? <Text style={ui.error}>{problem}</Text> : null}
@@ -40,7 +41,7 @@ export default function PushSettingsScreen(): React.JSX.Element {
             value={kinds[group]}
             disabled={server.status !== 'connected' || !canPush || !push.registered}
             trackColor={{ true: colors.accent }}
-            onValueChange={(on) => void push.setKinds(serverId, { ...kinds, [group]: on })}
+            onValueChange={(on) => void push.setKind(serverId, group, on)}
           />
         </View>
       ))}

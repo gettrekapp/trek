@@ -18,7 +18,8 @@ export default function ServersScreen(): React.JSX.Element {
       'Its token is deleted from this phone. It stays valid on the server until you revoke it there (the desktop app, or trek-server token revoke).',
       [
         { text: 'Cancel', style: 'cancel' },
-        // Its push grant goes first: cleared on the server and revoked at the relay (6b).
+        // Its push grant goes first: cleared on the server and revoked at the relay (6b), the
+        // relay not waited on.
         { text: 'Remove', style: 'destructive', onPress: () => void push.forget(id).finally(() => remove(id)) }
       ]
     )
@@ -35,7 +36,13 @@ export default function ServersScreen(): React.JSX.Element {
             <View style={[ui.card, ui.row, { justifyContent: 'space-between', marginBottom: 4 }]}>
               <View style={{ flex: 1 }}>
                 <Text style={ui.text}>Pause all pushes</Text>
-                <Text style={ui.muted}>{push.registered ? 'No server pushes to this phone while paused' : 'Allow notifications to get pushes'}</Text>
+                <Text style={ui.muted}>
+                  {!push.permitted ? 'Allow notifications to get pushes' : push.registered ? 'No server pushes to this phone while paused' : 'This phone is not registered for pushes yet'}
+                </Text>
+                {push.registrationProblem ? <Text style={ui.error}>{push.registrationProblem}</Text> : null}
+                {push.registered && push.paused && !push.pauseHeld ? (
+                  <Text style={ui.warn}>The push relay wasn't told: servers out of reach may still push. Tried again when the app is next opened.</Text>
+                ) : null}
               </View>
               <Switch accessibilityLabel="Pause all pushes" value={push.paused} disabled={!push.registered} trackColor={{ true: colors.accent }} onValueChange={(v) => void push.setPaused(v)} />
             </View>

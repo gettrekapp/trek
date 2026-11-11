@@ -184,52 +184,223 @@ test('ref counts: on for the first user, off after the last', () => {
 })
 
 // ---- Background push (6b): apps/mobile/src/logic/push.ts ----
-import { deviceAction, needsGrant, pushRouteData, relay, relayUrlOf, setGrantParams } from '../apps/mobile/src/logic/push.ts'
+import {
+  NO_PUSH_CONFIG,
+  deviceAction,
+  ensureDevice,
+  isDeadDevice,
+  keyedQueue,
+  kindsEqual,
+  needsGrant,
+  pushRouteData,
+  relayClient,
+  relayKeyOf,
+  relayUrlOf,
+  routeTap,
+  setGrantParams,
+  syncPlan,
+  withDevice,
+  withTimeout
+} from '../apps/mobile/src/logic/push.ts'
+/** A fake relay: answers by `METHOD path`, recording each call */
+const fakeRelay = (answers) => {
+  const calls = []
+  const fetch = async (url, init) => {
+    const path = new URL(url).pathname
+    calls.push({ url, path, ...init, json: init.body ? JSON.parse(init.body) : undefined })
+    const a = answers[`${init.method} ${path.replace(/\/v1\/(devices|grants)\/[^/]+$/, '/v1/$1/:id')}`]
+    const [status, body] = typeof a === 'function' ? a(calls.at(-1)) : (a ?? [404, { error: 'not found' }])
+    return { status, json: async () => body }
+  }
+  return { fetch, calls }
+}
+const DEVICE = { relayUrl: 'https://r', deviceId: 'd1', deviceSecret: 'sec', platform: 'ios', pushToken: 'a' }
 
-test('push: the build relay is https, or http to this device or a private address; nothing else', () => {
+test('push: the build relay is https only; a registration key is a non-empty string', () => {
   assert.equal(relayUrlOf('https://relay.example/'), 'https://relay.example')
-  assert.equal(relayUrlOf('http://192.168.1.5:7346'), 'http://192.168.1.5:7346')
-  for (const bad of ['', '  ', 'http://relay.example', 'https://u:p@relay.example', 'https://relay.example?x=1', 'nope', 42, undefined]) assert.equal(relayUrlOf(bad), null, String(bad))
+  assert.equal(relayUrlOf(' https://relay.example:8443/base/ '), 'https://relay.example:8443/base')
+  for (const bad of ['', '  ', 'http://relay.example', 'http://192.168.1.5:7346', 'http://localhost:7346', 'https://u:p@relay.example', 'https://relay.example?x=1', 'https://relay.example#x', 'nope', 42, undefined])
+    assert.equal(relayUrlOf(bad), null, String(bad))
+  assert.equal(relayKeyOf(' k '), 'k')
+  for (const none of ['', '  ', undefined, 3]) assert.equal(relayKeyOf(none), undefined)
+  assert.match(NO_PUSH_CONFIG, /google-services\.json/)
 })
 
-test('push: register once, send a rotated token, register again for another relay', () => {
-  const saved = { relayUrl: 'https://r', deviceId: 'd', deviceSecret: 's', platform: 'ios', pushToken: 'a' }
-  assert.equal(deviceAction(null, 'https://r', 'ios', 'a'), 'register')
-  assert.equal(deviceAction(saved, 'https://r', 'ios', 'a'), 'none')
-  assert.equal(deviceAction(saved, 'https://r', 'ios', 'b'), 'update')
-  assert.equal(deviceAction(saved, 'https://other', 'ios', 'a'), 'register')
+test('push: register for no device or another relay or platform; otherwise send the current token', () => {
+  assert.equal(deviceAction(null, 'https://r', 'ios'), 'register')
+  assert.equal(deviceAction(DEVICE, 'https://r', 'ios'), 'update')
+  assert.equal(deviceAction(DEVICE, 'https://other', 'ios'), 'register')
+  assert.equal(deviceAction(DEVICE, 'https://r', 'android'), 'register')
 })
 
-test('push: a new grant when the phone has none or the relay refused it; the old one again when the server forgot it', () => {
-  const push = { grantId: 'g', grantSecret: 'x', kinds: { decisions: true, sessions: false, prWatch: true }, serverId: 's' }
-  assert.equal(needsGrant(null, null), true)
-  assert.equal(needsGrant(push, { active: false }), true)
-  assert.equal(needsGrant(push, { active: true }), false)
-  assert.equal(needsGrant(push, null), false)
+test('push: each check sends the token (even unchanged) and the pause; a device the relay forgot (401) registers again', async () => {
+  const relay = fakeRelay({
+    'PUT /v1/devices/:id': (c) => [200, { updated: true, paused: c.json.paused === true }],
+    'POST /v1/devices': [201, { deviceId: 'd2', deviceSecret: 'sec2' }]
+  })
+  const client = relayClient(relay.fetch)
+  const same = await ensureDevice(client, DEVICE, 'https://r', 'ios', 'a', true)
+  assert.deepEqual(same, { device: DEVICE, paused: true, registered: false })
+  assert.deepEqual(relay.calls[0].json, { pushToken: 'a', paused: true })
+  assert.equal(relay.calls[0].headers.authorization, 'Bearer sec')
+  const rotated = await ensureDevice(client, DEVICE, 'https://r', 'ios', 'b', false)
+  assert.equal(rotated.device.pushToken, 'b')
+  assert.deepEqual(relay.calls[1].json, { pushToken: 'b', paused: false })
+
+  const fresh = await ensureDevice(client, null, 'https://r', 'android', 't', false)
+  assert.deepEqual(fresh, { device: { relayUrl: 'https://r', deviceId: 'd2', deviceSecret: 'sec2', platform: 'android', pushToken: 't' }, paused: false, registered: true })
+  assert.equal(relay.calls.length, 3, 'not paused: no pause call after registering')
+
+  const forgot = fakeRelay({ 'PUT /v1/devices/:id': (c) => (c.headers.authorization === 'Bearer sec' ? [401, { error: 'unauthorized' }] : [200, { updated: true, paused: true }]), 'POST /v1/devices': [201, { deviceId: 'd3', deviceSecret: 'sec3' }] })
+  const again = await ensureDevice(relayClient(forgot.fetch), DEVICE, 'https://r', 'ios', 'a', true)
+  assert.equal(again.device.deviceId, 'd3')
+  assert.equal(again.registered, true)
+  assert.deepEqual(forgot.calls.map((c) => `${c.method} ${c.path}`), ['PUT /v1/devices/d1', 'POST /v1/devices', 'PUT /v1/devices/d3'])
+  assert.deepEqual(forgot.calls[2].json, { paused: true }, 'the pause is set on the new registration')
+
+  // The new registration is kept when its pause can't be set; other failures are thrown.
+  const flaky = fakeRelay({ 'POST /v1/devices': [201, { deviceId: 'd4', deviceSecret: 'sec4' }], 'PUT /v1/devices/:id': [503, { error: 'busy' }] })
+  const kept = await ensureDevice(relayClient(flaky.fetch), null, 'https://r', 'ios', 'a', true)
+  assert.deepEqual([kept.device.deviceId, kept.paused], ['d4', false])
+  await assert.rejects(ensureDevice(relayClient(flaky.fetch), DEVICE, 'https://r', 'ios', 'a', false), /busy/)
+})
+
+test("push: registration sends the build's key; the relay's errors say what it answered", async () => {
+  const relay = fakeRelay({ 'POST /v1/devices': (c) => (c.headers['x-trek-relay-key'] === 'k' ? [201, { deviceId: 'd1', deviceSecret: 'sec' }] : [401, { error: 'registration key required' }]), 'POST /v1/grants': [409, { error: 'this device has too many grants' }] })
+  assert.deepEqual(await relayClient(relay.fetch, { relayKey: 'k' }).register('https://r', 'android', 'tok'), { deviceId: 'd1', deviceSecret: 'sec' })
+  assert.deepEqual(relay.calls[0].json, { platform: 'android', pushToken: 'tok' })
+  await assert.rejects(relayClient(relay.fetch).register('https://r', 'android', 'tok'), (err) => err.status === 401 && /registration key required/.test(err.message))
+  assert.equal(relay.calls[1].headers['x-trek-relay-key'], undefined)
+  const client = relayClient(relay.fetch)
+  await assert.rejects(client.grant(DEVICE, 'x'.repeat(200)), /too many grants/)
+  assert.equal(relay.calls[2].headers.authorization, 'Bearer sec')
+  assert.equal(relay.calls[2].json.label.length, 80)
+  assert.equal(relay.calls[2].headers['x-trek-relay-key'], undefined, 'the key goes only with a registration')
+  await assert.rejects(relayClient(async () => { throw new Error('offline') }).register('https://r', 'ios', 't'), (err) => err.status === 0 && /could not be reached/.test(err.message))
+  const answered = await relayClient(async () => ({ status: 503, json: async () => { throw new Error('not json') } })).grant(DEVICE, 'x').catch((e) => e)
+  assert.deepEqual([answered.status, answered.message], [503, 'The push relay answered 503'])
+})
+
+test('push: every relay call gives up after its timeout, aborting the request', async () => {
+  let signal
+  const hang = (url, init) => {
+    signal = init.signal
+    return new Promise(() => {})
+  }
+  const t0 = Date.now()
+  const err = await relayClient(hang, { timeoutMs: 30 }).revoke(DEVICE, 'g1').catch((e) => e)
+  assert.equal(err.status, 0)
+  assert.match(err.message, /could not be reached: no answer/)
+  assert.equal(signal.aborted, true)
+  assert.ok(Date.now() - t0 < 1000)
+  await assert.rejects(withTimeout(new Promise(() => {}), 20, 'push.status'), /push.status: no answer/)
+  assert.equal(await withTimeout(Promise.resolve(7), 20, 'x'), 7)
+})
+
+test('push: a grant call on a dead device sends the token and tries once more; an unknown device registers again', async () => {
+  let dead = true
+  const relay = fakeRelay({
+    'POST /v1/grants': () => (dead ? [410, { error: 'device-dead' }] : [201, { grantId: 'g1', grantSecret: 'gs' }]),
+    'PUT /v1/devices/:id': () => {
+      dead = false
+      return [200, { updated: true, paused: false }]
+    }
+  })
+  const client = relayClient(relay.fetch)
+  const err = await client.grant(DEVICE, 'x').catch((e) => e)
+  assert.equal(isDeadDevice(err), true)
+  assert.equal(isDeadDevice(Object.assign(new Error('x'), { status: 410 })), false)
+  const why = []
+  const out = await withDevice(DEVICE, async (w, d) => {
+    why.push(w)
+    return (await ensureDevice(client, d, d.relayUrl, d.platform, d.pushToken, false)).device
+  }, (d) => client.grant(d, 'srv'))
+  assert.deepEqual(out.result, { grantId: 'g1', grantSecret: 'gs' })
+  assert.deepEqual(why, ['dead'])
+  assert.deepEqual(relay.calls.slice(1).map((c) => `${c.method} ${c.path}`), ['POST /v1/grants', 'PUT /v1/devices/d1', 'POST /v1/grants'])
+
+  const other = { ...DEVICE, deviceId: 'd9', deviceSecret: 'sec9' }
+  // A 401 from the relay: recovered with a new registration, the call made with it.
+  const four01 = relayClient(async (url, init) => ({ status: init.headers.authorization === 'Bearer sec' ? 401 : 201, json: async () => ({ grantId: 'g2', grantSecret: 'gs2' }) }))
+  const re = await withDevice(DEVICE, async (w) => (why.push(w), other), (d) => four01.grant(d, 'x'))
+  assert.deepEqual([re.result.grantId, re.device.deviceId], ['g2', 'd9'])
+  assert.equal(why.at(-1), 'unknown')
+  // Anything else isn't recovered: it is thrown, and only once tried.
+  let tries = 0
+  await assert.rejects(withDevice(DEVICE, async () => assert.fail('no recovery'), async () => {
+    tries++
+    throw Object.assign(new Error('slow down'), { status: 429 })
+  }), /slow down/)
+  assert.equal(tries, 1)
+})
+
+test('push: a new grant for none, another relay or registration, a refused one, or a server on another relay; switches compared by value', () => {
+  const push = { grantId: 'g', grantSecret: 'x', kinds: { decisions: true, sessions: false, prWatch: true }, serverId: 's', relayUrl: 'https://r', deviceId: 'd1' }
+  const status = { relayUrl: 'https://r', active: true, paused: false, kinds: { prWatch: true, sessions: false, decisions: true } }
+  assert.equal(needsGrant(null, null, 'https://r', 'd1'), true)
+  assert.equal(needsGrant(push, status, 'https://r', 'd1'), false)
+  assert.equal(needsGrant(push, null, 'https://r', 'd1'), false, 'the server forgot it: the same grant again')
+  assert.equal(needsGrant(push, { ...status, active: false }, 'https://r', 'd1'), true)
+  assert.equal(needsGrant(push, { ...status, relayUrl: 'https://old' }, 'https://r', 'd1'), true)
+  assert.equal(needsGrant(push, status, 'https://new', 'd1'), true)
+  assert.equal(needsGrant(push, status, 'https://r', 'd2'), true)
+  const { relayUrl: _r, deviceId: _d, ...older } = push
+  assert.equal(needsGrant(older, status, 'https://r', 'd1'), true, 'a record from before relayUrl/deviceId were kept')
+
+  const ctx = { relayUrl: 'https://r', deviceId: 'd1', paused: false }
+  assert.equal(syncPlan(push, status, ctx), 'none', 'the same switches in another key order')
+  assert.equal(syncPlan(push, status, { ...ctx, force: true }), 'set')
+  assert.equal(syncPlan(push, { ...status, paused: true }, ctx), 'set')
+  assert.equal(syncPlan(push, { ...status, kinds: { ...status.kinds, sessions: true } }, ctx), 'set')
+  assert.equal(syncPlan(push, null, ctx), 'set')
+  assert.equal(syncPlan(null, status, ctx), 'grant')
+  assert.equal(kindsEqual({ decisions: true, sessions: true, prWatch: false }, { prWatch: false, decisions: true, sessions: true }), true)
+  assert.equal(kindsEqual({ decisions: true, sessions: true, prWatch: false }, { decisions: true, sessions: true, prWatch: true }), false)
   assert.deepEqual(setGrantParams('https://r', push, true), { relayUrl: 'https://r', grantSecret: 'x', kinds: { decisions: true, sessions: false, prWatch: true }, paused: true })
 })
 
-test("push: the relay's calls carry the device secret, and its errors say what it answered", async () => {
-  const calls = []
-  const fetch = async (url, init) => {
-    calls.push({ url, ...init })
-    if (url.endsWith('/v1/grants')) return { status: 409, json: async () => ({ error: 'this device has too many grants' }) }
-    return { status: 201, json: async () => ({ deviceId: 'd1', deviceSecret: 'sec' }) }
-  }
-  const reg = await relay.register(fetch, 'https://r', 'android', 'tok')
-  assert.deepEqual(reg, { deviceId: 'd1', deviceSecret: 'sec' })
-  assert.deepEqual(JSON.parse(calls[0].body), { platform: 'android', pushToken: 'tok' })
-  await assert.rejects(relay.grant(fetch, { relayUrl: 'https://r', deviceId: 'd1', deviceSecret: 'sec' }, 'x'.repeat(200)), /too many grants/)
-  assert.equal(calls[1].headers.authorization, 'Bearer sec')
-  assert.equal(JSON.parse(calls[1].body).label.length, 80)
-  await assert.rejects(relay.register(async () => { throw new Error('offline') }, 'https://r', 'ios', 't'), /could not be reached/)
+test('push: one queue per key runs its jobs in order, a failure not stopping the next; keys run side by side', async () => {
+  const run = keyedQueue()
+  const log = []
+  let grants = 0
+  const sync = (key) =>
+    run(key, async () => {
+      log.push(`start ${key}`)
+      await new Promise((r) => setTimeout(r, 5))
+      if (key === 'a' && grants === 0) grants++
+      log.push(`end ${key}`)
+    })
+  const failing = run('a', async () => {
+    log.push('fail a')
+    throw new Error('x')
+  })
+  await Promise.all([failing.catch(() => {}), sync('a'), sync('a'), sync('b')])
+  assert.equal(grants, 1, 'the second sync sees the first one done')
+  assert.deepEqual(log.filter((l) => l.endsWith(' a')), ['fail a', 'start a', 'end a', 'start a', 'end a'])
+  assert.ok(log.indexOf('start b') < log.indexOf('end a'), 'another key does not wait')
+  await assert.rejects(failing, /x/)
+  assert.equal(await run('a', async () => 5), 5)
 })
 
-test("push: a tapped push names the server's own id (under trek on iOS, at the top on Android): mapped to the entry", () => {
+test("push: a tapped push names the server's own id (iOS: the payload's body as data; Android: data keys at the top); mapped to the entry", () => {
   const entryFor = (id) => (id === 'srv-1' ? 'entry-1' : undefined)
-  assert.deepEqual(pushRouteData({ trek: { kind: 'decision', serverId: 'srv-1', projectId: 'p', sessionId: 's' } }, entryFor), { kind: 'decision', serverId: 'entry-1', projectId: 'p', sessionId: 's' })
-  assert.deepEqual(pushRouteData({ kind: 'pr-merged', serverId: 'srv-1', projectId: 'p', worktreeId: 'w' }, entryFor), { kind: 'pr-merged', serverId: 'entry-1', projectId: 'p', worktreeId: 'w' })
+  // iOS: expo-notifications gives the APNs payload's `body` object as content.data.
+  const iosPayload = { aps: { alert: { title: 'Trek · p', body: 'A decision is waiting' }, sound: 'default' }, body: { kind: 'decision', serverId: 'srv-1', projectId: 'p', sessionId: 's' } }
+  assert.deepEqual(pushRouteData(iosPayload.body, entryFor), { kind: 'decision', serverId: 'entry-1', projectId: 'p', sessionId: 's' })
+  // Android: the FCM message's data at the top, beside Google's own keys on a cold start.
+  const androidData = { kind: 'pr-merged', serverId: 'srv-1', projectId: 'p', worktreeId: 'w', 'google.message_id': '0:1', 'google.sent_time': 1 }
+  assert.deepEqual(pushRouteData(androidData, entryFor), { kind: 'pr-merged', serverId: 'entry-1', projectId: 'p', worktreeId: 'w' })
   assert.equal(pushRouteData({ kind: 'decision', serverId: 'unknown', projectId: 'p' }, entryFor), null)
   const local = { serverId: 'entry-1', projectId: 'p', sessionId: 's' }
-  assert.equal(pushRouteData(local, entryFor), local, "a local notification (6a) already names the entry")
+  assert.equal(pushRouteData(local, entryFor), local, 'a local notification (6a) already names the entry')
+  assert.equal(pushRouteData(null, entryFor), null)
+})
+
+test('push: a tap waits until the phone has loaded its servers, then is routed or dropped', () => {
+  const routeData = (d) => pushRouteData(d, (id) => (id === 'srv-1' ? 'entry-1' : undefined))
+  const tap = { kind: 'session-stopped', serverId: 'srv-1', projectId: 'p', sessionId: 's' }
+  assert.equal(routeTap(tap, false, routeData, notificationRoute), 'wait')
+  assert.deepEqual(routeTap(tap, true, routeData, notificationRoute), { pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId: 'entry-1', projectId: 'p', sessionId: 's' } })
+  assert.equal(routeTap({ ...tap, serverId: 'gone' }, true, routeData, notificationRoute), null)
+  assert.equal(routeTap({ kind: 'decision', serverId: 'srv-1', projectId: 'p' }, true, routeData, notificationRoute), null, 'no session or worktree: nothing to open')
 })
