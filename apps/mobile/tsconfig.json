@@ -1,0 +1,10 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    // The shared code (../../src/shared) imports its siblings with their .ts extension.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["app", "src", "expo-env.d.ts", ".expo/types/**/*.ts"]
+}

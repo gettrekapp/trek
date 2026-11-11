@@ -10,7 +10,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 
 const root = resolve(new URL('..', import.meta.url).pathname)
 /** What apps/mobile imports from the shared code (keep in step with apps/mobile/src/shared.ts). */
-export const MOBILE_ENTRIES = ['src/shared/client/index.ts', 'src/shared/model/topics.ts', 'src/shared/model/types.ts', 'src/shared/protocolV2.ts']
+export const MOBILE_ENTRIES = ['src/shared/client/index.ts', 'src/shared/model/topics.ts', 'src/shared/model/types.ts', 'src/shared/protocolV2.ts', 'src/shared/types.ts', 'src/shared/promote.ts']
 /** Packages the phone also has (none today: the shared code is dependency-free). */
 const ALLOWED_PACKAGES = new Set([])
 
@@ -72,6 +72,13 @@ test('the shared code the phone imports runs on React Native: no Node, Electron,
   const { files, problems } = walk()
   assert.ok(files.length >= MOBILE_ENTRIES.length, `walked ${files.length} files`)
   assert.deepEqual(problems, [])
+})
+
+test("apps/mobile/src/shared.ts imports only these entry points", () => {
+  const src = readFileSync(join(root, 'apps/mobile/src/shared.ts'), 'utf8')
+  const imported = [...src.matchAll(/from '\.\.\/\.\.\/\.\.\/(src\/shared\/[^']+)'/g)].map((m) => m[1])
+  assert.ok(imported.length > 0)
+  for (const path of imported) assert.ok(MOBILE_ENTRIES.includes(path), `${path} is not in MOBILE_ENTRIES`)
 })
 
 test('the guard catches what it should (a planted Node import and a DOM global)', () => {
