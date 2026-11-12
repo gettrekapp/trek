@@ -27,7 +27,7 @@ You need at least one platform. A platform with no credentials is refused at reg
   development builds (the APNs sandbox), `true` for TestFlight and App Store builds, which are
   built with the expo-notifications plugin's `mode: 'production'` (`TREK_APNS_MODE=production`,
   `apps/mobile/README.md`). A relay can't serve both kinds of build; run two if you need both.
-- **FCM (Android):** in the Firebase project the Android app (package `dev.trek.mobile`) is
+- **FCM (Android):** in the Firebase project the Android app (package `app.gettrek.mobile`) is
   registered in, with the Firebase Cloud Messaging API (V1) enabled, create a service account key
   (Project settings → Service accounts → Generate new private key). That JSON file is
   `serviceAccountPath`. The app's build needs the same project's `google-services.json`
@@ -56,7 +56,7 @@ had a push delivered, and APNs' `410`, mean the token is gone.
   "apns": {
     "keyId": "ABC123DEFG",
     "teamId": "TEAM123456",
-    "bundleId": "dev.trek.mobile",
+    "bundleId": "app.gettrek.mobile",
     "keyPath": "/etc/trek-relay/AuthKey_ABC123DEFG.p8",
     "production": false
   },

@@ -8,7 +8,10 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "dev.trek.mobile",
+      "bundleIdentifier": "app.gettrek.mobile",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "Trek connects to your Trek server on the local network."
       }
@@ -21,7 +24,7 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "dev.trek.mobile"
+      "package": "app.gettrek.mobile"
     },
     "scheme": "trek",
     "plugins": [
@@ -50,7 +53,11 @@
     ],
     "extra": {
       "relayUrl": "",
-      "relayKey": ""
-    }
+      "relayKey": "",
+      "eas": {
+        "projectId": "eec5cb93-eaae-4e47-840b-eea9e1b97198"
+      }
+    },
+    "owner": "ghoofman"
   }
 }

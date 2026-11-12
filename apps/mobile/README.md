@@ -97,7 +97,7 @@ in the build. It is optional and git-ignored: put it at `apps/mobile/google-serv
 point `GOOGLE_SERVICES_JSON` at it. `app.config.js` sets `android.googleServicesFile` only when
 the file exists. For EAS, upload it as a secret **file** environment variable named
 `GOOGLE_SERVICES_JSON` (EAS gives the build its path). The Android app (package
-`dev.trek.mobile`, `android.package`) must be registered in the same Firebase project as the
+`app.gettrek.mobile`, `android.package`) must be registered in the same Firebase project as the
 relay's service account. Without the file the build has no FCM token: the app shows "This build
 has no push config (Android: google-services.json)" and registers nothing (iOS is unaffected).
 
