@@ -26,6 +26,8 @@ const result = await build({
     __TREK_SERVER_BUILD__: JSON.stringify(BUILD_PLACEHOLDER)
   },
   banner: { js: '#!/usr/bin/env node' },
+  // sessions/nativePty.ts reads import.meta.url only where `require` is missing (never in this bundle).
+  logOverride: { 'empty-import-meta': 'silent' },
   write: false,
   logLevel: 'info'
 })

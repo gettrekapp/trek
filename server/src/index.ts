@@ -18,6 +18,7 @@ import { ProjectState } from './projects/state'
 import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
+import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
 import { createIntegrations, testEndpoint, VOICE_CONFIG_FILE } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
@@ -373,6 +374,13 @@ if (args.command === 'token') {
 }
 
 // start: every check runs before anything is written.
+// node-pty first: a native module that will not load (a quarantined download on macOS) would
+// otherwise fail the first session, after the server looked healthy.
+try {
+  loadNodePty()
+} catch (err) {
+  fail((err as Error).message)
+}
 if (local) {
   // The lock comes first: a second local server must not touch the profile.
   let lock: LockResult

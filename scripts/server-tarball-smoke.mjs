@@ -4,22 +4,34 @@
 // name and build.json, a pty from its own node-pty, the launcher through a symlink, a `start` that
 // listens on loopback and answers a WebSocket upgrade, and SIGTERM stopping it.
 //
-//   node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-<os>-<arch>.tar.gz
+//   node scripts/server-tarball-smoke.mjs [--notarized] dist-release/trek-server-<version>-<os>-<arch>.tar.gz
+//
+// --notarized (macOS, the release's signed and notarized tarball): pty.node and spawn-helper carry
+// a Developer ID Application signature with the hardened runtime, and the tarball is quarantined
+// before it is unpacked, as a browser download is (tar passes the flag on to every file), so the
+// pty check below is Gatekeeper's: macOS loads a quarantined native module only if it is notarized.
 import './smokeGh.mjs'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 
-const tarball = process.argv[2] && resolve(process.argv[2])
+const args = process.argv.slice(2)
+const notarized = args.includes('--notarized')
+const positional = args.filter((a) => a !== '--notarized')
+const tarball = positional.length === 1 && resolve(positional[0])
 const named = tarball && basename(tarball).match(/^trek-server-(.+)-(darwin|linux)-(x64|arm64)\.tar\.gz$/)
 if (!named || !existsSync(tarball)) {
-  console.error('usage: node scripts/server-tarball-smoke.mjs <path>/trek-server-<version>-<os>-<arch>.tar.gz')
+  console.error('usage: node scripts/server-tarball-smoke.mjs [--notarized] <path>/trek-server-<version>-<os>-<arch>.tar.gz')
   process.exit(2)
 }
 const [, version, os, arch] = named
+if (notarized && os !== 'darwin') {
+  console.error('--notarized is for the macOS tarballs')
+  process.exit(2)
+}
 
 let failed = false
 const check = (what, ok, detail = '') => {
@@ -34,7 +46,15 @@ process.on('exit', () => {
   rmSync(work, { recursive: true, force: true })
 })
 
-execFileSync('tar', ['-xzf', tarball, '-C', work])
+let unpackFrom = tarball
+if (notarized) {
+  // What Safari writes: 0083 (quarantined, downloaded), a hex timestamp, the agent.
+  unpackFrom = join(work, basename(tarball))
+  copyFileSync(tarball, unpackFrom)
+  execFileSync('xattr', ['-w', 'com.apple.quarantine', `0083;${Math.floor(Date.now() / 1000).toString(16)};Safari;`, unpackFrom])
+}
+execFileSync('tar', ['-xzf', unpackFrom, '-C', work])
+if (unpackFrom !== tarball) rmSync(unpackFrom)
 const top = readdirSync(work)
 const name = `trek-server-${version}-${os}-${arch}`
 check('the tarball holds one folder named after it', top.length === 1 && top[0] === name, JSON.stringify(top))
@@ -47,6 +67,16 @@ for (const file of ['bin/trek-server', 'trek-server.cjs', 'build.json', 'package
 const helpers = ['build/Release', `prebuilds/${os}-${arch}`].map((d) => join(dir, 'node_modules', 'node-pty', d, 'spawn-helper')).filter((p) => existsSync(p))
 if (os === 'darwin') check('node-pty has exactly one spawn-helper, executable', helpers.length === 1 && (statSync(helpers[0]).mode & 0o111) === 0o111, JSON.stringify(helpers))
 else check('node-pty has no spawn-helper (node-pty uses it on macOS only)', helpers.length === 0, JSON.stringify(helpers))
+if (notarized) {
+  for (const file of helpers.length === 1 ? [join(helpers[0], '..', 'pty.node'), helpers[0]] : []) {
+    const short = file.slice(dir.length + 1)
+    const xattr = spawnSync('xattr', ['-p', 'com.apple.quarantine', file], { encoding: 'utf8' })
+    check(`${short} is quarantined, as an unpacked download is`, xattr.status === 0 && xattr.stdout.trim() !== '', xattr.stderr)
+    const sig = spawnSync('codesign', ['-dv', '--verbose=4', file], { encoding: 'utf8' }).stderr
+    check(`${short} is signed with a Developer ID Application certificate`, /^Authority=Developer ID Application/m.test(sig), sig)
+    check(`${short} is signed with the hardened runtime and a timestamp`, /flags=.*runtime/.test(sig) && /^Timestamp=/m.test(sig), sig)
+  }
+}
 check('bin/trek-server is executable', (statSync(join(dir, 'bin', 'trek-server')).mode & 0o111) === 0o111)
 check('node_modules holds node-pty only', readdirSync(join(dir, 'node_modules')).filter((e) => !e.startsWith('.')).join() === 'node-pty')
 
@@ -66,7 +96,8 @@ symlinkSync(launcher, join(linkDir, 'trek-server'))
 check('the launcher works through a symlink', execFileSync(join(linkDir, 'trek-server'), ['version'], { env, encoding: 'utf8' }).trim() === version)
 
 // A pty from the tarball's node-pty: the native addon loads, and (on macOS) spawn-helper runs.
-const ptyOut = execFileSync(process.execPath, ['-e', `
+// spawnSync, not execFileSync: an addon that fails to load is a FAIL with its error, not a crash.
+const pty = spawnSync(process.execPath, ['-e', `
   const pty = require(${JSON.stringify(join(dir, 'node_modules', 'node-pty'))})
   const p = pty.spawn('/bin/sh', ['-c', 'echo pty-$((6 * 7))'], { cols: 80, rows: 24, env: { PATH: '/usr/bin:/bin' } })
   let out = ''
@@ -74,7 +105,8 @@ const ptyOut = execFileSync(process.execPath, ['-e', `
   p.onExit(({ exitCode }) => { process.stdout.write(out.trim() + ' exit ' + exitCode); process.exit(0) })
   setTimeout(() => { process.stdout.write('timeout: ' + out); process.exit(1) }, 10000)
 `], { env, encoding: 'utf8' })
-check('node-pty spawns a shell in a pty', /pty-42/.test(ptyOut) && /exit 0$/.test(ptyOut), ptyOut)
+const ptyOut = pty.stdout ?? ''
+check('node-pty spawns a shell in a pty', pty.status === 0 && /pty-42/.test(ptyOut) && /exit 0$/.test(ptyOut), ptyOut + (pty.stderr ?? ''))
 
 // start: a throwaway config (only a token hash), a free loopback port, a temp data folder.
 const port = await new Promise((done, reject) => {

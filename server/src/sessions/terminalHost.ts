@@ -2,7 +2,7 @@
 // headless xterm that tracks the screen and terminal modes, and any number of
 // attached clients. The pty pauses while any attached client, or the headless
 // screen's parser, is congested.
-import * as nodePty from 'node-pty'
+import { loadNodePty } from './nativePty.ts'
 // @xterm/headless is a webpack CommonJS bundle that sets __esModule. Node ESM
 // (tests, tsx) exposes it only as `default`; esbuild's CJS output honours
 // __esModule and has no `default`. Take whichever holds the exports.
@@ -116,7 +116,7 @@ interface PtyRecord {
 }
 
 export const nodePtySpawner: PtySpawner = (opts) => {
-  const proc = nodePty.spawn(opts.file, opts.args, {
+  const proc = loadNodePty().spawn(opts.file, opts.args, {
     name: 'xterm-256color',
     cwd: opts.cwd,
     cols: opts.cols,
