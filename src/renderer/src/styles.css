@@ -1190,6 +1190,7 @@ button:disabled {
 
 /* Terminal + quick buttons column, with the queue panel to its right */
 .terminal-main {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1230,6 +1231,41 @@ button:disabled {
 }
 
 .exited-overlay button:hover {
+  filter: brightness(1.12);
+}
+
+/* Above a server terminal whose pty another window sized: offers to take the size back */
+.terminal-size-bar {
+  /* Over the terminal, never above it: taking its height would refit it and claim the size */
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.terminal-size-bar button {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terminal-size-bar button:hover {
   filter: brightness(1.12);
 }
 

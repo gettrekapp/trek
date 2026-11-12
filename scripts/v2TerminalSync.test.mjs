@@ -6,6 +6,7 @@ import {
   ATTACH_RETRY_MIN_MS,
   attachResize,
   attachRetryDelay,
+  followResize,
   planTerminalSync,
   recordAttachFailure,
   shouldRetry,
@@ -166,4 +167,21 @@ test('attachResize: a shown terminal sends its size once; a hidden one takes the
   // Hidden (never opened, or opened under display:none): never resizes the pty.
   assert.deepEqual(attachResize(false, false, { cols: 80, rows: 24 }, { cols: 100, rows: 30 }), { resizeLocal: { cols: 100, rows: 30 } })
   assert.deepEqual(attachResize(false, false, { cols: 100, rows: 30 }, { cols: 100, rows: 30 }), {})
+})
+
+test('followResize: xterm follows the pty; foreign when shown and fitting would give another size', () => {
+  // Another window took the size: follow it, and offer to fit back.
+  assert.deepEqual(followResize(true, { cols: 120, rows: 40 }, { cols: 120, rows: 40 }, { cols: 100, rows: 30 }), {
+    resizeLocal: { cols: 100, rows: 30 },
+    foreign: true
+  })
+  // The echo of this window's own resize: nothing to do.
+  assert.deepEqual(followResize(true, { cols: 120, rows: 40 }, { cols: 120, rows: 40 }, { cols: 120, rows: 40 }), { foreign: false })
+  // Hidden: follow quietly; showing it claims the size anyway.
+  assert.deepEqual(followResize(false, { cols: 80, rows: 24 }, undefined, { cols: 100, rows: 30 }), {
+    resizeLocal: { cols: 100, rows: 30 },
+    foreign: false
+  })
+  // Shown but unmeasurable: never flagged.
+  assert.deepEqual(followResize(true, { cols: 100, rows: 30 }, undefined, { cols: 100, rows: 30 }), { foreign: false })
 })

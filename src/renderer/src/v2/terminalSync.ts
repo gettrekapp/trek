@@ -129,3 +129,21 @@ export function attachResize(
   if (local.cols === pty.cols && local.rows === pty.rows) return {}
   return { resizeLocal: { cols: pty.cols, rows: pty.rows } }
 }
+
+/**
+ * A `pty.resized` arrived (another client's resize, or the echo of this one's).
+ * The local xterm follows the pty's size so its output lays out as written; it
+ * is `foreign` when the terminal is shown and the size it would fit to differs
+ * (another window owns the size now: the pane offers "Fit to this window").
+ * `fitted` is the fit addon's proposal, undefined when it cannot measure.
+ */
+export function followResize(
+  shown: boolean,
+  local: TermSize,
+  fitted: TermSize | undefined,
+  pty: TermSize
+): { resizeLocal?: TermSize; foreign: boolean } {
+  const same = (a: TermSize, b: TermSize): boolean => a.cols === b.cols && a.rows === b.rows
+  const foreign = shown && fitted !== undefined && !same(fitted, pty)
+  return same(local, pty) ? { foreign } : { resizeLocal: { cols: pty.cols, rows: pty.rows }, foreign }
+}

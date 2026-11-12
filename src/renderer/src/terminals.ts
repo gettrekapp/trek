@@ -8,10 +8,12 @@ import type { PtyInfo } from '../../shared/protocolV2'
 import type { Project } from '../../shared/model/types'
 import {
   attachResize,
+  followResize,
   planTerminalSync,
   recordAttachFailure,
   terminalTargets,
-  type AttachFailure
+  type AttachFailure,
+  type TermSize
 } from './v2/terminalSync'
 import { errorCode, errorText } from './v2/errors'
 
@@ -39,6 +41,8 @@ interface V2Link {
   shown: string | null
   /** The pty whose attach last resolved: with `ptyId` the same, typed keys reach it */
   attached: string | null
+  /** The attached pty's size as last known (its attach, a `pty.resized`, or this window's own resize); null when none is attached */
+  ptySize: TermSize | null
 }
 
 interface Entry {
@@ -216,6 +220,7 @@ function disposeEntry(id: string): void {
   if (!entry) return
   entry.term.dispose()
   entries.delete(id)
+  setForeignSize(id, null)
 }
 
 /** A terminal entry's size (for a v2 restart), or null without an entry. */
@@ -275,7 +280,7 @@ function cancelV2Sync(): void {
 
 function createV2Entry(id: string, ptys: PtyStream): Entry {
   const { term, fit } = newXterm()
-  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null, attached: null }
+  const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null, attached: null, ptySize: null }
   const entry: Entry = { term, fit, v2: link }
   entries.set(id, entry)
   term.onData((data) => {
@@ -283,10 +288,69 @@ function createV2Entry(id: string, ptys: PtyStream): Entry {
   })
   // Only a shown terminal drives the pty's size: a hidden one (not opened, or
   // under display:none) has xterm's default, or the pty's own size (attachResize).
+  // Following another window's size (followResize) lands on the pty's size: nothing to send.
   term.onResize(({ cols, rows }) => {
-    if (link.ptyId && isShown(term)) void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
+    if (!link.ptyId || !isShown(term)) return
+    if (link.ptySize?.cols === cols && link.ptySize.rows === rows) return
+    sendPtySize(id, link, cols, rows)
   })
+  watchWindowFocus()
   return entry
+}
+
+/** Resizes the pty to this window's size; the size is ours now, so the pane's "Fit" bar goes. */
+function sendPtySize(id: string, link: V2Link, cols: number, rows: number): void {
+  if (!link.ptyId) return
+  link.ptySize = { cols, rows }
+  setForeignSize(id, null)
+  void link.ptys.resize(link.ptyId, cols, rows).catch(() => {})
+}
+
+/**
+ * Terminals whose pty another window sized (a Trek window on another machine,
+ * say): the pty's size, which this window's xterm follows. The pane shows a
+ * "Fit to this window" bar for them.
+ */
+const foreignSizes = new Map<string, TermSize>()
+const foreignListeners = new Set<() => void>()
+
+function setForeignSize(id: string, size: TermSize | null): void {
+  const old = foreignSizes.get(id)
+  if (size ? old?.cols === size.cols && old.rows === size.rows : !old) return
+  if (size) foreignSizes.set(id, size)
+  else foreignSizes.delete(id)
+  for (const listener of foreignListeners) listener()
+}
+
+/** For useSyncExternalStore: notified when any terminal's foreign size changes. */
+export function subscribeForeignSize(listener: () => void): () => void {
+  foreignListeners.add(listener)
+  return () => foreignListeners.delete(listener)
+}
+
+/** The size another window gave this terminal's pty, or null when it has this window's size. */
+export function foreignSize(id: string): TermSize | null {
+  return foreignSizes.get(id) ?? null
+}
+
+/** Coming back to this window takes back the size of every shown terminal another window sized. */
+let focusWatched = false
+function watchWindowFocus(): void {
+  if (focusWatched) return
+  focusWatched = true
+  window.addEventListener('focus', () => {
+    for (const id of [...foreignSizes.keys()]) sendV2Size(id)
+  })
+}
+
+/** Another client resized the pty (or this window's resize came back): follow it. */
+function followPtySize(id: string, entry: Entry, size: TermSize): void {
+  entry.v2.ptySize = { cols: size.cols, rows: size.rows }
+  const shown = isShown(entry.term)
+  const fitted = shown ? entry.fit.proposeDimensions() : undefined
+  const step = followResize(shown, entry.term, fitted && fitted.cols > 0 && fitted.rows > 0 ? fitted : undefined, size)
+  if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
+  setForeignSize(id, step.foreign ? size : null)
 }
 
 /**
@@ -324,10 +388,13 @@ function fitResized(entry: Entry): boolean {
  * ours (once) so the TUI repaints for it; hidden, whether opened or not, take
  * the pty's size instead of sending xterm's default 80x24 or a stale size.
  */
-function applyAttachSize(entry: Entry, ptys: PtyStream, ptyId: string, info: PtyInfo): void {
+function applyAttachSize(id: string, entry: Entry, info: PtyInfo): void {
+  const link = entry.v2
+  link.ptySize = { cols: info.cols, rows: info.rows }
+  setForeignSize(id, null)
   const shown = isShown(entry.term)
   const step = attachResize(shown, shown && fitResized(entry), entry.term, info)
-  if (step.resizePty) void ptys.resize(ptyId, step.resizePty.cols, step.resizePty.rows).catch(() => {})
+  if (step.resizePty) sendPtySize(id, link, step.resizePty.cols, step.resizePty.rows)
   if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
 }
 
@@ -378,7 +445,11 @@ function attachV2(id: string, ptyId: string): void {
       onReset: () => entry.term.reset(),
       // Re-attached after a reconnect: another client may have resized the pty meanwhile.
       onReattach: (info) => {
-        if (current()) applyAttachSize(entry, ptys, ptyId, info)
+        if (current()) applyAttachSize(id, entry, info)
+      },
+      // Another client resized the pty, or this window's resize came back.
+      onResize: (info) => {
+        if (current()) followPtySize(id, entry, info)
       },
       // The re-attach after a reconnect failed, or a handler threw: the pty may be alive.
       onError: (err) => {
@@ -394,7 +465,7 @@ function attachV2(id: string, ptyId: string): void {
         link.failed = null
         link.announced = null
         link.attached = ptyId
-        applyAttachSize(entry, ptys, ptyId, info)
+        applyAttachSize(id, entry, info)
       },
       (err: unknown) => {
         if (!current()) return
@@ -425,7 +496,8 @@ export function sendV2Size(id: string): boolean {
   const entry = entries.get(id)
   const link = entry?.v2
   if (!entry || !link?.ptyId || !isShown(entry.term)) return false
-  if (!fitResized(entry)) void link.ptys.resize(link.ptyId, entry.term.cols, entry.term.rows).catch(() => {})
+  if (!fitResized(entry)) sendPtySize(id, link, entry.term.cols, entry.term.rows)
+  else setForeignSize(id, null)
   return true
 }
 
@@ -435,6 +507,7 @@ function detachV2(entry: Entry): void {
   if (link.ptyId) void link.ptys.detach(link.ptyId)
   link.ptyId = null
   link.spent = null
+  link.ptySize = null
 }
 
 /**
@@ -457,6 +530,7 @@ export function syncV2Terminals(project: Project, ptys: PtyStream): void {
       link.ptys = ptys
       link.ptyId = null
       link.spent = null
+      link.ptySize = null
       link.failed = null
     }
     // A failure for a pty the session no longer runs holds nothing back.

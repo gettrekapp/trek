@@ -748,6 +748,22 @@ try {
     return paneSize !== null && JSON.stringify(await ptySize(s1)) === JSON.stringify(paneSize)
   }, true, 5000)
   check('the shown pane sized the pty to itself', await ptySize(s1), paneSize)
+  // Another window (another machine's Trek, say) resizes the shown session's pty: this window
+  // follows its size and offers "Fit to this window", which takes the size back.
+  {
+    const ptyId = worktreeNamed(await projectNow(), 'smoke-wt').sessions.find((s) => s.id === s1).ptyId
+    await live.request('pty.attach', { ptyId })
+    await live.request('pty.resize', { ptyId, cols: 90, rows: 20 })
+    await live.request('pty.detach', { ptyId })
+    check("the window's xterm follows another client's size", await until(() => localSize(s1), [90, 20]), [90, 20])
+    const sizeBar = detail.locator('.terminal-pane:visible .terminal-size-bar')
+    await sizeBar.waitFor({ timeout: 5000 })
+    check('the pane says another window sized it', (await sizeBar.textContent()).includes('90×20'), true)
+    await sizeBar.locator('button', { hasText: 'Fit to this window' }).click()
+    await sizeBar.waitFor({ state: 'detached', timeout: 5000 })
+    check('Fit to this window takes the size back', await until(() => ptySize(s1), paneSize), paneSize)
+    check('and the xterm is its own size again', await localSize(s1), paneSize)
+  }
   // Another client starts a 150x50 session in a loaded worktree this window is not showing.
   const featureX = worktreeNamed(await projectNow(), 'feature-x')
   const other = await live.request('session.start', { projectId: target.projectId, worktreeId: featureX.id, cols: 150, rows: 50 })

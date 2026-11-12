@@ -1,6 +1,14 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { useAppStore } from '../store'
-import { agentLabel, attachTerminal, fitTerminal, focusTerminal, sendV2Size } from '../terminals'
+import {
+  agentLabel,
+  attachTerminal,
+  fitTerminal,
+  focusTerminal,
+  foreignSize,
+  sendV2Size,
+  subscribeForeignSize
+} from '../terminals'
 import { getBackend } from '../backend'
 import { QueuePanel } from './QueuePanel'
 import { STATUS_LABELS } from '../../../shared/appServerRules.ts'
@@ -35,6 +43,11 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
   // A server window whose link is down: input would be dropped, so the pane is covered.
   const offline = useAppStore((s) => s.serverOffline)
   const link = useAppStore((s) => s.serverLink)
+  // Another window (e.g. Trek on the server's machine) sized the pty: this xterm follows it.
+  const foreign = useSyncExternalStore(
+    subscribeForeignSize,
+    useCallback(() => foreignSize(terminalId), [terminalId])
+  )
 
   useEffect(() => {
     if (!ref.current) return
@@ -70,6 +83,22 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
       onMouseDown={() => focusTerminal(terminalId)}
     >
       <div className="terminal-main">
+        {foreign && !offline && (
+          <div className="terminal-size-bar" role="status">
+            <span>
+              Sized for another window ({foreign.cols}×{foreign.rows})
+            </span>
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                sendV2Size(terminalId)
+                focusTerminal(terminalId)
+              }}
+            >
+              Fit to this window
+            </button>
+          </div>
+        )}
         <div ref={ref} className="terminal-host" />
         {quickButtons && quickButtons.length > 0 && status !== 'exited' && (
           <div className="quick-buttons">
