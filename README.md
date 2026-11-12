@@ -1,9 +1,48 @@
-# Trek Dev
+# Trek
 
-An Electron + React + TypeScript app for running Claude Code, or Codex, Gemini, Grok and
-local models, across multiple git worktrees of a repository, side by side.
+**Run a team of coding agents across your git worktrees, on your machine or a server
+you own, and keep them running when you close the laptop.**
 
-<img width="1206" alt="Trek Dev's project explorer in dark mode" src="docs/project-explorer-dark.png" />
+Trek gives each branch its own worktree and runs real agent CLIs in it, side by side:
+Claude Code, Codex, Gemini, Grok, or a local model through Ollama or LM Studio. It uses the
+CLIs and sign-ins you already have, so there's no extra account and no API key in between.
+
+<img width="1206" alt="Trek's project explorer in dark mode" src="docs/project-explorer-dark.png" />
+
+## Why Trek
+
+- **Sessions outlive the window.** Every project lives on a server: the one built into the
+  app, or `trek-server` on another Mac or Linux box (a desktop, a VPS, over Tailscale).
+  Close the window or the laptop and the agents keep working, and every window open on
+  that project sees the same thing live.
+- **Agents that drive agents.** Each session gets the `trek-dev` MCP tools, so one agent
+  can create worktrees, start sessions in them, send prompts, wait for them to finish,
+  read their output and tag the branches, all scoped to that one project.
+- **Worktrees as the unit of work.** One sidebar for every worktree of every repository in
+  a project, with a session status dot, ahead/behind/dirty state, workflow tags, notes,
+  Linear tickets and pull request links. You can check out a worktree straight from a PR.
+- **Pull requests and review.** The server can follow a PR's checks, reviews and merge
+  state for you. You can leave line comments on a worktree's changes for the agent to
+  pick up, then promote a finished branch into your main checkout.
+- **Knows when you're needed.** An agent that stops to ask you something flags the
+  worktree, and sessions that finish or stop show up at a glance.
+
+## Install
+
+- **Desktop app**: download `Trek-<version>-arm64.dmg` from the
+  [latest release](https://github.com/gettrekapp/trek/releases/latest). It's signed and
+  notarized, for Apple Silicon Macs.
+- **A remote server (optional)**: the same release has `trek-server` tarballs for macOS
+  and Linux (x64 and arm64). Unpack one on the machine you want the agents to run on and
+  start `bin/trek-server` with Node.js 22 or later. See [server/README.md](server/README.md).
+- **Agents**: install and sign in to the CLIs you want (`claude`, `codex`, `gemini`,
+  `grok`) as the user the server runs as. The server's config picks the default agent.
+
+**Status**: early and moving fast. The desktop app is macOS-only for now. A phone companion
+(`apps/mobile`, iOS and Android) isn't in the stores yet, and Windows support is on the
+way. Issues and feedback are welcome.
+
+Trek is [MIT licensed](LICENSE).
 
 ## Concepts
 
