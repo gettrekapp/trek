@@ -242,17 +242,31 @@ async function mainCheckout(worktreePath: string): Promise<string> {
  * symlink into the repository's main checkout. Only these are left out of a move: an entry that is
  * a real (tracked or untracked) directory or file in the worktree was never linked (linkDirs
  * leaves an existing path alone), so its contents are the worktree's own and are carried.
+ * Windows: also an untracked regular file where the main checkout has a file too, which is what
+ * linkDirs copies when Windows allows no file symlink; the target makes its own copy, so carrying
+ * it would fail the apply there ("already exists"). (A copy can't be told from a file of the
+ * worktree's own of the same name; one named in linkedDirs is taken for the copy.)
  * `repoPath`: the main checkout (git's common dir's parent when not given).
  */
-export async function linkedSymlinks(worktreePath: string, entries: readonly unknown[], repoPath?: string): Promise<string[]> {
+export async function linkedSymlinks(
+  worktreePath: string,
+  entries: readonly unknown[],
+  repoPath?: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
   const names = [...new Set(entries.map(normalizeLinkedDir).filter((d): d is string => d !== null))]
   if (names.length === 0) return []
   const main = resolve(repoPath ?? (await mainCheckout(worktreePath)))
   const mainReal = await realpath(main).catch(() => main)
+  const isMain = samePath(await realpath(worktreePath).catch(() => resolve(worktreePath)), mainReal)
   const out: string[] = []
   for (const name of names) {
     const link = join(worktreePath, name)
     const info = await lstat(link).catch(() => null)
+    if (platform === 'win32' && !isMain && info?.isFile() && (await isLinkCopy(worktreePath, main, name))) {
+      out.push(name)
+      continue
+    }
     if (!info?.isSymbolicLink()) continue
     const to = await readlink(link).catch(() => null)
     if (to === null) continue
@@ -263,6 +277,14 @@ export async function linkedSymlinks(worktreePath: string, entries: readonly unk
     if (into(main, pointed) || into(mainReal, pointed) || (real !== null && into(mainReal, real))) out.push(name)
   }
   return out
+}
+
+/** Whether `name` in the worktree is untracked and the main checkout has a file there: linkDirs' copy. */
+async function isLinkCopy(worktreePath: string, main: string, name: string): Promise<boolean> {
+  const source = await stat(join(main, name)).catch(() => null)
+  if (!source?.isFile()) return false
+  const tracked = await git(worktreePath, ['ls-files', '-z', '--', `:(literal)${name}`]).catch(() => null)
+  return tracked === ''
 }
 
 /**
@@ -291,7 +313,7 @@ export async function linkDirs(
     if (!name) continue
     const source = resolve(repoRoot, name)
     const target = resolve(worktreeRoot, name)
-    if (!isInside(repoRoot, source, process.platform, true) || !isInside(worktreeRoot, target, process.platform, true)) continue
+    if (!isInside(repoRoot, source, platform, true) || !isInside(worktreeRoot, target, platform, true)) continue
     try {
       await lstat(source)
     } catch {
@@ -394,8 +416,8 @@ function overflowed(err: unknown): boolean {
  * --binary -p`, explicit prefixes, context, no textconv, no renames, no external diff), so no
  * git config or .gitattributes diff driver changes what it says. Ignored files never appear,
  * nor do those of `exclude`'s linkedDirs entries that are symlinks into the main checkout here
- * (linkedSymlinks: the target links them itself); an entry that is a real directory in the
- * worktree is carried like any other. The patch puts every change back unstaged. Refuses:
+ * (linkedSymlinks: the target links them itself; on Windows also linkDirs' file copies); an
+ * entry that is a real directory in the worktree is carried like any other. The patch puts every change back unstaged. Refuses:
  * untracked files together over `maxBytes` (measured before git hashes them) or a patch over
  * the buffer (PatchTooBigError); an untracked nested git repository (NestedRepoError: `add -A`
  * would make it a gitlink, its files left behind); a patch that is not valid UTF-8
@@ -406,12 +428,12 @@ function overflowed(err: unknown): boolean {
 export async function exportDirtyPatch(
   worktreePath: string,
   exclude: readonly string[] = [],
-  options: { maxBytes?: number; repoPath?: string; linked?: readonly string[] } = {}
+  options: { maxBytes?: number; repoPath?: string; linked?: readonly string[]; platform?: NodeJS.Platform } = {}
 ): Promise<{ patch: string; headSha: string }> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_PATCH_BYTES
   // `linked` (5e's demote): the paths to leave out, given — the main checkout's linkedDirs are real
   // folders there, and only those the new worktree links stay behind.
-  const linked = options.linked ? [...options.linked] : await linkedSymlinks(worktreePath, exclude, options.repoPath)
+  const linked = options.linked ? [...options.linked] : await linkedSymlinks(worktreePath, exclude, options.repoPath, options.platform)
   const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]

@@ -4,9 +4,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { devNull, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig } from '../src/host/gitService.ts'
+import { applyPatch, exportDirtyPatch, linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig } from '../src/host/gitService.ts'
 import { defaultWorktreePath, safeDirName } from '../server/src/worktreeHandlers.ts'
 import { windowsOnly } from './testPlatform.mjs'
 
@@ -60,4 +60,35 @@ test('Windows: a linked directory is a junction, found again by linkedSymlinks',
   if (!lstatSync(join(wt, '.env')).isSymbolicLink()) assert.match(warnings.join('\n'), /\.env was copied, not linked/)
   const linked = await linkedSymlinks(wt, ['.trek', '.env'], repo)
   assert.ok(linked.includes('.trek'))
+})
+
+test("Windows: a linkedDirs file linkDirs copied (no symlink without Developer Mode) stays out of a move's patch", async (t) => {
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' }
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8' })
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-linked-copy-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const repo = join(dir, 'repo')
+  execFileSync('git', ['init', '-q', '-b', 'main', repo], { env })
+  writeFileSync(join(repo, 'README'), 'one\n')
+  git(repo, 'add', '-A')
+  git(repo, 'commit', '-q', '-m', 'init')
+  // Not ignored: the main checkout's own untracked .env, which linkDirs copied into each worktree.
+  writeFileSync(join(repo, '.env'), 'A=1\n')
+  const wt = join(dir, 'repo-feat')
+  const other = join(dir, 'repo-other')
+  git(repo, 'worktree', 'add', '-q', '-b', 'feat', wt)
+  git(repo, 'worktree', 'add', '-q', '-b', 'other', other)
+  for (const w of [wt, other]) writeFileSync(join(w, '.env'), 'A=1\n')
+  writeFileSync(join(wt, 'README'), 'two\n')
+  assert.deepEqual(await linkedSymlinks(wt, ['.env', 'README'], repo, 'win32'), ['.env'], 'the copy, never a tracked file')
+  const { patch } = await exportDirtyPatch(wt, ['.env', 'README'], { repoPath: repo, platform: 'win32' })
+  assert.doesNotMatch(patch, /\.env/)
+  assert.match(patch, /README/)
+  // The target has its own copy: the patch applies there (a copy in the patch would fail "already exists").
+  await applyPatch(other, patch)
+  assert.equal(readFileSync(join(other, 'README'), 'utf8'), 'two\n')
+  // Elsewhere a real file is the worktree's own and is carried (linkDirs only ever symlinks there).
+  assert.deepEqual(await linkedSymlinks(wt, ['.env'], repo, 'linux'), [])
+  // The main checkout's own file is never "a copy" of itself.
+  assert.deepEqual(await linkedSymlinks(repo, ['.env'], repo, 'win32'), [])
 })

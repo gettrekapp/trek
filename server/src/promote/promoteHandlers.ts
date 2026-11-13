@@ -24,7 +24,7 @@
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve, sep } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
 import { migrateSession } from '../../../src/host/claudeSessionService.ts'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
@@ -42,6 +42,7 @@ import {
 import { codedError } from '../errors.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
 import { realOrResolved as real } from '../repos.ts'
+import { isInside } from '../../../src/host/pathContainment.ts'
 import { requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
@@ -533,7 +534,7 @@ async function checkDemote(ctx: V2Context, p: any, blocked = true): Promise<Demo
   assertNotRepository(ctx.store.config.repos, target, 'path', requested)
   if (blocked) assertNotBlocked(ctx, [main.path, target])
   if (existsSync(target)) throw codedError('CONFLICT', `${requested} already exists`)
-  const inside = (root: string): boolean => target.startsWith(real(root) + sep)
+  const inside = (root: string): boolean => isInside(real(root), target, process.platform, true)
   if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
     throw bad(`${requested} is inside an existing checkout`)
   }
