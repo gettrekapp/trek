@@ -61,8 +61,8 @@ export interface SessionManagerDeps {
   now?: () => number
   /** The MCP access a project's sessions launch with; without it sessions launch without MCP */
   mcpAccess?: (projectId: string) => McpAccess | undefined
-  /** Added to the prompt of a session that has the MCP tools: the voice summary prompt while it is on (phase 5b) */
-  voicePrompt?: () => string | undefined
+  /** Added to the prompt of a session that has the MCP tools: the plugins' prompts in its project (plugin system phase 1) */
+  pluginPrompt?: (projectId: string) => string | undefined
   /** Whether a program resolves in the login shell (server.agents); default agentService.commandExists */
   commandExists?: (binary: string) => Promise<boolean>
   /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
@@ -678,7 +678,7 @@ export class SessionManager {
         resume: launch.resume,
         global: !worktree,
         systemPrompt: session.systemPrompt,
-        voicePrompt: this.deps.voicePrompt?.(),
+        pluginPrompt: this.deps.pluginPrompt?.(projectId),
         initialMessage: launch.resume ? undefined : run.initialMessage,
         addDirs
       },

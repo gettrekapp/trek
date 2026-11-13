@@ -12,6 +12,14 @@
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "../src/host/**/*.ts", "../src/shared/**/*.ts"],
+  "include": [
+    "src/**/*.ts",
+    "../src/host/**/*.ts",
+    "../src/shared/**/*.ts",
+    "../plugins/builtin.server.ts",
+    "../plugins/*/manifest.ts",
+    "../plugins/*/shared/**/*.ts",
+    "../plugins/*/server/**/*.ts"
+  ],
   "exclude": ["../src/host/bot/**", "../src/shared/plugins/client.ts"]
 }

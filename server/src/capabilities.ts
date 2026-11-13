@@ -33,12 +33,14 @@ export const STATIC_CAPABILITIES: readonly string[] = [
  * `mcp` while the MCP listener is up, then the features this server always has, then `pairing`
  * (6a: `pairing.create`, and a phone's `pairingCode` at hello) on any server but the local one (a
  * phone can't reach this machine's loopback), then `prWatch` while gh is signed in on its machine
- * (5c-1), then `local` on the local server.
+ * (5c-1), then `local` on the local server. `plugins`: the registered plugins' legacy capabilities
+ * (`voice`), listed after the static ones, for clients older than plugins.
  */
-export function welcomeCapabilities(mcp: boolean, local = false, prWatch = false): string[] {
+export function welcomeCapabilities(mcp: boolean, local = false, prWatch = false, plugins: readonly string[] = []): string[] {
   return [
     ...(mcp ? [CAPABILITY.mcp] : []),
     ...STATIC_CAPABILITIES,
+    ...plugins.filter((c) => !STATIC_CAPABILITIES.includes(c)),
     ...(local ? [] : [CAPABILITY.pairing]),
     ...(prWatch ? [CAPABILITY.prWatch] : []),
     ...(local ? [CAPABILITY.local] : [])

@@ -16,8 +16,8 @@ export interface AgentLaunch {
   global: boolean
   /** The session type's prompt (worktree sessions) */
   systemPrompt?: string
-  /** The voice summary prompt (phase 5b); only for an agent that gets the MCP tools, which has speak_summary */
-  voicePrompt?: string
+  /** The plugins' prompts (the voice plugin's, while it is set up); only for an agent that gets the MCP tools, which has theirs */
+  pluginPrompt?: string
   /** Sent only on a fresh start */
   initialMessage?: string
   addDirs?: string[]
@@ -31,13 +31,13 @@ export function agentCommand(launch: AgentLaunch, settings: ProjectSettings, llm
   const config = llm.providers[provider.id] ?? {}
   const isClaude = provider.id === 'claude'
   const mcp = launch.mcp && provider.capabilities.mcp ? launch.mcp : undefined
-  const voice = mcp ? launch.voicePrompt : undefined
-  // Trek's own guidance (the Global role, the voice prompt) first, then the user's (the session
+  const plugins = mcp ? launch.pluginPrompt : undefined
+  // Trek's own guidance (the Global role, the plugins' prompts) first, then the user's (the session
   // type's prompt, the project's shared or Global prompt) last, so the user's can override it,
   // "do not speak summaries" included, as the desktop ordered them (worktreeLaunch/globalLaunch).
   const prompts = launch.global
-    ? [mcp ? (isClaude ? GLOBAL_SYSTEM_PROMPT : globalAgentPrompt(provider.label)) : undefined, voice, settings.globalSystemPrompt?.trim()]
-    : [voice, launch.systemPrompt?.trim(), settings.sessionSystemPrompt?.trim()]
+    ? [mcp ? (isClaude ? GLOBAL_SYSTEM_PROMPT : globalAgentPrompt(provider.label)) : undefined, plugins, settings.globalSystemPrompt?.trim()]
+    : [plugins, launch.systemPrompt?.trim(), settings.sessionSystemPrompt?.trim()]
   const systemPrompt = prompts.filter(Boolean).join('\n\n') || undefined
   return provider.buildLaunch({
     sessionId: launch.sessionId,

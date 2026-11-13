@@ -15,6 +15,7 @@ import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
+import type { PluginPresence } from './plugins/manifest.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type {
   ComposeAction,
@@ -277,6 +278,11 @@ export interface WelcomeFrameV2 {
   serverName: string
   /** Optional features, e.g. "mcp", "bot", "docker"; clients hide what is missing */
   capabilities: string[]
+  /**
+   * The server's plugins (plugin system phase 1), on or off per project in its `plugins` setting;
+   * absent from a server older than plugins. A plugin's methods and events are `<id>.*`.
+   */
+  plugins?: PluginPresence[]
   /** Only to a hello that redeemed a `pairingCode` (6a): the phone's new token, sent this once */
   pairedToken?: string
   /** With `pairedToken`: the name the server gave it (`phone-<device>`) */
@@ -761,10 +767,16 @@ export interface EventPayloadsV2 {
    * every authenticated connection: re-read `linear.status` / `voice.settings`
    */
   'integrations.changed': IntegrationsChangedEvent
+  /** A plugin's server-wide state changed (a key, its config), by any client: its windows re-read it */
+  'plugins.changed': PluginsChangedEvent
   /** 5e: promote_to_primary asks the project's listening windows to confirm (`promote.claim` / `promote.answer`) */
   'promote.request': PromoteRequestEvent
   /** 5e: the request ended, or another window claimed it (`claimed`): close its dialog (the claimant carries on) */
   'promote.settled': PromoteSettledEvent
+}
+
+export interface PluginsChangedEvent {
+  id: string
 }
 
 export interface IntegrationsChangedEvent {

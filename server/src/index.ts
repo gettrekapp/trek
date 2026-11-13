@@ -20,6 +20,7 @@ import { formatRepoList } from './repos'
 import { startServer } from './server'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
+import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
 import { createIntegrations, testEndpoint, VOICE_CONFIG_FILE } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
@@ -507,6 +508,8 @@ const server = startServer(
     },
     // Background push (6b): the phones' relay grants live in the same secrets file.
     push: { secretsFile: secretsPathFor(resolve(args.configPath)) },
+    // The plugins (plugin system phase 1): their keys in the same secrets file, their files in `<dataDir>/plugins/<id>`.
+    plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
     web: webBundle ? { bundle: webBundle } : undefined
   }
 )

@@ -22,7 +22,7 @@ import { publishServerState } from './serverState'
 import { activeTokenHashes, listTokens, matchToken } from './tokens'
 import { PairingCodes, PairingLimiter, redeemForPhone } from './pairing'
 import { TopicHub, type Subscriber } from './topicHub'
-import { dispatchV2, responseRev } from './v2'
+import { dispatchV2, isCoreMethod, responseRev } from './v2'
 import { GitPoller } from './git/poller'
 import { SessionManager } from './sessions/manager'
 import { SINK_HIGH_WATER, type TerminalSink } from './sessions/terminalHost'
@@ -32,6 +32,9 @@ import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './
 import { createEventSink, type Machine } from './integrations/machineHandlers'
 import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
+import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
+import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
+import { mcpContext } from './plugins/mcp'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
 import { PromoteRequests } from './promote/requests'
@@ -95,6 +98,11 @@ export interface ServerOptions {
    * server answers `push.*` with NOT_FOUND and pushes nothing. `fetch` is for tests.
    */
   push?: { secretsFile: string; fetch?: typeof fetch }
+  /**
+   * The plugins' server halves (plugin system phase 1: plugins/builtin.server.ts), with the secrets
+   * file and data dir they keep their keys and files in. Without it the server has none.
+   */
+  plugins?: { list: readonly ServerPlugin[]; secretsFile: string; dataDir: string; env?: NodeJS.ProcessEnv }
 }
 
 export interface ProjectsSetup {
@@ -133,12 +141,25 @@ export function startServer(
     }
   }
   const access = mcpAccess
+  const plugins: PluginRegistry | undefined = options.plugins
+    ? createPluginRegistry({
+        plugins: options.plugins.list,
+        secretsFile: options.plugins.secretsFile,
+        dataDir: options.plugins.dataDir,
+        env: options.plugins.env,
+        hub,
+        projects,
+        isCoreMethod,
+        coreToolNames: MCP_TOOLS.map((t) => t.name)
+      })
+    : undefined
   const sessions = new SessionManager({
     projects,
     store,
     hub,
     mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined,
-    voicePrompt: () => (options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined),
+    pluginPrompt: (projectId) =>
+      [options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined, plugins?.sessionPrompt(projectId)].filter(Boolean).join('\n\n') || undefined,
     onSessionExit: (p) => pusher?.notify({ kind: 'session-stopped', ...p })
   })
 
@@ -238,6 +259,12 @@ export function startServer(
   }
   // An open window shows or hides the PR watch without reconnecting (5c-1).
   prWatchChanged = (available) => integrationsChanged({ prWatch: available })
+  // A plugin's key or config set by one client: every window re-reads it. A client older than
+  // plugins hears its legacy capability's integrations.changed instead.
+  plugins?.onChanged((manifest) => {
+    for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'plugins.changed', payload: { id: manifest.id } })
+    if (manifest.legacyCapability) integrationsChanged({ [manifest.legacyCapability]: true })
+  })
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
     health: () => [...projectsSetup.store.health(), ...poller.health()]
@@ -455,7 +482,8 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true),
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities()),
+          ...(plugins ? { plugins: plugins.presence() } : {}),
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
         })
         return
@@ -489,6 +517,7 @@ export function startServer(
         pairing,
         tokenName: callerTokenName,
         push: pushGrants ? { grants: pushGrants } : undefined,
+        plugins,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -559,7 +588,7 @@ export function startServer(
     trek.ready = startMcpListener({
       access,
       serverVersion: daemonVersion,
-      contextFor: (projectId) => ({ instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: callerFor(projectId) })
+      contextFor: (projectId) => mcpContext(projectId, callerFor(projectId), plugins)
     }).then(
       (listener) => {
         if (stopped) {
@@ -584,6 +613,7 @@ export function startServer(
     promoteRequests.stop()
     pusher?.stop()
     sessions.stopAll()
+    plugins?.dispose()
     // A move's staged histories (5d) are only of use to the connection that was sending them.
     const cleared = moveTransfers.clear().catch(() => {})
     store.off('change', onConfigChange)
