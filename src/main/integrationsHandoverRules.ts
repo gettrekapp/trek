@@ -29,6 +29,21 @@ export interface LegacyIntegrations {
   voice: { voiceId?: unknown; modelId?: unknown; promptSessions?: unknown; active?: unknown }
 }
 
+/**
+ * The parts the Local server can take: each part's plugin (plugin system phases 1–2), told by its
+ * legacy capability (`linear`, `voice`). A part the server lacks waits for a later start; the other
+ * goes over without it.
+ */
+export interface HandoverParts {
+  linear: boolean
+  voice: boolean
+}
+
+/** The parts a server's welcome capabilities say it takes. */
+export function handoverParts(capabilities: readonly string[]): HandoverParts {
+  return { linear: capabilities.includes('linear'), voice: capabilities.includes('voice') }
+}
+
 /** The Local server's `linear.setKey`, `voice.setKey` and `voice.setConfig`. */
 export type HandoverRequest = (method: 'linear.setKey' | 'voice.setKey' | 'voice.setConfig', params: Record<string, unknown>) => Promise<unknown>
 
@@ -88,6 +103,7 @@ const result = (value: unknown): { ok?: unknown; present?: unknown } => (value &
 /**
  * Hands over what `done` lacks; resolves what is done now. A part is done when there is nothing to
  * hand over (no key stored: one stored but unreadable here is not "nothing"), when the server took it (`ok`), or when it already had a key of its own (`present`:
+ * a part whose plugin the server lacks (`parts`) waits for a later start;
  * the user set one there, which wins). Anything else (a server older than 5b, a dropped link, a
  * secrets file it cannot write) leaves it for the next start. The server stores a hand-over key
  * without asking Linear or ElevenLabs (`ifAbsent`), so neither needs to be reachable. The voice settings go only with a key
@@ -99,7 +115,12 @@ export function nothingToHandOver(legacy: LegacyIntegrations): boolean {
   return !legacy.linearKey && !legacy.voiceKey && !legacy.unreadable?.linear && !legacy.unreadable?.voice
 }
 
-export async function handOver(request: HandoverRequest, legacy: LegacyIntegrations, done: HandoverDone): Promise<HandoverDone> {
+export async function handOver(
+  request: HandoverRequest,
+  legacy: LegacyIntegrations,
+  done: HandoverDone,
+  parts: HandoverParts = { linear: true, voice: true }
+): Promise<HandoverDone> {
   const next: HandoverDone = { ...done }
   const attempt = async <T>(run: () => Promise<T>): Promise<T | false> => {
     try {
@@ -108,7 +129,7 @@ export async function handOver(request: HandoverRequest, legacy: LegacyIntegrati
       return false
     }
   }
-  if (!next.linear && !legacy.unreadable?.linear) {
+  if (parts.linear && !next.linear && !legacy.unreadable?.linear) {
     const ok = await attempt(async () => {
       if (!legacy.linearKey) return true
       const r = result(await request('linear.setKey', { apiKey: legacy.linearKey, ifAbsent: true }))
@@ -121,7 +142,9 @@ export async function handOver(request: HandoverRequest, legacy: LegacyIntegrati
     if (Object.keys(config).length > 0) await request('voice.setConfig', config)
     return true
   })
-  if (!next.voice && !legacy.unreadable?.voice) {
+  if (!parts.voice) {
+    // Nothing of voice's this time, a pending config included.
+  } else if (!next.voice && !legacy.unreadable?.voice) {
     const stored = await attempt(async () => {
       if (!legacy.voiceKey) return 'nothing'
       const r = result(await request('voice.setKey', { apiKey: legacy.voiceKey, ifAbsent: true }))

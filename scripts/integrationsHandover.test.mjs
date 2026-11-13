@@ -2,7 +2,7 @@
 // settings to the Local server once (phase 5b), against a fake server's set-if-absent methods.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { handOver, legacyVoiceConfig, nothingToHandOver, parseHandoverState, readHandoverState } from '../src/main/integrationsHandoverRules.ts'
+import { handOver, handoverParts, legacyVoiceConfig, nothingToHandOver, parseHandoverState, readHandoverState } from '../src/main/integrationsHandoverRules.ts'
 
 /** A fake Local server: `keys` it already has; `fail` methods that throw (a server older than 5b, a dropped link). */
 function fakeServer({ keys = {}, reject = {}, fail = [] } = {}) {
@@ -34,6 +34,23 @@ test('both keys and the voice settings go over once, set-if-absent', async () =>
   const again = fakeServer()
   assert.deepEqual(await handOver(again.request, legacy, { linear: true, voice: true }), { linear: true, voice: true })
   assert.deepEqual(again.calls, [])
+})
+
+test("each part goes over on its own plugin's capability: one the server lacks waits, the other goes (plugin system phase 2)", async () => {
+  assert.deepEqual(handoverParts(['linear', 'voice', 'skills']), { linear: true, voice: true })
+  assert.deepEqual(handoverParts(['linear']), { linear: true, voice: false })
+  assert.deepEqual(handoverParts([]), { linear: false, voice: false })
+  // The voice plugin failed to start there: Linear goes over all the same; voice is left for a later start.
+  const noVoice = fakeServer()
+  assert.deepEqual(await handOver(noVoice.request, legacy, {}, { linear: true, voice: false }), { linear: true })
+  assert.deepEqual(noVoice.calls, [['linear.setKey', { apiKey: 'lin_app', ifAbsent: true }]])
+  // And the other way round; a pending voice config waits too.
+  const noLinear = fakeServer()
+  assert.deepEqual(await handOver(noLinear.request, legacy, {}, { linear: false, voice: true }), { voice: true })
+  assert.deepEqual(noLinear.calls.map(([m]) => m), ['voice.setKey', 'voice.setConfig'])
+  const pending = fakeServer()
+  assert.deepEqual(await handOver(pending.request, legacy, { linear: true, voice: true, voiceConfigPending: true }, { linear: true, voice: false }), { linear: true, voice: true, voiceConfigPending: true })
+  assert.deepEqual(pending.calls, [])
 })
 
 test("a server with its own key keeps it, and its own voice: that part is done", async () => {

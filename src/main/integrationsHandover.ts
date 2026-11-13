@@ -9,10 +9,9 @@ import { app } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ServerConnection, globalSocketFactory } from '../shared/client/index.ts'
-import { CAPABILITY } from '../shared/protocolV2.ts'
 import { appSettings, updateAppSettings } from './appSettings'
 import { createSecretStore, writeFileAtomic, type SecretRead, type SecretStore } from './secrets'
-import { handOver, nothingToHandOver, readHandoverState, type HandoverRequest, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
+import { handOver, handoverParts, nothingToHandOver, readHandoverState, type HandoverParts, type HandoverRequest, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
 import { localProfileKey, localServerStatus, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 
 const STATE_FILE = 'integrations-handover.json'
@@ -51,28 +50,27 @@ async function readLegacy(): Promise<LegacyIntegrations> {
   }
 }
 
-/** Connected to the Local server, or null when it does not answer in time (or has no `linear`/`voice`). */
-function connectLocal(url: string, token: string): Promise<ServerConnection | null> {
+/** Connected to the Local server with the parts it takes, or null when it does not answer in time (or takes neither). */
+function connectLocal(url: string, token: string): Promise<{ conn: ServerConnection; parts: HandoverParts } | null> {
   const conn = new ServerConnection({ url, token, createSocket: globalSocketFactory, client: 'trek-desktop-handover', clientVersion: app.getVersion() })
   return new Promise((resolve) => {
     let settled = false
-    const finish = (ok: boolean): void => {
+    const finish = (parts: HandoverParts | null): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       off()
-      if (ok) resolve(conn)
+      if (parts && (parts.linear || parts.voice)) resolve({ conn, parts })
       else {
         conn.close()
         resolve(null)
       }
     }
-    const timer = setTimeout(() => finish(false), CONNECT_TIMEOUT_MS)
+    const timer = setTimeout(() => finish(null), CONNECT_TIMEOUT_MS)
     const off = conn.on('status', ({ status }) => {
-      if (status === 'connected') {
-        const caps = conn.welcome?.capabilities ?? []
-        finish(caps.includes(CAPABILITY.linear) && caps.includes(CAPABILITY.voice))
-      } else if (status === 'needs-auth' || status === 'incompatible' || status === 'closed') finish(false)
+      // Each part on its own plugin's capability: one that failed to start doesn't hold the other back.
+      if (status === 'connected') finish(handoverParts(conn.welcome?.capabilities ?? []))
+      else if (status === 'needs-auth' || status === 'incompatible' || status === 'closed') finish(null)
     })
     conn.connect()
   })
@@ -115,12 +113,13 @@ async function run(): Promise<void> {
   else {
     const url = localServerUrl()
     const token = localToken()
-    const conn = url && token ? await connectLocal(url, token) : null
-    if (conn) {
+    const local = url && token ? await connectLocal(url, token) : null
+    if (local) {
+      const { conn, parts } = local
       try {
         // voice.* is the voice plugin's (plugin system phase 1), not in the core protocol's types.
         const request = conn.request.bind(conn) as unknown as (method: Parameters<HandoverRequest>[0], params: unknown, options: { timeoutMs: number }) => Promise<unknown>
-        next = await handOver((method, params) => request(method, params, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
+        next = await handOver((method, params) => request(method, params, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done, parts)
       } finally {
         conn.close()
       }
