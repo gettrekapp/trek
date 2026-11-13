@@ -33,6 +33,11 @@ does not run on Windows.
   worktree's creation says so.
 - **Worktree folders** drop the characters Windows forbids in names (`<>:"|?*`), trailing dots
   and spaces, and get a `-` after a device name (`CON`, `NUL`, `COM1`…). The branch keeps its name.
+- **Launchers.** The zip has `bin\trek-server.cmd` (what `trek-server` resolves to on PATH) and
+  `bin\trek-server.ps1`. With the `.cmd`, cmd.exe may ask "Terminate batch job (Y/N)?" on Ctrl+C
+  (answer Y); the PowerShell one does not. Until the scripts are signed (W2), Windows may refuse
+  the unsigned `.ps1`: run `powershell -NoProfile -ExecutionPolicy Bypass -File bin\trek-server.ps1 start`,
+  or `Get-ChildItem -Recurse <folder> | Unblock-File` once after unzipping.
 - **Stopping.** Ctrl+C (or Ctrl+Break, or closing the console) shuts the server down cleanly.
   `trek-server stop --local` asks the local server to stop over its own connection
   (`server.stop`); a stop from another process by signal is not possible on Windows.

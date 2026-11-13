@@ -7,7 +7,7 @@
 //   node scripts/server-tarball-smoke.mjs [--notarized] dist-release/trek-server-<version>-<os>-<arch>.tar.gz
 //   node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-win32-x64.zip   (on Windows)
 //
-// On Windows: bin\trek-server.cmd (run through cmd.exe), ConPTY's files in node-pty, a pty running
+// On Windows: bin\trek-server.cmd (run through cmd.exe) and bin\trek-server.ps1 (powershell.exe), ConPTY's files in node-pty, a pty running
 // cmd.exe, no symlink check, and taskkill instead of SIGTERM (Windows has no signals).
 //
 // --notarized (macOS, the release's signed and notarized tarball): pty.node and spawn-helper carry
@@ -70,7 +70,7 @@ const dir = join(work, name)
 
 check(`it is for this machine (${process.platform}-${process.arch})`, os === process.platform && arch === process.arch, `${os}-${arch}`)
 const launcherFile = windows ? 'bin/trek-server.cmd' : 'bin/trek-server'
-for (const file of [launcherFile, 'trek-server.cjs', 'build.json', 'package.json', 'README.md', ...(windows ? [] : ['trek-server.service']), 'web-client/index.html', 'node_modules/node-pty/package.json']) {
+for (const file of [launcherFile, 'trek-server.cjs', 'build.json', 'package.json', 'README.md', ...(windows ? ['bin/trek-server.ps1'] : ['trek-server.service']), 'web-client/index.html', 'node_modules/node-pty/package.json']) {
   check(`${file} is there`, existsSync(join(dir, file)))
 }
 if (windows) {
@@ -111,6 +111,12 @@ const runLauncher = (argv) => {
 const build = JSON.parse(readFileSync(join(dir, 'build.json'), 'utf8'))
 const printed = runLauncher(['--version']).trim()
 check(`--version prints ${version}`, printed === version && build.version === version, `printed ${printed}, build.json ${build.version}`)
+
+// The PowerShell launcher (Windows only; runs there, not on this Mac or Linux).
+if (windows) {
+  const ps = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(dir, 'bin', 'trek-server.ps1'), 'version'], { env, encoding: 'utf8' }).trim()
+  check(`bin\\trek-server.ps1 version prints ${version}`, ps === version, ps)
+}
 
 // The launcher from a symlink elsewhere, as a link in ~/.local/bin runs it (not on Windows: PATH there).
 if (!windows) {

@@ -7,7 +7,8 @@
 //
 // The tarball holds one folder, trek-server-<version>-<os>-<arch>/:
 //   bin/trek-server        sh launcher: checks Node >= 22, then runs trek-server.cjs (follows symlinks)
-//                          (Windows: bin\trek-server.cmd, the same checks in a batch file)
+//                          (Windows: bin\trek-server.cmd, the same checks in a batch file, and
+//                          bin\trek-server.ps1, in PowerShell, which Ctrl+C does not ask about)
 //   trek-server.cjs        the bundled server (everything but node-pty)
 //   build.json             its version and build id
 //   web-client/            the web client (`trek-server start --web`)
@@ -37,6 +38,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers.mjs'
 
 // The launcher. POSIX sh; resolves its own symlinks so a link in ~/.local/bin finds the folder.
 const LAUNCHER = `#!/bin/sh
@@ -67,31 +69,6 @@ if [ "$major" -lt 22 ]; then
 fi
 exec "$node" "$here/trek-server.cjs" "$@"
 `
-
-// The Windows launcher: the same checks, as a batch file (CRLF). parseInt keeps the version
-// check free of quotes, which for /f's command would trip on.
-const WIN_LAUNCHER = [
-  '@echo off',
-  'rem trek-server launcher: runs trek-server.cjs (beside this bin folder) with Node.js >= 22,',
-  'rem the node on PATH unless TREK_NODE names one.',
-  'setlocal',
-  'set "node=%TREK_NODE%"',
-  'if "%node%"=="" set "node=node"',
-  'set "major="',
-  'for /f "delims=" %%v in (\'""%node%" -p "parseInt(process.versions.node)" 2^>nul"\') do set "major=%%v"',
-  'if not defined major (',
-  '  echo trek-server: Node.js 22 or later is needed, and "%node%" was not found ^(set TREK_NODE to a node binary^) 1>&2',
-  '  exit /b 127',
-  ')',
-  'set /a "major=0+%major%" 2>nul',
-  'if %major% LSS 22 (',
-  '  echo trek-server: Node.js 22 or later is needed; "%node%" is version %major% 1>&2',
-  '  exit /b 1',
-  ')',
-  '"%node%" "%~dp0..\\trek-server.cjs" %*',
-  'exit /b %errorlevel%',
-  ''
-].join('\r\n')
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const dist = join(root, 'server', 'dist')
@@ -144,7 +121,10 @@ try {
     cpu: [ARCH],
     dependencies: { 'node-pty': ptyVersion }
   }, null, 2) + '\n')
-  if (WINDOWS) writeFileSync(join(dir, 'bin', 'trek-server.cmd'), WIN_LAUNCHER)
+  if (WINDOWS) {
+    writeFileSync(join(dir, 'bin', 'trek-server.cmd'), WIN_LAUNCHER)
+    writeFileSync(join(dir, 'bin', 'trek-server.ps1'), WIN_PS_LAUNCHER)
+  }
   else writeFileSync(join(dir, 'bin', 'trek-server'), LAUNCHER, { mode: 0o755 })
   writeFileSync(join(dir, 'README.md'), readme(name, version, build))
 
@@ -301,6 +281,17 @@ function windowsRun(name) {
     `\`add\` registers a repository, \`token\` creates the token a client signs in with, and \`start\``,
     'serves (see `--help` for `--host`, `--port`, `--web`). Put the `bin` folder on PATH to run',
     '`trek-server` from anywhere. Ctrl+C in its console stops it.',
+    '',
+    'There are two launchers: `bin\\trek-server.cmd` (what `trek-server` runs in cmd and PowerShell) and',
+    '`bin\\trek-server.ps1`. cmd asks "Terminate batch job (Y/N)?" on Ctrl+C with the .cmd one (answer Y);',
+    'the PowerShell one does not:',
+    '',
+    '```powershell',
+    `powershell -NoProfile -ExecutionPolicy Bypass -File ${name}\\bin\\trek-server.ps1 start`,
+    '```',
+    '',
+    'Until the scripts are signed, Windows may refuse to run the .ps1 (an unsigned script from a download):',
+    'pass `-ExecutionPolicy Bypass` as above, or run `Get-ChildItem -Recurse <folder> | Unblock-File` once.',
     '',
     'The configuration lives in %APPDATA%\\trek-server and the projects in %LOCALAPPDATA%\\trek-server,',
     'not here, so an upgrade is a new folder beside this one. Environments and dev stacks are not',
