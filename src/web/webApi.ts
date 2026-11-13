@@ -109,7 +109,7 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
     raised: () => {}
   })
 
-  // ---- This browser's app settings (voice Active/Busy, the notification switch) ----
+  // ---- This browser's app settings (the plugins' prefs, the notification switch) ----
   let appSettings = readAppSettings()
   const appSettingsListeners = new Set<(s: AppSettings) => void>()
 

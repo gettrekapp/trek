@@ -7,10 +7,8 @@ import { ServerProjectWindow } from './v2/ServerProjectWindow'
 import { requestSessionSelect, watchAttention } from './attentionSelect'
 import { runningMoveDetail } from './v2/moveFlow'
 import { useLinearSync } from './linear'
-import { useVoice } from './voice'
 import { loadLlmSettings, watchLlmSettings } from './llm'
 import { PluginRuntimes, PluginSlot } from './plugins/PluginHost'
-import { SummaryBubble } from './components/SummaryBubble'
 import { titleBarForeground } from '../../shared/appearance'
 
 export default function App(): React.JSX.Element {
@@ -27,7 +25,6 @@ export default function App(): React.JSX.Element {
     if (serverWindow) setStartRequest(undefined)
   }, [serverWindow])
   useLinearSync()
-  useVoice()
 
   useEffect(() => {
     void loadLlmSettings()
@@ -128,7 +125,6 @@ export default function App(): React.JSX.Element {
       ) : booted ? (
         <StartScreen request={startRequest} />
       ) : null}
-      <SummaryBubble />
       <PluginRuntimes />
       <PluginSlot name="overlay" />
     </div>

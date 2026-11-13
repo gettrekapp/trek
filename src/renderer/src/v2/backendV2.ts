@@ -180,13 +180,6 @@ const PROMOTE_FAILED = 'Could not promote worktree'
 const DEMOTE_FAILED = 'Could not move the branch to a worktree'
 /** docker start, stop and restart (the server gives docker two minutes) */
 const CONTAINER_MS = 3 * 60_000
-/** A base64 text (an mp3 over the wire) as bytes. */
-export function base64Bytes(text: string): Uint8Array {
-  const binary = atob(text)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
 
 const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
@@ -712,25 +705,6 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       onChanged: (listener) =>
         deps.onEvent('integrations.changed', (parts) => {
           if (parts.linear) listener()
-        })
-    },
-    voice: {
-      settings: () => request('voice.settings', {}),
-      setKey: (apiKey) => request('voice.setKey', { apiKey }),
-      clearKey: async () => {
-        await request('voice.clearKey', {})
-      },
-      voices: () => request('voice.voices', {}),
-      setConfig: (patch) => request('voice.setConfig', patch),
-      synthesize: async (text) => base64Bytes((await request('voice.synthesize', { text })).audio),
-      // Only this project's: the server sends a project's summaries to its subscribers only.
-      onSummary: (listener) =>
-        deps.onEvent('voice.summary', (event) => {
-          if (event.projectId === projectId) listener(event)
-        }),
-      onChanged: (listener) =>
-        deps.onEvent('integrations.changed', (parts) => {
-          if (parts.voice) listener()
         })
     },
     skills: {

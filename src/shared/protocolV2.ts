@@ -32,10 +32,6 @@ import type {
   SkillInfo,
   LinearKeyResult,
   StackLogChunk,
-  VoiceInfo,
-  VoiceKeyResult,
-  VoiceServerConfig,
-  VoiceServerSettings,
   StackStatus,
   ChangesSource,
   CommitInfo,
@@ -204,8 +200,9 @@ export const CAPABILITY = {
   /** `linear.*` look up Linear issues with the server's own API key (set from any client, never read back) */
   linear: 'linear',
   /**
-   * `voice.*` keep the server's ElevenLabs key and voice; its speak_summary tool sends each spoken
-   * summary to the project's subscribers as `voice.summary`
+   * The voice plugin's legacy capability (plugin system phase 1; a core `voice.*` in 5b): listed
+   * while the plugin is registered, for clients older than plugins. Its methods and events are the
+   * plugin's (plugins/voice/shared/types.ts).
    */
   voice: 'voice',
   /** `skills.list` lists a worktree's Claude Code skills and commands on the server's disk */
@@ -532,21 +529,6 @@ export interface MethodParamsV2 {
   /** The issues with these ids (e.g. TOW-123) that exist and the key can see; none without a key */
   'linear.issues': { ids: string[] }
 
-  // ElevenLabs voice summaries, with the server's API key (capability `voice`)
-  /** The server's voice, model and "Summarize automatically", and whether it has a key */
-  'voice.settings': Record<string, never>
-  /**
-   * Checks the key by listing its voices and stores it on the server (0600, never sent back); picks
-   * the first voice if none is chosen. `ifAbsent` as `linear.setKey`'s.
-   */
-  'voice.setKey': { apiKey: string; ifAbsent?: boolean }
-  'voice.clearKey': Record<string, never>
-  /** The key's voices */
-  'voice.voices': Record<string, never>
-  'voice.setConfig': Partial<VoiceServerConfig>
-  /** An mp3 of `text` (at most 400 characters), for this connection only: Settings' Test */
-  'voice.synthesize': { text: string }
-
   // Skills (capability `skills`)
   /** The worktree's `.claude/skills` and `.claude/commands`, then the server user's `~/.claude` ones */
   'skills.list': WorktreeRef
@@ -693,13 +675,6 @@ export interface MethodResultsV2 {
   'linear.setKey': LinearKeyResult
   'linear.clearKey': null
   'linear.issues': LinearIssue[]
-  'voice.settings': VoiceServerSettings
-  'voice.setKey': VoiceKeyResult
-  'voice.clearKey': null
-  'voice.voices': VoiceInfo[]
-  'voice.setConfig': VoiceServerConfig
-  /** The mp3, base64 */
-  'voice.synthesize': { audio: string }
   'skills.list': SkillInfo[]
   'move.prepare': MovePlan
   'move.export': MoveExport & { fingerprint: string }
@@ -757,14 +732,9 @@ export interface EventPayloadsV2 {
   /** An `env.up`, `env.stop` or `env.destroy`'s output and steps, to the connection that asked for it only */
   'env.log': EnvLogEvent
   /**
-   * A session's spoken summary (the speak_summary tool), to every connection subscribed to its
-   * project's topic; a client plays it unless its user is Busy
-   */
-  'voice.summary': VoiceSummaryEvent
-  /**
-   * The server's Linear or ElevenLabs key or voice settings changed (any client's linear.setKey
-   * that stored, linear.clearKey, voice.setKey that stored, voice.clearKey, voice.setConfig), to
-   * every authenticated connection: re-read `linear.status` / `voice.settings`
+   * The server's Linear key changed (any client's linear.setKey that stored, linear.clearKey), to
+   * every authenticated connection: re-read `linear.status`. A plugin with a legacy capability's
+   * server-wide change is sent here too, as `{ <capability>: true }`, for clients older than plugins.
    */
   'integrations.changed': IntegrationsChangedEvent
   /** A plugin's server-wide state changed (a key, its config), by any client: its windows re-read it */
@@ -781,6 +751,7 @@ export interface PluginsChangedEvent {
 
 export interface IntegrationsChangedEvent {
   linear?: true
+  /** The voice plugin's legacy capability: its key or settings changed */
   voice?: true
   /**
    * gh's sign-in on the server's machine changed (5c-1): the `prWatch` capability is now listed
@@ -789,14 +760,6 @@ export interface IntegrationsChangedEvent {
   prWatch?: boolean
 }
 
-export interface VoiceSummaryEvent {
-  projectId: string
-  /** The session that spoke (its terminalId) */
-  sessionId: string
-  text: string
-  /** The mp3, base64 */
-  audio: string
-}
 
 /** `push.status`'s answer (6b) */
 export interface PushStatusResult {

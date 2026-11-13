@@ -25,7 +25,6 @@ import { ClientError } from '../../../shared/client/index.ts'
 import { isLocalEntryId } from '../../../shared/appServerRules'
 import { createProjectionWaits, PROJECTION_WAIT_MS } from './projectionWaits'
 import { INSTALL_PATCH, LEAVE_PATCH } from './windowState'
-import { stopAllSummaries } from '../voice'
 import type { WindowBackend } from '../backend'
 import type { AppState } from '../store'
 import type { Project } from '../../../shared/model/types'
@@ -287,7 +286,6 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     ...v2SettingsOverrides(settingsWriter, settingsRequests, mirrorProject)
   })
   // Offline until ServerProjectWindow reports the real status: the commands start disabled.
-  stopAllSummaries()
   useAppStore.setState(INSTALL_PATCH)
 
   return {
@@ -321,7 +319,6 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       cancelAll()
       disposeV2Terminals()
       clearV2Projection()
-      stopAllSummaries()
       setProjectSetters(null)
       useAppStore.setState(LEAVE_PATCH)
     }

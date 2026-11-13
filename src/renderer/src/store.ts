@@ -20,7 +20,6 @@ import type {
   SessionType,
   TerminalQuickButton,
   TerminalStatus,
-  VoiceSettings,
   WorktreeInstance,
   WorktreeLocator,
   WorktreeTag
@@ -168,11 +167,6 @@ export interface TerminalMeta {
 }
 
 /** A session asked the user to make a call (request_decision MCP tool). */
-export interface SpokenSummary {
-  terminalId: string
-  text: string
-}
-
 export interface PendingDecision {
   terminalId: string
   question: string
@@ -240,17 +234,11 @@ export interface AppState {
   linearIssues: Record<string, LinearIssue>
   /** Open decision requests by terminal id, at most one per terminal. Not persisted. */
   decisions: Record<string, PendingDecision>
-  /** Machine-wide ElevenLabs settings, null until loaded. */
-  voice: VoiceSettings | null
-  /** This app's voice Active/Busy (app settings), apart from `voice`: null until loaded (not active). */
-  voiceActive: boolean | null
   llmSettings: LlmSettings | null
   setLlmSettings: (settings: LlmSettings | null) => void
   setProjectLlmDefault: (llm: LlmSelection | undefined) => void
   setGlobalLlm: (llm: LlmSelection | undefined) => void
   /** The spoken summary playing now, and how many wait behind it. Not persisted. */
-  voicePlaying: SpokenSummary | null
-  voiceQueued: number
 
   setActiveWorktree: (id: string) => void
   /**
@@ -306,9 +294,6 @@ export interface AppState {
   setBotDecision: (question: string | null) => void
   setBotSettings: (settings: BotSettings) => void
   setLinearConnected: (connected: boolean) => void
-  setVoice: (voice: VoiceSettings | null) => void
-  setVoiceActive: (active: boolean) => void
-  setVoicePlayback: (playing: SpokenSummary | null, queued: number) => void
   setLinearIssues: (issues: LinearIssue[]) => void
   setTerminalQueue: (id: string, texts: string[]) => void
   enqueueTerminalText: (id: string, text: string) => void
@@ -401,11 +386,7 @@ export const useAppStore = create<AppState>((set) => ({
   linearConnected: false,
   linearIssues: {},
   decisions: {},
-  voice: null,
-  voiceActive: null,
   llmSettings: null,
-  voicePlaying: null,
-  voiceQueued: 0,
 
   setActiveWorktree: (id) =>
     set((state) => {
@@ -478,13 +459,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   setLinearConnected: (connected) =>
     set(connected ? { linearConnected: true } : { linearConnected: false, linearIssues: {} }),
-  setVoice: (voice) => set({ voice }),
-  // The Settings section's copy (`voice.active`) follows it.
-  setVoiceActive: (active) => set((s) => ({ voiceActive: active, voice: s.voice && s.voice.active !== active ? { ...s.voice, active } : s.voice })),
 
   setLlmSettings: (llmSettings) => set({ llmSettings }),
 
-  setVoicePlayback: (playing, queued) => set({ voicePlaying: playing, voiceQueued: queued }),
 
   setLinearIssues: (issues) =>
     set((state) => {

@@ -118,7 +118,9 @@ async function run(): Promise<void> {
     const conn = url && token ? await connectLocal(url, token) : null
     if (conn) {
       try {
-        next = await handOver((method, params) => conn.request(method, params as never, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
+        // voice.* is the voice plugin's (plugin system phase 1), not in the core protocol's types.
+        const request = conn.request.bind(conn) as unknown as (method: string, params: unknown, options: { timeoutMs: number }) => Promise<unknown>
+        next = await handOver((method, params) => request(method, params, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
       } finally {
         conn.close()
       }

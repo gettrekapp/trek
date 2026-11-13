@@ -37,14 +37,9 @@ import type {
   StackLogChunk,
   StackStatus,
   WorktreeChanges,
-  VoiceInfo,
-  VoiceKeyResult,
-  VoiceServerConfig,
-  VoiceServerSettings,
   WorktreeInstance,
   WorktreeLocator
 } from '../../shared/types'
-import type { VoiceSummaryEvent } from '../../shared/protocolV2'
 import type { PluginWelcome } from './plugins/presence'
 import type { ReviewComment } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
@@ -184,20 +179,6 @@ export interface WindowBackend {
     /** The server's key was set or cleared (by any client: another window, the hand-over); returns the unsubscribe */
     onChanged(listener: () => void): () => void
   }
-  /** ElevenLabs with the server's own API key (feature `voice`) */
-  readonly voice: {
-    settings(): Promise<VoiceServerSettings>
-    setKey(apiKey: string): Promise<VoiceKeyResult>
-    clearKey(): Promise<void>
-    voices(): Promise<VoiceInfo[]>
-    setConfig(patch: Partial<VoiceServerConfig>): Promise<VoiceServerConfig>
-    /** An mp3 of `text`, for this window only (Settings' Test) */
-    synthesize(text: string): Promise<Uint8Array>
-    /** The project's sessions' spoken summaries (speak_summary), as the server sends them; returns the unsubscribe */
-    onSummary(listener: (event: VoiceSummaryEvent) => void): () => void
-    /** The server's key or voice settings changed (by any client); returns the unsubscribe */
-    onChanged(listener: () => void): () => void
-  }
   /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
   readonly skills: {
     list(loc: WorktreeLocator): Promise<SkillInfo[]>
@@ -332,16 +313,6 @@ export const idleBackend: WindowBackend = {
   },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
   linear: { hasKey: noProject, setKey: noProject, clearKey: noProject, issues: noProject, onChanged: () => () => {} },
-  voice: {
-    settings: noProject,
-    setKey: noProject,
-    clearKey: noProject,
-    voices: noProject,
-    setConfig: noProject,
-    synthesize: noProject,
-    onSummary: () => () => {},
-    onChanged: () => () => {}
-  },
   skills: { list: noProject },
   review: { add: noProject, edit: noProject, remove: noProject, clear: noProject, send: noProject },
   branch: {

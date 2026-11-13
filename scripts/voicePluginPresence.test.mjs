@@ -1,18 +1,19 @@
-// scripts/voicePresence.test.mjs — the window's copy of this app's voice Active/Busy (phase 5b):
-// its own value, loaded from the app settings and followed through their changes, independent of
-// the server's voice settings; not active until it is known.
+// scripts/voicePluginPresence.test.mjs — the window's copy of this app's voice Active/Busy (phase
+// 5b; the voice plugin's per-app `active` pref since plugin system phase 1): its own value, loaded
+// from the prefs and followed through their changes, independent of the server's voice settings;
+// not active until it is known.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_QUEUED_CLIPS, admitsClip, followAppActive, isPresenceActive, mergeVoice } from '../src/renderer/src/voicePresence.ts'
+import { MAX_QUEUED_CLIPS, activeIn, admitsClip, followAppActive, isPresenceActive, mergeVoice } from '../plugins/voice/client/presence.ts'
 
 function fakeSettings(initial) {
   const listeners = new Set()
   let release
-  const loaded = new Promise((resolve) => (release = () => resolve({ voiceActive: initial })))
+  const loaded = new Promise((resolve) => (release = () => resolve({ active: initial })))
   return {
-    api: { get: () => loaded, onChanged: (cb) => (listeners.add(cb), () => listeners.delete(cb)) },
+    api: { load: () => loaded, onChange: (cb) => (listeners.add(cb), () => listeners.delete(cb)) },
     release: () => release(),
-    change: (voiceActive) => [...listeners].forEach((l) => l({ voiceActive })),
+    change: (active) => [...listeners].forEach((l) => l({ active })),
     get count() {
       return listeners.size
     }
@@ -48,7 +49,7 @@ test('a change heard before the load answers wins over the older load; a failed 
   settings.release()
   await new Promise((r) => setImmediate(r))
   assert.deepEqual(seen, [false])
-  const failing = { get: () => Promise.reject(new Error('no ipc')), onChanged: () => () => {} }
+  const failing = { load: () => Promise.reject(new Error('no ipc')), onChange: () => () => {} }
   const got = []
   followAppActive(failing, { set: (v) => got.push(v), onBusy: () => {} })
   await new Promise((r) => setImmediate(r))
@@ -68,4 +69,11 @@ test('the clip queue holds at most MAX_QUEUED_CLIPS waiting; more are dropped', 
   assert.equal(admitsClip(0), true)
   assert.equal(admitsClip(4), true)
   assert.equal(admitsClip(5), false)
+})
+
+test('activeIn: Busy only when the pref says false; none yet is Active', () => {
+  assert.equal(activeIn({}), true)
+  assert.equal(activeIn({ active: true }), true)
+  assert.equal(activeIn({ active: false }), false)
+  assert.equal(activeIn({ active: 'no' }), true)
 })
