@@ -111,6 +111,8 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
 
   addRepo(path: string, request: AddRepoRequest): { repo: RemoteRepo; added: boolean } {
     this.syncFromDisk()
+    // Windows: never a repo on a network or WSL share, even from the CLI's `add` (no allowed root).
+    this.currentGuard.assertLocal(path)
     if (request.requireAllowedRoot) this.currentGuard.check(path)
     let root: string
     try {
@@ -118,6 +120,7 @@ export class ConfigStore extends EventEmitter<{ change: [] }> {
     } catch (err) {
       throw codedError('NOT_A_REPO', (err as Error).message)
     }
+    this.currentGuard.assertLocal(root)
     if (request.requireAllowedRoot) {
       this.currentGuard.check(root)
       // Adding must not widen the guard beyond space that is already allowed.
