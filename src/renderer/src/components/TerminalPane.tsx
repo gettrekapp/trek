@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { TerminalQuickButton } from '../../../shared/types'
+import {
+  fillTemplate,
+  parseTemplate,
+  planQuickButton,
+  resolveBuiltins,
+  templateInputs,
+  type BuiltinValues,
+  type QuickButtonPlan
+} from '../../../shared/quickButtonTemplate.ts'
+import { quickButtonContext } from '../quickButtonContext'
+import { QuickButtonModal } from './QuickButtonModal'
+import { QuickButtonRunModal } from './QuickButtonRunModal'
 import { useAppStore } from '../store'
 import {
   agentLabel,
@@ -23,6 +36,11 @@ function offlineTitle(link: ConnectionStatus | null): string {
   return link && link !== 'connected' ? STATUS_LABELS[link] : 'Disconnected from the server'
 }
 
+/** The final text of a button that needs no modal: its built-ins all resolved. */
+function fillTemplateNow(text: string, builtins: BuiltinValues): string {
+  return fillTemplate(parseTemplate(text), {}, builtins)
+}
+
 interface Props {
   terminalId: string
   visible: boolean
@@ -40,6 +58,35 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
   const quickButtons = useAppStore((s) =>
     global ? s.project?.globalTerminalButtons : s.project?.terminalButtons
   )
+  const setButtons = useAppStore((s) => (global ? s.setGlobalTerminalButtons : s.setTerminalButtons))
+  /** The button in the edit modal; 'new' = creating one */
+  const [editing, setEditing] = useState<TerminalQuickButton | 'new' | null>(null)
+  const [running, setRunning] = useState<{
+    button: TerminalQuickButton
+    plan: QuickButtonPlan
+    builtins: BuiltinValues
+  } | null>(null)
+
+  const send = (text: string): void => {
+    const backend = getBackend()
+    backend.sessions
+      .sendPrompt(terminalId, text)
+      .catch((err) => backend.errors.promptFailed('Could not send the prompt', err, text))
+    focusTerminal(terminalId)
+  }
+  const run = (button: TerminalQuickButton): void => {
+    const ctx = quickButtonContext(terminalId)
+    const builtins = ctx ? resolveBuiltins(ctx) : {}
+    const plan = planQuickButton(button.text, builtins)
+    if (plan.needsModal) setRunning({ button, plan, builtins })
+    else send(fillTemplateNow(button.text, builtins))
+  }
+  const saveButton = (button: TerminalQuickButton): void => {
+    const list = quickButtons ?? []
+    setButtons(
+      list.some((b) => b.id === button.id) ? list.map((b) => (b.id === button.id ? button : b)) : [...list, button]
+    )
+  }
   // A server window whose link is down: input would be dropped, so the pane is covered.
   const offline = useAppStore((s) => s.serverOffline)
   const link = useAppStore((s) => s.serverLink)
@@ -77,75 +124,109 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
   }, [visible, offline, terminalId])
 
   return (
-    <div
-      className="terminal-pane"
-      style={{ display: visible ? 'flex' : 'none' }}
-      onMouseDown={() => focusTerminal(terminalId)}
-    >
-      <div className="terminal-main">
-        {foreign && !offline && (
-          <div className="terminal-size-bar" role="status">
-            <span>
-              Sized for another window ({foreign.cols}×{foreign.rows})
-            </span>
-            <button
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                sendV2Size(terminalId)
-                focusTerminal(terminalId)
-              }}
-            >
-              Fit to this window
-            </button>
-          </div>
-        )}
-        <div ref={ref} className="terminal-host" />
-        {quickButtons && quickButtons.length > 0 && status !== 'exited' && (
-          <div className="quick-buttons">
-            {quickButtons.map((btn) => (
+    <>
+      <div
+        className="terminal-pane"
+        style={{ display: visible ? 'flex' : 'none' }}
+        onMouseDown={() => focusTerminal(terminalId)}
+      >
+        <div className="terminal-main">
+          {foreign && !offline && (
+            <div className="terminal-size-bar" role="status">
+              <span>
+                Sized for another window ({foreign.cols}×{foreign.rows})
+              </span>
               <button
-                key={btn.id}
-                className="quick-btn"
-                title={btn.text}
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => {
-                  const backend = getBackend()
-                  backend.sessions
-                    .sendPrompt(terminalId, btn.text)
-                    .catch((err) => backend.errors.promptFailed('Could not send the prompt', err, btn.text))
+                  sendV2Size(terminalId)
+                  focusTerminal(terminalId)
                 }}
               >
-                {btn.label.trim() || btn.text}
+                Fit to this window
               </button>
-            ))}
+            </div>
+          )}
+          <div ref={ref} className="terminal-host" />
+          {status !== 'exited' && (
+            <div className="quick-buttons">
+              {(quickButtons ?? []).map((btn) => {
+                const label = btn.label.trim() || btn.text
+                return (
+                  <div key={btn.id} className="quick-btn">
+                    <button className="quick-btn-main" title={btn.text} onClick={() => run(btn)}>
+                      {templateInputs(btn.text).length > 0 && (
+                        <span className="quick-btn-input-icon" title="Asks for input">
+                          ⌨
+                        </span>
+                      )}
+                      <span className="quick-btn-label">{label}</span>
+                    </button>
+                    <button
+                      className="quick-btn-edit"
+                      title="Edit button"
+                      aria-label={`Edit ${label}`}
+                      onClick={() => setEditing(btn)}
+                    >
+                      ✎
+                    </button>
+                  </div>
+                )
+              })}
+              <button className="quick-btn-add" title="Add quick button" onClick={() => setEditing('new')}>
+                +
+              </button>
+            </div>
+          )}
+        </div>
+        {status !== 'exited' && <QueuePanel terminalId={terminalId} global={global} />}
+        {offline && (
+          <div className="reconnecting-overlay" role="status">
+            <span className="reconnecting-title">{offlineTitle(link)}</span>
+            <span className="exited-hint">The session keeps running there. Typing is paused until the connection is back.</span>
+          </div>
+        )}
+        {!offline && status === 'exited' && (
+          <div className="exited-overlay">
+            <span>Process exited</span>
+            <button
+              disabled={readOnly !== undefined}
+              title={readOnly}
+              onClick={() => {
+                if (readOnly === undefined) void getBackend().sessions.restart(terminalId)
+              }}
+            >
+              Restart {agentLabel(terminalId)}
+            </button>
+            {llm && llm.provider !== 'claude' && (
+              <span className="exited-hint">
+                {`If ${agentLabel(terminalId)} isn't installed on the server, its command is set in the server's config.`}
+              </span>
+            )}
           </div>
         )}
       </div>
-      {status !== 'exited' && <QueuePanel terminalId={terminalId} global={global} />}
-      {offline && (
-        <div className="reconnecting-overlay" role="status">
-          <span className="reconnecting-title">{offlineTitle(link)}</span>
-          <span className="exited-hint">The session keeps running there. Typing is paused until the connection is back.</span>
-        </div>
+      {editing && (
+        <QuickButtonModal
+          button={editing === 'new' ? undefined : editing}
+          onSave={saveButton}
+          onDelete={
+            editing === 'new'
+              ? undefined
+              : () => setButtons((quickButtons ?? []).filter((b) => b.id !== editing.id))
+          }
+          onClose={() => setEditing(null)}
+        />
       )}
-      {!offline && status === 'exited' && (
-        <div className="exited-overlay">
-          <span>Process exited</span>
-          <button
-            disabled={readOnly !== undefined}
-            title={readOnly}
-            onClick={() => {
-              if (readOnly === undefined) void getBackend().sessions.restart(terminalId)
-            }}
-          >
-            Restart {agentLabel(terminalId)}
-          </button>
-          {llm && llm.provider !== 'claude' && (
-            <span className="exited-hint">
-              {`If ${agentLabel(terminalId)} isn't installed on the server, its command is set in the server's config.`}
-            </span>
-          )}
-        </div>
+      {running && (
+        <QuickButtonRunModal
+          button={running.button}
+          plan={running.plan}
+          builtins={running.builtins}
+          onSend={send}
+          onClose={() => setRunning(null)}
+        />
       )}
-    </div>
+    </>
   )
 }

@@ -1278,21 +1278,76 @@ button:disabled {
 }
 
 .quick-btn {
-  padding: 3px 10px;
+  display: inline-flex;
+  align-items: stretch;
+  max-width: 240px;
   border-radius: 6px;
   border: 1px solid var(--surface);
   background: var(--bg-lighter);
+  overflow: hidden;
+}
+
+.quick-btn:hover {
+  border-color: var(--accent);
+}
+
+.quick-btn-main,
+.quick-btn-edit,
+.quick-btn-add {
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
   font-size: 12px;
   font-family: inherit;
   cursor: pointer;
-  max-width: 220px;
+}
+
+.quick-btn-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 4px 3px 10px;
+}
+
+.quick-btn-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.quick-btn:hover {
+.quick-btn-input-icon {
+  color: #f0b35a;
+  font-size: 11px;
+}
+
+.quick-btn-main:hover {
+  color: var(--text);
+}
+
+/* Space reserved so nothing shifts; shown on hover or keyboard focus. */
+.quick-btn-edit {
+  padding: 3px 7px 3px 4px;
+  font-size: 11px;
+  visibility: hidden;
+}
+
+.quick-btn:hover .quick-btn-edit,
+.quick-btn:focus-within .quick-btn-edit {
+  visibility: visible;
+}
+
+.quick-btn-edit:hover {
+  color: var(--text);
+}
+
+.quick-btn-add {
+  padding: 2px 9px;
+  border: 1px dashed var(--surface);
+  border-radius: 6px;
+}
+
+.quick-btn-add:hover {
   color: var(--text);
   border-color: var(--accent);
 }
