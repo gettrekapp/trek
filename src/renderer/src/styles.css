@@ -1280,6 +1280,9 @@ button:disabled {
 .quick-btn {
   display: inline-flex;
   align-items: stretch;
+  /* One fixed height for buttons and +: adding or removing a button never resizes the terminal. */
+  height: 24px;
+  box-sizing: border-box;
   max-width: 240px;
   border-radius: 6px;
   border: 1px solid var(--surface);
@@ -1342,7 +1345,9 @@ button:disabled {
 }
 
 .quick-btn-add {
-  padding: 2px 9px;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 9px;
   border: 1px dashed var(--surface);
   border-radius: 6px;
 }

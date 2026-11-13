@@ -741,6 +741,8 @@ try {
   await createModal.waitFor({ state: 'detached', timeout: 5000 })
   check('a button made from the console is saved on the server', await until(async () => (await projectNow()).settings.terminalButtons?.map((b) => [b.label, b.text]), [['Check area', 'Check {AREA} on [branch]']]), [['Check area', 'Check {AREA} on [branch]']])
   const made = bar.locator('.quick-btn', { hasText: 'Check area' })
+  const barHeight = async () => (await bar.boundingBox())?.height
+  const heightWithButton = await barHeight()
   check('and shows the input icon', await made.locator('.quick-btn-input-icon').count(), 1)
   await made.locator('.quick-btn-main').click()
   const runModal = w1.locator('.modal', { hasText: 'Check area' })
@@ -755,6 +757,10 @@ try {
   const editModal = w1.locator('.modal', { hasText: 'Edit quick button' })
   await editModal.locator('button', { hasText: 'Delete' }).click()
   check('deleting it from the edit modal clears it on the server', await until(async () => (await projectNow()).settings.terminalButtons ?? [], []), [])
+  await made.waitFor({ state: 'detached', timeout: 5000 })
+  // The bar keeps its height with only + left, so the terminal is not refitted (and the pty size
+  // checks below are not raced by a late fit).
+  check('and the bar keeps its height with only + left', await barHeight(), heightWithButton)
 
   // The pty size: the shown pane claims it; a tab that was never shown leaves it alone.
   const ptySize = async (sessionId) => {
