@@ -101,12 +101,24 @@ function lockFile(st: Stats, text?: string): LockFile {
 /**
  * Reads the lock through one open fd, so its pid and its identity (fstat) are the
  * same file's. A symlink is not followed: a lock is never one. Undefined if the
- * lock is missing.
+ * lock is missing. `platform`: Windows has no O_NOFOLLOW (Node's open follows a
+ * symlink or junction), so there an lstat first takes a link for what POSIX's
+ * ELOOP gives: not a regular file, no pid.
  */
-export function readLock(path: string): LockFile | undefined {
+export function readLock(path: string, platform: NodeJS.Platform = process.platform): LockFile | undefined {
+  if (platform === 'win32') {
+    // A failed lstat (a missing lock among them) is left to the open below, as on POSIX.
+    let link: Stats | undefined
+    try {
+      link = lstatSync(path)
+    } catch {
+      link = undefined
+    }
+    if (link?.isSymbolicLink()) return lockFile(link)
+  }
   let fd: number
   try {
-    fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    fd = openSync(path, constants.O_RDONLY | (platform === 'win32' ? 0 : (constants.O_NOFOLLOW ?? 0)))
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code === 'ENOENT') return undefined

@@ -223,8 +223,7 @@ test('a lock that is a directory throws, and the directory is left', (t) => {
   assert.deepEqual(readdirSync(join(path, '..')), ['local.lock'], 'no temp file is left')
 })
 
-// Windows has no O_NOFOLLOW: readLock's open follows a symlinked lock there.
-test('a lock that is a symlink is not followed: it holds no pid and is replaced, its target untouched', { skip: posixOnly('O_NOFOLLOW') }, (t) => {
+test('a lock that is a symlink is not followed: it holds no pid and is replaced, its target untouched', { skip: posixOnly('a file symlink needs Developer Mode on Windows') }, (t) => {
   const dir = tempDir(t)
   const target = join(dir, 'target')
   writeFileSync(target, '100\n')
@@ -236,6 +235,21 @@ test('a lock that is a symlink is not followed: it holds no pid and is replaced,
   assert.equal(lstatSync(path).isSymbolicLink(), false)
   assert.equal(readLockPid(path), 200)
   assert.equal(readFileSync(target, 'utf8'), '100\n')
+})
+
+// Windows has no O_NOFOLLOW (readLock leaves it out there): an lstat first tells the link.
+test("readLock as on Windows: a symlinked lock is not followed, as POSIX's O_NOFOLLOW does", { skip: posixOnly('a file symlink needs Developer Mode on Windows') }, (t) => {
+  const dir = tempDir(t)
+  const target = join(dir, 'target')
+  writeFileSync(target, lockText(100, 'a'.repeat(32)))
+  const path = join(dir, 'local.lock')
+  symlinkSync(target, path)
+  const lock = readLock(path, 'win32')
+  assert.equal(lock.pid, undefined)
+  assert.equal(lock.ino, lstatSync(path).ino, "the link's own identity")
+  assert.deepEqual(readLock(path, 'win32'), readLock(path, 'darwin'))
+  writeFileSync(path + '.real', lockText(300, 'b'.repeat(32)))
+  assert.equal(readLock(path + '.real', 'win32').pid, 300, 'a regular file still reads')
 })
 
 test('running out of retries reports no holder, or only a live one', (t) => {
