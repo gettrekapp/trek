@@ -4591,3 +4591,64 @@ body.resizing-row {
 .tpl-legend .tpl-builtin {
   font-family: var(--mono);
 }
+
+/* ─── Quick button modals ──────────────────────────────────────────────── */
+
+.quick-btn-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.quick-btn-modal-field > input {
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--surface);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.quick-btn-modal-field > input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.quick-btn-modal-field .tpl-input,
+.quick-btn-modal-field .tpl-builtin {
+  font-family: var(--mono);
+}
+
+.quick-btn-missing {
+  color: var(--attention);
+}
+
+.quick-btn-preview {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-darker);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.quick-btn-modal-footer {
+  gap: 8px;
+}
+
+.quick-btn-modal-footer .spacer {
+  flex: 1;
+}
+
+.modal button.danger {
+  color: var(--danger);
+}
