@@ -1,5 +1,7 @@
 // scripts/childOptions.test.mjs — every child process in server/src and src/host passes its
-// options through hidden() (windowsHide), so a server without a console never flashes windows.
+// options through hidden() (windowsHide), so a server without a console never flashes windows,
+// and names its program through commandPath() (src/host/commandPath.ts), so on Windows a bare
+// name is never looked up in the current directory (a repository's planted git.exe).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -15,6 +17,8 @@ const ALLOWED = new Set([
   'src/host/bot/turnProcess.ts',
   'src/host/bot/sandbox.ts'
 ])
+// The program a call runs: commandPath(…), this very Node, or a choice between the two.
+const PROGRAM = /^(commandPath\(.*\)|process\.execPath|\w+ \? (process\.execPath|commandPath\(.*\)) : (process\.execPath|commandPath\(.*\)))$/s
 // A bare call (not a method: `.spawn(` is node-pty's or TerminalHost's).
 const CALL = /(?<![.\w])(spawn|spawnSync|execFile|execFileSync|execFileAsync|execSync|exec)\(/g
 
@@ -46,11 +50,31 @@ function callText(src, open) {
   return src.slice(open)
 }
 
+/** The call's first argument, up to its first top-level comma. */
+function firstArg(text) {
+  let depth = 0
+  let quote = null
+  for (let i = 1; i < text.length; i++) {
+    const c = text[i]
+    if (quote) {
+      if (c === '\\') i++
+      else if (c === quote) quote = null
+      continue
+    }
+    if (c === "'" || c === '"' || c === '`') quote = c
+    else if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') {
+      if (depth-- === 0) return text.slice(1, i).trim()
+    } else if (c === ',' && depth === 0) return text.slice(1, i).trim()
+  }
+  return text.slice(1).trim()
+}
+
 test('hidden() adds windowsHide and keeps the rest', () => {
   assert.deepEqual(hidden({ timeout: 5 }), { timeout: 5, windowsHide: true })
 })
 
-test('every spawn/execFile in server/src and src/host uses hidden()', () => {
+test('every spawn/execFile in server/src and src/host uses hidden() and commandPath()', () => {
   const missing = []
   for (const tree of TREES) {
     for (const file of files(join(root, tree))) {
@@ -60,12 +84,15 @@ test('every spawn/execFile in server/src and src/host uses hidden()', () => {
       if (!/node:child_process/.test(src)) continue
       for (const m of src.matchAll(CALL)) {
         const text = callText(src, m.index + m[0].length - 1)
-        if (!/\bhidden(<\w+>)?\(/.test(text)) {
-          const line = src.slice(0, m.index).split('\n').length
-          missing.push(`${rel}:${line} ${m[1]}(`)
+        const line = src.slice(0, m.index).split('\n').length
+        if (!/\bhidden(<\w+>)?\(/.test(text)) missing.push(`${rel}:${line} ${m[1]}( without hidden()`)
+        // The program: commandPath(…), or this very Node.
+        const program = firstArg(text)
+        if (!PROGRAM.test(program)) {
+          missing.push(`${rel}:${line} ${m[1]}(${program}, …) without commandPath()`)
         }
       }
     }
   }
-  assert.deepEqual(missing, [], `child processes without hidden():\n${missing.join('\n')}`)
+  assert.deepEqual(missing, [], `child processes without hidden() or commandPath():\n${missing.join('\n')}`)
 })

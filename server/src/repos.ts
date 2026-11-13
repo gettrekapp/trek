@@ -4,6 +4,7 @@ import { basename, resolve } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocolV2'
 import type { TrekServerConfig } from './config'
 import { hidden } from '../../src/host/childOptions.ts'
+import { commandPath } from '../../src/host/commandPath.ts'
 import { realPath } from '../../src/host/pathContainment.ts'
 
 /**
@@ -16,7 +17,7 @@ export function resolveRepoRoot(path: string): string {
   if (!existsSync(abs)) throw new Error(`${abs} does not exist`)
   let top: string
   try {
-    top = execFileSync('git', ['-C', abs, 'rev-parse', '--show-toplevel'], hidden({
+    top = execFileSync(commandPath('git'), ['-C', abs, 'rev-parse', '--show-toplevel'], hidden({
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000

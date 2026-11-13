@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { parseCodexSessionMeta } from '../shared/providers/codex.ts'
 import { shellQuote } from '../shared/providers/shell.ts'
 import { hidden } from './childOptions.ts'
+import { commandPath } from './commandPath.ts'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 /** Clock skew allowed between Trek's launch time and Codex's own timestamp. */
@@ -106,8 +107,12 @@ export async function discoverCodexSession(
 export function commandExists(command: string): Promise<boolean> {
   const shell = process.env.SHELL || '/bin/sh'
   return new Promise((resolve) => {
-    execFile(shell, ['-lc', `command -v ${shellQuote(command)}`], hidden({ timeout: 10_000 }), (err) =>
-      resolve(!err)
-    )
+    try {
+      execFile(commandPath(shell), ['-lc', `command -v ${shellQuote(command)}`], hidden({ timeout: 10_000 }), (err) =>
+        resolve(!err)
+      )
+    } catch {
+      resolve(false) // Windows: the shell is not on PATH
+    }
   })
 }

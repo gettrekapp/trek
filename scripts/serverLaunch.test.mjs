@@ -67,6 +67,11 @@ test('shellLaunch: a login shell with -c; cmd /c on Windows', () => {
   assert.deepEqual(shellLaunch('claude', 'win32', { COMSPEC: 'C:\\cmd.exe' }), { file: 'C:\\cmd.exe', args: ['/d', '/s', '/c', 'claude'] })
 })
 
+test('sessionEnv on Windows: cmd.exe never runs a program from the current directory (a provider env cannot undo it)', () => {
+  assert.equal(sessionEnv('s1', undefined, { NoDefaultCurrentDirectoryInExePath: '' }, 'win32').NoDefaultCurrentDirectoryInExePath, '1')
+  assert.equal('NoDefaultCurrentDirectoryInExePath' in sessionEnv('s1', undefined, {}, 'darwin'), false)
+})
+
 test('sessionEnv', () => {
   assert.deepEqual(sessionEnv('s1', undefined, { A: '1' }), { TREK_SESSION_ID: 's1', TREK_TERMINAL_ID: 's1', A: '1' })
   assert.equal(sessionEnv('s1', undefined, { TREK_SESSION_ID: 'forged' }).TREK_SESSION_ID, 's1')

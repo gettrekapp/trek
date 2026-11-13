@@ -5,6 +5,7 @@
 // kill on Windows is forced.
 import { execFile, execFileSync } from 'node:child_process'
 import { hidden } from './childOptions.ts'
+import { commandPath } from './commandPath.ts'
 
 export interface KillTreeOptions {
   /** POSIX only (default SIGKILL) */
@@ -31,7 +32,7 @@ function validPid(pid: number | undefined): pid is number {
 const runTaskkill = (args: string[]): Promise<void> =>
   new Promise((resolve) => {
     // Exit 128: no such process. Any failure leaves nothing more to do than a log.
-    execFile('taskkill', args, hidden({ timeout: 10_000 }), (err) => {
+    execFile(commandPath('taskkill'), args, hidden({ timeout: 10_000 }), (err) => {
       if (err && (err as { code?: unknown }).code !== 128) console.warn(`taskkill ${args.join(' ')}: ${err.message}`)
       resolve()
     })
@@ -56,7 +57,7 @@ export function killTreeSync(pid: number | undefined, options: KillTreeOptions =
   if (!validPid(pid)) return
   if ((options.platform ?? process.platform) === 'win32') {
     try {
-      execFileSync('taskkill', taskkillArgs(pid), hidden({ timeout: 10_000, stdio: 'ignore' }))
+      execFileSync(commandPath('taskkill'), taskkillArgs(pid), hidden({ timeout: 10_000, stdio: 'ignore' }))
     } catch {
       // gone already
     }

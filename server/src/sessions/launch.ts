@@ -8,6 +8,7 @@ import { effectiveEffort, sanitizeLlmSelection } from '../../../src/shared/provi
 import type { LaunchSpec, LlmSelection, LlmSettings, McpAccess } from '../../../src/shared/providers/types'
 import { readFileSync, statSync } from 'node:fs'
 import { codedError } from '../errors.ts'
+import { NO_CWD_EXE_LOOKUP } from '../../../src/host/commandPath.ts'
 import { winSpawnPlan, type WinLaunchDeps } from './winLaunch.ts'
 
 export interface AgentLaunch {
@@ -118,12 +119,16 @@ export function sessionProcess(
 export function sessionEnv(
   sessionId: string,
   worktree: { id: string; path: string } | undefined,
-  extra: Record<string, string> = {}
+  extra: Record<string, string> = {},
+  platform: string = process.platform
 ): Record<string, string> {
   return {
     ...extra,
     TREK_SESSION_ID: sessionId,
     TREK_TERMINAL_ID: sessionId,
-    ...(worktree ? { TREK_WORKTREE_ID: worktree.id, TREK_WORKTREE_PATH: worktree.path } : {})
+    ...(worktree ? { TREK_WORKTREE_ID: worktree.id, TREK_WORKTREE_PATH: worktree.path } : {}),
+    // Windows: a session's cmd.exe (a batch-file agent, anything the agent runs through cmd)
+    // never runs a program from the worktree; set last, so no provider env undoes it.
+    ...(platform === 'win32' ? { [NO_CWD_EXE_LOOKUP]: '1' } : {})
   }
 }

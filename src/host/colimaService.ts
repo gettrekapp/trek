@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { dockerContextFor } from '../shared/environments.ts'
 import type { EnvCheckResult, EnvService, EnvServicePort } from '../shared/types'
 import { hidden } from './childOptions.ts'
+import { commandPath } from './commandPath.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -25,7 +26,7 @@ export interface ColimaProfile {
 
 export async function checkTools(): Promise<EnvCheckResult> {
   const version = async (bin: string, args: string[]): Promise<string> => {
-    const { stdout } = await execFileAsync(bin, args, hidden({ timeout: 10_000 }))
+    const { stdout } = await execFileAsync(commandPath(bin), args, hidden({ timeout: 10_000 }))
     return stdout.trim().split('\n')[0]
   }
   let colimaVersion: string
@@ -44,7 +45,7 @@ export async function checkTools(): Promise<EnvCheckResult> {
 
 export async function listColimaProfiles(): Promise<ColimaProfile[]> {
   // Line-delimited JSON; empty output when no VMs exist yet.
-  const { stdout } = await execFileAsync('colima', ['list', '--json'], hidden({ timeout: 30_000 }))
+  const { stdout } = await execFileAsync(commandPath('colima'), ['list', '--json'], hidden({ timeout: 30_000 }))
   return stdout
     .trim()
     .split('\n')
@@ -76,9 +77,17 @@ function run(
 ): Promise<number> {
   return new Promise((resolve) => {
     onData(`$ ${bin} ${args.join(' ')}\n`)
-    const child = spawn(bin, args, hidden({ cwd, env: mergedEnv(env) }))
-    child.stdout.on('data', (chunk: Buffer) => onData(chunk.toString()))
-    child.stderr.on('data', (chunk: Buffer) => onData(chunk.toString()))
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(commandPath(bin), args, hidden({ cwd, env: mergedEnv(env) }))
+    } catch (err) {
+      // Windows: not on PATH (commandPath never falls back to the cwd).
+      onData(`error: ${(err as Error).message}\n`)
+      resolve(-1)
+      return
+    }
+    child.stdout!.on('data', (chunk: Buffer) => onData(chunk.toString()))
+    child.stderr!.on('data', (chunk: Buffer) => onData(chunk.toString()))
     child.on('error', (err) => {
       onData(`error: ${err.message}\n`)
       resolve(-1)
@@ -160,7 +169,7 @@ export async function composeLogs(
   envVars?: EnvVars
 ): Promise<string> {
   const { stdout, stderr } = await execFileAsync(
-    'docker',
+    commandPath('docker'),
     composeArgs(profile, composeFile, ['logs', '--no-color', '--tail', String(tail), service]),
     hidden({ timeout: 30_000, cwd: worktreePath, maxBuffer: 16 * 1024 * 1024, env: mergedEnv(envVars) })
   )
@@ -174,7 +183,7 @@ export async function composePs(
   envVars?: EnvVars
 ): Promise<EnvService[]> {
   const { stdout } = await execFileAsync(
-    'docker',
+    commandPath('docker'),
     composeArgs(profile, composeFile, ['ps', '--format', 'json']),
     hidden({ timeout: 30_000, cwd: worktreePath, env: mergedEnv(envVars) })
   )

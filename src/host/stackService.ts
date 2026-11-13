@@ -9,6 +9,7 @@ import { basename, isAbsolute, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import type { StackLogChunk, StackStatus } from '../shared/types'
 import { hidden } from './childOptions.ts'
+import { commandPath } from './commandPath.ts'
 import { killTree } from './processTree.ts'
 
 const execFileAsync = promisify(execFile)
@@ -68,7 +69,7 @@ function alive(pid: number): boolean {
 
 async function runningContainers(slug: string): Promise<number> {
   try {
-    const { stdout } = await execFileAsync('docker', ['ps', '-q', '--filter', `label=com.docker.compose.project=trek-${slug}`], hidden({ timeout: 10_000 }))
+    const { stdout } = await execFileAsync(commandPath('docker'), ['ps', '-q', '--filter', `label=com.docker.compose.project=trek-${slug}`], hidden({ timeout: 10_000 }))
     return stdout.split('\n').filter(Boolean).length
   } catch {
     return 0
@@ -141,12 +142,20 @@ export function createStackService({ stateDir, beforeStart }: StackServiceOption
     await log.write(`$ stack.sh ${args.join(' ')}\n`)
     // The process writes straight to the file, so `up` keeps running (and logging) across server
     // restarts without a pipe back to this process.
-    const child = spawn('bash', [join(ws, STACK_SCRIPT), ...args], hidden<SpawnOptions>({
-      cwd: ws,
-      env: stackEnv(),
-      detached: opts.detached,
-      stdio: ['ignore', log.fd, log.fd]
-    }))
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(commandPath('bash'), [join(ws, STACK_SCRIPT), ...args], hidden<SpawnOptions>({
+        cwd: ws,
+        env: stackEnv(),
+        detached: opts.detached,
+        stdio: ['ignore', log.fd, log.fd]
+      }))
+    } catch (err) {
+      // Windows: bash is not on PATH (commandPath never falls back to the cwd).
+      await log.write(`error: ${(err as Error).message}\n`)
+      await log.close()
+      return { exit: Promise.resolve(-1) }
+    }
     const exit = new Promise<number>((resolve) => {
       child.on('error', () => resolve(-1))
       child.on('close', (code) => resolve(code ?? -1))

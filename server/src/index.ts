@@ -28,6 +28,7 @@ import { loadWebBundle, type WebBundle } from './web/bundle'
 import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
 import { pruneRecoveryFiles } from './promote/promoteHandlers'
+import { hardenWindowsEnv } from '../../src/host/commandPath.ts'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -251,6 +252,10 @@ if (args.command === 'version') {
   console.log(buildInfo().version)
   process.exit(0)
 }
+
+// Windows: no cmd.exe this server starts (nor anything below it: every child inherits this env)
+// looks a program up in its current directory, a worktree a repository could plant one in.
+hardenWindowsEnv(process.env)
 
 /** `start --local`'s profile; its config and data dir replace the defaults. */
 const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir(), args.localProfile) : undefined

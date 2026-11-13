@@ -16,6 +16,7 @@ import type {
 } from '../shared/types'
 import { COMMIT_LIST_LIMIT, isCommitSha } from '../shared/review.ts'
 import { hidden } from './childOptions.ts'
+import { commandPath } from './commandPath.ts'
 import { isInside, samePath } from './pathContainment.ts'
 import { constants } from 'node:fs'
 
@@ -56,7 +57,7 @@ export function platformGitConfig(platform: NodeJS.Platform = process.platform):
 }
 
 export async function git(repoPath: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
-  const { stdout } = await execFileAsync('git', [...platformGitConfig(), '-C', repoPath, ...args], hidden({
+  const { stdout } = await execFileAsync(commandPath('git'), [...platformGitConfig(), '-C', repoPath, ...args], hidden({
     timeout: options.timeout ?? 60_000,
     maxBuffer: 64 * 1024 * 1024 // dirty patches (git diff --binary) can be large
   }))
@@ -415,7 +416,7 @@ export async function exportDirtyPatch(
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]
   const run = async (args: string[], env: NodeJS.ProcessEnv, maxBuffer = 64 * 1024 * 1024): Promise<Buffer> => {
-    const { stdout } = await execFileAsync('git', [...PATCH_CONFIG, '-C', worktreePath, ...args], hidden({
+    const { stdout } = await execFileAsync(commandPath('git'), [...PATCH_CONFIG, '-C', worktreePath, ...args], hidden({
       env,
       timeout: 60_000,
       maxBuffer,
@@ -548,7 +549,7 @@ export async function ignoredOverwrittenBy(path: string, ref: string, cap = 50):
   if (present.length === 0) return { paths: [], count: 0 }
   const ignored = await new Promise<string[]>((resolve, reject) => {
     const child = execFile(
-      'git',
+      commandPath('git'),
       [...platformGitConfig(), '-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
       hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, stdout) => {
@@ -576,7 +577,7 @@ export async function originUrl(repoPath: string): Promise<string | null> {
 export async function applyPatch(worktreePath: string, patch: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
-      'git',
+      commandPath('git'),
       [...PATCH_CONFIG, '-C', worktreePath, 'apply', '--binary', '--whitespace=nowarn', '-p1', '-'],
       hidden({ env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
@@ -589,7 +590,7 @@ export async function applyPatch(worktreePath: string, patch: string): Promise<v
 export async function reverseApplyPatch(worktreePath: string, patch: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
-      'git',
+      commandPath('git'),
       [...PATCH_CONFIG, '-C', worktreePath, 'apply', '-R', '--binary', '--whitespace=nowarn', '-p1', '-'],
       hidden({ env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
@@ -1104,7 +1105,7 @@ async function untrackedPatch(worktreePath: string, path: string): Promise<strin
           .replace(/^\+\+\+ b\/\.\/-$/m, '+++ b/-')
   try {
     const pending = execFileAsync(
-      'git',
+      commandPath('git'),
       [...platformGitConfig(), '-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
       hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
     )
