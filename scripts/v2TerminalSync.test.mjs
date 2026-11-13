@@ -10,7 +10,8 @@ import {
   planTerminalSync,
   recordAttachFailure,
   shouldRetry,
-  terminalTargets
+  terminalTargets,
+  welcomeWindowsPty
 } from '../src/renderer/src/v2/terminalSync.ts'
 
 const s = (id, ptyId) => ({ id, agentSessionId: id, title: id, llm: { provider: 'claude' }, queue: [], status: 'idle', ...(ptyId ? { ptyId } : {}) })
@@ -184,4 +185,25 @@ test('followResize: xterm follows the pty; foreign when shown and fitting would 
   })
   // Shown but unmeasurable: never flagged.
   assert.deepEqual(followResize(true, { cols: 100, rows: 30 }, undefined, { cols: 100, rows: 30 }), { foreign: false })
+})
+
+test('welcomeWindowsPty: ConPTY on a Windows server before the attach, cleared on any other', () => {
+  const win = { platform: 'win32', windowsBuild: 22631 }
+  // A new entry on a Windows server: ConPTY, its build.
+  assert.deepEqual(welcomeWindowsPty({}, win), { backend: 'conpty', buildNumber: 22631 })
+  assert.deepEqual(welcomeWindowsPty(undefined, win), { backend: 'conpty', buildNumber: 22631 })
+  // Without a build number it still says ConPTY.
+  assert.deepEqual(welcomeWindowsPty({}, { platform: 'win32' }), { backend: 'conpty' })
+  // Already so (the attach set it): left alone.
+  assert.equal(welcomeWindowsPty({ backend: 'conpty', buildNumber: 22631 }, win), undefined)
+  // A re-pointed entry: from a Windows server to a macOS or Linux one, or one before W1 (no platform).
+  assert.deepEqual(welcomeWindowsPty({ backend: 'conpty', buildNumber: 22631 }, { platform: 'darwin' }), {})
+  assert.deepEqual(welcomeWindowsPty({ backend: 'conpty', buildNumber: 22631 }, {}), {})
+  // A non-Windows server and nothing set: nothing to do.
+  assert.equal(welcomeWindowsPty({}, { platform: 'linux' }), undefined)
+  assert.equal(welcomeWindowsPty(undefined, { platform: 'linux' }), undefined)
+  // No welcome yet: leave it.
+  assert.equal(welcomeWindowsPty({ backend: 'conpty', buildNumber: 1 }, null), undefined)
+  // Another Windows build (re-pointed at another Windows server): the new one.
+  assert.deepEqual(welcomeWindowsPty({ backend: 'conpty', buildNumber: 19045 }, win), { backend: 'conpty', buildNumber: 22631 })
 })
