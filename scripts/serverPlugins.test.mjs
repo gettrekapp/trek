@@ -14,6 +14,9 @@ import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { MCP_INSTRUCTIONS, MCP_TOOLS } from '../server/src/mcp/tools.ts'
 import { pluginError } from '../src/shared/plugins/server.ts'
 
+// Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
+const posix = process.platform !== 'win32'
+
 /** Projects by id with their settings and sessions; `require` throws NOT_FOUND like ProjectState's. */
 function fakeProjects(projects) {
   return {
@@ -233,7 +236,7 @@ test("the host: only the manifest's secrets, in the server's secrets file; data 
   assert.throws(() => host.secret('elevenlabs'), /no secret named elevenlabs/)
   const file = host.dataFile('config.json')
   assert.equal(file, join(dir, 'data', 'plugins', 'echo', 'config.json'))
-  assert.equal(statSync(join(dir, 'data', 'plugins', 'echo')).mode & 0o777, 0o700)
+  if (posix) assert.equal(statSync(join(dir, 'data', 'plugins', 'echo')).mode & 0o777, 0o700)
   assert.equal(existsSync(file), false)
   assert.equal(host.legacyDataFile('voice.json'), join(dir, 'data', 'voice.json'))
   // One path segment only: a plugin keeps to its own directory.
