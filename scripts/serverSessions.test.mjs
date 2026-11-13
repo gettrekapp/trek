@@ -12,6 +12,10 @@ import { SessionManager } from '../server/src/sessions/manager.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 
+// The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
+// which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
+const real = process.platform === 'win32' ? realpathSync.native : realpathSync
+
 const s = (id) => ({ id, title: id, llm: { provider: 'claude' }, queue: [], status: 'idle' })
 const project = {
   id: 'p', name: 'P', settings: {},
@@ -65,7 +69,7 @@ const tick = () => new Promise((r) => setImmediate(r))
 const cmd = (proc) => proc.opts.args.at(-1)
 
 function setup(t, { llm, maxSessions, mcpAccess, commandExists } = {}) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
+  const dir = real(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
   const b = join(dir, 'repos', 'b')
@@ -87,8 +91,10 @@ function setup(t, { llm, maxSessions, mcpAccess, commandExists } = {}) {
   const discoveries = []
   const scheduled = []
   const clock = { t: 1_000_000 }
+  // A POSIX server's launches (a login shell's -c, which `cmd` reads) on any OS: winLaunch.ts's
+  // Windows launches are checked in serverWinLaunch.test.mjs.
   const sessions = new SessionManager({
-    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists,
+    projects, store, hub, spawner: fake.spawner, now: () => clock.t, mcpAccess, commandExists, platform: 'linux',
     discover: async (cwd, ageMs, exclude) => {
       discoveries.push({ cwd, ageMs, exclude })
       const next = sessions.__nextDiscovery
@@ -183,7 +189,7 @@ test('Global sessions run in the first repo with the others as addDirs', (t) => 
   assert.equal(s.project().globalSessions[0].title, 'Claude')
   const proc = s.spawned[0]
   assert.equal(proc.opts.cwd, s.a)
-  assert.match(cmd(proc), /--append-system-prompt 'Be global' --add-dir '.*\/repos\/b'/)
+  assert.match(cmd(proc), /--append-system-prompt 'Be global' --add-dir '.*[\\/]repos[\\/]b'/)
   assert.equal(proc.opts.env.TREK_WORKTREE_ID, undefined)
   s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
   assert.equal(s.project().globalSessions[1].title, 'Claude 2')

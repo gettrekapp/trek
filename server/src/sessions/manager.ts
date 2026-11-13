@@ -67,6 +67,8 @@ export interface SessionManagerDeps {
   commandExists?: (binary: string) => Promise<boolean>
   /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
   onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
+  /** Default process.platform: how a session is launched (a shell, or Windows' no-shell plan), its env, its pty's kill */
+  platform?: NodeJS.Platform
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
@@ -138,6 +140,7 @@ export class SessionManager {
       })
     this.terminals = new TerminalHost({
       spawner: deps.spawner,
+      platform: deps.platform,
       onExit: (ptyId, code) => this.onExit(ptyId, code),
       onOutput: (ptyId, data) => this.onPtyOutput(ptyId, data),
       onBell: (ptyId) => this.onPtyBell(ptyId)
@@ -399,7 +402,7 @@ export class SessionManager {
     const llm = this.deps.store.llmSettings()
     const agents = await Promise.all(
       agentCommands(llm, settings).map(async ({ provider, label, command }) => {
-        const binary = commandBinary(command)
+        const binary = commandBinary(command, this.deps.platform)
         return { provider, label, installed: binary ? await this.probe.installed(binary) : false }
       })
     )
@@ -687,9 +690,9 @@ export class SessionManager {
     )
     const ptyId = this.newId()
     this.terminals.spawn(ptyId, {
-      ...sessionProcess(spec, cwd),
+      ...sessionProcess(spec, cwd, this.deps.platform),
       cwd,
-      env: sessionEnv(session.id, worktree ? { id: worktree.id, path: worktree.path } : undefined, spec.env ?? {}),
+      env: sessionEnv(session.id, worktree ? { id: worktree.id, path: worktree.path } : undefined, spec.env ?? {}, this.deps.platform),
       cols: run.cols,
       rows: run.rows
     })
