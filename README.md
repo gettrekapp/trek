@@ -153,9 +153,8 @@ Smaller gaps: disk mounts over a parent of the user-data directory (macOS), the 
 own per-turn token in its environment, a local trek-server's data folder, earlier
 copies (hard links, backups, snapshots), Codex older than 0.148 (no Trek tools),
 the probe running only at start, and `bwrap` found through PATH. Windows is
-unsupported: the bot doesn't run there. The full list is in
-`docs/superpowers/specs/2026-11-02-project-bot-core-design.md`. A write allow-list,
-which closes the "files that run later" gap, is the planned follow-up.
+unsupported: the bot doesn't run there. A write allow-list, which closes the
+"files that run later" gap, is the planned follow-up.
 
 ## Servers and server projects
 

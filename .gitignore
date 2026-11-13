@@ -3,3 +3,6 @@ out/
 dist/
 .DS_Store
 dist-release/
+
+# Local design specs and plans (not tracked)
+docs/superpowers/
