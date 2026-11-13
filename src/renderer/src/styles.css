@@ -4431,3 +4431,163 @@ body.resizing-row {
 .wt-missing {
   color: var(--danger);
 }
+
+/* ─── Quick button template editor ─────────────────────────────────────── */
+
+.tpl-input {
+  color: #f0b35a;
+  background: rgba(240, 179, 90, 0.14);
+  border-radius: 3px;
+}
+
+.tpl-builtin {
+  color: #6fb8ff;
+  background: rgba(111, 184, 255, 0.14);
+  border-radius: 3px;
+}
+
+.tpl-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+  align-items: center;
+}
+
+.tpl-toolbar button,
+.modal .tpl-toolbar button {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.tpl-dropdown {
+  position: relative;
+}
+
+.tpl-name {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.tpl-name input {
+  width: 130px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--surface);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.tpl-editor {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--surface);
+  border-radius: 8px;
+}
+
+.tpl-editor:focus-within {
+  border-color: var(--accent);
+}
+
+.tpl-layer,
+.tpl-textarea {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 8px 10px;
+  margin: 0;
+  border: 0;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  letter-spacing: normal;
+  /* Same width for both whether or not the textarea shows a scrollbar */
+  scrollbar-gutter: stable;
+}
+
+.tpl-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.tpl-textarea {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  outline: none;
+}
+
+.tpl-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.tpl-menu {
+  position: absolute;
+  z-index: 110;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 300px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.tpl-menu-group {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 6px 8px 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tpl-menu-item,
+.modal .tpl-menu-item {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 12px;
+}
+
+.tpl-menu-item:hover,
+.tpl-menu-item.active {
+  background: var(--bg-lighter);
+}
+
+.tpl-menu-item .tpl-builtin {
+  font-family: var(--mono);
+}
+
+.tpl-menu-desc {
+  color: var(--text-muted);
+}
+
+.tpl-legend {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.tpl-legend .tpl-input,
+.tpl-legend .tpl-builtin {
+  font-family: var(--mono);
+}
