@@ -245,6 +245,8 @@ export interface WindowBackend {
     request(method: string, params: Record<string, unknown>): Promise<unknown>
     /** The server's events of one name on the window's connection; returns the unsubscribe */
     onEvent(event: string, listener: (payload: unknown) => void): () => void
+    /** Each time the window's connection comes up (a reconnect too); returns the unsubscribe */
+    onConnected(listener: () => void): () => void
   }
 }
 
@@ -320,7 +322,7 @@ export const idleBackend: WindowBackend = {
     promptFailed: (title, err) => void window.api.showError(title, String(err)),
     inline: (err) => errorText(err)
   },
-  plugins: { projectId: null, welcome: () => undefined, request: noProject, onEvent: () => () => {} }
+  plugins: { projectId: null, welcome: () => undefined, request: noProject, onEvent: () => () => {}, onConnected: () => () => {} }
 }
 
 let current: WindowBackend = idleBackend

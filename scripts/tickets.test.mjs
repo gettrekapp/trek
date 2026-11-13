@@ -181,3 +181,52 @@ test("the Linear provider's fromBranch: the issue id a Linear-style branch name 
   assert.equal(linearTickets.fromBranch('feature/login'), null)
   assert.equal(azureDevOpsTickets.fromBranch, undefined)
 })
+
+// ---- The link dialog's plan, the newest-lookup guard, a reconnect (review fixes) ----
+
+import { ticketFromBranch, ticketLinkPlan } from '../src/shared/tickets.ts'
+import { createLatest } from '../plugins/linear/client/issues.ts'
+
+test("ticketLinkPlan: the id, the settings a URL implies (only those that differ), the link field and its check", () => {
+  const providers = [linearTickets, azureDevOpsTickets]
+  assert.deepEqual(ticketLinkPlan(providers, {}, 'https://linear.app/acme/issue/TOW-1'), { ticketId: 'TOW-1', settings: { linearWorkspace: 'acme' }, problem: null })
+  assert.deepEqual(ticketLinkPlan(providers, { linearWorkspace: 'acme' }, 'https://linear.app/acme/issue/TOW-1'), { ticketId: 'TOW-1', settings: {}, problem: null }, 'the same workspace is not written again')
+  // A bare id whose tracker lacks its setting: the field, empty, then checked, then written.
+  const link = { key: 'linearWorkspace', label: 'Linear workspace', placeholder: linearTickets.linkSetting.placeholder }
+  assert.deepEqual(ticketLinkPlan(providers, {}, 'tow-2'), { ticketId: 'TOW-2', link, settings: {}, problem: null })
+  assert.deepEqual(ticketLinkPlan(providers, {}, 'tow-2', 'a b'), { ticketId: 'TOW-2', link, settings: {}, problem: 'Linear workspace must be a Linear workspace slug (letters, digits, _ and -; at most 200)' })
+  assert.deepEqual(ticketLinkPlan(providers, {}, 'tow-2', ' acme '), { ticketId: 'TOW-2', link, settings: { linearWorkspace: 'acme' }, problem: null })
+  assert.equal(ticketLinkPlan(providers, { linearWorkspace: 'acme' }, 'TOW-2').link, undefined, 'the project has it')
+  assert.match(ticketLinkPlan(providers, {}, '7', 'dev.azure.com/o/p').problem, /^Azure DevOps project URL must be an http\(s\) URL/)
+  assert.deepEqual(ticketLinkPlan(providers, {}, 'nope'), { ticketId: null, settings: {}, problem: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
+  assert.match(ticketLinkPlan([], {}, 'TOW-1').problem, /No ticket tracker is on/)
+})
+
+test('ticketFromBranch: the first provider that reads an id in the branch name', () => {
+  assert.equal(ticketFromBranch([azureDevOpsTickets, linearTickets], 'garrett/tow-123-fix-login'), 'TOW-123')
+  assert.equal(ticketFromBranch([azureDevOpsTickets], 'garrett/tow-123-fix-login'), '')
+  assert.equal(ticketFromBranch([linearTickets], 'main'), '')
+})
+
+test('createLatest: only the newest lookup counts', () => {
+  const latest = createLatest()
+  const a = latest.next()
+  const b = latest.next()
+  assert.equal(latest.isLatest(a), false)
+  assert.equal(latest.isLatest(b), true)
+})
+
+test("the client host's onChanged also fires when the window's connection comes back up", () => {
+  let connected
+  const backend = {
+    plugins: { projectId: 'p1', welcome: () => ({ plugins: [], capabilities: [] }), request: async () => null, onEvent: () => () => {}, onConnected: (l) => ((connected = l), () => (connected = undefined)) }
+  }
+  const appSettings = { get: async () => ({}), update: async () => ({}), onChanged: () => () => {} }
+  const host = createClientHost({ id: 'linear', version: '1', name: 'Linear', description: '', defaultEnabled: true }, backend, { appSettings, terminalLabel: String, currentBackend: () => backend })
+  let changes = 0
+  const off = host.onChanged(() => changes++)
+  connected()
+  assert.equal(changes, 1)
+  off()
+  assert.equal(connected, undefined)
+})

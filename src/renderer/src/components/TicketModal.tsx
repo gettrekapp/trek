@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { repoById, useAppStore } from '../store'
-import { parseTicketWith, ticketOwner, ticketView } from '../../../shared/tickets'
+import { ticketFromBranch, ticketLinkPlan, ticketView } from '../../../shared/tickets'
 import { useTicketProviders } from '../plugins/useTickets'
 
 interface Props {
@@ -24,32 +24,21 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
   const settings = project as unknown as Readonly<Record<string, unknown>>
 
   const currentTicket = repoById(project, repoId)?.branchTickets?.[branch]
-  const suggested = (): string => {
-    for (const p of providers) {
-      const id = p.fromBranch?.(branch)
-      if (id) return id
-    }
-    return ''
-  }
-  const [input, setInput] = useState(currentTicket ?? suggested())
+  const [input, setInput] = useState(currentTicket ?? ticketFromBranch(providers, branch))
   const [linkValue, setLinkValue] = useState('')
   const [error, setError] = useState<string | null>(null)
 
-  const parsed = parseTicketWith(providers, input)
-  const owner = parsed ? ticketOwner(providers, parsed.ticketId) : undefined
-  // A pasted URL brings its tracker's setting; a bare id needs it saved once.
-  const link = owner?.linkSetting
-  const needsLink = !!link && !parsed?.settings?.[link.key] && !(typeof settings[link.key] === 'string' && settings[link.key])
+  const plan = ticketLinkPlan(providers, settings, input, linkValue)
+  const link = plan.link
   const takes = providers.map((p) => p.hint)
 
   const save = (): void => {
-    if (!parsed) {
-      setError(takes.length > 0 ? `Enter ${takes.join(', or ')}.` : 'No ticket tracker is on in this project (Settings → Plugins).')
+    if (plan.problem || !plan.ticketId) {
+      setError(plan.problem)
       return
     }
-    for (const [key, value] of Object.entries(parsed.settings ?? {})) if (value !== settings[key]) setPluginSetting(key, value)
-    if (needsLink && link && linkValue.trim()) setPluginSetting(link.key, linkValue.trim())
-    setBranchTicket(repoId, branch, parsed.ticketId)
+    for (const [key, value] of Object.entries(plan.settings)) setPluginSetting(key, value, key === link?.key ? link.label : undefined)
+    setBranchTicket(repoId, branch, plan.ticketId)
     onClose()
   }
 
@@ -86,9 +75,9 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
               if (e.key === 'Escape') onClose()
             }}
           />
-          {needsLink && link && (
+          {link && (
             <>
-              <input type="text" placeholder={link.placeholder} value={linkValue} onChange={(e) => setLinkValue(e.target.value)} onKeyDown={onEnter} />
+              <input type="text" placeholder={link.placeholder} value={linkValue} onChange={(e) => { setLinkValue(e.target.value); setError(null) }} onKeyDown={onEnter} />
               <p className="muted ticket-hint">The {link.label.toLowerCase()} is saved once per project and turns ticket ids into links.</p>
             </>
           )}

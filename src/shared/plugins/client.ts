@@ -23,7 +23,11 @@ export interface ClientPluginHost {
    * not delivered. Returns the unsubscribe.
    */
   onEvent<T = unknown>(event: string, listener: (data: T) => void): () => void
-  /** The plugin's server-wide state changed (`plugins.changed`, or `integrations.changed` from an older server); returns the unsubscribe */
+  /**
+   * The plugin's server-wide state changed (`plugins.changed`, or `integrations.changed` from an
+   * older server), or may have while the window was offline (its connection came back up); returns
+   * the unsubscribe
+   */
   onChanged(listener: () => void): () => void
   /** Whether this host still serves the window (false once it moved to another server or project) */
   isCurrent(): boolean

@@ -30,5 +30,5 @@ export const linearTickets = defineTicketProvider({
     const workspace = settings[WORKSPACE_SETTING]
     return typeof workspace === 'string' && workspace ? `https://linear.app/${workspace}/issue/${ticketId}` : null
   },
-  linkSetting: { key: WORKSPACE_SETTING, label: 'Linear workspace', placeholder: 'Linear workspace, e.g. trek (from linear.app/trek/…)' }
+  linkSetting: { key: WORKSPACE_SETTING, label: 'Linear workspace', placeholder: 'Linear workspace, e.g. trek (from linear.app/trek/…)', check: workspaceProblem }
 })

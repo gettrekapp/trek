@@ -108,7 +108,10 @@ export function checkImport(raw: unknown, ctx: ImportContext): Project {
   if (!isRecord(raw)) throw bad('project must be an object')
   assertNoProtoKeys(raw, 'project')
   const name = requireName(raw.name, 'project.name')
-  const settings = validateSettings(raw.settings ?? {}, 'project.settings', ctx.settingRules)
+  // A plugin's setting is checked by kind only here: a project saved before its plugin checked it
+  // (a 0.2.x Azure DevOps base without a scheme) still imports; a live edit gets the full check.
+  const lenient = ctx.settingRules && { kind: ctx.settingRules.kind, check: () => null }
+  const settings = validateSettings(raw.settings ?? {}, 'project.settings', lenient)
   if (!Array.isArray(raw.repositories) || raw.repositories.length === 0) throw bad('project.repositories must be a non-empty array')
   if (!Array.isArray(raw.globalSessions)) throw bad('project.globalSessions must be an array')
   const seen = new Set<string>([ctx.projectId])

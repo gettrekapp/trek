@@ -220,8 +220,8 @@ export function v2SettingsOverrides(
     setSessionTypes: (types) => write('sessionTypes', 'Session types', listOrNull(types)),
     setProjectLlmDefault: (llm) => write('llmDefault', 'Default agent', llm ?? null),
     setGlobalLlm: (llm) => write('globalLlm', 'Global panel agent', llm ?? null),
-    // A plugin's own setting (phase 2), labelled by its key in a failure dialog.
-    setPluginSetting: (key, value) => write(key, key, textOrNull(value)),
+    // A plugin's own setting (phase 2), named in a failure dialog by its label (else its key).
+    setPluginSetting: (key, value, label) => write(key, label ?? key, textOrNull(value)),
     setProjectName: (value) => writer.write(name, value),
     setLinkedDirs: (repoId, dirs) => writer.write(linkedDirsField(repoId, requests), listOrNull(dirs)),
     // As the store's setter: `enabled` defaults to off, and the patch goes over the rest.

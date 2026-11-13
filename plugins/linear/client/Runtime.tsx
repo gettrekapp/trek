@@ -5,7 +5,7 @@
 import { useEffect } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import type { LinearIssue } from '../shared/types.ts'
-import { FOCUS_THROTTLE_MS, REFRESH_MS, linearIds, ticketInfoOf } from './issues.ts'
+import { FOCUS_THROTTLE_MS, REFRESH_MS, createLatest, linearIds, ticketInfoOf } from './issues.ts'
 import { useLinearStore } from './store.ts'
 
 export function LinearRuntime(): null {
@@ -39,14 +39,16 @@ export function LinearRuntime(): null {
     }
     let cancelled = false
     let lastRefresh = 0
+    const latest = createLatest()
     const refresh = (): void => {
+      const seq = latest.next()
       const ids = linearIds(host)
       if (ids.length === 0) return host.setTicketInfo({})
       lastRefresh = Date.now()
       host.request<LinearIssue[]>('issues', { ids }).then(
         (issues) => {
-          // The window moved on, or this Runtime went away: not its issues.
-          if (!cancelled && host.isCurrent()) host.setTicketInfo(ticketInfoOf(issues))
+          // The window moved on, this Runtime went away, or a newer lookup started: not its issues.
+          if (!cancelled && latest.isLatest(seq) && host.isCurrent()) host.setTicketInfo(ticketInfoOf(issues))
         },
         // Chips fall back to the bare id; the next refresh retries.
         (err) => console.warn('Linear issue refresh failed', err)

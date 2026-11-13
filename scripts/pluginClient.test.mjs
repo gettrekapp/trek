@@ -67,7 +67,8 @@ function fakeBackend(welcome = { plugins: [{ id: 'voice', version: '1.0.0', defa
         const entry = { event, listener }
         listeners.push(entry)
         return () => listeners.splice(listeners.indexOf(entry), 1)
-      }
+      },
+      onConnected: () => () => {}
     }
   }
   const fire = (event, payload) => listeners.filter((l) => l.event === event).forEach((l) => l.listener(payload))

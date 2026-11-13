@@ -809,7 +809,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return plugins ? { plugins, capabilities } : { capabilities }
       },
       request: (method, params) => (deps.request as unknown as (m: string, p: Record<string, unknown>) => Promise<unknown>)(method, params),
-      onEvent: (event, listener) => (deps.onEvent as unknown as (e: string, l: (payload: unknown) => void) => () => void)(event, listener)
+      onEvent: (event, listener) => (deps.onEvent as unknown as (e: string, l: (payload: unknown) => void) => () => void)(event, listener),
+      onConnected: (listener) => deps.onConnected(listener)
     }
   }
   return backend

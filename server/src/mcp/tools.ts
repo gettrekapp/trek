@@ -304,7 +304,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'set_worktree_ticket',
     description:
-      'Link a worktree branch to a ticket: a Linear issue id (e.g. TOW-123) or URL (https://linear.app/<workspace>/issue/TOW-123/...), or an Azure DevOps work item id or URL. Omit ticket to unlink it.',
+      'Link a worktree branch to a ticket of a tracker on in this project (its id or URL: a Linear issue such as TOW-123 or https://linear.app/<workspace>/issue/TOW-123, an Azure DevOps work item, as the project has them on). Omit ticket to unlink it. An unrecognised ticket says which trackers are on.',
     inputSchema: {
       type: 'object',
       properties: { worktree: WORKTREE_PARAM, ticket: { type: 'string' } },

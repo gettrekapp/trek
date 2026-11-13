@@ -60,3 +60,53 @@ export function ticketView(
     ...(info ? { info } : {})
   }
 }
+
+/** The id a branch name embeds, by the first provider that reads one (the link dialog's suggestion). */
+export function ticketFromBranch(providers: readonly TicketProvider[], branch: string): string {
+  for (const provider of providers) {
+    const id = safely(provider, null, () => provider.fromBranch?.(branch) ?? null)
+    if (id) return id
+  }
+  return ''
+}
+
+export interface TicketLinkPlan {
+  /** The ticket id to link; null when the input is no tracker's */
+  ticketId: string | null
+  /** The setting a bare id needs that the project lacks (the dialog shows its field) */
+  link?: { key: string; label: string; placeholder: string }
+  /** The project settings to write: a pasted URL's, and the link field's */
+  settings: Record<string, string>
+  /** Why it can't be saved yet, or null */
+  problem: string | null
+}
+
+/**
+ * What the link dialog would save for `input` (and its link field's `linkValue`): the ticket id, the
+ * settings to write (only those that differ), and its problem: an input no tracker reads, or a link
+ * value its tracker refuses.
+ */
+export function ticketLinkPlan(
+  providers: readonly TicketProvider[],
+  settings: Readonly<Record<string, unknown>>,
+  input: string,
+  linkValue = ''
+): TicketLinkPlan {
+  const parsed = parseTicketWith(providers, input)
+  if (!parsed) {
+    const takes = providers.map((p) => p.hint)
+    return { ticketId: null, settings: {}, problem: takes.length > 0 ? `Enter ${takes.join(', or ')}.` : 'No ticket tracker is on in this project (Settings → Plugins).' }
+  }
+  const owner = ticketOwner(providers, parsed.ticketId)
+  const writes: Record<string, string> = {}
+  for (const [key, value] of Object.entries(parsed.settings ?? {})) if (value !== settings[key]) writes[key] = value
+  const linkSetting = owner?.linkSetting
+  const has = (key: string): boolean => !!parsed.settings?.[key] || (typeof settings[key] === 'string' && settings[key] !== '')
+  if (!linkSetting || has(linkSetting.key)) return { ticketId: parsed.ticketId, settings: writes, problem: null }
+  const link = { key: linkSetting.key, label: linkSetting.label, placeholder: linkSetting.placeholder }
+  const value = linkValue.trim()
+  if (!value) return { ticketId: parsed.ticketId, link, settings: writes, problem: null }
+  const problem = owner ? safely(owner, null, () => linkSetting.check?.(value) ?? null) : null
+  if (problem) return { ticketId: parsed.ticketId, link, settings: writes, problem: `${linkSetting.label} ${problem}` }
+  return { ticketId: parsed.ticketId, link, settings: { ...writes, [linkSetting.key]: value }, problem: null }
+}

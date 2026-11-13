@@ -337,3 +337,23 @@ test("dispatchV2: project.updateSettings and its expected take a plugin's keys",
   assert.equal(stale.error.code, 'CONFLICT')
   assert.equal((await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'x' } }, { ...ctx, plugins: undefined })).error.code, 'BAD_REQUEST')
 })
+
+test("project.import checks a plugin's setting by kind only (a project saved before its plugin checked it still imports)", async (t) => {
+  const { checkImport } = await import('../server/src/projects/importCheck.ts')
+  const tracker = { manifest: manifest('tracker', { projectSettings: { trackerSpace: 'string' } }), setup: () => ({ handlers: {}, checkProjectSetting: () => 'never valid' }) }
+  const { registry } = setup(t, [tracker])
+  const raw = (settings) => ({ name: 'P', settings, repositories: [{ id: 'r', name: 'r', path: '/nowhere', worktrees: [] }], globalSessions: [] })
+  const ctx = { registry: [], guard: { check() {} }, existingIds: new Set(), projectId: 'new', settingRules: registry.settingRules }
+  // The settings pass (the repository's own check fails after them, as it should here).
+  const err = (() => {
+    try {
+      checkImport(raw({ trackerSpace: 'loose value' }), ctx)
+    } catch (e) {
+      return e
+    }
+  })()
+  assert.doesNotMatch(err?.message ?? '', /trackerSpace/)
+  assert.throws(() => checkImport(raw({ trackerSpace: 5 }), ctx), /project\.settings\.trackerSpace must be a string/)
+  // A live edit still gets the plugin's check.
+  assert.throws(() => applySettingsPatch({}, { trackerSpace: 'loose value' }, registry.settingRules), /never valid/)
+})

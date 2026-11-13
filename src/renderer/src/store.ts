@@ -240,8 +240,8 @@ export interface AppState {
   toggleDockerFavorite: (containerName: string) => void
   setBranchTicket: (repoId: string, branch: string, ticketId: string | null) => void
   setBranchPullRequest: (repoId: string, branch: string, url: string | null) => void
-  /** A plugin's project setting (phase 2: `linearWorkspace`, `azureDevOpsBaseUrl`); '' removes it */
-  setPluginSetting: (key: string, value: string) => void
+  /** A plugin's project setting (phase 2: `linearWorkspace`, `azureDevOpsBaseUrl`); '' removes it; `label` names it in a failure */
+  setPluginSetting: (key: string, value: string, label?: string) => void
   setBranchNote: (repoId: string, branch: string, text: string) => void
   setBranchEnvVars: (repoId: string, branch: string, text: string) => void
   setBranchTag: (repoId: string, branch: string, tagId: string | null) => void

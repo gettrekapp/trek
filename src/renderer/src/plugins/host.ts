@@ -51,9 +51,12 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
       const offLegacy = backend.plugins.onEvent('integrations.changed', (payload) => {
         if (changedFor(manifest, 'integrations.changed', payload, hasPlugins())) listener()
       })
+      // A change made while the window was offline sent nothing it heard: a reconnect is a change too.
+      const offConnected = backend.plugins.onConnected(listener)
       return () => {
         offPlugins()
         offLegacy()
+        offConnected()
       }
     },
     isCurrent: () => deps.currentBackend() === backend,

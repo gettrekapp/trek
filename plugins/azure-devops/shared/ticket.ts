@@ -31,5 +31,5 @@ export const azureDevOpsTickets = defineTicketProvider({
     const base = settings[BASE_URL_SETTING]
     return typeof base === 'string' && base ? `${base.replace(/\/+$/, '')}/_workitems/edit/${ticketId}` : null
   },
-  linkSetting: { key: BASE_URL_SETTING, label: 'Azure DevOps project URL', placeholder: 'https://dev.azure.com/org/Project' }
+  linkSetting: { key: BASE_URL_SETTING, label: 'Azure DevOps project URL', placeholder: 'https://dev.azure.com/org/Project', check: baseUrlProblem }
 })

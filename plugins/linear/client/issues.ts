@@ -15,3 +15,12 @@ export const linearIds = (host: ClientPluginHost): string[] => [...new Set(host.
 export function ticketInfoOf(issues: readonly LinearIssue[]): Record<string, TicketInfo> {
   return Object.fromEntries(issues.map((i) => [i.identifier, { title: i.title, status: i.status, statusColor: i.statusColor, url: i.url }]))
 }
+
+/**
+ * Which lookup is the newest: each refresh takes a number; only the newest one's answer is
+ * published, so an older one answering late (or after the ids went) can't drop a newer ticket's info.
+ */
+export function createLatest(): { next(): number; isLatest(n: number): boolean } {
+  let latest = 0
+  return { next: () => ++latest, isLatest: (n) => n === latest }
+}

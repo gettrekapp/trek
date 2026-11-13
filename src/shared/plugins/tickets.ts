@@ -33,8 +33,8 @@ export interface TicketProvider {
   url(settings: Readonly<Record<string, unknown>>, ticketId: string, info?: TicketInfo): string | null
   /** A ticket id a branch name embeds (Linear's default branch names: 'garrett/tow-123-fix-login'), for the link dialog to suggest */
   fromBranch?(branch: string): string | null
-  /** The setting a bare id needs before it links (Linear's workspace slug); the link dialog asks for it */
-  linkSetting?: { key: string; label: string; placeholder: string }
+  /** The setting a bare id needs before it links (Linear's workspace slug); the link dialog asks for it, and checks it with `check` (its problem, or null) */
+  linkSetting?: { key: string; label: string; placeholder: string; check?(value: string): string | null }
 }
 
 /** Types a provider. */
