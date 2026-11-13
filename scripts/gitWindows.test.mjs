@@ -3,14 +3,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { applyPatch, exportDirtyPatch, linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig } from '../src/host/gitService.ts'
+import { applyPatch, exportDirtyPatch, linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig, removeWorktree, removeWorktreeForce } from '../src/host/gitService.ts'
 import { defaultWorktreePath, safeDirName } from '../server/src/worktreeHandlers.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
-import { windowsOnly } from './testPlatform.mjs'
+import { posixOnly, windowsOnly } from './testPlatform.mjs'
 
 test('parseWorktreeList: Git for Windows paths (C:/x/y, CRLF) come out as C:\\x\\y', () => {
   const porcelain = 'worktree C:/work/repo\r\nHEAD abc\r\nbranch refs/heads/main\r\n\r\nworktree C:/work/repo-feat\r\nHEAD def\r\nbranch refs/heads/feat/x\r\n\r\n'
@@ -94,4 +94,59 @@ test("Windows: a linkedDirs file linkDirs copied (no symlink without Developer M
   assert.deepEqual(await linkedSymlinks(wt, ['.env'], repo, 'linux'), [])
   // The main checkout's own file is never "a copy" of itself.
   assert.deepEqual(await linkedSymlinks(repo, ['.env'], repo, 'win32'), [])
+})
+
+// A worktree's linkedDirs links go before `git worktree remove`: Git for Windows may take a
+// junction for a directory and delete what it points to (the main checkout's .trek).
+function linkedRepo(t, prefix) {
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' }
+  const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8' })
+  const dir = realPath(mkdtempSync(join(tmpdir(), prefix)))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const repo = join(dir, 'repo')
+  execFileSync('git', ['init', '-q', '-b', 'main', repo], { env })
+  writeFileSync(join(repo, 'README'), 'one\n')
+  git(repo, 'add', '-A')
+  git(repo, 'commit', '-q', '-m', 'init')
+  // Not ignored, so the link is an untracked entry in the worktree.
+  mkdirSync(join(repo, '.trek'))
+  writeFileSync(join(repo, '.trek', 'db.sql'), 'x')
+  const wt = join(dir, 'repo-feat')
+  git(repo, 'worktree', 'add', '-q', '-b', 'feat', wt)
+  return { repo, wt, git }
+}
+
+test('removeWorktree: the linkedDirs symlink goes first, the main checkout keeps its files, a refusal puts it back', { skip: posixOnly('directory symlinks need Developer Mode on Windows (the junction test covers it)') }, async (t) => {
+  const { repo, wt } = linkedRepo(t, 'trek-remove-linked-')
+  symlinkSync(join(repo, '.trek'), join(wt, '.trek'), 'dir')
+  // Dirty: git refuses, and the worktree keeps its link.
+  writeFileSync(join(wt, 'README'), 'two\n')
+  await assert.rejects(removeWorktree(repo, wt, ['.trek']))
+  assert.ok(lstatSync(join(wt, '.trek')).isSymbolicLink(), 'the link is put back after a refusal')
+  assert.equal(readFileSync(join(wt, '.trek', 'db.sql'), 'utf8'), 'x')
+  // Clean but for Trek's own link: removed, and the main checkout's linked file survives.
+  writeFileSync(join(wt, 'README'), 'one\n')
+  await removeWorktree(repo, wt, ['.trek'])
+  assert.ok(!existsSync(wt))
+  assert.equal(readFileSync(join(repo, '.trek', 'db.sql'), 'utf8'), 'x')
+})
+
+test('removeWorktreeForce: the main checkout keeps what a linkedDirs symlink pointed at', { skip: posixOnly('directory symlinks need Developer Mode on Windows (the junction test covers it)') }, async (t) => {
+  const { repo, wt } = linkedRepo(t, 'trek-remove-linked-force-')
+  symlinkSync(join(repo, '.trek'), join(wt, '.trek'), 'dir')
+  writeFileSync(join(wt, 'README'), 'two\n')
+  await removeWorktreeForce(repo, wt, ['.trek'])
+  assert.ok(!existsSync(wt))
+  assert.equal(readFileSync(join(repo, '.trek', 'db.sql'), 'utf8'), 'x')
+})
+
+test('Windows: removing a worktree never follows its .trek junction into the main checkout', { skip: windowsOnly('junctions') }, async (t) => {
+  for (const force of [false, true]) {
+    const { repo, wt } = linkedRepo(t, `trek-remove-junction-${force ? 'force-' : ''}`)
+    await linkDirs(repo, wt, ['.trek'])
+    assert.ok(lstatSync(join(wt, '.trek')).isSymbolicLink(), 'a junction')
+    await (force ? removeWorktreeForce(repo, wt, ['.trek']) : removeWorktree(repo, wt, ['.trek']))
+    assert.ok(!existsSync(wt))
+    assert.equal(readFileSync(join(repo, '.trek', 'db.sql'), 'utf8'), 'x', `force=${force}`)
+  }
 })

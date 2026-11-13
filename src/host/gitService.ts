@@ -1,7 +1,7 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, stat, symlink, utimes } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, rmdir, stat, symlink, unlink, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, resolve, sep, win32 } from 'node:path'
 import { promisify } from 'node:util'
@@ -338,9 +338,70 @@ export async function linkDirs(
   return warnings
 }
 
-/** Refuses (throws) if the worktree has uncommitted changes — deliberately no --force. */
-export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath, ['worktree', 'remove', '--', worktreePath])
+/**
+ * Removes the worktree's linkedDirs links (linkedSymlinks: those into the main checkout) and only
+ * the links, never what they point at, and returns their names. Git for Windows may take a
+ * junction for a directory, and `git worktree remove` would then delete the main checkout's
+ * linked contents (.trek backups, secrets) through it; so the links go before git runs. Done on
+ * every platform: git elsewhere removes a symlink itself, so the only difference there is that
+ * Trek's own (untracked) link no longer makes an unforced remove refuse. A Windows file copy
+ * (linkedSymlinks returns those too) is a plain file git deletes itself; it is left.
+ */
+async function unlinkLinkedDirs(repoPath: string, worktreePath: string, linkedDirs: readonly unknown[], platform: NodeJS.Platform): Promise<string[]> {
+  const removed: string[] = []
+  for (const name of await linkedSymlinks(worktreePath, linkedDirs, repoPath, platform)) {
+    const link = join(worktreePath, name)
+    if (!(await lstat(link).catch(() => null))?.isSymbolicLink()) continue
+    await removeLink(link, platform)
+    removed.push(name)
+  }
+  return removed
+}
+
+/**
+ * Removes a symlink or junction itself, never recursively. POSIX: unlink (rmdir refuses a
+ * symlink). Windows: a junction or directory symlink is a directory entry, removed with rmdir
+ * (which removes the link, not the target's contents); a file symlink with unlink.
+ */
+export async function removeLink(link: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+  if (platform !== 'win32') return unlink(link)
+  // A dangling junction can't be stat'd: take it for a directory link.
+  const isDir = await stat(link).then((s) => s.isDirectory(), () => true)
+  try {
+    await (isDir ? rmdir(link) : unlink(link))
+  } catch {
+    await (isDir ? unlink(link) : rmdir(link))
+  }
+}
+
+/** `git worktree remove [--force]` once the linkedDirs links are gone; a failure puts them back (best-effort). */
+async function removeWorktreeVia(
+  repoPath: string,
+  worktreePath: string,
+  linkedDirs: readonly unknown[],
+  force: boolean,
+  platform: NodeJS.Platform
+): Promise<void> {
+  const removed = await unlinkLinkedDirs(repoPath, worktreePath, linkedDirs, platform)
+  try {
+    await git(repoPath, ['worktree', 'remove', ...(force ? ['--force'] : []), '--', worktreePath])
+  } catch (err) {
+    if (removed.length > 0) await linkDirs(repoPath, worktreePath, removed, platform).catch(() => undefined)
+    throw err
+  }
+}
+
+/**
+ * Refuses (throws) if the worktree has uncommitted changes — deliberately no --force.
+ * `linkedDirs`: the repository's, whose links are removed first (unlinkLinkedDirs).
+ */
+export async function removeWorktree(
+  repoPath: string,
+  worktreePath: string,
+  linkedDirs: readonly unknown[],
+  platform: NodeJS.Platform = process.platform
+): Promise<void> {
+  await removeWorktreeVia(repoPath, worktreePath, linkedDirs, false, platform)
 }
 
 export async function checkout(repoPath: string, branch: string): Promise<void> {
@@ -752,9 +813,14 @@ export async function addWorktreeAt(
   await git(repoPath, ['worktree', 'add', '--', worktreePath, branch])
 }
 
-/** Only used after a move is verified on the target — bypasses the dirty check. */
-export async function removeWorktreeForce(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath, ['worktree', 'remove', '--force', '--', worktreePath])
+/** Bypasses the dirty check (a verified move or promote, an explicit forced remove). `linkedDirs`: as removeWorktree. */
+export async function removeWorktreeForce(
+  repoPath: string,
+  worktreePath: string,
+  linkedDirs: readonly unknown[],
+  platform: NodeJS.Platform = process.platform
+): Promise<void> {
+  await removeWorktreeVia(repoPath, worktreePath, linkedDirs, true, platform)
 }
 
 export async function defaultBranch(repoPath: string): Promise<string | null> {

@@ -62,15 +62,19 @@ throwaway repository.
    prompt, and the trek-dev MCP tools work (ask each to call `get_current_session` and
    `list_worktrees`).
 6. Unload the worktree and load it again: each session resumes. Close one session.
-7. Promote the worktree to primary, then demote it back, with an uncommitted change carried.
-8. With `git config --global core.autocrlf true` on Windows, move a worktree with uncommitted
+7. Give the repository a linkedDirs entry `.trek` (with a file in the main checkout's
+    `.trek`), add a worktree (its `.trek` is a junction), then remove the worktree, once with
+    uncommitted changes (forced) and once clean. Each time the main checkout's `.trek` and its
+    file are still there.
+8. Promote the worktree to primary, then demote it back, with an uncommitted change carried.
+9. With `git config --global core.autocrlf true` on Windows, move a worktree with uncommitted
    changes from the Mac to the Windows server and back; the files arrive with the right line
    endings and the move reports no mismatch.
-9. Watch the desktop while the server polls git for a minute: no console window flashes.
-10. Connect the phone (pair from the Mac's Trek) and the web client (`start --web`): both show the
+10. Watch the desktop while the server polls git for a minute: no console window flashes.
+11. Connect the phone (pair from the Mac's Trek) and the web client (`start --web`): both show the
     Windows server's terminals, wrapped correctly at their width.
-11. Stop the server with Ctrl+C in its console; start it again: the projects are all there.
-12. In another profile, `trek-server start --local --local-profile check`, then from another
+12. Stop the server with Ctrl+C in its console; start it again: the projects are all there.
+13. In another profile, `trek-server start --local --local-profile check`, then from another
     console `trek-server stop --local --local-profile check`: it prints "Stopped.", and
     `%APPDATA%\trek-server\local-check\local.json` and `local.lock` are gone.
 

@@ -429,7 +429,7 @@ async function promote(ctx: V2Context, c: PromoteChecked, unblock: { main: () =>
     // The point of commitment: the main checkout holds the branch and its work. The worktree goes
     // after it; a removal that fails (a folder it may not delete) is a note, never an undo.
     try {
-      await gitService.removeWorktreeForce(repo.path, worktree.path)
+      await gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? [])
     } catch (err) {
       removalFailed = true
       notes.push(
@@ -588,7 +588,7 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
           `the main checkout ${main.path} does not have its uncommitted work back (it changed, or putting it back failed), so it was not put back and the new worktree ${target}, which has the work, was kept (check both with git status)`
         )
       }
-      await gitService.removeWorktreeForce(repo.path, target)
+      await gitService.removeWorktreeForce(repo.path, target, repo.linkedDirs ?? [])
     })
     for (const warning of await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])) console.warn(`linkedDirs in ${target}: ${warning}`)
     // What the new worktree links from the main checkout stays there (it is shared, not carried).
