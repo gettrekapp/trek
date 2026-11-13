@@ -7,6 +7,7 @@ import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { codedError } from '../errors.ts'
 import { checkTitle, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
 import { assertNoProtoKeys, isRecord } from '../validate.ts'
+import { pluginSettingsProblem } from '../../../src/shared/plugins/manifest.ts'
 
 type Kind = 'string' | 'boolean' | 'array' | 'stringArray' | 'object'
 
@@ -40,7 +41,8 @@ const SETTINGS_KINDS: Record<keyof ProjectSettings, Kind> = {
   sessionTypes: 'array',
   llmDefault: 'object',
   globalLlm: 'object',
-  worktreeOrder: 'stringArray'
+  worktreeOrder: 'stringArray',
+  plugins: 'object'
 }
 
 /** Whether `key` is a project setting (an own key of the settings table). */
@@ -81,6 +83,10 @@ function checkValue(key: string, value: unknown, field: string): void {
   if (!ok) throw codedError('BAD_REQUEST', `${field}.${key} must be ${KIND_TEXT[kind]}`)
   assertNoProtoKeys(value, `${field}.${key}`)
   if (key === 'sessionTypes') checkSessionTypes(value as unknown[], `${field}.${key}`)
+  if (key === 'plugins') {
+    const problem = pluginSettingsProblem(value as Record<string, unknown>)
+    if (problem) throw codedError('BAD_REQUEST', `${field}.plugins: ${problem}`)
+  }
 }
 
 /** A whole settings object (from an import). */

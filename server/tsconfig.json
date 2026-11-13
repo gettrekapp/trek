@@ -13,5 +13,5 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*.ts", "../src/host/**/*.ts", "../src/shared/**/*.ts"],
-  "exclude": ["../src/host/bot/**"]
+  "exclude": ["../src/host/bot/**", "../src/shared/plugins/client.ts"]
 }

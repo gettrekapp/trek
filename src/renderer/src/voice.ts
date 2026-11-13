@@ -106,10 +106,11 @@ export async function updateVoiceConfig(patch: Partial<VoiceConfig>): Promise<vo
     if (next) useAppStore.getState().setVoice(next)
   }
   if (active !== undefined) {
-    const settings = await window.api.appSettings.update({ voiceActive: active })
-    useAppStore.getState().setVoiceActive(settings.voiceActive)
-    apply({ active: settings.voiceActive })
-    if (!settings.voiceActive) stopAllSummaries()
+    const settings = await window.api.appSettings.update({ plugins: { voice: { active } } })
+    const now = settings.plugins.voice?.active !== false
+    useAppStore.getState().setVoiceActive(now)
+    apply({ active: now })
+    if (!now) stopAllSummaries()
   }
   if (Object.keys(server).length > 0) {
     const backend = getBackend()
@@ -146,10 +147,16 @@ export function useVoice(): void {
   // The app's Active/Busy, for as long as the window is open, whatever its server.
   useEffect(
     () =>
-      followAppActive(window.api.appSettings, {
-        set: (active) => useAppStore.getState().setVoiceActive(active),
-        onBusy: stopAllSummaries
-      }),
+      followAppActive(
+        {
+          get: () => window.api.appSettings.get().then((s) => ({ voiceActive: s.plugins.voice?.active !== false })),
+          onChanged: (callback) => window.api.appSettings.onChanged((s) => callback({ voiceActive: s.plugins.voice?.active !== false }))
+        },
+        {
+          set: (active) => useAppStore.getState().setVoiceActive(active),
+          onBusy: stopAllSummaries
+        }
+      ),
     []
   )
   useEffect(() => {

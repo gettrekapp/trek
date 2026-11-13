@@ -338,7 +338,7 @@ try {
   const serverSecrets = join(profile, 'secrets.json')
   check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? statSync(serverSecrets).mode & 0o777 : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, 0o600])
   check('and the voice and model, with Summarize automatically', existsSync(join(localData, 'voice.json')) ? JSON.parse(readFileSync(join(localData, 'voice.json'), 'utf8')) : null, { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true })
-  check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).voiceActive, false)
+  check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).plugins.voice?.active, false)
   check('the hand-over asked neither Linear nor ElevenLabs', serviceRequests, [])
   check("the app's key files are left as they were", [readFileSync(join(userData, 'linear.json'), 'utf8').includes(plain('lin_api_from_app')), JSON.parse(readFileSync(join(userData, 'voice-settings.json'), 'utf8'))], [true, legacyVoice])
   await sdk.request('server.addRepo', { path: repo })

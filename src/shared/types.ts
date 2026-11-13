@@ -1,3 +1,4 @@
+import type { ProjectPluginSettings } from './plugins/manifest.ts'
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
@@ -378,6 +379,8 @@ export interface ProjectFile {
   worktreeOrder?: string[]
   /** Tabs of the global (project-wide) Claude panel, in tab order */
   globalSessions?: GlobalSession[]
+  /** Each plugin's on/off for this project (plugin system phase 1); a plugin not named uses its default */
+  plugins?: ProjectPluginSettings
 }
 
 export interface GlobalSession {

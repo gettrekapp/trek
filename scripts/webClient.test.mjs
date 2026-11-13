@@ -265,15 +265,15 @@ test('the api: app settings are this browser’s, kept in localStorage; a bad st
   await withWindow(async (store) => {
     store.set('trek.appSettings', 'not json')
     const web = createWebApi(FakeSocket)
-    assert.equal((await web.api.appSettings.get()).voiceActive, true)
+    assert.deepEqual((await web.api.appSettings.get()).plugins, {})
     const heard = []
-    web.api.appSettings.onChanged((s) => heard.push(s.voiceActive))
-    const saved = await web.api.appSettings.update({ voiceActive: false })
-    assert.equal(saved.voiceActive, false)
+    web.api.appSettings.onChanged((s) => heard.push(s.plugins.voice?.active))
+    const saved = await web.api.appSettings.update({ plugins: { voice: { active: false } } })
+    assert.equal(saved.plugins.voice.active, false)
     assert.deepEqual(heard, [false])
-    assert.equal(JSON.parse(store.get('trek.appSettings')).voiceActive, false)
+    assert.equal(JSON.parse(store.get('trek.appSettings')).plugins.voice.active, false)
     // A new page reads it back.
-    assert.equal((await createWebApi(FakeSocket).api.appSettings.get()).voiceActive, false)
+    assert.equal((await createWebApi(FakeSocket).api.appSettings.get()).plugins.voice.active, false)
   })
 })
 

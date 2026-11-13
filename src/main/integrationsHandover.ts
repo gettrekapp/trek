@@ -96,7 +96,7 @@ const writeState = (state: HandoverState): Promise<void> => writeFileAtomic(stat
 async function migrateVoiceActive(): Promise<void> {
   const state = readState("move this app's voice Active/Busy into the app settings")
   if (!state || state.voiceActive) return
-  if (readLegacyVoice().active === false && appSettings().voiceActive) await updateAppSettings({ voiceActive: false })
+  if (readLegacyVoice().active === false && appSettings().plugins.voice?.active !== false) await updateAppSettings({ plugins: { voice: { active: false } } })
   state.voiceActive = true
   await writeState(state)
 }
