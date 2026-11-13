@@ -145,9 +145,11 @@ try {
   mkdirSync(out, { recursive: true })
   const tarball = join(out, WINDOWS ? `${name}.zip` : `${name}.tar.gz`)
   rmSync(tarball, { force: true })
-  // Windows: its tar is bsdtar, which writes a zip for a .zip name (-a), what Explorer unpacks.
+  // Windows: its own tar (System32's bsdtar), which writes a zip for a .zip name (-a), what
+  // Explorer unpacks. By full path: under Git Bash (the workflows' shell) a bare `tar` is GNU tar,
+  // which writes no zip and reads C:\ as a remote host.
   // COPYFILE_DISABLE: macOS's tar would add ._ AppleDouble files for extended attributes.
-  if (WINDOWS) execFileSync('tar', ['-a', '-cf', tarball, '-C', stage, name], { stdio: 'inherit' })
+  if (WINDOWS) execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', tarball, '-C', stage, name], { stdio: 'inherit' })
   else execFileSync('tar', ['-czf', tarball, '-C', stage, name], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdio: 'inherit' })
   const sha = createHash('sha256').update(readFileSync(tarball)).digest('hex')
   console.log(`${tarball}\n  trek-server ${version} (build ${build}), node-pty ${ptyVersion}, ${(statSync(tarball).size / 1e6).toFixed(1)} MB, sha256 ${sha}`)

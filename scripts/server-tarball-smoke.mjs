@@ -60,8 +60,10 @@ if (notarized) {
   copyFileSync(tarball, unpackFrom)
   execFileSync('xattr', ['-w', 'com.apple.quarantine', `0083;${Math.floor(Date.now() / 1000).toString(16)};Safari;`, unpackFrom])
 }
-// Windows' tar (bsdtar) unpacks a zip.
-execFileSync('tar', [windows ? '-xf' : '-xzf', unpackFrom, '-C', work])
+// Windows' own tar (System32's bsdtar) unpacks a zip; by full path, as under Git Bash a bare `tar`
+// is GNU tar, which can't read a zip and reads C:\ as a remote host.
+const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar'
+execFileSync(tar, [windows ? '-xf' : '-xzf', unpackFrom, '-C', work])
 if (unpackFrom !== tarball) rmSync(unpackFrom)
 const top = readdirSync(work)
 const name = `trek-server-${version}-${os}-${arch}`
@@ -130,10 +132,20 @@ if (!windows) {
 // spawnSync, not execFileSync: an addon that fails to load is a FAIL with its error, not a crash.
 const pty = spawnSync(process.execPath, ['-e', `
   const pty = require(${JSON.stringify(join(dir, 'node_modules', 'node-pty'))})
-  const p = ${windows ? `pty.spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'set /a 6*7 >nul && echo pty-42'], { cols: 80, rows: 24 })` : `pty.spawn('/bin/sh', ['-c', 'echo pty-$((6 * 7))'], { cols: 80, rows: 24, env: { PATH: '/usr/bin:/bin' } })`}
+  const p = ${windows ? `pty.spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'set /a 6*7 >nul && echo pty-42 && ping -n 2 127.0.0.1 >nul'], { cols: 80, rows: 24 })` : `pty.spawn('/bin/sh', ['-c', 'echo pty-$((6 * 7))'], { cols: 80, rows: 24, env: { PATH: '/usr/bin:/bin' } })`}
   let out = ''
   p.onData((d) => { out += d })
-  p.onExit(({ exitCode }) => { process.stdout.write(out.trim() + ' exit ' + exitCode); process.exit(0) })
+  // ConPTY can report the exit before it flushes the output (hence the ping above, a second's
+  // pause): give the output up to 2s more to arrive after the exit.
+  p.onExit(({ exitCode }) => {
+    const since = Date.now()
+    const report = () => {
+      if (!/pty-42/.test(out) && Date.now() - since < 2000) return setTimeout(report, 50)
+      process.stdout.write(out.trim() + ' exit ' + exitCode)
+      process.exit(0)
+    }
+    report()
+  })
   setTimeout(() => { process.stdout.write('timeout: ' + out); process.exit(1) }, 10000)
 `], { env, encoding: 'utf8' })
 const ptyOut = pty.stdout ?? ''
