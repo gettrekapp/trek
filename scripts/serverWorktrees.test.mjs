@@ -513,6 +513,42 @@ test('worktree commands refuse a worktree path outside the allowlist', async (t)
   assert.equal((await callWithInertPoller(s, 'worktree.pull', ids)).error?.code, 'PATH_DENIED')
 })
 
+test('worktree.remove deletes a worktree git lists outside the allowlist (an agent\'s temp worktree)', async (t) => {
+  const s = await setup(t)
+  for (const [branch, dirty] of [['tmp-clean', false], ['tmp-dirty', true]]) {
+    const path = join(s.dir, 'scratchpad', branch)
+    git(s.a, 'worktree', 'add', '-q', '-b', branch, path)
+    if (dirty) writeFileSync(join(path, 'scratch.txt'), 'x')
+    await s.poller.refresh(s.a)
+    const wt = s.project().repositories[0].worktrees.find((w) => w.path === path)
+    assert.ok(wt, 'the poller lists it')
+    if (dirty) {
+      const refused = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
+      assert.equal(refused.error?.code, 'GIT_ERROR', JSON.stringify(refused))
+      assert.equal(refused.error.details?.reason, 'dirty')
+    }
+    const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id, force: dirty })
+    assert.deepEqual(res, { ok: true, result: null })
+    assert.equal(existsSync(path), false)
+    assert.equal(s.worktree(wt.id), undefined)
+  }
+})
+
+test('worktree.remove refuses a row outside the allowlist that git does not list', async (t) => {
+  const s = await setup(t)
+  const outside = join(s.dir, 'outside')
+  mkdirSync(outside)
+  writeFileSync(join(outside, 'keep.txt'), 'x')
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees.push({ id: 'planted', name: 'planted', path: outside, isMain: false, loaded: false, branch: 'main', sessions: [] })
+  })
+  for (const force of [false, true]) {
+    const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: 'planted', force })
+    assert.equal(res.error?.code, 'PATH_DENIED', JSON.stringify(res))
+    assert.ok(existsSync(join(outside, 'keep.txt')))
+  }
+})
+
 test('worktree commands refuse a worktree that is itself a registered repo', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'other')
