@@ -35,10 +35,12 @@ export const STATIC_CAPABILITIES: readonly string[] = [
  * phone can't reach this machine's loopback), then `prWatch` while gh is signed in on its machine
  * (5c-1), then `local` on the local server.
  */
-export function welcomeCapabilities(mcp: boolean, local = false, prWatch = false): string[] {
+export function welcomeCapabilities(mcp: boolean, local = false, prWatch = false, platform: NodeJS.Platform = process.platform): string[] {
+  // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
+  const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.env, CAPABILITY.stacks] : []
   return [
     ...(mcp ? [CAPABILITY.mcp] : []),
-    ...STATIC_CAPABILITIES,
+    ...STATIC_CAPABILITIES.filter((c) => !windowsOff.includes(c)),
     ...(local ? [] : [CAPABILITY.pairing]),
     ...(prWatch ? [CAPABILITY.prWatch] : []),
     ...(local ? [CAPABILITY.local] : [])

@@ -208,8 +208,10 @@ results carry only new ids; queries return their data.
 An error reply may carry `error.details`, an object a client can act on without
 reading the message (which may be git's own, localised text). Today the only key
 is `reason`: `dirty` (see `worktree.remove`), or, on a `TOOL_ERROR`, `missing` (the
-tool is not installed on the server) or `registry` (the server's environments registry
-cannot be read; nothing was written). Clients ignore keys and reasons they don't know.
+tool is not installed on the server), `registry` (the server's environments registry
+cannot be read; nothing was written) or `unsupported` (a Windows server's `env.*` and
+`stack.*`: not served there yet, and its welcome lists neither `env` nor `stacks`).
+Clients ignore keys and reasons they don't know.
 
 `project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
 `session.rename`, `session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
