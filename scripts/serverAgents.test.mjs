@@ -1,7 +1,7 @@
 // scripts/serverAgents.test.mjs — server.agents: each provider's command, its program, and the cached installed check.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { agentCommands, commandBinary, CommandProbe, MAX_PROBES_IN_FLIGHT, PROBE_TTL_MS } from '../server/src/sessions/agents.ts'
+import { agentCommands, commandBinary, CommandProbe, MAX_PROBES_IN_FLIGHT, platformCommandExists, PROBE_TTL_MS } from '../server/src/sessions/agents.ts'
 import { DEFAULT_LLM_SETTINGS } from '../src/shared/providers/types.ts'
 
 test('commandBinary skips leading env assignments and blanks', () => {
@@ -77,4 +77,23 @@ test('CommandProbe runs at most 8 checks at once; the excess reads as not instal
   assert.deepEqual(asked.slice(8), ['extra'], 'not cached: checked once there is room')
   release[8]()
   assert.equal(await later, true)
+})
+
+test('platformCommandExists on Windows: installed only for what a launch can run, found the way a launch finds it', async () => {
+  const on = new Set(['c:\\npm\\codex.cmd', 'c:\\npm\\helper.js', 'c:\\tools\\claude.exe', 'c:\\tools\\run.com', 'c:\\tools\\agent.bat', 'c:\\repo\\bin\\agent.exe'])
+  const deps = { env: { Path: 'C:\\npm;C:\\tools', PATHEXT: '.COM;.EXE;.BAT;.CMD;.JS' }, isFile: (p) => on.has(p.toLowerCase()) }
+  const exists = (b) => platformCommandExists(b, 'win32', deps)
+  assert.equal(await exists('codex'), true, 'an npm shim on PATH')
+  assert.equal(await exists('claude'), true)
+  assert.equal(await exists('run'), true)
+  assert.equal(await exists('agent'), true, 'a batch file')
+  assert.equal(await exists('C:\\tools\\claude.exe'), true, 'an absolute path')
+  assert.equal(await exists('C:/tools/claude'), true, 'an absolute path, PATHEXT tried')
+  assert.equal(await exists('helper'), false, 'a .js that PATHEXT names, which a launch refuses')
+  assert.equal(await exists('C:\\npm\\helper.js'), false)
+  assert.equal(await exists('gemini'), false)
+  // A relative head resolves against the session's worktree at launch, which isn't known here.
+  assert.equal(await exists('.\\bin\\agent.exe'), false)
+  assert.equal(await exists('bin/agent'), false)
+  assert.equal(await exists('\\tools\\claude.exe'), false, 'rooted on the current drive')
 })

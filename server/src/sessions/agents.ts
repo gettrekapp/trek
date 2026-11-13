@@ -4,6 +4,7 @@
 // (`API_KEY=… claude`).
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { win32 } from 'node:path'
 import { commandExists } from '../../../src/host/agentService.ts'
 import { parseWindowsCommandLine, resolveWindowsCommand } from './winLaunch.ts'
 import type { ProjectSettings } from '../../../src/shared/model/types'
@@ -36,13 +37,29 @@ const isFile = (path: string): boolean => {
   }
 }
 
+/** What a Windows launch runs (winSpawnPlan): anything else PATHEXT finds is refused there. */
+const WINDOWS_RUNNABLE = new Set(['.exe', '.com', '.cmd', '.bat'])
+
 /**
  * Whether `binary` is installed for the server's user: POSIX asks the login shell
- * (`command -v`); Windows looks it up as a session's launch does (PATH × PATHEXT).
+ * (`command -v`); Windows resolves it as a session's launch does (resolveWindowsCommand: PATH ×
+ * PATHEXT, never the current directory) and accepts only what that launch runs (.exe, .com,
+ * .cmd, .bat). A relative path (`.\bin\agent`, or `\tools\x.exe`, rooted on the current drive)
+ * resolves at launch against the session's worktree, which isn't known here: it can't be
+ * verified, and reads as not installed. So installed means a bare name or a full path.
+ * `deps`: the env and file check (default the server's own), for tests.
  */
-export function platformCommandExists(binary: string, platform: string = process.platform): Promise<boolean> {
+export function platformCommandExists(
+  binary: string,
+  platform: string = process.platform,
+  deps: { env: Record<string, string | undefined>; isFile: (path: string) => boolean } = { env: process.env, isFile }
+): Promise<boolean> {
   if (platform !== 'win32') return commandExists(binary)
-  return Promise.resolve(resolveWindowsCommand(binary, { env: process.env, cwd: homedir(), isFile }) !== undefined)
+  const isPath = /[\\/:]/.test(binary)
+  if (isPath && !/^([A-Za-z]:[\\/]|[\\/]{2})/.test(binary)) return Promise.resolve(false)
+  // A full path ignores cwd; a bare name never uses it (PATH only).
+  const resolved = resolveWindowsCommand(binary, { ...deps, cwd: homedir() })
+  return Promise.resolve(resolved !== undefined && WINDOWS_RUNNABLE.has(win32.extname(resolved).toLowerCase()))
 }
 
 /** Each provider with the command the server runs it with, chosen as agentCommand does. */
@@ -60,7 +77,7 @@ export function agentCommands(
 }
 
 /**
- * Whether a program resolves in the login shell; each answer is shared while in
+ * Whether a program is installed (platformCommandExists by default); each answer is shared while in
  * flight and reused for PROBE_TTL_MS. At most MAX_PROBES_IN_FLIGHT run at once.
  */
 export class CommandProbe {

@@ -37,7 +37,7 @@ import {
   type Activity
 } from './status.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
-import { agentCommands, commandBinary, CommandProbe } from './agents.ts'
+import { agentCommands, commandBinary, CommandProbe, platformCommandExists } from './agents.ts'
 import type { ServerAgents } from '../../../src/shared/protocolV2'
 
 export const LOAD_COLS = 120
@@ -63,7 +63,7 @@ export interface SessionManagerDeps {
   mcpAccess?: (projectId: string) => McpAccess | undefined
   /** Added to the prompt of a session that has the MCP tools: the voice summary prompt while it is on (phase 5b) */
   voicePrompt?: () => string | undefined
-  /** Whether a program resolves in the login shell (server.agents); default agentService.commandExists */
+  /** Whether a program is installed (server.agents); default platformCommandExists for `platform` (the login shell, or Windows' launch lookup) */
   commandExists?: (binary: string) => Promise<boolean>
   /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
   onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
@@ -130,7 +130,8 @@ export class SessionManager {
     this.newId = deps.newId ?? randomUUID
     this.now = deps.now ?? Date.now
     this.discover = deps.discover ?? discoverCodexSession
-    this.probe = new CommandProbe(deps.commandExists, this.now)
+    const platform = deps.platform ?? process.platform
+    this.probe = new CommandProbe(deps.commandExists ?? ((binary) => platformCommandExists(binary, platform)), this.now)
     this.schedule =
       deps.schedule ??
       ((fn, ms) => {

@@ -24,7 +24,10 @@ does not run on Windows.
   npm (a `.cmd` shim) is started as `node <its script>`, so multi-line prompts work. Any other
   batch file is run by `cmd.exe`, which cannot pass an argument containing a line break, so such
   a session is refused with a message. A custom command can't start with `NAME=value`: set the
-  variable in the server's environment instead.
+  variable in the server's environment instead. An agent shows as installed only when its
+  command is a bare name found on PATH or a full path (`C:\…`), to a program Trek can start; a
+  relative path (`.\tools\claude.exe`) is found from the worktree when a session starts, so it
+  shows as not installed but still starts.
 - **Repositories** must be on a local drive (`C:\…`). Network shares and WSL paths
   (`\\wsl$\…`, `\\wsl.localhost\…`) are refused: to work on a repository inside WSL, run the
   Linux trek-server inside WSL and connect to it as a remote server.
