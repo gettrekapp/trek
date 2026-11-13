@@ -857,10 +857,10 @@ try {
     tabs: [...el.querySelectorAll('.session-row .panel-btn')].map((b) => b.textContent.trim()).filter((t) => /^(Docker|Env|Stack)/.test(t)),
     skills: el.querySelectorAll('.skill-menu-trigger').length
   })), { actions: [], tabs: [], skills: 1 })
-  check("and its features say so; the server's docker, env, stacks, skills and Linear are on", await w1.evaluate(() => {
+  check("and its features say so; the server's docker, env, stacks and skills are on", await w1.evaluate(() => {
     const f = window.__features()
-    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear]
-  }), [true, true, true, true, false, false, true])
+    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor]
+  }), [true, true, true, true, false, false])
 
   // A rename sends the title it started from, so one made elsewhere meanwhile is not overwritten.
   const oldTitle = await w1.evaluate((id) => window.__store.getState().terminals[id].title, s1)
@@ -960,9 +960,9 @@ try {
     'Appearance',
     'Notifications',
     'Local server',
-    'Linear',
     'Plugins',
     'Voice summaries',
+    'Linear',
     'Agents',
     'Worktree tags',
     'Custom tags',

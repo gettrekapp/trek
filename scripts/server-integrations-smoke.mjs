@@ -10,11 +10,12 @@
 // --user-data-dir, no Local server, and main's dialogs stubbed; the server is added as an app server,
 // and the window opens a project made through the SDK. Through the DOM and the server's MCP endpoint
 // it checks:
-//   - the window's features: linear and skills on (the server's); Reveal and VS Code off;
+//   - the window's features: skills on (the server's); Reveal and VS Code off;
 //   - Settings → Linear: a rejected key shows Linear's error; a good one connects, is stored in the
 //     server's secrets file (0600), and the branch's ticket chip shows the issue's title;
 //   - Settings → Plugins: voice on for the project (its default); off removes speak_summary from the
-//     project's MCP tools and the voice UI, on brings them back;
+//     project's MCP tools and the voice UI, on brings them back; Linear off makes the chips bare,
+//     set_worktree_ticket refuses Linear URLs and a chip with no link opens the ticket dialog;
 //   - Settings → Voice: the key connects and lists the server key's voices; the chosen voice and
 //     "Summarize automatically" are saved on the server; Test synthesizes there, in that voice, and
 //     plays here;
@@ -249,7 +250,7 @@ try {
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
   check('the server says linear, voice and skills, and is not a local one', ['linear', 'voice', 'skills', 'local'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, false])
-  check('and lists its plugins: voice', sdk.welcome?.plugins, [{ id: 'voice', version: '1.0.0', defaultEnabled: true }])
+  check('and lists its plugins: voice, linear, azure-devops', sdk.welcome?.plugins?.map((p) => p.id), ['voice', 'linear', 'azure-devops'])
   const { projectId } = await sdk.request('project.create', { name: 'integrations', repositories: [{ path: repo }] })
   const topic = `project:${projectId}`
   const project = async () => {
@@ -291,10 +292,10 @@ try {
   }, [entry.id, projectId])
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
-  check("the window's features: the server's Linear and skills; not this machine's", await until(() => win.evaluate(() => {
+  check("the window's features: the server's skills; not this machine's (Linear and voice are plugins)", await until(() => win.evaluate(() => {
     const f = window.__features()
-    return [f.linear, f.skills, f.reveal, f.openInEditor]
-  }), [true, true, false, false]), [true, true, false, false])
+    return [f.skills, f.reveal, f.openInEditor]
+  }), [true, false, false]), [true, false, false])
 
   // ---- 3. Settings → Linear, with the server's key ---------------------------------------------------
 
@@ -403,6 +404,26 @@ try {
   check("off: the voice section and the sidebar's toggle are gone", [await until(() => settings.locator('h3', { hasText: 'Voice summaries' }).count(), 0), await until(() => win.locator('.voice-toggle').count(), 0)], [0, 0])
   await voiceSwitch.click()
   check('on again: speak_summary is back, and the toggle', [await until(async () => (await toolNames()).includes('speak_summary'), true), await until(() => win.locator('.voice-toggle').count(), 1)], [true, 1])
+
+  // ---- 5c. The Linear plugin off for the project, then on again (plugin system phase 2) -------------
+
+  const linearSwitch = settings.locator('label.settings-row', { hasText: 'Link worktree branches to Linear issues' }).locator('input')
+  const chipTitle = () => featureRow.locator('.mini-chip.ticket').getAttribute('title').catch(() => null)
+  const headerChip = detail.locator('.chip-ticket')
+  await linearSwitch.click()
+  check("Linear off: the project's plugins setting says so", await until(pluginsSetting, { voice: { enabled: true }, linear: { enabled: false } }), { voice: { enabled: true }, linear: { enabled: false } })
+  check("off: the chip is the bare id, no issue; the header's says so", [await until(chipTitle, null), await until(() => headerChip.textContent().catch(() => null), 'Ticket TOW-7')], [null, 'Ticket TOW-7'])
+  check("off: the Linear section is gone", await until(() => settings.locator('h3', { hasText: /^Linear$/ }).count(), 0), 0)
+  const offTicket = await tool('set_worktree_ticket', { worktree: 'feature-x', ticket: 'https://linear.app/x/issue/TOW-8' })
+  check('off: set_worktree_ticket refuses a Linear URL, naming the trackers on', [offTicket.isError, /Unrecognised ticket.*Azure DevOps work item id or URL/.test(String(offTicket.value))], [true, true])
+  await detail.locator('.panel-btn[title="App settings"]').click()
+  // A chip with no link opens the link dialog to add what it needs.
+  await headerChip.click()
+  check('off: clicking the chip with no link opens the ticket dialog', await until(() => win.locator('.ticket-modal').count(), 1), 1)
+  await win.locator('.ticket-modal').locator('button', { hasText: 'Cancel' }).click()
+  await detail.locator('.panel-btn[title="App settings"]').click()
+  await linearSwitch.click()
+  check('on again: the chip shows the issue again', await until(chipTitle, 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
   await detail.locator('.panel-btn[title="App settings"]').click()
 
   // ---- 6. A session's skill menu: the worktree's skill and the server user's command -----------------
@@ -425,9 +446,9 @@ try {
 
   // ---- 8. A key cleared by another client: the window follows (integrations.changed) ---------------
 
-  check('the window has Linear connected', await win.evaluate(() => window.__store.getState().linearConnected), true)
+  check('the chip has the issue (the window has the key)', await chipTitle(), 'TOW-7 · In Progress — Ship the integrations')
   await sdk.request('linear.clearKey', {})
-  check("a key cleared elsewhere: the window's Linear goes disconnected", await until(() => win.evaluate(() => window.__store.getState().linearConnected), false), false)
+  check("a key cleared elsewhere: the window follows (plugins.changed), the chip back to the bare id", await until(chipTitle, null), null)
   await sdk.request('voice.clearKey', {})
   check("a voice key cleared elsewhere: the window follows (plugins.changed), its toggle gone", await until(() => win.locator('.voice-toggle').count(), 0), 0)
 

@@ -145,6 +145,28 @@ try {
   }
   off()
 }
+{
+  // The Linear plugin (phase 2): as a 0.2.1 client calls it, and the notification it hears.
+  const heard = []
+  const off = conn.on('event', (ev) => heard.push(ev))
+  const legacy = () => heard.some((ev) => ev.event === 'integrations.changed' && ev.payload?.linear === true)
+  const plugin = () => heard.some((ev) => ev.event === 'plugins.changed' && ev.payload?.id === 'linear')
+  try {
+    const status = await conn.request('linear.status', {})
+    if (status?.hasKey !== false) fail(`linear.status: ${JSON.stringify(status)}`)
+    else ok('linear.status answers as in 0.2.1 (the Linear plugin, same wire name)')
+    // A cleared key says it changed; no Linear call is made.
+    await conn.request('linear.clearKey', {})
+    await waitFor(() => legacy() && plugin())
+    if (!legacy()) fail(`linear.clearKey: no integrations.changed with linear: true (heard ${JSON.stringify(heard.map((ev) => [ev.event, ev.payload]))})`)
+    else ok('linear.clearKey: integrations.changed { linear: true }, as a 0.2.1 client hears it')
+    if (!plugin()) fail('linear.clearKey: no plugins.changed for linear')
+    else ok("linear.clearKey: plugins.changed { id: 'linear' }")
+  } catch (err) {
+    fail(`linear.*: ${err.code} ${err.message}`)
+  }
+  off()
+}
 
 // --- 2. server topic ---
 let server = null

@@ -161,8 +161,10 @@ this machine). See `../PROTOCOL.md` for the tools.
 The app's Linear and ElevenLabs settings are each server's own: a key set from any
 client is stored in `secrets.json` beside the config file (`~/.config/trek-server/`,
 or the Local profile's directory; mode 0600, written then renamed) and is never sent
-back to a client, which only learns whether one is set. ElevenLabs is the voice
-plugin's (`../plugins/voice/README.md`): the voice, the model and "Summarize
+back to a client, which only learns whether one is set. Both are plugins
+(`../plugins/linear/README.md`, `../plugins/voice/README.md`), as is Azure DevOps
+(`../plugins/azure-devops/README.md`); Linear's workspace slug and Azure DevOps' base URL
+are the project's settings, owned by their plugins. For ElevenLabs: the voice, the model and "Summarize
 automatically" are in the data dir's `plugins/voice/config.json` (no secret; a
 `voice.json` from before plugins is copied there at the first start, and kept). With
 "Summarize automatically" on and a key set, every session the server starts with
@@ -170,7 +172,8 @@ the MCP tools, in a project where the plugin is on, is told to call `speak_summa
 when it finishes or waits on the user. Plugins are on or off per project (Settings →
 Plugins in the app).
 A `secrets.json` that cannot be read or parse is never overwritten: setting a key
-fails until it is fixed. The app's own keys are handed to its Local server once.
+fails until it is fixed. The app's own keys are handed to its Local server once, each
+once the Local server lists that plugin's capability.
 
 `TREK_SERVER_LINEAR_URL` and `TREK_SERVER_ELEVENLABS_URL` point the server at other
 endpoints (Linear's GraphQL URL; ElevenLabs' `/v1` base). They are for tests, which

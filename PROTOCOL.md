@@ -107,7 +107,7 @@ new optional field needs no capability: its absence says enough.
 | `docker` | `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine, and `docker.log` streams compose's output (see [Docker, environments and stacks](#docker-environments-and-stacks)) |
 | `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output |
 | `stacks` | `stack.*` run the worktrees' `docker/stack/stack.sh` dev stacks on the server's machine |
-| `linear` | `linear.*` look Linear issues up with the server's own API key (see [Linear and skills](#linear-and-skills)) |
+| `linear` | The Linear plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the Linear plugin](plugins/linear/README.md)) |
 | `voice` | The voice plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the voice plugin](plugins/voice/README.md)) |
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
 | `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
@@ -192,8 +192,7 @@ server restarts. A server without this field simply leaves it out.
 | Docker | `docker.list`, `docker.container`, `docker.compose` |
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
-| Linear | `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` |
-| Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize` (see [Plugins](#plugins)) |
+| Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize`; the Linear plugin's `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` (see [Plugins](#plugins)) |
 | Skills | `skills.list` |
 | Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
 | Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
@@ -699,40 +698,18 @@ log. Under backpressure (from more than 4 MiB unsent on the connection until it 
 2 MiB) their output chunks are dropped, and the next chunk of that run that is sent follows one
 `[output dropped: the connection fell behind]` line. A `done` or a `step` event is never dropped.
 
-## Linear and skills
+## Skills
 
-With the capabilities `linear` and `skills` (phase 5b), the server looks Linear issues up with its
-own API key, and lists the skills on its own disk. Before 5b the desktop app kept one Linear key
-for every window; now each server has its own, set from any client. (ElevenLabs is the voice
-plugin's since plugin system phase 1: see [Plugins](#plugins).)
-
-**The key is write-only.** `linear.setKey` stores it in the server's `secrets.json`, beside its
-config file (owner-only, 0600, written then renamed; a file that cannot be read or parse is never
-overwritten), and no method sends it back: `linear.status` says only whether one is set. A key is
-checked first (Linear's `viewer`); the result is `{ok: false, error}` with Linear's answer when it
-is refused. A `secrets.json` that cannot be read is `TOOL_ERROR` before Linear is asked (with
-`ifAbsent` too), as is one that cannot be written. `ifAbsent: true` is the desktop's one-time
-hand-over of its own key to the local server: the key is stored as it is, unchecked (the app
-checked it when the user entered it), and only while the server has none; otherwise the result is
-`{ok: false, error, present: true}` and the server's own key is kept. A key is 1 to 1024 printable
-ASCII characters with no spaces.
-
-**Changes reach every client.** A `linear.setKey` that stored its key (`ok: true`) and a
-`linear.clearKey` send `integrations.changed {linear: true}` to every authenticated connection,
-whatever it subscribes to, the caller's included; a client re-reads `linear.status`. A refused key,
-or one kept by `ifAbsent`, sends nothing.
+With the capability `skills` (phase 5b), the server lists the skills on its own disk. (Linear and
+ElevenLabs, with the server's own keys, are plugins since plugin system phases 1 and 2: see
+[Plugins](#plugins).)
 
 | Method | Params | Result |
 |---|---|---|
-| `linear.status` | `{}` | `{hasKey}` |
-| `linear.setKey` | `{apiKey, ifAbsent?}` | `{ok: true, user}` (the key's Linear user; empty for `ifAbsent`) or `{ok: false, error, present?}` |
-| `linear.clearKey` | `{}` | `null` |
-| `linear.issues` | `{ids}` (at most 500 strings of at most 64 characters) | the `LinearIssue`s that exist and the key can see; ids that are not `ABC-123` are left out; `[]` without a key |
 | `skills.list` | `{projectId, worktreeId}` | `SkillInfo[]`: the worktree's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, then the server user's `~/.claude` ones; a project one shadows a user one of the same name. Only regular files are read, their first 16 KiB; nothing is listed from a worktree's `.claude` (or its `skills`, `commands`, or a `SKILL.md`) whose real path is outside the worktree |
 
-A failure of Linear (unreachable, a revoked key) is `TOOL_ERROR` with its message. `skills.list`
-takes the worktree's path from the server's state and checks it as the worktree commands do
-(registered repository, not missing, inside the allowlist).
+`skills.list` takes the worktree's path from the server's state and checks it as the worktree
+commands do (registered repository, not missing, inside the allowlist).
 
 ## Plugins
 
@@ -761,9 +738,24 @@ every authenticated connection; one with a legacy capability sends `integrations
 {<capability>: true}` too, for clients older than plugins (a client that knows plugins heeds only
 `plugins.changed`).
 
-| Plugin | Methods, events and tools |
+**Project settings** (phase 2). A plugin can own project settings, kept at the top of the
+project's settings under the names its manifest declares (`linearWorkspace`,
+`azureDevOpsBaseUrl`) and checked by it: `project.updateSettings` and `project.import` take them as
+they take the core ones, whether or not the plugin is on in the project. A value it refuses is
+`BAD_REQUEST` naming the setting.
+
+**Ticket trackers** (phase 2). A branch's ticket (`branchData.ticket`) is an id the project's
+trackers read: each is a plugin's ticket provider (its ids and URLs, the chip's label, the link
+from the project's settings). `set_worktree_ticket` parses through the trackers on in the project
+and saves the settings a URL implies; a ticket no tracker on there owns shows as its bare id and
+links nowhere. A server older than plugins handled Linear (its `linear` capability) and Azure DevOps
+(built in) itself.
+
+| Plugin | Methods, events, tools and settings |
 |---|---|
 | `voice` | [The voice plugin](plugins/voice/README.md): `voice.*`, `voice.summary`, `speak_summary` |
+| `linear` | [The Linear plugin](plugins/linear/README.md): `linear.*`, Linear tickets, `linearWorkspace` |
+| `azure-devops` | [The Azure DevOps plugin](plugins/azure-devops/README.md): Azure DevOps tickets, `azureDevOpsBaseUrl` |
 
 ## Pull request watch
 
@@ -1450,7 +1442,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `set_worktree_tag` | `worktree`; `tag?` (name or id; omit to clear) | `{branch, tag}` |
 | `set_worktree_custom_tag` | `worktree`, `tag`; `enabled?` (default true) | `{branch, customTags}` |
 | `set_worktree_note` | `worktree`, `note` (empty clears) | `{branch}` |
-| `set_worktree_ticket` | `worktree`; `ticket?` (a Linear id or URL, or an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
+| `set_worktree_ticket` | `worktree`; `ticket?` (an id or URL of a tracker on in the project: a Linear id or URL, an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
 | `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
 | `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, of only the files commented on in it, with its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source. Because it reads only the commented files, `outdated` does not depend on the full diff's 8 MiB size cap or git's rename limit, so it can differ from what the Changes tab shows when the whole diff hits either |
@@ -1467,9 +1459,9 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 That is 30 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
-unknown name fails with the list of valid ones. `set_worktree_ticket` takes the
-Linear workspace or Azure DevOps base URL from a URL and saves it to the project's
-settings. A worktree with a detached HEAD has no branch data, so the `set_worktree_*`
+unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the
+project's trackers (see [Plugins](#plugins)) and saves the settings a URL implies (the Linear
+workspace, the Azure DevOps base URL) to the project's settings. A worktree with a detached HEAD has no branch data, so the `set_worktree_*`
 tools refuse it. `save_session_type` updates the type with the given `id` (an
 unknown `id` is `NOT_FOUND`), else the one with the same name, else creates one,
 and needs a `name` to create. A name already used by another type is `BAD_REQUEST`.
@@ -1512,9 +1504,9 @@ title rules (at most 200 characters, no control characters), and its `systemProm
 and `initialMessage` are at most 100,000 characters each. These session type rules
 also apply to `project.updateSettings` and `project.import`, which validate every
 entry of `sessionTypes` (`id` and `name` strings, a known `llm.provider`); the
-tools save through `project.updateSettings`. `parseTicket` accepts a Linear
-workspace only of word characters and hyphens, and an Azure DevOps base only as an
-`http` or `https` URL, each at most 200 characters.
+tools save through `project.updateSettings`. The Linear plugin accepts a workspace only of
+word characters and hyphens, and the Azure DevOps plugin a base only as an `http` or `https`
+URL, each at most 200 characters.
 
 ## Events
 
@@ -1532,7 +1524,7 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `plugins.changed` | `{id}`: a plugin's server-wide state (a key, its config) changed, by any client, to every authenticated connection |
 | `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
 | `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
-| `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: the server's Linear key changed (by any client), to every authenticated connection; re-read `linear.status` (see [Linear and skills](#linear-and-skills)). `voice` is the voice plugin's legacy capability, sent beside its `plugins.changed` for clients older than plugins. `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
+| `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: to every authenticated connection. `linear` and `voice` are the Linear and voice plugins' legacy capabilities, sent beside their `plugins.changed` for clients older than plugins. `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 
 ## Several clients
 

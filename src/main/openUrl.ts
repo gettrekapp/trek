@@ -34,7 +34,10 @@ function focusChromeTab(url: string): Promise<boolean> {
   })
 }
 
-/** The URL an open tab must match; Linear issue URLs drop the title slug, which tabs may lack or have stale. */
+/**
+ * The URL an open tab must match; Linear issue URLs drop the title slug, which tabs may lack or have
+ * stale. (A URL-shape rule in main; the Linear plugin owns Linear's tickets, plugins/linear.)
+ */
 function tabMatchUrl(url: string): string {
   const linearIssue = url.match(/^(https:\/\/linear\.app\/[^/]+\/issue\/[^/?#]+)/)
   return linearIssue ? linearIssue[1] : url.replace(/\/+$/, '')
