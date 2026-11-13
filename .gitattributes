@@ -1,0 +1,7 @@
+# Line endings for scripts their own platform runs, whatever core.autocrlf says on checkout.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.sh text eol=lf
+# Byte-exact fixtures (cmd-shim output, CRLF as committed): never converted.
+scripts/fixtures/cmd-shim/** -text
