@@ -8,6 +8,7 @@ import { VoiceSettings } from './VoiceSettings'
 import { NotificationSettings } from './NotificationSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
 import { AppearanceSettings } from './AppearanceSettings'
+import { QuickButtonModal } from './QuickButtonModal'
 import { LlmSettings } from './LlmSettings'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 import { SettingNumber, SettingText } from './SettingText'
@@ -532,6 +533,8 @@ function QuickButtonsEditor({
     onChange(next)
   }
 
+  const [editing, setEditing] = useState<TerminalQuickButton | null>(null)
+
   return (
     <>
       <div className="settings-row">
@@ -550,10 +553,13 @@ function QuickButtonsEditor({
           <SettingText
             rows={1}
             className="quick-btn-text-input"
-            placeholder="Text typed into the terminal and submitted"
+            placeholder="Text sent to the terminal — {INPUT} asks, [branch] etc. filled in"
             value={btn.text}
             onCommit={(text) => patchButton(btn.id, { text })}
           />
+          <button className="quick-btn-remove" title="Edit with built-ins" onClick={() => setEditing(btn)}>
+            ✎
+          </button>
           <button
             className="quick-btn-remove"
             title="Move up"
@@ -587,6 +593,14 @@ function QuickButtonsEditor({
           + Add button
         </button>
       </div>
+      {editing && (
+        <QuickButtonModal
+          button={editing}
+          onSave={(saved) => patchButton(saved.id, { label: saved.label, text: saved.text })}
+          onDelete={() => onChange(buttons.filter((b) => b.id !== editing.id))}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   )
 }
