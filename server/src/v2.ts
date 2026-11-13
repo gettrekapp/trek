@@ -149,7 +149,7 @@ const handlers: Record<string, Handler> = {
   'project.import': (p, ctx) => {
     const existingIds = ctx.projects.allIds()
     const projectId = ctx.projects.importProject((id) =>
-      checkImport(p.project, { registry: ctx.store.config.repos, guard: ctx.store.guard, existingIds, projectId: id })
+      checkImport(p.project, { registry: ctx.store.config.repos, guard: ctx.store.guard, existingIds, projectId: id, settingRules: ctx.plugins?.settingRules })
     )
     return { projectId }
   },
@@ -186,10 +186,10 @@ const handlers: Record<string, Handler> = {
     ctx.projects.apply(p.projectId, (d) => {
       const current = d.settings as Record<string, unknown>
       for (const [key, value] of Object.entries(expected ?? {})) {
-        if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
+        if (!isSettingsKey(key, ctx.plugins?.settingRules)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
         checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
       }
-      d.settings = applySettingsPatch(d.settings, patch)
+      d.settings = applySettingsPatch(d.settings, patch, ctx.plugins?.settingRules)
       // A deleted tag comes off every branch in the same change (one patch, one rev).
       d.repositories = pruneDeletedTags(d.repositories, d.settings, patch)
     })

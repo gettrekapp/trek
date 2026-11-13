@@ -10,7 +10,7 @@ import { checkQueue, checkTitle } from '../sessions/limits.ts'
 import { realOrResolved } from '../repos.ts'
 import { assertNoProtoKeys, isRecord, requireAbsolutePath, requireName } from '../validate.ts'
 import { assertNotRepository, findRegistered, resetRuntime } from './model.ts'
-import { validateSettings } from './settings.ts'
+import { validateSettings, type PluginSettingRules } from './settings.ts'
 
 export interface ImportContext {
   registry: readonly RemoteRepo[]
@@ -19,6 +19,8 @@ export interface ImportContext {
   existingIds: ReadonlySet<string>
   /** The id the server assigns to the imported project */
   projectId: string
+  /** The plugins' project settings (phase 2), accepted beside the core ones */
+  settingRules?: PluginSettingRules
 }
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
@@ -106,7 +108,7 @@ export function checkImport(raw: unknown, ctx: ImportContext): Project {
   if (!isRecord(raw)) throw bad('project must be an object')
   assertNoProtoKeys(raw, 'project')
   const name = requireName(raw.name, 'project.name')
-  const settings = validateSettings(raw.settings ?? {}, 'project.settings')
+  const settings = validateSettings(raw.settings ?? {}, 'project.settings', ctx.settingRules)
   if (!Array.isArray(raw.repositories) || raw.repositories.length === 0) throw bad('project.repositories must be a non-empty array')
   if (!Array.isArray(raw.globalSessions)) throw bad('project.globalSessions must be an array')
   const seen = new Set<string>([ctx.projectId])

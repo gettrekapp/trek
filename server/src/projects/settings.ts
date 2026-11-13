@@ -45,9 +45,24 @@ const SETTINGS_KINDS: Record<keyof ProjectSettings, Kind> = {
   plugins: 'object'
 }
 
-/** Whether `key` is a project setting (an own key of the settings table). */
-export function isSettingsKey(key: string): key is keyof ProjectSettings {
+/**
+ * The project settings the registered plugins own (plugin system phase 2: their manifests'
+ * `projectSettings`, checked by their server halves), beside the table above.
+ */
+export interface PluginSettingRules {
+  kind(key: string): 'string' | undefined
+  /** A value's problem, or null; only called with a value of the declared kind */
+  check(key: string, value: string): string | null
+}
+
+/** Whether `key` is a core project setting (an own key of the settings table). */
+export function isCoreSettingsKey(key: string): key is keyof ProjectSettings {
   return Object.hasOwn(SETTINGS_KINDS, key)
+}
+
+/** Whether `key` is a project setting: a core one, or one a registered plugin owns. */
+export function isSettingsKey(key: string, plugins?: PluginSettingRules): boolean {
+  return isCoreSettingsKey(key) || plugins?.kind(key) !== undefined
 }
 
 /** Session types are acted on at every session.start, so their fields are checked, not just their kind. */
@@ -71,9 +86,16 @@ function checkSessionTypes(types: unknown[], field: string): void {
   })
 }
 
-function checkValue(key: string, value: unknown, field: string): void {
-  if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `${field}.${key} is not a project setting`)
-  const kind = SETTINGS_KINDS[key as keyof ProjectSettings]
+function checkValue(key: string, value: unknown, field: string, plugins?: PluginSettingRules): void {
+  if (!isCoreSettingsKey(key)) {
+    const kind = plugins?.kind(key)
+    if (!kind) throw codedError('BAD_REQUEST', `${field}.${key} is not a project setting`)
+    if (typeof value !== 'string') throw codedError('BAD_REQUEST', `${field}.${key} must be ${KIND_TEXT[kind]}`)
+    const problem = plugins!.check(key, value)
+    if (problem) throw codedError('BAD_REQUEST', `${field}.${key}: ${problem}`)
+    return
+  }
+  const kind = SETTINGS_KINDS[key]
   const ok =
     kind === 'string' ? typeof value === 'string'
     : kind === 'boolean' ? typeof value === 'boolean'
@@ -90,21 +112,21 @@ function checkValue(key: string, value: unknown, field: string): void {
 }
 
 /** A whole settings object (from an import). */
-export function validateSettings(value: unknown, field: string): ProjectSettings {
+export function validateSettings(value: unknown, field: string, plugins?: PluginSettingRules): ProjectSettings {
   if (!isRecord(value)) throw codedError('BAD_REQUEST', `${field} must be an object`)
-  for (const [key, v] of Object.entries(value)) if (v !== undefined) checkValue(key, v, field)
+  for (const [key, v] of Object.entries(value)) if (v !== undefined) checkValue(key, v, field, plugins)
   return value as ProjectSettings
 }
 
 /** Shallow merge; a key set to null is removed. Returns a new object. */
-export function applySettingsPatch(current: ProjectSettings, patch: Record<string, unknown>): ProjectSettings {
+export function applySettingsPatch(current: ProjectSettings, patch: Record<string, unknown>, plugins?: PluginSettingRules): ProjectSettings {
   const next: Record<string, unknown> = { ...current }
   for (const [key, value] of Object.entries(patch)) {
     if (value === null) {
-      if (!isSettingsKey(key)) throw codedError('BAD_REQUEST', `settings.${key} is not a project setting`)
+      if (!isSettingsKey(key, plugins)) throw codedError('BAD_REQUEST', `settings.${key} is not a project setting`)
       delete next[key]
     } else if (value !== undefined) {
-      checkValue(key, value, 'settings')
+      checkValue(key, value, 'settings', plugins)
       next[key] = value
     }
   }

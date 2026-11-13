@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import { PLUGIN_ID_RE, pluginEnabled, type PluginManifest, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
 import type { PluginHandler, PluginInstance, PluginMcpTool, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
+import type { TicketProvider } from '../../../src/shared/plugins/tickets.ts'
+import { isCoreSettingsKey, type PluginSettingRules } from '../projects/settings.ts'
 import { codedError } from '../errors.ts'
 import { keySlot, testEndpoint } from '../integrations/integrations.ts'
 import type { ProjectState } from '../projects/state.ts'
@@ -56,6 +58,10 @@ export interface PluginRegistry {
   instructions(projectId: string): string
   /** Their session prompts, joined; undefined when none */
   sessionPrompt(projectId: string): string | undefined
+  /** The ticket providers of the plugins on in the project, in registration order (phase 2) */
+  ticketProviders(projectId: string): TicketProvider[]
+  /** The project settings the registered plugins own (phase 2), whether or not they are on in a project */
+  readonly settingRules: PluginSettingRules
   /** Called when a plugin says its server-wide state changed (`host.changed()`) */
   onChanged(listener: (manifest: PluginManifest) => void): void
   dispose(): void
@@ -81,6 +87,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const changedListeners: ((manifest: PluginManifest) => void)[] = []
   const coreTools = new Set(options.coreToolNames)
   const toolOwners = new Map<string, string>()
+  /** A plugin project setting's key → the plugin that owns it */
+  const settingOwners = new Map<string, string>()
 
   const enabled = (projectId: string, id: string): boolean => {
     const entry = entries.get(id)
@@ -143,6 +151,12 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       refuse('its id is a core namespace')
       continue
     }
+    const keys = Object.keys(manifest.projectSettings ?? {})
+    const taken = keys.find((key) => isCoreSettingsKey(key) || settingOwners.has(key) || key === '__proto__')
+    if (taken) {
+      refuse(`its project setting ${taken} is a core setting's or another plugin's`)
+      continue
+    }
     let instance: PluginInstance
     try {
       instance = plugin.setup(hostFor(manifest))
@@ -157,10 +171,28 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       continue
     }
     for (const tool of instance.mcpTools ?? []) toolOwners.set(tool.definition.name, manifest.id)
+    for (const key of keys) settingOwners.set(key, manifest.id)
     entries.set(manifest.id, { manifest, instance })
   }
 
   const on = (projectId: string): Entry[] => [...entries.values()].filter((e) => enabled(projectId, e.manifest.id))
+
+  const settingRules: PluginSettingRules = {
+    kind: (key) => {
+      const owner = settingOwners.get(key)
+      return owner ? entries.get(owner)?.manifest.projectSettings?.[key] : undefined
+    },
+    check: (key, value) => {
+      const owner = settingOwners.get(key)
+      const entry = owner ? entries.get(owner) : undefined
+      if (!entry?.instance.checkProjectSetting) return null
+      try {
+        return entry.instance.checkProjectSetting(key, value)
+      } catch (err) {
+        return `its check failed: ${err instanceof Error ? err.message : String(err)}`
+      }
+    }
+  }
 
   return {
     presence: () => [...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled })),
@@ -212,6 +244,8 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       })
       return prompts.length > 0 ? prompts.join('\n\n') : undefined
     },
+    ticketProviders: (projectId) => on(projectId).flatMap((e) => (e.instance.ticketProvider ? [e.instance.ticketProvider] : [])),
+    settingRules,
     onChanged: (listener) => {
       changedListeners.push(listener)
     },

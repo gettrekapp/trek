@@ -13,6 +13,7 @@ import { mcpContext } from '../server/src/plugins/mcp.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { MCP_INSTRUCTIONS, MCP_TOOLS } from '../server/src/mcp/tools.ts'
 import { pluginError } from '../src/shared/plugins/server.ts'
+import { applySettingsPatch, isSettingsKey, validateSettings } from '../server/src/projects/settings.ts'
 
 /** Projects by id with their settings and sessions; `require` throws NOT_FOUND like ProjectState's. */
 function fakeProjects(projects) {
@@ -264,4 +265,75 @@ test('changed() reaches the listeners with the manifest; dispose() disposes each
   assert.deepEqual(registry.presence(), [])
   seen.host.changed()
   assert.deepEqual(heard, ['echo'])
+})
+
+// ---- Plugin project settings and ticket providers (plugin system phase 2) ----
+
+test("project settings: a plugin's declared keys, accepted with their kind and the plugin's check; a clash refused", (t) => {
+  const tracker = {
+    manifest: manifest('tracker', { projectSettings: { trackerSpace: 'string' } }),
+    setup: () => ({ handlers: {}, checkProjectSetting: (key, value) => (/^[a-z]+$/.test(value) ? null : `${key} must be lowercase letters`) })
+  }
+  const clashCore = { manifest: manifest('clashcore', { projectSettings: { audioAlerts: 'string' } }), setup: () => ({ handlers: {} }) }
+  const clashOther = { manifest: manifest('clashother', { projectSettings: { trackerSpace: 'string' } }), setup: () => ({ handlers: {} }) }
+  const { registry, warnings } = setup(t, [tracker, clashCore, clashOther])
+  assert.deepEqual(registry.presence().map((p) => p.id), ['tracker'])
+  assert.match(warnings.join('\n'), /clashcore not loaded: its project setting audioAlerts/)
+  assert.match(warnings.join('\n'), /clashother not loaded: its project setting trackerSpace/)
+  const rules = registry.settingRules
+  assert.equal(rules.kind('trackerSpace'), 'string')
+  assert.equal(rules.kind('audioAlerts'), undefined, 'a core key is not a plugin one')
+  assert.equal(rules.kind('nope'), undefined)
+  assert.deepEqual(applySettingsPatch({}, { trackerSpace: 'team' }, rules), { trackerSpace: 'team' })
+  assert.deepEqual(applySettingsPatch({ trackerSpace: 'team' }, { trackerSpace: null }, rules), {})
+  assert.throws(() => applySettingsPatch({}, { trackerSpace: 'Team!' }, rules), (err) => err.code === 'BAD_REQUEST' && /settings\.trackerSpace: trackerSpace must be lowercase/.test(err.message))
+  assert.throws(() => applySettingsPatch({}, { trackerSpace: 1 }, rules), (err) => err.code === 'BAD_REQUEST' && /must be a string/.test(err.message))
+  assert.throws(() => applySettingsPatch({}, { trackerSpace: 'team' }), (err) => err.code === 'BAD_REQUEST', 'without the rules it is no setting')
+  assert.deepEqual(validateSettings({ trackerSpace: 'team', audioAlerts: true }, 'project.settings', rules), { trackerSpace: 'team', audioAlerts: true })
+  assert.equal(isSettingsKey('trackerSpace', rules), true)
+  assert.equal(isSettingsKey('trackerSpace'), false)
+})
+
+test("project settings: a plugin's key is accepted in a project where it is off; its check throwing is the setting's problem", (t) => {
+  const tracker = {
+    manifest: manifest('tracker', { projectSettings: { trackerSpace: 'string' } }),
+    setup: () => ({
+      handlers: {},
+      checkProjectSetting: () => {
+        throw new Error('no idea')
+      }
+    })
+  }
+  const { registry } = setup(t, [tracker], { projects: { p1: project('p1', { tracker: { enabled: false } }) } })
+  assert.equal(registry.enabled('p1', 'tracker'), false)
+  assert.throws(() => applySettingsPatch({}, { trackerSpace: 'x' }, registry.settingRules), /settings\.trackerSpace: its check failed: no idea/)
+  const quiet = { manifest: manifest('quiet', { projectSettings: { quietKey: 'string' } }), setup: () => ({ handlers: {} }) }
+  const plain = setup(t, [quiet], { projects: { p1: project('p1', { quiet: { enabled: false } }) } })
+  assert.deepEqual(applySettingsPatch({}, { quietKey: 'anything' }, plain.registry.settingRules), { quietKey: 'anything' }, 'no check: the kind only')
+})
+
+test('ticketProviders: those of the plugins on in the project, in registration order', (t) => {
+  const provider = (id) => ({ id, owns: () => false, parse: () => null, label: (x) => x, url: () => null })
+  const a = { manifest: manifest('a'), setup: () => ({ handlers: {}, ticketProvider: provider('a') }) }
+  const b = { manifest: manifest('b'), setup: () => ({ handlers: {}, ticketProvider: provider('b') }) }
+  const none = { manifest: manifest('none'), setup: () => ({ handlers: {} }) }
+  const { registry } = setup(t, [a, none, b], { projects: { p1: project('p1'), p2: project('p2', { a: { enabled: false } }) } })
+  assert.deepEqual(registry.ticketProviders('p1').map((p) => p.id), ['a', 'b'])
+  assert.deepEqual(registry.ticketProviders('p2').map((p) => p.id), ['b'])
+  assert.deepEqual(registry.ticketProviders('gone'), [])
+})
+
+test("dispatchV2: project.updateSettings and its expected take a plugin's keys", async (t) => {
+  const { ProjectState } = await import('../server/src/projects/state.ts')
+  const { TopicHub } = await import('../server/src/topicHub.ts')
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} }, [{ id: 'p1', name: 'P', settings: {}, repositories: [], globalSessions: [] }])
+  const tracker = { manifest: manifest('tracker', { projectSettings: { trackerSpace: 'string' } }), setup: () => ({ handlers: {} }) }
+  const { registry } = setup(t, [tracker], { projects, hub })
+  const ctx = { projects, plugins: registry, sessions: { refreshAttention() {} } }
+  assert.equal((await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'team' } }, ctx)).ok, true)
+  assert.equal(projects.require('p1').settings.trackerSpace, 'team')
+  const stale = await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'x' }, expected: { trackerSpace: 'old' } }, ctx)
+  assert.equal(stale.error.code, 'CONFLICT')
+  assert.equal((await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'x' } }, { ...ctx, plugins: undefined })).error.code, 'BAD_REQUEST')
 })
