@@ -12,7 +12,7 @@ import { ServerConnection, globalSocketFactory } from '../shared/client/index.ts
 import { CAPABILITY } from '../shared/protocolV2.ts'
 import { appSettings, updateAppSettings } from './appSettings'
 import { createSecretStore, writeFileAtomic, type SecretRead, type SecretStore } from './secrets'
-import { handOver, nothingToHandOver, readHandoverState, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
+import { handOver, nothingToHandOver, readHandoverState, type HandoverRequest, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
 import { localProfileKey, localServerStatus, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 
 const STATE_FILE = 'integrations-handover.json'
@@ -96,7 +96,7 @@ const writeState = (state: HandoverState): Promise<void> => writeFileAtomic(stat
 async function migrateVoiceActive(): Promise<void> {
   const state = readState("move this app's voice Active/Busy into the app settings")
   if (!state || state.voiceActive) return
-  if (readLegacyVoice().active === false && appSettings().voiceActive) await updateAppSettings({ voiceActive: false })
+  if (readLegacyVoice().active === false && appSettings().plugins.voice?.active !== false) await updateAppSettings({ plugins: { voice: { active: false } } })
   state.voiceActive = true
   await writeState(state)
 }
@@ -118,7 +118,9 @@ async function run(): Promise<void> {
     const conn = url && token ? await connectLocal(url, token) : null
     if (conn) {
       try {
-        next = await handOver((method, params) => conn.request(method, params as never, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
+        // voice.* is the voice plugin's (plugin system phase 1), not in the core protocol's types.
+        const request = conn.request.bind(conn) as unknown as (method: Parameters<HandoverRequest>[0], params: unknown, options: { timeoutMs: number }) => Promise<unknown>
+        next = await handOver((method, params) => request(method, params, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
       } finally {
         conn.close()
       }

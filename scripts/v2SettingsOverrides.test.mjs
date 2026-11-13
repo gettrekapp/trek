@@ -40,6 +40,7 @@ function setup() {
 const SETTINGS_SETTERS = [
   'setClaudePermissionMode',
   'setAudioAlerts',
+  'setPluginEnabled',
   'setTitleBarColor',
   'setLogoImage',
   'setBannerImage',
@@ -98,6 +99,49 @@ test('each setter sends its key in the server form, with the current value as ex
     ['updateSettings', { llmDefault: { provider: 'codex' } }, { llmDefault: null }],
     ['updateSettings', { linearWorkspace: 'acme' }, { linearWorkspace: null }]
   ])
+})
+
+test("setPluginEnabled sends the whole plugins setting, built on what the window shows (a pending edit kept)", async () => {
+  const { o, calls } = setup()
+  o.setPluginEnabled('voice', false)
+  // The second edit of the field waits for the first, and builds on it.
+  o.setPluginEnabled('other', true)
+  await new Promise((r) => setTimeout(r, 10))
+  assert.deepEqual(calls, [
+    ['updateSettings', { plugins: { voice: { enabled: false } } }, { plugins: null }],
+    ['updateSettings', { plugins: { voice: { enabled: false }, other: { enabled: true } } }, { plugins: { voice: { enabled: false } } }]
+  ])
+})
+
+test("a CONFLICT on plugins rebases per plugin: another window's switch is kept", async () => {
+  const calls = []
+  let conflicts = 1
+  const mirror = project()
+  const requests = {
+    updateSettings: async (settings, expected) => {
+      calls.push([settings, expected])
+      if (conflicts-- > 0) {
+        // Another window turned X off meanwhile.
+        mirror.settings = { ...mirror.settings, plugins: { x: { enabled: false } } }
+        throw Object.assign(new Error('changed'), { code: 'CONFLICT' })
+      }
+      mirror.settings = { ...mirror.settings, ...settings }
+    },
+    rename: async () => {},
+    setLinkedDirs: async () => {},
+    setEnvironments: async () => {},
+    setBranchEnv: async () => {}
+  }
+  const asked = []
+  const writer = createSettingsWriter({ project: () => mirror, changed: () => {}, askConflict: async (q) => (asked.push(q), 'reload'), reload: () => {}, reportEdit: () => {} })
+  const o = v2SettingsOverrides(writer, requests, () => mirror)
+  o.setPluginEnabled('voice', false)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(calls, [
+    [{ plugins: { voice: { enabled: false } } }, { plugins: null }],
+    [{ plugins: { x: { enabled: false }, voice: { enabled: false } } }, { plugins: { x: { enabled: false } } }]
+  ])
+  assert.deepEqual(asked, [], 'no clash: a different plugin')
 })
 
 test('the project name goes through project.rename, linked directories through repo.update', () => {

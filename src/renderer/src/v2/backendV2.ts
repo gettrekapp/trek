@@ -26,6 +26,7 @@ import {
   type PromoteFollower
 } from './promoteFlow.ts'
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
+import type { PluginPresence } from '../../../shared/plugins/manifest.ts'
 import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
@@ -99,6 +100,8 @@ export interface V2BackendDeps {
   requestWithRev: V2RequestWithRev
   /** The last welcome's capabilities; undefined before the first one */
   capabilities(): readonly string[] | undefined
+  /** The last welcome's plugins; undefined before the first one and from a server older than plugins */
+  welcomePlugins(): readonly PluginPresence[] | undefined
   /** The window's entry is the Local server's: with `local` in the welcome, its paths are this machine's (`v2Features`) */
   localEntry: boolean
   /** The server's events of one name on the window's connection (`docker.log`, `env.log`); returns the unsubscribe */
@@ -177,13 +180,6 @@ const PROMOTE_FAILED = 'Could not promote worktree'
 const DEMOTE_FAILED = 'Could not move the branch to a worktree'
 /** docker start, stop and restart (the server gives docker two minutes) */
 const CONTAINER_MS = 3 * 60_000
-/** A base64 text (an mp3 over the wire) as bytes. */
-export function base64Bytes(text: string): Uint8Array {
-  const binary = atob(text)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
 
 const NOT_REGISTERED = "Registered on the server but it isn't visible here yet — try again."
 
@@ -711,25 +707,6 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           if (parts.linear) listener()
         })
     },
-    voice: {
-      settings: () => request('voice.settings', {}),
-      setKey: (apiKey) => request('voice.setKey', { apiKey }),
-      clearKey: async () => {
-        await request('voice.clearKey', {})
-      },
-      voices: () => request('voice.voices', {}),
-      setConfig: (patch) => request('voice.setConfig', patch),
-      synthesize: async (text) => base64Bytes((await request('voice.synthesize', { text })).audio),
-      // Only this project's: the server sends a project's summaries to its subscribers only.
-      onSummary: (listener) =>
-        deps.onEvent('voice.summary', (event) => {
-          if (event.projectId === projectId) listener(event)
-        }),
-      onChanged: (listener) =>
-        deps.onEvent('integrations.changed', (parts) => {
-          if (parts.voice) listener()
-        })
-    },
     skills: {
       list: async (loc) => request('skills.list', { projectId, worktreeId: worktreeAt(loc.path) })
     },
@@ -833,6 +810,18 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         else void deps.showError(title, withPromptText(errorText(err), text))
       },
       inline: (err) => (deps.left() || errorCode(err) === 'NOT_CONNECTED' ? null : errorText(err))
+    },
+    // Each plugin types its own methods and events; here they are the wire's names, untyped.
+    plugins: {
+      projectId,
+      welcome: () => {
+        const capabilities = deps.capabilities()
+        if (!capabilities) return undefined
+        const plugins = deps.welcomePlugins()
+        return plugins ? { plugins, capabilities } : { capabilities }
+      },
+      request: (method, params) => (deps.request as unknown as (m: string, p: Record<string, unknown>) => Promise<unknown>)(method, params),
+      onEvent: (event, listener) => (deps.onEvent as unknown as (e: string, l: (payload: unknown) => void) => () => void)(event, listener)
     }
   }
   return backend

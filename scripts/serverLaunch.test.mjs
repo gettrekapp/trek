@@ -41,14 +41,14 @@ test('global sessions get the global prompt and addDirs; the role prompt only wi
   assert.match(withMcp.command, /--mcp-config '\/c.json'/)
 })
 
-test("the voice prompt goes before the user's prompts (they can override it), after a Global session's role, and only with MCP", () => {
+test("the plugins' prompt goes before the user's prompts (they can override it), after a Global session's role, and only with MCP", () => {
   const mcp = { configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }
-  const worktree = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', voicePrompt: 'VOICE', mcp }, { sessionSystemPrompt: 'SHARED' }, DEFAULT_LLM_SETTINGS)
+  const worktree = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', pluginPrompt: 'VOICE', mcp }, { sessionSystemPrompt: 'SHARED' }, DEFAULT_LLM_SETTINGS)
   assert.match(worktree.command, /--append-system-prompt 'VOICE\n\nTYPE\n\nSHARED'/)
-  const global = agentCommand({ ...base, global: true, llm: { provider: 'claude' }, voicePrompt: 'VOICE', mcp }, { globalSystemPrompt: 'G' }, DEFAULT_LLM_SETTINGS)
+  const global = agentCommand({ ...base, global: true, llm: { provider: 'claude' }, pluginPrompt: 'VOICE', mcp }, { globalSystemPrompt: 'G' }, DEFAULT_LLM_SETTINGS)
   assert.match(global.command, /global Claude session[^']*\n\nVOICE\n\nG'/)
   // Without the MCP tools there is no speak_summary to call.
-  const noMcp = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', voicePrompt: 'VOICE' }, {}, DEFAULT_LLM_SETTINGS)
+  const noMcp = agentCommand({ ...base, llm: { provider: 'claude' }, systemPrompt: 'TYPE', pluginPrompt: 'VOICE' }, {}, DEFAULT_LLM_SETTINGS)
   assert.match(noMcp.command, /--append-system-prompt 'TYPE'/)
 })
 

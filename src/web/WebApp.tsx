@@ -8,9 +8,8 @@ import { ServerProjectWindow } from '../renderer/src/v2/ServerProjectWindow'
 import { connectServerEntry } from '../renderer/src/v2/serverClients'
 import { requestSessionSelect, watchAttention } from '../renderer/src/attentionSelect'
 import { useLinearSync } from '../renderer/src/linear'
-import { useVoice } from '../renderer/src/voice'
 import { loadLlmSettings } from '../renderer/src/llm'
-import { SummaryBubble } from '../renderer/src/components/SummaryBubble'
+import { PluginRuntimes, PluginSlot } from '../renderer/src/plugins/PluginHost'
 import { titleBarForeground } from '../shared/appearance'
 import { STATUS_LABELS } from '../shared/appServerRules.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
@@ -47,7 +46,6 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
   const serverName = registered.connection.welcome?.serverName || 'trek-server'
 
   useLinearSync()
-  useVoice()
 
   useEffect(() => {
     void loadLlmSettings()
@@ -150,7 +148,8 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
       ) : (
         <ProjectsPage registered={registered} status={status} />
       )}
-      <SummaryBubble />
+      <PluginRuntimes />
+      <PluginSlot name="overlay" />
       <WebDialogHost />
     </div>
   )

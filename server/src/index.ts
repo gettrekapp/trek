@@ -20,7 +20,8 @@ import { formatRepoList } from './repos'
 import { startServer } from './server'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
-import { createIntegrations, testEndpoint, VOICE_CONFIG_FILE } from './integrations/integrations'
+import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
+import { createIntegrations, testEndpoint } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import { ghFromEnv } from './prWatch/gh'
@@ -502,9 +503,7 @@ const server = startServer(
     machine: createMachine(serverDataDir, { local: local !== undefined }),
     integrations: createIntegrations({
       secretsFile: secretsPathFor(resolve(args.configPath)),
-      linearEndpoint: testEndpoint('TREK_SERVER_LINEAR_URL', process.env.TREK_SERVER_LINEAR_URL),
-      voiceConfigFile: resolve(serverDataDir, VOICE_CONFIG_FILE),
-      elevenLabsApi: testEndpoint('TREK_SERVER_ELEVENLABS_URL', process.env.TREK_SERVER_ELEVENLABS_URL)
+      linearEndpoint: testEndpoint('TREK_SERVER_LINEAR_URL', process.env.TREK_SERVER_LINEAR_URL)
     }),
     prWatch: {
       gh: ghFromEnv(process.env.TREK_SERVER_GH),
@@ -514,6 +513,8 @@ const server = startServer(
     },
     // Background push (6b): the phones' relay grants live in the same secrets file.
     push: { secretsFile: secretsPathFor(resolve(args.configPath)) },
+    // The plugins (plugin system phase 1): their keys in the same secrets file, their files in `<dataDir>/plugins/<id>`.
+    plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
     web: webBundle ? { bundle: webBundle } : undefined,
     onStopRequest: local ? () => shutdown('server.stop') : undefined
   }

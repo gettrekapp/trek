@@ -1,6 +1,6 @@
 // Write-then-rename, so a reader (or a file watcher) never sees a half-written file. The temp
 // file is recreated each time so it never keeps a looser mode. Electron-free: the server's files
-// and the host services' own (voiceService's voice.json).
+// and the plugins' own (the voice plugin's config.json).
 //
 // Windows: renaming over a file fails with EPERM, EBUSY or EACCES while anything has it open
 // without FILE_SHARE_DELETE (an antivirus scan, the search indexer, an editor, a reader of the

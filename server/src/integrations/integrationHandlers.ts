@@ -1,8 +1,8 @@
-// Linear and ElevenLabs with the server's own API keys, and the skills on its disk (phase 5b;
-// capabilities `linear`, `voice` and `skills`). Before 5b the app's main process kept one key of each for every window; now each server
-// has its own, in its secrets file (secrets.ts), set from any client and never sent back.
-import { MAX_SPOKEN_CHARS } from '../../../src/host/voiceService.ts'
-import type { VoiceServerConfig } from '../../../src/shared/types'
+// Linear with the server's own API key, and the skills on its disk (phase 5b; capabilities
+// `linear` and `skills`). Before 5b the app's main process kept one key for every window; now each
+// server has its own, in its secrets file (secrets.ts), set from any client and never sent back.
+// (ElevenLabs is the voice plugin's since plugin system phase 1: plugins/voice.)
+import { optionalFlag, requireApiKey } from '../../../src/shared/plugins/server.ts'
 import type { V2Context } from '../v2.ts'
 import { present } from '../worktreeHandlers.ts'
 import { codedError } from '../errors.ts'
@@ -12,25 +12,8 @@ type Handler = (params: any, ctx: V2Context) => unknown
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
-const MAX_KEY = 1024
 const MAX_IDS = 500
 const MAX_ID = 64
-
-/** An API key: trimmed, not empty, printable, no whitespace inside (it goes into an HTTP header). */
-export function requireApiKey(value: unknown): string {
-  if (typeof value !== 'string') throw bad('apiKey must be a string')
-  const key = value.trim()
-  if (!key) throw bad('apiKey is required')
-  if (key.length > MAX_KEY) throw bad(`apiKey must be at most ${MAX_KEY} characters`)
-  if (!/^[\x21-\x7e]+$/.test(key)) throw bad('apiKey must be printable ASCII with no spaces')
-  return key
-}
-
-export function optionalFlag(value: unknown, field: string): boolean {
-  if (value === undefined) return false
-  if (typeof value !== 'boolean') throw bad(`${field} must be a boolean`)
-  return value
-}
 
 function requireIssueIds(value: unknown): string[] {
   if (!Array.isArray(value)) throw bad('ids must be an array of strings')
@@ -39,45 +22,13 @@ function requireIssueIds(value: unknown): string[] {
   return value as string[]
 }
 
-/** An ElevenLabs voice id (alphanumeric; it goes into the request's path, encoded too). */
-const VOICE_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
-const MODEL_ID_RE = /^[A-Za-z0-9_.-]{1,128}$/
-
-function requireVoicePatch(p: Record<string, unknown>): Partial<VoiceServerConfig> {
-  const patch: Partial<VoiceServerConfig> = {}
-  for (const key of Object.keys(p)) {
-    if (key !== 'voiceId' && key !== 'modelId' && key !== 'promptSessions') throw bad(`${key} is not a voice setting`)
-  }
-  if (p.voiceId !== undefined) {
-    if (typeof p.voiceId !== 'string' || !VOICE_ID_RE.test(p.voiceId)) throw bad('voiceId must be an ElevenLabs voice id')
-    patch.voiceId = p.voiceId
-  }
-  if (p.modelId !== undefined) {
-    if (typeof p.modelId !== 'string' || !MODEL_ID_RE.test(p.modelId)) throw bad('modelId must be an ElevenLabs model id')
-    patch.modelId = p.modelId
-  }
-  if (p.promptSessions !== undefined) patch.promptSessions = optionalFlag(p.promptSessions, 'promptSessions')
-  return patch
-}
-
-/** The text to speak: trimmed, not empty, at most MAX_SPOKEN_CHARS. */
-export function requireSpokenText(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw bad(`${field} is required`)
-  const text = value.trim()
-  if (text.length > MAX_SPOKEN_CHARS) {
-    throw bad(`${field} is ${text.length} characters; keep it to one to three short sentences (at most ${MAX_SPOKEN_CHARS})`)
-  }
-  return text
-}
-
 export const integrations = (ctx: V2Context): Integrations => {
   if (!ctx.integrations) throw codedError('NOT_FOUND', 'this server has no integrations')
   return ctx.integrations
 }
 
 /**
- * Any failure (Linear or ElevenLabs down or refusing, the secrets or voice file unreadable or
- * unwritable) is TOOL_ERROR with its message, never INTERNAL; only BAD_REQUEST and NOT_FOUND (no
+ * Any failure (Linear down or refusing, the secrets file unreadable or unwritable) is TOOL_ERROR with its message, never INTERNAL; only BAD_REQUEST and NOT_FOUND (no
  * integrations, a worktree that is not there) pass through as they are.
  */
 export async function viaService<T>(operation: () => T | Promise<T>): Promise<T> {
@@ -94,7 +45,7 @@ export async function viaService<T>(operation: () => T | Promise<T>): Promise<T>
 const stored = (result: unknown): boolean => (result as { ok?: unknown } | null)?.ok === true
 
 /** Runs `operation`, then tells every connection that `part` changed (only when `changed` says so). */
-async function changing<T>(ctx: V2Context, part: 'linear' | 'voice', operation: () => T | Promise<T>, changed: (result: T) => boolean = () => true): Promise<T> {
+async function changing<T>(ctx: V2Context, part: 'linear', operation: () => T | Promise<T>, changed: (result: T) => boolean = () => true): Promise<T> {
   const result = await viaService(operation)
   if (changed(result)) ctx.integrationsChanged?.({ [part]: true })
   return result
@@ -121,49 +72,9 @@ export const integrationHandlers: Record<string, Handler> = {
     return viaService(() => integrations(ctx).linear.issues(ids))
   },
 
-  'voice.settings': (_p, ctx) => viaService(() => integrations(ctx).voice.settings()),
-
-  // The service's own refusal is `{ ok: false }`; the secrets file failing is TOOL_ERROR.
-  'voice.setKey': (p, ctx) => {
-    const apiKey = requireApiKey(p.apiKey)
-    const ifAbsent = optionalFlag(p.ifAbsent, 'ifAbsent')
-    // A key stored whose first voice could not be saved throws (TOOL_ERROR), but the key changed.
-    return changing(
-      ctx,
-      'voice',
-      async () => {
-        try {
-          return await integrations(ctx).voice.setKey(apiKey, { ifAbsent })
-        } catch (err) {
-          if ((err as { keyStored?: unknown }).keyStored === true) ctx.integrationsChanged?.({ voice: true })
-          throw err
-        }
-      },
-      stored
-    )
-  },
-
-  'voice.clearKey': (_p, ctx) =>
-    changing(ctx, 'voice', () => {
-      integrations(ctx).voice.clearKey()
-      return null
-    }),
-
-  'voice.voices': (_p, ctx) => viaService(() => integrations(ctx).voice.voices()),
-
-  'voice.setConfig': (p, ctx) => {
-    const patch = requireVoicePatch(p)
-    return changing(ctx, 'voice', () => integrations(ctx).voice.setConfig(patch))
-  },
-
   // The worktree's path from the server's state, checked as the worktree commands check it.
   'skills.list': (p, ctx) => {
     const { worktree } = present(ctx, p)
     return viaService(() => integrations(ctx).skills.list(worktree.path))
-  },
-
-  'voice.synthesize': (p, ctx) => {
-    const text = requireSpokenText(p.text, 'text')
-    return viaService(async () => ({ audio: Buffer.from(await integrations(ctx).voice.synthesize(text)).toString('base64') }))
   }
 }

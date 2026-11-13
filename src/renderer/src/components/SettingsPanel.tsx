@@ -4,7 +4,7 @@ import { useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { ENV_DEFAULTS } from '../../../shared/environments'
 import { LinearSettings } from './LinearSettings'
-import { VoiceSettings } from './VoiceSettings'
+import { PluginsSettings } from '../plugins/PluginsSettings'
 import { NotificationSettings } from './NotificationSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
 import { AppearanceSettings } from './AppearanceSettings'
@@ -40,8 +40,8 @@ function NeedsUpdate({ title, what }: { title: string; what: string }): React.JS
 
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // The project's settings are edited on the server: text is committed on blur (each commit is a
-  // request), Linear, Voice and the environments show where the window's server has them (their
-  // keys and VMs are the server's), and a conflict's Reload remounts it.
+  // request), Linear and the environments show where the window's server has them (its key and
+  // VMs are the server's), the plugins where it has them (PluginsSettings), and a conflict's Reload remounts it.
   const features = useFeatures()
   const connected = useAppStore((s) => s.serverLink === 'connected')
   const sections = settingsSections(features, { connected })
@@ -227,8 +227,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         <NotificationSettings />
         {sections.linear === 'edit' && <LinearSettings />}
         {sections.linear === 'needsUpdate' && <NeedsUpdate title="Linear" what="Linear" />}
-        {sections.voice === 'edit' && <VoiceSettings />}
-        {sections.voice === 'needsUpdate' && <NeedsUpdate title="Voice summaries" what="voice summaries" />}
+        <PluginsSettings />
         <LlmSettings projectOnly={sections.agents === 'project'} />
         <h3>Worktree tags</h3>
         <WorktreeTagsEditor

@@ -15,7 +15,7 @@ import {
   worktreeStatus
 } from '../store'
 import { NotificationsMenu } from './NotificationsMenu'
-import { VoiceToggle } from './VoiceToggle'
+import { PluginSlot } from '../plugins/PluginHost'
 import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
@@ -467,7 +467,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           placeholder="Filter worktrees…"
           spellCheck={false}
         />
-        {features.voice && <VoiceToggle />}
+        <PluginSlot name="sidebarToolbar" />
         <NotificationsMenu />
       </div>
       <div className="sidebar-heading">

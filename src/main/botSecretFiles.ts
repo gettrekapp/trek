@@ -6,7 +6,8 @@
 // Policy also denies each one's temp and set-aside copies (`<name>.<pid>.tmp`, `<name>.corrupt-<time>`),
 // and `*` stands for any run of characters in a name, for the per-window MCP configs.
 export const BOT_SECRET_FILES = [
-  // Encrypted secret stores (createSecretStore)
+  // Encrypted secret stores (createSecretStore); elevenlabs.json is the 5b app's key, handed to the
+  // Local server once (now the voice plugin's, in the server's secrets.json)
   'elevenlabs.json',
   'linear.json',
   'server-tokens.json',

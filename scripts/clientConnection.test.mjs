@@ -36,6 +36,20 @@ test('the welcome carries the server\'s OS when it says (a Windows server: its b
   assert.equal(conn.welcome.windowsBuild, 22631)
 })
 
+test("the welcome's plugins (plugin system phase 1): kept when listed, bad entries dropped; absent from an older server", () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome({ plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }, { id: 'Bad', version: '1', defaultEnabled: true }, 'x'] })
+  assert.deepEqual(conn.welcome.plugins, [{ id: 'voice', version: '1.0.0', defaultEnabled: true }])
+  const older = setup()
+  older.conn.connect()
+  older.server.last().open()
+  older.server.last().welcome()
+  assert.equal('plugins' in older.conn.welcome, false)
+})
+
 test('requests resolve, fail with the wire code, time out, and reject when not connected', async () => {
   const { server, clock, conn } = setup()
   await assert.rejects(conn.request('sys.ping', { t: 1 }), (e) => e.code === 'NOT_CONNECTED')

@@ -3,19 +3,15 @@
 // endpoint can be pointed elsewhere (a test's stub server).
 import type { LinearIssue, LinearKeyResult } from '../shared/types'
 import { MAX_JSON_BYTES, readBodyCapped } from './httpBody.ts'
+import { PRESENT_ERROR, type KeySlot } from '../shared/plugins/server.ts'
+
+export { PRESENT_ERROR, type KeySlot }
 
 export const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
 export const LINEAR_ISSUE_ID = /^[A-Z][A-Z0-9]*-\d+$/
 /** Linear caps query complexity, so large lookups are split into batches. */
 const BATCH_SIZE = 50
 const TIMEOUT_MS = 15_000
-
-/** Where the key lives; it never leaves the server. */
-export interface KeySlot {
-  get(): string | null
-  set(value: string | null): void
-  setIfAbsent(value: string): boolean
-}
 
 export interface LinearService {
   hasKey(): boolean
@@ -45,7 +41,6 @@ interface RawIssue {
   state: { name: string; type: string; color: string }
 }
 
-export const PRESENT_ERROR = 'This server already has a key; it was kept'
 
 export function createLinearService(options: { key: KeySlot; endpoint?: string; fetch?: typeof fetch }): LinearService {
   const endpoint = options.endpoint ?? LINEAR_ENDPOINT

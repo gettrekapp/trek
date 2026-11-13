@@ -1,13 +1,14 @@
-import { useAppStore } from '../store'
-import { terminalLabel } from '../terminals'
-import { stopSummary } from '../voice'
+import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import { stopSummary } from './playback.ts'
+import { useVoiceStore } from './store.ts'
 
 /** Floats while a spoken summary plays; clicking it stops the audio. */
 export function SummaryBubble(): React.JSX.Element | null {
-  const playing = useAppStore((s) => s.voicePlaying)
-  const queued = useAppStore((s) => s.voiceQueued)
+  const host = usePluginHost()
+  const playing = useVoiceStore((s) => s.playing)
+  const queued = useVoiceStore((s) => s.queued)
   if (!playing) return null
-  const source = playing.terminalId ? terminalLabel(playing.terminalId) : 'Test'
+  const source = playing.terminalId ? host.terminalLabel(playing.terminalId) : 'Test'
   return (
     <button className="summary-bubble" title="Click to stop" onClick={stopSummary}>
       <span className="summary-bubble-wave" aria-hidden="true">

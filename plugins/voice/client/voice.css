@@ -1,0 +1,130 @@
+/* The voice plugin: the sidebar's Active/Busy toggle and the bubble while a summary plays. */
+.voice-toggle {
+  height: 32px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bg-lighter);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.voice-toggle:hover {
+  color: var(--text);
+}
+
+.voice-toggle-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+.voice-toggle.active .voice-toggle-dot {
+  background: var(--done);
+  box-shadow: 0 0 6px var(--done);
+}
+
+.summary-bubble {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1000;
+  max-width: 380px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  animation: summary-bubble-in 0.18s ease-out;
+}
+
+.summary-bubble:hover {
+  border-color: var(--accent);
+}
+
+.summary-bubble:hover .summary-bubble-stop {
+  color: var(--text);
+}
+
+@keyframes summary-bubble-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.summary-bubble-wave {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+  padding-top: 2px;
+}
+
+.summary-bubble-wave span {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: summary-wave 0.9s ease-in-out infinite;
+}
+
+.summary-bubble-wave span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.summary-bubble-wave span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes summary-wave {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.summary-bubble-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.summary-bubble-source {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.summary-bubble-queued {
+  font-weight: 400;
+}
+
+.summary-bubble-text {
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.summary-bubble-stop {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-top: 2px;
+}

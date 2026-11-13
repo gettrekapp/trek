@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useAppStore } from '../store'
-import { getBackend } from '../backend'
-import { loadVoiceSettings, testVoice, updateVoiceConfig } from '../voice'
-import type { VoiceInfo } from '../../../shared/types'
+import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import type { VoiceInfo } from '../shared/types.ts'
+import { loadVoiceSettings, setVoiceKey, testVoice, updateVoiceConfig } from './playback.ts'
+import { useVoiceStore } from './store.ts'
 
 const MODELS = [
   { id: 'eleven_flash_v2_5', label: 'Flash v2.5 — fastest, cheapest' },
@@ -12,7 +12,8 @@ const MODELS = [
 
 /** ElevenLabs key and voice — the window's server's, shared by every project on it. */
 export function VoiceSettings(): React.JSX.Element {
-  const voice = useAppStore((s) => s.voice)
+  const host = usePluginHost()
+  const voice = useVoiceStore((s) => s.settings)
   const [apiKey, setApiKey] = useState('')
   const [voices, setVoices] = useState<VoiceInfo[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -21,11 +22,11 @@ export function VoiceSettings(): React.JSX.Element {
 
   useEffect(() => {
     if (!connected) return
-    getBackend()
-      .voice.voices()
+    host
+      .request<VoiceInfo[]>('voices')
       .then(setVoices)
       .catch((err: Error) => setError(err.message))
-  }, [connected])
+  }, [connected, host])
 
   const fail = (err: unknown): void => setError(err instanceof Error ? err.message : String(err))
 
@@ -34,14 +35,14 @@ export function VoiceSettings(): React.JSX.Element {
     setBusy(true)
     setError(null)
     try {
-      const result = await getBackend().voice.setKey(apiKey)
+      const result = await setVoiceKey(host, apiKey)
       if (!result.ok) {
         setError(result.error)
         return
       }
       setApiKey('')
       setVoices(result.voices)
-      await loadVoiceSettings()
+      await loadVoiceSettings(host)
     } catch (err) {
       fail(err)
     } finally {
@@ -51,23 +52,23 @@ export function VoiceSettings(): React.JSX.Element {
 
   const disconnect = async (): Promise<void> => {
     try {
-      await getBackend().voice.clearKey()
+      await host.request('clearKey')
       setVoices([])
-      await loadVoiceSettings()
+      await loadVoiceSettings(host)
     } catch (err) {
       fail(err)
     }
   }
 
-  const update = (patch: Parameters<typeof updateVoiceConfig>[0]): void => {
+  const update = (patch: Parameters<typeof updateVoiceConfig>[1]): void => {
     setError(null)
-    updateVoiceConfig(patch).catch(fail)
+    updateVoiceConfig(host, patch).catch(fail)
   }
 
   const test = async (): Promise<void> => {
     setError(null)
     try {
-      const result = await testVoice('This is how spoken summaries from your agent sessions will sound.')
+      const result = await testVoice(host, 'This is how spoken summaries from your agent sessions will sound.')
       if (!result.played) setError(result.reason)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

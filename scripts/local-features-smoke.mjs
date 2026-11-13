@@ -15,7 +15,8 @@
 //   - main's row: Open in VS Code and Reveal call main with the repository's path; the Docker tab
 //     is there, and its compose menu runs `docker compose up -d` in the repository;
 //   - the hand-over (5b): the app's Linear and ElevenLabs keys and voice settings are the Local
-//     server's (its secrets file and voice.json), asked of neither service; Busy is an app setting;
+//     server's (its secrets file and the voice plugin's config.json), asked of neither service;
+//     Busy is the voice plugin's app pref;
 //   - Settings show Linear, Voice and Environments; the environments switch is saved on the server
 //     (repo.update), and the environments poll starts (the tool check, colima list);
 //   - the feature row's env badge; its tabs: Changes, Notes, Env, Stack, Settings; its header's
@@ -337,8 +338,9 @@ try {
   check('main handed the Linear and ElevenLabs settings to this Local profile once', await until(() => (existsSync(handover) ? JSON.parse(readFileSync(handover, 'utf8')) : null), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true }), { profiles: { 'local-dev': { linear: true, voice: true } }, voiceActive: true })
   const serverSecrets = join(profile, 'secrets.json')
   check("the keys are the Local server's now, in its secrets file, owner-only", [existsSync(serverSecrets) ? JSON.parse(readFileSync(serverSecrets, 'utf8')) : null, existsSync(serverSecrets) ? statSync(serverSecrets).mode & 0o777 : null], [{ linear: 'lin_api_from_app', elevenlabs: 'sk_from_app' }, 0o600])
-  check('and the voice and model, with Summarize automatically', existsSync(join(localData, 'voice.json')) ? JSON.parse(readFileSync(join(localData, 'voice.json'), 'utf8')) : null, { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true })
-  check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).voiceActive, false)
+  const voiceFile = join(localData, 'plugins', 'voice', 'config.json')
+  check("and the voice and model, with Summarize automatically (the voice plugin's config)", existsSync(voiceFile) ? JSON.parse(readFileSync(voiceFile, 'utf8')) : null, { voiceId: 'v9', modelId: 'eleven_turbo_v2_5', promptSessions: true })
+  check("Busy stays this app's: an app setting now", (await win.evaluate(() => window.api.appSettings.get())).plugins.voice?.active, false)
   check('the hand-over asked neither Linear nor ElevenLabs', serviceRequests, [])
   check("the app's key files are left as they were", [readFileSync(join(userData, 'linear.json'), 'utf8').includes(plain('lin_api_from_app')), JSON.parse(readFileSync(join(userData, 'voice-settings.json'), 'utf8'))], [true, legacyVoice])
   await sdk.request('server.addRepo', { path: repo })
@@ -363,10 +365,10 @@ try {
   }, projectId)
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
-  check("the window's features: the machine-local ones, the server's Linear, voice and skills, Move (5d) and Promote (5e)", await until(() => win.evaluate(() => {
+  check("the window's features: the machine-local ones, the server's Linear and skills, Move (5d) and Promote (5e)", await until(() => win.evaluate(() => {
     const f = window.__features()
-    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear, f.bot, f.voice, f.promote, f.moveWorktree]
-  }), [true, true, true, true, true, true, true, false, true, true, true]), [true, true, true, true, true, true, true, false, true, true, true])
+    return [f.docker, f.env, f.stacks, f.skills, f.reveal, f.openInEditor, f.linear, f.bot, f.promote, f.moveWorktree]
+  }), [true, true, true, true, true, true, true, false, true, true]), [true, true, true, true, true, true, true, false, true, true])
   check('its sidebar says Busy (the handed-over key, this app\'s setting)', await until(() => win.locator('.voice-toggle').textContent().catch(() => null), 'Busy'), 'Busy')
   const detail = win.locator('.server-window .detail')
   const mainRow = rows.filter({ hasNotText: 'feature-x' })

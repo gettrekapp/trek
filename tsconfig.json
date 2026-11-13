@@ -14,7 +14,7 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["src"],
+  "include": ["src", "plugins"],
   // The project bot's Electron wiring, dormant until phase 5 ports the bot onto trek-server: it
   // needs the desktop MCP server and file-window IPC that 4e deleted. Kept in the tree, imported by
   // nothing, so neither type-checked nor bundled. Its logic (src/host/bot/) is compiled and tested.

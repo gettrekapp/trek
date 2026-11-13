@@ -17,9 +17,13 @@ test('win32: every env.* and stack.* method refuses as unsupported, docker.* is 
 })
 
 test('win32: the welcome has no env or stacks capability; elsewhere it has both', () => {
-  const win = welcomeCapabilities(true, false, false, 'win32')
+  const win = welcomeCapabilities(true, false, false, [], 'win32')
   assert.equal(win.includes('env') || win.includes('stacks'), false)
   assert.ok(win.includes('docker'))
-  const linux = welcomeCapabilities(true, false, false, 'linux')
+  // The plugins' legacy capabilities don't bring them back.
+  const withPlugins = welcomeCapabilities(true, false, false, ['voice'], 'win32')
+  assert.equal(withPlugins.includes('env') || withPlugins.includes('stacks'), false)
+  assert.ok(withPlugins.includes('voice'))
+  const linux = welcomeCapabilities(true, false, false, [], 'linux')
   assert.ok(linux.includes('env') && linux.includes('stacks'))
 })

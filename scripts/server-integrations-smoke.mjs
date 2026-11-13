@@ -10,9 +10,11 @@
 // --user-data-dir, no Local server, and main's dialogs stubbed; the server is added as an app server,
 // and the window opens a project made through the SDK. Through the DOM and the server's MCP endpoint
 // it checks:
-//   - the window's features: linear, voice and skills on (the server's); Reveal and VS Code off;
+//   - the window's features: linear and skills on (the server's); Reveal and VS Code off;
 //   - Settings → Linear: a rejected key shows Linear's error; a good one connects, is stored in the
 //     server's secrets file (0600), and the branch's ticket chip shows the issue's title;
+//   - Settings → Plugins: voice on for the project (its default); off removes speak_summary from the
+//     project's MCP tools and the voice UI, on brings them back;
 //   - Settings → Voice: the key connects and lists the server key's voices; the chosen voice and
 //     "Summarize automatically" are saved on the server; Test synthesizes there, in that voice, and
 //     plays here;
@@ -247,6 +249,7 @@ try {
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
   check('the server says linear, voice and skills, and is not a local one', ['linear', 'voice', 'skills', 'local'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, false])
+  check('and lists its plugins: voice', sdk.welcome?.plugins, [{ id: 'voice', version: '1.0.0', defaultEnabled: true }])
   const { projectId } = await sdk.request('project.create', { name: 'integrations', repositories: [{ path: repo }] })
   const topic = `project:${projectId}`
   const project = async () => {
@@ -288,10 +291,10 @@ try {
   }, [entry.id, projectId])
   const rows = win.locator('.server-window .wt-row')
   await until(() => rows.count(), 2)
-  check("the window's features: the server's Linear, voice and skills; not this machine's", await until(() => win.evaluate(() => {
+  check("the window's features: the server's Linear and skills; not this machine's", await until(() => win.evaluate(() => {
     const f = window.__features()
-    return [f.linear, f.voice, f.skills, f.reveal, f.openInEditor]
-  }), [true, true, true, false, false]), [true, true, true, false, false])
+    return [f.linear, f.skills, f.reveal, f.openInEditor]
+  }), [true, true, false, false]), [true, true, false, false])
 
   // ---- 3. Settings → Linear, with the server's key ---------------------------------------------------
 
@@ -302,7 +305,9 @@ try {
   await detail.locator('.panel-btn[title="App settings"]').click()
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
-  check('Settings show Linear and Voice summaries', [await settings.locator('h3', { hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: 'Voice summaries' }).count()], [1, 1])
+  check('Settings show Linear, Plugins and Voice summaries', [await settings.locator('h3', { hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: /^Plugins$/ }).count(), await settings.locator('h3', { hasText: 'Voice summaries' }).count()], [1, 1, 1])
+  const voiceSwitch = settings.locator('label.settings-row', { hasText: 'Agent sessions read a short summary aloud' }).locator('input')
+  check('the voice plugin is on for the project (its default)', await voiceSwitch.isChecked(), true)
   const linearRow = settings.locator('.settings-row', { hasText: 'API key' }).filter({ has: win.locator('input[placeholder="lin_api_…"]') })
   await linearRow.locator('input').fill('lin_api_wrong')
   await linearRow.locator('button', { hasText: 'Connect' }).click()
@@ -325,7 +330,8 @@ try {
   const voiceSelect = settings.locator('.settings-row', { hasText: /^Voice/ }).locator('select')
   check("the key connects and lists the server key's voices", await until(() => voiceSelect.locator('option').allTextContents().catch(() => []), ['Rachel', 'Adam']), ['Rachel', 'Adam'])
   await voiceSelect.selectOption('v2')
-  const voiceConfig = () => (existsSync(join(data, 'voice.json')) ? JSON.parse(readFileSync(join(data, 'voice.json'), 'utf8')) : null)
+  const voiceFile = join(data, 'plugins', 'voice', 'config.json')
+  const voiceConfig = () => (existsSync(voiceFile) ? JSON.parse(readFileSync(voiceFile, 'utf8')) : null)
   check('the chosen voice is saved on the server', await until(() => voiceConfig()?.voiceId ?? null, 'v2'), 'v2')
   await settings.locator('label.settings-row', { hasText: 'Summarize automatically' }).locator('input').click()
   check('and "Summarize automatically"', await until(() => voiceConfig()?.promptSessions ?? null, true), true)
@@ -343,6 +349,9 @@ try {
   const tool = async (name, args) => {
     const res = await fetch(mcp.url, { method: 'POST', headers: { 'content-type': 'application/json', ...mcp.headers }, body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method: 'tools/call', params: { name, arguments: args } }) })
     const body = await res.json()
+    // A tool the project doesn't list (a plugin off there) is a JSON-RPC error, not an isError result.
+    // Folded into { isError, value }: a caller expecting success must compare `value` (or check isError), not only that it answered.
+    if (body.error) return { isError: true, value: body.error.message }
     const text = body.result?.content?.[0]?.text ?? ''
     try {
       return { isError: body.result?.isError === true, value: JSON.parse(text) }
@@ -359,11 +368,11 @@ try {
   check('in the voice the server has', speechRequests().at(-1), { voice: 'v2', text: 'The integrations are on the server.', model_id: 'eleven_flash_v2_5' })
   // Busy (this app's setting): the clip still comes, and is not played.
   await win.locator('.voice-toggle').click()
-  check('the sidebar toggle goes Busy, an app setting', await until(() => win.evaluate(async () => (await window.api.appSettings.get()).voiceActive), false), false)
+  check("the sidebar toggle goes Busy, the voice plugin's app pref", await until(() => win.evaluate(async () => (await window.api.appSettings.get()).plugins.voice?.active), false), false)
   // What the window's backend hears, played or not: the clip is counted only once it arrived.
   await win.evaluate(() => {
     window.__heard = []
-    window.__offHeard = window.__onVoiceSummary((text) => window.__heard.push(text))
+    window.__offHeard = window.__onPluginEvent('voice', 'summary', (e) => window.__heard.push(e.text))
   })
   const busySpoken = await tool('speak_summary', { terminalId: started.sessionId, summary: 'Nobody hears this.' })
   const heard = await until(() => win.evaluate(() => window.__heard.includes('Nobody hears this.')), true)
@@ -377,6 +386,24 @@ try {
   const read = async (terminalId) => (await tool('read_terminal', { terminalId, lines: 50 })).value.output ?? ''
   // Compared without whitespace: the screen wraps the long line.
   check('the session started after carries the voice prompt', await until(async () => (await read(started.sessionId)).replace(/\s+/g, '').includes('callthetrek-devspeak_summarytool'), true), true)
+
+  // ---- 5b. The voice plugin off for the project, then on again ---------------------------------------
+
+  const toolNames = async () => {
+    const res = await fetch(mcp.url, { method: 'POST', headers: { 'content-type': 'application/json', ...mcp.headers }, body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method: 'tools/list', params: {} }) })
+    return (await res.json()).result.tools.map((t) => t.name)
+  }
+  check('speak_summary is listed while voice is on', (await toolNames()).includes('speak_summary'), true)
+  await detail.locator('.panel-btn[title="App settings"]').click()
+  await voiceSwitch.click()
+  const pluginsSetting = async () => (await project()).settings.plugins ?? null
+  check("off: the project's plugins setting says so, on the server", await until(pluginsSetting, { voice: { enabled: false } }), { voice: { enabled: false } })
+  const offCall = await tool('speak_summary', { terminalId: started.sessionId, summary: 'Off.' })
+  check('off: speak_summary leaves the tools, its call is refused as unknown', [(await toolNames()).includes('speak_summary'), offCall.isError, offCall.value], [false, true, 'Unknown tool: speak_summary'])
+  check("off: the voice section and the sidebar's toggle are gone", [await until(() => settings.locator('h3', { hasText: 'Voice summaries' }).count(), 0), await until(() => win.locator('.voice-toggle').count(), 0)], [0, 0])
+  await voiceSwitch.click()
+  check('on again: speak_summary is back, and the toggle', [await until(async () => (await toolNames()).includes('speak_summary'), true), await until(() => win.locator('.voice-toggle').count(), 1)], [true, 1])
+  await detail.locator('.panel-btn[title="App settings"]').click()
 
   // ---- 6. A session's skill menu: the worktree's skill and the server user's command -----------------
 
@@ -402,7 +429,7 @@ try {
   await sdk.request('linear.clearKey', {})
   check("a key cleared elsewhere: the window's Linear goes disconnected", await until(() => win.evaluate(() => window.__store.getState().linearConnected), false), false)
   await sdk.request('voice.clearKey', {})
-  check("a voice key cleared elsewhere: the window's Voice settings follow", await until(() => win.evaluate(() => window.__store.getState().voice?.hasApiKey ?? null), false), false)
+  check("a voice key cleared elsewhere: the window follows (plugins.changed), its toggle gone", await until(() => win.locator('.voice-toggle').count(), 0), 0)
 
   // The store's state, the page, the window's own string globals and its web storage.
   const held = await win.evaluate(() => {

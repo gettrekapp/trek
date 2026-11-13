@@ -1,7 +1,7 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
-// Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts), and the
+// Linear and skills with the server's own key and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
 // moving a worktree between servers (moveHandlers.ts).
 import type { PairingCodes } from './pairing'
@@ -24,6 +24,7 @@ import { promoteHandlers } from './promote/promoteHandlers.ts'
 import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
+import type { PluginRegistry } from './plugins/registry.ts'
 import type { TerminalSink } from './sessions/terminalHost.ts'
 import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
@@ -64,9 +65,9 @@ export interface V2Context {
   machine?: Machine
   /** This connection, as a receiver of the `docker.log` and `env.log` its own requests stream */
   events?: EventSink
-  /** Linear and ElevenLabs with the server's own keys, and the skills on its disk (phase 5b) */
+  /** Linear with the server's own key, and the skills on its disk (phase 5b) */
   integrations?: Integrations
-  /** Tells every authenticated connection the keys or voice settings changed (`integrations.changed`) */
+  /** Tells every authenticated connection the Linear key changed (and a plugin's legacy capability, for clients older than plugins) (`integrations.changed`) */
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
   /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
   prWatch?: PrWatcher
@@ -82,6 +83,8 @@ export interface V2Context {
   requestStop?: () => void
   /** Background push (6b): each token's relay grant */
   push?: { grants: PushGrants }
+  /** The server's plugins (plugin system phase 1): a method no core handler has goes to plugin `<id>` */
+  plugins?: PluginRegistry
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -404,12 +407,23 @@ export function responseRev(method: string, params: unknown, hub: TopicHub): Top
   return rev === undefined ? undefined : { topic, rev }
 }
 
+/** Whether a core method's name starts with `prefix` (a plugin may not take a core namespace). */
+export function isCoreMethod(prefix: string): boolean {
+  return Object.keys(handlers).some((name) => name.startsWith(prefix))
+}
+
+/** A plugin's method (`<id>.<name>`), when no core method has the name. */
+function pluginHandler(method: string, ctx: V2Context): Handler | undefined {
+  const call = ctx.plugins?.handler(method)
+  return call ? (params) => call(params) : undefined
+}
+
 /**
  * Synchronous when the handler is: the caller can then answer in the same tick,
  * so a `sub.subscribe` response always precedes the patches it registered for.
  */
 export function dispatchV2(method: string, params: unknown, ctx: V2Context): Outcome | Promise<Outcome> {
-  const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined
+  const handler = Object.hasOwn(handlers, method) ? handlers[method] : pluginHandler(method, ctx)
   if (!handler) {
     return { ok: false, error: { code: 'NOT_FOUND', message: `Unknown method: ${method}` } }
   }

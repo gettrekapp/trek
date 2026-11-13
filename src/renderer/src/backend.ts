@@ -37,14 +37,10 @@ import type {
   StackLogChunk,
   StackStatus,
   WorktreeChanges,
-  VoiceInfo,
-  VoiceKeyResult,
-  VoiceServerConfig,
-  VoiceServerSettings,
   WorktreeInstance,
   WorktreeLocator
 } from '../../shared/types'
-import type { VoiceSummaryEvent } from '../../shared/protocolV2'
+import type { PluginWelcome } from './plugins/presence'
 import type { ReviewComment } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
 import type { PromoteAsked } from './v2/promoteFlow'
@@ -183,20 +179,6 @@ export interface WindowBackend {
     /** The server's key was set or cleared (by any client: another window, the hand-over); returns the unsubscribe */
     onChanged(listener: () => void): () => void
   }
-  /** ElevenLabs with the server's own API key (feature `voice`) */
-  readonly voice: {
-    settings(): Promise<VoiceServerSettings>
-    setKey(apiKey: string): Promise<VoiceKeyResult>
-    clearKey(): Promise<void>
-    voices(): Promise<VoiceInfo[]>
-    setConfig(patch: Partial<VoiceServerConfig>): Promise<VoiceServerConfig>
-    /** An mp3 of `text`, for this window only (Settings' Test) */
-    synthesize(text: string): Promise<Uint8Array>
-    /** The project's sessions' spoken summaries (speak_summary), as the server sends them; returns the unsubscribe */
-    onSummary(listener: (event: VoiceSummaryEvent) => void): () => void
-    /** The server's key or voice settings changed (by any client); returns the unsubscribe */
-    onChanged(listener: () => void): () => void
-  }
   /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
   readonly skills: {
     list(loc: WorktreeLocator): Promise<SkillInfo[]>
@@ -262,6 +244,19 @@ export interface WindowBackend {
     /** The error as one line for an inline message, or null when nothing should show */
     inline(err: unknown): string | null
   }
+  /**
+   * The plugins' channel to the window's server (plugin system phase 1): their `<id>.*` methods
+   * and events, untyped here (each plugin types its own), and what the server's welcome says.
+   */
+  readonly plugins: {
+    /** The window's project; null in an empty window */
+    readonly projectId: string | null
+    /** The last welcome's plugins and capabilities; undefined before the first one */
+    welcome(): PluginWelcome | undefined
+    request(method: string, params: Record<string, unknown>): Promise<unknown>
+    /** The server's events of one name on the window's connection; returns the unsubscribe */
+    onEvent(event: string, listener: (payload: unknown) => void): () => void
+  }
 }
 
 const noProject = (): Promise<never> => Promise.reject(new Error('No project is open in this window'))
@@ -318,16 +313,6 @@ export const idleBackend: WindowBackend = {
   },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
   linear: { hasKey: noProject, setKey: noProject, clearKey: noProject, issues: noProject, onChanged: () => () => {} },
-  voice: {
-    settings: noProject,
-    setKey: noProject,
-    clearKey: noProject,
-    voices: noProject,
-    setConfig: noProject,
-    synthesize: noProject,
-    onSummary: () => () => {},
-    onChanged: () => () => {}
-  },
   skills: { list: noProject },
   review: { add: noProject, edit: noProject, remove: noProject, clear: noProject, send: noProject },
   branch: {
@@ -346,7 +331,8 @@ export const idleBackend: WindowBackend = {
     report: (title, err) => void window.api.showError(title, String(err)),
     promptFailed: (title, err) => void window.api.showError(title, String(err)),
     inline: (err) => errorText(err)
-  }
+  },
+  plugins: { projectId: null, welcome: () => undefined, request: noProject, onEvent: () => () => {} }
 }
 
 let current: WindowBackend = idleBackend

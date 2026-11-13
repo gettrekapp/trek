@@ -29,7 +29,7 @@ class CodedError extends Error {
  * whenProjected's rev (null without one); `timeouts` each request sent with
  * one; `listeners` what subscribed to each server event.
  */
-function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], localEntry = false, machine = {}, projectedAfter = [], left = () => false, revs = {} } = {}) {
+function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], welcomePlugins = () => undefined, localEntry = false, machine = {}, projectedAfter = [], left = () => false, revs = {} } = {}) {
   const calls = []
   const ui = []
   const reports = []
@@ -77,6 +77,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     },
     // null stands for "no welcome yet" (undefined would take the default)
     capabilities: typeof capabilities === 'function' ? capabilities : () => capabilities ?? undefined,
+    welcomePlugins,
     localEntry,
     onEvent: (event, listener) => {
       ;(listeners[event] ??= []).push(listener)
@@ -167,13 +168,13 @@ test('features before the welcome, then when the capabilities change', () => {
 
 test("this machine's features: only the Local entry's server, once it says `local`; the server's follow its capabilities", () => {
   const local = (b) => ['reveal', 'openInEditor'].filter((name) => b.features[name])
-  const server = (b) => ['docker', 'env', 'stacks', 'linear', 'voice', 'skills'].filter((name) => b.features[name])
+  const server = (b) => ['docker', 'env', 'stacks', 'linear', 'skills'].filter((name) => b.features[name])
   assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['reveal', 'openInEditor'])
   assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'] }).backend), [])
   assert.deepEqual(local(setup({ capabilities: ['mcp'], localEntry: true }).backend), [])
   assert.deepEqual(server(setup({ capabilities: ['mcp', 'docker', 'env', 'stacks'] }).backend), ['docker', 'env', 'stacks'])
   assert.deepEqual(server(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), [])
-  assert.deepEqual(server(setup({ capabilities: ['linear', 'voice', 'skills'] }).backend), ['linear', 'voice', 'skills'])
+  assert.deepEqual(server(setup({ capabilities: ['linear', 'voice', 'skills'] }).backend), ['linear', 'skills'])
   assert.equal(setup().backend.features.linear, false)
   // A server before its welcome, then once it arrives.
   let caps
@@ -282,16 +283,11 @@ test('a worktree path the projection does not know is refused here, and nothing 
   assert.deepEqual(calls, [])
 })
 
-test("linear, voice and skills go to the window's server; the clip comes back as bytes; the summaries are this project's", async () => {
+test("linear and skills go to the window's server; Linear's changes are its own listeners'", async () => {
   const replies = {
     'linear.status': { hasKey: true },
     'linear.setKey': { ok: true, user: 'Ada' },
     'linear.issues': [{ identifier: 'TOW-1' }],
-    'voice.settings': { hasKey: false, voiceId: '', modelId: 'm', promptSessions: false },
-    'voice.setKey': { ok: true, voices: [] },
-    'voice.voices': [{ id: 'v1', name: 'Rachel' }],
-    'voice.setConfig': { voiceId: 'v1', modelId: 'm', promptSessions: true },
-    'voice.synthesize': { audio: Buffer.from('mp3!').toString('base64') },
     'skills.list': [{ name: 'review', source: 'project', kind: 'skill' }]
   }
   const { backend, calls, listeners } = setup({ replies })
@@ -299,44 +295,42 @@ test("linear, voice and skills go to the window's server; the clip comes back as
   assert.deepEqual(await backend.linear.setKey('lin_k'), { ok: true, user: 'Ada' })
   await backend.linear.clearKey()
   assert.deepEqual(await backend.linear.issues(['TOW-1']), [{ identifier: 'TOW-1' }])
-  assert.equal((await backend.voice.settings()).modelId, 'm')
-  await backend.voice.setKey('sk_k')
-  await backend.voice.clearKey()
-  await backend.voice.voices()
-  await backend.voice.setConfig({ promptSessions: true })
-  assert.equal(Buffer.from(await backend.voice.synthesize('Hi')).toString(), 'mp3!')
   assert.deepEqual(await backend.skills.list({ path: '/r-feat' }), [{ name: 'review', source: 'project', kind: 'skill' }])
   assert.deepEqual(calls, [
     ['linear.status', {}],
     ['linear.setKey', { apiKey: 'lin_k' }],
     ['linear.clearKey', {}],
     ['linear.issues', { ids: ['TOW-1'] }],
-    ['voice.settings', {}],
-    ['voice.setKey', { apiKey: 'sk_k' }],
-    ['voice.clearKey', {}],
-    ['voice.voices', {}],
-    ['voice.setConfig', { promptSessions: true }],
-    ['voice.synthesize', { text: 'Hi' }],
     ['skills.list', { projectId: 'p1', worktreeId: 'w2' }]
   ])
-  const heard = []
-  const off = backend.voice.onSummary((e) => heard.push(e.text))
-  for (const l of listeners['voice.summary']) l({ projectId: 'p1', sessionId: 's1', text: 'mine', audio: '' })
-  for (const l of listeners['voice.summary']) l({ projectId: 'other', sessionId: 's1', text: 'theirs', audio: '' })
-  off()
-  assert.deepEqual(listeners['voice.summary'], [])
-  assert.deepEqual(heard, ['mine'])
-  // A key or voice change made anywhere (another window, the hand-over): each part's own listeners.
+  // A key change made anywhere (another window, the hand-over).
   const changed = []
   const offLinear = backend.linear.onChanged(() => changed.push('linear'))
-  const offVoice = backend.voice.onChanged(() => changed.push('voice'))
   for (const l of listeners['integrations.changed']) l({ linear: true })
   for (const l of listeners['integrations.changed']) l({ voice: true })
-  for (const l of listeners['integrations.changed']) l({ linear: true, voice: true })
   offLinear()
-  offVoice()
   assert.deepEqual(listeners['integrations.changed'], [])
-  assert.deepEqual(changed, ['linear', 'voice', 'linear', 'voice'])
+  assert.deepEqual(changed, ['linear'])
+})
+
+test("the plugins' channel: the project, the welcome's plugins and capabilities, untyped <id>.* requests and events", async () => {
+  let plugins
+  let caps
+  const { backend, calls, listeners } = setup({ replies: { 'voice.settings': { hasKey: false } }, capabilities: () => caps, welcomePlugins: () => plugins })
+  assert.equal(backend.plugins.projectId, 'p1')
+  assert.equal(backend.plugins.welcome(), undefined, 'before the welcome')
+  caps = ['mcp', 'voice']
+  assert.deepEqual(backend.plugins.welcome(), { capabilities: ['mcp', 'voice'] }, 'a server older than plugins')
+  plugins = [{ id: 'voice', version: '1.0.0', defaultEnabled: true }]
+  assert.deepEqual(backend.plugins.welcome(), { plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }], capabilities: ['mcp', 'voice'] })
+  assert.deepEqual(await backend.plugins.request('voice.settings', {}), { hasKey: false })
+  assert.deepEqual(calls, [['voice.settings', {}]])
+  const heard = []
+  const off = backend.plugins.onEvent('voice.summary', (e) => heard.push(e.text))
+  for (const l of listeners['voice.summary']) l({ text: 'hi' })
+  off()
+  assert.deepEqual(listeners['voice.summary'], [])
+  assert.deepEqual(heard, ['hi'])
 })
 
 test("the logs come from the window's connection, by event name, until unsubscribed", () => {

@@ -1,3 +1,4 @@
+import type { ProjectPluginSettings } from './plugins/manifest.ts'
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
@@ -378,6 +379,8 @@ export interface ProjectFile {
   worktreeOrder?: string[]
   /** Tabs of the global (project-wide) Claude panel, in tab order */
   globalSessions?: GlobalSession[]
+  /** Each plugin's on/off for this project (plugin system phase 1); a plugin not named uses its default */
+  plugins?: ProjectPluginSettings
 }
 
 export interface GlobalSession {
@@ -708,36 +711,3 @@ export interface LinearIssue {
 /** `present`: a set-if-absent (the app's hand-over) found a key already stored, and kept it. */
 export type LinearKeyResult = { ok: true; user: string } | { ok: false; error: string; present?: true }
 
-/**
- * A window's view of voice summaries (phase 5b): its server's voice, model and "Summarize
- * automatically" (VoiceServerConfig), with this app's Active/Busy (`voiceActive` in the app settings).
- */
-export interface VoiceConfig extends VoiceServerConfig {
-  /** Active plays spoken summaries in this app's windows; Busy (false) drops them. */
-  active: boolean
-}
-
-export interface VoiceSettings extends VoiceConfig {
-  /** The window's server has an ElevenLabs key */
-  hasApiKey: boolean
-}
-
-export interface VoiceInfo {
-  id: string
-  name: string
-}
-
-/** `present`: a set-if-absent (the app's hand-over) found a key already stored, and kept it. */
-export type VoiceKeyResult = { ok: true; voices: VoiceInfo[] } | { ok: false; error: string; present?: true }
-
-/** A server's ElevenLabs settings (phase 5b): its voice and model, and whether sessions are told to speak. */
-export interface VoiceServerConfig {
-  voiceId: string
-  modelId: string
-  /** Tell agent sessions to call speak_summary on their own when they finish or need the user. */
-  promptSessions: boolean
-}
-
-export interface VoiceServerSettings extends VoiceServerConfig {
-  hasKey: boolean
-}

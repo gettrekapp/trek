@@ -385,13 +385,15 @@ test('project.delete ends the project topic for its subscribers, before the serv
   assert.deepEqual(sent.map((m) => m.ended ? [m.topic, m.ended] : [m.topic, 'patch']), [[`project:${projectId}`, 'deleted'], ['server', 'patch']])
 })
 
-test('welcome capabilities: mcp while the listener is up, then what the server always has, pairing except on the local server, then local on the local server', () => {
-  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills', 'review', 'move', 'promote', 'push']
+test('welcome capabilities: mcp while the listener is up, then what the server always has and the plugins’ legacy capabilities, pairing except on the local server, then local on the local server', () => {
+  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'skills', 'review', 'move', 'promote', 'push']
   // A macOS or Linux server's (a Windows one's are in serverWindowsMachine.test.mjs).
-  assert.deepEqual(welcomeCapabilities(true, false, false, 'linux'), ['mcp', ...all, 'pairing'])
-  assert.deepEqual(welcomeCapabilities(false, false, false, 'linux'), [...all, 'pairing'])
-  assert.deepEqual(welcomeCapabilities(true, true, false, 'linux'), ['mcp', ...all, 'local'])
-  assert.deepEqual(welcomeCapabilities(false, true, false, 'darwin'), [...all, 'local'])
+  assert.deepEqual(welcomeCapabilities(true, false, false, [], 'linux'), ['mcp', ...all, 'pairing'])
+  assert.deepEqual(welcomeCapabilities(false, false, false, [], 'linux'), [...all, 'pairing'])
+  assert.deepEqual(welcomeCapabilities(true, true, false, [], 'linux'), ['mcp', ...all, 'local'])
+  assert.deepEqual(welcomeCapabilities(false, true, false, [], 'darwin'), [...all, 'local'])
+  // The plugins' legacy capabilities (voice, plugin system phase 1) follow the static ones.
+  assert.deepEqual(welcomeCapabilities(false, false, false, ['voice'], 'linux'), [...all, 'voice', 'pairing'])
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {
