@@ -83,11 +83,14 @@ version, and the server closes a client with a version it does not support (`400
 
 ```json
 { "type": "welcome", "protocolVersion": 2, "daemonVersion": "0.2.0",
-  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"] }
+  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"], "platform": "linux" }
 ```
 
 `serverId` is a UUID generated on the server's first start and never changes.
-Clients key everything they cache by it. `repos` is gone; the project list
+Clients key everything they cache by it. `platform` is the server's OS (Node's
+`process.platform`: `win32`, `darwin`, `linux`), and a Windows server adds
+`windowsBuild` (its build number, `22631` for 10.0.22631); a server older than
+Windows support sends neither. `repos` is gone; the project list
 comes from the `server` topic.
 
 `capabilities` names the features a client could not otherwise tell the server
@@ -1295,6 +1298,12 @@ from a connection that has not attached to the pty ("attach to the pty first").
 (below). `CAPACITY` for `session.start` or
 `session.restart` over `maxSessions`, and for `session.start` over the 500 records of
 a project. `IN_USE` as above.
+
+**Windows ptys.** On a Windows server a pty is a ConPTY, and `pty.attach`'s
+`PtyInfo` carries `windowsPty: {backend: "conpty", buildNumber}`. A client renders
+it with xterm.js's `windowsPty` option set to that value (ConPTY reflows and wraps
+lines itself, and xterm must not do it again); the server's own headless screen
+does the same. Absent on macOS and Linux.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
 buffer of up to 2 Mi UTF-16 code units) as `pty.data` events with `replay: true`, then streams live

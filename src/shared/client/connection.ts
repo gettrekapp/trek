@@ -37,6 +37,9 @@ export interface WelcomeInfo {
   serverName: string
   daemonVersion: string
   capabilities: string[]
+  /** The server's OS (win32, darwin, linux); undefined from a server before W1 */
+  platform?: string
+  windowsBuild?: number
 }
 
 export interface ServerEvent {
@@ -130,6 +133,8 @@ interface IncomingFrame {
   serverName?: unknown
   daemonVersion?: unknown
   capabilities?: unknown
+  platform?: unknown
+  windowsBuild?: unknown
 }
 
 export class ServerConnection {
@@ -318,7 +323,9 @@ export class ServerConnection {
         serverId: String(frame.serverId ?? ''),
         serverName: String(frame.serverName ?? ''),
         daemonVersion: String(frame.daemonVersion ?? ''),
-        capabilities: Array.isArray(frame.capabilities) ? frame.capabilities.map(String) : []
+        capabilities: Array.isArray(frame.capabilities) ? frame.capabilities.map(String) : [],
+        ...(typeof frame.platform === 'string' ? { platform: frame.platform } : {}),
+        ...(typeof frame.windowsBuild === 'number' ? { windowsBuild: frame.windowsBuild } : {})
       }
       this.welcome = welcome
       this.backoff = BACKOFF_MIN_MS

@@ -26,6 +26,16 @@ test('connect sends hello v2 with the token; welcome makes it connected', () => 
   assert.deepEqual(statuses, ['connecting', 'connected'])
 })
 
+test('the welcome carries the server\'s OS when it says (a Windows server: its build too)', () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome({ platform: 'win32', windowsBuild: 22631 })
+  assert.equal(conn.welcome.platform, 'win32')
+  assert.equal(conn.welcome.windowsBuild, 22631)
+})
+
 test('requests resolve, fail with the wire code, time out, and reject when not connected', async () => {
   const { server, clock, conn } = setup()
   await assert.rejects(conn.request('sys.ping', { t: 1 }), (e) => e.code === 'NOT_CONNECTED')

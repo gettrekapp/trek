@@ -154,6 +154,17 @@ export interface PtyInfo {
   rows: number
   /** Byte offset of the next output chunk (total bytes emitted so far). */
   seq: number
+  /**
+   * The pty runs on Windows (ConPTY): pass it to xterm.js's `windowsPty` option, which turns on
+   * the reflow and wrapping behaviour ConPTY output needs. Absent on macOS and Linux.
+   */
+  windowsPty?: WindowsPtyInfo
+}
+
+export interface WindowsPtyInfo {
+  backend: 'conpty'
+  /** The Windows build (the third part of os.release(): 22631 for 10.0.22631) */
+  buildNumber: number
 }
 
 export interface PtyDataEventWire {
@@ -277,6 +288,10 @@ export interface WelcomeFrameV2 {
   serverName: string
   /** Optional features, e.g. "mcp", "bot", "docker"; clients hide what is missing */
   capabilities: string[]
+  /** The server's OS (process.platform: win32, darwin, linux); absent from older servers */
+  platform?: string
+  /** On Windows: its build number (see WindowsPtyInfo) */
+  windowsBuild?: number
   /** Only to a hello that redeemed a `pairingCode` (6a): the phone's new token, sent this once */
   pairedToken?: string
   /** With `pairedToken`: the name the server gave it (`phone-<device>`) */

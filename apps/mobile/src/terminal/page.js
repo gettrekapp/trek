@@ -31,6 +31,8 @@
   window.__trek = function (m) {
     if (m.type === 'data') term.write(m.data)
     else if (m.type === 'reset') term.reset()
+    // A Windows server's pty (ConPTY): set before its output is written.
+    else if (m.type === 'windowsPty') term.options.windowsPty = { backend: 'conpty', buildNumber: m.buildNumber }
     else if (m.type === 'size') {
       fitFont(m.cols)
       term.resize(m.cols, m.rows)

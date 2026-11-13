@@ -389,6 +389,10 @@ function fitResized(entry: Entry): boolean {
  * the pty's size instead of sending xterm's default 80x24 or a stale size.
  */
 function applyAttachSize(id: string, entry: Entry, info: PtyInfo): void {
+  // A pty on a Windows server is ConPTY's: xterm reflows and wraps its output differently.
+  if (info.windowsPty && entry.term.options.windowsPty?.buildNumber !== info.windowsPty.buildNumber) {
+    entry.term.options.windowsPty = { backend: info.windowsPty.backend, buildNumber: info.windowsPty.buildNumber }
+  }
   const link = entry.v2
   link.ptySize = { cols: info.cols, rows: info.rows }
   setForeignSize(id, null)

@@ -528,6 +528,23 @@ test('win32: whenGone kills the tree of a pty that outlives the timeout', async 
   assert.deepEqual(trees, [[401, false]])
 })
 
+test('a Windows host gives xterm\'s windowsPty in the attach info (and its own screen); elsewhere nothing', (t) => {
+  const { host } = setup(t, { platform: 'win32', osRelease: '10.0.22631', treeKiller: () => {} })
+  host.spawn('p1', opts)
+  assert.deepEqual(host.attach('p1', sink()).windowsPty, { backend: 'conpty', buildNumber: 22631 })
+  const mac = setup(t)
+  mac.host.spawn('p1', opts)
+  assert.equal('windowsPty' in mac.host.attach('p1', sink()), false)
+})
+
+test('windowsBuildNumber', async () => {
+  const { windowsBuildNumber, windowsPtyFor } = await import('../server/src/sessions/terminalHost.ts')
+  assert.equal(windowsBuildNumber('10.0.19045'), 19045)
+  assert.equal(windowsBuildNumber('24.6.0'), undefined)
+  assert.deepEqual(windowsPtyFor('win32', 'odd'), { backend: 'conpty', buildNumber: 0 })
+  assert.equal(windowsPtyFor('linux', '6.1.0'), undefined)
+})
+
 test('spawn and resize cap sizes at 500 columns and 200 rows', (t) => {
   const { host } = setup(t)
   const bad = (e) => e.code === 'BAD_REQUEST'

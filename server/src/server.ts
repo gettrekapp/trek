@@ -43,6 +43,8 @@ import { moveTransfers, sweepStaleMoveDirs } from './move/transfers'
 import { createSecretFile } from './secrets'
 import { PushGrants } from './push/grants'
 import { Pusher } from './push/pusher'
+import { release } from 'node:os'
+import { windowsBuildNumber } from './sessions/terminalHost.ts'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -461,6 +463,7 @@ export function startServer(
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
           capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true),
+          ...platformInfo,
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
         })
         return
@@ -542,6 +545,9 @@ export function startServer(
     })
   })
 
+  // The welcome's OS fields: clients show Windows paths and set xterm up for ConPTY (W1).
+  const build = process.platform === 'win32' ? windowsBuildNumber(release()) : undefined
+  const platformInfo = { platform: process.platform, ...(build !== undefined ? { windowsBuild: build } : {}) }
   let stopped = false
   // After this tick, so the response goes out before the shutdown closes the sockets.
   const requestStop = (): void => {

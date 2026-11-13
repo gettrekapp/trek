@@ -8,7 +8,8 @@ import { loadNodePty } from './nativePty.ts'
 // __esModule and has no `default`. Take whichever holds the exports.
 import * as xtermNamespace from '@xterm/headless'
 import type { Terminal as HeadlessTerminal } from '@xterm/headless'
-import type { PtyInfo } from '../../../src/shared/protocolV2'
+import { release } from 'node:os'
+import type { PtyInfo, WindowsPtyInfo } from '../../../src/shared/protocolV2'
 import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { MAX_COLS, MAX_ROWS } from './limits.ts'
@@ -32,6 +33,18 @@ const PARSER_HIGH_WATER = 8 * 1024 * 1024
 const PARSER_LOW_WATER = 2 * 1024 * 1024
 const KILL_TIMEOUT_MS = 3000
 const MAX_SCREEN_LINES = 10_000
+
+/** The build number in os.release() on Windows (10.0.22631 → 22631); undefined if it has none. */
+export function windowsBuildNumber(osRelease: string): number | undefined {
+  const build = Number(osRelease.split('.')[2])
+  return Number.isInteger(build) && build > 0 ? build : undefined
+}
+
+/** xterm's `windowsPty` for ptys on this machine: ConPTY on Windows, nothing elsewhere. */
+export function windowsPtyFor(platform: NodeJS.Platform, osRelease: string): WindowsPtyInfo | undefined {
+  if (platform !== 'win32') return undefined
+  return { backend: 'conpty', buildNumber: windowsBuildNumber(osRelease) ?? 0 }
+}
 
 export interface PtyProcess {
   onData(cb: (data: string) => void): void
@@ -96,6 +109,8 @@ export interface TerminalHostDeps {
   platform?: NodeJS.Platform
   /** Default killTree/killTreeSync for `platform` */
   treeKiller?: TreeKiller
+  /** Default os.release(); with win32, the build number given to xterm */
+  osRelease?: string
 }
 
 interface PtyRecord {
@@ -159,6 +174,7 @@ export class TerminalHost {
   private readonly onBellHook?: TerminalHostDeps['onBell']
   private readonly platform: NodeJS.Platform
   private readonly treeKiller: TreeKiller
+  private readonly windowsPty: WindowsPtyInfo | undefined
 
   constructor(deps: TerminalHostDeps) {
     this.spawner = deps.spawner ?? nodePtySpawner
@@ -168,6 +184,7 @@ export class TerminalHost {
     this.onBellHook = deps.onBell
     this.platform = deps.platform ?? process.platform
     this.treeKiller = deps.treeKiller ?? defaultTreeKiller(this.platform)
+    this.windowsPty = windowsPtyFor(this.platform, deps.osRelease ?? release())
   }
 
   /**
@@ -193,7 +210,13 @@ export class TerminalHost {
     validateSize(opts.cols, opts.rows)
     // The screen first: if its constructor throws, no process is left running.
     // allowProposedApi is required for the buffer API that screen() reads.
-    const screen = new Terminal({ cols: opts.cols, rows: opts.rows, scrollback: SCROLLBACK, allowProposedApi: true })
+    const screen = new Terminal({
+      cols: opts.cols,
+      rows: opts.rows,
+      scrollback: SCROLLBACK,
+      allowProposedApi: true,
+      ...(this.windowsPty ? { windowsPty: this.windowsPty } : {})
+    })
     let proc: PtyProcess
     try {
       proc = this.spawner(opts)
@@ -256,7 +279,8 @@ export class TerminalHost {
 
   info(ptyId: string): PtyInfo {
     const r = this.require(ptyId)
-    return { ptyId: r.ptyId, cwd: r.cwd, cols: r.cols, rows: r.rows, seq: r.seq }
+    const info: PtyInfo = { ptyId: r.ptyId, cwd: r.cwd, cols: r.cols, rows: r.rows, seq: r.seq }
+    return this.windowsPty ? { ...info, windowsPty: this.windowsPty } : info
   }
 
   /**
