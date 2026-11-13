@@ -2,7 +2,7 @@
 // the poller before answering, so the client's next patch already shows it.
 // worktree.load / worktree.unload start and stop sessions and arrive in 2d.
 import { existsSync } from 'node:fs'
-import { basename, dirname, join, sep } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import * as gitService from '../../src/host/gitService.ts'
 import type { Project, Repository, Worktree } from '../../src/shared/model/types'
 import { codedError } from './errors.ts'
@@ -13,6 +13,7 @@ import type { V2Context } from './v2.ts'
 import { checkPath, checkSource } from './review/draft.ts'
 import { MAX_REVIEW_COMMENTS } from '../../src/shared/review.ts'
 import { assertNotPromoting } from './promote/changing.ts'
+import { isInside } from '../../src/host/pathContainment.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -162,7 +163,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     const target = ctx.store.guard.check(requested)
     assertNotRepository(ctx.store.config.repos, target, 'path', requested)
     if (existsSync(target)) throw bad(`${requested} already exists`)
-    const inside = (root: string): boolean => target.startsWith(real(root) + sep)
+    const inside = (root: string): boolean => isInside(real(root), target, process.platform, true)
     if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
       throw bad(`${requested} is inside an existing checkout`)
     }

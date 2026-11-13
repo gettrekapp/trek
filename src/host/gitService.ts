@@ -16,6 +16,7 @@ import type {
 } from '../shared/types'
 import { COMMIT_LIST_LIMIT, isCommitSha } from '../shared/review.ts'
 import { hidden } from './childOptions.ts'
+import { isInside } from './pathContainment.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -269,7 +270,7 @@ export async function linkDirs(
     if (!name) continue
     const source = resolve(repoRoot, name)
     const target = resolve(worktreeRoot, name)
-    if (!source.startsWith(repoRoot + sep) || !target.startsWith(worktreeRoot + sep)) continue
+    if (!isInside(repoRoot, source, process.platform, true) || !isInside(worktreeRoot, target, process.platform, true)) continue
     try {
       await lstat(source)
     } catch {

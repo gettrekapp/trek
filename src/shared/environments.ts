@@ -36,7 +36,8 @@ export function deriveProfileName(repoPath: string, branch: string): string {
 export function envRepoKey(repo: { path: string; environments?: { profileKey?: unknown } }): string {
   // Stored data a client or file could have written anything into: only an absolute path counts.
   const key = repo.environments?.profileKey
-  return typeof key === 'string' && key.startsWith('/') ? key : repo.path
+  // POSIX (/…) or Windows (C:\… or C:/…); not node:path, as the renderer imports this file.
+  return typeof key === 'string' && /^(\/|[A-Za-z]:[\\/])/.test(key) ? key : repo.path
 }
 
 /** Colima registers a docker context named after the profile. */

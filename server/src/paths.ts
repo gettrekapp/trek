@@ -1,6 +1,6 @@
-import { realpathSync } from 'node:fs'
-import { dirname, resolve, sep } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import type { TrekServerConfig } from './config'
+import { isInside, isUncPath, realPath, UNC_REFUSAL } from '../../src/host/pathContainment.ts'
 
 export interface PathGuardOptions {
   /** Every path is allowed (`trek-server start --local` only) */
@@ -28,7 +28,7 @@ export class PathGuard {
       // realpath so symlinked configs (e.g. /var → /private/var) match the
       // realpath'd targets checked later.
       try {
-        roots.add(realpathSync(resolve(path)))
+        roots.add(realPath(resolve(path)))
       } catch {
         roots.add(resolve(path))
       }
@@ -43,9 +43,16 @@ export class PathGuard {
 
   /** Returns the resolved path, or throws { code: 'PATH_DENIED' } (never when permissive). */
   check(path: string): string {
+    // Network and WSL shares: git and file watching over them are slow and unreliable, and an
+    // agent would run on the Windows side of a WSL repo. Refused even on the local server.
+    if (process.platform === 'win32' && isUncPath(path)) {
+      const err = new Error(`${UNC_REFUSAL}: ${path}`)
+      ;(err as NodeJS.ErrnoException).code = 'PATH_DENIED'
+      throw err
+    }
     let resolved: string
     try {
-      resolved = realpathSync(resolve(path))
+      resolved = realPath(resolve(path))
     } catch {
       // Target may not exist yet (e.g. a worktree about to be created) —
       // resolve the deepest existing ancestor instead.
@@ -53,7 +60,7 @@ export class PathGuard {
       let probe = dirname(resolved)
       while (probe !== dirname(probe)) {
         try {
-          const real = realpathSync(probe)
+          const real = realPath(probe)
           resolved = real + resolved.slice(probe.length)
           break
         } catch {
@@ -62,9 +69,7 @@ export class PathGuard {
       }
     }
     if (this.permissive) return resolved
-    const allowed = this.roots.some(
-      (root) => resolved === root || resolved.startsWith(root + sep)
-    )
+    const allowed = this.roots.some((root) => isInside(root, resolved))
     if (!allowed) {
       const err = new Error(`Path not under a configured root: ${path}`)
       ;(err as NodeJS.ErrnoException).code = 'PATH_DENIED'
