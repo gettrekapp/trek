@@ -4650,7 +4650,7 @@ body.resizing-row {
 /* ─── Quick button modals ──────────────────────────────────────────────── */
 
 /* Short: no scrolling, so the built-in menu and suggestions float over the modal's edge */
-.quick-btn-modal {
+.quick-btn-edit-modal {
   overflow: visible;
   max-height: none;
 }

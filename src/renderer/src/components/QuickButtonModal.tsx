@@ -26,7 +26,7 @@ export function QuickButtonModal({ button, onSave, onDelete, onClose }: Props): 
         if (e.key === 'Escape') onClose()
       }}
     >
-      <div className="modal quick-btn-modal" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal quick-btn-modal quick-btn-edit-modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>{button ? 'Edit quick button' : 'New quick button'}</h2>
         <label className="quick-btn-modal-field">
           <span>Label</span>
@@ -36,7 +36,11 @@ export function QuickButtonModal({ button, onSave, onDelete, onClose }: Props): 
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') save()
+              if (e.key === 'Enter') {
+                // Not left to reach the terminal once it has focus again
+                e.preventDefault()
+                save()
+              }
             }}
           />
         </label>

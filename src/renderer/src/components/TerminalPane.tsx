@@ -72,7 +72,8 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     backend.sessions
       .sendPrompt(terminalId, text)
       .catch((err) => backend.errors.promptFailed('Could not send the prompt', err, text))
-    focusTerminal(terminalId)
+    // After the key event that sent it (a modal's Enter), or xterm gets that Enter too
+    requestAnimationFrame(() => focusTerminal(terminalId))
   }
   const run = (button: TerminalQuickButton): void => {
     const ctx = quickButtonContext(terminalId)
@@ -225,7 +226,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
           }
           onClose={() => {
             setEditing(null)
-            focusTerminal(terminalId)
+            requestAnimationFrame(() => focusTerminal(terminalId))
           }}
         />
       )}
@@ -237,7 +238,7 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
           onSend={send}
           onClose={() => {
             setRunning(null)
-            focusTerminal(terminalId)
+            requestAnimationFrame(() => focusTerminal(terminalId))
           }}
         />
       )}

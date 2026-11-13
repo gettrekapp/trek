@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { BUILTINS, parseTemplate, type BuiltinDef } from '../../../shared/quickButtonTemplate.ts'
 
 const GROUPS = [...new Set(BUILTINS.map((b) => b.group))]
@@ -8,7 +8,6 @@ interface Props {
   value: string
   onChange: (value: string) => void
   placeholder?: string
-  autoFocus?: boolean
 }
 
 /**
@@ -16,15 +15,27 @@ interface Props {
  * orange, [built-ins] blue. The textarea's own glyphs are transparent so the
  * layer shows through; both share font, padding and wrapping.
  */
-export function TemplateEditor({ value, onChange, placeholder, autoFocus }: Props): React.JSX.Element {
+export function TemplateEditor({ value, onChange, placeholder }: Props): React.JSX.Element {
   const ta = useRef<HTMLTextAreaElement>(null)
   const layer = useRef<HTMLDivElement>(null)
+  const dropdown = useRef<HTMLDivElement>(null)
+  /** Until the textarea is first focused its caret is 0: toolbar inserts go at the end instead */
+  const everFocused = useRef(false)
   /** The `[` suggestion list: where its `[` is and what follows it */
   const [suggest, setSuggest] = useState<{ start: number; query: string } | null>(null)
   const [active, setActive] = useState(0)
   const [listOpen, setListOpen] = useState(false)
   const [naming, setNaming] = useState(false)
   const [inputName, setInputName] = useState('')
+  // A mousedown outside the built-in menu closes it.
+  useEffect(() => {
+    if (!listOpen) return undefined
+    const onDown = (e: MouseEvent): void => {
+      if (!dropdown.current?.contains(e.target as Node)) setListOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [listOpen])
   const segments = useMemo(() => parseTemplate(value), [value])
   const matches = suggest ? BUILTINS.filter((b) => b.name.includes(suggest.query.toLowerCase())) : []
 
@@ -39,13 +50,19 @@ export function TemplateEditor({ value, onChange, placeholder, autoFocus }: Prop
   }
   const insert = (token: string): void => {
     const el = ta.current
-    const start = el?.selectionStart ?? value.length
-    replace(start, el?.selectionEnd ?? start, token)
+    if (!el || !everFocused.current) {
+      replace(value.length, value.length, token)
+      return
+    }
+    replace(el.selectionStart, el.selectionEnd, token)
   }
   const pick = (b: BuiltinDef): void => {
     if (!suggest) return
-    replace(suggest.start, ta.current?.selectionStart ?? suggest.start, `[${b.name}]`)
     setSuggest(null)
+    // The caret must still be right after the typed `[query`; anything else is a stale anchor.
+    const caret = ta.current?.selectionStart ?? -1
+    if (caret < suggest.start || caret !== suggest.start + 1 + suggest.query.length) return
+    replace(suggest.start, caret, `[${b.name}]`)
   }
   const track = (text: string, caret: number): void => {
     const open = text.slice(0, caret).match(/\[([A-Za-z_]*)$/)
@@ -54,7 +71,7 @@ export function TemplateEditor({ value, onChange, placeholder, autoFocus }: Prop
   }
   const addInput = (): void => {
     if (!INPUT_NAME.test(inputName)) return
-    insert(`{${inputName}}`)
+    insert(`{${inputName}}`) // focuses the textarea
     setNaming(false)
     setInputName('')
   }
@@ -62,7 +79,16 @@ export function TemplateEditor({ value, onChange, placeholder, autoFocus }: Prop
   return (
     <div className="tpl">
       <div className="tpl-toolbar">
-        <div className="tpl-dropdown">
+        <div
+          ref={dropdown}
+          className="tpl-dropdown"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && listOpen) {
+              e.stopPropagation()
+              setListOpen(false)
+            }
+          }}
+        >
           <button type="button" onClick={() => setListOpen((o) => !o)}>
             + Built-in ▾
           </button>
@@ -106,6 +132,9 @@ export function TemplateEditor({ value, onChange, placeholder, autoFocus }: Prop
                 if (e.key === 'Escape') {
                   e.stopPropagation()
                   setNaming(false)
+                  setInputName('')
+                  // The field unmounts: keep focus in the modal so Escape can still close it.
+                  requestAnimationFrame(() => ta.current?.focus())
                 }
               }}
             />
@@ -138,12 +167,16 @@ export function TemplateEditor({ value, onChange, placeholder, autoFocus }: Prop
           className="tpl-textarea"
           value={value}
           placeholder={placeholder}
-          autoFocus={autoFocus}
           spellCheck={false}
           onChange={(e) => {
             onChange(e.target.value)
             track(e.target.value, e.target.selectionStart)
           }}
+          onFocus={() => {
+            everFocused.current = true
+          }}
+          // The caret moved (arrows, Home/End, a click): the `[` list follows it.
+          onSelect={(e) => track(e.currentTarget.value, e.currentTarget.selectionStart)}
           onScroll={(e) => {
             if (layer.current) layer.current.scrollTop = e.currentTarget.scrollTop
           }}
