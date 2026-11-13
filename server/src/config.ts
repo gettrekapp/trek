@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocolV2'
 import { writeFileAtomic } from '../../src/host/atomicWrite.ts'
 import type { TokenEntry } from './tokens'
+import { serverConfigDir } from '../../src/shared/localServer.ts'
 
 export interface TrekServerConfig {
   /** Stable UUID of this server, generated on first start. */
@@ -48,8 +49,8 @@ export interface TrekServerConfig {
   web?: boolean
 }
 
-export function defaultConfigPath(): string {
-  return join(homedir(), '.config', 'trek-server', 'config.json')
+export function defaultConfigPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
+  return join(serverConfigDir(join, platform, env, home), 'config.json')
 }
 
 /** Where trek-daemon (before the rename) kept its config. */

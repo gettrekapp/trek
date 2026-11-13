@@ -8,7 +8,7 @@ import {
   LOCAL_CONFIG_FILE,
   LOCAL_INFO_FILE,
   LOCAL_LOCK_FILE,
-  localProfileDir,
+  localProfilePath,
   localProfileSegment,
   parseLocalInfo,
   type LocalInfo
@@ -27,10 +27,17 @@ export interface LocalProfile {
 
 /**
  * `dataDir` is the platform data dir (defaultDataDir()); the profile uses its `local`
- * subdirectory, or `local-<name>` for a named profile. Throws on an invalid name.
+ * subdirectory, or `local-<name>` for a named profile. Its own directory is in trek-server's
+ * config dir (serverConfigDir: under `home`, or %APPDATA% on Windows). Throws on an invalid name.
  */
-export function localProfile(home: string, dataDir: string, name?: string): LocalProfile {
-  const dir = join(home, ...localProfileDir(name))
+export function localProfile(
+  home: string,
+  dataDir: string,
+  name?: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env
+): LocalProfile {
+  const dir = localProfilePath(join, platform, env, home, name)
   return {
     dir,
     configPath: join(dir, LOCAL_CONFIG_FILE),

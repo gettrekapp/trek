@@ -9,7 +9,7 @@ import {
   LOCAL_LOCK_FILE,
   LOCAL_ALREADY_RUNNING_EXIT,
   isLocalProfileName,
-  localProfileDir,
+  localProfilePath,
   type LocalInfo
 } from '../shared/localServer.ts'
 import type { LocalServerStatus } from '../shared/types.ts'
@@ -121,8 +121,8 @@ export function isLocalServerCommand(command: string, profile: string | undefine
 }
 
 /** The profile's files; `profile` is localProfileName's (throws on an invalid name). */
-export function localPaths(home: string, profile?: string): LocalPaths {
-  const dir = join(home, ...localProfileDir(profile))
+export function localPaths(home: string, profile?: string, platform: string = process.platform, env: Record<string, string | undefined> = process.env): LocalPaths {
+  const dir = localProfilePath(join, platform, env, home, profile)
   return {
     dir,
     config: join(dir, LOCAL_CONFIG_FILE),

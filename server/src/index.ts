@@ -94,7 +94,8 @@ Options:
                     Not with --local.
   --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
   --local           start/stop: the app's local server. Its own config, data and lock under
-                    ~/.config/trek-server/local and <platform data dir>/local; 127.0.0.1
+                    ~/.config/trek-server/local (Windows: %APPDATA%\\trek-server\\local)
+                    and <platform data dir>/local; 127.0.0.1
                     on a random port; a new token on every start; any path allowed.
                     Writes the port and token to local.json there (0600) while it runs.
                     Takes none of --config, --data-dir, --port, --host, --insecure, --web.
