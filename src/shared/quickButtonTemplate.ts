@@ -1,3 +1,6 @@
+import type { ProjectFile, Repository } from './types'
+import { ticketUrl } from './tickets.ts'
+
 // Quick button templates: {INPUT} asks the user, [builtin] is filled from the
 // clicked terminal's context. Shared so the parser is unit-tested in node.
 
@@ -88,4 +91,91 @@ export function templateInputs(text: string): string[] {
 /** The known `[name]` built-ins, once each, in order of first appearance. */
 export function templateBuiltins(text: string): string[] {
   return uniqueNames(text, 'builtin')
+}
+
+/** What the built-ins are resolved from; the renderer builds it from the store. */
+export interface BuiltinContext {
+  project: Pick<ProjectFile, 'name' | 'worktreeTags' | 'customTags' | 'linearWorkspace' | 'azureDevOpsBaseUrl'>
+  /** Undefined in the Global panel */
+  repo?: Pick<
+    Repository,
+    'name' | 'path' | 'branchTags' | 'branchCustomTags' | 'branchTickets' | 'branchPullRequests' | 'branchNotes'
+  >
+  worktree?: { id: string; name: string; path: string }
+  branch?: string
+  terminal: { id: string; title: string; sessionId: string; sessionPending?: boolean }
+  /** Agent label, e.g. "Claude" */
+  agent: string
+  now: Date
+}
+
+export type BuiltinValues = Record<string, string | undefined>
+
+const present = (value: string | null | undefined): string | undefined =>
+  value && value.trim() ? value : undefined
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+
+function prNumber(url: string | undefined): string | undefined {
+  if (!url) return undefined
+  return url.match(/\/pull\/(\d+)/)?.[1] ?? url.match(/(\d+)\/?$/)?.[1]
+}
+
+/** Every built-in's value for this context; undefined = no value here. */
+export function resolveBuiltins(ctx: BuiltinContext): BuiltinValues {
+  const { project, repo, worktree, branch, terminal, now } = ctx
+  const byBranch = <T>(map: Record<string, T> | undefined): T | undefined =>
+    branch && map ? map[branch] : undefined
+  const tagId = byBranch(repo?.branchTags)
+  const customIds = byBranch(repo?.branchCustomTags) ?? []
+  const ticket = present(byBranch(repo?.branchTickets))
+  const prUrl = present(byBranch(repo?.branchPullRequests))
+  return {
+    worktree_id: present(worktree?.id),
+    worktree_name: present(worktree?.name),
+    worktree_path: present(worktree?.path),
+    branch: present(branch),
+    repo_name: present(repo?.name),
+    repo_path: present(repo?.path),
+    project_name: present(project.name),
+    workflow_tag: present(tagId ? project.worktreeTags?.find((t) => t.id === tagId)?.name : undefined),
+    labels: present(
+      (project.customTags ?? [])
+        .filter((t) => customIds.includes(t.id))
+        .map((t) => t.name)
+        .join(', ')
+    ),
+    ticket,
+    ticket_url: ticket ? present(ticketUrl(project, ticket)) : undefined,
+    pr_url: prUrl,
+    pr_number: prNumber(prUrl),
+    note: present(byBranch(repo?.branchNotes)),
+    session_title: present(terminal.title),
+    session_id: terminal.sessionPending ? undefined : present(terminal.sessionId),
+    terminal_id: present(terminal.id),
+    agent: present(ctx.agent),
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`
+  }
+}
+
+/** The final text: inputs from `inputs`, built-ins from `builtins`; anything missing is blank. */
+export function fillTemplate(segments: Segment[], inputs: Record<string, string>, builtins: BuiltinValues): string {
+  return segments
+    .map((s) => (s.kind === 'text' ? s.text : s.kind === 'input' ? (inputs[s.name] ?? '') : (builtins[s.name] ?? '')))
+    .join('')
+}
+
+export interface QuickButtonPlan {
+  inputs: string[]
+  /** Built-ins the text uses that have no value here */
+  missing: string[]
+  /** Whether clicking opens the run modal rather than sending at once */
+  needsModal: boolean
+}
+
+export function planQuickButton(text: string, builtins: BuiltinValues): QuickButtonPlan {
+  const inputs = templateInputs(text)
+  const missing = templateBuiltins(text).filter((name) => builtins[name] === undefined)
+  return { inputs, missing, needsModal: inputs.length > 0 || missing.length > 0 }
 }
