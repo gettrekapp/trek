@@ -10,8 +10,9 @@
 #                packaged-app smokes run against it. It and server-mac are the only jobs with the
 #                signing secrets: they live in the `release` environment (limited to v* tags), not
 #                the repository.
-#   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, each
-#                unpacked and run (scripts/server-tarball-smoke.mjs)
+#   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, and
+#                trek-server-X.Y.Z-win32-x64.zip on Windows (unsigned: nothing in it is an .exe
+#                SmartScreen checks), each unpacked and run (scripts/server-tarball-smoke.mjs)
 #   server-mac   trek-server-X.Y.Z-darwin-<arch>.tar.gz the same way, with node-pty's pty.node and
 #                spawn-helper signed (Developer ID, hardened runtime) and notarized, the smoke
 #                unpacking it quarantined as a browser download is (--notarized)
@@ -219,11 +220,17 @@ jobs:
       matrix:
         include:
           # Ubuntu 22.04 (glibc 2.35): node-pty compiled there runs on older distros than 24.04's.
-          - { target: linux-x64, runner: ubuntu-22.04 }
-          - { target: linux-arm64, runner: ubuntu-22.04-arm }
+          - { target: linux-x64, runner: ubuntu-22.04, ext: tar.gz }
+          - { target: linux-arm64, runner: ubuntu-22.04-arm, ext: tar.gz }
+          # node-pty's own Windows prebuild (ConPTY + winpty), zipped by Windows' bsdtar.
+          - { target: win32-x64, runner: windows-latest, ext: zip }
     env:
       VERSION: ${{ needs.version.outputs.version }}
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    defaults:
+      run:
+        # Git Bash on the Windows runner, so the steps are the same everywhere.
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -244,13 +251,13 @@ jobs:
       - name: Package
         run: |
           node scripts/package-server.mjs --out dist-release
-          test -f "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
+          test -f "dist-release/trek-server-$VERSION-${{ matrix.target }}.${{ matrix.ext }}"
       - name: Unpack and run it
-        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-${{ matrix.target }}.tar.gz"
+        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$VERSION-${{ matrix.target }}.${{ matrix.ext }}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: server-${{ matrix.target }}
-          path: dist-release/trek-server-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          path: dist-release/trek-server-${{ env.VERSION }}-${{ matrix.target }}.${{ matrix.ext }}
           if-no-files-found: error
           retention-days: 14
 
@@ -408,6 +415,7 @@ jobs:
         run: |
           expected=("Trek-$VERSION-arm64.dmg" "trek-relay-$VERSION.cjs" "trek-relay-$VERSION.cjs.sha256")
           for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do expected+=("trek-server-$VERSION-$t.tar.gz"); done
+          expected+=("trek-server-$VERSION-win32-x64.zip")
           for f in "${expected[@]}"; do [ -f "$f" ] || { echo "::error::missing artifact $f"; exit 1; }; done
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
@@ -421,6 +429,7 @@ jobs:
 
           - \`Trek-$VERSION-arm64.dmg\`: the desktop app for Apple silicon Macs (signed and notarized).
           - \`trek-server-$VERSION-<os>-<arch>.tar.gz\`: trek-server for macOS and Linux (x64, arm64); needs Node.js 22 or later. Unpack it and run \`bin/trek-server\` (see its README.md).
+          - \`trek-server-$VERSION-win32-x64.zip\`: trek-server for Windows (x64); needs Node.js 22 or later. Unzip it and run \`bin\\trek-server\` (see its README.md and docs/WINDOWS.md).
           - \`trek-relay-$VERSION.cjs\`: the push relay (\`node trek-relay-$VERSION.cjs start --config <file>\`); see relay/README.md.
           - \`SHA256SUMS\`: \`sha256sum -c SHA256SUMS\` (\`shasum -a 256 -c SHA256SUMS\` on macOS).
 
