@@ -80,8 +80,8 @@ test('overrides move items between free and ask', () => {
   assert.equal(decide(bash('git push origin x'), ctx({ overrides })).decision, 'allow')
 })
 
-test('anything that runs outside the sandbox always needs approval, whatever the overrides say', () => {
-  const names = ['start_session', 'send_prompt', 'send_keys', 'start_stack', 'create_worktree', 'load_worktree', 'save_session_type', 'delete_session_type']
+test('anything that runs or deletes outside the sandbox always needs approval, whatever the overrides say', () => {
+  const names = ['start_session', 'send_prompt', 'send_keys', 'start_stack', 'create_worktree', 'load_worktree', 'remove_worktree', 'save_session_type', 'delete_session_type']
   assert.deepEqual([...ALWAYS_ASK_TOOLS].sort(), [...names].sort())
   const overrides = { free: names }
   for (const name of names) {

@@ -192,6 +192,19 @@ export const MCP_TOOLS: ToolDefinition[] = [
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
   },
   {
+    name: 'remove_worktree',
+    description:
+      'Delete a linked worktree: its directory, git\'s record of it and its row. The branch is kept. Refused for the primary checkout and for a loaded worktree (unload_worktree first, which ends its sessions). A worktree with uncommitted or untracked changes is refused unless force is true, which discards them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        force: { type: 'boolean', description: 'Remove it even with uncommitted or untracked changes, discarding them. Default false.' }
+      },
+      required: ['worktree']
+    }
+  },
+  {
     name: 'send_prompt',
     description:
       "Type a prompt into a session's agent input and submit it. Slash commands and skills work too, e.g. \"/test-in-docker\".",
@@ -557,7 +570,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     /** Runs a v2 command on this project; a refusal throws with its code and message. */
     const v2 = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> => {
       const outcome = await dispatchV2(method, { ...params, projectId }, ctx)
-      if (!outcome.ok) throw codedError(outcome.error.code, outcome.error.message)
+      if (!outcome.ok) throw codedError(outcome.error.code, outcome.error.message, outcome.error.details)
       return outcome.result
     }
 
@@ -756,6 +769,20 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const { worktree } = resolveWorktree(project, args.worktree)
         await v2('worktree.unload', { worktreeId: worktree.id })
         return { unloaded: true }
+      },
+
+      remove_worktree: async (args, project) => {
+        if (args.force !== undefined && typeof args.force !== 'boolean') throw bad('force must be a boolean')
+        const { worktree } = resolveWorktree(project, args.worktree)
+        try {
+          await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true })
+        } catch (err) {
+          if ((err as { details?: { reason?: string } }).details?.reason === 'dirty') {
+            throw codedError('GIT_ERROR', `${worktree.path} has uncommitted or untracked changes; pass force: true to discard them`, { reason: 'dirty' })
+          }
+          throw err
+        }
+        return { removed: true, path: worktree.path, branch: worktree.branch ?? null }
       },
 
       set_worktree_tag: async (args, project) => {
