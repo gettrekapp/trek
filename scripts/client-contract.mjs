@@ -2,7 +2,8 @@
 // built trek-server: connect, mirror the server and project topics, create a
 // project and wait for its rev, start a session and stream its pty, survive a
 // reconnect, see a deleted project's topic end, and reach needs-auth with a
-// wrong token. Uses only the SDK and the global WebSocket.
+// wrong token; the welcome's plugins and the voice plugin's 0.2.1 wire names. Uses only the SDK and
+// the global WebSocket.
 import './smokeGh.mjs'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -109,6 +110,18 @@ conn.connect()
 if (!(await waitFor(() => conn.status === 'connected'))) abort(`connect: status ${conn.status} (${statuses.join(' > ')})`)
 if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills'].every((c) => conn.welcome?.capabilities.includes(c))) fail(`welcome capabilities: ${JSON.stringify(conn.welcome)}`)
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
+
+// --- 1b. plugins (plugin system phase 1): listed in the welcome; a 0.2.1 client's voice.* still answers ---
+if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify([{ id: 'voice', version: '1.0.0' }])) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
+else ok('welcome plugins: voice')
+try {
+  // As 0.2.1 sends it, with no idea that voice is a plugin now.
+  const settings = await conn.request('voice.settings', {})
+  if (settings.hasKey !== false || typeof settings.modelId !== 'string') fail(`voice.settings: ${JSON.stringify(settings)}`)
+  else ok('voice.settings answers as in 0.2.1 (the voice plugin, same wire name)')
+} catch (err) {
+  fail(`voice.settings: ${err.code} ${err.message}`)
+}
 
 // --- 2. server topic ---
 let server = null

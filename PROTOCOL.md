@@ -83,8 +83,11 @@ version, and the server closes a client with a version it does not support (`400
 
 ```json
 { "type": "welcome", "protocolVersion": 2, "daemonVersion": "0.2.0",
-  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"] }
+  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"],
+  "plugins": [{ "id": "voice", "version": "1.0.0" }] }
 ```
+
+`plugins` lists the server's plugins (see [Plugins](#plugins)); a server older than plugins sends none.
 
 `serverId` is a UUID generated on the server's first start and never changes.
 Clients key everything they cache by it. `repos` is gone; the project list
@@ -104,8 +107,8 @@ new optional field needs no capability: its absence says enough.
 | `docker` | `docker.list`, `docker.container` and `docker.compose` run docker on the server's machine, and `docker.log` streams compose's output (see [Docker, environments and stacks](#docker-environments-and-stacks)) |
 | `env` | `env.*` run the worktrees' Colima environments on the server's machine, and `env.log` streams their output |
 | `stacks` | `stack.*` run the worktrees' `docker/stack/stack.sh` dev stacks on the server's machine |
-| `linear` | `linear.*` look Linear issues up with the server's own API key (see [Linear, voice and skills](#linear-voice-and-skills)) |
-| `voice` | `voice.*` keep the server's ElevenLabs key and voice; the MCP tool `speak_summary` sends each spoken summary to the project's subscribers as `voice.summary` |
+| `linear` | `linear.*` look Linear issues up with the server's own API key (see [Linear and skills](#linear-and-skills)) |
+| `voice` | The voice plugin's legacy capability: listed while the plugin is registered, for clients older than plugins (see [Plugins](#plugins) and [the voice plugin](plugins/voice/README.md)) |
 | `skills` | `skills.list` lists a worktree's Claude Code skills and commands on the server's disk |
 | `prWatch` | gh is installed and signed in on the server's machine, so `branch.setPrWatch` can turn a branch's pull request watch on (see [Pull request watch](#pull-request-watch)). Checked (`gh auth status --hostname github.com`) when the server starts, every 10 minutes after that whether it is listed or not, and when a poll fails with what looks like a sign-in error (HTTP 401, not logged in); a poll failing any other way (the network, GitHub, one unreadable PR) leaves it as it is. The Local server announces itself only once the first check has answered (at most 3 s), so the app's first welcome has it; a remote server takes connections at once, so a welcome sent before gh answered lacks it and the change is pushed. A change is pushed to every authenticated connection as `integrations.changed` `{prWatch: true|false}`, and the client SDK applies it to `welcome.capabilities` |
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
@@ -190,7 +193,7 @@ server restarts. A server without this field simply leaves it out.
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
 | Linear | `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` |
-| Voice | `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize` |
+| Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize` (see [Plugins](#plugins)) |
 | Skills | `skills.list` |
 | Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
 | Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
@@ -696,30 +699,28 @@ log. Under backpressure (from more than 4 MiB unsent on the connection until it 
 2 MiB) their output chunks are dropped, and the next chunk of that run that is sent follows one
 `[output dropped: the connection fell behind]` line. A `done` or a `step` event is never dropped.
 
-## Linear, voice and skills
+## Linear and skills
 
-With the capabilities `linear`, `voice` and `skills` (phase 5b), the server looks Linear issues up
-and synthesizes spoken summaries with its own API keys, and lists the skills on its own disk.
-Before 5b the desktop app kept one Linear and one ElevenLabs key for every window; now each server
-has its own, set from any client.
+With the capabilities `linear` and `skills` (phase 5b), the server looks Linear issues up with its
+own API key, and lists the skills on its own disk. Before 5b the desktop app kept one Linear key
+for every window; now each server has its own, set from any client. (ElevenLabs is the voice
+plugin's since plugin system phase 1: see [Plugins](#plugins).)
 
-**The keys are write-only.** `linear.setKey` and `voice.setKey` store a key in the server's
-`secrets.json`, beside its config file (owner-only, 0600, written then renamed; a file that cannot
-be read or parse is never overwritten), and no method sends a key back: `linear.status` and
-`voice.settings` say only whether one is set. A key is checked first (Linear's `viewer`, the
-ElevenLabs key's voices); the result is `{ok: false, error}` with the service's answer when it is
-refused. A `secrets.json` that cannot be read is `TOOL_ERROR` before the service is asked (with
-`ifAbsent` too), as is one that cannot be written; a `voice.setKey` whose key was stored but whose
-first voice could not be saved is `TOOL_ERROR` saying so. `ifAbsent: true` is the desktop's one-time hand-over of its own keys to the local server:
-the key is stored as it is, unchecked (the app checked it when the user entered it), and only while
-the server has none; otherwise the result is `{ok: false, error, present: true}` and the server's
-own key is kept. A key is 1 to 1024 printable ASCII characters with no spaces.
+**The key is write-only.** `linear.setKey` stores it in the server's `secrets.json`, beside its
+config file (owner-only, 0600, written then renamed; a file that cannot be read or parse is never
+overwritten), and no method sends it back: `linear.status` says only whether one is set. A key is
+checked first (Linear's `viewer`); the result is `{ok: false, error}` with Linear's answer when it
+is refused. A `secrets.json` that cannot be read is `TOOL_ERROR` before Linear is asked (with
+`ifAbsent` too), as is one that cannot be written. `ifAbsent: true` is the desktop's one-time
+hand-over of its own key to the local server: the key is stored as it is, unchecked (the app
+checked it when the user entered it), and only while the server has none; otherwise the result is
+`{ok: false, error, present: true}` and the server's own key is kept. A key is 1 to 1024 printable
+ASCII characters with no spaces.
 
-**Changes reach every client.** A `linear.setKey` or `voice.setKey` that stored its key (`ok:
-true`), a `linear.clearKey`, a `voice.clearKey` and a `voice.setConfig` send `integrations.changed`
-(`{linear: true}` or `{voice: true}`) to every authenticated connection, whatever it subscribes to,
-the caller's included; a client re-reads `linear.status` or `voice.settings`. A refused key, or
-one kept by `ifAbsent`, sends nothing.
+**Changes reach every client.** A `linear.setKey` that stored its key (`ok: true`) and a
+`linear.clearKey` send `integrations.changed {linear: true}` to every authenticated connection,
+whatever it subscribes to, the caller's included; a client re-reads `linear.status`. A refused key,
+or one kept by `ifAbsent`, sends nothing.
 
 | Method | Params | Result |
 |---|---|---|
@@ -727,27 +728,40 @@ one kept by `ifAbsent`, sends nothing.
 | `linear.setKey` | `{apiKey, ifAbsent?}` | `{ok: true, user}` (the key's Linear user; empty for `ifAbsent`) or `{ok: false, error, present?}` |
 | `linear.clearKey` | `{}` | `null` |
 | `linear.issues` | `{ids}` (at most 500 strings of at most 64 characters) | the `LinearIssue`s that exist and the key can see; ids that are not `ABC-123` are left out; `[]` without a key |
-| `voice.settings` | `{}` | `{hasKey, voiceId, modelId, promptSessions}` |
-| `voice.setKey` | `{apiKey, ifAbsent?}` | `{ok: true, voices}` (the first one is chosen when no voice is; empty for `ifAbsent`) or `{ok: false, error, present?}` |
-| `voice.clearKey` | `{}` | `null` |
-| `voice.voices` | `{}` | the key's voices, `[{id, name}]` |
-| `voice.setConfig` | any of `{voiceId, modelId, promptSessions}` | the whole config |
-| `voice.synthesize` | `{text}` (trimmed, 1 to 400 characters) | `{audio}`: an mp3, base64, for this connection only (a client's Test) |
 | `skills.list` | `{projectId, worktreeId}` | `SkillInfo[]`: the worktree's `.claude/skills/*/SKILL.md` and `.claude/commands/*.md`, then the server user's `~/.claude` ones; a project one shadows a user one of the same name. Only regular files are read, their first 16 KiB; nothing is listed from a worktree's `.claude` (or its `skills`, `commands`, or a `SKILL.md`) whose real path is outside the worktree |
 
-A failure of Linear or ElevenLabs (unreachable, a revoked key, a quota) is `TOOL_ERROR` with the
-service's message. The voice config (`<dataDir>/voice.json`) holds no secret. `promptSessions`
-("Summarize automatically") adds a prompt to every session the server starts that has the MCP tools,
-while it has a key and a voice, telling the agent to call `speak_summary` when it finishes or waits on the
-user. `skills.list` takes the worktree's path from the server's state and checks it as the worktree
-commands do (registered repository, not missing, inside the allowlist).
+A failure of Linear (unreachable, a revoked key) is `TOOL_ERROR` with its message. `skills.list`
+takes the worktree's path from the server's state and checks it as the worktree commands do
+(registered repository, not missing, inside the allowlist).
 
-**Spoken summaries.** The MCP tool `speak_summary` (see [MCP](#mcp-trek-dev-on-the-server))
-synthesizes the summary with the server's key and sends it as a `voice.summary` event to every
-connection subscribed to the session's project topic, and answers how many it went to. A
-connection with more than 4 MiB unsent is skipped (the clip would play late). Whether a client
-plays it is the client's: the desktop plays it unless its user set the app to Busy, an app-wide
-setting of that desktop, not the server's.
+## Plugins
+
+A plugin (plugin system phase 1) is a feature with its own methods, events, MCP tools, session
+prompt and client UI, built into trek-server and the Trek app (`plugins/<id>/`). The welcome lists
+the server's (`plugins: [{id, version}]`); a server older than plugins sends no `plugins`, and a
+client then knows a plugin only by its legacy capability (`voice`), if it has one.
+
+**Names.** A plugin's methods are `<id>.<name>` and its events `<id>.<event>`, on the same socket.
+A method no core handler has goes to the plugin whose id is its prefix; a plugin's id can't be a
+core namespace. Its errors reach the client as `BAD_REQUEST`, `NOT_FOUND`, `CONFLICT` or
+`TOOL_ERROR` (anything else is `TOOL_ERROR`).
+
+**On or off per project.** A project's `plugins` setting (`project.updateSettings`) is `{<id>:
+{enabled: boolean}}`; a plugin it doesn't name uses its default (the voice plugin's is on). Its
+methods answer whatever a project's setting (a key or a config is the server's); where it is off,
+its MCP tools are not listed (a call is an unknown tool), its MCP instructions and session prompt
+are left out, and it sends that project no events. A change shows at an agent's next `tools/list`,
+and in the prompt of the sessions started after it. A server older than plugins has no setting: its
+plugins are on everywhere.
+
+**Server-wide changes.** A plugin's key or config set by any client sends `plugins.changed {id}` to
+every authenticated connection; one with a legacy capability sends `integrations.changed
+{<capability>: true}` too, for clients older than plugins (a client that knows plugins heeds only
+`plugins.changed`).
+
+| Plugin | Methods, events and tools |
+|---|---|
+| `voice` | [The voice plugin](plugins/voice/README.md): `voice.*`, `voice.summary`, `speak_summary` |
 
 ## Pull request watch
 
@@ -1441,7 +1455,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
-| `speak_summary` | `terminalId`, `summary` (one to three short sentences, trimmed, at most 400 characters) | `{played: true, windows}` (the connections it went to, see [Linear, voice and skills](#linear-voice-and-skills)), or `{played: false, reason}`: voice is not set up (the server has no ElevenLabs key or no voice, or its secrets file cannot be read), or no connection has the project open (nothing is synthesized in either case), or the clip was synthesized but every connection with the project open is more than 4 MiB behind. A failed synthesis (ElevenLabs unreachable, a quota) is a tool error |
+| `speak_summary` | The voice plugin's, listed only in projects where it is on: see [the voice plugin](plugins/voice/README.md) | |
 | `get_stack` | `worktree` | `{available: false}`, or `{available: true, name, state, containers, ports, urls, logins}`; `state` is `starting`, `running`, `stopping` or `stopped` |
 | `start_stack` | `worktree`; `starter?` (boolean) | the stack as `get_stack` describes it, once `stack.sh up` is started; `BAD_REQUEST` when it is not stopped |
 | `stop_stack` | `worktree` | the stack once `stack.sh down` exited 0; else `BAD_REQUEST` naming the code |
@@ -1512,10 +1526,11 @@ workspace only of word characters and hyphens, and an Azure DevOps base only as 
 | `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
-| `voice.summary` | `{projectId, sessionId, text, audio}`: a session's spoken summary (`speak_summary`), an mp3 in base64, to every connection subscribed to the project's topic (not one more than 4 MiB behind) |
+| `<id>.<event>` | A plugin's event (see [Plugins](#plugins)): the voice plugin's `voice.summary` |
+| `plugins.changed` | `{id}`: a plugin's server-wide state (a key, its config) changed, by any client, to every authenticated connection |
 | `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
 | `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
-| `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: the server's Linear or ElevenLabs key, or its voice settings, changed (by any client), to every authenticated connection; re-read `linear.status` / `voice.settings` (see [Linear, voice and skills](#linear-voice-and-skills)). `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
+| `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: the server's Linear key changed (by any client), to every authenticated connection; re-read `linear.status` (see [Linear and skills](#linear-and-skills)). `voice` is the voice plugin's legacy capability, sent beside its `plugins.changed` for clients older than plugins. `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 
 ## Several clients
 

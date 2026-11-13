@@ -150,8 +150,9 @@ memory, so each start of the server makes new ones. The config files agents
 launch with are written to `<dataDir>/mcp` (mode 0600, in a 0700 directory) and
 removed when their project is deleted or the server next starts. If that
 directory cannot be used, the server logs a warning and runs without MCP.
-Besides those, sessions get `speak_summary` (read aloud through the server's
-ElevenLabs key, in every Trek window that has the project open) and `get_stack`,
+Besides those, sessions get `speak_summary` (the voice plugin's, in projects where it
+is on: read aloud through the server's ElevenLabs key, in every Trek window that has
+the project open) and `get_stack`,
 `start_stack`, `stop_stack` and `read_stack_log` (the worktree's dev stack, run on
 this machine). See `../PROTOCOL.md` for the tools.
 
@@ -160,10 +161,14 @@ this machine). See `../PROTOCOL.md` for the tools.
 The app's Linear and ElevenLabs settings are each server's own: a key set from any
 client is stored in `secrets.json` beside the config file (`~/.config/trek-server/`,
 or the Local profile's directory; mode 0600, written then renamed) and is never sent
-back to a client, which only learns whether one is set. The voice, the model and
-"Summarize automatically" are in the data dir's `voice.json` (no secret). With
+back to a client, which only learns whether one is set. ElevenLabs is the voice
+plugin's (`../plugins/voice/README.md`): the voice, the model and "Summarize
+automatically" are in the data dir's `plugins/voice/config.json` (no secret; a
+`voice.json` from before plugins is moved there at the first start). With
 "Summarize automatically" on and a key set, every session the server starts with
-the MCP tools is told to call `speak_summary` when it finishes or waits on the user.
+the MCP tools, in a project where the plugin is on, is told to call `speak_summary`
+when it finishes or waits on the user. Plugins are on or off per project (Settings →
+Plugins in the app).
 A `secrets.json` that cannot be read or parse is never overwritten: setting a key
 fails until it is fixed. The app's own keys are handed to its Local server once.
 
