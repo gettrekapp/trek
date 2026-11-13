@@ -9,7 +9,9 @@
 #   build   npm run build (app, web client, server) and the relay; the Node-only smokes
 #   mobile  the phone app: typecheck and an `expo export` for iOS and Android (no EAS, no signing)
 #   windows on Windows: the unit tests, then trek-server's own smoke (the built bundle) and the
-#           client contract smoke, whose fake agents are npm-style shims (scripts/fakeAgent.mjs).
+#           client contract smoke, whose fake agents are npm-style shims (scripts/fakeAgent.mjs),
+#           then the release's Windows zip (scripts/package-server.mjs) unpacked and run
+#           (scripts/server-tarball-smoke.mjs), as release.yml makes it.
 #           Tests for what Windows doesn't have skip with posixOnly() (scripts/testPlatform.mjs);
 #           tests named "Windows: …" run only here.
 #
@@ -32,7 +34,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  # The Linux jobs never start Electron: skip its ~100 MB binary.
+  # No job here starts Electron (the Linux ones and the Windows one): skip its ~100 MB binary.
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   # Smokes and tests run TypeScript straight from src/ (Node's type stripping, Node >= 22.18).
   NODE_VERSION: '22'
@@ -123,7 +125,7 @@ jobs:
         run: npx expo export --platform android --output-dir "$RUNNER_TEMP/expo-android"
 
   windows:
-    name: Windows (unit tests, server smokes)
+    name: Windows (unit tests, server smokes, zip)
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -159,3 +161,17 @@ jobs:
       - name: Client contract smoke
         if: ${{ !cancelled() }}
         run: node scripts/client-contract.mjs
+      # The release's Windows zip, as release.yml's server job makes and checks it (not uploaded),
+      # so a packaging break shows up here rather than on a tag.
+      - name: Build the web client
+        if: ${{ !cancelled() }}
+        run: npm run build:web
+      - name: Package trek-server
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/package-server.mjs --out dist-release
+          version=$(node -p "require('./server/package.json').version")
+          test -f "dist-release/trek-server-$version-win32-x64.zip"
+      - name: Unpack and run it
+        if: ${{ !cancelled() }}
+        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$(node -p "require('./server/package.json').version")-win32-x64.zip"

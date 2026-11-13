@@ -232,6 +232,9 @@ jobs:
         # Git Bash on the Windows runner, so the steps are the same everywhere.
         shell: bash
     steps:
+      # Byte-exact checkouts, as ci.yml's Windows job: the launchers and web client are packaged as
+      # committed (.gitattributes fixes the line endings that matter), not as core.autocrlf rewrites them.
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
