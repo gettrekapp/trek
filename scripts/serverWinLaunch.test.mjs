@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import {
   cmdEscapeArg,
   cmdEscapeCommand,
+  envValue,
   MAX_COMMAND_LINE,
   parseCmdShim,
   parseExeShim,
@@ -22,6 +23,15 @@ import { commandBinary } from '../server/src/sessions/agents.ts'
 import { launchSpec, quoted, raw, word } from '../src/shared/providers/shell.ts'
 import { claude } from '../src/shared/providers/claude.ts'
 import { windowsOnly } from './testPlatform.mjs'
+
+/**
+ * `env` with PATH set to `value`, under the key it already has whatever its case: Windows' is
+ * `Path`, and a spread plus `PATH: …` would hold both, which one the child gets being unsaid.
+ */
+function withPath(env, value) {
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
+  return { ...env, [key]: value }
+}
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/cmd-shim/${name}.cmd`, import.meta.url), 'utf8')
 
@@ -56,6 +66,12 @@ const ARGS = [
   '\\',
   '\\"'
 ]
+
+test('withPath (this file\'s helper) replaces the PATH key whatever its case', () => {
+  assert.deepEqual(withPath({ Path: 'a', X: '1' }, 'b'), { Path: 'b', X: '1' })
+  assert.deepEqual(withPath({ PATH: 'a' }, 'b'), { PATH: 'b' })
+  assert.deepEqual(withPath({}, 'b'), { PATH: 'b' })
+})
 
 test('quoteWindowsArg round-trips through CommandLineToArgvW for every awkward argument', () => {
   const line = ['prog.exe', ...ARGS.map(quoteWindowsArg)].join(' ')
@@ -244,7 +260,8 @@ test('Windows: an .exe, an npm shim and a batch file each receive their argv int
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   // The "agent": prints its argv as JSON between markers.
   const script = join(dir, 'print-argv.js')
-  writeFileSync(script, "process.stdout.write('ARGV' + JSON.stringify(process.argv.slice(2)) + 'END')\n")
+  // It stays 200 ms after writing, so ConPTY has flushed the output before the exit closes the pty.
+  writeFileSync(script, "process.stdout.write('ARGV' + JSON.stringify(process.argv.slice(2)) + 'END')\nsetTimeout(() => {}, 200)\n")
   // fake-agent.exe: node itself, whose first argument is the script.
   copyFileSync(process.execPath, join(dir, 'fake-agent.exe'))
   // An npm shim (its node_modules layout) for the script.
@@ -252,7 +269,7 @@ test('Windows: an .exe, an npm shim and a batch file each receive their argv int
   // An npm shim for a native .exe bin (fake-agent.exe, which takes the script first).
   writeFileSync(join(dir, 'nativeshim.cmd'), fixture('nativetool').replace('..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe', 'fake-agent.exe'))
   writeFileSync(join(dir, 'plain.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0print-argv.js" %*\r\n`)
-  const env = { ...process.env, PATH: `${dir};${process.env.PATH}` }
+  const env = withPath(process.env, `${dir};${envValue(process.env, 'PATH') ?? ''}`)
   const tricky = ['two words', 'say "hi"', '100% & | ^', 'C:\\dir\\', '']
   const run = async (head, args) => {
     const plan = sessionProcess(launchSpec(head, args.map((a) => quoted(a))), dir, 'win32', env)
