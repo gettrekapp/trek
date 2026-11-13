@@ -1,6 +1,6 @@
 {
   "name": "trek-server",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Trek server: projects, worktrees and agent sessions for Trek Dev clients",
   "private": true,
   "bin": {
