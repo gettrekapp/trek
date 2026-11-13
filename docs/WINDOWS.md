@@ -41,6 +41,10 @@ does not run on Windows.
   (answer Y); the PowerShell one does not. Until the scripts are signed (W2), Windows may refuse
   the unsigned `.ps1`: run `powershell -NoProfile -ExecutionPolicy Bypass -File bin\trek-server.ps1 start`,
   or `Get-ChildItem -Recurse <folder> | Unblock-File` once after unzipping.
+  Both run the `node` found on PATH, and cmd.exe looks in the current directory before PATH: a
+  `node.exe` (or `node.cmd`) in the folder you start `bin\trek-server.cmd` from would run instead.
+  Start it from a directory you trust (not a repository's), or set `TREK_NODE` to the absolute
+  path of `node.exe`.
 - **Stopping.** Ctrl+C (or Ctrl+Break, or closing the console) shuts the server down cleanly.
   `trek-server stop --local` asks the local server to stop over its own connection
   (`server.stop`); a stop from another process by signal is not possible on Windows.
