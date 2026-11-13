@@ -740,9 +740,11 @@ every authenticated connection; one with a legacy capability sends `integrations
 
 **Project settings** (phase 2). A plugin can own project settings, kept at the top of the
 project's settings under the names its manifest declares (`linearWorkspace`,
-`azureDevOpsBaseUrl`) and checked by it: `project.updateSettings` and `project.import` take them as
-they take the core ones, whether or not the plugin is on in the project. A value it refuses is
-`BAD_REQUEST` naming the setting.
+`azureDevOpsBaseUrl`) and checked by it: `project.updateSettings` takes them as it takes the core
+ones, whether or not the plugin is on in the project, and a value it refuses is `BAD_REQUEST` naming
+the setting (a 0.2.x client, which sent these unchecked, sees that as a failed save).
+`project.import` checks them by kind only, and takes a built-in plugin's keys even where that
+plugin didn't load, so an older project still imports.
 
 **Ticket trackers** (phase 2). A branch's ticket (`branchData.ticket`) is an id the project's
 trackers read: each is a plugin's ticket provider (its ids and URLs, the chip's label, the link

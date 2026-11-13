@@ -69,7 +69,11 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
             autoFocus
             placeholder={providers[0]?.hint ?? ''}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            aria-label="Ticket id or URL"
+            onChange={(e) => {
+              setInput(e.target.value)
+              setError(null)
+            }}
             onKeyDown={(e) => {
               onEnter(e)
               if (e.key === 'Escape') onClose()
@@ -77,7 +81,17 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
           />
           {link && (
             <>
-              <input type="text" placeholder={link.placeholder} value={linkValue} onChange={(e) => { setLinkValue(e.target.value); setError(null) }} onKeyDown={onEnter} />
+              <input
+                type="text"
+                aria-label={link.label}
+                placeholder={link.placeholder}
+                value={linkValue}
+                onChange={(e) => {
+                  setLinkValue(e.target.value)
+                  setError(null)
+                }}
+                onKeyDown={onEnter}
+              />
               <p className="muted ticket-hint">The {link.label.toLowerCase()} is saved once per project and turns ticket ids into links.</p>
             </>
           )}

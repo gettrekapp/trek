@@ -408,3 +408,20 @@ test("project.import checks a plugin's setting by kind only (a project saved bef
   // A live edit still gets the plugin's check.
   assert.throws(() => applySettingsPatch({}, { trackerSpace: 'loose value' }, registry.settingRules), /never valid/)
 })
+
+test("project.import keeps a built-in plugin's setting when that plugin didn't load on the server", async (t) => {
+  const { checkImport } = await import('../server/src/projects/importCheck.ts')
+  const { registry } = setup(t, [])
+  const raw = { name: 'P', settings: { linearWorkspace: 'acme team', azureDevOpsBaseUrl: 'dev.azure.com/o/p' }, repositories: [{ id: 'r', name: 'r', path: '/nowhere', worktrees: [] }], globalSessions: [] }
+  const ctx = { registry: [], guard: { check() {} }, existingIds: new Set(), projectId: 'new', settingRules: registry.settingRules }
+  const err = (() => {
+    try {
+      checkImport(raw, ctx)
+    } catch (e) {
+      return e
+    }
+  })()
+  // The settings pass; the import goes on to the repository, which fails here as it should.
+  assert.doesNotMatch(err?.message ?? '', /linearWorkspace|azureDevOpsBaseUrl/)
+  assert.throws(() => checkImport({ ...raw, settings: { notAKey: 'x' } }, ctx), /notAKey is not a project setting/)
+})

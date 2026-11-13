@@ -10,7 +10,7 @@ import { checkQueue, checkTitle } from '../sessions/limits.ts'
 import { realOrResolved } from '../repos.ts'
 import { assertNoProtoKeys, isRecord, requireAbsolutePath, requireName } from '../validate.ts'
 import { assertNotRepository, findRegistered, resetRuntime } from './model.ts'
-import { validateSettings, type PluginSettingRules } from './settings.ts'
+import { PLUGIN_OWNED_SETTINGS, validateSettings, type PluginSettingRules } from './settings.ts'
 
 export interface ImportContext {
   registry: readonly RemoteRepo[]
@@ -110,7 +110,13 @@ export function checkImport(raw: unknown, ctx: ImportContext): Project {
   const name = requireName(raw.name, 'project.name')
   // A plugin's setting is checked by kind only here: a project saved before its plugin checked it
   // (a 0.2.x Azure DevOps base without a scheme) still imports; a live edit gets the full check.
-  const lenient = ctx.settingRules && { kind: ctx.settingRules.kind, check: () => null }
+  // A built-in plugin's own keys are taken as strings even when that plugin didn't load here (its
+  // setup failed): its setting is kept, not the whole project refused.
+  const owned: ReadonlySet<string> = new Set(PLUGIN_OWNED_SETTINGS)
+  const lenient: PluginSettingRules = {
+    kind: (key) => ctx.settingRules?.kind(key) ?? (owned.has(key) ? 'string' : undefined),
+    check: () => null
+  }
   const settings = validateSettings(raw.settings ?? {}, 'project.settings', lenient)
   if (!Array.isArray(raw.repositories) || raw.repositories.length === 0) throw bad('project.repositories must be a non-empty array')
   if (!Array.isArray(raw.globalSessions)) throw bad('project.globalSessions must be an array')
