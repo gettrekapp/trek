@@ -128,10 +128,11 @@ start first proves the sandbox works by trying to read a canary file. If the rea
 succeeds, or no sandbox is available, the bot won't run. A bot folder or repository
 inside the user-data directory is refused too.
 
-Trek's MCP server enforces the bot's policy on every tool call. These eight tools
-run something outside the sandbox, so they always ask for your approval, whatever
-`POLICY.json` says: `start_session`, `send_prompt`, `send_keys`, `start_stack`,
-`create_worktree`, `load_worktree`, `save_session_type`, `delete_session_type`.
+Trek's MCP server enforces the bot's policy on every tool call. These nine tools
+run or delete something outside the sandbox, so they always ask for your approval,
+whatever `POLICY.json` says: `start_session`, `send_prompt`, `send_keys`, `start_stack`,
+`create_worktree`, `load_worktree`, `remove_worktree`, `save_session_type`,
+`delete_session_type`.
 
 **What it doesn't do yet:** it does not stop a determined, prompt-injected bot from
 getting code run outside the sandbox. The main ways:

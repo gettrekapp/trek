@@ -54,6 +54,24 @@ async function hasChanges(worktreePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * A worktree may be removed where the allowlist covers it, or wherever git itself
+ * lists it as a linked worktree of the repo: an agent's worktree in a temp or
+ * scratchpad folder is outside the roots, but its path comes from git, not the
+ * client. A row git does not list (a hand-edited file) still needs the allowlist.
+ */
+async function assertRemovable(ctx: V2Context, repoPath: string, worktreePath: string): Promise<void> {
+  try {
+    ctx.store.guard.check(worktreePath)
+    return
+  } catch (err) {
+    const key = real(worktreePath)
+    const listed = await gitService.listWorktrees(repoPath).catch(() => null)
+    if (listed?.some((w) => !w.isMain && real(w.path) === key)) return
+    throw err
+  }
+}
+
 /** Only a real branch name: not a revision expression like @{-1}, nor HEAD, a tag or a SHA. */
 export async function checkBranchName(repoPath: string, branch: string, mustExist: boolean): Promise<void> {
   if (branch.startsWith('-')) throw bad('branch must not start with "-"')
@@ -196,8 +214,8 @@ export const worktreeHandlers: Record<string, Handler> = {
 
     if (!worktree.missing) {
       findRegistered(ctx.store.config.repos, repo.path)
+      await assertRemovable(ctx, repo.path, worktree.path)
       // Another registered repo's checkout may be listed as a row here.
-      ctx.store.guard.check(worktree.path)
       assertNotRepository(ctx.store.config.repos, real(worktree.path), 'worktree')
       // A directory that is already gone is removed from git's list too, and
       // only this one: a repo-wide prune would drop worktrees on unmounted volumes.

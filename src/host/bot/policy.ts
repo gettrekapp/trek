@@ -41,13 +41,13 @@ const FREE_TOOLS = new Set([
 ])
 
 /**
- * Trek tools that run something outside the bot's OS sandbox: a worktree session (start, prompt,
- * keys), a stack's scripts, a worktree's setup, or a session type that later sessions run. They
+ * Trek tools that run or delete something outside the bot's OS sandbox: a worktree session (start,
+ * prompt, keys), a stack's scripts, a worktree's setup or removal, or a session type that later sessions run. They
  * always need the user's approval: POLICY.json can't make them free. `enqueue_prompt` stays free.
  */
 export const ALWAYS_ASK_TOOLS: ReadonlySet<string> = new Set([
   'start_session', 'send_prompt', 'send_keys',
-  'start_stack', 'create_worktree', 'load_worktree', 'save_session_type', 'delete_session_type'
+  'start_stack', 'create_worktree', 'load_worktree', 'remove_worktree', 'save_session_type', 'delete_session_type'
 ])
 
 const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])

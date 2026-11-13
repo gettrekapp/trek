@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { describeWorktree, resolveWorktree } from '../server/src/mcp/describe.ts'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -111,7 +111,7 @@ async function toolSetup(t, opts = {}) {
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
     'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack',
-    'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt',
+    'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_worktree',
     'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'speak_summary', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'
@@ -239,6 +239,23 @@ test('load_worktree and unload_worktree', async (t) => {
   const s = await toolSetup(t)
   assert.deepEqual(await s.call('load_worktree', { worktree: 'main' }), { loaded: true, sessions: [] })
   assert.deepEqual(await s.call('unload_worktree', { worktree: 'main' }), { unloaded: true })
+})
+
+test('remove_worktree deletes a worktree, keeps its branch, and refuses dirty, loaded or primary ones', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('create_worktree', { branch: 'feat/rm' })
+  writeFileSync(join(created.path, 'scratch.txt'), 'x')
+  await assert.rejects(s.call('remove_worktree', { worktree: 'feat/rm' }), (err) => err.code === 'GIT_ERROR' && err.details?.reason === 'dirty')
+  assert.ok(existsSync(created.path))
+  await s.call('load_worktree', { worktree: 'feat/rm' })
+  await assert.rejects(s.call('remove_worktree', { worktree: 'feat/rm', force: true }), (err) => err.code === 'IN_USE')
+  await s.call('unload_worktree', { worktree: 'feat/rm' })
+  await assert.rejects(s.call('remove_worktree', { worktree: 'feat/rm', force: 'yes' }), /force must be a boolean/)
+  assert.deepEqual(await s.call('remove_worktree', { worktree: 'feat/rm', force: true }), { removed: true, path: created.path, branch: 'feat/rm' })
+  assert.equal(existsSync(created.path), false)
+  assert.equal((await s.call('list_worktrees', {})).length, 1)
+  assert.match(execFileSync('git', ['-C', s.a, 'branch', '--list', 'feat/rm'], { encoding: 'utf8' }), /feat\/rm/)
+  await assert.rejects(s.call('remove_worktree', { worktree: 'main' }), /main worktree cannot be removed/)
 })
 
 test('start_session, get_current_session and close_session', async (t) => {

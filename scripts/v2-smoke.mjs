@@ -728,6 +728,34 @@ try {
   await w1.keyboard.press('Enter')
   check('typed input is echoed by the agent', await until(async () => (await term(s1)).includes('GOT:hello'), true), true)
 
+  // Quick buttons from the console: + creates one with an input and a built-in; clicking asks for
+  // the input, fills [branch], and sends; ✎ deletes it again.
+  const bar = detail.locator('.terminal-pane:visible .quick-buttons')
+  await bar.locator('.quick-btn-add').click()
+  const createModal = w1.locator('.modal', { hasText: 'New quick button' })
+  await createModal.waitFor({ timeout: 5000 })
+  await createModal.locator('input[placeholder="Label"]').fill('Check area')
+  await createModal.locator('.tpl-textarea').fill('Check {AREA} on [branch]')
+  check('the editor highlights the input and the built-in', await createModal.locator('.tpl-layer .tpl-input, .tpl-layer .tpl-builtin').allTextContents(), ['{AREA}', '[branch]'])
+  await createModal.locator('button', { hasText: 'Save' }).click()
+  await createModal.waitFor({ state: 'detached', timeout: 5000 })
+  check('a button made from the console is saved on the server', await until(async () => (await projectNow()).settings.terminalButtons?.map((b) => [b.label, b.text]), [['Check area', 'Check {AREA} on [branch]']]), [['Check area', 'Check {AREA} on [branch]']])
+  const made = bar.locator('.quick-btn', { hasText: 'Check area' })
+  check('and shows the input icon', await made.locator('.quick-btn-input-icon').count(), 1)
+  await made.locator('.quick-btn-main').click()
+  const runModal = w1.locator('.modal', { hasText: 'Check area' })
+  await runModal.waitFor({ timeout: 5000 })
+  await runModal.locator('input[aria-label="AREA"]').fill('smoke')
+  check('the run modal previews the final text', await runModal.locator('.quick-btn-preview').textContent(), 'Check smoke on smoke-wt')
+  await runModal.locator('input[aria-label="AREA"]').press('Enter')
+  await runModal.waitFor({ state: 'detached', timeout: 5000 })
+  check('the filled text reaches the agent', await until(async () => (await term(s1)).includes('GOT:Check smoke on smoke-wt'), true), true)
+  await made.hover()
+  await made.locator('.quick-btn-edit').click()
+  const editModal = w1.locator('.modal', { hasText: 'Edit quick button' })
+  await editModal.locator('button', { hasText: 'Delete' }).click()
+  check('deleting it from the edit modal clears it on the server', await until(async () => (await projectNow()).settings.terminalButtons ?? [], []), [])
+
   // The pty size: the shown pane claims it; a tab that was never shown leaves it alone.
   const ptySize = async (sessionId) => {
     const snap = await projectNow()

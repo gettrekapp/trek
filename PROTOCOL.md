@@ -1420,6 +1420,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `create_worktree` | `branch`; `existingBranch?` (check out an existing branch; default false); `repo?` (name or id; required with several repositories) | the new worktree entry |
 | `load_worktree` | `worktree` | `{loaded: true, sessions}` |
 | `unload_worktree` | `worktree` | `{unloaded: true}` |
+| `remove_worktree` | `worktree`; `force?` (true discards uncommitted and untracked changes; default false) | `{removed: true, path, branch}`, through `worktree.remove`: deletes the directory and git's record of it, keeps the branch. `BAD_REQUEST` for the primary checkout, `IN_USE` while it is loaded (unload it first), `GIT_ERROR` with `details.reason: 'dirty'` when it has changes and `force` is not true |
 | `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, decision, worktree}`, `worktree` being an entry (`null` for a Global session) |
 | `request_decision` | `terminalId`, `question` (1 to 1000 characters once whitespace runs become one space and it is trimmed; no other control characters) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
 | `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
