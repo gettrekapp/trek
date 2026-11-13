@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalHost } from '../server/src/sessions/terminalHost.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 function fakeSpawner() {
   const spawned = []
@@ -569,7 +570,7 @@ test('toWireError carries the details of a passed-through code: only an object, 
   assert.deepEqual(toWireError('worktree.remove', extra), { code: 'GIT_ERROR', message: 'x', details: { reason: 'dirty' } }, 'only the named fields')
 })
 
-test('whenGone SIGKILLs the pty\'s process group: a background child that ignores SIGHUP does not outlive it', { skip: process.platform === 'win32' }, async (t) => {
+test('whenGone SIGKILLs the pty\'s process group: a background child that ignores SIGHUP does not outlive it', { skip: posixOnly('process groups and SIGHUP') }, async (t) => {
   const { mkdtempSync, readFileSync, rmSync, existsSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')

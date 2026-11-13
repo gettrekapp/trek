@@ -16,6 +16,7 @@ import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-integrations-'))
@@ -441,7 +442,7 @@ const write = (path, text) => {
   writeFileSync(path, text)
 }
 
-test('skills.list skips FIFOs and links to devices, and reads only a file\'s head', { skip: process.platform === 'win32', timeout: 10_000 }, async (t) => {
+test('skills.list skips FIFOs and links to devices, and reads only a file\'s head', { skip: posixOnly('FIFOs and device files'), timeout: 10_000 }, async (t) => {
   const s = await skillsSetup(t)
   for (const root of [join(s.a, '.claude'), join(s.home, '.claude')]) {
     mkdirSync(join(root, 'skills', 'fifo'), { recursive: true })

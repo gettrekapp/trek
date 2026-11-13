@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig } from '../src/host/gitService.ts'
 import { defaultWorktreePath, safeDirName } from '../server/src/worktreeHandlers.ts'
+import { windowsOnly } from './testPlatform.mjs'
 
 test('parseWorktreeList: Git for Windows paths (C:/x/y, CRLF) come out as C:\\x\\y', () => {
   const porcelain = 'worktree C:/work/repo\r\nHEAD abc\r\nbranch refs/heads/main\r\n\r\nworktree C:/work/repo-feat\r\nHEAD def\r\nbranch refs/heads/feat/x\r\n\r\n'
@@ -41,7 +42,7 @@ test('defaultWorktreePath: <repo>-<branch>, safe on Windows', () => {
   assert.match(defaultWorktreePath('/w/repo', 'feat/a:b.', 'win32'), /repo-feat-a-b$/)
 })
 
-test('Windows: a linked directory is a junction, found again by linkedSymlinks', { skip: process.platform !== 'win32' }, async (t) => {
+test('Windows: a linked directory is a junction, found again by linkedSymlinks', { skip: windowsOnly('junctions') }, async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-junction-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const repo = join(dir, 'repo')

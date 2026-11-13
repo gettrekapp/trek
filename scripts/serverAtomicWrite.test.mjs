@@ -21,8 +21,7 @@ test('creates parent directories, writes the text, leaves only the target', (t) 
   assert.deepEqual(readdirSync(join(dir, 'a', 'b')), ['f.json'])
 })
 
-test('the result has the requested mode, even over a looser file or stale temp file', (t) => {
-  if (process.platform === 'win32') return
+test('the result has the requested mode, even over a looser file or stale temp file', { skip: posixOnly('file modes') }, (t) => {
   const dir = tempDir(t)
   const path = join(dir, 'f.json')
   writeFileSync(path, 'old')
@@ -37,6 +36,7 @@ test('the result has the requested mode, even over a looser file or stale temp f
 // --- Windows: a rename over a file something holds open is retried ---
 
 import { RENAME_RETRY_DELAYS_MS, renameRetry, renameRetrySync } from '../src/host/atomicWrite.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 const busy = (code) => Object.assign(new Error(`${code}: busy`), { code })
 

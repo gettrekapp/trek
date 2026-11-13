@@ -18,6 +18,7 @@ import {
   removeStaleTemps
 } from '../server/src/localLock.ts'
 import { lockText, parseLockText } from '../src/shared/localServer.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-lock-')))
@@ -42,7 +43,7 @@ test('pidAlive: this process is, an exited child is not', () => {
   assert.equal(pidAlive(child.pid), false)
 })
 
-test("pidAlive: another user's process (EPERM) is alive", { skip: process.getuid?.() === 0 ? 'running as root' : process.platform === 'win32' }, () => {
+test("pidAlive: another user's process (EPERM) is alive", { skip: process.getuid?.() === 0 ? 'running as root' : posixOnly('another user\'s process (EPERM)') }, () => {
   // launchd / init is pid 1 and is root's: signal 0 fails with EPERM.
   assert.equal(pidAlive(1), true)
 })

@@ -20,6 +20,7 @@ import { sessionProcess, shellLaunch } from '../server/src/sessions/launch.ts'
 import { commandBinary } from '../server/src/sessions/agents.ts'
 import { launchSpec, quoted, raw, word } from '../src/shared/providers/shell.ts'
 import { claude } from '../src/shared/providers/claude.ts'
+import { windowsOnly } from './testPlatform.mjs'
 
 const fixture = (name) => readFileSync(new URL(`./fixtures/cmd-shim/${name}.cmd`, import.meta.url), 'utf8')
 
@@ -192,7 +193,7 @@ test('commandBinary on Windows reads the program as CreateProcess does', () => {
 
 // --- Windows only (the windows-latest CI job): real ConPTY spawns, argv as the program sees it ---
 
-test('Windows: an .exe, an npm shim and a batch file each receive their argv intact', { skip: process.platform !== 'win32' }, async (t) => {
+test('Windows: an .exe, an npm shim and a batch file each receive their argv intact', { skip: windowsOnly('ConPTY spawns') }, async (t) => {
   const { TerminalHost } = await import('../server/src/sessions/terminalHost.ts')
   const dir = mkdtempSync(join(tmpdir(), 'trek-winlaunch-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))

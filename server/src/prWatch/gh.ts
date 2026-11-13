@@ -30,11 +30,14 @@ const NO_GH = 'gh is not installed on the server'
 /** A runner for `binary`; for null, one that always fails as though gh were not installed. */
 export const ghRunner = (binary: string | null): GhRunner => {
   if (binary === null) return () => Promise.reject(new Error(`${NO_GH} (TREK_SERVER_GH is not an absolute path)`))
+  // A test stub given as a Node script (TREK_SERVER_GH=/…/gh.mjs) runs with this Node: Windows
+  // can't run a sh stub, and execFile can't start a batch file without a shell.
+  const [file, lead] = /\.m?js$/.test(binary) ? [process.execPath, [binary]] : [binary, []]
   return (args, signal) =>
     new Promise((resolve, reject) => {
       execFile(
-        binary,
-        args,
+        file,
+        [...lead, ...args],
         hidden({
           timeout: GH_TIMEOUT_MS,
           maxBuffer: GH_MAX_OUTPUT,

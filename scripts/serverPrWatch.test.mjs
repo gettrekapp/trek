@@ -109,6 +109,17 @@ test('ghBinary: gh on the PATH only when TREK_SERVER_GH is unset; an absolute pa
   await assert.rejects(ghRunner(null)(['auth', 'status']), /gh is not installed on the server/)
 })
 
+test('ghRunner: a stub given as a Node script runs with this Node (Windows has no sh stubs)', async (t) => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const stub = join(dir, 'gh.mjs')
+  writeFileSync(stub, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n")
+  assert.equal(await ghRunner(stub)(['api', 'graphql', '-f', 'query=x y']), JSON.stringify(['api', 'graphql', '-f', 'query=x y']))
+})
+
 test('isAuthFailure: only sign-in trouble re-checks the sign-in', () => {
   for (const m of ['HTTP 401: Bad credentials (https://api.github.com/graphql)', 'You are not logged into any GitHub hosts. To log in, run: gh auth login', 'authentication required']) assert.equal(isAuthFailure(m), true, m)
   for (const m of ['HTTP 502: Bad Gateway', 'dial tcp: lookup api.github.com: no such host', 'GitHub: Could not resolve to a PullRequest with the number of 12.', 'no such pull request']) assert.equal(isAuthFailure(m), false, m)
