@@ -345,7 +345,7 @@ export interface ProjectFile {
   dockerFavorites?: string[]
   /** Azure DevOps org/project URL, e.g. https://dev.azure.com/org/Project (the azure-devops plugin's project setting) */
   azureDevOpsBaseUrl?: string
-  /** Linear workspace slug (linear.app/<slug>/...) — turns issue identifiers into links */
+  /** Linear workspace slug (linear.app/<slug>/...) — turns issue identifiers into links (the linear plugin's project setting) */
   linearWorkspace?: string
   /** Workflow tags offered for worktrees, in order (undefined = DEFAULT_WORKTREE_TAGS) */
   worktreeTags?: WorktreeTag[]

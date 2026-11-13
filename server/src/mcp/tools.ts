@@ -8,7 +8,7 @@ import { keySequence } from '../../../src/shared/keys.ts'
 import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import { PROVIDER_IDS, type LlmSelection } from '../../../src/shared/providers/types.ts'
-import { parseTicket, ticketUrl } from '../../../src/shared/tickets.ts'
+import { parseTicketWith, ticketView } from '../../../src/shared/tickets.ts'
 import type { SessionType } from '../../../src/shared/types'
 import type { ConfigStore } from '../configStore'
 import { codedError } from '../errors.ts'
@@ -810,17 +810,18 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           await v2('branch.setTicket', { repoId: repo.id, branch, ticket: null })
           return { branch, ticket: null }
         }
-        const parsed = parseTicket(input)
+        // The trackers on in this project (their plugins').
+        const providers = deps.plugins?.ticketProviders(projectId) ?? []
+        const parsed = parseTicketWith(providers, input)
         if (!parsed) {
-          throw bad(`Unrecognised ticket "${input}". Use a Linear issue id (TOW-123), a Linear issue URL, or an Azure DevOps work item id/URL.`)
+          const takes = providers.length > 0 ? `Use ${providers.map((p) => p.hint).join(', or ')}.` : 'No ticket tracker is on in this project.'
+          throw bad(`Unrecognised ticket "${input}". ${takes}`)
         }
-        const settings: Record<string, string> = {}
-        if (parsed.linearWorkspace) settings.linearWorkspace = parsed.linearWorkspace
-        if (parsed.azureDevOpsBaseUrl) settings.azureDevOpsBaseUrl = parsed.azureDevOpsBaseUrl
-        if (Object.keys(settings).length > 0) await v2('project.updateSettings', { settings })
+        // A URL's workspace or base, written as the tracker's project settings.
+        if (parsed.settings && Object.keys(parsed.settings).length > 0) await v2('project.updateSettings', { settings: parsed.settings })
         await v2('branch.setTicket', { repoId: repo.id, branch, ticket: parsed.ticketId })
-        const fresh = deps.projects.require(projectId).settings
-        return { branch, ticket: parsed.ticketId, url: ticketUrl(fresh, parsed.ticketId) }
+        const fresh = deps.projects.require(projectId).settings as Record<string, unknown>
+        return { branch, ticket: parsed.ticketId, url: ticketView(providers, fresh, parsed.ticketId).url }
       },
 
       set_worktree_pull_request: async (args, project) => {

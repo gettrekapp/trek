@@ -21,7 +21,7 @@ import { startServer } from './server'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
 import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
-import { createIntegrations, testEndpoint } from './integrations/integrations'
+import { createIntegrations } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import { ghFromEnv } from './prWatch/gh'
@@ -494,10 +494,7 @@ const server = startServer(
     promoteRecoveryDir: resolve(serverDataDir, 'promote-recovery'),
     local: local !== undefined,
     machine: createMachine(serverDataDir, { local: local !== undefined }),
-    integrations: createIntegrations({
-      secretsFile: secretsPathFor(resolve(args.configPath)),
-      linearEndpoint: testEndpoint('TREK_SERVER_LINEAR_URL', process.env.TREK_SERVER_LINEAR_URL)
-    }),
+    integrations: createIntegrations({}),
     prWatch: {
       gh: ghFromEnv(process.env.TREK_SERVER_GH),
       // The smokes' knob: the time between polls, and between sign-in checks.

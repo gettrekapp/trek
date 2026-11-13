@@ -1,5 +1,5 @@
-// scripts/serverIntegrations.test.mjs — the server's secrets file, linear.* and skills.list (phase 5b),
-// against a local HTTP stub of Linear's API: nothing here reaches it. (voice.* is the voice plugin's:
+// scripts/serverIntegrations.test.mjs — the server's secrets file, skills.list and the test
+// endpoints (phase 5b). (linear.* and voice.* are the Linear and voice plugins': scripts/linearPlugin.test.mjs,
 // scripts/voicePlugin.test.mjs.)
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -22,48 +22,6 @@ const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-integrations-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
-}
-
-/** A stub of Linear's endpoint: `good-key` is a valid key; issues TOW-1 and TOW-2..TOW-120 exist. */
-async function linearStub(t, options = {}) {
-  const requests = []
-  const server = createServer((req, res) => {
-    let body = ''
-    req.on('data', (c) => (body += c))
-    req.on('end', () => {
-      const parsed = JSON.parse(body)
-      requests.push({ auth: req.headers.authorization, ...parsed })
-      const send = (status, value) => {
-        res.writeHead(status, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(value))
-      }
-      if (options.notJson) {
-        res.writeHead(400, { 'content-type': 'text/html' })
-        return res.end('<html>Bad Request</html>')
-      }
-      if (options.status) return send(options.status, {})
-      if (req.headers.authorization !== 'good-key') return send(401, {})
-      if (parsed.query.includes('viewer')) return send(200, { data: { viewer: { name: 'Ada' } } })
-      const data = {}
-      for (const [alias, id] of Object.entries(parsed.variables)) {
-        data[alias] = /^TOW-\d+$/.test(id) ? { identifier: id, title: `Title ${id}`, url: `https://linear.app/x/issue/${id}`, state: { name: 'In Progress', type: 'started', color: '#f00' } } : null
-      }
-      send(200, { data })
-    })
-  })
-  await new Promise((r) => server.listen(0, '127.0.0.1', r))
-  t.after(() => server.close())
-  return { url: `http://127.0.0.1:${server.address().port}/graphql`, requests }
-}
-
-async function setup(t, options = {}) {
-  const dir = tempDir(t)
-  const stub = await linearStub(t, options)
-  const secretsFile = secretsPathFor(join(dir, 'config.json'))
-  const integrations = createIntegrations({ secretsFile, linearEndpoint: stub.url })
-  const ctx = { integrations }
-  const call = (method, params) => dispatchV2(method, params, ctx)
-  return { dir, stub, secretsFile, integrations, call }
 }
 
 const refused = (res, code) => {
@@ -98,74 +56,6 @@ test('the secrets file: one that cannot be parsed throws, and is never replaced'
   assert.throws(() => file.get('linear'), /not valid JSON/)
   assert.throws(() => file.set('elevenlabs', 'e1'), /not valid JSON/)
   assert.equal(readFileSync(path, 'utf8'), '{"linear": "k1", torn')
-})
-
-test('linear.setKey checks the key with Linear, stores it 0600 and never sends it back', async (t) => {
-  const s = await setup(t)
-  assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
-  // Without a key, no lookup and no request.
-  assert.deepEqual((await s.call('linear.issues', { ids: ['TOW-1'] })).result, [])
-  assert.equal(s.stub.requests.length, 0)
-
-  const rejected = await s.call('linear.setKey', { apiKey: 'bad-key' })
-  assert.deepEqual(rejected.result, { ok: false, error: 'Linear rejected the API key' })
-  assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
-
-  const set = await s.call('linear.setKey', { apiKey: '  good-key \n' })
-  assert.deepEqual(set.result, { ok: true, user: 'Ada' })
-  assert.equal(JSON.stringify(set).includes('good-key'), false)
-  assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: true })
-  assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
-  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { linear: 'good-key' })
-
-  assert.deepEqual((await s.call('linear.clearKey', {})).result, null)
-  assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
-})
-
-test('linear.setKey ifAbsent (the hand-over) stores the key unchecked, and keeps a stored one', async (t) => {
-  const s = await setup(t)
-  assert.deepEqual((await s.call('linear.setKey', { apiKey: 'app-key', ifAbsent: true })).result, { ok: true, user: '' })
-  const again = await s.call('linear.setKey', { apiKey: 'other-key', ifAbsent: true })
-  assert.deepEqual(again.result, { ok: false, error: 'This server already has a key; it was kept', present: true })
-  // Linear was never asked: the app checked the key when it was entered.
-  assert.equal(s.stub.requests.length, 0)
-  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { linear: 'app-key' })
-})
-
-test('linear.issues looks the ids up in batches of 50 and leaves out unknown and malformed ids', async (t) => {
-  const s = await setup(t)
-  await s.call('linear.setKey', { apiKey: 'good-key' })
-  const lookups = s.stub.requests.length
-  const ids = [...Array.from({ length: 60 }, (_, i) => `TOW-${i + 1}`), 'TOW-1', 'nope', 'ABC-9']
-  const res = await s.call('linear.issues', { ids })
-  assert.equal(res.ok, true)
-  // ABC-9 is well-formed but Linear has no such issue; "nope" is never sent; TOW-1 once.
-  assert.equal(res.result.length, 60)
-  assert.deepEqual(res.result[0], { identifier: 'TOW-1', title: 'Title TOW-1', url: 'https://linear.app/x/issue/TOW-1', status: 'In Progress', statusType: 'started', statusColor: '#f00' })
-  const sent = s.stub.requests.slice(lookups)
-  assert.equal(sent.length, 2)
-  assert.deepEqual(sent.map((r) => Object.keys(r.variables).length), [50, 11])
-  assert.equal(sent.every((r) => r.auth === 'good-key'), true)
-})
-
-test('linear.*: a Linear that fails is TOOL_ERROR; bad arguments are BAD_REQUEST before any request', async (t) => {
-  const s = await setup(t, { status: 500 })
-  // No key yet: the check fails with Linear's status, nothing stored.
-  assert.deepEqual((await s.call('linear.setKey', { apiKey: 'good-key' })).result, { ok: false, error: 'Linear API returned 500' })
-  createSecretFile(s.secretsFile).set('linear', 'good-key')
-  refused(await s.call('linear.issues', { ids: ['TOW-1'] }), 'TOOL_ERROR')
-  const sent = s.stub.requests.length
-  refused(await s.call('linear.setKey', { apiKey: 'has space' }), 'BAD_REQUEST')
-  refused(await s.call('linear.setKey', { apiKey: '' }), 'BAD_REQUEST')
-  refused(await s.call('linear.setKey', { apiKey: 'k', ifAbsent: 'yes' }), 'BAD_REQUEST')
-  refused(await s.call('linear.issues', { ids: 'TOW-1' }), 'BAD_REQUEST')
-  refused(await s.call('linear.issues', { ids: Array.from({ length: 501 }, () => 'TOW-1') }), 'BAD_REQUEST')
-  refused(await s.call('linear.issues', { ids: [1] }), 'BAD_REQUEST')
-  assert.equal(s.stub.requests.length, sent)
-})
-
-test('linear.*: a server without integrations answers NOT_FOUND', async () => {
-  refused(await dispatchV2('linear.status', {}, {}), 'NOT_FOUND')
 })
 
 test('TopicHub.emit reaches the subscribers that take events and counts the ones it was sent to', () => {
@@ -209,7 +99,7 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
     poller.stop()
     store.close()
   })
-  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), home })
+  const integrations = createIntegrations({ home })
   const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, integrations }
   const call = (method, params) => dispatchV2(method, params, ctx)
   const projectId = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result.projectId
@@ -232,25 +122,6 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
 })
 
 /** The secrets file a directory: every read of it fails (EISDIR), whoever runs the test. */
-const unreadableSecrets = (s) => mkdirSync(s.secretsFile, { recursive: true })
-
-test('linear.setKey with an unreadable secrets file is TOOL_ERROR before any request, with or without ifAbsent', async (t) => {
-  const s = await setup(t)
-  unreadableSecrets(s)
-  for (const ifAbsent of [false, true]) {
-    const res = await s.call('linear.setKey', { apiKey: 'good-key', ifAbsent })
-    refused(res, 'TOOL_ERROR')
-    assert.match(res.error.message, /cannot be read/)
-  }
-  assert.equal(s.stub.requests.length, 0)
-})
-
-test('linear.setKey: a 400 whose body is not JSON is a failed check, not a parse error', async (t) => {
-  const s = await setup(t, { notJson: true })
-  assert.deepEqual((await s.call('linear.setKey', { apiKey: 'good-key' })).result, { ok: false, error: 'Linear API returned 400' })
-  assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
-})
-
 test('readBodyCapped: content-length over the cap, a stream over the cap, and one under it', async () => {
   const stream = (bytes) => new ReadableStream({ start(c) { for (let i = 0; i < bytes; i += 10) c.enqueue(new Uint8Array(10)); c.close() } })
   await assert.rejects(readBodyCapped(new Response('x'.repeat(20), { headers: { 'content-length': '20' } }), 10, 'The reply'), /The reply is larger than 10 bytes/)
@@ -268,7 +139,7 @@ async function skillsSetup(t) {
   execFileSync('git', ['init', '-q', '-b', 'main', a])
   const home = join(dir, 'home')
   mkdirSync(home, { recursive: true })
-  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), home })
+  const integrations = createIntegrations({ home })
   return { dir, a, home, list: () => integrations.skills.list(a) }
 }
 
@@ -320,24 +191,6 @@ test("skills.list lists nothing from a worktree's .claude (or its skills dir) th
   symlinkSync(join(outside, 'skills', 'stolen', 'SKILL.md'), join(s.a, '.claude', 'skills', 'linked', 'SKILL.md'))
   assert.deepEqual((await s.list()).map((x) => x.name), ['ship', 'mine'])
 })
-
-test('integrations.changed: a stored key and a cleared key say so; a refused or kept key does not', async (t) => {
-  const s = await setup(t)
-  const changes = []
-  const ctx = { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) }
-  const call = (method, params) => dispatchV2(method, params, ctx)
-  await call('linear.setKey', { apiKey: 'bad-key' })
-  assert.deepEqual(changes, [])
-  await call('linear.setKey', { apiKey: 'good-key' })
-  await call('linear.setKey', { apiKey: 'other', ifAbsent: true })
-  await call('linear.clearKey', {})
-  assert.deepEqual(changes, [{ linear: true }, { linear: true }])
-  // Reads say nothing.
-  changes.length = 0
-  await call('linear.status', {})
-  assert.deepEqual(changes, [])
-})
-
 
 test('the test endpoints (TREK_SERVER_LINEAR_URL, TREK_SERVER_ELEVENLABS_URL) are taken only on loopback', () => {
   const warned = []

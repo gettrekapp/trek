@@ -1,14 +1,11 @@
-// Linear's ticket lookups with the server's API key (phase 5b; main's linear.ts before it).
-// Electron-free: the key is in a slot the caller owns (the server's secrets file), and the
-// endpoint can be pointed elsewhere (a test's stub server).
-import type { LinearIssue, LinearKeyResult } from '../shared/types'
-import { MAX_JSON_BYTES, readBodyCapped } from './httpBody.ts'
-import { PRESENT_ERROR, type KeySlot } from '../shared/plugins/server.ts'
-
-export { PRESENT_ERROR, type KeySlot }
+// Linear's ticket lookups with the server's API key (phase 5b; the Linear plugin's since plugin
+// system phase 2). The key is in a slot the host owns (the server's secrets file), and the endpoint
+// can be pointed elsewhere (a test's stub server).
+import type { LinearIssue, LinearKeyResult } from '../shared/types.ts'
+import { LINEAR_ISSUE_ID } from '../shared/ticket.ts'
+import { MAX_JSON_BYTES, PRESENT_ERROR, readBodyCapped, type KeySlot } from '../../../src/shared/plugins/server.ts'
 
 export const LINEAR_ENDPOINT = 'https://api.linear.app/graphql'
-export const LINEAR_ISSUE_ID = /^[A-Z][A-Z0-9]*-\d+$/
 /** Linear caps query complexity, so large lookups are split into batches. */
 const BATCH_SIZE = 50
 const TIMEOUT_MS = 15_000

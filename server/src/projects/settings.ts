@@ -23,7 +23,7 @@ const KIND_TEXT: Record<Kind, string> = {
  * ProjectSettings keys a built-in plugin owns (plugin system phase 2): declared in its manifest's
  * `projectSettings` and checked by it, not in the table below.
  */
-type PluginOwnedSetting = 'azureDevOpsBaseUrl'
+type PluginOwnedSetting = 'azureDevOpsBaseUrl' | 'linearWorkspace'
 
 /** Every core ProjectSettings key; the Record type makes the compiler flag a missing one. */
 const SETTINGS_KINDS: Record<Exclude<keyof ProjectSettings, PluginOwnedSetting>, Kind> = {
@@ -31,7 +31,6 @@ const SETTINGS_KINDS: Record<Exclude<keyof ProjectSettings, PluginOwnedSetting>,
   claudeArgs: 'string',
   claudePermissionMode: 'string',
   dockerFavorites: 'stringArray',
-  linearWorkspace: 'string',
   worktreeTags: 'array',
   customTags: 'array',
   audioAlerts: 'boolean',

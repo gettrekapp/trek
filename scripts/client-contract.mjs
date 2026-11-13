@@ -112,8 +112,13 @@ if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'sta
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
 
 // --- 1b. plugins (plugin system phase 1): listed in the welcome; a 0.2.1 client's voice.* still answers ---
-if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify([{ id: 'voice', version: '1.0.0', defaultEnabled: true }])) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
-else ok('welcome plugins: voice')
+const BUILTIN_PLUGINS = [
+  { id: 'voice', version: '1.0.0', defaultEnabled: true },
+  { id: 'linear', version: '1.0.0', defaultEnabled: true },
+  { id: 'azure-devops', version: '1.0.0', defaultEnabled: true }
+]
+if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify(BUILTIN_PLUGINS)) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
+else ok('welcome plugins: voice, linear, azure-devops')
 try {
   // As 0.2.1 sends it, with no idea that voice is a plugin now.
   const settings = await conn.request('voice.settings', {})

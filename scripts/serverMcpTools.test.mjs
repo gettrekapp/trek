@@ -524,6 +524,25 @@ test('tickets: numbers, Azure DevOps URLs, unrecognised input, wrong types', asy
   assert.deepEqual(await s.call('set_worktree_ticket', { worktree: 'main' }), { branch: 'main', ticket: null })
 })
 
+test("tickets go through the project's trackers: one turned off refuses its ids and URLs, naming those on", async (t) => {
+  const s = await toolSetup(t)
+  const linear = await s.call('set_worktree_ticket', { worktree: 'main', ticket: 'https://linear.app/acme/issue/TOW-5' })
+  assert.deepEqual(linear, { branch: 'main', ticket: 'TOW-5', url: 'https://linear.app/acme/issue/TOW-5' })
+  assert.equal(s.projects.require(s.projectId).settings.linearWorkspace, 'acme')
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.plugins = { linear: { enabled: false } }
+  })
+  const err = await s.call('set_worktree_ticket', { worktree: 'main', ticket: 'TOW-6' }).catch((e) => e)
+  assert.equal(err.code, 'BAD_REQUEST')
+  assert.match(err.message, /Unrecognised ticket "TOW-6"\. Use an Azure DevOps work item id or URL\./)
+  assert.equal(s.projects.require(s.projectId).repositories[0].branchData.main.ticket, 'TOW-5', 'the stored ticket is kept')
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.plugins = { linear: { enabled: false }, 'azure-devops': { enabled: false } }
+  })
+  const none = await s.call('set_worktree_ticket', { worktree: 'main', ticket: '12' }).catch((e) => e)
+  assert.match(none.message, /No ticket tracker is on in this project/)
+})
+
 test('pull requests: #n inferred from another branch PR, none to infer from, wrong types', async (t) => {
   const s = await toolSetup(t)
   await s.call('create_worktree', { branch: 'feat' })

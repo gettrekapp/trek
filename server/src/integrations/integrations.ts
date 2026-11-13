@@ -1,28 +1,18 @@
-// The server's integrations (phase 5b): Linear with the server's own key in its secrets file, and
-// the Claude Code skills on its disk. Made once per server (index.ts) and handed to the handlers
-// through V2Context. (ElevenLabs is the voice plugin's since plugin system phase 1.)
-import { createLinearService, type KeySlot, type LinearService } from '../../../src/host/linearService.ts'
+// The server's integrations (phase 5b): the Claude Code skills on its disk. Made once per server
+// (index.ts) and handed to the handlers through V2Context. (ElevenLabs is the voice plugin's since
+// plugin system phase 1, Linear the Linear plugin's since phase 2.) Also the plugins' key slots in
+// the secrets file and their loopback-only test endpoints.
 import { listSkills } from '../../../src/host/skillService.ts'
+import type { KeySlot } from '../../../src/shared/plugins/server.ts'
 import type { SkillInfo } from '../../../src/shared/types'
-import { createSecretFile, type SecretFile } from '../secrets.ts'
-
-/** The secrets file's names. */
-export const LINEAR_SECRET = 'linear'
+import type { SecretFile } from '../secrets.ts'
 
 export interface Integrations {
-  linear: LinearService
   /** A worktree's skills and commands, then the server user's */
   skills: { list(worktreePath: string): Promise<SkillInfo[]> }
 }
 
 export interface IntegrationOptions {
-  /** `secrets.json` beside the server's config (secretsPathFor) */
-  secretsFile: string
-  /**
-   * Linear's GraphQL endpoint, for tests (default api.linear.app); the server reads
-   * `TREK_SERVER_LINEAR_URL` from its environment for its smokes (loopback only: testEndpoint).
-   */
-  linearEndpoint?: string
   /** Whose `~/.claude` the skills come from (default: the server user's home) */
   home?: string
 }
@@ -57,9 +47,7 @@ export function keySlot(file: SecretFile, name: string): KeySlot {
 }
 
 export function createIntegrations(options: IntegrationOptions): Integrations {
-  const secrets = createSecretFile(options.secretsFile)
   return {
-    linear: createLinearService({ key: keySlot(secrets, LINEAR_SECRET), endpoint: options.linearEndpoint }),
     skills: { list: (worktreePath) => listSkills(worktreePath, options.home) }
   }
 }

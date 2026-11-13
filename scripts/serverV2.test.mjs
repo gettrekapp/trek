@@ -382,14 +382,14 @@ test('project.delete ends the project topic for its subscribers, before the serv
 })
 
 test('welcome capabilities: mcp while the listener is up, then what the server always has and the plugins’ legacy capabilities, pairing except on the local server, then local on the local server', () => {
-  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'skills', 'review', 'move', 'promote', 'push']
+  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'skills', 'review', 'move', 'promote', 'push']
   assert.deepEqual(welcomeCapabilities(true), ['mcp', ...all, 'pairing'])
   assert.deepEqual(welcomeCapabilities(false), [...all, 'pairing'])
   assert.deepEqual(welcomeCapabilities(true, false), ['mcp', ...all, 'pairing'])
   assert.deepEqual(welcomeCapabilities(true, true), ['mcp', ...all, 'local'])
   assert.deepEqual(welcomeCapabilities(false, true), [...all, 'local'])
   // The plugins' legacy capabilities (voice, plugin system phase 1) follow the static ones.
-  assert.deepEqual(welcomeCapabilities(false, false, false, ['voice']), [...all, 'voice', 'pairing'])
+  assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear']), [...all, 'voice', 'linear', 'pairing'])
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {

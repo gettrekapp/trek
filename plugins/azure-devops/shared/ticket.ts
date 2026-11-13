@@ -19,6 +19,7 @@ export function baseUrlProblem(base: string): string | null {
 
 export const azureDevOpsTickets = defineTicketProvider({
   id: 'azure-devops',
+  hint: 'an Azure DevOps work item id or URL',
   owns: (ticketId) => /^\d+$/.test(ticketId),
   parse: (input) => {
     const url = input.match(/^(https?:\/\/.+?)\/_workitems\/edit\/(\d+)/i)

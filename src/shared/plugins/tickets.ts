@@ -21,6 +21,8 @@ export interface ParsedTicketInput {
 export interface TicketProvider {
   /** The plugin's id ('linear', 'azure-devops') */
   id: string
+  /** What it takes, for a message or a placeholder: 'a Linear issue id (TOW-123) or issue URL' */
+  hint: string
   /** Whether a stored ticket id is this provider's ('TOW-123'; '12345') */
   owns(ticketId: string): boolean
   /** An id or URL the user typed or pasted → its ticket id, and the project settings a URL implies; null when it isn't this tracker's */

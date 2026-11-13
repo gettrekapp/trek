@@ -11,6 +11,7 @@ import { pluginStatus } from '../src/renderer/src/plugins/presence.ts'
 /** Two fake trackers: letters-dash-digits, and `n<digits>`. */
 const dash = {
   id: 'dash',
+  hint: 'a dash id',
   owns: (id) => /^[A-Z]+-\d+$/.test(id),
   parse: (input) => {
     const url = input.match(/^https:\/\/dash\.example\/([a-z]+)\/(\w+-\d+)$/i)
@@ -22,6 +23,7 @@ const dash = {
 }
 const num = {
   id: 'num',
+  hint: 'a number',
   owns: (id) => /^\d+$/.test(id),
   parse: (input) => (/^n?\d+$/.test(input) ? { ticketId: input.replace(/^n/, '') } : null),
   label: (id) => `#${id}`,
@@ -29,6 +31,7 @@ const num = {
 }
 const broken = {
   id: 'broken',
+  hint: 'nothing',
   owns: () => {
     throw new Error('boom')
   },
