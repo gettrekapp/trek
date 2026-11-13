@@ -94,14 +94,13 @@ export function setupVoice(host: ServerPluginHost, options: { fetch?: typeof fet
           const audio = Buffer.from(await voice.synthesize(summary)).toString('base64')
           const event: VoiceSummaryEvent = { projectId: ctx.projectId, sessionId, text: summary, audio }
           const windows = host.emit(ctx.projectId, 'summary', event)
+          // A project switched off for this plugin while it synthesized lands here too (emit reaches no one).
           return windows > 0 ? { played: true, windows } : NOBODY
         }
       }
     ],
     mcpInstructions: 'speak_summary reads a short summary aloud to the user.',
-    sessionPrompt: () => (voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined),
-    /** For the tests */
-    voice
+    sessionPrompt: () => (voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined)
   }
 }
 

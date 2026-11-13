@@ -14,10 +14,22 @@ export interface PluginEntry {
   plugin: ClientPlugin
   status: PluginStatus
   host: ClientPluginHost
+  /** The React key of the plugin's components: its id and its backend's generation */
+  key: string
 }
 
 /** One host per (backend, plugin id), so a component keeps its host across renders. */
 const hosts = new WeakMap<WindowBackend, Map<string, ClientPluginHost>>()
+
+/** Each backend's number, from a counter: a plugin component's key, so another backend remounts it. */
+const generations = new WeakMap<WindowBackend, number>()
+let nextGeneration = 0
+
+function generationOf(backend: WindowBackend): number {
+  let generation = generations.get(backend)
+  if (generation === undefined) generations.set(backend, (generation = ++nextGeneration))
+  return generation
+}
 
 function hostFor(backend: WindowBackend, plugin: ClientPlugin): ClientPluginHost {
   let byId = hosts.get(backend)
@@ -45,7 +57,7 @@ export function usePluginEntries(plugins: readonly ClientPlugin[] = BUILTIN_CLIE
   return useMemo(() => {
     // Before the project's settings are in, its on/off is not known: nothing mounts yet.
     const welcome = backend.plugins.projectId && hasProject ? backend.plugins.welcome() : undefined
-    return plugins.map((plugin) => ({ plugin, status: pluginStatus(plugin.manifest, welcome, settings), host: hostFor(backend, plugin) }))
+    return plugins.map((plugin) => ({ plugin, status: pluginStatus(plugin.manifest, welcome, settings), host: hostFor(backend, plugin), key: `${plugin.manifest.id}:${generationOf(backend)}` }))
     // `key` stands for the welcome, which the backend holds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend, key, hasProject, settings, plugins])
@@ -73,7 +85,7 @@ export function PluginScope({ entry, children }: { entry: PluginEntry; children:
   )
 }
 
-/** Each active plugin's Runtime, remounted when the window's backend changes. */
+/** Each active plugin's Runtime, remounted when the window's backend changes (keyed on the backend, not its project id: another server with the same project id remounts too). */
 export function PluginRuntimes(): React.JSX.Element {
   const entries = usePluginEntries()
   return (
@@ -83,7 +95,7 @@ export function PluginRuntimes(): React.JSX.Element {
         .map((e) => {
           const Runtime = e.plugin.Runtime!
           return (
-            <PluginScope key={`${e.plugin.manifest.id}:${e.host.projectId}`} entry={e}>
+            <PluginScope key={e.key} entry={e}>
               <Runtime />
             </PluginScope>
           )
@@ -102,7 +114,7 @@ export function PluginSlot({ name }: { name: Exclude<PluginSlotName, 'settings'>
         .map((e) => {
           const Slot = e.plugin.slots![name]!
           return (
-            <PluginScope key={`${e.plugin.manifest.id}:${e.host.projectId}`} entry={e}>
+            <PluginScope key={e.key} entry={e}>
               <Slot />
             </PluginScope>
           )

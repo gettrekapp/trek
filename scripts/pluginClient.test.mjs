@@ -144,6 +144,32 @@ test("the host's prefs: this plugin's part of the app settings, loaded, set (nul
   assert.deepEqual((await appSettings.get()).plugins, { other: { x: 1 } })
 })
 
+test("the host's prefs.onChange: called only when this plugin's prefs change, not on other app settings", async () => {
+  const appSettings = fakeAppSettings({ plugins: { voice: { active: true, b: 1 } } })
+  const fake = fakeBackend()
+  const host = createClientHost(voice, fake.backend, { appSettings, terminalLabel: String, currentBackend: () => fake.backend })
+  const heard = []
+  const off = host.prefs.onChange((prefs) => heard.push(prefs))
+  await host.prefs.set('active', false)
+  await appSettings.update({ showNotifications: false })
+  await appSettings.update({ plugins: { other: { x: 1 } } })
+  await host.prefs.set('active', false)
+  assert.deepEqual(heard, [{ active: false, b: 1 }], 'an unrelated change, or the same value again, is not heard')
+  off()
+  // The same prefs in another key order are the same prefs.
+  const listeners = new Set()
+  const emit = (plugins) => listeners.forEach((l) => l({ ...DEFAULT_APP_SETTINGS, plugins }))
+  const stub = { get: async () => DEFAULT_APP_SETTINGS, update: async () => DEFAULT_APP_SETTINGS, onChanged: (l) => (listeners.add(l), () => listeners.delete(l)) }
+  const other = createClientHost(voice, fake.backend, { appSettings: stub, terminalLabel: String, currentBackend: () => fake.backend })
+  const seen = []
+  other.prefs.onChange((prefs) => seen.push(prefs))
+  emit({ voice: { a: 1, b: 2 } })
+  emit({ voice: { b: 2, a: 1 } })
+  emit({ voice: { b: 2, a: 1 }, other: { x: 1 } })
+  emit({ voice: { a: 1 } })
+  assert.deepEqual(seen, [{ a: 1, b: 2 }, { a: 1 }])
+})
+
 test('isCurrent: false once the window has another backend', () => {
   const fake = fakeBackend()
   let current = fake.backend

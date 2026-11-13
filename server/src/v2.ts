@@ -66,7 +66,7 @@ export interface V2Context {
   events?: EventSink
   /** Linear with the server's own key, and the skills on its disk (phase 5b) */
   integrations?: Integrations
-  /** Tells every authenticated connection the keys or voice settings changed (`integrations.changed`) */
+  /** Tells every authenticated connection the Linear key changed (and a plugin's legacy capability, for clients older than plugins) (`integrations.changed`) */
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
   /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
   prWatch?: PrWatcher

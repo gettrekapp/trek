@@ -9,8 +9,8 @@ import type { PluginRegistry } from './registry.ts'
  */
 export function mcpContext(projectId: string, core: ToolCall, plugins?: PluginRegistry): { instructions: string; tools: ToolDefinition[]; call: ToolCall } {
   const own = plugins?.tools(projectId) ?? []
-  if (own.length === 0 && !plugins?.instructions(projectId)) return { instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: core }
   const extra = plugins?.instructions(projectId)
+  if (own.length === 0 && !extra) return { instructions: MCP_INSTRUCTIONS, tools: MCP_TOOLS, call: core }
   return {
     instructions: extra ? `${MCP_INSTRUCTIONS} ${extra}` : MCP_INSTRUCTIONS,
     tools: [...MCP_TOOLS, ...own.map((t) => t.definition)],

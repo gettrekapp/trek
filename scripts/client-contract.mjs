@@ -122,6 +122,24 @@ try {
 } catch (err) {
   fail(`voice.settings: ${err.code} ${err.message}`)
 }
+// A voice setting changed: a 0.2.1 client hears integrations.changed { voice: true }, a client with plugins plugins.changed { id: 'voice' }.
+{
+  const heard = []
+  const off = conn.on('event', (ev) => heard.push(ev))
+  const legacy = () => heard.some((ev) => ev.event === 'integrations.changed' && ev.payload?.voice === true)
+  const plugin = () => heard.some((ev) => ev.event === 'plugins.changed' && ev.payload?.id === 'voice')
+  try {
+    await conn.request('voice.setConfig', { promptSessions: false })
+    await waitFor(() => legacy() && plugin())
+    if (!legacy()) fail(`voice.setConfig: no integrations.changed with voice: true (heard ${JSON.stringify(heard.map((ev) => [ev.event, ev.payload]))})`)
+    else ok('voice.setConfig: integrations.changed { voice: true }, as a 0.2.1 client hears it')
+    if (!plugin()) fail(`voice.setConfig: no plugins.changed for voice (heard ${JSON.stringify(heard.map((ev) => [ev.event, ev.payload]))})`)
+    else ok("voice.setConfig: plugins.changed { id: 'voice' }")
+  } catch (err) {
+    fail(`voice.setConfig: ${err.code} ${err.message}`)
+  }
+  off()
+}
 
 // --- 2. server topic ---
 let server = null

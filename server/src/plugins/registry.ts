@@ -216,7 +216,11 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       changedListeners.push(listener)
     },
     dispose: () => {
-      for (const e of entries.values()) {
+      // Each plugin once: after it the registry is empty, and a second dispose does nothing.
+      const disposing = [...entries.values()]
+      entries.clear()
+      changedListeners.length = 0
+      for (const e of disposing) {
         try {
           e.instance.dispose?.()
         } catch (err) {

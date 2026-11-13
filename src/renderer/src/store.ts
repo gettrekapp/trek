@@ -238,8 +238,6 @@ export interface AppState {
   setLlmSettings: (settings: LlmSettings | null) => void
   setProjectLlmDefault: (llm: LlmSelection | undefined) => void
   setGlobalLlm: (llm: LlmSelection | undefined) => void
-  /** The spoken summary playing now, and how many wait behind it. Not persisted. */
-
   setActiveWorktree: (id: string) => void
   /**
    * instanceId pins the selection to a known instance (e.g. the primary,

@@ -350,6 +350,7 @@ try {
     const res = await fetch(mcp.url, { method: 'POST', headers: { 'content-type': 'application/json', ...mcp.headers }, body: JSON.stringify({ jsonrpc: '2.0', id: rpcId++, method: 'tools/call', params: { name, arguments: args } }) })
     const body = await res.json()
     // A tool the project doesn't list (a plugin off there) is a JSON-RPC error, not an isError result.
+    // Folded into { isError, value }: a caller expecting success must compare `value` (or check isError), not only that it answered.
     if (body.error) return { isError: true, value: body.error.message }
     const text = body.result?.content?.[0]?.text ?? ''
     try {

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
-import type { AppSettings } from '../shared/appSettings'
+import type { AppSettings, AppSettingsPatch } from '../shared/appSettings'
 import type {
   AppServerInfo,
   AppServersChanged,
@@ -96,7 +96,7 @@ const api = {
   // App-wide preferences (app-settings.json), shared by every window.
   appSettings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('appSettings:get'),
-    update: (patch: Partial<AppSettings>): Promise<AppSettings> => ipcRenderer.invoke('appSettings:update', patch),
+    update: (patch: AppSettingsPatch): Promise<AppSettings> => ipcRenderer.invoke('appSettings:update', patch),
     onChanged: (callback: (settings: AppSettings) => void): (() => void) => subscribe('appSettings:changed', callback)
   },
   // Sessions on the app-wide servers that need the user, merged by main (no token, no URL).

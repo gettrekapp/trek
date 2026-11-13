@@ -13,7 +13,7 @@
 //     non-Local entry, so the UI does not offer it.
 import { createAttention, type AttentionSource } from '../main/attention.ts'
 import { dismissRequest } from '../main/attentionRules.ts'
-import { DEFAULT_APP_SETTINGS, parseAppSettings, type AppSettings } from '../shared/appSettings.ts'
+import { DEFAULT_APP_SETTINGS, parseAppSettings, type AppSettings, type AppSettingsPatch } from '../shared/appSettings.ts'
 import { mergeLlmSettings } from '../shared/providers/settings.ts'
 import { DEFAULT_LLM_SETTINGS, type LlmSettings } from '../shared/providers/types.ts'
 import type { AppServerLink, AppServersChanged, AttentionChanged, AttentionItem } from '../shared/types.ts'
@@ -158,7 +158,7 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
     localServer: { start: refuse, restart: refuse, reset: refuse },
     appSettings: {
       get: async () => appSettings,
-      update: async (patch) => {
+      update: async (patch: AppSettingsPatch) => {
         appSettings = parseAppSettings(patch, appSettings)
         try {
           storage()?.setItem(APP_SETTINGS_KEY, JSON.stringify(appSettings))

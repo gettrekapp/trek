@@ -71,9 +71,10 @@ test('the clip queue holds at most MAX_QUEUED_CLIPS waiting; more are dropped', 
   assert.equal(admitsClip(5), false)
 })
 
-test('activeIn: Busy only when the pref says false; none yet is Active', () => {
+test('activeIn: Busy only when the pref says false; none yet, or a value that is not a boolean, is Active', () => {
   assert.equal(activeIn({}), true)
   assert.equal(activeIn({ active: true }), true)
   assert.equal(activeIn({ active: false }), false)
   assert.equal(activeIn({ active: 'no' }), true)
+  assert.equal(activeIn({ active: 0 }), true)
 })

@@ -55,7 +55,7 @@ export function stopAllSummaries(): void {
 }
 
 /** This app's Active/Busy: not active until loaded. */
-const isActive = (): boolean => isPresenceActive(useVoiceStore.getState().active)
+export const isActive = (): boolean => isPresenceActive(useVoiceStore.getState().active)
 
 /** A base64 mp3 as bytes. */
 export function base64Bytes(base64: string): Uint8Array {

@@ -12,7 +12,7 @@ import { ServerConnection, globalSocketFactory } from '../shared/client/index.ts
 import { CAPABILITY } from '../shared/protocolV2.ts'
 import { appSettings, updateAppSettings } from './appSettings'
 import { createSecretStore, writeFileAtomic, type SecretRead, type SecretStore } from './secrets'
-import { handOver, nothingToHandOver, readHandoverState, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
+import { handOver, nothingToHandOver, readHandoverState, type HandoverRequest, type HandoverState, type LegacyIntegrations } from './integrationsHandoverRules'
 import { localProfileKey, localServerStatus, localServerUrl, localToken, onLocalServerChanged } from './localServer'
 
 const STATE_FILE = 'integrations-handover.json'
@@ -119,7 +119,7 @@ async function run(): Promise<void> {
     if (conn) {
       try {
         // voice.* is the voice plugin's (plugin system phase 1), not in the core protocol's types.
-        const request = conn.request.bind(conn) as unknown as (method: string, params: unknown, options: { timeoutMs: number }) => Promise<unknown>
+        const request = conn.request.bind(conn) as unknown as (method: Parameters<HandoverRequest>[0], params: unknown, options: { timeoutMs: number }) => Promise<unknown>
         next = await handOver((method, params) => request(method, params, { timeoutMs: REQUEST_TIMEOUT_MS }), legacy, done)
       } finally {
         conn.close()

@@ -754,7 +754,7 @@ its MCP tools are not listed (a call is an unknown tool), its MCP instructions a
 are left out, and it sends that project no events. A change shows at an agent's next `tools/list`,
 and in the prompt of the sessions started after it (the server sends no MCP `listChanged`: an agent
 that listed a tool before it was switched off gets an unknown-tool error if it calls it). A server
-older than plugins has no setting: its plugins are on everywhere.
+older than plugins has no per-project setting: its voice (the legacy capability) is on in every project.
 
 **Server-wide changes.** A plugin's key or config set by any client sends `plugins.changed {id}` to
 every authenticated connection; one with a legacy capability sends `integrations.changed

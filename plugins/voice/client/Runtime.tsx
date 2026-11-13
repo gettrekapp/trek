@@ -4,8 +4,8 @@
 import { useEffect } from 'react'
 import { usePluginHost } from '../../../src/shared/plugins/client.ts'
 import type { VoiceSummaryEvent } from '../shared/types.ts'
-import { base64Bytes, enqueue, loadVoiceSettings, stopAllSummaries } from './playback.ts'
-import { followAppActive, isPresenceActive } from './presence.ts'
+import { base64Bytes, enqueue, isActive, loadVoiceSettings, stopAllSummaries } from './playback.ts'
+import { followAppActive } from './presence.ts'
 import { useVoiceStore } from './store.ts'
 
 export function VoiceRuntime(): null {
@@ -29,7 +29,7 @@ export function VoiceRuntime(): null {
     }
     load()
     const offSummary = host.onEvent<VoiceSummaryEvent>('summary', (event) => {
-      if (!isPresenceActive(useVoiceStore.getState().active)) return
+      if (!isActive()) return
       enqueue(event.sessionId, event.text, base64Bytes(event.audio))
     })
     // The key or voice set elsewhere (another window, the hand-over to the Local server).

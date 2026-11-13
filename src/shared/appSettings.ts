@@ -16,6 +16,11 @@ export interface AppSettings {
   plugins: PluginPrefs
 }
 
+/** A change to the app settings: any of its fields; `plugins` is merged per plugin and key, and a key set to null is removed. */
+export type AppSettingsPatch = Partial<Omit<AppSettings, 'plugins'>> & {
+  plugins?: Record<string, Record<string, PluginPrefValue | null>>
+}
+
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({ showNotifications: true, stopLocalServerOnQuit: false, plugins: Object.freeze({}) as PluginPrefs })
 
 /** The most preferences a plugin keeps, and the longest key or string value. */
@@ -29,7 +34,7 @@ const prefValue = (value: unknown): value is PluginPrefValue =>
 
 /**
  * `patch` over `base`: per plugin id, per key; a key set to null is removed (a plugin left with none
- * is dropped). Ids that are not plugin ids, keys too long and values of other kinds are ignored.
+ * is dropped). A plugin's removals apply before its additions, so the cap counts what is left. Ids that are not plugin ids, keys too long and values of other kinds are ignored.
  */
 function mergePluginPrefs(base: PluginPrefs, patch: unknown): PluginPrefs {
   const out: PluginPrefs = { ...base }
@@ -37,10 +42,10 @@ function mergePluginPrefs(base: PluginPrefs, patch: unknown): PluginPrefs {
   for (const [id, prefs] of Object.entries(patch)) {
     if (!PLUGIN_ID_RE.test(id) || !isObject(prefs)) continue
     const next: Record<string, PluginPrefValue> = { ...(Object.hasOwn(base, id) ? base[id] : {}) }
-    for (const [key, value] of Object.entries(prefs)) {
-      if (!key || key.length > MAX_PLUGIN_PREF_CHARS || key === '__proto__') continue
-      if (value === null) delete next[key]
-      else if (prefValue(value) && (Object.hasOwn(next, key) || Object.keys(next).length < MAX_PLUGIN_PREFS)) next[key] = value
+    const keys = Object.entries(prefs).filter(([key]) => key && key.length <= MAX_PLUGIN_PREF_CHARS && key !== '__proto__')
+    for (const [key, value] of keys) if (value === null) delete next[key]
+    for (const [key, value] of keys) {
+      if (value !== null && prefValue(value) && (Object.hasOwn(next, key) || Object.keys(next).length < MAX_PLUGIN_PREFS)) next[key] = value
     }
     if (Object.keys(next).length > 0) out[id] = next
     else delete out[id]

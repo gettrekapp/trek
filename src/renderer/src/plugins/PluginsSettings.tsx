@@ -41,7 +41,7 @@ export function PluginsSettings(): React.JSX.Element | null {
         .map((e) => {
           const Settings = e.plugin.slots!.settings!
           return (
-            <PluginScope key={`${e.plugin.manifest.id}:${e.host.projectId}`} entry={e}>
+            <PluginScope key={e.key} entry={e}>
               <Settings />
             </PluginScope>
           )

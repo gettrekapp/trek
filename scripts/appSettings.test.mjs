@@ -28,18 +28,29 @@ test("plugin preferences merge per plugin and key; null removes a key, and a plu
   assert.deepEqual(parseAppSettings({ plugins: { voice: { volume: null } } }, current).plugins, { voice: { active: true }, other: { x: 'a' } })
   assert.deepEqual(parseAppSettings({ plugins: { other: { x: null } } }, current).plugins, { voice: { active: true, volume: 3 } })
   // Not plugin ids, not objects, values of other kinds: ignored.
-  const ignored = { Bad: { a: 1 }, voice: { obj: {}, arr: [], nan: Number.NaN, long: 'x'.repeat(257) }, other: 'x', ['__proto__']: { a: 1 } }
+  const ignored = { Bad: { a: 1 }, voice: { obj: {}, arr: [], nan: Number.NaN, inf: Infinity, ninf: -Infinity, long: 'x'.repeat(257), ['k'.repeat(257)]: 1 }, other: 'x', ['__proto__']: { a: 1 } }
   assert.deepEqual(parseAppSettings({ plugins: ignored }, current).plugins, current.plugins)
   // At most MAX_PLUGIN_PREFS keys per plugin; changing an existing one still works when full.
   const full = Object.fromEntries(Array.from({ length: MAX_PLUGIN_PREFS }, (_, i) => [`k${i}`, i]))
   const many = parseAppSettings({ plugins: { p: { ...full, extra: 1 } } }).plugins.p
   assert.equal(Object.keys(many).length, MAX_PLUGIN_PREFS)
   assert.equal(parseAppSettings({ plugins: { p: { k0: 'changed' } } }, { ...DEFAULTS, plugins: { p: full } }).plugins.p.k0, 'changed')
+  // A key 256 characters long is kept.
+  assert.equal(parseAppSettings({ plugins: { p: { ['k'.repeat(256)]: 1 } } }).plugins.p['k'.repeat(256)], 1)
+  // A patch's removals apply before its additions: at the cap, a new key and a removed one keep the new key, in either order.
+  const atCap = { ...DEFAULTS, plugins: { p: full } }
+  for (const patch of [{ k32: 1, k0: null }, { k0: null, k32: 1 }]) {
+    const after = parseAppSettings({ plugins: { p: patch } }, atCap).plugins.p
+    assert.equal(after.k32, 1, JSON.stringify(patch))
+    assert.equal('k0' in after, false)
+    assert.equal(Object.keys(after).length, MAX_PLUGIN_PREFS)
+  }
 })
 
 test("0.2.x's voiceActive becomes the voice plugin's active, in a file or a patch, unless it has its own", () => {
   assert.deepEqual(parseAppSettings({ showNotifications: true, voiceActive: false }), { ...DEFAULTS, plugins: { voice: { active: false } } })
   assert.deepEqual(parseAppSettings({ voiceActive: false }, { ...DEFAULTS, plugins: { voice: { active: true } } }).plugins, { voice: { active: false } })
   assert.deepEqual(parseAppSettings({ voiceActive: false, plugins: { voice: { active: true } } }).plugins, { voice: { active: true } })
+  assert.deepEqual(parseAppSettings({ voiceActive: false, plugins: { voice: { volume: 3 } } }).plugins, { voice: { volume: 3, active: false } }, 'a voice plugin without its own active takes it')
   assert.equal('voiceActive' in parseAppSettings({ voiceActive: true }), false, 'not kept: the next write drops it')
 })

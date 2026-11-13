@@ -17,8 +17,8 @@ export const admitsClip = (waiting: number): boolean => waiting < MAX_QUEUED_CLI
  */
 export const mergeVoice = (now: VoiceSettings | null, update: Partial<VoiceSettings>): VoiceSettings | null => (now ? { ...now, ...update } : null)
 
-/** The plugin's prefs: `active` false is Busy; anything else (none yet) is Active, the default. */
-export const activeIn = (prefs: Record<string, PluginPrefValue>): boolean => prefs.active !== false
+/** The plugin's prefs: `active` false is Busy; true, none yet or a value that is not a boolean is Active, the default. */
+export const activeIn = (prefs: Record<string, PluginPrefValue>): boolean => (typeof prefs.active === 'boolean' ? prefs.active : true)
 
 interface PrefsApi {
   load(): Promise<Record<string, PluginPrefValue>>
