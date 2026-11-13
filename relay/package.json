@@ -1,6 +1,6 @@
 {
   "name": "trek-relay",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "Trek push relay: holds the APNs key and FCM credentials and forwards trek-server attention to paired phones",
   "private": true,
   "bin": {
