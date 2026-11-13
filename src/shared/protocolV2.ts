@@ -475,6 +475,8 @@ export interface MethodParamsV2 {
   'server.removeRepo': { repoId: string }
   /** The agents the server can launch; with `projectId`, Claude's command is that project's `claudeCommand` when it has one */
   'server.agents': { projectId?: string }
+  /** The local server only, from its own `local` token: answers, then shuts down as SIGTERM would (`trek-server stop --local`) */
+  'server.stop': Record<string, never>
   // Docker on the server's machine (capability `docker`)
   /** `docker ps -a` */
   'docker.list': Record<string, never>
@@ -665,6 +667,7 @@ export interface MethodResultsV2 {
   'server.addRepo': { repoId: string }
   'server.removeRepo': null
   'server.agents': ServerAgents
+  'server.stop': null
   'docker.list': ContainerInfo[]
   'docker.container': null
   /** docker compose's exit code; -1 when docker could not run */

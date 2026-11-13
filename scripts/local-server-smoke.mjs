@@ -198,13 +198,15 @@ async function suite(rt) {
     check(b.code === LOCAL_ALREADY_RUNNING_EXIT && b.err.includes(`already running (pid ${a.child.pid})`), `a second --local start exits ${LOCAL_ALREADY_RUNNING_EXIT}: already running`, `${b.code} ${b.err}`)
     check(info()?.pid === a.child.pid && lockPid() === a.child.pid, "the refused start leaves local.json and the lock alone")
 
-    // --- 6. stop --local: SIGTERM, and the cleanup ---
+    // --- 6. stop --local: server.stop with the local token, and the cleanup ---
     for (const c of conns.splice(0)) c.close()
     const stopped = await runCli(['stop', '--local'])
     await Promise.race([a.exited, new Promise((r) => setTimeout(r, 5000))])
     check(stopped.code === 0 && stopped.out.includes(`Stopping the local trek-server (pid ${a.child.pid})`) && stopped.out.includes('Stopped.'), 'stop --local stops it: exit 0, "Stopped."', `${stopped.code} ${stopped.out} ${stopped.err}`)
-    check(a.code === 0, 'SIGTERM: the server exits 0', String(a.code))
-    check(!existsSync(infoPath) && !existsSync(lockPath), 'SIGTERM removes local.json and local.lock')
+    check(!stopped.out.includes('did not take a stop request'), 'stop --local stops it with server.stop, not a signal', stopped.out)
+    check(a.out.includes('server.stop — shutting down'), 'the server shuts down for server.stop', a.out.slice(-500))
+    check(a.code === 0, 'server.stop: the server exits 0', String(a.code))
+    check(!existsSync(infoPath) && !existsSync(lockPath), 'server.stop removes local.json and local.lock')
     const again = await runCli(['stop', '--local'])
     check(again.code === 0 && again.out.includes('No local trek-server is running.'), 'stop --local with none running: exit 0, "not running"', `${again.code} ${again.out} ${again.err}`)
 

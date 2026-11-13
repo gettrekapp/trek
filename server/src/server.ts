@@ -95,6 +95,11 @@ export interface ServerOptions {
    * server answers `push.*` with NOT_FOUND and pushes nothing. `fetch` is for tests.
    */
   push?: { secretsFile: string; fetch?: typeof fetch }
+  /**
+   * The local server's shutdown, for `server.stop` (called after the response is sent). Only with
+   * `local`; elsewhere `server.stop` answers NOT_FOUND.
+   */
+  onStopRequest?: () => void
 }
 
 export interface ProjectsSetup {
@@ -488,6 +493,7 @@ export function startServer(
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
         tokenName: callerTokenName,
+        requestStop: options.local && options.onStopRequest ? requestStop : undefined,
         push: pushGrants ? { grants: pushGrants } : undefined,
         mcpAccess: access
           ? {
@@ -537,6 +543,11 @@ export function startServer(
   })
 
   let stopped = false
+  // After this tick, so the response goes out before the shutdown closes the sockets.
+  const requestStop = (): void => {
+    const stop = options.onStopRequest
+    if (stop) setImmediate(stop)
+  }
   const callers = new Map<string, ToolCall>()
   const trek: TrekServer = {
     httpServer,

@@ -186,6 +186,7 @@ server restarts. A server without this field simply leaves it out.
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Agents | `server.agents` |
+| Stopping (local server only) | `server.stop` |
 | Docker | `docker.list`, `docker.container`, `docker.compose` |
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
@@ -351,6 +352,16 @@ succeeds, it does the same for that repository's sessions and for the project's
 Global sessions, whose working directory or additional directories it changed.
 The Global session records stay, as `idle`, and `session.restart` runs them with
 the remaining repositories. A refused or failed removal ends nothing.
+
+`server.stop {}` stops the local server (`trek-server start --local`) the way SIGTERM
+does: it answers `null`, then sends `daemon.shutdown`, saves pending project writes,
+removes `local.json` and its lock, ends every session and exits 0. Only the local
+server has it (any other answers `NOT_FOUND`), and only a connection signed in with its
+own `local` token, the one in `local.json`, may call it (any other token gets
+`UNAUTHORIZED`). `trek-server stop --local` uses it on every platform and falls back to
+SIGTERM if it gets no answer; on Windows, where a signal from another process ends a
+process at once without its shutdown, the fallback is `taskkill /T /F` once the wait
+runs out.
 
 `server.addRepo {path, name?}` registers the git repository containing `path`
 and returns `{repoId}`. Both `path` and the repository's top level must be under

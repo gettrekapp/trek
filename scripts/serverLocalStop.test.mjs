@@ -89,14 +89,71 @@ const capture = () => {
   return { lines, log: (l) => lines.push(l), error: (l) => lines.push(`E: ${l}`) }
 }
 
-test('stopLocal: SIGTERMs the server and waits for local.json and the lock to go', async (t) => {
+/** The stand-in servers never listen: a stop request finds nobody. */
+const unreachable = () => 'unreachable'
+
+test('stopLocal: asks the server named by local.json to stop, with its port and token, and never signals it', async (t) => {
   const profile = setup(t)
   const { child, exited } = await fakeServer(t, profile)
   const out = capture()
-  assert.equal(stopLocal(profile, out), 0)
+  const asked = []
+  const kills = []
+  // The stand-in shuts down on SIGTERM; a real server does so on server.stop.
+  const requestStop = (i) => {
+    asked.push(i)
+    child.kill('SIGTERM')
+    return 'accepted'
+  }
+  assert.equal(stopLocal(profile, { ...out, requestStop, kill: (...a) => kills.push(a) }), 0)
+  assert.equal(await exited, 0)
+  assert.deepEqual(asked.map((i) => [i.port, i.pid, i.token]), [[4000, child.pid, TOKEN]])
+  assert.deepEqual(kills, [])
+  assert.deepEqual(out.lines, [`Stopping the local trek-server (pid ${child.pid})…`, 'Stopped.'])
+})
+
+test('stopLocal: a server that does not take the request is SIGTERMed and waited for', async (t) => {
+  const profile = setup(t)
+  const { child, exited } = await fakeServer(t, profile)
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, requestStop: unreachable }), 0)
   assert.equal(await exited, 0)
   assert.equal(existsSync(profile.infoPath) || existsSync(profile.lockPath), false)
-  assert.deepEqual(out.lines, [`Stopping the local trek-server (pid ${child.pid})…`, 'Stopped.'])
+  assert.deepEqual(out.lines, [
+    'The local trek-server did not take a stop request (unreachable); sending SIGTERM.',
+    `Stopping the local trek-server (pid ${child.pid})…`,
+    'Stopped.'
+  ])
+})
+
+test('stopLocal on Windows: no signal; once the wait runs out, the process tree is ended', async (t) => {
+  const profile = setup(t)
+  const { child, exited } = await fakeServer(t, profile, { ignoreTerm: true })
+  const out = capture()
+  const kills = []
+  const forced = []
+  const code = stopLocal(profile, {
+    ...out,
+    timeoutMs: 200,
+    platform: 'win32',
+    // A killed child stays a zombie until this (blocked) thread reaps it: gone once it was ended.
+    alive: () => forced.length === 0,
+    requestStop: () => 'refused',
+    kill: (...a) => kills.push(a),
+    forceKill: (pid) => {
+      forced.push(pid)
+      child.kill('SIGKILL')
+    }
+  })
+  await exited
+  assert.equal(code, 0)
+  assert.deepEqual(kills, [])
+  assert.deepEqual(forced, [child.pid])
+  assert.deepEqual(out.lines, [
+    'The local trek-server did not take a stop request (refused).',
+    `Stopping the local trek-server (pid ${child.pid})…`,
+    'It did not stop within 0.2 s; ending its process tree.',
+    `Stopped, but it left files in ${profile.dir}; the next start cleans them up.`
+  ])
 })
 
 test('stopLocal: nothing running is exit 0', (t) => {
@@ -144,7 +201,7 @@ test('stopLocal: a server that ignores SIGTERM times out with exit 1', async (t)
   const profile = setup(t)
   const { child } = await fakeServer(t, profile, { ignoreTerm: true })
   const out = capture()
-  assert.equal(stopLocal(profile, { ...out, timeoutMs: 300 }), 1)
+  assert.equal(stopLocal(profile, { ...out, timeoutMs: 300, requestStop: unreachable }), 1)
   assert.equal(out.lines.at(-1), `E: The local trek-server (pid ${child.pid}) did not stop within 0.3 s.`)
 })
 
