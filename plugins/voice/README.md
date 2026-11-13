@@ -33,8 +33,8 @@ spaces.
 | `voice.synthesize` | `{text}` (trimmed, 1 to 400 characters) | `{audio}`: an mp3, base64, for this connection only (Settings' Test) |
 
 A failure of ElevenLabs (unreachable, a revoked key, a quota) is `TOOL_ERROR` with its message. The
-config (`<dataDir>/plugins/voice/config.json`; `<dataDir>/voice.json` before plugins, moved at the
-plugin's first start) holds no secret. A stored key (`ok: true`), `voice.clearKey` and
+config (`<dataDir>/plugins/voice/config.json`; `<dataDir>/voice.json` before plugins, copied at the
+plugin's first start and left in place for a server rolled back to 0.2.x) holds no secret. A stored key (`ok: true`), `voice.clearKey` and
 `voice.setConfig` send `plugins.changed {id: 'voice'}` and, for 0.2.x clients, `integrations.changed
 {voice: true}` to every authenticated connection; a refused or kept key sends nothing.
 

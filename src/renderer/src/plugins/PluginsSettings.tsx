@@ -31,7 +31,7 @@ export function PluginsSettings(): React.JSX.Element | null {
             <span className="settings-label">
               <span className="settings-name">{plugin.manifest.name}</span>
               <span className="settings-desc">
-                {status === 'missing' ? 'This server is too old for this plugin: update it to use it here.' : plugin.manifest.description}
+                {status === 'missing' ? 'Not available on this server: it may be older than this plugin (update it), or the plugin failed to start there (see its log).' : plugin.manifest.description}
               </span>
             </span>
           </label>

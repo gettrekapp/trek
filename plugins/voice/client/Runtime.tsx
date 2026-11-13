@@ -19,10 +19,12 @@ export function VoiceRuntime(): null {
     [host]
   )
   useEffect(() => {
+    // A load that answers after the Runtime unmounted (the plugin turned off) is dropped.
+    let cancelled = false
     const load = (): void => {
-      void loadVoiceSettings(host).catch((err) => {
+      void loadVoiceSettings(host, () => cancelled).catch((err) => {
         console.warn('Voice settings could not be read', err)
-        if (host.isCurrent()) useVoiceStore.getState().setSettings(null)
+        if (!cancelled && host.isCurrent()) useVoiceStore.getState().setSettings(null)
       })
     }
     load()
@@ -33,6 +35,7 @@ export function VoiceRuntime(): null {
     // The key or voice set elsewhere (another window, the hand-over to the Local server).
     const offChanged = host.onChanged(load)
     return () => {
+      cancelled = true
       offSummary()
       offChanged()
       stopAllSummaries()

@@ -321,8 +321,8 @@ test("the plugins' channel: the project, the welcome's plugins and capabilities,
   assert.equal(backend.plugins.welcome(), undefined, 'before the welcome')
   caps = ['mcp', 'voice']
   assert.deepEqual(backend.plugins.welcome(), { capabilities: ['mcp', 'voice'] }, 'a server older than plugins')
-  plugins = [{ id: 'voice', version: '1.0.0' }]
-  assert.deepEqual(backend.plugins.welcome(), { plugins: [{ id: 'voice', version: '1.0.0' }], capabilities: ['mcp', 'voice'] })
+  plugins = [{ id: 'voice', version: '1.0.0', defaultEnabled: true }]
+  assert.deepEqual(backend.plugins.welcome(), { plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }], capabilities: ['mcp', 'voice'] })
   assert.deepEqual(await backend.plugins.request('voice.settings', {}), { hasKey: false })
   assert.deepEqual(calls, [['voice.settings', {}]])
   const heard = []

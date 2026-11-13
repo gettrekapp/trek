@@ -28,8 +28,16 @@ test("parsePluginPresence: undefined from a server without plugins; bad entries 
   assert.equal(parsePluginPresence({}), undefined)
   assert.deepEqual(parsePluginPresence([]), [])
   assert.deepEqual(
-    parsePluginPresence([{ id: 'voice', version: '1.0.0' }, { id: 'Bad', version: '1' }, { id: 'x' }, null, 'voice', { id: 'linear', version: '0.1.0', extra: 1 }]),
-    [{ id: 'voice', version: '1.0.0' }, { id: 'linear', version: '0.1.0' }]
+    parsePluginPresence([
+      { id: 'voice', version: '1.0.0', defaultEnabled: true },
+      { id: 'Bad', version: '1', defaultEnabled: true },
+      { id: 'x' },
+      { id: 'nodefault', version: '1' },
+      null,
+      'voice',
+      { id: 'linear', version: '0.1.0', defaultEnabled: false, extra: 1 }
+    ]),
+    [{ id: 'voice', version: '1.0.0', defaultEnabled: true }, { id: 'linear', version: '0.1.0', defaultEnabled: false }]
   )
 })
 

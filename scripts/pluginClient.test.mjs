@@ -12,13 +12,16 @@ const voice = { id: 'voice', version: '1.0.0', name: 'Voice', description: '', d
 const quiet = { id: 'quiet', version: '1.0.0', name: 'Quiet', description: '', defaultEnabled: false }
 
 test('pluginStatus: unknown before the welcome; on/off by the setting and default; missing; legacy on an older server', () => {
-  const welcome = { plugins: [{ id: 'voice', version: '1.0.0' }, { id: 'quiet', version: '1.0.0' }], capabilities: [] }
+  const welcome = { plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }, { id: 'quiet', version: '1.0.0', defaultEnabled: false }], capabilities: [] }
   assert.equal(pluginStatus(voice, undefined, undefined), 'unknown')
   assert.equal(pluginStatus(voice, welcome, undefined), 'on')
   assert.equal(pluginStatus(voice, welcome, { voice: { enabled: false } }), 'off')
   assert.equal(pluginStatus(quiet, welcome, undefined), 'off')
   assert.equal(pluginStatus(quiet, welcome, { quiet: { enabled: true } }), 'on')
   assert.equal(pluginStatus(voice, { plugins: [], capabilities: ['voice'] }, undefined), 'missing', 'a server with plugins but not this one')
+  // The server's default decides, not this app's manifest (a server with another default for it).
+  assert.equal(pluginStatus(voice, { plugins: [{ id: 'voice', version: '2.0.0', defaultEnabled: false }], capabilities: [] }, undefined), 'off')
+  assert.equal(pluginStatus(quiet, { plugins: [{ id: 'quiet', version: '2.0.0', defaultEnabled: true }], capabilities: [] }, undefined), 'on')
   // A 0.2.x server: no plugins in its welcome, its legacy capability or nothing; the setting is not read there.
   assert.equal(pluginStatus(voice, { capabilities: ['voice'] }, { voice: { enabled: false } }), 'legacy')
   assert.equal(pluginStatus(voice, { capabilities: [] }, undefined), 'missing')
@@ -49,7 +52,7 @@ test("forProject: a payload naming another project is not this window's; one nam
 })
 
 /** A window backend's plugin channel: records requests, lets the test fire events. */
-function fakeBackend(welcome = { plugins: [{ id: 'voice', version: '1.0.0' }], capabilities: ['voice'] }) {
+function fakeBackend(welcome = { plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }], capabilities: ['voice'] }) {
   const requests = []
   const listeners = []
   const backend = {

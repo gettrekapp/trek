@@ -113,6 +113,37 @@ test("setPluginEnabled sends the whole plugins setting, built on what the window
   ])
 })
 
+test("a CONFLICT on plugins rebases per plugin: another window's switch is kept", async () => {
+  const calls = []
+  let conflicts = 1
+  const mirror = project()
+  const requests = {
+    updateSettings: async (settings, expected) => {
+      calls.push([settings, expected])
+      if (conflicts-- > 0) {
+        // Another window turned X off meanwhile.
+        mirror.settings = { ...mirror.settings, plugins: { x: { enabled: false } } }
+        throw Object.assign(new Error('changed'), { code: 'CONFLICT' })
+      }
+      mirror.settings = { ...mirror.settings, ...settings }
+    },
+    rename: async () => {},
+    setLinkedDirs: async () => {},
+    setEnvironments: async () => {},
+    setBranchEnv: async () => {}
+  }
+  const asked = []
+  const writer = createSettingsWriter({ project: () => mirror, changed: () => {}, askConflict: async (q) => (asked.push(q), 'reload'), reload: () => {}, reportEdit: () => {} })
+  const o = v2SettingsOverrides(writer, requests, () => mirror)
+  o.setPluginEnabled('voice', false)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(calls, [
+    [{ plugins: { voice: { enabled: false } } }, { plugins: null }],
+    [{ plugins: { x: { enabled: false }, voice: { enabled: false } } }, { plugins: { x: { enabled: false } } }]
+  ])
+  assert.deepEqual(asked, [], 'no clash: a different plugin')
+})
+
 test('the project name goes through project.rename, linked directories through repo.update', () => {
   const { o, calls } = setup()
   o.setProjectName('Renamed')

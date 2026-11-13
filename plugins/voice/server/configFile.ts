@@ -1,35 +1,21 @@
 // The voice settings' file: `<dataDir>/plugins/voice/config.json` since plugin system phase 1,
-// `<dataDir>/voice.json` before. Moved once, at the plugin's setup.
-import { copyFileSync, existsSync, fsyncSync, openSync, closeSync, unlinkSync } from 'node:fs'
+// `<dataDir>/voice.json` before. Copied once, at the plugin's setup.
+import { existsSync, readFileSync } from 'node:fs'
+import { writeFileAtomic } from '../../../src/shared/plugins/server.ts'
 
 /**
- * Moves `legacy` to `next` when only the old one is there: copy, fsync, then remove the old one.
- * Returns the file to use: `next` once it is there; `legacy` when the copy failed (read in place,
- * the move retried at the next start). A removal that fails leaves both, `next` winning.
+ * Copies `legacy` to `next` when only the old one is there, atomically (a temp file renamed: a
+ * crash leaves no half-written `next`). `legacy` is kept, so a server rolled back to 0.2.x still
+ * has its voice; once `next` is there it wins. Returns the file to use: `next`, or `legacy` when
+ * the copy failed (read in place, the copy retried at the next start).
  */
 export function migrateConfigFile(legacy: string, next: string, warn: (message: string) => void): string {
   if (existsSync(next) || !existsSync(legacy)) return next
   try {
-    copyFileSync(legacy, next)
-    const fd = openSync(next, 'r')
-    try {
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
+    writeFileAtomic(next, readFileSync(legacy, 'utf8'), 0o600)
   } catch (err) {
-    warn(`could not move ${legacy} to ${next} (${err instanceof Error ? err.message : String(err)}); reading it where it is`)
-    try {
-      unlinkSync(next)
-    } catch {
-      // never written, or already gone
-    }
+    warn(`could not copy ${legacy} to ${next} (${err instanceof Error ? err.message : String(err)}); reading it where it is`)
     return legacy
-  }
-  try {
-    unlinkSync(legacy)
-  } catch (err) {
-    warn(`moved ${legacy} to ${next} but could not remove the old one (${err instanceof Error ? err.message : String(err)})`)
   }
   return next
 }

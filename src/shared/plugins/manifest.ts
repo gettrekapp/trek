@@ -30,6 +30,8 @@ export const PLUGIN_ID_RE = /^[a-z][a-z0-9-]{0,31}$/
 export interface PluginPresence {
   id: string
   version: string
+  /** The server's default for a project with no setting for it: a client goes by this, not its own manifest's */
+  defaultEnabled: boolean
 }
 
 /** A project's `plugins` setting: each plugin's on/off there. A plugin it doesn't name uses its `defaultEnabled`. */
@@ -47,8 +49,8 @@ export function parsePluginPresence(raw: unknown): PluginPresence[] | undefined 
   const out: PluginPresence[] = []
   for (const entry of raw) {
     if (!entry || typeof entry !== 'object') continue
-    const { id, version } = entry as { id?: unknown; version?: unknown }
-    if (typeof id === 'string' && PLUGIN_ID_RE.test(id) && typeof version === 'string') out.push({ id, version })
+    const { id, version, defaultEnabled } = entry as { id?: unknown; version?: unknown; defaultEnabled?: unknown }
+    if (typeof id === 'string' && PLUGIN_ID_RE.test(id) && typeof version === 'string' && typeof defaultEnabled === 'boolean') out.push({ id, version, defaultEnabled })
   }
   return out
 }

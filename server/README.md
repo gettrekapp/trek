@@ -164,7 +164,7 @@ or the Local profile's directory; mode 0600, written then renamed) and is never 
 back to a client, which only learns whether one is set. ElevenLabs is the voice
 plugin's (`../plugins/voice/README.md`): the voice, the model and "Summarize
 automatically" are in the data dir's `plugins/voice/config.json` (no secret; a
-`voice.json` from before plugins is moved there at the first start). With
+`voice.json` from before plugins is copied there at the first start, and kept). With
 "Summarize automatically" on and a key set, every session the server starts with
 the MCP tools, in a project where the plugin is on, is told to call `speak_summary`
 when it finishes or waits on the user. Plugins are on or off per project (Settings →

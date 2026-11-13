@@ -196,6 +196,8 @@ export function v2SettingsOverrides(
   }
   const name = nameField(requests)
   const favoritesField: SettingsField = { ...settingField('dockerFavorites', 'Docker favourites', requests), rebase: rebaseSet }
+  // Per plugin: a switch flipped elsewhere meanwhile is kept, and only the same plugin's clashes.
+  const pluginsField: SettingsField = { ...settingField('plugins', 'Plugins', requests), rebase: rebaseObject }
   const write = (key: string, label: string, value: unknown): void => writer.write(setting(key, label), value)
   const overlaid = (): Project | undefined => {
     const project = shown()
@@ -205,7 +207,7 @@ export function v2SettingsOverrides(
     setClaudePermissionMode: (mode) => write('claudePermissionMode', 'Claude session mode', textOrNull(mode)),
     setAudioAlerts: (enabled) => write('audioAlerts', 'Audio alerts', enabled),
     // The whole `plugins` setting, from what the window shows (pending edits included).
-    setPluginEnabled: (id, enabled) => write('plugins', 'Plugins', withPluginEnabled(overlaid()?.settings.plugins, id, enabled)),
+    setPluginEnabled: (id, enabled) => writer.write(pluginsField, withPluginEnabled(overlaid()?.settings.plugins, id, enabled)),
     setTitleBarColor: (color) => write('titleBarColor', 'Title bar color', textOrNull(color)),
     setLogoImage: (image) => write('logoImage', 'Logo', textOrNull(image)),
     setBannerImage: (image) => write('bannerImage', 'Banner', textOrNull(image)),

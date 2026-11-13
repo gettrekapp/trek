@@ -102,7 +102,7 @@ function echoPlugin(more = {}) {
 test('a plugin is set up once; the welcome lists it and its legacy capability', (t) => {
   const { plugin } = echoPlugin()
   const { registry } = setup(t, [plugin])
-  assert.deepEqual(registry.presence(), [{ id: 'echo', version: '1.0.0' }])
+  assert.deepEqual(registry.presence(), [{ id: 'echo', version: '1.0.0', defaultEnabled: true }])
   assert.deepEqual(registry.legacyCapabilities(), ['echo'])
   const caps = welcomeCapabilities(false, false, false, registry.legacyCapabilities())
   assert.ok(caps.includes('echo'))
@@ -236,6 +236,11 @@ test("the host: only the manifest's secrets, in the server's secrets file; data 
   assert.equal(statSync(join(dir, 'data', 'plugins', 'echo')).mode & 0o777, 0o700)
   assert.equal(existsSync(file), false)
   assert.equal(host.legacyDataFile('voice.json'), join(dir, 'data', 'voice.json'))
+  // One path segment only: a plugin keeps to its own directory.
+  for (const name of ['', '.', '..', '../secrets.json', 'a/b', 'a\\b', 'x\0y']) {
+    assert.throws(() => host.dataFile(name), /not a data file name/, name)
+    assert.throws(() => host.legacyDataFile(name), /not a data file name/, name)
+  }
   assert.equal(host.testEndpoint('TREK_SERVER_ECHO_URL'), 'http://127.0.0.1:9/x')
   assert.equal(host.testEndpoint('TREK_SERVER_BAD_URL'), undefined)
   assert.equal(host.testEndpoint('TREK_SERVER_UNSET_URL'), undefined)

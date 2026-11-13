@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile } from '../server/src/secrets.ts'
@@ -106,7 +106,7 @@ const refused = (res, code) => {
 
 test('the voice plugin registers as voice, with its legacy capability', async (t) => {
   const s = await setup(t)
-  assert.deepEqual(s.registry.presence(), [{ id: 'voice', version: '1.0.0' }])
+  assert.deepEqual(s.registry.presence(), [{ id: 'voice', version: '1.0.0', defaultEnabled: true }])
   assert.deepEqual(s.registry.legacyCapabilities(), ['voice'])
   assert.deepEqual(s.warnings, [])
 })
@@ -224,35 +224,43 @@ test('plugins.changed: a stored key, a cleared key and new voice settings say so
   assert.deepEqual(s.changes, ['voice', 'voice', 'voice'])
 })
 
-test("the 5b voice.json moves into plugins/voice/config.json at setup; one already moved wins", async (t) => {
+test("the 5b voice.json is copied into plugins/voice/config.json at setup and kept (a rollback reads it); the copy wins after", async (t) => {
   const dir = tempDir(t)
   mkdirSync(join(dir, 'data'), { recursive: true })
   const legacy = join(dir, 'data', 'voice.json')
-  writeFileSync(legacy, JSON.stringify({ voiceId: 'v9', modelId: 'eleven_multilingual_v2', promptSessions: true }))
+  const original = JSON.stringify({ voiceId: 'v9', modelId: 'eleven_multilingual_v2', promptSessions: true })
+  writeFileSync(legacy, original)
   const { registry } = registryFor(dir)
   const call = (method, params) => dispatchV2(method, params, { plugins: registry })
   assert.deepEqual((await call('voice.settings', {})).result, { voiceId: 'v9', modelId: 'eleven_multilingual_v2', promptSessions: true, hasKey: false })
-  assert.equal(existsSync(legacy), false)
-  assert.equal(JSON.parse(readFileSync(join(dir, 'data', 'plugins', 'voice', 'config.json'), 'utf8')).voiceId, 'v9')
-  // A voice.json that reappears (an older server run meanwhile) is left alone: the new file wins.
-  writeFileSync(legacy, JSON.stringify({ voiceId: 'old' }))
+  const next = join(dir, 'data', 'plugins', 'voice', 'config.json')
+  assert.equal(JSON.parse(readFileSync(next, 'utf8')).voiceId, 'v9')
+  assert.equal(statSync(next).mode & 0o777, 0o600)
+  assert.equal(readFileSync(legacy, 'utf8'), original, 'kept as it was')
+  // A change goes to the copy only; a later start reads the copy, not voice.json.
+  await call('voice.setConfig', { voiceId: 'v2' })
+  assert.equal(readFileSync(legacy, 'utf8'), original)
   const again = registryFor(dir).registry
-  assert.equal((await dispatchV2('voice.settings', {}, { plugins: again })).result.voiceId, 'v9')
-  assert.equal(existsSync(legacy), true)
+  assert.equal((await dispatchV2('voice.settings', {}, { plugins: again })).result.voiceId, 'v2')
 })
 
-test('migrateConfigFile: a copy that fails reads the old file in place; a removal that fails keeps the new one', (t) => {
+test('migrateConfigFile: atomic (no half-written copy is ever there); a copy that fails reads the old file in place', (t) => {
   const dir = tempDir(t)
   const warnings = []
   const warn = (m) => warnings.push(m)
   const legacy = join(dir, 'voice.json')
-  writeFileSync(legacy, '{}')
-  // The new file's directory is missing: the copy fails.
-  assert.equal(migrateConfigFile(legacy, join(dir, 'missing', 'config.json'), warn), legacy)
+  writeFileSync(legacy, '{"voiceId": "v1"}')
+  // The new file's directory can't be made (a file is in its place): the copy fails, and nothing is written.
+  writeFileSync(join(dir, 'plugins-file'), '')
+  assert.equal(migrateConfigFile(legacy, join(dir, 'plugins-file', 'config.json'), warn), legacy)
   assert.match(warnings.pop(), /reading it where it is/)
-  assert.equal(existsSync(legacy), true)
-  // Nothing to move.
-  assert.equal(migrateConfigFile(join(dir, 'none.json'), join(dir, 'config.json'), warn), join(dir, 'config.json'))
+  assert.deepEqual(readdirSync(dir).sort(), ['plugins-file', 'voice.json'], 'no temp file left')
+  // Copied: the whole file, then it wins.
+  const next = join(dir, 'plugins', 'config.json')
+  assert.equal(migrateConfigFile(legacy, next, warn), next)
+  assert.equal(readFileSync(next, 'utf8'), '{"voiceId": "v1"}')
+  // Nothing to copy.
+  assert.equal(migrateConfigFile(join(dir, 'none.json'), join(dir, 'other.json'), warn), join(dir, 'other.json'))
   assert.deepEqual(warnings, [])
 })
 

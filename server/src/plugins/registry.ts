@@ -17,6 +17,12 @@ import type { TopicHub } from '../topicHub'
 /** Namespaces a plugin may not take, beside those of the core methods. */
 const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp'])
 
+/** A data file's name: one path segment, not `.` or `..` (a plugin keeps to its own directory). */
+function checkFileName(name: string): string {
+  if (!name || name === '.' || name === '..' || /[\\/\0]/.test(name)) throw new Error(`not a data file name: ${JSON.stringify(name)}`)
+  return name
+}
+
 /** The error codes a plugin's method or tool may throw as they are; anything else is TOOL_ERROR. */
 const PASSTHROUGH: ReadonlySet<string> = new Set(['BAD_REQUEST', 'NOT_FOUND', 'CONFLICT', 'TOOL_ERROR'])
 
@@ -100,9 +106,9 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       dataFile: (name) => {
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         chmodSync(dir, 0o700)
-        return join(dir, name)
+        return join(dir, checkFileName(name))
       },
-      legacyDataFile: (name) => join(options.dataDir, name),
+      legacyDataFile: (name) => join(options.dataDir, checkFileName(name)),
       testEndpoint: (envName) => testEndpoint(envName, env[envName], warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
       subscriberCount: (projectId) => options.hub.eventSubscriberCount(projectTopic(projectId)),
@@ -157,7 +163,7 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
   const on = (projectId: string): Entry[] => [...entries.values()].filter((e) => enabled(projectId, e.manifest.id))
 
   return {
-    presence: () => [...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version })),
+    presence: () => [...entries.values()].map((e) => ({ id: e.manifest.id, version: e.manifest.version, defaultEnabled: e.manifest.defaultEnabled })),
     legacyCapabilities: () => [...entries.values()].flatMap((e) => (e.manifest.legacyCapability ? [e.manifest.legacyCapability] : [])),
     handler: (method) => {
       const dot = method.indexOf('.')

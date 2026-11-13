@@ -112,7 +112,7 @@ if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'sta
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
 
 // --- 1b. plugins (plugin system phase 1): listed in the welcome; a 0.2.1 client's voice.* still answers ---
-if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify([{ id: 'voice', version: '1.0.0' }])) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
+if (JSON.stringify(conn.welcome?.plugins) !== JSON.stringify([{ id: 'voice', version: '1.0.0', defaultEnabled: true }])) fail(`welcome plugins: ${JSON.stringify(conn.welcome?.plugins)}`)
 else ok('welcome plugins: voice')
 try {
   // As 0.2.1 sends it, with no idea that voice is a plugin now.

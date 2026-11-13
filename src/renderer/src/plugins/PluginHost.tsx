@@ -40,13 +40,15 @@ const welcomeKey = (): string => {
 export function usePluginEntries(plugins: readonly ClientPlugin[] = BUILTIN_CLIENT_PLUGINS): PluginEntry[] {
   const backend = useSyncExternalStore(subscribeBackend, getBackend)
   const key = useSyncExternalStore(subscribeBackend, welcomeKey)
+  const hasProject = useAppStore((s) => s.project !== null)
   const settings = useAppStore((s) => s.project?.plugins)
   return useMemo(() => {
-    const welcome = backend.plugins.projectId ? backend.plugins.welcome() : undefined
+    // Before the project's settings are in, its on/off is not known: nothing mounts yet.
+    const welcome = backend.plugins.projectId && hasProject ? backend.plugins.welcome() : undefined
     return plugins.map((plugin) => ({ plugin, status: pluginStatus(plugin.manifest, welcome, settings), host: hostFor(backend, plugin) }))
     // `key` stands for the welcome, which the backend holds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backend, key, settings, plugins])
+  }, [backend, key, hasProject, settings, plugins])
 }
 
 class PluginBoundary extends Component<{ id: string; children: ReactNode }, { failed: boolean }> {

@@ -76,10 +76,10 @@ export function enqueue(terminalId: string, text: string, audio: Uint8Array): nu
 }
 
 /** The window's server's voice settings with this app's Active/Busy. */
-export async function loadVoiceSettings(host: ClientPluginHost): Promise<void> {
+export async function loadVoiceSettings(host: ClientPluginHost, cancelled: () => boolean = () => false): Promise<void> {
   const server = await host.request<VoiceServerSettings>('settings')
-  // The window moved to another server meanwhile: its own load wins.
-  if (!host.isCurrent()) return
+  // The window moved to another server meanwhile (its own load wins), or the Runtime unmounted.
+  if (!host.isCurrent() || cancelled()) return
   const { hasKey, ...config } = server
   // Until the app's Active/Busy is loaded the section shows Active (the default); it follows.
   const voice: VoiceSettings = { ...config, hasApiKey: hasKey, active: useVoiceStore.getState().active !== false }

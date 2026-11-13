@@ -249,7 +249,7 @@ try {
   sdk.connect()
   await until(() => sdk.status, 'connected', 5000)
   check('the server says linear, voice and skills, and is not a local one', ['linear', 'voice', 'skills', 'local'].map((c) => sdk.welcome?.capabilities.includes(c)), [true, true, true, false])
-  check('and lists its plugins: voice', sdk.welcome?.plugins, [{ id: 'voice', version: '1.0.0' }])
+  check('and lists its plugins: voice', sdk.welcome?.plugins, [{ id: 'voice', version: '1.0.0', defaultEnabled: true }])
   const { projectId } = await sdk.request('project.create', { name: 'integrations', repositories: [{ path: repo }] })
   const topic = `project:${projectId}`
   const project = async () => {

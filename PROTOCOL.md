@@ -84,7 +84,7 @@ version, and the server closes a client with a version it does not support (`400
 ```json
 { "type": "welcome", "protocolVersion": 2, "daemonVersion": "0.2.0",
   "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"],
-  "plugins": [{ "id": "voice", "version": "1.0.0" }] }
+  "plugins": [{ "id": "voice", "version": "1.0.0", "defaultEnabled": true }] }
 ```
 
 `plugins` lists the server's plugins (see [Plugins](#plugins)); a server older than plugins sends none.
@@ -738,7 +738,8 @@ takes the worktree's path from the server's state and checks it as the worktree 
 
 A plugin (plugin system phase 1) is a feature with its own methods, events, MCP tools, session
 prompt and client UI, built into trek-server and the Trek app (`plugins/<id>/`). The welcome lists
-the server's (`plugins: [{id, version}]`); a server older than plugins sends no `plugins`, and a
+the server's (`plugins: [{id, version, defaultEnabled}]`: a client goes by the server's default, not its
+own); a server older than plugins sends no `plugins`, and a
 client then knows a plugin only by its legacy capability (`voice`), if it has one.
 
 **Names.** A plugin's methods are `<id>.<name>` and its events `<id>.<event>`, on the same socket.
@@ -751,8 +752,9 @@ core namespace. Its errors reach the client as `BAD_REQUEST`, `NOT_FOUND`, `CONF
 methods answer whatever a project's setting (a key or a config is the server's); where it is off,
 its MCP tools are not listed (a call is an unknown tool), its MCP instructions and session prompt
 are left out, and it sends that project no events. A change shows at an agent's next `tools/list`,
-and in the prompt of the sessions started after it. A server older than plugins has no setting: its
-plugins are on everywhere.
+and in the prompt of the sessions started after it (the server sends no MCP `listChanged`: an agent
+that listed a tool before it was switched off gets an unknown-tool error if it calls it). A server
+older than plugins has no setting: its plugins are on everywhere.
 
 **Server-wide changes.** A plugin's key or config set by any client sends `plugins.changed {id}` to
 every authenticated connection; one with a legacy capability sends `integrations.changed

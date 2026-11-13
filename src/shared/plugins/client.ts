@@ -1,7 +1,11 @@
 // The client half of a Trek plugin (plugin system phase 1): React components for named slots in a
 // project window (the desktop's and the web client's), and the host API they reach the window's
-// server and this app through. A plugin's client code imports only this module, the shared types
-// and its own folder; never src/renderer (scripts/pluginBoundaries.test.mjs).
+// server and this app through. A plugin's client code imports only this contract and its own
+// folder; never src/renderer (scripts/pluginBoundaries.test.mjs).
+//
+// This module is one shared instance at run time, like React: `PluginHostContext` works only if a
+// plugin and the window import the same copy. An installable plugin (a later phase) gets it, and
+// React, from the app as externals; it must never bundle its own.
 import { createContext, useContext, type FC } from 'react'
 import type { PluginManifest, PluginPrefValue } from './manifest.ts'
 

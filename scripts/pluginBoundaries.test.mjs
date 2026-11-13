@@ -1,6 +1,6 @@
 // scripts/pluginBoundaries.test.mjs — the plugin boundary (plugin system phase 1). A plugin's code
-// (plugins/<id>/) imports only the plugin contract and shared code (src/shared/), its own folder
-// and npm packages; never server/src, src/main, src/renderer, src/host, src/web or another
+// (plugins/<id>/) imports only the plugin contract (src/shared/plugins/), its own folder and npm
+// packages: not the rest of src/shared (the protocol's or the model's internals), never server/src, src/main, src/renderer, src/host, src/web or another
 // plugin. Core imports a plugin only through plugins/builtin.*.ts. That is what lets a plugin
 // become a package later with only the loader changing.
 import test from 'node:test'
@@ -38,14 +38,14 @@ const pluginDir = join(root, 'plugins')
 const pluginOf = (repoPath) => (repoPath.startsWith('plugins/') ? repoPath.split('/')[1] : undefined)
 const BUILTIN = /^plugins\/builtin\.[a-z]+(\.ts)?$/
 
-test("a plugin's code imports only the contract, shared code and its own folder", () => {
+test("a plugin's code imports only the contract and its own folder", () => {
   const problems = []
   for (const file of walk(pluginDir)) {
     const from = relative(root, file).split(sep).join('/')
     if (BUILTIN.test(from)) continue
     const own = pluginOf(from)
     for (const target of relativeImports(file)) {
-      const ok = target.startsWith('src/shared/') || pluginOf(target) === own
+      const ok = target.startsWith('src/shared/plugins/') || pluginOf(target) === own
       if (!ok) problems.push(`${from} imports ${target}`)
     }
   }

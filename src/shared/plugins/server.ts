@@ -48,9 +48,12 @@ export interface ServerPluginHost {
   readonly id: string
   /** A name its manifest lists in `secrets`; any other throws */
   secret(name: string): KeySlot
-  /** `<dataDir>/plugins/<id>/<name>`; the directory is made (0700) on first use */
+  /** `<dataDir>/plugins/<id>/<name>` (`name` one path segment, else it throws); the directory is made (0700) on first use */
   dataFile(name: string): string
-  /** The server's data dir itself, for a one-time move of a file the plugin had before it was one */
+  /**
+   * `<dataDir>/<name>` (one path segment): only for a built-in plugin's one-time move of a file it
+   * kept there before plugins (the voice plugin's voice.json). Not for installable plugins.
+   */
   legacyDataFile(name: string): string
   /** A test endpoint from the server's environment (`envName`), taken only as http(s) on loopback */
   testEndpoint(envName: string): string | undefined
