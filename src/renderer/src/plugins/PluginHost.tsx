@@ -5,7 +5,7 @@ import { Component, useMemo, useSyncExternalStore, type ReactNode } from 'react'
 import { PluginHostContext, type ClientPlugin, type ClientPluginHost, type PluginSlotName } from '../../../shared/plugins/client.ts'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
-import { useAppStore } from '../store'
+import { allBranchTickets, useAppStore } from '../store'
 import { terminalLabel } from '../terminals'
 import { createClientHost } from './host'
 import { pluginActive, pluginStatus, type PluginStatus } from './presence'
@@ -36,10 +36,29 @@ function hostFor(backend: WindowBackend, plugin: ClientPlugin): ClientPluginHost
   if (!byId) hosts.set(backend, (byId = new Map()))
   let host = byId.get(plugin.manifest.id)
   if (!host) {
-    host = createClientHost(plugin.manifest, backend, { appSettings: window.api.appSettings, terminalLabel, currentBackend: getBackend })
+    host = createClientHost(plugin.manifest, backend, {
+      appSettings: window.api.appSettings,
+      terminalLabel,
+      currentBackend: getBackend,
+      ticketIds: projectTicketIds,
+      onTicketIdsChanged: (listener) => {
+        let last = projectTicketIds().join('\n')
+        return useAppStore.subscribe(() => {
+          const now = projectTicketIds().join('\n')
+          if (now === last) return
+          last = now
+          listener()
+        })
+      }
+    })
     byId.set(plugin.manifest.id, host)
   }
   return host
+}
+
+/** The window's project's linked ticket ids, once each, sorted. */
+function projectTicketIds(): string[] {
+  return [...new Set(allBranchTickets(useAppStore.getState().project))].sort()
 }
 
 /** The welcome as a stable value: re-read on every backend change (the welcome's arrival is one). */

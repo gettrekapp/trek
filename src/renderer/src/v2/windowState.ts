@@ -22,7 +22,7 @@ export const EMPTY: Partial<AppState> = {
 
 /**
  * View state a window keeps from what it showed before (an open Global panel or
- * bot tab, the bot, Colima environments, tool check and list error, Linear chips): a server
+ * bot tab, the bot, Colima environments, tool check and list error; the plugins' ticket info is per backend): a server
  * window starts from none of it and leaves none behind. (The voice plugin's
  * queue stops with its Runtime, which unmounts when the window leaves.) The queue panels' open state is an app-wide
  * preference and stays.
@@ -35,8 +35,7 @@ export const VIEW_RESET: Partial<AppState> = {
   environments: {},
   envBusy: {},
   envToolCheck: null,
-  envListError: null,
-  linearIssues: {}
+  envListError: null
 }
 
 /** On install: the view reset; offline until ServerProjectWindow reports the real status. */

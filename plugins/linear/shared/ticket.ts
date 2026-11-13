@@ -23,6 +23,8 @@ export const linearTickets = defineTicketProvider({
     return /^[a-z][a-z0-9]*-\d+$/i.test(input) ? { ticketId: input.toUpperCase() } : null
   },
   label: (ticketId) => ticketId,
+  // Linear's default branch names embed the issue id: "garrett/tow-123-fix-login".
+  fromBranch: (branch) => branch.match(/(?:^|\/)([a-z][a-z0-9]*-\d+)(?:-|$)/i)?.[1].toUpperCase() ?? null,
   url: (settings, ticketId, info) => {
     if (info?.url) return info.url
     const workspace = settings[WORKSPACE_SETTING]

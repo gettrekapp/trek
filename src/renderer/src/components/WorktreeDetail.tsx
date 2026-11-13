@@ -9,10 +9,9 @@ import {
   pullRequestLabel,
   repoOfInfo,
   tagStyle,
-  ticketLabel,
-  ticketUrl,
   useAppStore
 } from '../store'
+import { useTicketViews } from '../plugins/useTickets'
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
@@ -114,7 +113,7 @@ export function WorktreeDetail({
   const toggleTerminalComplete = useAppStore((s) => s.toggleTerminalComplete)
   const setBranchTag = useAppStore((s) => s.setBranchTag)
   const setBranchCustomTag = useAppStore((s) => s.setBranchCustomTag)
-  const linearIssues = useAppStore((s) => s.linearIssues)
+  const ticketViewOf = useTicketViews()
 
   const [panel, setPanel] = useState<Panel>('sessions')
   const [menuOpen, setMenuOpen] = useState(false)
@@ -245,8 +244,10 @@ export function WorktreeDetail({
         return [{ terminalId: id, title: t.title, detail: `${describeLlm(t.llm ?? { provider: 'claude' })} · ${t.status}` }]
       })
     : []
-  const linearIssue = ticket ? linearIssues[ticket] : undefined
-  const linkedTicketUrl = ticket ? ticketUrl(project, ticket, linearIssue) : null
+  // Through the project's trackers (their plugins'): its label, link and looked-up issue.
+  const ticketInfo = ticket ? ticketViewOf(ticket) : undefined
+  const issue = ticketInfo?.info
+  const linkedTicketUrl = ticketInfo?.url ?? null
 
   // Notes are keyed to the live branch, so they follow it through promote/demote.
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
@@ -424,24 +425,26 @@ export function WorktreeDetail({
                 className="chip chip-ticket"
                 title={
                   linkedTicketUrl
-                    ? `Open ticket ${ticketLabel(ticket)}${linearIssue ? ` — ${linearIssue.title}` : ''}`
-                    : `Ticket ${ticketLabel(ticket)} (link it by URL once to make this clickable)`
+                    ? `Open ticket ${ticketInfo!.label}${issue ? ` — ${issue.title}` : ''}`
+                    : `Ticket ${ticketInfo!.label}: click to add what its link needs`
                 }
                 onClick={() => {
+                  // No link yet (its tracker's setting is missing, or no tracker on owns it): the dialog says what it needs.
                   if (linkedTicketUrl) window.open(linkedTicketUrl)
+                  else if (info.branch) setShowTicket(true)
                 }}
               >
-                {linearIssue ? ticketLabel(ticket) : `Ticket ${ticketLabel(ticket)}`}
-                {linearIssue && (
+                {issue ? ticketInfo!.label : `Ticket ${ticketInfo!.label}`}
+                {issue && (
                   <>
                     <span className="ticket-status">
                       <span
                         className="ticket-status-dot"
-                        style={{ background: linearIssue.statusColor }}
+                        style={{ background: issue.statusColor }}
                       />
-                      {linearIssue.status}
+                      {issue.status}
                     </span>
-                    <span className="ticket-title">{linearIssue.title}</span>
+                    <span className="ticket-title">{issue.title}</span>
                   </>
                 )}
               </span>
@@ -591,7 +594,7 @@ export function WorktreeDetail({
                   }}
                 >
                   <div className="detail-menu-name">
-                    Ticket {ticket ? ticketLabel(ticket) : '(none)'}…
+                    Ticket {ticketInfo ? ticketInfo.label : '(none)'}…
                   </div>
                   <div className="detail-menu-desc">Change or unlink the linked ticket</div>
                 </div>

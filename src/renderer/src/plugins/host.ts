@@ -21,6 +21,9 @@ export interface HostDeps {
   currentBackend(): WindowBackend
   /** Where `setTicketInfo` publishes (default: the window's store) */
   ticketInfo?: TicketInfoStore
+  /** The project's linked ticket ids, and their changes (default: none) */
+  ticketIds?: () => string[]
+  onTicketIdsChanged?: (listener: () => void) => () => void
 }
 
 const prefsOf = (settings: AppSettings, id: string): Record<string, PluginPrefValue> =>
@@ -79,6 +82,8 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
     },
     terminalLabel: (terminalId) => deps.terminalLabel(terminalId),
     // A stale host (the window moved on) publishes under its own backend, which nobody reads.
-    setTicketInfo: (info) => (deps.ticketInfo ?? ticketInfoStore).set(backend, id, info)
+    setTicketInfo: (info) => (deps.ticketInfo ?? ticketInfoStore).set(backend, id, info),
+    ticketIds: () => deps.ticketIds?.() ?? [],
+    onTicketIdsChanged: (listener) => deps.onTicketIdsChanged?.(listener) ?? (() => {})
   }
 }

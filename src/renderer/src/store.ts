@@ -13,7 +13,6 @@ import type {
   EnvironmentInfo,
   EnvironmentSettings,
   GitWorktreeInfo,
-  LinearIssue,
   PersistedTerminal,
   ProjectFile,
   Repository,
@@ -139,14 +138,6 @@ export function pullRequestLabel(url: string): string {
   return match ? `#${match[1]}` : 'PR'
 }
 
-export { isLinearTicket, parseTicket, ticketUrl, type ParsedTicket } from '../../shared/tickets'
-import { isLinearTicket } from '../../shared/tickets'
-
-/** Short label for a linked ticket: "TOW-123" for Linear, "#12345" for Azure DevOps. */
-export function ticketLabel(ticketId: string): string {
-  return isLinearTicket(ticketId) ? ticketId : `#${ticketId}`
-}
-
 /** repoId is stamped on selection, so a row that later vanishes still has a repository. */
 export type SelectedWorktree = WorktreeLocator & { repoId?: string }
 
@@ -228,10 +219,6 @@ export interface AppState {
   globalView: 'sessions' | 'bot'
   botView: BotView
   botEvents: BotEvent[]
-  /** Whether a Linear API key is stored (machine-wide, not per project). */
-  linearConnected: boolean
-  /** Live Linear issues by identifier, for ticket chips. Not persisted. */
-  linearIssues: Record<string, LinearIssue>
   /** Open decision requests by terminal id, at most one per terminal. Not persisted. */
   decisions: Record<string, PendingDecision>
   llmSettings: LlmSettings | null
@@ -253,8 +240,8 @@ export interface AppState {
   toggleDockerFavorite: (containerName: string) => void
   setBranchTicket: (repoId: string, branch: string, ticketId: string | null) => void
   setBranchPullRequest: (repoId: string, branch: string, url: string | null) => void
-  setAzureDevOpsBaseUrl: (url: string) => void
-  setLinearWorkspace: (slug: string) => void
+  /** A plugin's project setting (phase 2: `linearWorkspace`, `azureDevOpsBaseUrl`); '' removes it */
+  setPluginSetting: (key: string, value: string) => void
   setBranchNote: (repoId: string, branch: string, text: string) => void
   setBranchEnvVars: (repoId: string, branch: string, text: string) => void
   setBranchTag: (repoId: string, branch: string, tagId: string | null) => void
@@ -291,8 +278,6 @@ export interface AppState {
   addBotEvent: (event: BotEvent) => void
   setBotDecision: (question: string | null) => void
   setBotSettings: (settings: BotSettings) => void
-  setLinearConnected: (connected: boolean) => void
-  setLinearIssues: (issues: LinearIssue[]) => void
   setTerminalQueue: (id: string, texts: string[]) => void
   enqueueTerminalText: (id: string, text: string) => void
   removeQueuedText: (id: string, index: number) => void
@@ -335,8 +320,7 @@ const SETTINGS_SETTERS = [
   'setSessionTypes',
   'setProjectLlmDefault',
   'setGlobalLlm',
-  'setLinearWorkspace',
-  'setAzureDevOpsBaseUrl',
+  'setPluginSetting',
   'setProjectName',
   'setLinkedDirs',
   'setEnvironmentSettings',
@@ -381,8 +365,6 @@ export const useAppStore = create<AppState>((set) => ({
   globalView: 'sessions',
   botView: OFF_VIEW,
   botEvents: [],
-  linearConnected: false,
-  linearIssues: {},
   decisions: {},
   llmSettings: null,
 
@@ -455,18 +437,8 @@ export const useAppStore = create<AppState>((set) => ({
   setBotSettings: (bot) =>
     set((state) => (state.project ? { project: { ...state.project, bot } } : state)),
 
-  setLinearConnected: (connected) =>
-    set(connected ? { linearConnected: true } : { linearConnected: false, linearIssues: {} }),
-
   setLlmSettings: (llmSettings) => set({ llmSettings }),
 
-
-  setLinearIssues: (issues) =>
-    set((state) => {
-      const linearIssues = { ...state.linearIssues }
-      for (const issue of issues) linearIssues[issue.identifier] = issue
-      return { linearIssues }
-    }),
 
   // The project setters call the server window's (projectSetters.ts), each by its own name.
   ...viaServerAll([...SESSION_SETTERS, ...SETTINGS_SETTERS])

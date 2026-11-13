@@ -24,7 +24,7 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'linear', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'settingsEdit', 'globalPanel'])
 })
 
 test('moving a worktree to another server follows move (5d)', () => {
@@ -57,10 +57,10 @@ test('v2 features are the ceiling AND the welcome capabilities; settings need no
   assert.deepEqual(on(['mcp', 'bot', 'moveWorktree']), ['settingsEdit', 'globalPanel'])
 })
 
-test('Linear and skills are the server\'s (5b): each follows its own capability, on any server (voice is a plugin)', () => {
-  const on = (caps, options) => ['linear', 'skills'].filter((name) => v2Features(caps, options)[name])
-  assert.deepEqual(on(['linear', 'voice', 'skills']), ['linear', 'skills'])
-  assert.deepEqual(on(['skills']), ['skills'])
+test('skills are the server\'s (5b): they follow their capability, on any server (voice and Linear are plugins)', () => {
+  const on = (caps, options) => ['skills'].filter((name) => v2Features(caps, options)[name])
+  assert.deepEqual(on(['linear', 'voice', 'skills']), ['skills'])
+  assert.deepEqual(on(['linear']), [])
   // A server older than 5b: none, even on the Local entry with `local`.
   assert.deepEqual(on(['mcp', 'local', 'docker'], { localEntry: true }), [])
 })
@@ -77,20 +77,18 @@ test("docker, env and stacks run on the server's machine: each follows its own c
 })
 
 test("the settings sections: a server window shows what its server has and keeps the project's agents", () => {
-  const v2 = settingsSections(v2Features(['mcp', 'linear']))
+  const v2 = settingsSections(v2Features(['mcp']))
   assert.deepEqual(Object.keys(v2), [...SETTINGS_SECTIONS])
   const by = (mode) => SETTINGS_SECTIONS.filter((name) => v2[name] === mode)
-  // Linear's key is the server's (5b): shown where it serves linear.*; the environments where it has them.
-  // (The plugins' sections are PluginsSettings', not these.)
+  // The environments where the server has them. (The plugins' sections, Linear's and voice's, are
+  // PluginsSettings', not these.)
   assert.deepEqual(by('hidden'), ['environments'])
-  assert.deepEqual(SETTINGS_SECTIONS.filter((name) => settingsSections(v2Features([]))[name] === 'hidden'), ['linear', 'environments'])
   assert.deepEqual(by('project'), ['agents'])
   assert.deepEqual(by('edit'), [
     'sessionMode',
     'audioAlerts',
     'linkedDirs',
     'appearance',
-    'linear',
     'worktreeTags',
     'customTags',
     'terminalButtons',
@@ -110,7 +108,6 @@ test("the Local entry's server, welcomed with `local`, has this machine's featur
     'docker',
     'env',
     'stacks',
-    'linear',
     'skills',
     'reveal',
     'openInEditor',
@@ -131,22 +128,11 @@ test("this machine's features need both the Local entry and the `local` capabili
   assert.deepEqual(any(SERVER_MACHINE, { localEntry: true }), [])
 })
 
-test('a connected server older than 5b (no linear) shows a hint to update it in its place', () => {
-  const older = settingsSections(v2Features(['mcp', 'env']), { connected: true })
-  assert.deepEqual([older.linear, older.environments], ['needsUpdate', 'edit'])
-  // Not connected (connecting, offline, an empty window): nothing is known, so it is hidden.
-  const offline = settingsSections(v2Features(['mcp', 'env']), { connected: false })
-  assert.equal(offline.linear, 'hidden')
-  // Environments are a machine's, not a version's: still hidden without env.
-  assert.equal(settingsSections(v2Features(['linear']), { connected: true }).environments, 'hidden')
-  assert.equal(settingsSections(v2Features(['linear']), { connected: true }).linear, 'edit')
-})
-
-test('a window whose server runs environments and has Linear shows them in Settings, on Local or not', () => {
+test('a window whose server runs environments shows them in Settings, on Local or not', () => {
   for (const [caps, options] of [[[...SERVER_MACHINE, 'local'], { localEntry: true }], [SERVER_MACHINE, {}]]) {
     const sections = settingsSections(v2Features(caps, options))
     assert.deepEqual(SETTINGS_SECTIONS.filter((name) => sections[name] === 'hidden'), [])
-    assert.deepEqual([sections.environments, sections.linear, sections.agents], ['edit', 'edit', 'project'])
+    assert.deepEqual([sections.environments, sections.agents], ['edit', 'project'])
   }
 })
 

@@ -168,14 +168,14 @@ test('features before the welcome, then when the capabilities change', () => {
 
 test("this machine's features: only the Local entry's server, once it says `local`; the server's follow its capabilities", () => {
   const local = (b) => ['reveal', 'openInEditor'].filter((name) => b.features[name])
-  const server = (b) => ['docker', 'env', 'stacks', 'linear', 'skills'].filter((name) => b.features[name])
+  const server = (b) => ['docker', 'env', 'stacks', 'skills'].filter((name) => b.features[name])
   assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), ['reveal', 'openInEditor'])
   assert.deepEqual(local(setup({ capabilities: ['mcp', 'local'] }).backend), [])
   assert.deepEqual(local(setup({ capabilities: ['mcp'], localEntry: true }).backend), [])
   assert.deepEqual(server(setup({ capabilities: ['mcp', 'docker', 'env', 'stacks'] }).backend), ['docker', 'env', 'stacks'])
   assert.deepEqual(server(setup({ capabilities: ['mcp', 'local'], localEntry: true }).backend), [])
-  assert.deepEqual(server(setup({ capabilities: ['linear', 'voice', 'skills'] }).backend), ['linear', 'skills'])
-  assert.equal(setup().backend.features.linear, false)
+  assert.deepEqual(server(setup({ capabilities: ['linear', 'voice', 'skills'] }).backend), ['skills'])
+  assert.equal(setup().backend.features.skills, false)
   // A server before its welcome, then once it arrives.
   let caps
   const { backend } = setup({ capabilities: () => caps })
@@ -283,34 +283,10 @@ test('a worktree path the projection does not know is refused here, and nothing 
   assert.deepEqual(calls, [])
 })
 
-test("linear and skills go to the window's server; Linear's changes are its own listeners'", async () => {
-  const replies = {
-    'linear.status': { hasKey: true },
-    'linear.setKey': { ok: true, user: 'Ada' },
-    'linear.issues': [{ identifier: 'TOW-1' }],
-    'skills.list': [{ name: 'review', source: 'project', kind: 'skill' }]
-  }
-  const { backend, calls, listeners } = setup({ replies })
-  assert.equal(await backend.linear.hasKey(), true)
-  assert.deepEqual(await backend.linear.setKey('lin_k'), { ok: true, user: 'Ada' })
-  await backend.linear.clearKey()
-  assert.deepEqual(await backend.linear.issues(['TOW-1']), [{ identifier: 'TOW-1' }])
+test("skills go to the window's server", async () => {
+  const { backend, calls } = setup({ replies: { 'skills.list': [{ name: 'review', source: 'project', kind: 'skill' }] } })
   assert.deepEqual(await backend.skills.list({ path: '/r-feat' }), [{ name: 'review', source: 'project', kind: 'skill' }])
-  assert.deepEqual(calls, [
-    ['linear.status', {}],
-    ['linear.setKey', { apiKey: 'lin_k' }],
-    ['linear.clearKey', {}],
-    ['linear.issues', { ids: ['TOW-1'] }],
-    ['skills.list', { projectId: 'p1', worktreeId: 'w2' }]
-  ])
-  // A key change made anywhere (another window, the hand-over).
-  const changed = []
-  const offLinear = backend.linear.onChanged(() => changed.push('linear'))
-  for (const l of listeners['integrations.changed']) l({ linear: true })
-  for (const l of listeners['integrations.changed']) l({ voice: true })
-  offLinear()
-  assert.deepEqual(listeners['integrations.changed'], [])
-  assert.deepEqual(changed, ['linear'])
+  assert.deepEqual(calls, [['skills.list', { projectId: 'p1', worktreeId: 'w2' }]])
 })
 
 test("the plugins' channel: the project, the welcome's plugins and capabilities, untyped <id>.* requests and events", async () => {

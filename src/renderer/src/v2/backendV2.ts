@@ -695,18 +695,6 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       destroy: async (loc) => request('stack.destroy', { projectId, worktreeId: worktreeAt(loc.path) }, { timeoutMs: SLOW_MS }),
       log: async (loc, fileId, offset) => request('stack.log', { projectId, worktreeId: worktreeAt(loc.path), fileId, offset })
     },
-    linear: {
-      hasKey: async () => (await request('linear.status', {})).hasKey,
-      setKey: (apiKey) => request('linear.setKey', { apiKey }),
-      clearKey: async () => {
-        await request('linear.clearKey', {})
-      },
-      issues: (ids) => request('linear.issues', { ids }),
-      onChanged: (listener) =>
-        deps.onEvent('integrations.changed', (parts) => {
-          if (parts.linear) listener()
-        })
-    },
     skills: {
       list: async (loc) => request('skills.list', { projectId, worktreeId: worktreeAt(loc.path) })
     },

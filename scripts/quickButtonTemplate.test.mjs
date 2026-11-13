@@ -58,9 +58,10 @@ const ctx = (over = {}) => ({
     customTags: [
       { id: 'a', name: 'ui', color: '#fff' },
       { id: 'b', name: 'urgent', color: '#fff' }
-    ],
-    linearWorkspace: 'acme'
+    ]
   },
+  // The project's trackers' link (plugin system phase 2), here a fixed one.
+  ticketUrl: (id) => `https://linear.app/acme/issue/${id}`,
   repo: {
     name: 'trek',
     path: '/r/trek',
@@ -122,11 +123,11 @@ test('empty values and a pending session id count as missing', () => {
   assert.equal(values.session_id, undefined)
 })
 
-test('ticket_url is missing without a workspace; pr_number falls back to trailing digits', () => {
+test('ticket_url is missing when its tracker has no link for it; pr_number falls back to trailing digits', () => {
   const base = ctx()
   const values = resolveBuiltins({
     ...base,
-    project: { ...base.project, linearWorkspace: undefined },
+    ticketUrl: () => null,
     repo: { ...base.repo, branchPullRequests: { feat: 'https://example.com/mr/7/' } }
   })
   assert.equal(values.ticket_url, undefined)

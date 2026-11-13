@@ -42,6 +42,10 @@ export interface ClientPluginHost {
    * window's ticket chips show their status and title.
    */
   setTicketInfo(info: Readonly<Record<string, TicketInfo>>): void
+  /** The ticket ids the window's project's branches link to, once each (phase 2) */
+  ticketIds(): string[]
+  /** Called when that set changes; returns the unsubscribe */
+  onTicketIdsChanged(listener: () => void): () => void
 }
 
 export interface ClientPlugin {

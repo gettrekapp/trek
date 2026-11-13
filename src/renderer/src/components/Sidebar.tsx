@@ -10,10 +10,10 @@ import {
   repoOfInfo,
   repoWorktrees,
   tagStyle,
-  ticketLabel,
   useAppStore,
   worktreeStatus
 } from '../store'
+import { useTicketViews } from '../plugins/useTickets'
 import { NotificationsMenu } from './NotificationsMenu'
 import { PluginSlot } from '../plugins/PluginHost'
 import { removalBlock } from '../repoRemoval'
@@ -92,7 +92,7 @@ function PrNoticeFlag({ title }: { title: string }): React.JSX.Element {
 
 export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
-  const linearIssues = useAppStore((s) => s.linearIssues)
+  const ticketViewOf = useTicketViews()
   const selected = useAppStore((s) => s.selected)
   const selectWorktree = useAppStore((s) => s.selectWorktree)
   const terminals = useAppStore((s) => s.terminals)
@@ -210,7 +210,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const tag = branchTag(project, repo, info.branch)
     const rowCustomTags = branchCustomTags(project, repo, info.branch)
     const ticket = info.branch ? repo.branchTickets?.[info.branch] : undefined
-    const linearIssue = ticket ? linearIssues[ticket] : undefined
+    const ticketInfo = ticket ? ticketViewOf(ticket) : undefined
     const pullRequest = info.branch
       ? repo.branchPullRequests?.[info.branch]
       : undefined
@@ -299,22 +299,22 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                     {t.name}
                   </span>
                 ))}
-                {ticket && (
+                {ticket && ticketInfo && (
                   <span
                     className="mini-chip ticket"
                     title={
-                      linearIssue
-                        ? `${ticket} · ${linearIssue.status} — ${linearIssue.title}`
+                      ticketInfo.info
+                        ? `${ticketInfo.label} · ${ticketInfo.info.status} — ${ticketInfo.info.title}`
                         : undefined
                     }
                   >
-                    {linearIssue && (
+                    {ticketInfo.info && (
                       <span
                         className="ticket-status-dot"
-                        style={{ background: linearIssue.statusColor }}
+                        style={{ background: ticketInfo.info.statusColor }}
                       />
                     )}
-                    {ticketLabel(ticket)}
+                    {ticketInfo.label}
                   </span>
                 )}
                 {pullRequest && (

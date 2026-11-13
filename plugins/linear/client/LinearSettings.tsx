@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { useAppStore } from '../store'
-import { getBackend } from '../backend'
+import { usePluginHost } from '../../../src/shared/plugins/client.ts'
+import type { LinearKeyResult } from '../shared/types.ts'
+import { useLinearStore } from './store.ts'
 
 /** Linear API key — the window's server's, shared by every project on it. */
 export function LinearSettings(): React.JSX.Element {
-  const connected = useAppStore((s) => s.linearConnected)
-  const setLinearConnected = useAppStore((s) => s.setLinearConnected)
+  const host = usePluginHost()
+  const connected = useLinearStore((s) => s.connected)
+  const setLinearConnected = useLinearStore((s) => s.setConnected)
   const [apiKey, setApiKey] = useState('')
   const [user, setUser] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -15,9 +17,9 @@ export function LinearSettings(): React.JSX.Element {
     if (!apiKey.trim()) return
     setBusy(true)
     setError(null)
-    let result: Awaited<ReturnType<ReturnType<typeof getBackend>['linear']['setKey']>>
+    let result: LinearKeyResult
     try {
-      result = await getBackend().linear.setKey(apiKey)
+      result = await host.request<LinearKeyResult>('setKey', { apiKey })
     } catch (err) {
       setBusy(false)
       setError(err instanceof Error ? err.message : String(err))
@@ -35,7 +37,7 @@ export function LinearSettings(): React.JSX.Element {
 
   const disconnect = async (): Promise<void> => {
     try {
-      await getBackend().linear.clearKey()
+      await host.request('clearKey')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       return

@@ -28,9 +28,7 @@ import type {
   EnvUpResult,
   EnvironmentInfo,
   EnvironmentSettings,
-  LinearIssue,
   SkillInfo,
-  LinearKeyResult,
   StackLogChunk,
   StackStatus,
   ChangesSource,
@@ -197,7 +195,11 @@ export const CAPABILITY = {
   env: 'env',
   /** `stack.*` run the worktrees' docker/stack/stack.sh dev stacks on the server's machine */
   stacks: 'stacks',
-  /** `linear.*` look up Linear issues with the server's own API key (set from any client, never read back) */
+  /**
+   * The Linear plugin's legacy capability (plugin system phase 2; a core `linear.*` in 5b): listed
+   * while the plugin is registered, for clients older than plugins. Its methods are the plugin's
+   * (plugins/linear/shared/types.ts).
+   */
   linear: 'linear',
   /**
    * The voice plugin's legacy capability (plugin system phase 1; a core `voice.*` in 5b): listed
@@ -516,18 +518,6 @@ export interface MethodParamsV2 {
   /** The stack's log from `offset` of the file `fileId` names, or its last 64 KiB when that file is gone */
   'stack.log': WorktreeRef & { fileId: number; offset: number }
 
-  // Linear, with the server's API key (capability `linear`)
-  /** Whether the server has a Linear key */
-  'linear.status': Record<string, never>
-  /**
-   * Checks the key with Linear and stores it on the server (0600, never sent back). `ifAbsent` (the
-   * app's hand-over): stored as it is, unchecked, only while the server has none; a stored key is
-   * kept and the result says `present`.
-   */
-  'linear.setKey': { apiKey: string; ifAbsent?: boolean }
-  'linear.clearKey': Record<string, never>
-  /** The issues with these ids (e.g. TOW-123) that exist and the key can see; none without a key */
-  'linear.issues': { ids: string[] }
 
   // Skills (capability `skills`)
   /** The worktree's `.claude/skills` and `.claude/commands`, then the server user's `~/.claude` ones */
@@ -671,10 +661,6 @@ export interface MethodResultsV2 {
   'stack.down': number
   'stack.destroy': number
   'stack.log': StackLogChunk
-  'linear.status': { hasKey: boolean }
-  'linear.setKey': LinearKeyResult
-  'linear.clearKey': null
-  'linear.issues': LinearIssue[]
   'skills.list': SkillInfo[]
   'move.prepare': MovePlan
   'move.export': MoveExport & { fingerprint: string }
@@ -732,9 +718,9 @@ export interface EventPayloadsV2 {
   /** An `env.up`, `env.stop` or `env.destroy`'s output and steps, to the connection that asked for it only */
   'env.log': EnvLogEvent
   /**
-   * The server's Linear key changed (any client's linear.setKey that stored, linear.clearKey), to
-   * every authenticated connection: re-read `linear.status`. A plugin with a legacy capability's
-   * server-wide change is sent here too, as `{ <capability>: true }`, for clients older than plugins.
+   * For clients older than plugins: a plugin with a legacy capability's server-wide change (the
+   * Linear or voice key or settings), as `{ <capability>: true }`, beside its `plugins.changed`; and
+   * gh's sign-in (`prWatch`). To every authenticated connection.
    */
   'integrations.changed': IntegrationsChangedEvent
   /** A plugin's server-wide state changed (a key, its config), by any client: its windows re-read it */
@@ -750,6 +736,7 @@ export interface PluginsChangedEvent {
 }
 
 export interface IntegrationsChangedEvent {
+  /** The Linear plugin's legacy capability: its key changed */
   linear?: true
   /** The voice plugin's legacy capability: its key or settings changed */
   voice?: true

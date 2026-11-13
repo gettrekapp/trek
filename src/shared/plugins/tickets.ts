@@ -31,6 +31,8 @@ export interface TicketProvider {
   label(ticketId: string): string
   /** Its browser URL from the project's settings (or a looked-up issue's own); null when it can't be built */
   url(settings: Readonly<Record<string, unknown>>, ticketId: string, info?: TicketInfo): string | null
+  /** A ticket id a branch name embeds (Linear's default branch names: 'garrett/tow-123-fix-login'), for the link dialog to suggest */
+  fromBranch?(branch: string): string | null
   /** The setting a bare id needs before it links (Linear's workspace slug); the link dialog asks for it */
   linkSetting?: { key: string; label: string; placeholder: string }
 }

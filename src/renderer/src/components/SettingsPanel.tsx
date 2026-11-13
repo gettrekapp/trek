@@ -3,7 +3,6 @@ import { CLAUDE_PERMISSION_MODES } from '../../../shared/providers/claude'
 import { useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { ENV_DEFAULTS } from '../../../shared/environments'
-import { LinearSettings } from './LinearSettings'
 import { PluginsSettings } from '../plugins/PluginsSettings'
 import { NotificationSettings } from './NotificationSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
@@ -26,25 +25,12 @@ interface Props {
   visible: boolean
 }
 
-/** In place of a section the window's server is too old for (it predates Trek 5b). */
-function NeedsUpdate({ title, what }: { title: string; what: string }): React.JSX.Element {
-  return (
-    <>
-      <h3>{title}</h3>
-      <div className="settings-row">
-        <span className="settings-desc">This server is older than Trek 5b: update it to use {what} here.</span>
-      </div>
-    </>
-  )
-}
-
 export function SettingsPanel({ visible }: Props): React.JSX.Element {
   // The project's settings are edited on the server: text is committed on blur (each commit is a
-  // request), Linear and the environments show where the window's server has them (its key and
-  // VMs are the server's), the plugins where it has them (PluginsSettings), and a conflict's Reload remounts it.
+  // request), the environments show where the window's server has them (its VMs are the
+  // server's), the plugins where it has them (PluginsSettings), and a conflict's Reload remounts it.
   const features = useFeatures()
-  const connected = useAppStore((s) => s.serverLink === 'connected')
-  const sections = settingsSections(features, { connected })
+  const sections = settingsSections(features)
   const reload = useAppStore((s) => s.settingsReload)
   const serverDefault = useAppStore((s) => s.serverAgents?.llmDefault)
   const picker = useServerPicker()
@@ -225,8 +211,6 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         </div>
         <AppearanceSettings />
         <NotificationSettings />
-        {sections.linear === 'edit' && <LinearSettings />}
-        {sections.linear === 'needsUpdate' && <NeedsUpdate title="Linear" what="Linear" />}
         <PluginsSettings />
         <LlmSettings projectOnly={sections.agents === 'project'} />
         <h3>Worktree tags</h3>

@@ -1,5 +1,4 @@
 import type { ProjectFile, Repository } from './types'
-import { ticketUrl } from './tickets.ts'
 
 // Quick button templates: {INPUT} asks the user, [builtin] is filled from the
 // clicked terminal's context. Shared so the parser is unit-tested in node.
@@ -95,7 +94,9 @@ export function templateBuiltins(text: string): string[] {
 
 /** What the built-ins are resolved from; the renderer builds it from the store. */
 export interface BuiltinContext {
-  project: Pick<ProjectFile, 'name' | 'worktreeTags' | 'customTags' | 'linearWorkspace' | 'azureDevOpsBaseUrl'>
+  project: Pick<ProjectFile, 'name' | 'worktreeTags' | 'customTags'>
+  /** A ticket's link through the project's trackers (plugin system phase 2), or null */
+  ticketUrl(ticketId: string): string | null
   /** Undefined in the Global panel */
   repo?: Pick<
     Repository,
@@ -123,7 +124,7 @@ function prNumber(url: string | undefined): string | undefined {
 
 /** Every built-in's value for this context; undefined = no value here. */
 export function resolveBuiltins(ctx: BuiltinContext): BuiltinValues {
-  const { project, repo, worktree, branch, terminal, now } = ctx
+  const { project, repo, worktree, branch, terminal, now, ticketUrl } = ctx
   const byBranch = <T>(map: Record<string, T> | undefined): T | undefined =>
     branch && map ? map[branch] : undefined
   const tagId = byBranch(repo?.branchTags)
@@ -146,7 +147,7 @@ export function resolveBuiltins(ctx: BuiltinContext): BuiltinValues {
         .join(', ')
     ),
     ticket,
-    ticket_url: ticket ? present(ticketUrl(project, ticket)) : undefined,
+    ticket_url: ticket ? present(ticketUrl(ticket)) : undefined,
     pr_url: prUrl,
     pr_number: prNumber(prUrl),
     note: present(byBranch(repo?.branchNotes)),

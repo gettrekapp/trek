@@ -103,3 +103,81 @@ test('pluginStatus: a legacyBuiltIn plugin is legacy on a server older than plug
   assert.equal(pluginStatus(ado, { plugins: [], capabilities: [] }, undefined), 'missing')
   assert.equal(pluginStatus(ado, { plugins: [{ id: 'azure-devops', version: '1', defaultEnabled: true }], capabilities: [] }, { 'azure-devops': { enabled: false } }), 'off')
 })
+
+// ---- The window's trackers (the plugins active there) ----
+
+import { activeTicketProviders, windowTicketView } from '../src/renderer/src/plugins/ticketProviders.ts'
+import { linearTickets } from '../plugins/linear/shared/ticket.ts'
+import { azureDevOpsTickets } from '../plugins/azure-devops/shared/ticket.ts'
+import { FOCUS_THROTTLE_MS, REFRESH_MS, linearIds, ticketInfoOf } from '../plugins/linear/client/issues.ts'
+
+const linearPlugin = { manifest: { id: 'linear', version: '1', name: 'Linear', description: '', defaultEnabled: true, legacyCapability: 'linear' }, ticketProvider: linearTickets }
+const adoPlugin = { manifest: { id: 'azure-devops', version: '1', name: 'Azure DevOps', description: '', defaultEnabled: true, legacyBuiltIn: true }, ticketProvider: azureDevOpsTickets }
+const voicePlugin = { manifest: { id: 'voice', version: '1', name: 'Voice', description: '', defaultEnabled: true, legacyCapability: 'voice' } }
+const listed = (...ids) => ({ plugins: ids.map((id) => ({ id, version: '1', defaultEnabled: true })), capabilities: [] })
+
+test("activeTicketProviders: the providers of the plugins on in the project, in built-in order; none before the welcome", () => {
+  const plugins = [voicePlugin, linearPlugin, adoPlugin]
+  const ids = (welcome, settings) => activeTicketProviders(plugins, welcome, settings).map((p) => p.id)
+  assert.deepEqual(ids(undefined, undefined), [])
+  assert.deepEqual(ids(listed('voice', 'linear', 'azure-devops'), undefined), ['linear', 'azure-devops'])
+  assert.deepEqual(ids(listed('voice', 'linear', 'azure-devops'), { linear: { enabled: false } }), ['azure-devops'])
+  assert.deepEqual(ids(listed('voice', 'azure-devops'), undefined), ['azure-devops'], 'a server without the Linear plugin')
+  // A 0.2.x server: Linear by its capability, Azure DevOps built in.
+  assert.deepEqual(ids({ capabilities: ['linear'] }, undefined), ['linear', 'azure-devops'])
+  assert.deepEqual(ids({ capabilities: [] }, undefined), ['azure-devops'])
+})
+
+test("windowTicketView: the owner's link, with its looked-up issue for this backend only", () => {
+  const store = createTicketInfoStore()
+  const backend = {}
+  store.set(backend, 'linear', { 'TOW-1': { title: 'Fix', status: 'Doing', statusColor: '#0f0', url: 'https://linear.app/x/issue/TOW-1' } })
+  const providers = [linearTickets, azureDevOpsTickets]
+  assert.deepEqual(windowTicketView(providers, {}, 'TOW-1', store, backend), {
+    label: 'TOW-1',
+    url: 'https://linear.app/x/issue/TOW-1',
+    providerId: 'linear',
+    info: { title: 'Fix', status: 'Doing', statusColor: '#0f0', url: 'https://linear.app/x/issue/TOW-1' }
+  })
+  assert.deepEqual(windowTicketView(providers, {}, 'TOW-1', store, {}), { label: 'TOW-1', url: null, providerId: 'linear' }, 'another backend has no info')
+  assert.deepEqual(windowTicketView(providers, { azureDevOpsBaseUrl: 'https://d/o/p' }, '9', store, backend), { label: '#9', url: 'https://d/o/p/_workitems/edit/9', providerId: 'azure-devops' })
+})
+
+test("the Linear Runtime's rules: the project's Linear ids once each, sorted; issues as ticket info; its timings", () => {
+  const host = { ticketIds: () => ['TOW-2', '12', 'TOW-1', 'TOW-2', 'nope'] }
+  assert.deepEqual(linearIds(host), ['TOW-1', 'TOW-2'])
+  const issue = { identifier: 'TOW-1', title: 'T', url: 'https://u', status: 'Done', statusType: 'completed', statusColor: '#00f' }
+  assert.deepEqual(ticketInfoOf([issue]), { 'TOW-1': { title: 'T', status: 'Done', statusColor: '#00f', url: 'https://u' } })
+  assert.deepEqual([REFRESH_MS, FOCUS_THROTTLE_MS], [300_000, 60_000])
+})
+
+test("the client host's ticketIds and onTicketIdsChanged come from its deps (none without)", () => {
+  const backend = { plugins: { projectId: 'p1', welcome: () => undefined, request: async () => null, onEvent: () => () => {} } }
+  const appSettings = { get: async () => ({}), update: async () => ({}), onChanged: () => () => {} }
+  const manifest = { id: 'linear', version: '1', name: 'Linear', description: '', defaultEnabled: true }
+  const bare = createClientHost(manifest, backend, { appSettings, terminalLabel: String, currentBackend: () => backend })
+  assert.deepEqual(bare.ticketIds(), [])
+  bare.onTicketIdsChanged(() => {})()
+  let listener
+  const host = createClientHost(manifest, backend, {
+    appSettings,
+    terminalLabel: String,
+    currentBackend: () => backend,
+    ticketIds: () => ['TOW-1'],
+    onTicketIdsChanged: (l) => ((listener = l), () => (listener = undefined))
+  })
+  assert.deepEqual(host.ticketIds(), ['TOW-1'])
+  let heard = 0
+  const off = host.onTicketIdsChanged(() => heard++)
+  listener()
+  off()
+  assert.equal(heard, 1)
+  assert.equal(listener, undefined)
+})
+
+test("the Linear provider's fromBranch: the issue id a Linear-style branch name embeds", () => {
+  assert.equal(linearTickets.fromBranch('garrett/tow-123-fix-login'), 'TOW-123')
+  assert.equal(linearTickets.fromBranch('tow-9'), 'TOW-9')
+  assert.equal(linearTickets.fromBranch('feature/login'), null)
+  assert.equal(azureDevOpsTickets.fromBranch, undefined)
+})

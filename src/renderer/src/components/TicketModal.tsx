@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { isLinearTicket, parseTicket, repoById, ticketLabel, useAppStore } from '../store'
+import { repoById, useAppStore } from '../store'
+import { parseTicketWith, ticketOwner, ticketView } from '../../../shared/tickets'
+import { useTicketProviders } from '../plugins/useTickets'
 
 interface Props {
   repoId: string
@@ -9,44 +11,44 @@ interface Props {
   onClose: () => void
 }
 
-/** Linear's default branch names embed the issue id, e.g. "garrett/tow-123-fix-login". */
-function ticketFromBranch(branch: string): string {
-  const match = branch.match(/(?:^|\/)([a-z][a-z0-9]*-\d+)(?:-|$)/i)
-  return match ? match[1].toUpperCase() : ''
-}
-
 /**
- * Links a branch to a Linear issue or an Azure DevOps work item, by
- * identifier or pasted URL.
+ * Links a branch to a ticket of one of the project's trackers (plugin system phase 2: their
+ * plugins' providers), by id or pasted URL. A bare id whose tracker needs a project setting to link
+ * (Linear's workspace, Azure DevOps' base URL) asks for it, saved once per project.
  */
 export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const setBranchTicket = useAppStore((s) => s.setBranchTicket)
-  const setAzureDevOpsBaseUrl = useAppStore((s) => s.setAzureDevOpsBaseUrl)
-  const setLinearWorkspace = useAppStore((s) => s.setLinearWorkspace)
+  const setPluginSetting = useAppStore((s) => s.setPluginSetting)
+  const providers = useTicketProviders()
+  const settings = project as unknown as Readonly<Record<string, unknown>>
 
   const currentTicket = repoById(project, repoId)?.branchTickets?.[branch]
-  const [input, setInput] = useState(currentTicket ?? ticketFromBranch(branch))
-  const [baseUrl, setBaseUrl] = useState(project.azureDevOpsBaseUrl ?? '')
-  const [workspace, setWorkspace] = useState(project.linearWorkspace ?? '')
+  const suggested = (): string => {
+    for (const p of providers) {
+      const id = p.fromBranch?.(branch)
+      if (id) return id
+    }
+    return ''
+  }
+  const [input, setInput] = useState(currentTicket ?? suggested())
+  const [linkValue, setLinkValue] = useState('')
   const [error, setError] = useState<string | null>(null)
 
-  const parsed = parseTicket(input)
-  // Pasted URLs supply the workspace/base URL themselves; bare ids need it saved once.
-  const bareLinear = !!parsed && isLinearTicket(parsed.ticketId) && !parsed.linearWorkspace
-  const bareAdo = !!parsed && !isLinearTicket(parsed.ticketId) && !parsed.azureDevOpsBaseUrl
-  const needsWorkspace = bareLinear && !project.linearWorkspace
-  const needsBaseUrl = bareAdo && !project.azureDevOpsBaseUrl
+  const parsed = parseTicketWith(providers, input)
+  const owner = parsed ? ticketOwner(providers, parsed.ticketId) : undefined
+  // A pasted URL brings its tracker's setting; a bare id needs it saved once.
+  const link = owner?.linkSetting
+  const needsLink = !!link && !parsed?.settings?.[link.key] && !(typeof settings[link.key] === 'string' && settings[link.key])
+  const takes = providers.map((p) => p.hint)
 
   const save = (): void => {
     if (!parsed) {
-      setError('Enter a Linear issue id (e.g. TOW-123), a work item id, or paste the ticket URL.')
+      setError(takes.length > 0 ? `Enter ${takes.join(', or ')}.` : 'No ticket tracker is on in this project (Settings → Plugins).')
       return
     }
-    const ws = parsed.linearWorkspace ?? workspace.trim()
-    const base = parsed.azureDevOpsBaseUrl ?? baseUrl.trim()
-    if (ws && ws !== project.linearWorkspace) setLinearWorkspace(ws)
-    if (base && base !== project.azureDevOpsBaseUrl) setAzureDevOpsBaseUrl(base)
+    for (const [key, value] of Object.entries(parsed.settings ?? {})) if (value !== settings[key]) setPluginSetting(key, value)
+    if (needsLink && link && linkValue.trim()) setPluginSetting(link.key, linkValue.trim())
     setBranchTicket(repoId, branch, parsed.ticketId)
     onClose()
   }
@@ -69,14 +71,14 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
       <div className="modal ticket-modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Ticket</h2>
         <p className="muted">
-          Link branch “{branch}” to a Linear issue. Enter its id or paste the issue URL.
+          Link branch “{branch}” to a ticket: {takes.length > 0 ? `${takes.join(', or ')}.` : 'no ticket tracker is on in this project (Settings → Plugins).'}
         </p>
         {error && <div className="error">{error}</div>}
         <div className="ticket-fields">
           <input
             type="text"
             autoFocus
-            placeholder="TOW-123 or https://linear.app/trek/issue/TOW-123"
+            placeholder={providers[0]?.hint ?? ''}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -84,39 +86,17 @@ export function TicketModal({ repoId, branch, onClose }: Props): React.JSX.Eleme
               if (e.key === 'Escape') onClose()
             }}
           />
-          {needsWorkspace && (
+          {needsLink && link && (
             <>
-              <input
-                type="text"
-                placeholder="Linear workspace, e.g. trek (from linear.app/trek/…)"
-                value={workspace}
-                onChange={(e) => setWorkspace(e.target.value)}
-                onKeyDown={onEnter}
-              />
-              <p className="muted ticket-hint">
-                The workspace is saved once per project and turns issue ids into links.
-              </p>
-            </>
-          )}
-          {needsBaseUrl && (
-            <>
-              <input
-                type="text"
-                placeholder="Azure DevOps base URL, e.g. https://dev.azure.com/trek/Trek"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                onKeyDown={onEnter}
-              />
-              <p className="muted ticket-hint">
-                The base URL is saved once per project and turns work item ids into links.
-              </p>
+              <input type="text" placeholder={link.placeholder} value={linkValue} onChange={(e) => setLinkValue(e.target.value)} onKeyDown={onEnter} />
+              <p className="muted ticket-hint">The {link.label.toLowerCase()} is saved once per project and turns ticket ids into links.</p>
             </>
           )}
         </div>
         <div className="modal-footer ticket-footer">
           {currentTicket && (
             <button className="danger-button" onClick={unlink}>
-              Unlink {ticketLabel(currentTicket)}
+              Unlink {ticketView(providers, settings, currentTicket).label}
             </button>
           )}
           <span className="ticket-footer-spacer" />

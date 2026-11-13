@@ -6,7 +6,6 @@ export type FeatureName =
   | 'env'
   | 'stacks'
   | 'bot'
-  | 'linear'
   | 'skills'
   | 'prWatch'
   | 'review'
@@ -24,7 +23,6 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'env',
   'stacks',
   'bot',
-  'linear',
   'skills',
   'prWatch',
   'review',
@@ -49,9 +47,9 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
- * - Linear and skills are the server's (5b): Linear with the server's own
- *   key, the skills read on its disk; each needs its capability, on any
- *   server. (Voice is a plugin since plugin system phase 1: plugins/.)
+ * - Skills are the server's (5b), read on its disk: they need `skills`, on
+ *   any server. (Voice and Linear are plugins since plugin system phases 1
+ *   and 2: plugins/.)
  * - The pull request watch (5c-1) runs gh on the server's machine: it needs
  *   `prWatch`, which the server lists only while gh is signed in there.
  * - The Changes tab's sources and line comments (5c-2) need `review`: an older server's
@@ -67,7 +65,6 @@ export const V2_FEATURES: BackendFeatures = {
   env: true,
   stacks: true,
   bot: false,
-  linear: true,
   skills: true,
   prWatch: true,
   review: true,
@@ -83,7 +80,7 @@ export const V2_FEATURES: BackendFeatures = {
  * The welcome capability a v2 feature needs, if any. Global sessions drive the
  * worktree sessions through the server's MCP tools, so without `mcp` they
  * could not do their job. Docker, the environments and the stacks are the
- * server's own methods (5a), and Linear and skills (5b): a server older
+ * server's own methods (5a), and the skills (5b): a server older
  * than them has none of them.
  */
 const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
@@ -91,7 +88,6 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   docker: 'docker',
   env: 'env',
   stacks: 'stacks',
-  linear: 'linear',
   skills: 'skills',
   prWatch: 'prWatch',
   review: 'review',
@@ -162,7 +158,6 @@ export const SETTINGS_SECTIONS = [
   'audioAlerts',
   'linkedDirs',
   'appearance',
-  'linear',
   'agents',
   'worktreeTags',
   'customTags',
@@ -180,25 +175,19 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
  * How a section shows: `edit`, the whole section; `project` only the
  * project's part, with a hint that the rest is the server's config (the
  * agents: the server's default and its provider commands are its `llm`
- * section, which the protocol does not edit); `needsUpdate`, a one-line hint
- * that the window's server is too old for it (Linear on a connected
- * server older than 5b, a Local server still running an older build included);
- * `hidden`.
+ * section, which the protocol does not edit); `hidden`. (A plugin's section is
+ * PluginsSettings', which says when the server is too old for it.)
  */
-export type SectionMode = 'edit' | 'project' | 'needsUpdate' | 'hidden'
+export type SectionMode = 'edit' | 'project' | 'hidden'
 
 /**
  * Which Settings sections a window shows. A server window edits the project's
- * settings on the server; Linear (its key is the server's, 5b) shows where
- * it has `linear`, and the Docker environments where it
- * has `env` (a server that runs them, on its own machine).
+ * settings on the server; the Docker environments show where it has `env` (a
+ * server that runs them, on its own machine).
  */
-export function settingsSections(features: BackendFeatures, options: { connected?: boolean } = {}): Readonly<Record<SettingsSection, SectionMode>> {
+export function settingsSections(features: BackendFeatures): Readonly<Record<SettingsSection, SectionMode>> {
   const out = {} as Record<SettingsSection, SectionMode>
   for (const name of SETTINGS_SECTIONS) out[name] = 'edit'
-  // Every server since 5b has them: a connected one without them is older (before its welcome, nothing is known).
-  const missing: SectionMode = options.connected === true ? 'needsUpdate' : 'hidden'
-  if (!features.linear) out.linear = missing
   if (!features.env) out.environments = 'hidden'
   out.agents = 'project'
   return out

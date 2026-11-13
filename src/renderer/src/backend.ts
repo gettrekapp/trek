@@ -29,8 +29,6 @@ import type {
   EnvironmentInfo,
   EnvironmentSettings,
   GitWorktreeInfo,
-  LinearIssue,
-  LinearKeyResult,
   Repository,
   SessionType,
   SkillInfo,
@@ -170,15 +168,6 @@ export interface WindowBackend {
     destroy(loc: WorktreeLocator): Promise<number>
     log(loc: WorktreeLocator, fileId: number, offset: number): Promise<StackLogChunk>
   }
-  /** Linear with the server's own API key (feature `linear`); the key is never sent back */
-  readonly linear: {
-    hasKey(): Promise<boolean>
-    setKey(apiKey: string): Promise<LinearKeyResult>
-    clearKey(): Promise<void>
-    issues(ids: string[]): Promise<LinearIssue[]>
-    /** The server's key was set or cleared (by any client: another window, the hand-over); returns the unsubscribe */
-    onChanged(listener: () => void): () => void
-  }
   /** A worktree's Claude Code skills and commands, and the server user's (feature `skills`) */
   readonly skills: {
     list(loc: WorktreeLocator): Promise<SkillInfo[]>
@@ -312,7 +301,6 @@ export const idleBackend: WindowBackend = {
     onLog: () => () => {}
   },
   stacks: { status: noProject, up: noProject, down: noProject, destroy: noProject, log: noProject },
-  linear: { hasKey: noProject, setKey: noProject, clearKey: noProject, issues: noProject, onChanged: () => () => {} },
   skills: { list: noProject },
   review: { add: noProject, edit: noProject, remove: noProject, clear: noProject, send: noProject },
   branch: {

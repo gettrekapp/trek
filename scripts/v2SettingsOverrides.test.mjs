@@ -53,8 +53,7 @@ const SETTINGS_SETTERS = [
   'setSessionTypes',
   'setProjectLlmDefault',
   'setGlobalLlm',
-  'setLinearWorkspace',
-  'setAzureDevOpsBaseUrl',
+  'setPluginSetting',
   'setProjectName',
   'setLinkedDirs',
   'setEnvironmentSettings',
@@ -85,8 +84,8 @@ test('each setter sends its key in the server form, with the current value as ex
   o.setCustomTags([])
   o.setProjectLlmDefault({ provider: 'codex' })
   o.setGlobalLlm(undefined)
-  o.setLinearWorkspace('acme')
-  o.setAzureDevOpsBaseUrl('')
+  o.setPluginSetting('linearWorkspace', 'acme')
+  o.setPluginSetting('azureDevOpsBaseUrl', '')
   assert.deepEqual(calls, [
     ['updateSettings', { audioAlerts: true }, { audioAlerts: false }],
     ['updateSettings', { claudePermissionMode: 'plan' }, { claudePermissionMode: null }],
