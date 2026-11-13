@@ -15,6 +15,7 @@ import type {
   WorktreeStatus
 } from '../shared/types'
 import { COMMIT_LIST_LIMIT, isCommitSha } from '../shared/review.ts'
+import { hidden } from './childOptions.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -44,10 +45,10 @@ export function assertSafeBranch(branch: string): void {
 }
 
 export async function git(repoPath: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
+  const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], hidden({
     timeout: options.timeout ?? 60_000,
     maxBuffer: 64 * 1024 * 1024 // dirty patches (git diff --binary) can be large
-  })
+  }))
   return stdout
 }
 
@@ -382,12 +383,12 @@ export async function exportDirtyPatch(
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]
   const run = async (args: string[], env: NodeJS.ProcessEnv, maxBuffer = 64 * 1024 * 1024): Promise<Buffer> => {
-    const { stdout } = await execFileAsync('git', [...PATCH_CONFIG, '-C', worktreePath, ...args], {
+    const { stdout } = await execFileAsync('git', [...PATCH_CONFIG, '-C', worktreePath, ...args], hidden({
       env,
       timeout: 60_000,
       maxBuffer,
       encoding: 'buffer'
-    })
+    }))
     return stdout
   }
   // The untracked files' sizes first: `add -A` would hash every one into the object store.
@@ -517,7 +518,7 @@ export async function ignoredOverwrittenBy(path: string, ref: string, cap = 50):
     const child = execFile(
       'git',
       ['-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
-      { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, stdout) => {
         // 1: none of them is ignored
         if (err && (err as { code?: unknown }).code !== 1) reject(err)
@@ -545,7 +546,7 @@ export async function applyPatch(worktreePath: string, patch: string): Promise<v
     const child = execFile(
       'git',
       [...PATCH_CONFIG, '-C', worktreePath, 'apply', '--binary', '--whitespace=nowarn', '-p1', '-'],
-      { env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      hidden({ env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
     )
     child.stdin!.end(patch)
@@ -558,7 +559,7 @@ export async function reverseApplyPatch(worktreePath: string, patch: string): Pr
     const child = execFile(
       'git',
       [...PATCH_CONFIG, '-C', worktreePath, 'apply', '-R', '--binary', '--whitespace=nowarn', '-p1', '-'],
-      { env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      hidden({ env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
     )
     child.stdin!.end(patch)
@@ -1073,7 +1074,7 @@ async function untrackedPatch(worktreePath: string, path: string): Promise<strin
     const pending = execFileAsync(
       'git',
       ['-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
-      { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }
+      hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
     )
     // Never let git wait on stdin, whatever the file is called.
     pending.child.stdin?.end()

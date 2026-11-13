@@ -4,6 +4,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { ComposeAction, ContainerAction, ContainerInfo, DockerLogEvent } from '../shared/types'
+import { hidden } from './childOptions.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -20,7 +21,7 @@ export const COMPOSE_ARGS: Readonly<Record<ComposeAction, readonly string[]>> = 
 }
 
 export async function listContainers(): Promise<ContainerInfo[]> {
-  const { stdout } = await execFileAsync('docker', ['ps', '-a', '--format', '{{json .}}'], { timeout: 10_000 })
+  const { stdout } = await execFileAsync('docker', ['ps', '-a', '--format', '{{json .}}'], hidden({ timeout: 10_000 }))
   return stdout
     .trim()
     .split('\n')
@@ -41,7 +42,7 @@ export async function listContainers(): Promise<ContainerInfo[]> {
 /** `id` must already be a container id or name (the server's `requireContainerId`). */
 export async function containerAction(action: ContainerAction, id: string): Promise<void> {
   if (!CONTAINER_ACTIONS.includes(action)) throw new Error(`Unsupported action: ${action}`)
-  await execFileAsync('docker', [action, id], { timeout: 120_000 })
+  await execFileAsync('docker', [action, id], hidden({ timeout: 120_000 }))
 }
 
 /** Long-running: streams the combined output through `onLog`, then resolves the exit code (-1 if docker could not run). */
@@ -49,7 +50,7 @@ export function compose(action: ComposeAction, cwd: string, onLog: (event: Docke
   const args = COMPOSE_ARGS[action]
   return new Promise((resolve) => {
     onLog({ data: `$ docker compose ${args.join(' ')}\n` })
-    const child = spawn('docker', ['compose', ...args], { cwd, env: process.env })
+    const child = spawn('docker', ['compose', ...args], hidden({ cwd, env: process.env }))
     child.stdout.on('data', (chunk: Buffer) => onLog({ data: chunk.toString() }))
     child.stderr.on('data', (chunk: Buffer) => onLog({ data: chunk.toString() }))
     // A spawn that fails reports error and then close: one done event, the first.

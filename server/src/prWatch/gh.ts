@@ -3,6 +3,7 @@
 // the watcher a fake runner; every smoke points TREK_SERVER_GH at a stub (scripts/smokeGh.mjs).
 import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
+import { hidden } from '../../../src/host/childOptions.ts'
 
 /**
  * Runs `gh <args>`, resolving with its stdout; rejects on a non-zero exit, a timeout, no gh, or
@@ -34,13 +35,13 @@ export const ghRunner = (binary: string | null): GhRunner => {
       execFile(
         binary,
         args,
-        {
+        hidden({
           timeout: GH_TIMEOUT_MS,
           maxBuffer: GH_MAX_OUTPUT,
           signal,
           // Never a prompt, a pager or an update check: the server has no terminal for them.
           env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
-        },
+        }),
         (err, stdout, stderr) => {
           if (err) {
             const detail = String(stderr).trim().split('\n')[0] || err.message

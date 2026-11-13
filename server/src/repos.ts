@@ -3,6 +3,7 @@ import { existsSync, realpathSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocolV2'
 import type { TrekServerConfig } from './config'
+import { hidden } from '../../src/host/childOptions.ts'
 
 /**
  * Resolves `path` to the top level of the git checkout containing it, so
@@ -14,11 +15,11 @@ export function resolveRepoRoot(path: string): string {
   if (!existsSync(abs)) throw new Error(`${abs} does not exist`)
   let top: string
   try {
-    top = execFileSync('git', ['-C', abs, 'rev-parse', '--show-toplevel'], {
+    top = execFileSync('git', ['-C', abs, 'rev-parse', '--show-toplevel'], hidden({
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000
-    }).trim()
+    })).trim()
   } catch {
     throw new Error(`${abs} is not inside a git repository`)
   }
