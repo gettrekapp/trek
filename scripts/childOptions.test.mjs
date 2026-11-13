@@ -1,16 +1,20 @@
-// scripts/childOptions.test.mjs — every child process in server/src and src/host passes its
-// options through hidden() (windowsHide), so a server without a console never flashes windows,
-// and names its program through commandPath() (src/host/commandPath.ts), so on Windows a bare
+// scripts/childOptions.test.mjs — every child process in server/src, src/host and the plugins'
+// server halves (plugins/<id>/server) passes its options through hidden() (windowsHide), so a
+// server without a console never flashes windows, and names its program through commandPath() (src/host/commandPath.ts), so on Windows a bare
 // name is never looked up in the current directory (a repository's planted git.exe).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hidden } from '../src/host/childOptions.ts'
 
 const root = join(fileURLToPath(import.meta.url), '..', '..')
-const TREES = ['server/src', 'src/host']
+// The plugins' server halves run in the server too (plugin system phase 1).
+const PLUGIN_SERVERS = readdirSync(join(root, 'plugins'))
+  .map((id) => `plugins/${id}/server`)
+  .filter((dir) => existsSync(join(root, dir)) && statSync(join(root, dir)).isDirectory())
+const TREES = ['server/src', 'src/host', ...PLUGIN_SERVERS]
 /** Calls that are not child_process ones, or that never run on Windows. */
 const ALLOWED = new Set([
   // The bot refuses to start on win32 (src/host/bot/sandbox.ts), so its processes never run there.
@@ -74,7 +78,11 @@ test('hidden() adds windowsHide and keeps the rest', () => {
   assert.deepEqual(hidden({ timeout: 5 }), { timeout: 5, windowsHide: true })
 })
 
-test('every spawn/execFile in server/src and src/host uses hidden() and commandPath()', () => {
+test("the scan covers the plugins' server halves", () => {
+  assert.ok(TREES.includes('plugins/voice/server'))
+})
+
+test('every spawn/execFile in server/src, src/host and plugins/*/server uses hidden() and commandPath()', () => {
   const missing = []
   for (const tree of TREES) {
     for (const file of files(join(root, tree))) {
