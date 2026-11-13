@@ -13,7 +13,8 @@ import { mcpContext } from '../server/src/plugins/mcp.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { MCP_INSTRUCTIONS, MCP_TOOLS } from '../server/src/mcp/tools.ts'
 import { pluginError } from '../src/shared/plugins/server.ts'
-import { applySettingsPatch, isSettingsKey, validateSettings } from '../server/src/projects/settings.ts'
+import { applySettingsPatch, isSettingsKey, PLUGIN_OWNED_SETTINGS, validateSettings } from '../server/src/projects/settings.ts'
+import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 
 /** Projects by id with their settings and sessions; `require` throws NOT_FOUND like ProjectState's. */
 function fakeProjects(projects) {
@@ -336,6 +337,56 @@ test("dispatchV2: project.updateSettings and its expected take a plugin's keys",
   const stale = await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'x' }, expected: { trackerSpace: 'old' } }, ctx)
   assert.equal(stale.error.code, 'CONFLICT')
   assert.equal((await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'x' } }, { ...ctx, plugins: undefined })).error.code, 'BAD_REQUEST')
+})
+
+test("refused: a ticket provider whose id is not its plugin's (disposed)", (t) => {
+  const provider = (id) => ({ id, hint: '', owns: () => false, parse: () => null, label: (x) => x, url: () => null })
+  let disposed = 0
+  const wrong = { manifest: manifest('wrong'), setup: () => ({ handlers: {}, ticketProvider: provider('other'), dispose: () => disposed++ }) }
+  const right = { manifest: manifest('right'), setup: () => ({ handlers: {}, ticketProvider: provider('right') }) }
+  const { registry, warnings } = setup(t, [wrong, right])
+  assert.deepEqual(registry.presence().map((p) => p.id), ['right'])
+  assert.match(warnings.join('\n'), /wrong not loaded: its ticket provider's id "other" is not the plugin's id/)
+  assert.equal(disposed, 1)
+  assert.deepEqual(registry.ticketProviders('p1').map((p) => p.id), ['right'])
+})
+
+test("refused before setup: a project setting of a kind other than 'string', or with an empty key", (t) => {
+  let setups = 0
+  const spy = () => {
+    setups++
+    return { handlers: {} }
+  }
+  const badKind = { manifest: manifest('badkind', { projectSettings: { someFlag: 'boolean' } }), setup: spy }
+  const emptyKey = { manifest: manifest('emptykey', { projectSettings: { '': 'string' } }), setup: spy }
+  const { registry, warnings } = setup(t, [badKind, emptyKey])
+  assert.deepEqual(registry.presence(), [])
+  assert.equal(setups, 0, "a refused plugin's setup is never called")
+  assert.match(warnings.join('\n'), /badkind not loaded: its project setting someFlag is of a kind other than 'string'/)
+  assert.match(warnings.join('\n'), /emptykey not loaded: it declares a project setting with an empty key/)
+  assert.equal(registry.settingRules.kind('someFlag'), undefined)
+})
+
+test('PLUGIN_OWNED_SETTINGS: exactly the project settings the built-in server plugins declare', () => {
+  const declared = BUILTIN_SERVER_PLUGINS.flatMap((p) => Object.keys(p.manifest.projectSettings ?? {}))
+  for (const key of PLUGIN_OWNED_SETTINGS) assert.ok(declared.includes(key), `${key} is declared by a built-in plugin`)
+  for (const key of declared) assert.ok(PLUGIN_OWNED_SETTINGS.includes(key), `${key} is in PLUGIN_OWNED_SETTINGS`)
+})
+
+test("dispatchV2: project.updateSettings with a plugin's key null removes it; an expected naming an unknown key is BAD_REQUEST", async (t) => {
+  const { ProjectState } = await import('../server/src/projects/state.ts')
+  const { TopicHub } = await import('../server/src/topicHub.ts')
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} }, [{ id: 'p1', name: 'P', settings: { trackerSpace: 'team', audioAlerts: true }, repositories: [], globalSessions: [] }])
+  const tracker = { manifest: manifest('tracker', { projectSettings: { trackerSpace: 'string' } }), setup: () => ({ handlers: {} }) }
+  const { registry } = setup(t, [tracker], { projects, hub })
+  const ctx = { projects, plugins: registry, sessions: { refreshAttention() {} } }
+  assert.equal((await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: null } }, ctx)).ok, true)
+  assert.equal(Object.hasOwn(projects.require('p1').settings, 'trackerSpace'), false)
+  assert.equal(projects.require('p1').settings.audioAlerts, true)
+  const unknown = await dispatchV2('project.updateSettings', { projectId: 'p1', settings: { trackerSpace: 'x' }, expected: { nope: 'old' } }, ctx)
+  assert.equal(unknown.error.code, 'BAD_REQUEST')
+  assert.equal(Object.hasOwn(projects.require('p1').settings, 'trackerSpace'), false, 'nothing written')
 })
 
 test("project.import checks a plugin's setting by kind only (a project saved before its plugin checked it still imports)", async (t) => {

@@ -230,3 +230,90 @@ test("the client host's onChanged also fires when the window's connection comes 
   off()
   assert.equal(connected, undefined)
 })
+
+// ---- Review follow-ups: a provider's parse checked by its owns, warnings per method, the info store's no-op sets, ids, status colors ----
+
+import { safeStatusColor } from '../src/renderer/src/plugins/ticketProviders.ts'
+
+test("parseTicketWith: a parse whose ticket id its own provider doesn't own (or no id) is no match", () => {
+  const lower = { ...dash, id: 'lower', parse: (input) => (/^[a-z]+-\d+$/.test(input) ? { ticketId: input } : null) }
+  assert.equal(parseTicketWith([lower], 'ab-1'), null, 'a lowercase id its owns rejects')
+  assert.deepEqual(parseTicketWith([lower, num], 'ab-1'), null)
+  assert.deepEqual(parseTicketWith([lower, dash], 'ab-1'), { ticketId: 'AB-1', providerId: 'dash' }, 'the next provider still reads it')
+  const empty = { ...dash, id: 'empty', owns: () => true, parse: () => ({ ticketId: '' }) }
+  const notString = { ...dash, id: 'notstring', owns: () => true, parse: () => ({ ticketId: 5 }) }
+  assert.equal(parseTicketWith([empty, notString], 'x'), null)
+})
+
+test("a provider's throws are warned once per provider and method", (t) => {
+  const warnings = []
+  t.mock.method(console, 'warn', (m) => warnings.push(m))
+  const flaky = {
+    id: 'flaky-warn',
+    hint: '',
+    owns: (id) => {
+      if (id === 'throw') throw new Error('owns broke')
+      return true
+    },
+    parse: () => null,
+    label: (id) => id,
+    url: () => {
+      throw new Error('url broke')
+    }
+  }
+  ticketOwner([flaky], 'throw')
+  ticketOwner([flaky], 'throw')
+  assert.equal(ticketView([flaky], {}, 'T-1').url, null)
+  ticketView([flaky], {}, 'T-1')
+  assert.equal(warnings.length, 2, String(warnings))
+  assert.match(warnings[0], /flaky-warn failed \(owns\): owns broke/)
+  assert.match(warnings[1], /flaky-warn failed \(url\): url broke/)
+})
+
+test('the ticket info store: a set equal by value does nothing; a listener that throws does not stop the others', (t) => {
+  t.mock.method(console, 'error', () => {})
+  const store = createTicketInfoStore()
+  const backend = {}
+  let heard = 0
+  store.subscribe(() => {
+    throw new Error('bad listener')
+  })
+  store.subscribe(() => heard++)
+  const v0 = store.version()
+  store.set(backend, 'dash', {})
+  assert.equal(store.version(), v0, 'an absent entry equals {}')
+  assert.equal(heard, 0)
+  store.set(backend, 'dash', { 'AB-1': { title: 'T', status: 'S', statusColor: '#000' } })
+  assert.equal(store.version(), v0 + 1)
+  assert.equal(heard, 1, 'heard despite the throwing listener')
+  store.set(backend, 'dash', { 'AB-1': { title: 'T', status: 'S', statusColor: '#000' } })
+  assert.equal(store.version(), v0 + 1, 'the same tickets by value')
+  assert.equal(heard, 1)
+  store.set(backend, 'dash', { 'AB-1': { title: 'T', status: 'Done', statusColor: '#000' } })
+  assert.equal(store.version(), v0 + 2)
+  store.set(backend, 'dash', { 'AB-1': { title: 'T', status: 'Done', statusColor: '#000', url: 'https://x' } })
+  assert.equal(store.version(), v0 + 3, 'a new field is a change')
+  assert.equal(heard, 3)
+})
+
+test("activeTicketProviders: a plugin whose provider's id is not its own is left out (warned once)", (t) => {
+  const warnings = []
+  t.mock.method(console, 'warn', (m) => warnings.push(m))
+  const misnamed = { manifest: { id: 'misnamed', version: '1', name: 'M', description: '', defaultEnabled: true }, ticketProvider: { ...num, id: 'num' } }
+  const welcome = listed('misnamed', 'azure-devops')
+  assert.deepEqual(activeTicketProviders([misnamed, adoPlugin], welcome, undefined).map((p) => p.id), ['azure-devops'])
+  activeTicketProviders([misnamed, adoPlugin], welcome, undefined)
+  assert.equal(warnings.length, 1)
+  assert.match(warnings[0], /misnamed/)
+})
+
+test('safeStatusColor: plain CSS colors only', () => {
+  for (const ok of ['#abc', '#a1b2c3', '#a1b2c3d4', 'rgb(1, 2, 3)', 'rgba(1,2,3,0.5)', 'hsl(120, 50%, 50%)', 'hsla(120,50%,50%,.3)', 'red', 'RebeccaPurple']) {
+    assert.equal(safeStatusColor(ok), ok, ok)
+  }
+  for (const bad of ['url(x)', 'red;background:url(x)', '#abcd1', '#ggg', 'rgb(var(--x))', 'calc(1px)', 'red blue', '', ' red', 'expression(alert(1))', 'rgb(1,2,3);x:y']) {
+    assert.equal(safeStatusColor(bad), undefined, bad)
+  }
+  assert.equal(safeStatusColor(undefined), undefined)
+  assert.equal(safeStatusColor(5), undefined)
+})

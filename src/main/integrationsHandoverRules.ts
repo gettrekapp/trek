@@ -1,6 +1,7 @@
 // The app's Linear and ElevenLabs keys and voice settings, handed to the Local server once (phase
 // 5b): before 5b main kept them (safeStorage in userData), and the server cannot decrypt those
 // files. Pure: the requests and the legacy values come in, so `node --test` covers it.
+import { CAPABILITY } from '../shared/protocolV2.ts'
 
 /** What a Local profile has been given already, by part. */
 export interface HandoverDone {
@@ -41,7 +42,7 @@ export interface HandoverParts {
 
 /** The parts a server's welcome capabilities say it takes. */
 export function handoverParts(capabilities: readonly string[]): HandoverParts {
-  return { linear: capabilities.includes('linear'), voice: capabilities.includes('voice') }
+  return { linear: capabilities.includes(CAPABILITY.linear), voice: capabilities.includes(CAPABILITY.voice) }
 }
 
 /** The Local server's `linear.setKey`, `voice.setKey` and `voice.setConfig`. */
@@ -102,10 +103,11 @@ const result = (value: unknown): { ok?: unknown; present?: unknown } => (value &
 
 /**
  * Hands over what `done` lacks; resolves what is done now. A part is done when there is nothing to
- * hand over (no key stored: one stored but unreadable here is not "nothing"), when the server took it (`ok`), or when it already had a key of its own (`present`:
- * a part whose plugin the server lacks (`parts`) waits for a later start;
- * the user set one there, which wins). Anything else (a server older than 5b, a dropped link, a
- * secrets file it cannot write) leaves it for the next start. The server stores a hand-over key
+ * hand over (no key stored: one stored but unreadable here is not "nothing"), whatever `parts`
+ * says; when the server took it (`ok`); or when it already had a key of its own (`present`: the
+ * user set one there, which wins). A part with a key whose plugin the server lacks (`parts`) waits
+ * for a later start. Anything else (a server older than 5b, a dropped link, a secrets file it
+ * cannot write) leaves it for the next start. The server stores a hand-over key
  * without asking Linear or ElevenLabs (`ifAbsent`), so neither needs to be reachable. The voice settings go only with a key
  * the server took: a server with its own key keeps its own voice too. Settings that fail after
  * their key went are pending, and sent on the next start.
@@ -129,9 +131,9 @@ export async function handOver(
       return false
     }
   }
-  if (parts.linear && !next.linear && !legacy.unreadable?.linear) {
+  if (!next.linear && !legacy.unreadable?.linear && !legacy.linearKey) next.linear = true
+  else if (parts.linear && !next.linear && !legacy.unreadable?.linear) {
     const ok = await attempt(async () => {
-      if (!legacy.linearKey) return true
       const r = result(await request('linear.setKey', { apiKey: legacy.linearKey, ifAbsent: true }))
       return r.ok === true || r.present === true
     })
@@ -142,15 +144,18 @@ export async function handOver(
     if (Object.keys(config).length > 0) await request('voice.setConfig', config)
     return true
   })
-  if (!parts.voice) {
+  const voiceKey = legacy.voiceKey
+  if (!next.voice && !legacy.unreadable?.voice && !voiceKey) {
+    // No key: nothing to send, so done (its settings go only with a key the server took).
+    next.voice = true
+  } else if (!parts.voice) {
     // Nothing of voice's this time, a pending config included.
-  } else if (!next.voice && !legacy.unreadable?.voice) {
+  } else if (!next.voice && !legacy.unreadable?.voice && voiceKey) {
     const stored = await attempt(async () => {
-      if (!legacy.voiceKey) return 'nothing'
-      const r = result(await request('voice.setKey', { apiKey: legacy.voiceKey, ifAbsent: true }))
+      const r = result(await request('voice.setKey', { apiKey: voiceKey, ifAbsent: true }))
       if (r.present === true) return 'kept'
       return r.ok === true ? 'stored' : false
-    }) as 'nothing' | 'kept' | 'stored' | false
+    }) as 'kept' | 'stored' | false
     if (stored) {
       next.voice = true
       if (stored === 'stored' && !(await sendConfig())) next.voiceConfigPending = true

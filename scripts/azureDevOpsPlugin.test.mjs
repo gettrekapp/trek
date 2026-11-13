@@ -79,6 +79,8 @@ test("through the registry: azureDevOpsBaseUrl checked as the plugin's; the prov
   })
   assert.deepEqual(applySettingsPatch({}, { azureDevOpsBaseUrl: 'https://dev.azure.com/o/p' }, registry.settingRules), { azureDevOpsBaseUrl: 'https://dev.azure.com/o/p' })
   assert.throws(() => applySettingsPatch({}, { azureDevOpsBaseUrl: 'ftp://x' }, registry.settingRules), /settings\.azureDevOpsBaseUrl: must be an http\(s\) URL/)
+  assert.throws(() => applySettingsPatch({}, { azureDevOpsBaseUrl: 5 }, registry.settingRules), /settings\.azureDevOpsBaseUrl must be a string/)
+  assert.deepEqual(applySettingsPatch({ azureDevOpsBaseUrl: 'https://dev.azure.com/o/p', audioAlerts: true }, { azureDevOpsBaseUrl: null }, registry.settingRules), { audioAlerts: true }, 'null removes it')
   assert.deepEqual(registry.ticketProviders('on').map((p) => p.id), ['azure-devops'])
   assert.deepEqual(registry.ticketProviders('off'), [])
 })

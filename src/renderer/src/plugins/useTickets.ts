@@ -1,19 +1,31 @@
 // The project window's tickets through its trackers (plugin system phase 2): the chips, the link
 // dialog and quick buttons read these, never a tracker by name.
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import type { TicketProvider } from '../../../shared/plugins/tickets.ts'
 import type { TicketView } from '../../../shared/tickets.ts'
-import { getBackend } from '../backend'
+import { getBackend, subscribeBackend } from '../backend'
 import { useAppStore } from '../store'
-import { usePluginEntries } from './PluginHost'
-import { pluginActive } from './presence'
+import { welcomeKey } from './PluginHost'
 import { activeTicketProviders, windowTicketView } from './ticketProviders'
 import { ticketInfoStore } from './ticketInfo'
 
-/** The project's trackers, re-read with the welcome and the project's settings. */
+/**
+ * The project's trackers, re-read with the backend, its welcome and the project's settings: the
+ * same inputs as `currentTicketView`'s (the welcome only once the backend has a project and the
+ * store has it), so the two agree.
+ */
 export function useTicketProviders(): TicketProvider[] {
-  return usePluginEntries().flatMap((e) => (e.plugin.ticketProvider && pluginActive(e.status) ? [e.plugin.ticketProvider] : []))
+  const backend = useSyncExternalStore(subscribeBackend, getBackend)
+  const key = useSyncExternalStore(subscribeBackend, welcomeKey)
+  const hasProject = useAppStore((s) => s.project !== null)
+  const settings = useAppStore((s) => s.project?.plugins)
+  return useMemo(
+    () => activeTicketProviders(BUILTIN_CLIENT_PLUGINS, backend.plugins.projectId && hasProject ? backend.plugins.welcome() : undefined, settings),
+    // `key` stands for the welcome, which the backend holds.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [backend, key, hasProject, settings]
+  )
 }
 
 /** A function from a ticket id to its view, re-rendering on the plugins' looked-up issues. */
@@ -21,7 +33,7 @@ export function useTicketViews(): (ticketId: string) => TicketView {
   const providers = useTicketProviders()
   const project = useAppStore((s) => s.project)
   useSyncExternalStore(ticketInfoStore.subscribe, ticketInfoStore.version)
-  const backend = getBackend()
+  const backend = useSyncExternalStore(subscribeBackend, getBackend)
   const settings = (project ?? {}) as Readonly<Record<string, unknown>>
   return (ticketId) => windowTicketView(providers, settings, ticketId, ticketInfoStore, backend)
 }

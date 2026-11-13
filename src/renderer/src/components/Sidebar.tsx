@@ -14,6 +14,7 @@ import {
   worktreeStatus
 } from '../store'
 import { useTicketViews } from '../plugins/useTickets'
+import { safeStatusColor } from '../plugins/ticketProviders'
 import { NotificationsMenu } from './NotificationsMenu'
 import { PluginSlot } from '../plugins/PluginHost'
 import { removalBlock } from '../repoRemoval'
@@ -311,7 +312,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                     {ticketInfo.info && (
                       <span
                         className="ticket-status-dot"
-                        style={{ background: ticketInfo.info.statusColor }}
+                        style={{ background: safeStatusColor(ticketInfo.info.statusColor) }}
                       />
                     )}
                     {ticketInfo.label}

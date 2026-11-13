@@ -2,8 +2,8 @@
 // built trek-server: connect, mirror the server and project topics, create a
 // project and wait for its rev, start a session and stream its pty, survive a
 // reconnect, see a deleted project's topic end, and reach needs-auth with a
-// wrong token; the welcome's plugins and the voice plugin's 0.2.1 wire names. Uses only the SDK and
-// the global WebSocket.
+// wrong token; the welcome's plugins, and the voice and Linear plugins' 0.2.1 wire names (with the
+// notifications a 0.2.1 client hears). Uses only the SDK and the global WebSocket.
 import './smokeGh.mjs'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'

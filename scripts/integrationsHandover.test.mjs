@@ -53,6 +53,16 @@ test("each part goes over on its own plugin's capability: one the server lacks w
   assert.deepEqual(pending.calls, [])
 })
 
+test('a part with no key stored is done whatever the server lacks: nothing to send', async () => {
+  const server = fakeServer()
+  const onlyLinear = { linearKey: 'lin_app', voiceKey: null, voice: legacy.voice }
+  assert.deepEqual(await handOver(server.request, onlyLinear, {}, { linear: true, voice: false }), { linear: true, voice: true })
+  assert.deepEqual(server.calls, [['linear.setKey', { apiKey: 'lin_app', ifAbsent: true }]], 'no voice call')
+  const onlyVoice = fakeServer()
+  assert.deepEqual(await handOver(onlyVoice.request, { ...legacy, linearKey: null }, {}, { linear: false, voice: false }), { linear: true })
+  assert.deepEqual(onlyVoice.calls, [])
+})
+
 test("a server with its own key keeps it, and its own voice: that part is done", async () => {
   const server = fakeServer({ keys: { linear: 'lin_srv', voice: 'sk_srv' } })
   assert.deepEqual(await handOver(server.request, legacy, {}), { linear: true, voice: true })

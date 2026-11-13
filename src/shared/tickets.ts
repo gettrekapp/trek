@@ -3,34 +3,41 @@
 // plugins: plugins/linear, plugins/azure-devops). No tracker is named here.
 import type { ParsedTicketInput, TicketInfo, TicketProvider } from './plugins/tickets.ts'
 
-/** A provider call that throws counts as no match (logged once per provider). */
+/** A provider call that throws counts as no match (logged once per provider and method). */
 const warned = new Set<string>()
-function safely<T>(provider: TicketProvider, fallback: T, call: () => T): T {
+function safely<T>(provider: TicketProvider, method: string, fallback: T, call: () => T): T {
   try {
     return call()
   } catch (err) {
-    if (!warned.has(provider.id)) {
-      warned.add(provider.id)
-      console.warn(`[tickets] provider ${provider.id} failed: ${err instanceof Error ? err.message : String(err)}`)
+    const key = `${provider.id}:${method}`
+    if (!warned.has(key)) {
+      warned.add(key)
+      console.warn(`[tickets] provider ${provider.id} failed (${method}): ${err instanceof Error ? err.message : String(err)}`)
     }
     return fallback
   }
 }
 
-/** The first provider (in order) that reads `input` as its ticket, with what it read; null when none does. */
+/**
+ * The first provider (in order) that reads `input` as its ticket, with what it read; null when none
+ * does. A parse counts only if its ticket id is a non-empty string the same provider owns.
+ */
 export function parseTicketWith(providers: readonly TicketProvider[], input: string): (ParsedTicketInput & { providerId: string }) | null {
   const trimmed = input.trim()
   if (!trimmed) return null
   for (const provider of providers) {
-    const parsed = safely(provider, null, () => provider.parse(trimmed))
-    if (parsed) return { ...parsed, providerId: provider.id }
+    const parsed = safely(provider, 'parse', null, () => provider.parse(trimmed))
+    if (!parsed || typeof parsed.ticketId !== 'string' || !parsed.ticketId) continue
+    const id = parsed.ticketId
+    if (!safely(provider, 'owns', false, () => provider.owns(id))) continue
+    return { ...parsed, providerId: provider.id }
   }
   return null
 }
 
 /** The provider that owns a stored ticket id, if one of these does. */
 export function ticketOwner(providers: readonly TicketProvider[], ticketId: string): TicketProvider | undefined {
-  return providers.find((p) => safely(p, false, () => p.owns(ticketId)))
+  return providers.find((p) => safely(p, 'owns', false, () => p.owns(ticketId)))
 }
 
 export interface TicketView {
@@ -54,8 +61,8 @@ export function ticketView(
   if (!owner) return { label: ticketId, url: null }
   const info = infoFor(owner.id, ticketId)
   return {
-    label: safely(owner, ticketId, () => owner.label(ticketId)),
-    url: safely(owner, null, () => owner.url(settings, ticketId, info)),
+    label: safely(owner, 'label', ticketId, () => owner.label(ticketId)),
+    url: safely(owner, 'url', null, () => owner.url(settings, ticketId, info)),
     providerId: owner.id,
     ...(info ? { info } : {})
   }
@@ -64,7 +71,7 @@ export function ticketView(
 /** The id a branch name embeds, by the first provider that reads one (the link dialog's suggestion). */
 export function ticketFromBranch(providers: readonly TicketProvider[], branch: string): string {
   for (const provider of providers) {
-    const id = safely(provider, null, () => provider.fromBranch?.(branch) ?? null)
+    const id = safely(provider, 'fromBranch', null, () => provider.fromBranch?.(branch) ?? null)
     if (id) return id
   }
   return ''
@@ -106,7 +113,7 @@ export function ticketLinkPlan(
   const link = { key: linkSetting.key, label: linkSetting.label, placeholder: linkSetting.placeholder }
   const value = linkValue.trim()
   if (!value) return { ticketId: parsed.ticketId, link, settings: writes, problem: null }
-  const problem = owner ? safely(owner, null, () => linkSetting.check?.(value) ?? null) : null
+  const problem = owner ? safely(owner, 'linkSetting.check', null, () => linkSetting.check?.(value) ?? null) : null
   if (problem) return { ticketId: parsed.ticketId, link, settings: writes, problem: `${linkSetting.label} ${problem}` }
   return { ticketId: parsed.ticketId, link, settings: { ...writes, [linkSetting.key]: value }, problem: null }
 }

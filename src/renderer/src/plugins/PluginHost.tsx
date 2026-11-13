@@ -62,7 +62,7 @@ function projectTicketIds(): string[] {
 }
 
 /** The welcome as a stable value: re-read on every backend change (the welcome's arrival is one). */
-const welcomeKey = (): string => {
+export const welcomeKey = (): string => {
   const welcome = getBackend().plugins.welcome()
   return welcome ? JSON.stringify([welcome.plugins ?? null, welcome.capabilities ?? []]) : ''
 }

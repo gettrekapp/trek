@@ -409,18 +409,25 @@ try {
 
   const linearSwitch = settings.locator('label.settings-row', { hasText: 'Link worktree branches to Linear issues' }).locator('input')
   const chipTitle = () => featureRow.locator('.mini-chip.ticket').getAttribute('title').catch(() => null)
+  // The sidebar chip's text: a bare chip is still there, with the id ("no chip" is not "bare").
+  const chipText = () => featureRow.locator('.mini-chip.ticket').textContent().catch(() => null)
+  const branchTicket = async () => (await project()).repositories[0].branchData?.['feature-x']?.ticket ?? null
+  const linearWorkspace = async () => (await project()).settings.linearWorkspace ?? null
   const headerChip = detail.locator('.chip-ticket')
   await linearSwitch.click()
   check("Linear off: the project's plugins setting says so", await until(pluginsSetting, { voice: { enabled: true }, linear: { enabled: false } }), { voice: { enabled: true }, linear: { enabled: false } })
-  check("off: the chip is the bare id, no issue; the header's says so", [await until(chipTitle, null), await until(() => headerChip.textContent().catch(() => null), 'Ticket TOW-7')], [null, 'Ticket TOW-7'])
+  check("off: the chip is the bare id, no issue; the header's says so", [await until(chipTitle, null), await until(chipText, 'TOW-7'), await until(() => headerChip.textContent().catch(() => null), 'Ticket TOW-7')], [null, 'TOW-7', 'Ticket TOW-7'])
   check("off: the Linear section is gone", await until(() => settings.locator('h3', { hasText: /^Linear$/ }).count(), 0), 0)
+  const workspaceBefore = await linearWorkspace()
   const offTicket = await tool('set_worktree_ticket', { worktree: 'feature-x', ticket: 'https://linear.app/x/issue/TOW-8' })
-  check('off: set_worktree_ticket refuses a Linear URL, naming the trackers on', [offTicket.isError, /Unrecognised ticket.*Azure DevOps work item id or URL/.test(String(offTicket.value))], [true, true])
+  check('off: set_worktree_ticket refuses a Linear URL, naming the trackers on (not Linear)', [offTicket.isError, /Unrecognised ticket.*Azure DevOps work item id or URL/.test(String(offTicket.value)), !/Linear issue id/.test(String(offTicket.value))], [true, true, true])
+  check("off: the refused call changed nothing: the branch's ticket, the project's linearWorkspace", [await branchTicket(), await linearWorkspace()], ['TOW-7', workspaceBefore])
   await detail.locator('.panel-btn[title="App settings"]').click()
   // A chip with no link opens the link dialog to add what it needs.
   await headerChip.click()
   check('off: clicking the chip with no link opens the ticket dialog', await until(() => win.locator('.ticket-modal').count(), 1), 1)
   await win.locator('.ticket-modal').locator('button', { hasText: 'Cancel' }).click()
+  check('off: Cancel closes the ticket dialog', await until(() => win.locator('.ticket-modal').count(), 0), 0)
   await detail.locator('.panel-btn[title="App settings"]').click()
   await linearSwitch.click()
   check('on again: the chip shows the issue again', await until(chipTitle, 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
@@ -448,7 +455,7 @@ try {
 
   check('the chip has the issue (the window has the key)', await chipTitle(), 'TOW-7 · In Progress — Ship the integrations')
   await sdk.request('linear.clearKey', {})
-  check("a key cleared elsewhere: the window follows (plugins.changed), the chip back to the bare id", await until(chipTitle, null), null)
+  check("a key cleared elsewhere: the window follows (plugins.changed), the chip back to the bare id", [await until(chipTitle, null), await until(chipText, 'TOW-7')], [null, 'TOW-7'])
   await sdk.request('voice.clearKey', {})
   check("a voice key cleared elsewhere: the window follows (plugins.changed), its toggle gone", await until(() => win.locator('.voice-toggle').count(), 0), 0)
 

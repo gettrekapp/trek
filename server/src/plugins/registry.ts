@@ -151,7 +151,17 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       refuse('its id is a core namespace')
       continue
     }
-    const keys = Object.keys(manifest.projectSettings ?? {})
+    const declared = manifest.projectSettings ?? {}
+    const keys = Object.keys(declared)
+    if (keys.some((key) => !key)) {
+      refuse('it declares a project setting with an empty key')
+      continue
+    }
+    const badKind = keys.find((key) => (declared as Record<string, unknown>)[key] !== 'string')
+    if (badKind !== undefined) {
+      refuse(`its project setting ${badKind} is of a kind other than 'string'`)
+      continue
+    }
     const taken = keys.find((key) => isCoreSettingsKey(key) || settingOwners.has(key) || key === '__proto__')
     if (taken) {
       refuse(`its project setting ${taken} is a core setting's or another plugin's`)
@@ -167,6 +177,11 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
     const clash = (instance.mcpTools ?? []).map((t) => t.definition.name).find((name) => coreTools.has(name) || toolOwners.has(name))
     if (clash) {
       refuse(`its MCP tool ${clash} has the name of another tool`)
+      instance.dispose?.()
+      continue
+    }
+    if (instance.ticketProvider && instance.ticketProvider.id !== manifest.id) {
+      refuse(`its ticket provider's id ${JSON.stringify(instance.ticketProvider.id)} is not the plugin's id`)
       instance.dispose?.()
       continue
     }

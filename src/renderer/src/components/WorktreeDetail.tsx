@@ -12,6 +12,7 @@ import {
   useAppStore
 } from '../store'
 import { useTicketViews } from '../plugins/useTickets'
+import { safeStatusColor } from '../plugins/ticketProviders'
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
@@ -248,6 +249,11 @@ export function WorktreeDetail({
   const ticketInfo = ticket ? ticketViewOf(ticket) : undefined
   const issue = ticketInfo?.info
   const linkedTicketUrl = ticketInfo?.url ?? null
+  /** The header's ticket chip, clicked or keyed: its link, else (no link yet: its tracker's setting is missing, or no tracker on owns it) the dialog that says what it needs. */
+  const openTicketChip = (): void => {
+    if (linkedTicketUrl) window.open(linkedTicketUrl)
+    else if (info.branch) setShowTicket(true)
+  }
 
   // Notes are keyed to the live branch, so they follow it through promote/demote.
   const noteKey = info.branch ?? instance?.branch ?? instance?.name ?? baseName(info.path)
@@ -423,15 +429,19 @@ export function WorktreeDetail({
             {ticket && (
               <span
                 className="chip chip-ticket"
+                role="button"
+                tabIndex={0}
                 title={
                   linkedTicketUrl
                     ? `Open ticket ${ticketInfo!.label}${issue ? ` — ${issue.title}` : ''}`
                     : `Ticket ${ticketInfo!.label}: click to add what its link needs`
                 }
-                onClick={() => {
-                  // No link yet (its tracker's setting is missing, or no tracker on owns it): the dialog says what it needs.
-                  if (linkedTicketUrl) window.open(linkedTicketUrl)
-                  else if (info.branch) setShowTicket(true)
+                onClick={openTicketChip}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openTicketChip()
+                  }
                 }}
               >
                 {issue ? ticketInfo!.label : `Ticket ${ticketInfo!.label}`}
@@ -440,7 +450,7 @@ export function WorktreeDetail({
                     <span className="ticket-status">
                       <span
                         className="ticket-status-dot"
-                        style={{ background: issue.statusColor }}
+                        style={{ background: safeStatusColor(issue.statusColor) }}
                       />
                       {issue.status}
                     </span>

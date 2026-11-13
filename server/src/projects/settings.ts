@@ -23,7 +23,8 @@ const KIND_TEXT: Record<Kind, string> = {
  * ProjectSettings keys a built-in plugin owns (plugin system phase 2): declared in its manifest's
  * `projectSettings` and checked by it, not in the table below.
  */
-type PluginOwnedSetting = 'azureDevOpsBaseUrl' | 'linearWorkspace'
+export const PLUGIN_OWNED_SETTINGS = ['azureDevOpsBaseUrl', 'linearWorkspace'] as const
+type PluginOwnedSetting = (typeof PLUGIN_OWNED_SETTINGS)[number]
 
 /** Every core ProjectSettings key; the Record type makes the compiler flag a missing one. */
 const SETTINGS_KINDS: Record<Exclude<keyof ProjectSettings, PluginOwnedSetting>, Kind> = {
