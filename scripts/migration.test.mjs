@@ -125,3 +125,11 @@ test('a legacy project with no llm fields loads unchanged by LLM sanitizing', ()
   )
   assert.deepEqual(sanitizeProjectLlm(project), project)
 })
+
+test("a v1 repository's name is its folder's, with Windows separators too", () => {
+  const name = (repositoryPath) => migrateToV3({ version: 1, name: 'p', repositoryPath }, ids()).repositories[0].name
+  assert.equal(name('C:\\work\\api'), 'api')
+  assert.equal(name('C:\\work\\api\\'), 'api')
+  assert.equal(name('C:/work\\api/'), 'api')
+  assert.equal(name('/r/api//'), 'api')
+})
