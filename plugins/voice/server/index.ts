@@ -39,7 +39,15 @@ function ready(voice: VoiceService): boolean {
 }
 
 export function setupVoice(host: ServerPluginHost, options: { fetch?: typeof fetch } = {}) {
-  const configFile = migrateConfigFile(host.legacyDataFile('voice.json'), host.dataFile('config.json'), host.log.warn)
+  const legacy = host.legacyDataFile('voice.json')
+  let next: string | undefined
+  try {
+    next = host.dataFile('config.json')
+  } catch (err) {
+    // The plugin's data dir can't be made (permissions): keep voice working on the old file.
+    host.log.warn(`its data dir is not usable (${err instanceof Error ? err.message : String(err)}); reading ${legacy} in place`)
+  }
+  const configFile = next ? migrateConfigFile(legacy, next, host.log.warn) : legacy
   const voice = createVoiceService({
     key: host.secret('elevenlabs'),
     configFile,

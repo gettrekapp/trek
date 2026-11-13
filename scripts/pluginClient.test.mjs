@@ -170,6 +170,19 @@ test("the host's prefs.onChange: called only when this plugin's prefs change, no
   assert.deepEqual(seen, [{ a: 1, b: 2 }, { a: 1 }])
 })
 
+test("the host's prefs.onChange is seeded from the prefs now: the first unrelated change is not heard", async () => {
+  const appSettings = fakeAppSettings({ plugins: { voice: { active: false } } })
+  const fake = fakeBackend()
+  const host = createClientHost(voice, fake.backend, { appSettings, terminalLabel: String, currentBackend: () => fake.backend })
+  const heard = []
+  host.prefs.onChange((prefs) => heard.push(prefs))
+  await new Promise((r) => setImmediate(r))
+  await appSettings.update({ showNotifications: false })
+  assert.deepEqual(heard, [])
+  await host.prefs.set('active', true)
+  assert.deepEqual(heard, [{ active: true }])
+})
+
 test('isCurrent: false once the window has another backend', () => {
   const fake = fakeBackend()
   let current = fake.backend

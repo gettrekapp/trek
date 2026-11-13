@@ -244,6 +244,18 @@ test("the 5b voice.json is copied into plugins/voice/config.json at setup and ke
   assert.equal((await dispatchV2('voice.settings', {}, { plugins: again })).result.voiceId, 'v2')
 })
 
+test("a plugin data dir that can't be made: voice still sets up, on the 5b voice.json in place", async (t) => {
+  const dir = tempDir(t)
+  mkdirSync(join(dir, 'data'), { recursive: true })
+  writeFileSync(join(dir, 'data', 'voice.json'), JSON.stringify({ voiceId: 'v7' }))
+  // A file where the plugins directory would be.
+  writeFileSync(join(dir, 'data', 'plugins'), '')
+  const { registry, warnings } = registryFor(dir)
+  assert.deepEqual(registry.presence().map((p) => p.id), ['voice'])
+  assert.equal((await dispatchV2('voice.settings', {}, { plugins: registry })).result.voiceId, 'v7')
+  assert.match(warnings.join('\n'), /data dir is not usable/)
+})
+
 test('migrateConfigFile: atomic (no half-written copy is ever there); a copy that fails reads the old file in place', (t) => {
   const dir = tempDir(t)
   const warnings = []

@@ -58,6 +58,13 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
         // Only when this plugin's prefs differ from the last ones heard: a change to other app
         // settings (or another plugin's prefs) does not call it.
         let last: string | undefined
+        // Seeded from the prefs as they are now, so the first unrelated change is not heard either.
+        deps.appSettings.get().then(
+          (s) => {
+            if (last === undefined) last = prefsKey(prefsOf(s, id))
+          },
+          () => {}
+        )
         return deps.appSettings.onChanged((s) => {
           const prefs = prefsOf(s, id)
           const key = prefsKey(prefs)
