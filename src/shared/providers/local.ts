@@ -1,4 +1,4 @@
-import { buildClaudeCommand, CLAUDE_PERMISSION_MODES, DEFAULT_PERMISSION_MODE } from './claude.ts'
+import { buildClaudeLaunch, CLAUDE_PERMISSION_MODES, DEFAULT_PERMISSION_MODE } from './claude.ts'
 import { DEFAULT_LOCAL_URLS } from './types.ts'
 import type { LaunchOptions, LaunchSpec, LlmProvider, LocalBackend, ModelInfo } from './types'
 
@@ -28,10 +28,11 @@ export const local: LlmProvider = {
   buildLaunch(o: LaunchOptions): LaunchSpec {
     const backend: LocalBackend = o.localBackend === 'lmstudio' ? 'lmstudio' : 'ollama'
     const baseUrl = (o.baseUrl?.trim() || DEFAULT_LOCAL_URLS[backend]).replace(/\/+$/, '')
-    return {
-      command: buildClaudeCommand({ ...o, extraArgs: undefined }, undefined),
-      env: { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_AUTH_TOKEN: backend, ANTHROPIC_API_KEY: '' }
-    }
+    return buildClaudeLaunch({ ...o, extraArgs: undefined }, undefined, {
+      ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_AUTH_TOKEN: backend,
+      ANTHROPIC_API_KEY: ''
+    })
   }
 }
 

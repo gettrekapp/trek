@@ -1,5 +1,5 @@
-import { joinCommand, shellQuote } from './shell.ts'
-import type { ApprovalModeOption, LaunchOptions, LaunchSpec, LlmProvider } from './types'
+import { launchSpec, quoted, word } from './shell.ts'
+import type { ApprovalModeOption, LaunchArg, LaunchOptions, LaunchSpec, LlmProvider } from './types'
 
 const GEMINI_APPROVAL_MODES: ApprovalModeOption[] = [
   { value: 'auto_edit', label: 'Auto-approve edits' },
@@ -41,18 +41,15 @@ export const gemini: LlmProvider = {
     // The mode goes on the line unquoted, so only a known one does.
     const mode = o.approvalMode?.trim()
     const known = GEMINI_APPROVAL_MODES.some((m) => m.value === mode) ? mode : undefined
-    const parts = [o.command?.trim() || 'gemini', `--approval-mode ${known || 'auto_edit'}`]
+    const args: LaunchArg[] = [word('--approval-mode'), word(known || 'auto_edit')]
     // Attached, so a value starting with a dash can never be read as a flag.
-    if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
-    for (const dir of o.addDirs ?? []) parts.push(`--include-directories ${shellQuote(dir)}`)
-    parts.push(o.resume ? `--resume ${o.sessionId}` : `--session-id ${o.sessionId}`)
+    if (o.model) args.push(quoted(o.model, '--model='))
+    for (const dir of o.addDirs ?? []) args.push(word('--include-directories'), quoted(dir))
+    args.push(word(o.resume ? '--resume' : '--session-id'), word(o.sessionId))
     if (!o.resume) {
       const first = [o.systemPrompt, o.initialMessage].filter(Boolean).join('\n\n')
-      if (first) parts.push(`--prompt-interactive=${shellQuote(first)}`)
+      if (first) args.push(quoted(first, '--prompt-interactive='))
     }
-    return {
-      command: joinCommand(parts),
-      ...(o.mcp ? { env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: o.mcp.geminiSettingsPath } } : {})
-    }
+    return launchSpec(o.command?.trim() || 'gemini', args, o.mcp ? { GEMINI_CLI_SYSTEM_SETTINGS_PATH: o.mcp.geminiSettingsPath } : undefined)
   }
 }

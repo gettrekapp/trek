@@ -1,25 +1,25 @@
-import { joinCommand, shellQuote } from './shell.ts'
-import type { LaunchOptions, LaunchSpec, LlmProvider } from './types'
+import { launchSpec, quoted, shellQuote, word } from './shell.ts'
+import type { LaunchArg, LaunchOptions, LaunchSpec, LlmProvider } from './types'
 
 const CODEX_EFFORTS = ['minimal', 'low', 'medium', 'high']
 
 /** `-c key=value` override; the value is TOML, and a JSON string is a valid TOML basic string. */
-function config(key: string, value: string): string {
+function config(key: string, value: string): LaunchArg[] {
   const safe = value.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd')
   const toml = JSON.stringify(safe).replace(/\x7f/g, '\\u007f')
-  return `-c ${shellQuote(`${key}=${toml}`)}`
+  return [word('-c'), quoted(`${key}=${toml}`)]
 }
 
-function approvalFlags(mode: string | undefined): string {
+function approvalFlags(mode: string | undefined): LaunchArg[] {
   switch (mode) {
     case 'on-request':
-      return '-a on-request'
+      return [word('-a'), word('on-request')]
     case 'untrusted':
-      return '-a untrusted'
+      return [word('-a'), word('untrusted')]
     case 'yolo':
-      return '--dangerously-bypass-approvals-and-sandbox'
+      return [word('--dangerously-bypass-approvals-and-sandbox')]
     default:
-      return '--full-auto'
+      return [word('--full-auto')]
   }
 }
 
@@ -51,24 +51,24 @@ export const codex: LlmProvider = {
   defaultApprovalMode: 'full-auto',
   statusMarkers: ['esc to interrupt'],
   buildLaunch(o: LaunchOptions): LaunchSpec {
-    const parts = [o.command?.trim() || 'codex']
-    if (o.resume) parts.push(`resume ${shellQuote(o.sessionId)}`)
-    parts.push(approvalFlags(o.approvalMode?.trim()))
+    const args: LaunchArg[] = []
+    if (o.resume) args.push(word('resume'), quoted(o.sessionId))
+    args.push(...approvalFlags(o.approvalMode?.trim()))
     // Attached, so a value starting with a dash can never be read as a flag.
-    if (o.model) parts.push(`--model=${shellQuote(o.model)}`)
-    if (o.effort) parts.push(config('model_reasoning_effort', o.effort))
+    if (o.model) args.push(quoted(o.model, '--model='))
+    if (o.effort) args.push(...config('model_reasoning_effort', o.effort))
     // The token comes from a helper command (Codex 0.148+), never the environment: any process of
     // this user, the bot's included, can read another's environment (`ps -E`, KERN_PROCARGS2).
     if (o.mcp) {
-      parts.push(
-        config('mcp_servers.trek-dev.url', o.mcp.url),
-        config('mcp_servers.trek-dev.http_headers_helper', o.mcp.codexHeadersHelper)
+      args.push(
+        ...config('mcp_servers.trek-dev.url', o.mcp.url),
+        ...config('mcp_servers.trek-dev.http_headers_helper', o.mcp.codexHeadersHelper)
       )
     }
-    if (o.systemPrompt) parts.push(config('developer_instructions', o.systemPrompt))
-    for (const dir of o.addDirs ?? []) parts.push(`--add-dir ${shellQuote(dir)}`)
-    if (!o.resume && o.initialMessage) parts.push('--', shellQuote(o.initialMessage))
-    return { command: joinCommand(parts) }
+    if (o.systemPrompt) args.push(...config('developer_instructions', o.systemPrompt))
+    for (const dir of o.addDirs ?? []) args.push(word('--add-dir'), quoted(dir))
+    if (!o.resume && o.initialMessage) args.push(word('--'), quoted(o.initialMessage))
+    return launchSpec(o.command?.trim() || 'codex', args)
   }
 }
 

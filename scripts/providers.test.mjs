@@ -1,7 +1,7 @@
 // scripts/providers.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { joinCommand, shellQuote } from '../src/shared/providers/shell.ts'
+import { argvOf, joinCommand, shellQuote, splitArgs } from '../src/shared/providers/shell.ts'
 
 test('shellQuote wraps in single quotes and escapes embedded ones', () => {
   assert.equal(shellQuote('plain'), `'plain'`)
@@ -26,9 +26,11 @@ const MCP = {
 }
 
 test('claude: a plain new session matches today', () => {
-  assert.deepEqual(claude.buildLaunch({ sessionId: ID, resume: false }), {
-    command: `claude --permission-mode auto --session-id ${ID}`
-  })
+  const spec = claude.buildLaunch({ sessionId: ID, resume: false })
+  assert.equal(spec.command, `claude --permission-mode auto --session-id ${ID}`)
+  assert.equal(spec.head, 'claude')
+  assert.deepEqual(argvOf(spec.args), ['--permission-mode', 'auto', '--session-id', ID])
+  assert.equal(spec.env, undefined)
 })
 
 test('claude: a local worktree session with prompt and first message matches today', () => {
@@ -308,4 +310,70 @@ test('hardening: an unknown approval mode falls back to the provider default', (
     `gemini --approval-mode yolo --resume ${ID}`
   )
   assert.equal(codex.buildLaunch({ sessionId: ID, resume: false, approvalMode: evil }).command, 'codex --full-auto')
+})
+
+// --- Without a shell (Windows): the same arguments, unquoted, one per argv entry ---
+
+test('splitArgs: spaces separate; quotes group and go; backslashes stay (Windows paths)', () => {
+  assert.deepEqual(splitArgs('--verbose  --add-dir C:\\work\\x'), ['--verbose', '--add-dir', 'C:\\work\\x'])
+  assert.deepEqual(splitArgs(`--a "two words" 'it"s' x"y z"w`), ['--a', 'two words', 'it"s', 'xy zw'])
+  assert.deepEqual(splitArgs('"say \\"hi\\""'), ['say "hi"'])
+  assert.deepEqual(splitArgs('""'), [''])
+  assert.deepEqual(splitArgs('  '), [])
+  assert.throws(() => splitArgs('--x "open'), /Unclosed " in the arguments/)
+})
+
+test('claude argv: multi-line prompt and message, quotes and %, each one argument', () => {
+  const spec = claude.buildLaunch({
+    sessionId: ID,
+    resume: false,
+    model: 'opus',
+    effort: 'high',
+    mcp: MCP,
+    systemPrompt: 'line one\nline "two" 100%',
+    initialMessage: `it's ^ & | < >`,
+    addDirs: ['C:\\a b\\c']
+  })
+  assert.equal(spec.head, 'claude')
+  assert.deepEqual(argvOf(spec.args), [
+    '--permission-mode', 'auto',
+    '--model', 'opus',
+    '--effort', 'high',
+    '--mcp-config', MCP.configPath, '--allowedTools', 'mcp__trek-dev',
+    '--append-system-prompt', 'line one\nline "two" 100%',
+    '--add-dir', 'C:\\a b\\c',
+    '--session-id', ID,
+    `it's ^ & | < >`
+  ])
+})
+
+test('claude argv: claudeArgs text is split into words; the head is kept as typed', () => {
+  const spec = claude.buildLaunch({ sessionId: ID, resume: true, command: ' C:\\tools\\claude.exe ', extraArgs: '--permission-mode plan --verbose' })
+  assert.equal(spec.head, 'C:\\tools\\claude.exe')
+  assert.deepEqual(argvOf(spec.args), ['--permission-mode', 'plan', '--verbose', '--resume', ID])
+})
+
+test('codex argv: -c values, attached --model=, -- before the first message', () => {
+  const spec = codex.buildLaunch({ sessionId: ID, resume: false, model: 'gpt-5', effort: 'low', approvalMode: 'on-request', systemPrompt: 'a\nb', initialMessage: '-x' })
+  assert.deepEqual(argvOf(spec.args), [
+    '-a', 'on-request',
+    '--model=gpt-5',
+    '-c', 'model_reasoning_effort="low"',
+    '-c', 'developer_instructions="a\\nb"',
+    '--', '-x'
+  ])
+  assert.deepEqual(argvOf(codex.buildLaunch({ sessionId: 'abc', resume: true }).args), ['resume', 'abc', '--full-auto'])
+})
+
+test('gemini and grok argv', () => {
+  const g = gemini.buildLaunch({ sessionId: ID, resume: false, model: 'm', systemPrompt: 'p', initialMessage: 'hi', addDirs: ['/d'] })
+  assert.deepEqual(argvOf(g.args), ['--approval-mode', 'auto_edit', '--model=m', '--include-directories', '/d', '--session-id', ID, '--prompt-interactive=p\n\nhi'])
+  const k = grok.buildLaunch({ sessionId: ID, resume: false, model: 'grok-4', initialMessage: 'hi' })
+  assert.deepEqual(argvOf(k.args), ['--model=grok-4', '--', 'hi'])
+})
+
+test('local argv: claude without claudeArgs, and its env', () => {
+  const spec = local.buildLaunch({ sessionId: ID, resume: false, model: 'q', extraArgs: '--x' })
+  assert.deepEqual(argvOf(spec.args), ['--permission-mode', 'auto', '--model', 'q', '--session-id', ID])
+  assert.equal(spec.env.ANTHROPIC_AUTH_TOKEN, 'ollama')
 })
