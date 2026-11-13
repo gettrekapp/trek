@@ -240,7 +240,7 @@ test("the host: only the manifest's secrets, in the server's secrets file; data 
   assert.equal(existsSync(file), false)
   assert.equal(host.legacyDataFile('voice.json'), join(dir, 'data', 'voice.json'))
   // One path segment only: a plugin keeps to its own directory.
-  for (const name of ['', '.', '..', '../secrets.json', 'a/b', 'a\\b', 'x\0y']) {
+  for (const name of ['', '.', '..', '../secrets.json', 'a/b', 'a\\b', 'x\0y', 'config.json:stream', 'C:config.json']) {
     assert.throws(() => host.dataFile(name), /not a data file name/, name)
     assert.throws(() => host.legacyDataFile(name), /not a data file name/, name)
   }
