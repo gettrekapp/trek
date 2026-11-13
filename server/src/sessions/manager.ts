@@ -22,7 +22,7 @@ import { realOrResolved as real } from '../repos.ts'
 import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import type { McpAccess } from '../../../src/shared/providers/types'
-import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
+import { agentCommand, sessionEnv, sessionProcess } from './launch.ts'
 import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQuestion, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import {
@@ -687,7 +687,7 @@ export class SessionManager {
     )
     const ptyId = this.newId()
     this.terminals.spawn(ptyId, {
-      ...shellLaunch(spec.command),
+      ...sessionProcess(spec, cwd),
       cwd,
       env: sessionEnv(session.id, worktree ? { id: worktree.id, path: worktree.path } : undefined, spec.env ?? {}),
       cols: run.cols,

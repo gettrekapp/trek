@@ -65,7 +65,8 @@ const defaultTreeKiller =
 
 export interface SpawnOptions {
   file: string
-  args: string[]
+  /** An argv, or on Windows the raw command line after `file` (node-pty passes a string as is) */
+  args: string[] | string
   cwd: string
   env: Record<string, string>
   cols: number

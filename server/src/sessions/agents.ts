@@ -2,7 +2,10 @@
 // program of the command the server would run for it is installed for the
 // server's user. The command line itself is never sent: it may carry secrets
 // (`API_KEY=… claude`).
+import { statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { commandExists } from '../../../src/host/agentService.ts'
+import { parseWindowsCommandLine, resolveWindowsCommand } from './winLaunch.ts'
 import type { ProjectSettings } from '../../../src/shared/model/types'
 import { PROVIDER_LIST } from '../../../src/shared/providers/registry.ts'
 import type { LlmProviderId, LlmSettings } from '../../../src/shared/providers/types'
@@ -19,8 +22,27 @@ export const MAX_PROBES_IN_FLIGHT = 8
  * assignments. A best-effort hint for the installed check, not a shell parser:
  * `env FOO=1 claude` gives `env`, and quoting or `$(...)` are not understood.
  */
-export function commandBinary(command: string): string | undefined {
+export function commandBinary(command: string, platform: string = process.platform): string | undefined {
+  // Windows: the first word as CreateProcess reads it ("C:\Program Files\…\claude.exe" in quotes).
+  if (platform === 'win32') return parseWindowsCommandLine(command)[0] || undefined
   return command.trim().split(/\s+/).find((word) => word !== '' && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
+}
+
+const isFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether `binary` is installed for the server's user: POSIX asks the login shell
+ * (`command -v`); Windows looks it up as a session's launch does (PATH × PATHEXT).
+ */
+export function platformCommandExists(binary: string, platform: string = process.platform): Promise<boolean> {
+  if (platform !== 'win32') return commandExists(binary)
+  return Promise.resolve(resolveWindowsCommand(binary, { env: process.env, cwd: homedir(), isFile }) !== undefined)
 }
 
 /** Each provider with the command the server runs it with, chosen as agentCommand does. */
@@ -47,7 +69,7 @@ export class CommandProbe {
   private readonly cache = new Map<string, { at: number; result: Promise<boolean> }>()
   private inFlight = 0
 
-  constructor(exists: (binary: string) => Promise<boolean> = commandExists, now: () => number = Date.now) {
+  constructor(exists: (binary: string) => Promise<boolean> = platformCommandExists, now: () => number = Date.now) {
     this.exists = exists
     this.now = now
   }
