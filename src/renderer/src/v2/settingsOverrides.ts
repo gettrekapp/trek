@@ -24,6 +24,7 @@ import type { Project, Repository } from '../../../shared/model/types'
 import type { EnvironmentSettings } from '../../../shared/types'
 import type { AppState, SettingsSetter } from '../store'
 import { sameSetting, type Rebased, type SettingsField, type SettingsWriter } from './settingsWriter.ts'
+import { withPluginEnabled } from '../plugins/presence.ts'
 
 export type SettingsOverrides = Pick<AppState, SettingsSetter>
 
@@ -203,6 +204,8 @@ export function v2SettingsOverrides(
   return {
     setClaudePermissionMode: (mode) => write('claudePermissionMode', 'Claude session mode', textOrNull(mode)),
     setAudioAlerts: (enabled) => write('audioAlerts', 'Audio alerts', enabled),
+    // The whole `plugins` setting, from what the window shows (pending edits included).
+    setPluginEnabled: (id, enabled) => write('plugins', 'Plugins', withPluginEnabled(overlaid()?.settings.plugins, id, enabled)),
     setTitleBarColor: (color) => write('titleBarColor', 'Title bar color', textOrNull(color)),
     setLogoImage: (image) => write('logoImage', 'Logo', textOrNull(image)),
     setBannerImage: (image) => write('bannerImage', 'Banner', textOrNull(image)),

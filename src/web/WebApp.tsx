@@ -10,6 +10,7 @@ import { requestSessionSelect, watchAttention } from '../renderer/src/attentionS
 import { useLinearSync } from '../renderer/src/linear'
 import { useVoice } from '../renderer/src/voice'
 import { loadLlmSettings } from '../renderer/src/llm'
+import { PluginRuntimes, PluginSlot } from '../renderer/src/plugins/PluginHost'
 import { SummaryBubble } from '../renderer/src/components/SummaryBubble'
 import { titleBarForeground } from '../shared/appearance'
 import { STATUS_LABELS } from '../shared/appServerRules.ts'
@@ -151,6 +152,8 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
         <ProjectsPage registered={registered} status={status} />
       )}
       <SummaryBubble />
+      <PluginRuntimes />
+      <PluginSlot name="overlay" />
       <WebDialogHost />
     </div>
   )

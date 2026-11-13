@@ -276,6 +276,8 @@ export interface AppState {
   setBranchCustomTag: (repoId: string, branch: string, tagId: string, enabled: boolean) => void
   setCustomTags: (tags: WorktreeTag[]) => void
   setAudioAlerts: (enabled: boolean) => void
+  /** A plugin on or off for the project (its `plugins` setting) */
+  setPluginEnabled: (id: string, enabled: boolean) => void
   setProjectName: (name: string) => void
   setTitleBarColor: (color: string | undefined) => void
   setLogoImage: (image: string | undefined) => void
@@ -337,6 +339,7 @@ export type SessionSetter = (typeof SESSION_SETTERS)[number]
 const SETTINGS_SETTERS = [
   'setClaudePermissionMode',
   'setAudioAlerts',
+  'setPluginEnabled',
   'setTitleBarColor',
   'setLogoImage',
   'setBannerImage',

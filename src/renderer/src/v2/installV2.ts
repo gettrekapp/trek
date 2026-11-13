@@ -130,6 +130,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
     request,
     requestWithRev,
     capabilities: () => registered()?.connection.welcome?.capabilities,
+    welcomePlugins: () => registered()?.connection.welcome?.plugins,
     localEntry: isLocalEntryId(entryId),
     onEvent: windowEventSubscriber(() => registered()?.connection, () => left),
     ids: v2Ids,

@@ -11,6 +11,7 @@ import {
   type MethodResultsV2,
   type TopicRev
 } from '../protocolV2.ts'
+import { parsePluginPresence, type PluginPresence } from '../plugins/manifest.ts'
 import { OPEN, realTimers, type SocketFactory, type SocketLike, type Timers } from './socket.ts'
 
 export type ConnectionStatus =
@@ -37,6 +38,8 @@ export interface WelcomeInfo {
   serverName: string
   daemonVersion: string
   capabilities: string[]
+  /** The server's plugins (plugin system phase 1); undefined from a server older than plugins */
+  plugins?: PluginPresence[]
 }
 
 export interface ServerEvent {
@@ -130,6 +133,7 @@ interface IncomingFrame {
   serverName?: unknown
   daemonVersion?: unknown
   capabilities?: unknown
+  plugins?: unknown
 }
 
 export class ServerConnection {
@@ -320,6 +324,8 @@ export class ServerConnection {
         daemonVersion: String(frame.daemonVersion ?? ''),
         capabilities: Array.isArray(frame.capabilities) ? frame.capabilities.map(String) : []
       }
+      const plugins = parsePluginPresence(frame.plugins)
+      if (plugins) welcome.plugins = plugins
       this.welcome = welcome
       this.backoff = BACKOFF_MIN_MS
       this.setStatus('connected', '')

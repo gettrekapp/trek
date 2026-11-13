@@ -4,6 +4,7 @@ import { useAppStore } from '../store'
 import { refreshEnvironments } from '../environmentActions'
 import { ENV_DEFAULTS } from '../../../shared/environments'
 import { LinearSettings } from './LinearSettings'
+import { PluginsSettings } from '../plugins/PluginsSettings'
 import { VoiceSettings } from './VoiceSettings'
 import { NotificationSettings } from './NotificationSettings'
 import { ImagePicker, SESSION_ICON_LIMITS } from './ImagePicker'
@@ -229,6 +230,7 @@ export function SettingsPanel({ visible }: Props): React.JSX.Element {
         {sections.linear === 'needsUpdate' && <NeedsUpdate title="Linear" what="Linear" />}
         {sections.voice === 'edit' && <VoiceSettings />}
         {sections.voice === 'needsUpdate' && <NeedsUpdate title="Voice summaries" what="voice summaries" />}
+        <PluginsSettings />
         <LlmSettings projectOnly={sections.agents === 'project'} />
         <h3>Worktree tags</h3>
         <WorktreeTagsEditor

@@ -26,6 +26,7 @@ import {
   type PromoteFollower
 } from './promoteFlow.ts'
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
+import type { PluginPresence } from '../../../shared/plugins/manifest.ts'
 import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
@@ -99,6 +100,8 @@ export interface V2BackendDeps {
   requestWithRev: V2RequestWithRev
   /** The last welcome's capabilities; undefined before the first one */
   capabilities(): readonly string[] | undefined
+  /** The last welcome's plugins; undefined before the first one and from a server older than plugins */
+  welcomePlugins(): readonly PluginPresence[] | undefined
   /** The window's entry is the Local server's: with `local` in the welcome, its paths are this machine's (`v2Features`) */
   localEntry: boolean
   /** The server's events of one name on the window's connection (`docker.log`, `env.log`); returns the unsubscribe */
@@ -833,6 +836,18 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         else void deps.showError(title, withPromptText(errorText(err), text))
       },
       inline: (err) => (deps.left() || errorCode(err) === 'NOT_CONNECTED' ? null : errorText(err))
+    },
+    // Each plugin types its own methods and events; here they are the wire's names, untyped.
+    plugins: {
+      projectId,
+      welcome: () => {
+        const capabilities = deps.capabilities()
+        if (!capabilities) return undefined
+        const plugins = deps.welcomePlugins()
+        return plugins ? { plugins, capabilities } : { capabilities }
+      },
+      request: (method, params) => (deps.request as unknown as (m: string, p: Record<string, unknown>) => Promise<unknown>)(method, params),
+      onEvent: (event, listener) => (deps.onEvent as unknown as (e: string, l: (payload: unknown) => void) => () => void)(event, listener)
     }
   }
   return backend

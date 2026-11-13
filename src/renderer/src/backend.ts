@@ -45,6 +45,7 @@ import type {
   WorktreeLocator
 } from '../../shared/types'
 import type { VoiceSummaryEvent } from '../../shared/protocolV2'
+import type { PluginWelcome } from './plugins/presence'
 import type { ReviewComment } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
 import type { PromoteAsked } from './v2/promoteFlow'
@@ -262,6 +263,19 @@ export interface WindowBackend {
     /** The error as one line for an inline message, or null when nothing should show */
     inline(err: unknown): string | null
   }
+  /**
+   * The plugins' channel to the window's server (plugin system phase 1): their `<id>.*` methods
+   * and events, untyped here (each plugin types its own), and what the server's welcome says.
+   */
+  readonly plugins: {
+    /** The window's project; null in an empty window */
+    readonly projectId: string | null
+    /** The last welcome's plugins and capabilities; undefined before the first one */
+    welcome(): PluginWelcome | undefined
+    request(method: string, params: Record<string, unknown>): Promise<unknown>
+    /** The server's events of one name on the window's connection; returns the unsubscribe */
+    onEvent(event: string, listener: (payload: unknown) => void): () => void
+  }
 }
 
 const noProject = (): Promise<never> => Promise.reject(new Error('No project is open in this window'))
@@ -346,7 +360,8 @@ export const idleBackend: WindowBackend = {
     report: (title, err) => void window.api.showError(title, String(err)),
     promptFailed: (title, err) => void window.api.showError(title, String(err)),
     inline: (err) => errorText(err)
-  }
+  },
+  plugins: { projectId: null, welcome: () => undefined, request: noProject, onEvent: () => () => {} }
 }
 
 let current: WindowBackend = idleBackend

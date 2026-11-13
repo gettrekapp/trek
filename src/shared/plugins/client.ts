@@ -41,8 +41,8 @@ export interface ClientPlugin {
   slots?: {
     /** A Settings section, after the Plugins list */
     settings?: FC
-    /** In the sidebar's footer */
-    sidebarFooter?: FC
+    /** In the sidebar's top bar, beside the worktree filter (the voice plugin's Active/Busy) */
+    sidebarToolbar?: FC
     /** Over the window (a floating bubble) */
     overlay?: FC
   }
