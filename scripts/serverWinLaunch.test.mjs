@@ -11,6 +11,7 @@ import {
   cmdEscapeCommand,
   MAX_COMMAND_LINE,
   parseCmdShim,
+  parseExeShim,
   parseWindowsCommandLine,
   quoteWindowsArg,
   resolveWindowsCommand,
@@ -113,6 +114,20 @@ test('parseCmdShim: npm shims for node scripts, with node arguments; nothing for
   assert.equal(own.bundledNode, 'C:\\Users\\u\\AppData\\Roaming\\npm\\bin\\node.exe')
 })
 
+test('parseExeShim: an npm shim for a native .exe bin (no _prog block), with %dp0% or %~dp0; nothing else', () => {
+  const at = 'C:\\Users\\u\\AppData\\Roaming\\npm\\bin\\tool.cmd'
+  const exe = 'C:\\Users\\u\\AppData\\Roaming\\npm\\lib\\node_modules\\@x\\tool\\bin\\tool.exe'
+  const there = (p) => p.toLowerCase() === exe.toLowerCase()
+  assert.equal(parseExeShim(fixture('nativetool'), at, there), exe)
+  assert.equal(parseExeShim(fixture('nativetool'), at, () => false), undefined, 'the .exe must be there')
+  assert.equal(parseExeShim('@ECHO off\r\n"%~dp0\\..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe" %*\r\n', at, there), exe)
+  assert.equal(parseExeShim('@"%~dp0\\..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe" %*', at, there), exe)
+  assert.equal(parseExeShim(fixture('claude'), at, () => true), undefined, 'a node shim')
+  assert.equal(parseExeShim('@echo off\r\nset FOO=1\r\n"%~dp0\\..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe" %*\r\n', at, there), undefined, 'a batch file that does more')
+  assert.equal(parseExeShim('@echo off\r\n"%dp0%\\..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe" %*\r\n', at, there), undefined, '%dp0% that nothing sets')
+  assert.equal(parseExeShim('@echo off\r\n"%~dp0\\..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe" --flag %*\r\n', at, there), undefined, 'arguments of its own')
+})
+
 test('cmd escaping (cross-spawn): quote, then ^ before each metacharacter; twice for a shim', () => {
   assert.equal(cmdEscapeArg('plain', false), '^"plain^"')
   assert.equal(cmdEscapeArg('a b&c', false), '^"a^ b^&c^"')
@@ -128,7 +143,9 @@ const WIN_FILES = {
   [`${NPM}\\codex.cmd`]: fixture('codex').replaceAll('..\\lib\\node_modules', 'node_modules'),
   'C:\\tools\\claude.exe': '',
   'C:\\tools\\my-agent.bat': '@echo off\r\nreal-agent.exe %*\r\n',
-  'C:\\tools\\plain.cmd': '@echo off\r\necho hi\r\n'
+  'C:\\tools\\plain.cmd': '@echo off\r\necho hi\r\n',
+  [`${NPM}\\tool.cmd`]: fixture('nativetool').replaceAll('..\\lib\\node_modules', 'node_modules'),
+  [`${NPM}\\node_modules\\@x\\tool\\bin\\tool.exe`]: ''
 }
 const winDeps = (extra = {}) => ({ env: { ...ENV, ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, cwd: 'C:\\repo', ...files({ ...WIN_FILES, ...extra }) })
 
@@ -146,6 +163,12 @@ test('winSpawnPlan: an npm shim runs node with its script directly (no cmd.exe)'
   const plan = winSpawnPlan(spec, winDeps())
   assert.equal(plan.file, 'C:\\Program Files\\nodejs\\node.exe')
   assert.deepEqual(parseWindowsCommandLine(`x ${plan.args}`).slice(1), [`${NPM}\\node_modules\\@openai\\codex\\bin\\codex.js`, '--full-auto', '--', 'line1\nline2'])
+})
+
+test("winSpawnPlan: an npm shim for a native .exe runs that .exe directly, multi-line arguments and all", () => {
+  const plan = winSpawnPlan(launchSpec('tool', [word('--x'), quoted('line1\nline2'), quoted('100% & "q"')]), winDeps())
+  assert.equal(plan.file, `${NPM}\\node_modules\\@x\\tool\\bin\\tool.exe`)
+  assert.deepEqual(parseWindowsCommandLine(`x ${plan.args}`).slice(1), ['--x', 'line1\nline2', '100% & "q"'])
 })
 
 test('winSpawnPlan: the head may carry its own arguments, and claudeArgs text is split', () => {
@@ -226,6 +249,8 @@ test('Windows: an .exe, an npm shim and a batch file each receive their argv int
   copyFileSync(process.execPath, join(dir, 'fake-agent.exe'))
   // An npm shim (its node_modules layout) for the script.
   writeFileSync(join(dir, 'shimmed.cmd'), fixture('claude').replace('..\\lib\\node_modules\\@anthropic-ai\\claude-code\\cli.js', 'print-argv.js'))
+  // An npm shim for a native .exe bin (fake-agent.exe, which takes the script first).
+  writeFileSync(join(dir, 'nativeshim.cmd'), fixture('nativetool').replace('..\\lib\\node_modules\\@x\\tool\\bin\\tool.exe', 'fake-agent.exe'))
   writeFileSync(join(dir, 'plain.cmd'), `@echo off\r\n"${process.execPath}" "%~dp0print-argv.js" %*\r\n`)
   const env = { ...process.env, PATH: `${dir};${process.env.PATH}` }
   const tricky = ['two words', 'say "hi"', '100% & | ^', 'C:\\dir\\', '']
@@ -244,5 +269,6 @@ test('Windows: an .exe, an npm shim and a batch file each receive their argv int
   }
   assert.deepEqual(await run(`fake-agent.exe "${script}"`, [...tricky, 'a\nb']), [...tricky, 'a\nb'])
   assert.deepEqual(await run('shimmed', [...tricky, 'a\nb']), [...tricky, 'a\nb'])
+  assert.deepEqual(await run('nativeshim', [script, ...tricky, 'a\nb']), [...tricky, 'a\nb'])
   assert.deepEqual(await run('plain', tricky), tricky)
 })

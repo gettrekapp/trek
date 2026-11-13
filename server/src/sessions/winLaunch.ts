@@ -5,7 +5,7 @@
 //     and Node program parses with (CommandLineToArgvW), so newlines and quotes survive;
 //   - an npm shim (.cmd written by cmd-shim) is unwrapped: Trek runs node with the shim's
 //     script directly, so no cmd.exe sits in between (multi-line prompts work, and Ctrl+C never
-//     asks "Terminate batch job (Y/N)?");
+//     asks "Terminate batch job (Y/N)?"); one for a native .exe bin runs that .exe directly;
 //   - any other .cmd or .bat runs under cmd.exe with its metacharacters escaped (cross-spawn's
 //     rules); cmd.exe can't pass a newline inside an argument, nor read a line over 8191
 //     characters, so such a launch is refused;
@@ -161,6 +161,27 @@ export function parseCmdShim(text: string, shimPath: string, isFile: (path: stri
   return { ...(isFile(own) ? { bundledNode: own } : {}), nodeArgs, script: win32.resolve(dir, run[2]) }
 }
 
+// The lines of cmd-shim's head (lower-cased), before the one that runs the target.
+const CMD_SHIM_HEAD = new Set(['@echo off', 'goto start', ':find_dp0', 'set dp0=%~dp0', 'exit /b', ':start', 'setlocal', 'call :find_dp0'])
+
+/**
+ * The .exe (or .com) a shim that only runs it with `%*` points at: what cmd-shim writes for a
+ * package whose bin is a native program (`"%dp0%\…\x.exe"   %*`, no _prog block), or the same
+ * by hand with `%~dp0`. Undefined for anything else: a line besides cmd-shim's head (the batch
+ * file does more than run the program, which skipping cmd.exe would skip too), arguments of the
+ * shim's own, `%dp0%` that nothing sets, or a program that isn't there.
+ */
+export function parseExeShim(text: string, shimPath: string, isFile: (path: string) => boolean): string | undefined {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '')
+  const last = lines.pop()
+  if (last === undefined || !lines.every((l) => CMD_SHIM_HEAD.has(l.toLowerCase().replace(/\s+/g, ' ')))) return undefined
+  const run = /^@?"(%dp0%|%~dp0)\\?([^"%]+\.(?:exe|com))"[ \t]+%\*$/i.exec(last)
+  if (!run) return undefined
+  if (run[1].toLowerCase() === '%dp0%' && !lines.some((l) => l.toLowerCase() === 'set dp0=%~dp0')) return undefined
+  const exe = win32.resolve(win32.dirname(shimPath), run[2])
+  return isFile(exe) ? exe : undefined
+}
+
 // cmd.exe's metacharacters (cross-spawn's set).
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g
 
@@ -202,7 +223,10 @@ export function winSpawnPlan(spec: LaunchSpec, deps: WinLaunchDeps): WinSpawnPla
     const text = deps.readFile(resolved)
     const shim = parseCmdShim(text, resolved, deps.isFile)
     const node = shim ? (shim.bundledNode ?? resolveWindowsCommand('node.exe', deps)) : undefined
-    if (shim && node) {
+    const exe = shim ? undefined : parseExeShim(text, resolved, deps.isFile)
+    if (exe) {
+      plan = { file: exe, args: joinArgs(argv) }
+    } else if (shim && node) {
       plan = { file: node, args: joinArgs([...shim.nodeArgs, shim.script, ...argv]) }
     } else {
       if (argv.some((a) => /[\r\n]/.test(a))) {

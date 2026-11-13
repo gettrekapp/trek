@@ -1,3 +1,4 @@
 cmd-shim 7.0.0 (npm 11) output for a package script, made with
   require("cmd-shim")("lib/node_modules/<pkg>/<script>", "bin/<name>")
 (shtool: a #!/bin/sh script, which Trek does not unwrap).
+nativetool: cmd-shim 8.0.0 output for a native .exe bin (lib/node_modules/@x/tool/bin/tool.exe).
