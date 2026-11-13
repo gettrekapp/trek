@@ -21,7 +21,7 @@ import { startServer } from './server'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
 import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
-import { createIntegrations, testEndpoint, VOICE_CONFIG_FILE } from './integrations/integrations'
+import { createIntegrations, testEndpoint } from './integrations/integrations'
 import { secretsPathFor } from './secrets'
 import { seedEnvironmentsFromApp } from './integrations/envSeed'
 import { ghFromEnv } from './prWatch/gh'
@@ -496,9 +496,7 @@ const server = startServer(
     machine: createMachine(serverDataDir, { local: local !== undefined }),
     integrations: createIntegrations({
       secretsFile: secretsPathFor(resolve(args.configPath)),
-      linearEndpoint: testEndpoint('TREK_SERVER_LINEAR_URL', process.env.TREK_SERVER_LINEAR_URL),
-      voiceConfigFile: resolve(serverDataDir, VOICE_CONFIG_FILE),
-      elevenLabsApi: testEndpoint('TREK_SERVER_ELEVENLABS_URL', process.env.TREK_SERVER_ELEVENLABS_URL)
+      linearEndpoint: testEndpoint('TREK_SERVER_LINEAR_URL', process.env.TREK_SERVER_LINEAR_URL)
     }),
     prWatch: {
       gh: ghFromEnv(process.env.TREK_SERVER_GH),

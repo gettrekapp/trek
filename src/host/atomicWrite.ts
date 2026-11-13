@@ -1,6 +1,6 @@
 // Write-then-rename, so a reader (or a file watcher) never sees a half-written file. The temp
 // file is recreated each time so it never keeps a looser mode. Electron-free: the server's files
-// and the host services' own (voiceService's voice.json).
+// and the plugins' own (the voice plugin's config.json).
 import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 

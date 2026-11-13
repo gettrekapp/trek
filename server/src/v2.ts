@@ -1,7 +1,7 @@
 // Protocol v2 request dispatch. Serves the handshake topics, the repo registry,
 // projects, repositories and branch data, worktree commands, session.*, worktree.load/unload,
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
-// Linear, voice and skills with the server's own keys and disk (integrationHandlers.ts), and the
+// Linear and skills with the server's own key and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
 // moving a worktree between servers (moveHandlers.ts).
 import type { PairingCodes } from './pairing'
@@ -64,7 +64,7 @@ export interface V2Context {
   machine?: Machine
   /** This connection, as a receiver of the `docker.log` and `env.log` its own requests stream */
   events?: EventSink
-  /** Linear and ElevenLabs with the server's own keys, and the skills on its disk (phase 5b) */
+  /** Linear with the server's own key, and the skills on its disk (phase 5b) */
   integrations?: Integrations
   /** Tells every authenticated connection the keys or voice settings changed (`integrations.changed`) */
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void

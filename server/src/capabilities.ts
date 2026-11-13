@@ -4,8 +4,8 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
 /**
  * What this server always has. `docker`, `env` and `stacks` say it serves those methods; whether
  * the machine has docker or colima installed is each call's answer (`env.check`, TOOL_ERROR).
- * `linear` and `voice` say it serves `linear.*` and `voice.*`; whether it has a key is
- * `linear.status`'s and `voice.settings`' answer. `review` (5c-2): the Changes tab's sources and
+ * `linear` says it serves `linear.*`; whether it has a key is `linear.status`'s answer. (`voice`
+ * is the voice plugin's legacy capability since plugin system phase 1, listed while it is registered.) `review` (5c-2): the Changes tab's sources and
  * draft line comments. `move` (5d): `move.*`, a worktree's
  * move to or from another server. `promote` (5e): `worktree.promote`, `worktree.demote`,
  * `promote.listen`, `promote.claim` and `promote.answer`, and promote_to_primary's
@@ -21,7 +21,6 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.env,
   CAPABILITY.stacks,
   CAPABILITY.linear,
-  CAPABILITY.voice,
   CAPABILITY.skills,
   CAPABILITY.review,
   CAPABILITY.move,

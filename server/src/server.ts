@@ -30,7 +30,6 @@ import { McpAccessStore } from './mcp/access'
 import { startMcpListener, type McpListener } from './mcp/listener'
 import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
 import { createEventSink, type Machine } from './integrations/machineHandlers'
-import { VOICE_SUMMARY_PROMPT } from '../../src/shared/providers/prompts.ts'
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
@@ -80,7 +79,7 @@ export interface ServerOptions {
   local?: boolean
   /** Docker, the environments and the dev stacks on this machine, with their files in the data dir (machine.ts) */
   machine?: Machine
-  /** Linear and ElevenLabs with the server's own keys (its secrets file), and the skills on its disk (integrations.ts) */
+  /** Linear with the server's own key (its secrets file), and the skills on its disk (integrations.ts) */
   integrations?: Integrations
   /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
   prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
@@ -158,8 +157,7 @@ export function startServer(
     store,
     hub,
     mcpAccess: access ? (projectId) => access.accessFor(projectId) : undefined,
-    pluginPrompt: (projectId) =>
-      [options.integrations?.voice.promptSessions() ? VOICE_SUMMARY_PROMPT : undefined, plugins?.sessionPrompt(projectId)].filter(Boolean).join('\n\n') || undefined,
+    pluginPrompt: (projectId) => plugins?.sessionPrompt(projectId),
     onSessionExit: (p) => pusher?.notify({ kind: 'session-stopped', ...p })
   })
 
@@ -578,7 +576,7 @@ export function startServer(
     shutdown: (reason) => shutdown(reason)
   }
   if (access) {
-    const caller = createToolCaller({ store, hub, projects, poller, sessions, voice: options.integrations?.voice, machine: options.machine, prWatch, promoteRequests })
+    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests })
     const callerFor = (projectId: string): ToolCall => {
       let call = callers.get(projectId)
       if (!call) callers.set(projectId, (call = caller(projectId)))

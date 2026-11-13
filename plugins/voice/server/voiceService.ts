@@ -1,15 +1,11 @@
-// ElevenLabs voice summaries with the server's API key (phase 5b; main's voice.ts before it).
-// Electron-free: the key is in a slot the caller owns (the server's secrets file), the voice and
+// ElevenLabs voice summaries with the server's API key (phase 5b; the voice plugin's since plugin
+// system phase 1). The key is in a slot the host owns (the server's secrets file), the voice and
 // model in a JSON file, and the API's base URL can be pointed at a test's stub server.
 import { readFileSync } from 'node:fs'
-import type { VoiceInfo, VoiceKeyResult, VoiceServerConfig, VoiceServerSettings } from '../shared/types'
-import { writeFileAtomic } from './atomicWrite.ts'
-import { MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES, readBodyCapped } from './httpBody.ts'
-import { PRESENT_ERROR, type KeySlot } from './linearService.ts'
+import type { VoiceInfo, VoiceKeyResult, VoiceServerConfig, VoiceServerSettings } from '../shared/types.ts'
+import { MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES, PRESENT_ERROR, readBodyCapped, writeFileAtomic, type KeySlot } from '../../../src/shared/plugins/server.ts'
 
 export const ELEVENLABS_API = 'https://api.elevenlabs.io/v1'
-/** The longest text synthesized (the speak_summary tool's limit): one to three short sentences. */
-export const MAX_SPOKEN_CHARS = 400
 const TIMEOUT_MS = 30_000
 
 export const DEFAULT_VOICE_CONFIG: Readonly<VoiceServerConfig> = Object.freeze({

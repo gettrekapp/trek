@@ -24,8 +24,6 @@ import type { PromoteRequests } from '../promote/requests.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { ToolDefinition } from './protocol.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
-import type { VoiceService } from '../../../src/host/voiceService.ts'
-import { requireSpokenText } from '../integrations/integrationHandlers.ts'
 import type { Machine } from '../integrations/machineHandlers.ts'
 import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
 import type { StackStatus } from '../../../src/shared/types'
@@ -92,19 +90,6 @@ export const MCP_TOOLS: ToolDefinition[] = [
         }
       },
       required: ['terminalId', 'question']
-    }
-  },
-  {
-    name: 'speak_summary',
-    description:
-      "Read a short spoken summary aloud to the user through the Trek server's ElevenLabs voice. Keep it SHORT: one to three plain sentences (max 400 characters), written to be heard — no markdown, code, file paths, URLs or lists. Use it only when your instructions or the user ask for spoken summaries. It plays in every Trek window that has this project open, one summary at a time, and is skipped where the user is set to Busy, so never repeat it. The result's windows counts the windows it was sent to, Busy ones included. Pass the TREK_TERMINAL_ID environment variable of your shell (echo $TREK_TERMINAL_ID).",
-    inputSchema: {
-      type: 'object',
-      properties: {
-        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' },
-        summary: { type: 'string', description: 'One to three short spoken sentences, at most 400 characters' }
-      },
-      required: ['terminalId', 'summary']
     }
   },
   {
@@ -405,7 +390,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine, and speak_summary reads a short summary aloud to the user. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   store: ConfigStore
@@ -413,8 +398,6 @@ export interface ToolDeps {
   projects: ProjectState
   poller: GitPoller
   sessions: SessionManager
-  /** ElevenLabs with the server's key, for speak_summary; without it the tool says voice is not set up */
-  voice?: VoiceService
   /** The dev stacks on the server's machine, for the stack tools; without it they say so */
   machine?: Machine
   /** The pull request watch, for watch_pull_request; without it the tool says the server does not watch PRs */
@@ -1092,29 +1075,6 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       start_stack: (args, project) => stackTool('start_stack', args, project),
       stop_stack: (args, project) => stackTool('stop_stack', args, project),
       read_stack_log: (args, project) => stackTool('read_stack_log', args, project),
-
-      speak_summary: async (args) => {
-        // Global sessions may speak too, so this does not go through targetIn.
-        const { session } = sessionIn(args.terminalId)
-        const summary = requireSpokenText(args.summary, 'summary')
-        const notSetUp = { played: false, reason: 'Voice summaries are not set up on this Trek server — do not call speak_summary again' }
-        // Ready: a key and a chosen voice (synthesize refuses without one).
-        let ready = false
-        try {
-          const settings = deps.voice?.settings()
-          ready = settings?.hasKey === true && !!settings.voiceId
-        } catch {
-          // An unreadable secrets file: not set up.
-        }
-        if (!ready) return notSetUp
-        const topic = projectTopic(projectId)
-        const nobody = { played: false, reason: 'No Trek window has this project open, so nobody would hear it' }
-        // Only the subscribers emit reaches: an MCP tool call's no-op subscriber hears nothing.
-        if (deps.hub.eventSubscriberCount(topic) === 0) return nobody
-        const audio = Buffer.from(await deps.voice!.synthesize(summary)).toString('base64')
-        const windows = deps.hub.emit(topic, 'voice.summary', { projectId, sessionId: session.id, text: summary, audio })
-        return windows > 0 ? { played: true, windows } : nobody
-      },
 
       close_session: async (args) => {
         const { session } = targetIn(args.terminalId)

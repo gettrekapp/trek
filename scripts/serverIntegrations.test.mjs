@@ -1,5 +1,6 @@
-// scripts/serverIntegrations.test.mjs — the server's secrets file, linear.*, voice.* and skills.list (phase 5b),
-// against local HTTP stubs of Linear's and ElevenLabs' APIs: nothing here reaches either service.
+// scripts/serverIntegrations.test.mjs — the server's secrets file, linear.* and skills.list (phase 5b),
+// against a local HTTP stub of Linear's API: nothing here reaches it. (voice.* is the voice plugin's:
+// scripts/voicePlugin.test.mjs.)
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -55,58 +56,14 @@ async function linearStub(t, options = {}) {
   return { url: `http://127.0.0.1:${server.address().port}/graphql`, requests }
 }
 
-/** A stub of ElevenLabs' API: `good-voice` is a valid key with two voices; speech is `mp3:<voice>:<model>:<text>`. */
-async function elevenLabsStub(t, options = {}) {
-  const requests = []
-  const server = createServer((req, res) => {
-    let body = ''
-    req.on('data', (c) => (body += c))
-    req.on('end', () => {
-      requests.push({ method: req.method, url: req.url, key: req.headers['xi-api-key'], body })
-      if (options.status) {
-        res.writeHead(options.status)
-        return res.end('quota exceeded')
-      }
-      if (req.headers['xi-api-key'] !== 'good-voice') {
-        res.writeHead(401)
-        return res.end()
-      }
-      if (req.method === 'GET' && req.url === '/v1/voices') {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        return res.end(JSON.stringify({ voices: [{ voice_id: 'v1', name: 'Rachel' }, { voice_id: 'v2', name: 'Adam' }] }))
-      }
-      const speech = /^\/v1\/text-to-speech\/([^?]+)\?output_format=mp3_44100_128$/.exec(req.url)
-      if (req.method === 'POST' && speech) {
-        const { text, model_id } = JSON.parse(body)
-        if (options.audioBytes) {
-          // A clip over the cap, streamed without a content-length.
-          res.writeHead(200, { 'content-type': 'audio/mpeg', 'transfer-encoding': 'chunked' })
-          const chunk = Buffer.alloc(64 * 1024, 1)
-          for (let sent = 0; sent < options.audioBytes; sent += chunk.length) res.write(chunk)
-          return res.end()
-        }
-        res.writeHead(200, { 'content-type': 'audio/mpeg' })
-        return res.end(`mp3:${decodeURIComponent(speech[1])}:${model_id}:${text}`)
-      }
-      res.writeHead(404)
-      res.end()
-    })
-  })
-  await new Promise((r) => server.listen(0, '127.0.0.1', r))
-  t.after(() => server.close())
-  return { url: `http://127.0.0.1:${server.address().port}/v1`, requests }
-}
-
 async function setup(t, options = {}) {
   const dir = tempDir(t)
   const stub = await linearStub(t, options)
-  const voiceStub = await elevenLabsStub(t, options.voice)
   const secretsFile = secretsPathFor(join(dir, 'config.json'))
-  const voiceConfigFile = join(dir, 'data', 'voice.json')
-  const integrations = createIntegrations({ secretsFile, linearEndpoint: stub.url, voiceConfigFile, elevenLabsApi: voiceStub.url })
+  const integrations = createIntegrations({ secretsFile, linearEndpoint: stub.url })
   const ctx = { integrations }
   const call = (method, params) => dispatchV2(method, params, ctx)
-  return { dir, stub, voiceStub, secretsFile, voiceConfigFile, integrations, call }
+  return { dir, stub, secretsFile, integrations, call }
 }
 
 const refused = (res, code) => {
@@ -211,65 +168,6 @@ test('linear.*: a server without integrations answers NOT_FOUND', async () => {
   refused(await dispatchV2('linear.status', {}, {}), 'NOT_FOUND')
 })
 
-test('voice.setKey checks the key by listing its voices, picks the first voice, and never sends the key back', async (t) => {
-  const s = await setup(t)
-  assert.deepEqual((await s.call('voice.settings', {})).result, { voiceId: '', modelId: 'eleven_flash_v2_5', promptSessions: false, hasKey: false })
-  assert.deepEqual((await s.call('voice.setKey', { apiKey: 'bad' })).result, { ok: false, error: 'ElevenLabs rejected the API key' })
-  const set = await s.call('voice.setKey', { apiKey: 'good-voice' })
-  assert.deepEqual(set.result, { ok: true, voices: [{ id: 'v1', name: 'Rachel' }, { id: 'v2', name: 'Adam' }] })
-  assert.equal(JSON.stringify(set).includes('good-voice'), false)
-  assert.deepEqual((await s.call('voice.settings', {})).result, { voiceId: 'v1', modelId: 'eleven_flash_v2_5', promptSessions: false, hasKey: true })
-  assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
-  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { elevenlabs: 'good-voice' })
-  assert.deepEqual((await s.call('voice.voices', {})).result, [{ id: 'v1', name: 'Rachel' }, { id: 'v2', name: 'Adam' }])
-  // A voice already chosen is kept by a later key.
-  await s.call('voice.setConfig', { voiceId: 'v2' })
-  await s.call('voice.setKey', { apiKey: 'good-voice' })
-  assert.equal((await s.call('voice.settings', {})).result.voiceId, 'v2')
-  // ifAbsent keeps the stored key without a request, and stores one unchecked on a server without.
-  const before = s.voiceStub.requests.length
-  assert.deepEqual((await s.call('voice.setKey', { apiKey: 'other', ifAbsent: true })).result, { ok: false, error: 'This server already has a key; it was kept', present: true })
-  assert.equal(s.voiceStub.requests.length, before)
-  const fresh = await setup(t)
-  assert.deepEqual((await fresh.call('voice.setKey', { apiKey: 'app-voice', ifAbsent: true })).result, { ok: true, voices: [] })
-  assert.deepEqual([fresh.voiceStub.requests.length, (await fresh.call('voice.settings', {})).result.hasKey], [0, true])
-  assert.equal((await s.call('voice.clearKey', {})).ok, true)
-  assert.equal((await s.call('voice.settings', {})).result.hasKey, false)
-  refused(await s.call('voice.voices', {}), 'TOOL_ERROR')
-})
-
-test('voice.setConfig checks each field; voice.synthesize speaks in the chosen voice and model, to this connection', async (t) => {
-  const s = await setup(t)
-  refused(await s.call('voice.synthesize', { text: 'Hi' }), 'TOOL_ERROR')
-  await s.call('voice.setKey', { apiKey: 'good-voice' })
-  const config = await s.call('voice.setConfig', { modelId: 'eleven_turbo_v2_5', promptSessions: true })
-  assert.deepEqual(config.result, { voiceId: 'v1', modelId: 'eleven_turbo_v2_5', promptSessions: true })
-  assert.deepEqual(JSON.parse(readFileSync(s.voiceConfigFile, 'utf8')), config.result)
-  assert.equal(s.integrations.voice.promptSessions(), true)
-  const spoken = await s.call('voice.synthesize', { text: ' Hello there. ' })
-  assert.equal(Buffer.from(spoken.result.audio, 'base64').toString(), 'mp3:v1:eleven_turbo_v2_5:Hello there.')
-  for (const params of [{ voiceId: '../x' }, { voiceId: '' }, { modelId: 'a b' }, { promptSessions: 'yes' }, { promptSessions: 1 }, { active: true }, { voiceId: 'v2', extra: 1 }]) {
-    refused(await s.call('voice.setConfig', params), 'BAD_REQUEST')
-  }
-  // Nothing refused reached the file.
-  assert.deepEqual(JSON.parse(readFileSync(s.voiceConfigFile, 'utf8')), config.result)
-  refused(await s.call('voice.synthesize', { text: 'x'.repeat(401) }), 'BAD_REQUEST')
-  refused(await s.call('voice.synthesize', { text: '' }), 'BAD_REQUEST')
-  // Without a key, sessions are not told to speak whatever the setting.
-  await s.call('voice.clearKey', {})
-  assert.equal(s.integrations.voice.promptSessions(), false)
-})
-
-test('voice.*: an ElevenLabs that fails is TOOL_ERROR with its message', async (t) => {
-  const s = await setup(t, { voice: { status: 429 } })
-  assert.deepEqual((await s.call('voice.setKey', { apiKey: 'good-voice' })).result, { ok: false, error: 'ElevenLabs returned 429: quota exceeded' })
-  createSecretFile(s.secretsFile).set('elevenlabs', 'good-voice')
-  await s.call('voice.setConfig', { voiceId: 'v1' })
-  const res = await s.call('voice.synthesize', { text: 'Hi' })
-  refused(res, 'TOOL_ERROR')
-  assert.match(res.error.message, /429/)
-})
-
 test('TopicHub.emit reaches the subscribers that take events and counts the ones it was sent to', () => {
   const hub = new TopicHub()
   hub.publish('project:p', {})
@@ -311,7 +209,7 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
     poller.stop()
     store.close()
   })
-  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), voiceConfigFile: join(dir, 'voice.json'), home })
+  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), home })
   const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, integrations }
   const call = (method, params) => dispatchV2(method, params, ctx)
   const projectId = (await call('project.create', { name: 'P', repositories: [{ path: a }] })).result.projectId
@@ -336,83 +234,21 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
 /** The secrets file a directory: every read of it fails (EISDIR), whoever runs the test. */
 const unreadableSecrets = (s) => mkdirSync(s.secretsFile, { recursive: true })
 
-test('setKey with an unreadable secrets file is TOOL_ERROR before any request, with or without ifAbsent', async (t) => {
+test('linear.setKey with an unreadable secrets file is TOOL_ERROR before any request, with or without ifAbsent', async (t) => {
   const s = await setup(t)
   unreadableSecrets(s)
-  for (const method of ['linear.setKey', 'voice.setKey']) {
-    for (const ifAbsent of [false, true]) {
-      const res = await s.call(method, { apiKey: method === 'linear.setKey' ? 'good-key' : 'good-voice', ifAbsent })
-      refused(res, 'TOOL_ERROR')
-      assert.match(res.error.message, /cannot be read/)
-    }
+  for (const ifAbsent of [false, true]) {
+    const res = await s.call('linear.setKey', { apiKey: 'good-key', ifAbsent })
+    refused(res, 'TOOL_ERROR')
+    assert.match(res.error.message, /cannot be read/)
   }
-  assert.deepEqual([s.stub.requests.length, s.voiceStub.requests.length], [0, 0])
-})
-
-test('voice.setKey: a key stored whose voice choice cannot be saved is TOOL_ERROR saying the key was kept', async (t) => {
-  const s = await setup(t)
-  // voice.json's directory is a file: the config reads as the defaults and cannot be written.
-  writeFileSync(join(s.dir, 'data'), '')
-  const res = await s.call('voice.setKey', { apiKey: 'good-voice' })
-  refused(res, 'TOOL_ERROR')
-  assert.match(res.error.message, /key was stored.*voice could not be saved/)
-  assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { elevenlabs: 'good-voice' })
-})
-
-test('voice.setKey: a key stored whose voice choice cannot be saved still says the voice changed', async (t) => {
-  const s = await setup(t)
-  writeFileSync(join(s.dir, 'data'), '')
-  const changes = []
-  const res = await dispatchV2('voice.setKey', { apiKey: 'good-voice' }, { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) })
-  refused(res, 'TOOL_ERROR')
-  assert.deepEqual(changes, [{ voice: true }])
-  // A key refused before anything was stored says nothing.
-  changes.length = 0
-  await dispatchV2('voice.setKey', { apiKey: 'bad-voice' }, { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) })
-  assert.deepEqual(changes, [])
-})
-
-test('voice.json that cannot be parsed: settings read the defaults, but setConfig and the first-voice pick fail and leave it as it was', async (t) => {
-  const s = await setup(t)
-  mkdirSync(join(s.dir, 'data'), { recursive: true })
-  writeFileSync(s.voiceConfigFile, '{"voiceId": "v2", "promptSessions": tr')
-  const original = readFileSync(s.voiceConfigFile, 'utf8')
-  assert.equal((await s.call('voice.settings', {})).result.voiceId, '')
-  assert.equal(s.integrations.voice.promptSessions(), false)
-  const res = await s.call('voice.setConfig', { modelId: 'eleven_turbo_v2_5' })
-  refused(res, 'TOOL_ERROR')
-  assert.equal(readFileSync(s.voiceConfigFile, 'utf8'), original)
-  const key = await s.call('voice.setKey', { apiKey: 'good-voice' })
-  refused(key, 'TOOL_ERROR')
-  assert.match(key.error.message, /key was stored.*voice could not be saved/)
-  assert.equal(readFileSync(s.voiceConfigFile, 'utf8'), original)
-  // Neither is a JSON value that is not an object replaced.
-  writeFileSync(s.voiceConfigFile, '[1]')
-  refused(await s.call('voice.setConfig', { promptSessions: true }), 'TOOL_ERROR')
-  assert.equal(readFileSync(s.voiceConfigFile, 'utf8'), '[1]')
+  assert.equal(s.stub.requests.length, 0)
 })
 
 test('linear.setKey: a 400 whose body is not JSON is a failed check, not a parse error', async (t) => {
   const s = await setup(t, { notJson: true })
   assert.deepEqual((await s.call('linear.setKey', { apiKey: 'good-key' })).result, { ok: false, error: 'Linear API returned 400' })
   assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
-})
-
-test('sessions are prompted to speak only with a key, a chosen voice and the setting on', async (t) => {
-  const s = await setup(t)
-  await s.call('voice.setKey', { apiKey: 'app-voice', ifAbsent: true })
-  await s.call('voice.setConfig', { promptSessions: true })
-  assert.equal(s.integrations.voice.promptSessions(), false)
-  await s.call('voice.setConfig', { voiceId: 'v1' })
-  assert.equal(s.integrations.voice.promptSessions(), true)
-})
-
-test('voice.synthesize: a clip over 4 MiB is TOOL_ERROR', async (t) => {
-  const s = await setup(t, { voice: { audioBytes: 4 * 1024 * 1024 + 64 * 1024 } })
-  await s.call('voice.setKey', { apiKey: 'good-voice' })
-  const res = await s.call('voice.synthesize', { text: 'Hi' })
-  refused(res, 'TOOL_ERROR')
-  assert.match(res.error.message, /larger than/)
 })
 
 test('readBodyCapped: content-length over the cap, a stream over the cap, and one under it', async () => {
@@ -432,7 +268,7 @@ async function skillsSetup(t) {
   execFileSync('git', ['init', '-q', '-b', 'main', a])
   const home = join(dir, 'home')
   mkdirSync(home, { recursive: true })
-  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), voiceConfigFile: join(dir, 'voice.json'), home })
+  const integrations = createIntegrations({ secretsFile: join(dir, 'secrets.json'), home })
   return { dir, a, home, list: () => integrations.skills.list(a) }
 }
 
@@ -485,7 +321,7 @@ test("skills.list lists nothing from a worktree's .claude (or its skills dir) th
   assert.deepEqual((await s.list()).map((x) => x.name), ['ship', 'mine'])
 })
 
-test('integrations.changed: a stored key, a cleared key and new voice settings say so; a refused or kept key does not', async (t) => {
+test('integrations.changed: a stored key and a cleared key say so; a refused or kept key does not', async (t) => {
   const s = await setup(t)
   const changes = []
   const ctx = { integrations: s.integrations, integrationsChanged: (parts) => changes.push(parts) }
@@ -496,18 +332,9 @@ test('integrations.changed: a stored key, a cleared key and new voice settings s
   await call('linear.setKey', { apiKey: 'other', ifAbsent: true })
   await call('linear.clearKey', {})
   assert.deepEqual(changes, [{ linear: true }, { linear: true }])
-  changes.length = 0
-  await call('voice.setKey', { apiKey: 'bad-voice' })
-  assert.deepEqual(changes, [])
-  await call('voice.setKey', { apiKey: 'good-voice' })
-  await call('voice.setConfig', { promptSessions: true })
-  refused(await call('voice.setConfig', { voiceId: 'no spaces' }), 'BAD_REQUEST')
-  await call('voice.clearKey', {})
-  assert.deepEqual(changes, [{ voice: true }, { voice: true }, { voice: true }])
   // Reads say nothing.
   changes.length = 0
   await call('linear.status', {})
-  await call('voice.settings', {})
   assert.deepEqual(changes, [])
 })
 
