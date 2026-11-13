@@ -15,6 +15,11 @@ import { createHash, randomBytes } from 'node:crypto'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 
 const WAIT_MS = 5000
+// The welcome's capabilities: Windows (W1) serves no environments or dev stacks yet
+// (server/src/capabilities.ts), so there `env` and `stacks` must be absent.
+const WINDOWS_OFF = process.platform === 'win32' ? ['env', 'stacks'] : []
+const EXPECTED_CAPABILITIES = ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills']
+  .filter((c) => !WINDOWS_OFF.includes(c))
 
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
@@ -109,7 +114,7 @@ const mirror = new TopicMirror(conn)
 const ptys = new PtyStream(conn)
 conn.connect()
 if (!(await waitFor(() => conn.status === 'connected'))) abort(`connect: status ${conn.status} (${statuses.join(' > ')})`)
-if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills'].every((c) => conn.welcome?.capabilities.includes(c))) fail(`welcome capabilities: ${JSON.stringify(conn.welcome)}`)
+if (!(EXPECTED_CAPABILITIES.every((c) => conn.welcome?.capabilities.includes(c)) && WINDOWS_OFF.every((c) => !conn.welcome?.capabilities.includes(c)))) fail(`welcome capabilities: ${JSON.stringify(conn.welcome)}`)
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
 
 // --- 2. server topic ---
