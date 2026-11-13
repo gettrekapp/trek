@@ -114,6 +114,14 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
     }
   }, [visible, terminalId])
 
+  // A hidden pane leaves no modal behind (they render outside the pane, so would stay shown).
+  useEffect(() => {
+    if (!visible) {
+      setEditing(null)
+      setRunning(null)
+    }
+  }, [visible])
+
   // Back online: the stream has re-attached (or is about to); a shown pane claims its size again.
   // Only on the way from offline to online: the show above covers a pane that becomes visible.
   const wasOffline = useRef(offline)
@@ -215,7 +223,10 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
               ? undefined
               : () => setButtons((quickButtons ?? []).filter((b) => b.id !== editing.id))
           }
-          onClose={() => setEditing(null)}
+          onClose={() => {
+            setEditing(null)
+            focusTerminal(terminalId)
+          }}
         />
       )}
       {running && (
@@ -224,7 +235,10 @@ export function TerminalPane({ terminalId, visible, global = false, readOnly }: 
           plan={running.plan}
           builtins={running.builtins}
           onSend={send}
-          onClose={() => setRunning(null)}
+          onClose={() => {
+            setRunning(null)
+            focusTerminal(terminalId)
+          }}
         />
       )}
     </>

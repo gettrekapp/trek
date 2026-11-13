@@ -4649,6 +4649,12 @@ body.resizing-row {
 
 /* ─── Quick button modals ──────────────────────────────────────────────── */
 
+/* Short: no scrolling, so the built-in menu and suggestions float over the modal's edge */
+.quick-btn-modal {
+  overflow: visible;
+  max-height: none;
+}
+
 .quick-btn-modal-field {
   display: flex;
   flex-direction: column;
