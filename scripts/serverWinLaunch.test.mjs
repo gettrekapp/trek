@@ -175,6 +175,28 @@ test('winSpawnPlan refuses: a multi-line argument to a batch file, an env prefix
   assert.throws(() => winSpawnPlan(launchSpec('C:\\tools\\claude.exe', [quoted('x'.repeat(MAX_COMMAND_LINE))]), winDeps()), /over Windows' limit of 32767/)
 })
 
+test("winSpawnPlan: the whole command line stays under Windows' limit (32767 counts the NUL)", () => {
+  // `C:\tools\claude.exe` (19) + a space + the argument
+  assert.doesNotThrow(() => winSpawnPlan(launchSpec('C:\\tools\\claude.exe', [word('x'.repeat(MAX_COMMAND_LINE - 21))]), winDeps()))
+  assert.throws(() => winSpawnPlan(launchSpec('C:\\tools\\claude.exe', [word('x'.repeat(MAX_COMMAND_LINE - 20))]), winDeps()), /is 32767 characters, over Windows' limit/)
+})
+
+test("winSpawnPlan: a batch file's cmd.exe line stays under cmd's limit of 8191", () => {
+  assert.doesNotThrow(() => winSpawnPlan(launchSpec('C:\\tools\\plain.cmd', [word('x'.repeat(7000))]), winDeps()))
+  assert.throws(
+    () => winSpawnPlan(launchSpec('C:\\tools\\plain.cmd', [word('x'.repeat(8200))]), winDeps()),
+    /`C:\\tools\\plain\.cmd` is a batch file \(plain\.cmd\), and its cmd\.exe command line is \d+ characters, over cmd's limit of 8191/
+  )
+})
+
+test('winSpawnPlan: only .exe/.com run directly; another PATHEXT match (.js, .vbs, .msc) is refused', () => {
+  const env = { ...ENV, PATHEXT: '.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC' }
+  const deps = { ...winDeps({ 'C:\\tools\\agent.js': '', 'C:\\Users\\u\\AppData\\Roaming\\npm\\helper.vbs': '', 'C:\\tools\\run.com': '' }), env }
+  assert.equal(winSpawnPlan(launchSpec('C:\\tools\\run.com', []), deps).file, 'C:\\tools\\run.com')
+  assert.throws(() => winSpawnPlan(launchSpec('C:\\tools\\agent.js', []), deps), /`C:\\tools\\agent\.js` resolves to agent\.js, a \.js file: Trek runs only \.exe, \.com, \.cmd or \.bat/)
+  assert.throws(() => winSpawnPlan(launchSpec('helper', []), deps), /`helper` resolves to helper\.vbs, a \.vbs file/)
+})
+
 test('sessionProcess: POSIX keeps the login shell; Windows refusals are BAD_REQUEST', () => {
   const spec = launchSpec('claude', [word('--session-id'), word('x')])
   assert.deepEqual(sessionProcess(spec, '/w', 'linux', { SHELL: '/bin/zsh' }), shellLaunch(spec.command, 'linux', { SHELL: '/bin/zsh' }))

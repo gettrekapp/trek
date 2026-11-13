@@ -7,11 +7,16 @@
 //     script directly, so no cmd.exe sits in between (multi-line prompts work, and Ctrl+C never
 //     asks "Terminate batch job (Y/N)?");
 //   - any other .cmd or .bat runs under cmd.exe with its metacharacters escaped (cross-spawn's
-//     rules); cmd.exe can't pass a newline inside an argument, so such a launch is refused.
+//     rules); cmd.exe can't pass a newline inside an argument, nor read a line over 8191
+//     characters, so such a launch is refused;
+//   - anything else PATHEXT names (.js, .vbs, .wsf, .msc…) is refused: CreateProcess can't run it.
 // Everything here takes the env and the file system as arguments, so it is tested on any OS.
 import { win32 } from 'node:path'
 import type { LaunchSpec } from '../../../src/shared/providers/types'
 import { argvOf } from '../../../src/shared/providers/shell.ts'
+import { envValue, findOnPath, pathExts } from '../../../src/host/commandPath.ts'
+
+export { envValue }
 
 /** What node-pty spawns: `file`, with `args` as the raw command line after it. */
 export interface WinSpawnPlan {
@@ -28,17 +33,11 @@ export interface WinLaunchDeps {
   readFile: (path: string) => string
 }
 
-/** Windows' limit on a whole command line (CreateProcess's lpCommandLine), in UTF-16 units. */
+/** Windows' limit on a whole command line (CreateProcess's lpCommandLine), in UTF-16 units, its NUL included. */
 export const MAX_COMMAND_LINE = 32_767
 
-const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD'
-
-/** A variable of the env, by Windows' case-insensitive name (`Path`, `PATH`). */
-export function envValue(env: Record<string, string | undefined>, name: string): string | undefined {
-  const wanted = name.toLowerCase()
-  for (const [key, value] of Object.entries(env)) if (key.toLowerCase() === wanted && value !== undefined) return value
-  return undefined
-}
+/** cmd.exe's limit on the command line it reads, in characters. */
+export const MAX_CMD_LINE = 8_191
 
 /** One argument quoted for CommandLineToArgvW and the MSVC runtime. */
 export function quoteWindowsArg(arg: string): string {
@@ -127,21 +126,13 @@ export function parseWindowsCommandLine(line: string): string[] {
  * else each PATH directory in turn; each with PATHEXT's extensions unless it already has one.
  */
 export function resolveWindowsCommand(name: string, deps: Pick<WinLaunchDeps, 'env' | 'cwd' | 'isFile'>): string | undefined {
-  const exts = (envValue(deps.env, 'PATHEXT') ?? DEFAULT_PATHEXT)
-    .split(';')
-    .map((e) => e.trim().toLowerCase())
-    .filter((e) => e.startsWith('.'))
-  const hasExt = exts.includes(win32.extname(name).toLowerCase())
-  const candidates = (base: string): string[] => (hasExt ? [base] : exts.map((e) => base + e))
-  const find = (base: string): string | undefined => candidates(base).find((c) => deps.isFile(c))
-  if (/[\\/]/.test(name) || win32.isAbsolute(name)) return find(win32.resolve(deps.cwd, name))
-  for (const raw of (envValue(deps.env, 'PATH') ?? '').split(';')) {
-    const dir = raw.trim().replace(/^"(.*)"$/, '$1')
-    if (!dir || !win32.isAbsolute(dir)) continue
-    const hit = find(win32.join(dir, name))
-    if (hit) return hit
+  const exts = pathExts(deps.env)
+  if (/[\\/]/.test(name) || win32.isAbsolute(name)) {
+    const base = win32.resolve(deps.cwd, name)
+    const hasExt = exts.includes(win32.extname(name).toLowerCase())
+    return (hasExt ? [base] : exts.map((e) => base + e)).find((c) => deps.isFile(c))
   }
-  return undefined
+  return findOnPath(name, deps.env, deps.isFile, exts)
 }
 
 /** An npm shim's target: node (the shim's own node.exe if it has one), its arguments, and the script. */
@@ -185,6 +176,11 @@ export function cmdEscapeCommand(path: string): string {
   return path.replace(CMD_META, '^$1')
 }
 
+/** The whole command line `plan` makes (node-pty puts the quoted file before its args). */
+function commandLineLength(plan: WinSpawnPlan): number {
+  return quoteWindowsArg(plan.file).length + 1 + plan.args.length
+}
+
 function joinArgs(args: string[]): string {
   return args.map(quoteWindowsArg).join(' ')
 }
@@ -219,10 +215,22 @@ export function winSpawnPlan(spec: LaunchSpec, deps: WinLaunchDeps): WinSpawnPla
       const doubleEscape = /%\*/.test(text)
       const inner = [cmdEscapeCommand(resolved), ...argv.map((a) => cmdEscapeArg(a, doubleEscape))].join(' ')
       plan = { file: comspec, args: `/d /s /c "${inner}"` }
+      const cmdLength = commandLineLength(plan)
+      if (cmdLength > MAX_CMD_LINE) {
+        throw new Error(
+          `\`${name}\` is a batch file (${win32.basename(resolved)}), and its cmd.exe command line is ${cmdLength} characters, over cmd's limit of ${MAX_CMD_LINE}; shorten the session's prompt, or install the agent's native binary or its npm package`
+        )
+      }
     }
-  } else plan = { file: resolved, args: joinArgs(argv) }
-  const length = quoteWindowsArg(plan.file).length + 1 + plan.args.length
-  if (length > MAX_COMMAND_LINE) {
+  } else if (ext === '.exe' || ext === '.com') plan = { file: resolved, args: joinArgs(argv) }
+  else {
+    throw new Error(
+      `\`${name}\` resolves to ${win32.basename(resolved)}, a ${ext || 'extensionless'} file: Trek runs only .exe, .com, .cmd or .bat programs on Windows`
+    )
+  }
+  const length = commandLineLength(plan)
+  // The limit counts the terminating NUL.
+  if (length >= MAX_COMMAND_LINE) {
     throw new Error(`The command line is ${length} characters, over Windows' limit of ${MAX_COMMAND_LINE}; shorten the session's prompt`)
   }
   return plan
