@@ -13,6 +13,7 @@ import type { EventPayloadsV2 } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { MAX_COLS, MAX_ROWS } from './limits.ts'
 import { isQueryReply } from './status.ts'
+import { killTree, killTreeSync } from '../../../src/host/processTree.ts'
 
 const { Terminal } = (xtermNamespace as { default?: typeof xtermNamespace }).default ?? xtermNamespace
 
@@ -49,15 +50,18 @@ export interface PtyProcess {
   readonly pid?: number
 }
 
-/** SIGKILL to the process group `pid` leads, if there is one (none on Windows, or for a fake pty without a pid). */
-function killGroup(pid: number | undefined): void {
-  if (process.platform === 'win32' || pid === undefined || !Number.isInteger(pid) || pid <= 1) return
-  try {
-    process.kill(-pid, 'SIGKILL')
-  } catch {
-    // gone already (ESRCH), or not ours to signal
+/**
+ * Ends the process tree `pid` heads (none for a fake pty without a pid). POSIX: SIGKILL to its
+ * process group. Windows: taskkill /T /F, `sync` when the server is about to exit.
+ */
+export type TreeKiller = (pid: number | undefined, sync: boolean) => void
+
+const defaultTreeKiller =
+  (platform: NodeJS.Platform): TreeKiller =>
+  (pid, sync) => {
+    if (sync) killTreeSync(pid, { platform })
+    else void killTree(pid, { platform })
   }
-}
 
 export interface SpawnOptions {
   file: string
@@ -87,6 +91,10 @@ export interface TerminalHostDeps {
   onOutput?: (ptyId: string, data: string) => void
   /** The program rang the terminal bell (from the headless screen) */
   onBell?: (ptyId: string) => void
+  /** Default process.platform; win32 changes how a pty is force-killed */
+  platform?: NodeJS.Platform
+  /** Default killTree/killTreeSync for `platform` */
+  treeKiller?: TreeKiller
 }
 
 interface PtyRecord {
@@ -148,6 +156,8 @@ export class TerminalHost {
   private readonly killTimeoutMs: number
   private readonly onOutputHook?: TerminalHostDeps['onOutput']
   private readonly onBellHook?: TerminalHostDeps['onBell']
+  private readonly platform: NodeJS.Platform
+  private readonly treeKiller: TreeKiller
 
   constructor(deps: TerminalHostDeps) {
     this.spawner = deps.spawner ?? nodePtySpawner
@@ -155,6 +165,26 @@ export class TerminalHost {
     this.killTimeoutMs = deps.killTimeoutMs ?? KILL_TIMEOUT_MS
     this.onOutputHook = deps.onOutput
     this.onBellHook = deps.onBell
+    this.platform = deps.platform ?? process.platform
+    this.treeKiller = deps.treeKiller ?? defaultTreeKiller(this.platform)
+  }
+
+  /**
+   * The last resort for a pty's process. POSIX: SIGKILL to it. Windows: node-pty's kill() takes no
+   * signal there (it throws "Signals not supported on windows"), so the whole tree goes through
+   * taskkill instead.
+   */
+  private forceKill(record: PtyRecord, sync = false): void {
+    if (this.platform === 'win32') {
+      this.treeKiller(record.proc.pid, sync)
+      return
+    }
+    record.proc.kill('SIGKILL')
+  }
+
+  /** The process group (POSIX) or tree (Windows) `pid` heads. */
+  private killGroup(pid: number | undefined): void {
+    this.treeKiller(pid, false)
   }
 
   spawn(ptyId: string, opts: SpawnOptions): void {
@@ -216,7 +246,7 @@ export class TerminalHost {
   forceKillAll(): void {
     for (const record of this.records.values()) {
       try {
-        record.proc.kill('SIGKILL')
+        this.forceKill(record, true)
       } catch {
         // already gone
       }
@@ -307,7 +337,7 @@ export class TerminalHost {
     record.killTimer = setTimeout(() => {
       if (this.records.get(ptyId) !== record) return
       try {
-        record.proc.kill('SIGKILL')
+        this.forceKill(record)
       } catch (err) {
         console.warn(`pty ${ptyId}: SIGKILL failed`, err)
       }
@@ -329,7 +359,10 @@ export class TerminalHost {
     // member runs, so its id is not reused meanwhile.
     const groups = alive().map((r) => r.proc.pid)
     const killGroups = (): void => {
-      for (const pid of groups) killGroup(pid)
+      // Windows: these pids' processes have exited, and Windows reuses pids quickly, so a
+      // taskkill /T now could end some unrelated process's tree. Only live ones are killed there.
+      if (this.platform === 'win32') return
+      for (const pid of groups) this.killGroup(pid)
     }
     const wait = async (ms: number): Promise<boolean> => {
       const until = Date.now() + ms
@@ -345,7 +378,8 @@ export class TerminalHost {
     }
     for (const record of alive()) {
       // The group, and the process itself (in case it is not a group leader).
-      killGroup(record.proc.pid)
+      this.killGroup(record.proc.pid)
+      if (this.platform === 'win32') continue
       try {
         record.proc.kill('SIGKILL')
       } catch {

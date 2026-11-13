@@ -9,6 +9,7 @@ import { basename, isAbsolute, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import type { StackLogChunk, StackStatus } from '../shared/types'
 import { hidden } from './childOptions.ts'
+import { killTree } from './processTree.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -169,11 +170,8 @@ export function createStackService({ stateDir, beforeStart }: StackServiceOption
     try {
       const pid = await upPid(slug)
       if (pid) {
-        try {
-          process.kill(-pid, 'SIGINT')
-        } catch {
-          // already gone
-        }
+        // Ctrl-C to its process group; Windows has neither, so there the tree is ended (taskkill /T /F).
+        await killTree(pid, { signal: 'SIGINT' })
         await waitForExit(pid, 60_000)
       }
       const { exit } = await runScript(ws, slug, [command])

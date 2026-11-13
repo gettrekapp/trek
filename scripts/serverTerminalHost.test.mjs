@@ -480,6 +480,54 @@ test('forceKillAll sends SIGKILL to every pty still alive', (t) => {
   assert.deepEqual(signals, ['SIGKILL', 'SIGKILL'])
 })
 
+test('win32: forceKillAll ends each pty\'s tree synchronously, never with a signal', (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  host.spawn('p2', opts)
+  spawned[0].pid = 101
+  spawned[1].pid = 102
+  const signals = []
+  for (const p of spawned) p.kill = (signal) => signals.push(signal)
+  host.forceKillAll()
+  assert.deepEqual(trees, [[101, true], [102, true]])
+  assert.deepEqual(signals, [])
+})
+
+test('win32: kill() sends no signal, and a pty still running at the timeout has its tree killed', async (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', killTimeoutMs: 10, treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  spawned[0].pid = 201
+  const signals = []
+  spawned[0].kill = (signal) => signals.push(signal)
+  host.kill('p1')
+  assert.deepEqual(signals, [undefined], 'node-pty on Windows throws when given a signal')
+  await new Promise((r) => setTimeout(r, 40))
+  assert.deepEqual(trees, [[201, false]])
+})
+
+test('win32: whenGone never kills the tree of a pty that already exited (Windows reuses pids)', async (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  spawned[0].pid = 301
+  host.kill('p1')
+  assert.equal(await host.whenGone(['p1'], 1000), true)
+  assert.deepEqual(trees, [])
+})
+
+test('win32: whenGone kills the tree of a pty that outlives the timeout', async (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', killTimeoutMs: 60_000, treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  spawned[0].pid = 401
+  spawned[0].kill = () => {}
+  host.kill('p1')
+  assert.equal(await host.whenGone(['p1'], 30, 30), false)
+  assert.deepEqual(trees, [[401, false]])
+})
+
 test('spawn and resize cap sizes at 500 columns and 200 rows', (t) => {
   const { host } = setup(t)
   const bad = (e) => e.code === 'BAD_REQUEST'
