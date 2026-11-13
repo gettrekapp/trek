@@ -18,6 +18,17 @@ export interface PluginManifest {
   legacyCapability?: string
   /** The `secrets.json` names its server half may read and write (`host.secret`) */
   secrets?: readonly string[]
+  /**
+   * Project setting keys the plugin owns (plugin system phase 2), with their kind: stored at the
+   * top of the project's settings under these names (`linearWorkspace`), checked by the plugin's
+   * server half (`checkProjectSetting`). A name can't be a core setting's or another plugin's.
+   */
+  projectSettings?: Readonly<Record<string, 'string'>>
+  /**
+   * A server older than plugins had this built in, with no capability saying so (Azure DevOps
+   * tickets): a client counts it `legacy` (on) there.
+   */
+  legacyBuiltIn?: true
 }
 
 /** A per-app preference value (the app settings' `plugins[id]`). */

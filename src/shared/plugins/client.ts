@@ -8,6 +8,7 @@
 // React, from the app as externals; it must never bundle its own.
 import { createContext, useContext, type FC } from 'react'
 import type { PluginManifest, PluginPrefValue } from './manifest.ts'
+import type { TicketInfo, TicketProvider } from './tickets.ts'
 
 export type { PluginPrefValue }
 
@@ -36,10 +37,17 @@ export interface ClientPluginHost {
   }
   /** A session's label as the window shows it ("Claude 2", the worktree's name) */
   terminalLabel(terminalId: string): string
+  /**
+   * This plugin's looked-up tickets (phase 2), by ticket id: replaces what it published before. The
+   * window's ticket chips show their status and title.
+   */
+  setTicketInfo(info: Readonly<Record<string, TicketInfo>>): void
 }
 
 export interface ClientPlugin {
   manifest: PluginManifest
+  /** A ticket tracker (phase 2): the window's ticket chips and link dialog go through it where the plugin is on */
+  ticketProvider?: TicketProvider
   /** Mounted once per project window while the server has the plugin and it is on for the project */
   Runtime?: FC
   slots?: {

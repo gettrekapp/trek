@@ -6,6 +6,7 @@ import type { PluginManifest, PluginPrefValue } from '../../../shared/plugins/ma
 import type { AppSettings, AppSettingsPatch } from '../../../shared/appSettings.ts'
 import type { WindowBackend } from '../backend'
 import { changedFor, forProject } from './presence.ts'
+import { ticketInfoStore, type TicketInfoStore } from './ticketInfo.ts'
 
 export interface AppSettingsApi {
   get(): Promise<AppSettings>
@@ -18,6 +19,8 @@ export interface HostDeps {
   terminalLabel(terminalId: string): string
   /** The window's backend now (getBackend) */
   currentBackend(): WindowBackend
+  /** Where `setTicketInfo` publishes (default: the window's store) */
+  ticketInfo?: TicketInfoStore
 }
 
 const prefsOf = (settings: AppSettings, id: string): Record<string, PluginPrefValue> =>
@@ -74,6 +77,8 @@ export function createClientHost(manifest: PluginManifest, backend: WindowBacken
         })
       }
     },
-    terminalLabel: (terminalId) => deps.terminalLabel(terminalId)
+    terminalLabel: (terminalId) => deps.terminalLabel(terminalId),
+    // A stale host (the window moved on) publishes under its own backend, which nobody reads.
+    setTicketInfo: (info) => (deps.ticketInfo ?? ticketInfoStore).set(backend, id, info)
   }
 }

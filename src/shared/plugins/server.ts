@@ -2,6 +2,7 @@
 // and what it gives back (its instance). A plugin's server code imports only this module, the
 // shared types and its own folder; never server/src (scripts/pluginBoundaries.test.mjs).
 import type { PluginManifest } from './manifest.ts'
+import type { TicketProvider } from './tickets.ts'
 
 export { readBodyCapped, MAX_AUDIO_BYTES, MAX_ERROR_BYTES, MAX_JSON_BYTES } from '../../host/httpBody.ts'
 export { writeFileAtomic } from '../../host/atomicWrite.ts'
@@ -101,6 +102,10 @@ export interface PluginInstance {
   mcpInstructions?: string
   /** Added to the launch prompt of an agent session with the MCP tools, in those projects */
   sessionPrompt?(projectId: string): string | undefined
+  /** A ticket tracker (phase 2): `set_worktree_ticket` parses through it in the projects where the plugin is on */
+  ticketProvider?: TicketProvider
+  /** A value for one of the manifest's `projectSettings` keys (already the declared kind): its problem, or null */
+  checkProjectSetting?(key: string, value: string): string | null
   dispose?(): void
 }
 

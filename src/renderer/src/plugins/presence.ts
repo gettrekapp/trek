@@ -11,7 +11,8 @@ export interface PluginWelcome {
 /**
  * How a plugin the app knows stands on the window's server:
  * - `on`/`off`: the server has it, and it is on or off for the project;
- * - `legacy`: a server older than plugins that has it (its legacy capability), always on there;
+ * - `legacy`: a server older than plugins that has it (its legacy capability, or built in there:
+ *   `legacyBuiltIn`), always on there;
  * - `missing`: the server lists plugins but not this one (too old for it, or its setup failed there);
  * - `unknown`: no welcome yet (or no project).
  */
@@ -19,7 +20,10 @@ export type PluginStatus = 'on' | 'off' | 'legacy' | 'missing' | 'unknown'
 
 export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | undefined, settings: ProjectPluginSettings | undefined): PluginStatus {
   if (!welcome) return 'unknown'
-  if (!welcome.plugins) return manifest.legacyCapability && welcome.capabilities?.includes(manifest.legacyCapability) ? 'legacy' : 'missing'
+  if (!welcome.plugins) {
+    const capability = !!manifest.legacyCapability && welcome.capabilities?.includes(manifest.legacyCapability) === true
+    return capability || manifest.legacyBuiltIn === true ? 'legacy' : 'missing'
+  }
   const listed = welcome.plugins.find((p) => p.id === manifest.id)
   if (!listed) return 'missing'
   // The server's default, not this app's: the two decide the same project's tools and UI.
