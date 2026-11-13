@@ -610,7 +610,8 @@ export interface MethodResultsV2 {
   'repo.remove': null
   'repo.update': null
   'repo.listBranches': string[]
-  'worktree.create': { worktreeId: string }
+  /** linkWarnings: linkedDirs entries that could not be linked (Windows: a file copied instead) */
+  'worktree.create': { worktreeId: string; linkWarnings?: string[] }
   'worktree.remove': null
   'worktree.load': null
   'worktree.unload': null

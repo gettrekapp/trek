@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, stat, symlink, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, resolve, sep, win32 } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   ChangedFile,
@@ -16,7 +16,8 @@ import type {
 } from '../shared/types'
 import { COMMIT_LIST_LIMIT, isCommitSha } from '../shared/review.ts'
 import { hidden } from './childOptions.ts'
-import { isInside } from './pathContainment.ts'
+import { isInside, samePath } from './pathContainment.ts'
+import { constants } from 'node:fs'
 
 const execFileAsync = promisify(execFile)
 
@@ -45,8 +46,17 @@ export function assertSafeBranch(branch: string): void {
   if (bad) throw new Error(`invalid branch name: ${JSON.stringify(branch)}`)
 }
 
+/**
+ * Config every git run of Trek's gets on this platform. Windows: core.longpaths, so a worktree
+ * whose paths pass MAX_PATH (260) still checks out (Git for Windows supports long paths, but
+ * only with this on).
+ */
+export function platformGitConfig(platform: NodeJS.Platform = process.platform): string[] {
+  return platform === 'win32' ? ['-c', 'core.longpaths=true'] : []
+}
+
 export async function git(repoPath: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], hidden({
+  const { stdout } = await execFileAsync('git', [...platformGitConfig(), '-C', repoPath, ...args], hidden({
     timeout: options.timeout ?? 60_000,
     maxBuffer: 64 * 1024 * 1024 // dirty patches (git diff --binary) can be large
   }))
@@ -75,12 +85,14 @@ export async function defaultBaseBranch(repoPath: string): Promise<string | null
   return null
 }
 
-export function parseWorktreeList(porcelain: string): GitWorktreeInfo[] {
+export function parseWorktreeList(porcelain: string, platform: NodeJS.Platform = process.platform): GitWorktreeInfo[] {
   const entries: GitWorktreeInfo[] = []
   let current: Partial<GitWorktreeInfo> = {}
-  for (const line of porcelain.split('\n')) {
+  for (const line of porcelain.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) {
-      current = { path: line.slice('worktree '.length) }
+      const path = line.slice('worktree '.length)
+      // Git for Windows prints C:/x/y: stored paths use one separator style, the platform's.
+      current = { path: platform === 'win32' ? win32.normalize(path) : path }
     } else if (line.startsWith('HEAD ')) {
       current.head = line.slice('HEAD '.length)
     } else if (line.startsWith('branch ')) {
@@ -243,8 +255,9 @@ export async function linkedSymlinks(worktreePath: string, entries: readonly unk
     if (!info?.isSymbolicLink()) continue
     const to = await readlink(link).catch(() => null)
     if (to === null) continue
-    const pointed = resolve(dirname(link), to)
-    const into = (root: string, p: string): boolean => p === resolve(root, name)
+    // A junction (Windows' directory link) reads as \\?\C:\…: compare it as C:\….
+    const pointed = resolve(dirname(link), to.replace(/^\\\\\?\\(?!UNC\\)/i, ''))
+    const into = (root: string, p: string): boolean => samePath(p, resolve(root, name))
     const real = await realpath(link).catch(() => null)
     if (into(main, pointed) || into(mainReal, pointed) || (real !== null && into(mainReal, real))) out.push(name)
   }
@@ -256,12 +269,19 @@ export async function linkedSymlinks(worktreePath: string, entries: readonly unk
  * .trek/ folder holding database backups and secrets that aren't
  * committed). Best-effort per entry: a missing source or an already-present
  * target is skipped, so re-linking an existing worktree is a no-op.
+ *
+ * Windows: a directory becomes a junction, which needs neither admin rights nor Developer Mode
+ * (a symlink needs one of them). A file has no such link: it is a symlink where Windows allows
+ * one, and otherwise a copy, which the returned warnings name (the copy no longer follows the
+ * main checkout's file).
  */
 export async function linkDirs(
   repoPath: string,
   worktreePath: string,
-  entries: string[]
-): Promise<void> {
+  entries: string[],
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  const warnings: string[] = []
   const repoRoot = resolve(repoPath)
   const worktreeRoot = resolve(worktreePath)
   for (const entry of entries) {
@@ -276,13 +296,23 @@ export async function linkDirs(
     } catch {
       continue // nothing to link in the main repo
     }
+    // What it is (through a symlink in the main checkout too): a junction only for a directory.
+    const isDir = await stat(source).then((s) => s.isDirectory(), () => false)
     try {
       await mkdir(dirname(target), { recursive: true })
-      await symlink(source, target)
-    } catch {
-      // target already exists (checked-in or previously linked) — leave it
+      await symlink(source, target, platform === 'win32' ? (isDir ? 'junction' : 'file') : undefined)
+    } catch (err) {
+      // EEXIST: target already exists (checked-in or previously linked) — leave it
+      if (platform !== 'win32' || isDir || (err as NodeJS.ErrnoException).code !== 'EPERM') continue
+      try {
+        await copyFile(source, target, constants.COPYFILE_EXCL)
+        warnings.push(`${name} was copied, not linked (Windows allows file symlinks only with Developer Mode on); it won't follow the main checkout's copy`)
+      } catch {
+        // there after all — leave it
+      }
     }
   }
+  return warnings
 }
 
 /** Refuses (throws) if the worktree has uncommitted changes — deliberately no --force. */
@@ -317,6 +347,7 @@ const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
  * pinned off.)
  */
 const PATCH_CONFIG = [
+  ...platformGitConfig(),
   '-c', 'core.quotepath=false',
   '-c', 'diff.suppressBlankEmpty=false',
   '-c', 'apply.whitespace=nowarn',
@@ -518,7 +549,7 @@ export async function ignoredOverwrittenBy(path: string, ref: string, cap = 50):
   const ignored = await new Promise<string[]>((resolve, reject) => {
     const child = execFile(
       'git',
-      ['-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
+      [...platformGitConfig(), '-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
       hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, stdout) => {
         // 1: none of them is ignored
@@ -1074,7 +1105,7 @@ async function untrackedPatch(worktreePath: string, path: string): Promise<strin
   try {
     const pending = execFileAsync(
       'git',
-      ['-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
+      [...platformGitConfig(), '-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
       hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
     )
     // Never let git wait on stdin, whatever the file is called.

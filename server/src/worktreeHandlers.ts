@@ -19,9 +19,22 @@ type Handler = (params: any, ctx: V2Context) => unknown
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
+/**
+ * A directory name Windows accepts: its forbidden characters (<>:"|?* and control characters)
+ * become -, trailing dots and spaces go, and a reserved device name (CON, NUL, COM1…, with any
+ * extension) gets a - after it. Elsewhere the name is kept as is. The branch is never renamed.
+ */
+export function safeDirName(name: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return name
+  let out = name.replace(/[<>:"|?*\x00-\x1f]/g, '-').replace(/[. ]+$/, '')
+  if (out === '') out = '-'
+  if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i.test(out)) out = out.replace(/^([^.]+)/, '$1-')
+  return out
+}
+
 /** Where a branch's worktree goes by default: next to the repo, as <repo>-<branch>. */
-export function defaultWorktreePath(repoPath: string, branch: string): string {
-  return join(dirname(repoPath), `${basename(repoPath)}-${branch.replace(/[/\\]/g, '-')}`)
+export function defaultWorktreePath(repoPath: string, branch: string, platform: NodeJS.Platform = process.platform): string {
+  return join(dirname(repoPath), safeDirName(`${basename(repoPath)}-${branch.replace(/[/\\]/g, '-')}`, platform))
 }
 
 /** Runs a git operation; any failure reaches the client as GIT_ERROR with git's message. */
@@ -183,7 +196,7 @@ export const worktreeHandlers: Record<string, Handler> = {
       }
       await gitService.addWorktreeAt(repo.path, target, branch)
     })
-    await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+    const linkWarnings = await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
     const listed = await ctx.poller.refresh(repo.path)
     if (!listed) {
       throw codedError('GIT_ERROR', `created ${target} but could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
@@ -199,7 +212,7 @@ export const worktreeHandlers: Record<string, Handler> = {
       if (firstTag && !data?.tag && created.branch === branch) r.branchData[branch] = { ...data, tag: firstTag }
       return created.id
     })
-    return { worktreeId }
+    return linkWarnings.length > 0 ? { worktreeId, linkWarnings } : { worktreeId }
   },
 
   'worktree.remove': async (p, ctx) => {

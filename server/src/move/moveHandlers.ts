@@ -688,7 +688,7 @@ async function build(
     try {
       await viaGit(() => gitService.addWorktreeAt(repo.path, target, branch))
       undo.push(() => gitService.removeWorktreeForce(repo.path, target))
-      await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+      for (const warning of await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])) console.warn(`linkedDirs in ${target}: ${warning}`)
       const checked = await viaGit(() => gitService.revParseHead(target))
       if (checked !== head) throw codedError('GIT_ERROR', `${target} checked out ${checked.slice(0, 8)}, not ${head.slice(0, 8)}`)
       if (patch !== '') await viaGit(() => gitService.applyPatch(target, patch).catch((err: Error) => {

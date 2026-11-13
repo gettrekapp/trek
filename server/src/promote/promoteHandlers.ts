@@ -589,7 +589,7 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
       }
       await gitService.removeWorktreeForce(repo.path, target)
     })
-    await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+    for (const warning of await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])) console.warn(`linkedDirs in ${target}: ${warning}`)
     // What the new worktree links from the main checkout stays there (it is shared, not carried).
     const linked = await gitService.linkedSymlinks(target, repo.linkedDirs ?? [], repo.path)
     const { patch } = await patchOf(main.path, repo, linked)
