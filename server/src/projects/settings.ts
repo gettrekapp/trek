@@ -19,13 +19,18 @@ const KIND_TEXT: Record<Kind, string> = {
   object: 'an object'
 }
 
-/** Every ProjectSettings key; the Record type makes the compiler flag a missing one. */
-const SETTINGS_KINDS: Record<keyof ProjectSettings, Kind> = {
+/**
+ * ProjectSettings keys a built-in plugin owns (plugin system phase 2): declared in its manifest's
+ * `projectSettings` and checked by it, not in the table below.
+ */
+type PluginOwnedSetting = 'azureDevOpsBaseUrl'
+
+/** Every core ProjectSettings key; the Record type makes the compiler flag a missing one. */
+const SETTINGS_KINDS: Record<Exclude<keyof ProjectSettings, PluginOwnedSetting>, Kind> = {
   claudeCommand: 'string',
   claudeArgs: 'string',
   claudePermissionMode: 'string',
   dockerFavorites: 'stringArray',
-  azureDevOpsBaseUrl: 'string',
   linearWorkspace: 'string',
   worktreeTags: 'array',
   customTags: 'array',
@@ -56,7 +61,7 @@ export interface PluginSettingRules {
 }
 
 /** Whether `key` is a core project setting (an own key of the settings table). */
-export function isCoreSettingsKey(key: string): key is keyof ProjectSettings {
+export function isCoreSettingsKey(key: string): key is keyof typeof SETTINGS_KINDS {
   return Object.hasOwn(SETTINGS_KINDS, key)
 }
 

@@ -23,6 +23,7 @@ import { describeWorktree, resolveWorktree } from './describe.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { ToolDefinition } from './protocol.ts'
+import type { PluginRegistry } from '../plugins/registry.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import type { Machine } from '../integrations/machineHandlers.ts'
 import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
@@ -393,6 +394,8 @@ export const MCP_INSTRUCTIONS =
   "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
+  /** The server's plugins: their project settings (phase 2) and ticket providers */
+  plugins?: PluginRegistry
   store: ConfigStore
   hub: TopicHub
   projects: ProjectState
@@ -541,6 +544,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     sessions: deps.sessions,
     machine: deps.machine,
     prWatch: deps.prWatch,
+    plugins: deps.plugins,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }

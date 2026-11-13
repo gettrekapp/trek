@@ -576,7 +576,7 @@ export function startServer(
     shutdown: (reason) => shutdown(reason)
   }
   if (access) {
-    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests })
+    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests, plugins })
     const callerFor = (projectId: string): ToolCall => {
       let call = callers.get(projectId)
       if (!call) callers.set(projectId, (call = caller(projectId)))

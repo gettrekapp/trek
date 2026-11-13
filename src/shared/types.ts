@@ -343,7 +343,7 @@ export interface ProjectFile {
   servers?: ServerConfig[]
   /** Favorited docker containers, by container name */
   dockerFavorites?: string[]
-  /** Azure DevOps org/project URL, e.g. https://dev.azure.com/org/Project */
+  /** Azure DevOps org/project URL, e.g. https://dev.azure.com/org/Project (the azure-devops plugin's project setting) */
   azureDevOpsBaseUrl?: string
   /** Linear workspace slug (linear.app/<slug>/...) — turns issue identifiers into links */
   linearWorkspace?: string

@@ -14,6 +14,9 @@ import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
+import { createPluginRegistry } from '../server/src/plugins/registry.ts'
+import { isCoreMethod } from '../server/src/v2.ts'
+import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 
 // Keep a user's global git config and hooks out of the real git these tests run.
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
@@ -97,7 +100,19 @@ async function toolSetup(t, opts = {}) {
   t.after(() => clearInterval(keepAlive))
   const projectId = projects.create('P', [{ registered, name: undefined }])
   await poller.refresh(a)
-  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
+  // The built-in plugins, as the server registers them: their project settings and ticket providers.
+  const plugins = createPluginRegistry({
+    plugins: BUILTIN_SERVER_PLUGINS,
+    secretsFile: join(dir, 'secrets.json'),
+    dataDir: join(dir, 'data'),
+    hub,
+    projects,
+    isCoreMethod,
+    coreToolNames: MCP_TOOLS.map((tool) => tool.name),
+    env: {},
+    warn: () => {}
+  })
+  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
     const job = jobs.find((j) => j.ms === 2500 && !j.cancelled && !j.fired)
