@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localProfile } from '../server/src/localProfile.ts'
 import { stopDecision, stopLocal } from '../server/src/localStop.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 const TOKEN = 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU'
 const info = (pid) => ({ port: 4000, pid, token: TOKEN, version: '0.2.0', build: 'abc123def456' })
@@ -46,19 +47,21 @@ function setup(t) {
 }
 
 /**
- * A stand-in local server: writes the lock and local.json, and removes them on SIGTERM (unless
- * `ignoreTerm`). Ready once local.json is there and parses: its SIGTERM handler is set before
+ * A stand-in local server: writes the lock and local.json, and removes them on SIGTERM or an IPC
+ * 'stop' (a real server's server.stop; Windows has no SIGTERM handlers) (unless `ignoreTerm`). Ready once local.json is there and parses: its SIGTERM handler is set before
  * either file is written, and local.json is written last, whole (a rename), so a stop under load
  * never sees a half-written file or a server that a SIGTERM would still kill.
  */
 async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
   const code = `
     const fs = require('node:fs')
-    process.on('SIGTERM', () => {
+    const stop = () => {
       if (${ignoreTerm}) return
       fs.rmSync(${JSON.stringify(profile.infoPath)})
       setTimeout(() => { fs.rmSync(${JSON.stringify(profile.lockPath)}); process.exit(0) }, 100)
-    })
+    }
+    process.on('SIGTERM', stop)
+    process.on('message', stop)
     fs.mkdirSync(${JSON.stringify(profile.dir)}, { recursive: true })
     fs.writeFileSync(${JSON.stringify(profile.lockPath)}, process.pid + '\\n')
     const tmp = ${JSON.stringify(profile.infoPath)} + '.tmp'
@@ -66,7 +69,7 @@ async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
     fs.renameSync(tmp, ${JSON.stringify(profile.infoPath)})
     setInterval(() => {}, 1000)
   `
-  const child = spawn(process.execPath, ['-e', code], { stdio: 'ignore' })
+  const child = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
   const exited = new Promise((resolve) => child.on('exit', (c, s) => resolve(c ?? s)))
   t.after(() => child.kill('SIGKILL'))
   const ready = () => {
@@ -98,10 +101,10 @@ test('stopLocal: asks the server named by local.json to stop, with its port and 
   const out = capture()
   const asked = []
   const kills = []
-  // The stand-in shuts down on SIGTERM; a real server does so on server.stop.
+  // The stand-in shuts down on a message, as a real server does on server.stop.
   const requestStop = (i) => {
     asked.push(i)
-    child.kill('SIGTERM')
+    child.send('stop')
     return 'accepted'
   }
   assert.equal(stopLocal(profile, { ...out, requestStop, kill: (...a) => kills.push(a) }), 0)
@@ -111,7 +114,7 @@ test('stopLocal: asks the server named by local.json to stop, with its port and 
   assert.deepEqual(out.lines, [`Stopping the local trek-server (pid ${child.pid})…`, 'Stopped.'])
 })
 
-test('stopLocal: a server that does not take the request is SIGTERMed and waited for', async (t) => {
+test('stopLocal: a server that does not take the request is SIGTERMed and waited for', { skip: posixOnly('SIGTERM (Windows ends the process tree instead, below)') }, async (t) => {
   const profile = setup(t)
   const { child, exited } = await fakeServer(t, profile)
   const out = capture()
@@ -197,7 +200,7 @@ test('stopLocal: an unverified lock holder says it may still be starting or stop
   assert.match(out.lines[0], /may still be starting or stopping/)
 })
 
-test('stopLocal: a server that ignores SIGTERM times out with exit 1', async (t) => {
+test('stopLocal: a server that ignores SIGTERM times out with exit 1', { skip: posixOnly('SIGTERM (Windows ends the process tree instead)') }, async (t) => {
   const profile = setup(t)
   const { child } = await fakeServer(t, profile, { ignoreTerm: true })
   const out = capture()

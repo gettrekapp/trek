@@ -2,13 +2,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from '../server/src/repos.ts'
+import { realPath } from '../src/host/pathContainment.ts'
 
 function tempDir(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-repos-')))
+  // realPath: on Windows the OS's (long names, as resolveRepoRoot gives them, not RUNNER~1).
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-repos-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -48,9 +50,11 @@ test('addRepo uses an explicit id and name', () => {
 })
 
 test('addRepo does not add the same path twice', () => {
-  const existing = { id: 'trek', name: 'Trek', path: '/home/dev/trek' }
+  // A resolved path, as addRepo is given (on Windows /home/dev/trek resolves to C:\home\dev\trek).
+  const path = resolve('/home/dev/trek')
+  const existing = { id: 'trek', name: 'Trek', path }
   const config = { repos: [existing] }
-  const result = addRepo(config, '/home/dev/trek')
+  const result = addRepo(config, path)
   assert.equal(result.added, false)
   assert.equal(result.repo, existing)
   assert.equal(config.repos.length, 1)

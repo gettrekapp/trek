@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandExists, discoverCodexSession } from '../src/host/agentService.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 const pad = (n) => String(n).padStart(2, '0')
 
@@ -40,7 +41,8 @@ function withRoot(fn) {
   }
 }
 
-test('the timezone override makes local and UTC dates differ', () => {
+// The rest hold either way: with local and UTC dates the same, both day folders are one.
+test('the timezone override makes local and UTC dates differ', { skip: posixOnly('a time zone set through process.env.TZ at run time (Windows keeps the system one)') }, () => {
   const d = new Date('2026-11-04T12:00:00.000Z')
   assert.notEqual(d.getDate(), d.getUTCDate())
 })
@@ -115,7 +117,7 @@ test('a missing sessions dir finds nothing', async () => {
   assert.equal(await discoverCodexSession('/w', 1000, [], '/nonexistent/codex'), undefined)
 })
 
-test('commandExists', async () => {
+test('commandExists', { skip: posixOnly('commandExists asks a POSIX login shell ($SHELL -lc)') }, async () => {
   assert.equal(await commandExists('sh'), true)
   assert.equal(await commandExists('definitely-not-a-command-xyz'), false)
 })

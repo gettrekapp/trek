@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -18,6 +18,7 @@ import { SessionManager } from '../server/src/sessions/manager.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { PromoteRequests } from '../server/src/promote/requests.ts'
+import { realPath } from '../src/host/pathContainment.ts'
 
 export const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 export const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -45,10 +46,15 @@ function fakeSpawner() {
  * review draft and branch data; the main checkout has a Claude session of its own.
  */
 export async function setup(t, options = {}) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-promote-')))
+  // realPath: on Windows the OS's (long names, as the server resolves a repo, not RUNNER~1).
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-promote-')))
+  // A temp home for Claude's histories (projectDir): homedir() reads HOME, or USERPROFILE on Windows.
   const home = process.env.HOME
+  const profile = process.env.USERPROFILE
   process.env.HOME = join(dir, 'home')
-  t.after(() => { process.env.HOME = home; rmSync(dir, { recursive: true, force: true }) })
+  process.env.USERPROFILE = join(dir, 'home')
+  const restore = (name, value) => { if (value === undefined) delete process.env[name]; else process.env[name] = value }
+  t.after(() => { restore('HOME', home); restore('USERPROFILE', profile); rmSync(dir, { recursive: true, force: true }) })
   const origin = join(dir, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: gitEnv })
   const app = join(dir, 'app')

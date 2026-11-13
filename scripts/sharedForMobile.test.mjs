@@ -7,8 +7,10 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { builtinModules } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = resolve(new URL('..', import.meta.url).pathname)
+// fileURLToPath, not .pathname: on Windows that is /D:/… , which resolve() reads as a path on the current drive.
+const root = fileURLToPath(new URL('..', import.meta.url))
 /** What apps/mobile imports from the shared code (keep in step with apps/mobile/src/shared.ts). */
 export const MOBILE_ENTRIES = ['src/shared/client/index.ts', 'src/shared/model/topics.ts', 'src/shared/model/types.ts', 'src/shared/protocolV2.ts', 'src/shared/types.ts', 'src/shared/promote.ts', 'src/shared/push.ts']
 /** Packages the phone also has (none today: the shared code is dependency-free). */

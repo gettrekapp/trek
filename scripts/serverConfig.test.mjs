@@ -21,7 +21,9 @@ function tempDir(t) {
 }
 
 test('default paths: trek-server, with trek-daemon as the legacy one', () => {
-  assert.match(defaultConfigPath(), /[\\/]\.config[\\/]trek-server[\\/]config\.json$/)
+  assert.match(defaultConfigPath('linux', {}, '/home/u'), /[\\/]\.config[\\/]trek-server[\\/]config\.json$/)
+  // Windows keeps it in %APPDATA% (or the home's AppData\Roaming without one).
+  assert.equal(defaultConfigPath('win32', { APPDATA: 'C:\\Users\\u\\AppData\\Roaming' }, 'C:\\Users\\u'), join('C:\\Users\\u\\AppData\\Roaming', 'trek-server', 'config.json'))
   assert.match(legacyConfigPath(), /[\\/]\.config[\\/]trek-daemon[\\/]config\.json$/)
 })
 

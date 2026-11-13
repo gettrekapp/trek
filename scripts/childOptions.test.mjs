@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hidden } from '../src/host/childOptions.ts'
 
@@ -78,7 +78,8 @@ test('every spawn/execFile in server/src and src/host uses hidden() and commandP
   const missing = []
   for (const tree of TREES) {
     for (const file of files(join(root, tree))) {
-      const rel = relative(root, file)
+      // In '/' form on Windows too, as ALLOWED and the messages spell it.
+      const rel = relative(root, file).split(sep).join('/')
       if (ALLOWED.has(rel)) continue
       const src = readFileSync(file, 'utf8')
       if (!/node:child_process/.test(src)) continue

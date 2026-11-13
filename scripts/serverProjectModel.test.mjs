@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   assertNotRepository,
   collectIds,
@@ -128,9 +128,10 @@ test('resetRuntime drops missing', () => {
 
 test('assertNotRepository refuses a registered repo or a parent of one', () => {
   const registry = [{ id: 'a', name: 'a', path: '/r/a' }]
-  assert.throws(() => assertNotRepository(registry, '/r/a', 'path'), /is another repository/)
-  assert.throws(() => assertNotRepository(registry, '/r', 'path'), (e) => e.code === 'BAD_REQUEST')
-  assertNotRepository(registry, '/r/a-feat', 'path')
+  // The path is given resolved, as callers pass the guard's (on Windows /r/a is D:\r\a).
+  assert.throws(() => assertNotRepository(registry, resolve('/r/a'), 'path'), /is another repository/)
+  assert.throws(() => assertNotRepository(registry, resolve('/r'), 'path'), (e) => e.code === 'BAD_REQUEST')
+  assertNotRepository(registry, resolve('/r/a-feat'), 'path')
 })
 
 test('repoIn finds a repository or answers NOT_FOUND / BAD_REQUEST', () => {

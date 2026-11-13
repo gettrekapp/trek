@@ -23,6 +23,11 @@ import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
 import { deriveProfileName, envListProblem } from '../src/shared/environments.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// The stubs are bash scripts, and a Windows server has no environments or dev stacks yet (W1;
+// scripts/serverWindowsMachine.test.mjs checks it refuses them): only the pure checks run there.
+const skip = posixOnly('bash stubs for docker, colima and stack.sh; no env or stacks on Windows')
 
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -105,7 +110,7 @@ const refused = (res, code, reason) => {
   if (reason !== undefined) assert.equal(res.error.details?.reason, reason)
 }
 
-test('docker.list, docker.container and docker.compose run docker on the server, compose in the main checkout', async (t) => {
+test('docker.list, docker.container and docker.compose run docker on the server, compose in the main checkout', { skip }, async (t) => {
   const s = await setup(t)
   const list = await s.call('docker.list', {})
   assert.deepEqual(list.result, [{ id: 'c1', name: 'web', image: 'nginx', state: 'running', status: 'Up 1 minute', ports: '80/tcp' }])
@@ -119,7 +124,7 @@ test('docker.list, docker.container and docker.compose run docker on the server,
   assert.equal(s.events.at(-1)[1].done, true)
 })
 
-test('docker: an action, a container id or a repository the server does not know is refused before docker runs', async (t) => {
+test('docker: an action, a container id or a repository the server does not know is refused before docker runs', { skip }, async (t) => {
   const s = await setup(t)
   for (const id of ['-rf', 'a b', 'a;rm -rf /', '', '$(id)', 'x'.repeat(300)]) refused(await s.call('docker.container', { action: 'stop', id }), 'BAD_REQUEST')
   refused(await s.call('docker.container', { action: 'rm', id: 'c1' }), 'BAD_REQUEST')
@@ -129,7 +134,7 @@ test('docker: an action, a container id or a repository the server does not know
   assert.deepEqual(calls(), [])
 })
 
-test('a machine without docker or colima: TOOL_ERROR with reason missing, and env.check says so', async (t) => {
+test('a machine without docker or colima: TOOL_ERROR with reason missing, and env.check says so', { skip }, async (t) => {
   const s = await setup(t)
   const empty = mkdtempSync(join(tmpdir(), 'trek-machine-nopath-'))
   process.env.PATH = empty
@@ -150,7 +155,7 @@ test('a machine without docker or colima: TOOL_ERROR with reason missing, and en
   assert.equal(s.events.filter(([, e]) => e.done).length, 1)
 })
 
-test("env.up starts the branch's VM under the repository's envRepoKey, with the checked settings and variables", async (t) => {
+test("env.up starts the branch's VM under the repository's envRepoKey, with the checked settings and variables", { skip }, async (t) => {
   const s = await setup(t)
   // An imported repository keeps the path its VMs were named after.
   s.projects.apply(s.projectId, (d) => {
@@ -187,7 +192,7 @@ test("env.up starts the branch's VM under the repository's envRepoKey, with the 
   assert.deepEqual((await s.call('env.composeFiles', { projectId: s.projectId, worktreeId })).result, ['compose.dev.yaml', 'docker-compose.yml'])
 })
 
-test('env.up refuses settings, compose files and variables that would steer the run, before colima runs', async (t) => {
+test('env.up refuses settings, compose files and variables that would steer the run, before colima runs', { skip }, async (t) => {
   const s = await setup(t)
   const worktreeId = s.worktreeAt(s.feature).id
   const up = (extra) => s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true }, ...extra })
@@ -235,7 +240,7 @@ test('env.up refuses settings, compose files and variables that would steer the 
   assert.equal((await up({ settings: { enabled: true, networkAddress: false, composeFile: 'linked.yml' }, envVars: { API_URL: 'http://x' } })).result.code, 0)
 })
 
-test('env.up takes a fractional memory size, as colima --memory does (GiB)', async (t) => {
+test('env.up takes a fractional memory size, as colima --memory does (GiB)', { skip }, async (t) => {
   const s = await setup(t)
   const worktreeId = s.worktreeAt(s.feature).id
   const profile = deriveProfileName(s.a, 'feature-x')
@@ -245,7 +250,7 @@ test('env.up takes a fractional memory size, as colima --memory does (GiB)', asy
   assert.equal((await s.call('env.up', { projectId: s.projectId, worktreeId, settings: { enabled: true, memory: 0.5, networkAddress: false } })).result.code, 0)
 })
 
-test("a symlinked default docker-compose.yml (into the main checkout, say) is the repository's: no composeFile, no confinement", async (t) => {
+test("a symlinked default docker-compose.yml (into the main checkout, say) is the repository's: no composeFile, no confinement", { skip }, async (t) => {
   const s = await setup(t)
   const worktreeId = s.worktreeAt(s.feature).id
   const profile = deriveProfileName(s.a, 'feature-x')
@@ -280,7 +285,7 @@ test("a Local server's sibling profiles: local and local-* beside its data dir, 
   assert.deepEqual(localSiblingRegistries(join(parent, 'gone', 'local')), [])
 })
 
-test("a Local server reads the other Local profiles' registries (read-only): their VMs are not orphans to delete", async (t) => {
+test("a Local server reads the other Local profiles' registries (read-only): their VMs are not orphans to delete", { skip }, async (t) => {
   const s = await setup(t)
   const parent = join(s.dir, 'trek-server')
   const own = join(parent, 'local')
@@ -317,7 +322,7 @@ test("a Local server reads the other Local profiles' registries (read-only): the
   assert.deepEqual((await list()).map(([p]) => p), ['twb-devvm-000000', 'twb-leftover-000000', 'twb-torn-000000'])
 })
 
-test('env.destroy deletes the VM and its registry entry; two environments started at once both stay registered', async (t) => {
+test('env.destroy deletes the VM and its registry entry; two environments started at once both stay registered', { skip }, async (t) => {
   const s = await setup(t)
   git(s.a, 'worktree', 'add', '-q', '-b', 'feature-y', `${s.a}-feature-y`)
   await s.ctx.poller.refresh(s.a)
@@ -334,7 +339,7 @@ test('env.destroy deletes the VM and its registry entry; two environments starte
   assert.equal((await s.call('env.stop', { profile: py })).result, 0)
 })
 
-test("stack.*: the worktree's stack.sh, by the server's own path; its state in the data dir", async (t) => {
+test("stack.*: the worktree's stack.sh, by the server's own path; its state in the data dir", { skip }, async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 30; fi' })
   const worktreeId = s.worktreeAt(s.feature).id
   const ref = { projectId: s.projectId, worktreeId }
@@ -359,7 +364,7 @@ test("stack.*: the worktree's stack.sh, by the server's own path; its state in t
   assert.deepEqual((await s.call('stack.status', { projectId: s.projectId, worktreeId: main.id })).result.slug, 'a')
 })
 
-test('worktree.dirty reads git afresh; a worktree outside the allowlist is PATH_DENIED for every machine method', async (t) => {
+test('worktree.dirty reads git afresh; a worktree outside the allowlist is PATH_DENIED for every machine method', { skip }, async (t) => {
   const s = await setup(t)
   const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
   assert.equal((await s.call('worktree.dirty', ref)).result, false)
@@ -378,7 +383,7 @@ test('worktree.dirty reads git afresh; a worktree outside the allowlist is PATH_
   assert.deepEqual(calls(), [])
 })
 
-test('a filesystem ENOENT is a TOOL_ERROR, not a missing tool; only a failed spawn is', async (t) => {
+test('a filesystem ENOENT is a TOOL_ERROR, not a missing tool; only a failed spawn is', { skip }, async (t) => {
   const s = await setup(t)
   const fsError = Object.assign(new Error("ENOENT: no such file or directory, open '/data/stacks/a.log'"), { code: 'ENOENT', syscall: 'open', path: '/data/stacks/a.log' })
   s.ctx.machine = { ...s.ctx.machine, stacks: { ...s.ctx.machine.stacks, log: () => Promise.reject(fsError) } }
@@ -388,7 +393,7 @@ test('a filesystem ENOENT is a TOOL_ERROR, not a missing tool; only a failed spa
   assert.match(res.error.message, /ENOENT: no such file/)
 })
 
-test('stack.sh is refused when its real path leaves the worktree; the outside script never runs', async (t) => {
+test('stack.sh is refused when its real path leaves the worktree; the outside script never runs', { skip }, async (t) => {
   const s = await setup(t)
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
   t.after(() => rmSync(outside, { recursive: true, force: true }))
@@ -413,7 +418,7 @@ test('stack.sh is refused when its real path leaves the worktree; the outside sc
   assert.deepEqual(calls(), [])
 })
 
-test("stack.up: a second up while one is starting is refused; a run that exits leaves a later run's pid file alone", async (t) => {
+test("stack.up: a second up while one is starting is refused; a run that exits leaves a later run's pid file alone", { skip }, async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 0.5; fi' })
   const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
   const results = await Promise.all([s.call('stack.up', { ...ref, starter: false }), s.call('stack.up', { ...ref, starter: false })])
@@ -428,7 +433,7 @@ test("stack.up: a second up while one is starting is refused; a run that exits l
   assert.equal(calls().filter((c) => c.startsWith('stack|')).length, 1)
 })
 
-test('the registry: a file that cannot be read is never overwritten; a leftover temp file does not loosen 0600', async (t) => {
+test('the registry: a file that cannot be read is never overwritten; a leftover temp file does not loosen 0600', { skip }, async (t) => {
   const s = await setup(t)
   const registryFile = join(s.data, 'environments.json')
   const worktreeId = s.worktreeAt(s.feature).id
@@ -448,7 +453,7 @@ test('the registry: a file that cannot be read is never overwritten; a leftover 
   assert.equal(statSync(registryFile).mode & 0o777, 0o600)
 })
 
-test('env.destroy skips docker compose for a registry entry outside the allowlist, and still deletes the VM', async (t) => {
+test('env.destroy skips docker compose for a registry entry outside the allowlist, and still deletes the VM', { skip }, async (t) => {
   const s = await setup(t)
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
   t.after(() => rmSync(outside, { recursive: true, force: true }))
@@ -461,7 +466,7 @@ test('env.destroy skips docker compose for a registry entry outside the allowlis
   assert.deepEqual(JSON.parse(readFileSync(join(s.data, 'environments.json'), 'utf8')), {})
 })
 
-test("env.up refuses a worktree outside Colima's home on a path boundary (/x/rep is not /x/repos)", async (t) => {
+test("env.up refuses a worktree outside Colima's home on a path boundary (/x/rep is not /x/repos)", { skip }, async (t) => {
   const s = await setup(t)
   // A home that is a string prefix of the worktree's path but not one of its directories.
   s.ctx.machine = { ...s.ctx.machine, env: createEnvironmentService({ registryFile: join(s.data, 'environments.json'), home: join(s.dir, 'rep') }) }
@@ -471,7 +476,7 @@ test("env.up refuses a worktree outside Colima's home on a path boundary (/x/rep
   assert.deepEqual(calls(), [])
 })
 
-test("a run's events reach only the connection that asked for it", async (t) => {
+test("a run's events reach only the connection that asked for it", { skip }, async (t) => {
   const s = await setup(t)
   const other = s.connection()
   const worktreeId = s.worktreeAt(s.feature).id
@@ -509,7 +514,7 @@ test('the event sink drops log chunks past the high-water mark, says so once it 
   ])
 })
 
-test('stack.down and stack.destroy are refused while an up is starting, so the start cannot bring containers up after them', async (t) => {
+test('stack.down and stack.destroy are refused while an up is starting, so the start cannot bring containers up after them', { skip }, async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 30; fi' })
   const ref = { projectId: s.projectId, worktreeId: s.worktreeAt(s.feature).id }
   // Hold each up inside its start window (marked starting, no pid yet) until the stop has been refused.
@@ -542,7 +547,7 @@ test('stack.down and stack.destroy are refused while an up is starting, so the s
   }
 })
 
-test('env.list: a registry file that cannot be read is a TOOL_ERROR naming it, not a list of orphans', async (t) => {
+test('env.list: a registry file that cannot be read is a TOOL_ERROR naming it, not a list of orphans', { skip }, async (t) => {
   const s = await setup(t)
   const registryFile = join(s.data, 'environments.json')
   writeFileSync(join(stubDir, 'vms'), `${JSON.stringify({ name: 'twb-real-000000', status: 'Running' })}\n`)

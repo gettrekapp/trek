@@ -3,6 +3,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { analyzeShell, couldMatch, expandPath, parseShell, shellBudget, SHELL_STEP_LIMIT } from '../src/host/bot/shellCommand.ts'
 import { resolve } from 'node:path'
+import { posixOnly } from './testPlatform.mjs'
+
+// The cwds, writes and paths are POSIX ones (/c/a), and the bot refuses to run on Windows
+// (src/host/bot/sandbox.ts); only the tests of words and limits run there.
+const skip = posixOnly('the bot reads POSIX paths (it refuses to run on Windows)')
 
 const words = (command) => parseShell(command, '/c').map((s) => s.words.map((w) => w.text))
 
@@ -37,7 +42,7 @@ test('skips heredoc bodies and comments', () => {
   assert.deepEqual(words('# a\nb # c\nd#e'), [['b'], ['d#e']])
 })
 
-test('tracks cd through segments and subshells', () => {
+test('tracks cd through segments and subshells', { skip }, () => {
   const cwds = (c, from = '/c') => parseShell(c, from).map((s) => s.cwd)
   // A `..` is kept as written, for the policy to resolve lexically and physically
   assert.deepEqual(cwds('cd a && b; cd ../d; e'), ['/c', '/c/a', '/c/a', '/c/a/../d'])
@@ -48,12 +53,12 @@ test('tracks cd through segments and subshells', () => {
   assert.equal(parseShell('cd ~/x; a', '/c')[1].cwd, expandPath('~/x', '/c'))
 })
 
-test('expands inner scripts without leaking their cd', () => {
+test('expands inner scripts without leaking their cd', { skip }, () => {
   assert.deepEqual(words('bash -c "a b; c" && d'), [['bash', '-c', 'a b; c'], ['a', 'b'], ['c'], ['d']])
   assert.deepEqual(parseShell('sh -c "cd a; b"; c', '/c').map((s) => s.cwd), ['/c', '/c', '/c/a', '/c'])
 })
 
-test('marks only unquoted wildcards', () => {
+test('marks only unquoted wildcards', { skip }, () => {
   const ref = (c) => analyzeShell(c, '/c').paths.at(-1)
   assert.equal(couldMatch(ref('cat /d/*.json'), '/d/a.json'), true)
   assert.equal(couldMatch(ref('cat /d/?.json'), '/d/a.json'), true)
@@ -64,7 +69,7 @@ test('marks only unquoted wildcards', () => {
   assert.deepEqual(words('[ -f a ] && b'), [['[', '-f', 'a', ']'], ['b']])
 })
 
-test('analysis reports force pushes per segment, ask keys and write targets', () => {
+test('analysis reports force pushes per segment, ask keys and write targets', { skip }, () => {
   assert.equal(analyzeShell('git push && rm -f x', '/c').forcePush, false)
   assert.equal(analyzeShell('rm -f x && git -C a push -f', '/c').forcePush, true)
   assert.deepEqual(analyzeShell('git push; gh pr merge 1; git status', '/c').ask, ['git push', 'gh pr merge'])
@@ -76,7 +81,7 @@ test('analysis reports force pushes per segment, ask keys and write targets', ()
   assert.deepEqual(analyzeShell('find . -name c', '/c').destroys, [])
 })
 
-test('analysis reports what would be destroyed as a whole', () => {
+test('analysis reports what would be destroyed as a whole', { skip }, () => {
   const destroys = (c) => analyzeShell(c, '/c').destroys
   assert.deepEqual(destroys('rm -rf a b'), ['/c/a', '/c/b'])
   assert.deepEqual(destroys('mv a b c'), ['/c/a', '/c/b'])
@@ -89,7 +94,7 @@ test('analysis reports what would be destroyed as a whole', () => {
   assert.deepEqual(destroys('mkdir a; touch b; cat c'), [])
 })
 
-test('substitutions queue their segments and keep the outer word', () => {
+test('substitutions queue their segments and keep the outer word', { skip }, () => {
   assert.deepEqual(words('echo "a$(b c)d" e'), [['b', 'c'], ['echo', 'a$()d', 'e']])
   assert.deepEqual(words('echo a`b c`d e'), [['b', 'c'], ['echo', 'a$()d', 'e']])
   assert.deepEqual(words(`x "$(cat <<'E'\nb " c\nE\n)" y`), [['cat'], ['x', '$()', 'y']])
@@ -103,7 +108,7 @@ test('ANSI-C strings keep an escaped quote inside', () => {
   assert.deepEqual(words(`echo $'it\\'s' b`), [['echo', `it's`, 'b']])
 })
 
-test('a run of wildcards collapses', () => {
+test('a run of wildcards collapses', { skip }, () => {
   const ref = analyzeShell(`cat /d/${'*'.repeat(500)}x`, '/c').paths.at(-1)
   assert.equal(couldMatch(ref, '/d/aax'), true)
   assert.equal(couldMatch(ref, '/d/aay'), false)
@@ -134,7 +139,7 @@ const work = (command, cwd = '/c') => {
   }
 }
 
-test('analysis is bounded by work, not time: each rejection stops within the step limit', () => {
+test('analysis is bounded by work, not time: each rejection stops within the step limit', { skip }, () => {
   const rejected = [
     // Each cd deepened cwd, and every later path cost its depth: 73 s on the main thread before.
     ['cd a;'.repeat(1999), /too deeply nested/],
@@ -157,7 +162,7 @@ test('analysis is bounded by work, not time: each rejection stops within the ste
   }
 })
 
-test('ordinary commands take a small part of the budget', () => {
+test('ordinary commands take a small part of the budget', { skip }, () => {
   for (const command of [
     'git status',
     'cd /Users/me/proj && git status && npm test 2>&1 | tail -5; for f in src/*.ts; do grep -n foo "$f"; done',

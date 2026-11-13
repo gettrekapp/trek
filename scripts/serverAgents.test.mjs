@@ -5,11 +5,13 @@ import { agentCommands, commandBinary, CommandProbe, MAX_PROBES_IN_FLIGHT, PROBE
 import { DEFAULT_LLM_SETTINGS } from '../src/shared/providers/types.ts'
 
 test('commandBinary skips leading env assignments and blanks', () => {
-  assert.equal(commandBinary('claude'), 'claude')
-  assert.equal(commandBinary('  /opt/bin/codex --full-auto '), '/opt/bin/codex')
-  assert.equal(commandBinary('API_KEY=x OTHER_1=y gemini -y'), 'gemini')
-  assert.equal(commandBinary('A=1'), undefined)
-  assert.equal(commandBinary('   '), undefined)
+  // A POSIX command line (on Windows it is read as one: no env assignments there).
+  assert.equal(commandBinary('claude', 'linux'), 'claude')
+  assert.equal(commandBinary('  /opt/bin/codex --full-auto ', 'linux'), '/opt/bin/codex')
+  assert.equal(commandBinary('API_KEY=x OTHER_1=y gemini -y', 'linux'), 'gemini')
+  assert.equal(commandBinary('A=1', 'linux'), undefined)
+  assert.equal(commandBinary('   ', 'linux'), undefined)
+  assert.equal(commandBinary('"C:\\Program Files\\x\\codex.cmd" --full-auto', 'win32'), 'C:\\Program Files\\x\\codex.cmd')
 })
 
 test('agentCommands: every provider, the server config command, else the default; Claude takes the project\'s claudeCommand', () => {

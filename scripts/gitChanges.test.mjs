@@ -4,7 +4,9 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, truncateSync, chmodSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { limitPatches, splitPatch, worktreeChanges, worktreeCommits, worktreeDiff } from '../src/host/gitService.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 // Keep a user's global and system git config (signing, log settings, hooks) out of these tests.
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
@@ -166,7 +168,7 @@ test('an orphan branch has no HEAD and does not throw', async (t) => {
   assert.equal(byPath(changes, 'keep.txt').status, 'added')
 })
 
-test('a tab in a filename keeps the whole path', async (t) => {
+test('a tab in a filename keeps the whole path', { skip: posixOnly('a tab in a file name (Windows refuses control characters)') }, async (t) => {
   const { dir, run } = makeRepo(t)
   writeFileSync(join(dir, 'a\tb.txt'), 'x\n')
   run('add', 'a\tb.txt')
@@ -220,7 +222,7 @@ test('untracked files over 5 MB are flagged tooLarge, not binary', async (t) => 
   })
 })
 
-test('an unreadable untracked file is flagged and does not fail the summary', async (t) => {
+test('an unreadable untracked file is flagged and does not fail the summary', { skip: posixOnly('an unreadable file (chmod 0)') }, async (t) => {
   if (process.getuid?.() === 0) return t.skip('root can read anything')
   const { dir } = makeRepo(t)
   writeFileSync(join(dir, 'keep.txt'), 'one\nchanged\n')
@@ -327,7 +329,7 @@ test('worktreeDiff has no entry for tracked or untracked binary files', async (t
   assert.deepEqual(await worktreeDiff(dir), {})
 })
 
-test('worktreeDiff has no entry for tooLarge or unreadable files and still resolves', async (t) => {
+test('worktreeDiff has no entry for tooLarge or unreadable files and still resolves', { skip: posixOnly('an unreadable file (chmod 0)') }, async (t) => {
   if (process.getuid?.() === 0) return t.skip('root can read anything')
   const { dir } = makeRepo(t)
   const big = join(dir, 'big.dat')
@@ -356,7 +358,7 @@ test('worktreeDiff concatenates tracked and untracked patches for one path', asy
   assert.match(diffs['keep.txt'], /^\+one$/m)
 })
 
-test('a type change keeps both sections for the path', async (t) => {
+test('a type change keeps both sections for the path', { skip: posixOnly('symlinks in a worktree (Git for Windows checks them out as files)') }, async (t) => {
   const { dir } = makeRepo(t)
   rmSync(join(dir, 'keep.txt'))
   symlinkSync('target.txt', join(dir, 'keep.txt'))
@@ -365,7 +367,7 @@ test('a type change keeps both sections for the path', async (t) => {
   assert.match(diffs['keep.txt'], /^\+target\.txt$/m)
 })
 
-test('an untracked symlink to a directory has no entry and does not fail', async (t) => {
+test('an untracked symlink to a directory has no entry and does not fail', { skip: posixOnly('symlinks in a worktree (Git for Windows checks them out as files)') }, async (t) => {
   const { dir } = makeRepo(t)
   mkdirSync(join(dir, 'real'))
   symlinkSync('real', join(dir, 'link'))
@@ -584,7 +586,9 @@ test('source uncommitted on an unborn HEAD: everything against the empty tree', 
 test('worktreeDiff with paths: only those files, the same patches, untracked ones included', async (t) => {
   const { dir, run } = withWork(t)
   run('mv', 'moved.txt', 'renamed.txt')
-  writeFileSync(join(dir, '*.txt'), 'glob\n')
+  // Windows refuses * in a file name: the literal-pathspec check is POSIX only.
+  const star = process.platform !== 'win32'
+  if (star) writeFileSync(join(dir, '*.txt'), 'glob\n')
   const full = await worktreeDiff(dir)
   for (const want of [['keep.txt'], ['untracked.txt'], ['renamed.txt'], ['moved.txt'], ['keep.txt', 'untracked.txt', 'nope.txt']]) {
     const only = await worktreeDiff(dir, { kind: 'branch' }, want)
@@ -592,7 +596,7 @@ test('worktreeDiff with paths: only those files, the same patches, untracked one
     assert.deepEqual(only, expected, want.join(','))
   }
   // A path is literal, never a pathspec pattern.
-  assert.deepEqual(Object.keys(await worktreeDiff(dir, { kind: 'branch' }, ['*.txt'])), ['*.txt'])
+  if (star) assert.deepEqual(Object.keys(await worktreeDiff(dir, { kind: 'branch' }, ['*.txt'])), ['*.txt'])
   assert.deepEqual(await worktreeDiff(dir, { kind: 'branch' }, []), {})
   const commit = run('rev-parse', 'HEAD').trim()
   assert.deepEqual(await worktreeDiff(dir, { kind: 'commit', sha: commit }, ['second.txt']), await worktreeDiff(dir, { kind: 'commit', sha: commit }))
@@ -602,7 +606,7 @@ test('source commit: a shallow clone\'s boundary commit is refused, not shown as
   const { dir, sha } = withWork(t)
   const clone = mkdtempSync(join(tmpdir(), 'trek-changes-shallow-'))
   t.after(() => rmSync(clone, { recursive: true, force: true }))
-  execFileSync('git', ['clone', '-q', '--depth', '1', '-b', 'feature', `file://${dir}`, join(clone, 'c')])
+  execFileSync('git', ['clone', '-q', '--depth', '1', '-b', 'feature', pathToFileURL(dir).href, join(clone, 'c')])
   const boundary = sha('HEAD')
   await assert.rejects(worktreeChanges(join(clone, 'c'), { kind: 'commit', sha: boundary }), /shallow clone/)
   await assert.rejects(worktreeDiff(join(clone, 'c'), { kind: 'commit', sha: boundary }), /shallow clone/)

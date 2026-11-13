@@ -53,8 +53,9 @@ test('acquireLock creates a 0700 directory and a 0600 lock holding the pid, with
   const path = join(dir, 'local.lock')
   assert.deepEqual(acquireLock(path, 100, alive), { ok: true })
   assert.match(readFileSync(path, 'utf8'), /^100\n[0-9a-f]{32}\n$/, 'the pid, then a nonce')
-  assert.equal(statSync(path).mode & 0o777, 0o600)
-  assert.equal(statSync(dir).mode & 0o777, 0o700)
+  // Windows has no POSIX file modes.
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(statSync(dir).mode & 0o777, 0o700)
   assert.deepEqual(readdirSync(dir), ['local.lock'])
   assert.equal(readLockPid(path), 100)
   assert.equal(holdsLock(path, 100), true)
@@ -124,7 +125,7 @@ test('the lock text: the pid and a nonce; an older server\'s lock (the pid alone
   assert.notEqual(readLock(join(dir, 'x.lock')).nonce, readLock(join(dir, 'y.lock')).nonce)
 })
 
-test('acquireLock keeps the profile directory 0700 even if it already existed looser', (t) => {
+test('acquireLock keeps the profile directory 0700 even if it already existed looser', { skip: posixOnly('file modes') }, (t) => {
   const dir = join(tempDir(t), 'profile')
   mkdirSync(dir, { mode: 0o755 })
   chmodSync(dir, 0o755)
@@ -222,7 +223,8 @@ test('a lock that is a directory throws, and the directory is left', (t) => {
   assert.deepEqual(readdirSync(join(path, '..')), ['local.lock'], 'no temp file is left')
 })
 
-test('a lock that is a symlink is not followed: it holds no pid and is replaced, its target untouched', (t) => {
+// Windows has no O_NOFOLLOW: readLock's open follows a symlinked lock there.
+test('a lock that is a symlink is not followed: it holds no pid and is replaced, its target untouched', { skip: posixOnly('O_NOFOLLOW') }, (t) => {
   const dir = tempDir(t)
   const target = join(dir, 'target')
   writeFileSync(target, '100\n')

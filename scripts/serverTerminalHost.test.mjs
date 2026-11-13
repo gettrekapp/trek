@@ -37,10 +37,11 @@ const MiB = 1024 * 1024
 const opts = { file: '/bin/sh', args: ['-ilc', 'exec x'], cwd: '/tmp', env: {}, cols: 80, rows: 24 }
 const flush = () => new Promise((r) => setImmediate(r))
 
+// The fake ptys are a POSIX host's unless a test says win32 (its kills, its windowsPty), on any OS.
 function setup(t, extra = {}) {
   const fake = fakeSpawner()
   const exits = []
-  const host = new TerminalHost({ spawner: fake.spawner, onExit: (ptyId, code) => exits.push([ptyId, code]), ...extra })
+  const host = new TerminalHost({ spawner: fake.spawner, onExit: (ptyId, code) => exits.push([ptyId, code]), platform: 'linux', ...extra })
   t.after(() => host.disposeAll())
   return { ...fake, exits, host }
 }
@@ -397,7 +398,7 @@ test('data emitted after exit is ignored', (t) => {
 
 test('an owner onExit that throws is contained', (t) => {
   const fake = fakeSpawner()
-  const host = new TerminalHost({ spawner: fake.spawner, onExit: () => { throw new Error('owner bug') } })
+  const host = new TerminalHost({ spawner: fake.spawner, onExit: () => { throw new Error('owner bug') }, platform: 'linux' })
   t.after(() => host.disposeAll())
   host.spawn('p1', opts)
   assert.doesNotThrow(() => fake.spawned[0].exit(1))

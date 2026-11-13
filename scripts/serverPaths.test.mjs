@@ -3,11 +3,15 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { PathGuard } from '../server/src/paths.ts'
 
+// The guard resolves as pathContainment's realPath does: on Windows the native one, which also
+// expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
+const real = process.platform === 'win32' ? realpathSync.native : realpathSync
+
 function setup(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-paths-')))
+  const dir = real(mkdtempSync(join(tmpdir(), 'trek-server-paths-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   for (const d of ['repos/a', 'roots/extra', 'outside/c']) mkdirSync(join(dir, d), { recursive: true })
   const config = { repos: [{ id: 'a', name: 'a', path: join(dir, 'repos', 'a') }], worktreeRoots: [join(dir, 'roots')] }
@@ -55,7 +59,7 @@ test('the permissive guard allows any path and still resolves it', (t) => {
   const { dir, config } = setup(t)
   const guard = new PathGuard(config, { permissive: true })
   assert.equal(guard.check(join(dir, 'outside', 'c')), join(dir, 'outside', 'c'))
-  assert.equal(guard.check('/'), '/')
+  assert.equal(guard.check('/'), resolve('/'), 'the root (C:\\ on Windows)')
   symlinkSync(join(dir, 'outside', 'c'), join(dir, 'link'))
   assert.equal(guard.check(join(dir, 'link')), join(dir, 'outside', 'c'), 'a symlink resolves to its target')
   assert.equal(guard.check(join(dir, 'link', 'new', 'wt')), join(dir, 'outside', 'c', 'new', 'wt'), 'a path not created yet resolves through its ancestor')

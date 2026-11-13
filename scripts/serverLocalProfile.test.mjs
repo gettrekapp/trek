@@ -10,6 +10,12 @@ import { localProfile, readLocalInfo, removeLocalInfo, writeLocalInfo } from '..
 // A token as addToken makes one: 32 random bytes, base64url.
 const info = { port: 51234, pid: 4242, token: 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU', version: '0.2.0', build: 'abc123def456' }
 
+/** A profile's paths on Linux, home /h and data dir /d/trek-server, as this machine's join() spells them. */
+const linuxProfile = (segment) => {
+  const dir = join('/h', '.config', 'trek-server', segment)
+  return { dir, configPath: join(dir, 'config.json'), infoPath: join(dir, 'local.json'), lockPath: join(dir, 'local.lock'), dataDir: join('/d/trek-server', segment) }
+}
+
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-local-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -17,23 +23,12 @@ function tempDir(t) {
 }
 
 test('the local profile lives under ~/.config/trek-server/local and <dataDir>/local', () => {
-  assert.deepEqual(localProfile('/h', '/d/trek-server'), {
-    dir: '/h/.config/trek-server/local',
-    configPath: '/h/.config/trek-server/local/config.json',
-    infoPath: '/h/.config/trek-server/local/local.json',
-    lockPath: '/h/.config/trek-server/local/local.lock',
-    dataDir: '/d/trek-server/local'
-  })
+  // Linux's layout, joined by this machine's node:path (backslashes on Windows).
+  assert.deepEqual(localProfile('/h', '/d/trek-server', undefined, 'linux', {}), linuxProfile('local'))
 })
 
 test('a named profile lives under ~/.config/trek-server/local-<name> and <dataDir>/local-<name>', () => {
-  assert.deepEqual(localProfile('/h', '/d/trek-server', 'dev'), {
-    dir: '/h/.config/trek-server/local-dev',
-    configPath: '/h/.config/trek-server/local-dev/config.json',
-    infoPath: '/h/.config/trek-server/local-dev/local.json',
-    lockPath: '/h/.config/trek-server/local-dev/local.lock',
-    dataDir: '/d/trek-server/local-dev'
-  })
+  assert.deepEqual(localProfile('/h', '/d/trek-server', 'dev', 'linux', {}), linuxProfile('local-dev'))
   assert.deepEqual(localProfile('/h', '/d', undefined), localProfile('/h', '/d'), 'no name is the default profile')
   assert.deepEqual(localProfileDir(), LOCAL_PROFILE_DIR)
   assert.deepEqual(localProfileDir('a-1'), ['.config', 'trek-server', 'local-a-1'])
@@ -79,7 +74,8 @@ test('writeLocalInfo writes 0600 by rename, leaving no temp file; readLocalInfo 
   const path = join(dir, 'local.json')
   writeFileSync(path, '{}', { mode: 0o644 })
   writeLocalInfo(path, info)
-  assert.equal(statSync(path).mode & 0o777, 0o600)
+  // Windows has no POSIX file modes.
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
   assert.deepEqual(readdirSync(dir), ['local.json'])
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), info)
   assert.deepEqual(readLocalInfo(path), info)
@@ -93,7 +89,7 @@ test('writeLocalInfo replaces a symlink at local.json, never writing through it'
   symlinkSync(target, path)
   writeLocalInfo(path, info)
   assert.equal(lstatSync(path).isSymbolicLink(), false)
-  assert.equal(statSync(path).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
   assert.deepEqual(readLocalInfo(path), info)
   assert.equal(readFileSync(target, 'utf8'), 'untouched')
 })

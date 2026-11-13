@@ -79,7 +79,8 @@ test('grants: per token in the secrets file (0600), status never shows the secre
   const { grants, path, tokens } = grantsIn(t)
   grants.set('phone-a', grant({ paused: true }))
   grants.set('phone-b', grant())
-  assert.equal(statSync(path).mode & 0o777, 0o600)
+  // Windows has no POSIX file modes.
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
   const status = grants.status('phone-a')
   assert.deepEqual(status, { relayUrl: 'https://relay.example', kinds: { decisions: true, sessions: true, prWatch: true }, paused: true, active: true })
   assert.ok(!JSON.stringify(status).includes(SECRET))

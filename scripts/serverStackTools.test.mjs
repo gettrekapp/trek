@@ -18,6 +18,10 @@ import { createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { createStackService } from '../src/host/stackService.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// Dev stacks are POSIX only (a Windows server refuses them, W1), and the stubs are bash scripts.
+const skip = posixOnly('bash stubs for stack.sh and docker; no dev stacks on Windows')
 
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -68,7 +72,7 @@ async function setup(t, { stackBody = '', machine = true } = {}) {
   return { a, feature: `${a}-feature-x`, call, projects, projectId }
 }
 
-test('get_stack, start_stack, read_stack_log and stop_stack drive the worktree stack.sh on the server', async (t) => {
+test('get_stack, start_stack, read_stack_log and stop_stack drive the worktree stack.sh on the server', { skip }, async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then sleep 30; fi' })
   assert.deepEqual(await s.call('get_stack', { worktree: 'feature-x' }), {
     available: true,
@@ -103,7 +107,7 @@ test('get_stack, start_stack, read_stack_log and stop_stack drive the worktree s
   assert.deepEqual(calls().filter((c) => c.startsWith('stack|')), ['stack|up --starter', 'stack|down'])
 })
 
-test('read_stack_log of a log longer than the 64 KiB it reads leaves out the cut first line', async (t) => {
+test('read_stack_log of a log longer than the 64 KiB it reads leaves out the cut first line', { skip }, async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = up ]; then for i in $(seq 1 3000); do echo "line $i padding-padding-padding"; done; fi' })
   await s.call('start_stack', { worktree: 'feature-x' })
   let output = ''
@@ -116,7 +120,7 @@ test('read_stack_log of a log longer than the 64 KiB it reads leaves out the cut
   for (const line of lines) assert.match(line, /^line \d+ padding-padding-padding$/)
 })
 
-test('the stack tools: a worktree without stack.sh, a failed down, bad arguments, and a server without stacks', async (t) => {
+test('the stack tools: a worktree without stack.sh, a failed down, bad arguments, and a server without stacks', { skip }, async (t) => {
   const s = await setup(t, { stackBody: 'if [ "$1" = down ]; then exit 3; fi' })
   assert.deepEqual(await s.call('get_stack', { worktree: `${s.a}-bare` }), { available: false })
   await assert.rejects(s.call('start_stack', { worktree: `${s.a}-bare` }), /no docker\/stack\/stack\.sh/)
@@ -128,7 +132,7 @@ test('the stack tools: a worktree without stack.sh, a failed down, bad arguments
   await assert.rejects(none.call('get_stack', { worktree: 'feature-x' }), /does not run dev stacks/)
 })
 
-test('the stack tools refuse a worktree outside the allowlist', async (t) => {
+test('the stack tools refuse a worktree outside the allowlist', { skip }, async (t) => {
   const s = await setup(t)
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-stack-tools-outside-')))
   t.after(() => rmSync(outside, { recursive: true, force: true }))

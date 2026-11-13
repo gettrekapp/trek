@@ -8,6 +8,10 @@ import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { seedEnvironmentsFromApp } from '../server/src/integrations/envSeed.ts'
 import { createStackService } from '../src/host/stackService.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// Windows has no POSIX file modes (stat reports 0666): the 0600 checks are POSIX only.
+const posix = process.platform !== 'win32'
 
 function dirs(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-env-seed-')))
@@ -31,7 +35,7 @@ test("copies the app's registry and stack files into an empty data dir, and leav
   const result = seedEnvironmentsFromApp(app, data)
   assert.deepEqual(result, { seeded: true, environments: 2, stackFiles: 2, skipped: [] })
   assert.deepEqual(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8')), registry)
-  assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
   assert.equal(readFileSync(join(data, 'stacks', 'app-feature-x.pid'), 'utf8'), String(process.pid))
   // The log is the same file (a hard link): a `stack.sh up` still writing to it shows in the new place.
   assert.equal(statSync(join(data, 'stacks', 'app-feature-x.log')).ino, statSync(join(app, 'stacks', 'app-feature-x.log')).ino)
@@ -105,14 +109,14 @@ test('stack files: only regular files, a live pid as the stack service writes it
   writeFileSync(join(app, 'stacks', 'a.pid'), ` ${process.pid}\n`)
   writeFileSync(join(app, 'stacks', 'b.pid'), 'not a pid')
   // A pid no process has (the stack ended while the app was closed): left out, so a reused pid is never Ctrl-C'd.
-  const dead = spawnSync('true').pid
+  const dead = spawnSync(process.execPath, ['-e', '']).pid
   writeFileSync(join(app, 'stacks', 'd.pid'), String(dead))
   writeFileSync(join(app, 'secret'), 'outside')
   symlinkSync(join(app, 'secret'), join(app, 'stacks', 'c.log'))
   const result = seedEnvironmentsFromApp(app, data)
   assert.equal(result.stackFiles, 1)
   assert.equal(readFileSync(join(data, 'stacks', 'a.pid'), 'utf8'), String(process.pid), "String(pid): the stack service's pid compare reads it")
-  assert.equal(statSync(join(data, 'stacks', 'a.pid')).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(join(data, 'stacks', 'a.pid')).mode & 0o777, 0o600)
   assert.equal(existsSync(join(data, 'stacks', 'b.pid')), false)
   assert.equal(existsSync(join(data, 'stacks', 'c.log')), false)
   assert.equal(existsSync(join(data, 'stacks', 'd.pid')), false)
@@ -138,7 +142,7 @@ test("the server's registry is never replaced, even a dangling symlink or a file
   const stale = join(data, `environments.json.${process.pid}.seed.tmp`)
   writeFileSync(stale, 'stale', { mode: 0o644 })
   assert.equal(seedEnvironmentsFromApp(app, data).seeded, true)
-  assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(join(data, 'environments.json')).mode & 0o777, 0o600)
   assert.equal(existsSync(stale), false)
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(data, 'environments.json'), 'utf8'))), ['twb-a-000001'])
 })
@@ -162,7 +166,7 @@ test('a log that cannot be hard-linked (another volume) is copied instead', (t) 
   assert.notEqual(statSync(join(data, 'stacks', 'app-feature-x.log')).ino, statSync(join(app, 'stacks', 'app-feature-x.log')).ino, 'a copy')
 })
 
-test("the stack service runs on what the seed took over: the app's running up counts, its log shows, and down stops it", async (t) => {
+test("the stack service runs on what the seed took over: the app's running up counts, its log shows, and down stops it", { skip: posixOnly('dev stacks: a stack.sh in its own process group, Ctrl-C by SIGINT (no stacks on a Windows server)') }, async (t) => {
   const { app, data } = dirs(t)
   const root = join(app, '..')
   // Stubs first on PATH: `docker ps` (the status's container count) lists nothing; no real docker runs.

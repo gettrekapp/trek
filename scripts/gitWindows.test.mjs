@@ -3,11 +3,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyPatch, exportDirtyPatch, linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig } from '../src/host/gitService.ts'
 import { defaultWorktreePath, safeDirName } from '../server/src/worktreeHandlers.ts'
+// realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
+import { realPath } from '../src/host/pathContainment.ts'
 import { windowsOnly } from './testPlatform.mjs'
 
 test('parseWorktreeList: Git for Windows paths (C:/x/y, CRLF) come out as C:\\x\\y', () => {
@@ -38,12 +40,13 @@ test('safeDirName: Windows-forbidden characters, trailing dots/spaces and device
 })
 
 test('defaultWorktreePath: <repo>-<branch>, safe on Windows', () => {
-  assert.equal(defaultWorktreePath('/w/repo', 'feat/a:b', 'linux'), '/w/repo-feat-a:b')
+  // The host's path join (backslashes on Windows); `platform` picks only the name's rules.
+  assert.equal(defaultWorktreePath('/w/repo', 'feat/a:b', 'linux'), join('/w', 'repo-feat-a:b'))
   assert.match(defaultWorktreePath('/w/repo', 'feat/a:b.', 'win32'), /repo-feat-a-b$/)
 })
 
 test('Windows: a linked directory is a junction, found again by linkedSymlinks', { skip: windowsOnly('junctions') }, async (t) => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-junction-')))
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-junction-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const repo = join(dir, 'repo')
   const wt = join(dir, 'repo-feat')
@@ -65,7 +68,7 @@ test('Windows: a linked directory is a junction, found again by linkedSymlinks',
 test("Windows: a linkedDirs file linkDirs copied (no symlink without Developer Mode) stays out of a move's patch", async (t) => {
   const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' }
   const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8' })
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-linked-copy-')))
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-linked-copy-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const repo = join(dir, 'repo')
   execFileSync('git', ['init', '-q', '-b', 'main', repo], { env })

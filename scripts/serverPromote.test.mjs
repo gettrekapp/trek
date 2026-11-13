@@ -2,12 +2,14 @@
 // against real git in a temp dir and a session manager with a fake pty spawner (promoteFixture.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { promoteChanging, promoteTestHooks, pruneRecoveryFiles } from '../server/src/promote/promoteHandlers.ts'
 import { CLAUDE_ID, MAIN_ID, branchOf, git, setup, status } from './promoteFixture.mjs'
+import { realPath } from '../src/host/pathContainment.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 test('worktree.promote dryRun: the plan, nothing changed', async (t) => {
   const s = await setup(t)
@@ -104,7 +106,8 @@ test('worktree.promote refuses a locked worktree, and changes nothing', async (t
   assert.equal(s.repo().worktrees.length, 2)
 })
 
-test('worktree.promote: a worktree folder that cannot be fully removed is a note after the commitment, nothing lost', async (t) => {
+// chmod 0555 makes a folder undeletable on POSIX only (Windows' read-only bit is not honoured on folders).
+test('worktree.promote: a worktree folder that cannot be fully removed is a note after the commitment, nothing lost', { skip: posixOnly('a read-only directory (chmod)') }, async (t) => {
   const s = await setup(t)
   const locked = join(s.path, 'readonly')
   mkdirSync(locked)
@@ -216,7 +219,7 @@ test('worktree.promote and worktree.demote refuse IN_USE while another project h
   const q = other.result.projectId
   await s.poller.refresh(s.app)
   const rows = s.projects.require(q).repositories[0].worktrees
-  const theirs = rows.find((w) => realpathSync(w.path) === realpathSync(s.path))
+  const theirs = rows.find((w) => realPath(w.path) === realPath(s.path))
   assert.ok(theirs)
   assert.equal((await s.call('worktree.load', { projectId: q, worktreeId: theirs.id })).ok, true)
   const r = await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId })
@@ -254,7 +257,7 @@ test('worktree.promote dryRun lists the main checkout\'s ignored files, and thos
 
 test('worktree.promote, worktree.remove, worktree.pull and move.* refuse while a promote changes the repository', async (t) => {
   const s = await setup(t)
-  promoteChanging.add(realpathSync(s.app))
+  promoteChanging.add(realPath(s.app))
   t.after(() => promoteChanging.clear())
   for (const [method, params] of [
     ['worktree.promote', { projectId: s.projectId, worktreeId: s.worktreeId }],

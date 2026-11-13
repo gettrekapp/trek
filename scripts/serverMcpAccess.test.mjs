@@ -5,6 +5,10 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { McpAccessStore } from '../server/src/mcp/access.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// Windows has no POSIX file modes (stat reports 0666 or 0444): the 0600/0700 checks are POSIX only.
+const posix = process.platform !== 'win32'
 
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-mcp-access-'))
@@ -32,13 +36,13 @@ test('accessFor writes the Claude and Gemini files once per project, mode 0600',
   assert.deepEqual(JSON.parse(readFileSync(a.geminiSettingsPath, 'utf8')), {
     mcpServers: { 'trek-dev': { httpUrl: a.url, headers: { Authorization: `Bearer ${a.token}` }, trust: true } }
   })
-  assert.equal(statSync(a.configPath).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(a.configPath).mode & 0o777, 0o600)
   // Codex reads the token through a helper command, from a file of its own: never from env or argv.
   const codexFile = join(mcpDir, 'p1.codex.json')
-  assert.equal(a.codexHeadersHelper, `/bin/cat '${codexFile}'`)
+  assert.equal(a.codexHeadersHelper, posix ? `/bin/cat '${codexFile}'` : `type "${codexFile}"`)
   assert.deepEqual(JSON.parse(readFileSync(codexFile, 'utf8')), { Authorization: `Bearer ${a.token}` })
-  assert.equal(statSync(codexFile).mode & 0o777, 0o600)
-  assert.equal(statSync(mcpDir).mode & 0o777, 0o700)
+  if (posix) assert.equal(statSync(codexFile).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(mcpDir).mode & 0o777, 0o700)
   assert.deepEqual(store.accessFor('p1'), a, 'the same token and files on the next call')
   assert.notEqual(store.accessFor('p2').token, a.token)
 })
@@ -67,7 +71,7 @@ test('the constructor clears files from an earlier run', (t) => {
   assert.equal(existsSync(join(mcpDir, 'old.json')), false)
 })
 
-test('an existing directory with a looser mode is tightened to 0700', (t) => {
+test('an existing directory with a looser mode is tightened to 0700', { skip: posixOnly('file modes') }, (t) => {
   const { mcpDir } = setup(t)
   mkdirSync(mcpDir, { recursive: true })
   chmodSync(mcpDir, 0o755)
@@ -98,7 +102,7 @@ test('a symlinked mcp directory is refused and its target left alone', (t) => {
   symlinkSync(target, mcpDir)
   assert.throws(() => new McpAccessStore(mcpDir), /symbolic link/)
   assert.equal(existsSync(join(target, 'keep.json')), true)
-  assert.equal(statSync(target).mode & 0o777, 0o755)
+  if (posix) assert.equal(statSync(target).mode & 0o777, 0o755)
 })
 
 test('an mcp path that is a file is refused', (t) => {
@@ -166,6 +170,6 @@ test('accessFor rewrites deleted files with the same token (a second start swept
   assert.equal(b.token, a.token)
   assert.ok(existsSync(a.configPath) && existsSync(a.geminiSettingsPath))
   assert.equal(JSON.parse(readFileSync(a.configPath, 'utf8')).mcpServers['trek-dev'].headers.Authorization, `Bearer ${a.token}`)
-  assert.equal(statSync(a.geminiSettingsPath).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(a.geminiSettingsPath).mode & 0o777, 0o600)
   assert.equal(JSON.parse(readFileSync(join(mcpDir, 'p1.codex.json'), 'utf8')).Authorization, `Bearer ${a.token}`)
 })
