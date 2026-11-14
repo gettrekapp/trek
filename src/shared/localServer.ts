@@ -29,9 +29,36 @@ export function localProfileSegment(name?: string): string {
   return `local-${name}`
 }
 
-/** The profile's directory as segments under the home directory: LOCAL_PROFILE_DIR, or ~/.config/trek-server/local-<name> */
+/** The profile's directory as segments under the home directory: LOCAL_PROFILE_DIR, or ~/.config/trek-server/local-<name> (POSIX; see serverConfigDir for Windows) */
 export function localProfileDir(name?: string): readonly string[] {
   return ['.config', 'trek-server', localProfileSegment(name)]
+}
+
+/**
+ * trek-server's config directory, which holds config.json and each local profile's directory:
+ * ~/.config/trek-server, or on Windows %APPDATA%\trek-server (the roaming per-user settings
+ * folder; projects stay in %LOCALAPPDATA%). `join` is the caller's node:path join, so this file
+ * still imports nothing.
+ */
+export function serverConfigDir(
+  join: (...parts: string[]) => string,
+  platform: string,
+  env: Record<string, string | undefined>,
+  home: string
+): string {
+  if (platform === 'win32') return join(env.APPDATA || join(home, 'AppData', 'Roaming'), 'trek-server')
+  return join(home, '.config', 'trek-server')
+}
+
+/** A local profile's directory (`local` or `local-<name>`) in serverConfigDir. */
+export function localProfilePath(
+  join: (...parts: string[]) => string,
+  platform: string,
+  env: Record<string, string | undefined>,
+  home: string,
+  name?: string
+): string {
+  return join(serverConfigDir(join, platform, env, home), localProfileSegment(name))
 }
 /** The local server's config file, in the profile directory */
 export const LOCAL_CONFIG_FILE = 'config.json'

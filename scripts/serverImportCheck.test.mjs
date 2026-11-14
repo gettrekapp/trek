@@ -1,15 +1,17 @@
 // scripts/serverImportCheck.test.mjs — what project.import accepts.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { checkImport } from '../server/src/projects/importCheck.ts'
 import { PathGuard } from '../server/src/paths.ts'
 import { importProjectFile } from '../src/shared/model/importProject.ts'
+import { realPath } from '../src/host/pathContainment.ts'
 
 function setup(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-import-')))
+  // realPath: on Windows the OS's (long names, as the guard resolves paths, not RUNNER~1).
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-import-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const repo = join(dir, 'repo')
   mkdirSync(repo)
@@ -91,7 +93,8 @@ test('the permissive guard (the local server) allows a worktree anywhere, but re
   const ctx = { registry, guard: new PathGuard({ repos: registry }, { permissive: true }), existingIds: new Set(), projectId: 'pid' }
   const b = project()
   b.repositories[0].worktrees[1].path = '/elsewhere/wt'
-  assert.equal(checkImport(b, ctx).repositories[0].worktrees[1].path, '/elsewhere/wt')
+  // Resolved (on Windows: C:\elsewhere\wt).
+  assert.equal(checkImport(b, ctx).repositories[0].worktrees[1].path, resolve('/elsewhere/wt'))
   const a = project()
   a.repositories[0].path = '/elsewhere/repo'
   assert.equal(code(() => checkImport(a, ctx)), 'PATH_DENIED')

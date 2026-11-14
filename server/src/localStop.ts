@@ -1,5 +1,8 @@
-// `trek-server stop --local`: SIGTERM the local server named by local.json, and
-// wait for it to remove local.json and its lock. The lock is the authority on
+// `trek-server stop --local`: ask the local server named by local.json to stop (`server.stop`,
+// with its token), or SIGTERM it if it does not answer, and wait for it to remove local.json and
+// its lock. Windows has no SIGTERM (a signal from another process is TerminateProcess, which skips
+// the shutdown), so there the fallback is only a forced end of its process tree, once the wait
+// runs out. The lock is the authority on
 // which process is the server: it is taken before anything else and released
 // last. The pid is signalled only if local.json names it and the lock holds it,
 // and the lock is from this boot (the start's staleness rule), so a pid reused
@@ -7,6 +10,8 @@
 import type { LocalInfo } from '../../src/shared/localServer.ts'
 import { beforeBoot, pidAlive, readLock, readLockPid, systemClock, type Clock } from './localLock.ts'
 import { readLocalInfo, type LocalProfile } from './localProfile.ts'
+import { requestStopSync, type StopRequestResult } from './stopRequest.ts'
+import { killTreeSync } from '../../src/host/processTree.ts'
 
 export type StopDecision =
   /** local.json names a live pid that holds the lock: the server */
@@ -45,6 +50,11 @@ export interface StopOptions {
   /** For the lock's boot-time check */
   clock?: Clock
   kill?: (pid: number, signal: NodeJS.Signals) => void
+  /** `server.stop` to the server local.json names (default requestStopSync) */
+  requestStop?: (info: LocalInfo) => StopRequestResult
+  platform?: NodeJS.Platform
+  /** Windows: the last resort once the wait runs out (default killTreeSync: taskkill /T /F) */
+  forceKill?: (pid: number) => void
   log?: (line: string) => void
   error?: (line: string) => void
 }
@@ -67,11 +77,15 @@ export function stopLocal(profile: LocalProfile, options: StopOptions = {}): num
     alive = pidAlive,
     clock = systemClock,
     kill = (pid, signal) => process.kill(pid, signal),
+    requestStop = (info) => requestStopSync(info.port, info.token),
+    platform = process.platform,
+    forceKill = (pid) => killTreeSync(pid, { platform: 'win32' }),
     log = console.log,
     error = console.error
   } = options
   const lock = readLock(profile.lockPath)
-  const decision = stopDecision(readLocalInfo(profile.infoPath), lock?.pid, alive, lock !== undefined && beforeBoot(lock.mtimeMs, clock))
+  const info = readLocalInfo(profile.infoPath)
+  const decision = stopDecision(info, lock?.pid, alive, lock !== undefined && beforeBoot(lock.mtimeMs, clock))
   if (decision.action === 'not-running') {
     log(
       decision.stale === undefined
@@ -97,20 +111,37 @@ export function stopLocal(profile: LocalProfile, options: StopOptions = {}): num
     return 1
   }
   const { pid } = decision
-  try {
-    kill(pid, 'SIGTERM')
-  } catch (err) {
-    // ESRCH: it exited between the check and the signal; the wait below sees that.
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
-      error(`Cannot signal the local trek-server (pid ${pid}): ${(err as Error).message}`)
-      return 1
+  // 'signal' means local.json names the lock's pid, so its port and token are that server's.
+  const asked = requestStop(info!)
+  const windows = platform === 'win32'
+  if (asked !== 'accepted') {
+    log(`The local trek-server did not take a stop request (${asked})${windows ? '' : '; sending SIGTERM'}.`)
+    if (!windows) {
+      try {
+        kill(pid, 'SIGTERM')
+      } catch (err) {
+        // ESRCH: it exited between the check and the signal; the wait below sees that.
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') {
+          error(`Cannot signal the local trek-server (pid ${pid}): ${(err as Error).message}`)
+          return 1
+        }
+      }
     }
   }
   log(`Stopping the local trek-server (pid ${pid})…`)
   const filesGone = (): boolean => readLocalInfo(profile.infoPath)?.pid !== pid && readLockPid(profile.lockPath) !== pid
-  const deadline = Date.now() + timeoutMs
   // The server removes both files on its way out, so once it is dead they are gone or never will be.
-  while (!filesGone() && alive(pid) && Date.now() < deadline) sleepSync(pollMs)
+  const wait = (ms: number): void => {
+    const deadline = Date.now() + ms
+    while (!filesGone() && alive(pid) && Date.now() < deadline) sleepSync(pollMs)
+  }
+  wait(timeoutMs)
+  if (!filesGone() && alive(pid) && windows) {
+    // Only the pid both files still name (checked again just now, as on every poll).
+    log(`It did not stop within ${timeoutMs / 1000} s; ending its process tree.`)
+    forceKill(pid)
+    wait(Math.min(timeoutMs, 5000))
+  }
   if (filesGone()) {
     log('Stopped.')
     return 0

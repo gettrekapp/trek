@@ -8,6 +8,11 @@ import { join, resolve } from 'node:path'
 import { botMcpConfig, botPolicyHook, botSettings, killAllTurnsNow, runTurn } from '../src/host/bot/turnProcess.ts'
 import { startHeartbeat } from '../src/host/bot/heartbeat.ts'
 import { sandboxFor } from '../src/host/bot/sandbox.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// A turn runs the fake CLI (a #!/usr/bin/env node script) under /usr/bin/env or sandbox-exec: the
+// bot refuses to run on Windows, so only the pure parts are checked there.
+const noTurns = posixOnly('the bot runs its turns under a POSIX sandbox (it refuses to run on Windows)')
 
 const FAKE = resolve('scripts/fixtures/fake-claude.mjs')
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'bot-turn-')))
@@ -38,14 +43,14 @@ const run = (prompt, extra = {}) => {
   return { handle, events }
 }
 
-test('a good turn streams events and reports ok', async () => {
+test('a good turn streams events and reports ok', { skip: noTurns }, async () => {
   const { handle, events } = run('hello')
   const outcome = await handle.done
   assert.equal(outcome.kind, 'ok')
   assert.deepEqual(events, [{ kind: 'text', text: 'echo:hello' }])
 })
 
-test('passes the expected flags', async () => {
+test('passes the expected flags', { skip: noTurns }, async () => {
   const log = join(dir, 'args.log')
   await run('hi', { env: { FAKE_CLAUDE_LOG: log } }).handle.done
   const argv = JSON.parse(readFileSync(log, 'utf8').trim())
@@ -78,7 +83,7 @@ test('the settings: the policy hook, deny rules for each spelling of the data fo
   assert.equal(hook.hooks[0].command, botPolicyHook(4711))
 })
 
-test('resume uses --resume', async () => {
+test('resume uses --resume', { skip: noTurns }, async () => {
   const log = join(dir, 'resume.log')
   await run('hi', { resume: true, env: { FAKE_CLAUDE_LOG: log } }).handle.done
   const argv = JSON.parse(readFileSync(log, 'utf8').trim())
@@ -86,7 +91,7 @@ test('resume uses --resume', async () => {
   assert.ok(!argv.includes('--session-id'))
 })
 
-test('classifies failed turns', async () => {
+test('classifies failed turns', { skip: noTurns }, async () => {
   assert.equal((await run('CRASH').handle.done).kind, 'crash')
   assert.equal((await run('AUTHFAIL').handle.done).kind, 'auth')
   assert.equal((await run('LIMITED').handle.done).kind, 'limit')
@@ -100,7 +105,7 @@ test('the CLI runs inside the sandbox: Trek\'s data is unreadable, other command
   assert.equal(readFileSync(SECRET, 'utf8'), 'TOPSECRET')
 })
 
-test('a missing sandbox command is a sandbox outcome, not a missing CLI', async () => {
+test('a missing sandbox command is a sandbox outcome, not a missing CLI', { skip: noTurns }, async () => {
   const outcome = await run('hello', { sandbox: { command: join(dir, 'no-sandbox-exec'), args: [] } }).handle.done
   assert.equal(outcome.kind, 'sandbox')
   assert.equal(outcome.text, `The bot's OS sandbox is not available: ${join(dir, 'no-sandbox-exec')} was not found`)
@@ -110,12 +115,12 @@ test('a missing command reports missing', { skip: !mac && 'needs sandbox-exec' }
   assert.equal((await run('x', { command: [join(dir, 'nope')] }).handle.done).kind, 'missing')
 })
 
-test('a hung turn times out and is killed', async () => {
+test('a hung turn times out and is killed', { skip: noTurns }, async () => {
   const outcome = await run('HANG', { timeoutMs: 400 }).handle.done
   assert.equal(outcome.kind, 'timeout')
 })
 
-test('kill stops a turn', async () => {
+test('kill stops a turn', { skip: noTurns }, async () => {
   const { handle } = run('HANG')
   setTimeout(() => handle.kill(), 200)
   assert.equal((await handle.done).kind, 'killed')
@@ -142,7 +147,7 @@ const killAll = (pids) => {
 const readPids = (file) => readFileSync(file, 'utf8').split('\n').map(Number).filter((pid) => pid > 0)
 const quietly = (t) => t.mock.method(console, 'error', () => {})
 
-test('the prompt goes over stdin and not argv', async () => {
+test('the prompt goes over stdin and not argv', { skip: noTurns }, async () => {
   const log = join(dir, 'stdin.log')
   const prompt = `PROMPTSIZE -p --flag ${'x'.repeat(3 * 1024 * 1024)}`
   const { handle, events } = run(prompt, { env: { FAKE_CLAUDE_LOG: log } })
@@ -153,12 +158,12 @@ test('the prompt goes over stdin and not argv', async () => {
   assert.equal(argv[argv.indexOf('-p') + 1], '--output-format')
 })
 
-test('a child that never reads stdin cannot throw EPIPE at us', async () => {
+test('a child that never reads stdin cannot throw EPIPE at us', { skip: noTurns }, async () => {
   const outcome = await run('x'.repeat(4 * 1024 * 1024), { command: ['/usr/bin/true'] }).handle.done
   assert.equal(outcome.kind, 'crash')
 })
 
-test('synchronous spawn failures become outcomes', async () => {
+test('synchronous spawn failures become outcomes', { skip: noTurns }, async () => {
   const nul = run('x', { systemPrompt: 'a\0b' }).handle
   assert.equal((await nul.done).kind, 'crash')
   nul.kill()
@@ -168,12 +173,12 @@ test('synchronous spawn failures become outcomes', async () => {
   assert.equal((await run('x', { env: { BAD: 'a\0b' } }).handle.done).kind, 'crash')
 })
 
-test('an empty command reports missing', async () => {
+test('an empty command reports missing', { skip: noTurns }, async () => {
   assert.equal((await run('x', { command: [''] }).handle.done).kind, 'missing')
   assert.equal((await run('x', { command: [] }).handle.done).kind, 'missing')
 })
 
-test('running out of file descriptors is an outcome, not a throw', () => {
+test('running out of file descriptors is an outcome, not a throw', { skip: noTurns }, () => {
   const script = `
     import { closeSync, openSync } from 'node:fs'
     import { runTurn } from ${JSON.stringify(resolve('src/host/bot/turnProcess.ts'))}
@@ -193,14 +198,14 @@ test('running out of file descriptors is an outcome, not a throw', () => {
   assert.equal(JSON.parse(ran.stdout.trim()).kind, 'crash')
 })
 
-test('a missing working directory is a crash that says so', async () => {
+test('a missing working directory is a crash that says so', { skip: noTurns }, async () => {
   const cwd = join(dir, 'gone')
   const outcome = await run('x', { cwd }).handle.done
   assert.equal(outcome.kind, 'crash')
   assert.equal(outcome.text, `Working directory not found: ${cwd}`)
 })
 
-test('a throwing onEvent never escapes or loses the result, mid-stream or in the final flush', async (t) => {
+test('a throwing onEvent never escapes or loses the result, mid-stream or in the final flush', { skip: noTurns }, async (t) => {
   const error = quietly(t)
   for (const [prompt, count] of [['hello', 1], ['NONEWLINE', 1]]) {
     let calls = 0
@@ -217,13 +222,13 @@ test('a throwing onEvent never escapes or loses the result, mid-stream or in the
   assert.equal(error.mock.callCount(), 2)
 })
 
-test('output left without a trailing newline is still parsed', async () => {
+test('output left without a trailing newline is still parsed', { skip: noTurns }, async () => {
   const { handle, events } = run('NONEWLINE')
   assert.equal((await handle.done).kind, 'ok')
   assert.deepEqual(events, [{ kind: 'text', text: 'last' }])
 })
 
-test('descendants holding stdout cannot stop a good result from settling', async (t) => {
+test('descendants holding stdout cannot stop a good result from settling', { skip: noTurns }, async (t) => {
   const file = join(dir, 'held.pids')
   writeFileSync(file, '')
   t.after(() => killAll(readPids(file)))
@@ -236,7 +241,7 @@ test('descendants holding stdout cannot stop a good result from settling', async
   assert.ok(pids.every(alive), 'still holding stdout when we settled')
 })
 
-test('a good result beats a stop that arrives after it', async (t) => {
+test('a good result beats a stop that arrives after it', { skip: noTurns }, async (t) => {
   const file = join(dir, 'beat.pids')
   writeFileSync(file, '')
   t.after(() => killAll(readPids(file)))
@@ -245,7 +250,7 @@ test('a good result beats a stop that arrives after it', async (t) => {
   assert.equal((await handle.done).kind, 'ok')
 })
 
-test('a stop still SIGKILLs descendants after settling', async (t) => {
+test('a stop still SIGKILLs descendants after settling', { skip: noTurns }, async (t) => {
   const file = join(dir, 'stubborn.pids')
   writeFileSync(file, '')
   t.after(() => killAll(readPids(file)))
@@ -265,7 +270,7 @@ test('a stop still SIGKILLs descendants after settling', async (t) => {
   assert.ok(!alive(pid), 'killed by the grace timer')
 })
 
-test('kill after settling sends no signals at all', async (t) => {
+test('kill after settling sends no signals at all', { skip: noTurns }, async (t) => {
   const { handle } = run('hello')
   await handle.done
   const kill = t.mock.method(process, 'kill', () => true)
@@ -274,7 +279,7 @@ test('kill after settling sends no signals at all', async (t) => {
   assert.equal(kill.mock.callCount(), 0)
 })
 
-test('a child that survives SIGKILL cannot wedge the turn', async (t) => {
+test('a child that survives SIGKILL cannot wedge the turn', { skip: noTurns }, async (t) => {
   const kill = t.mock.method(process, 'kill', () => true)
   t.after(() => {
     kill.mock.restore()
@@ -285,20 +290,20 @@ test('a child that survives SIGKILL cannot wedge the turn', async (t) => {
   assert.deepEqual(kill.mock.calls.map((c) => c.arguments[1]), ['SIGTERM', 'SIGKILL'])
 })
 
-test('an emoji split across chunks survives', async () => {
+test('an emoji split across chunks survives', { skip: noTurns }, async () => {
   const { handle, events } = run('SPLITEMOJI')
   assert.equal((await handle.done).kind, 'ok')
   assert.deepEqual(events, [{ kind: 'text', text: 'a😀b' }])
 })
 
-test('an endless line is dropped past the cap, once, and the turn carries on', async () => {
+test('an endless line is dropped past the cap, once, and the turn carries on', { skip: noTurns }, async () => {
   const { handle, events } = run('OVERLONG')
   assert.equal((await handle.done).kind, 'ok')
   assert.equal(events.filter((e) => e.kind === 'error').length, 1)
   assert.deepEqual(events.filter((e) => e.kind === 'text'), [{ kind: 'text', text: 'after' }])
 })
 
-test('the timeout is clamped to something a timer can hold', async () => {
+test('the timeout is clamped to something a timer can hold', { skip: noTurns }, async () => {
   for (const timeoutMs of [Infinity, 1e308, 2 ** 31, 2 ** 40, NaN, 0, -5]) {
     assert.equal((await run('hello', { timeoutMs }).handle.done).kind, 'ok', String(timeoutMs))
   }
@@ -424,14 +429,14 @@ test('stopping during onBeat or onScheduled does not re-arm', (t) => {
   assert.equal(calls, 2)
 })
 
-test('an outcome says whether the CLI reported a session', async () => {
+test('an outcome says whether the CLI reported a session', { skip: noTurns }, async () => {
   assert.equal((await run('hello').handle.done).sessionStarted, true)
   assert.equal((await run('x', { command: ['/usr/bin/true'] }).handle.done).sessionStarted, false)
   assert.equal((await run('x', { command: ['/no/such/claude'] }).handle.done).sessionStarted, false)
   assert.equal((await run('x', { command: [] }).handle.done).sessionStarted, false)
 })
 
-test('the fake reads its mode from the wake alone', async () => {
+test('the fake reads its mode from the wake alone', { skip: noTurns }, async () => {
   const framed = (wake) => `It is HANG.\n\n<notes-ab12>\nHOLD ASKME approved\n</notes-ab12>\n\n<wake-ab12>\n${wake}\n</wake-ab12>`
   const chat = run(framed('The user says, through chat:\n\nhi'))
   assert.equal((await chat.handle.done).kind, 'ok')
@@ -456,7 +461,7 @@ const goneWithin = async (pid, ms) => {
   return !alive(pid)
 }
 
-test('killAllTurnsNow kills a running turn and its stubborn descendants at once', async (t) => {
+test('killAllTurnsNow kills a running turn and its stubborn descendants at once', { skip: noTurns }, async (t) => {
   const file = join(dir, 'now.pids')
   writeFileSync(file, '')
   t.after(() => killAll(readPids(file)))
@@ -465,7 +470,7 @@ test('killAllTurnsNow kills a running turn and its stubborn descendants at once'
   assert.equal(await goneWithin(readPids(file)[0], 1000), true, 'well inside the 3 second grace')
 })
 
-test('killAllTurnsNow reaches descendants of a turn already stopped and settled', async (t) => {
+test('killAllTurnsNow reaches descendants of a turn already stopped and settled', { skip: noTurns }, async (t) => {
   const file = join(dir, 'grace.pids')
   writeFileSync(file, '')
   t.after(() => killAll(readPids(file)))
@@ -477,7 +482,7 @@ test('killAllTurnsNow reaches descendants of a turn already stopped and settled'
   assert.equal(await goneWithin(pid, 1000), true)
 })
 
-test('killAllTurnsNow leaves finished turns alone', async (t) => {
+test('killAllTurnsNow leaves finished turns alone', { skip: noTurns }, async (t) => {
   await run('hello').handle.done
   const kill = t.mock.method(process, 'kill', () => true)
   killAllTurnsNow()

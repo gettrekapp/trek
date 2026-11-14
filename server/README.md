@@ -27,7 +27,9 @@ keeps running on the server; the app reattaches when it reconnects.
 
 A release's `trek-server-<version>-<os>-<arch>.tar.gz` (macOS and Linux, x64 and arm64) needs
 no build tools: unpack it and run `bin/trek-server` with Node.js 22 or later (its README.md says
-more; see ../docs/RELEASING.md). From a checkout:
+more; see ../docs/RELEASING.md). On Windows (x64) it is `trek-server-<version>-win32-x64.zip`
+with `bin\trek-server.cmd`; ../docs/WINDOWS.md says how a Windows server differs (config in
+`%APPDATA%\trek-server`, no environments or dev stacks yet, no WSL paths). From a checkout:
 
 ```sh
 git clone <this repo> ~/Trek.Developer

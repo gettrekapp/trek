@@ -7,7 +7,12 @@
 // A reset (a reconnect is about to replay again) clears the page and holds output again until
 // the next size. A `pty.resized` from another client is applied as it comes.
 
-export type PageMessage = { type: 'data'; data: string } | { type: 'reset' } | { type: 'size'; cols: number; rows: number }
+export type PageMessage =
+  | { type: 'data'; data: string }
+  | { type: 'reset' }
+  | { type: 'size'; cols: number; rows: number }
+  /** The pty is on a Windows server (ConPTY): xterm's windowsPty option, before any output */
+  | { type: 'windowsPty'; buildNumber: number }
 
 export class TerminalFeed {
   private sized = false
@@ -27,10 +32,14 @@ export class TerminalFeed {
     return [{ type: 'reset' }]
   }
 
-  /** The pty's size (attach, re-attach, or pty.resized): the size, then whatever was held. */
-  size(cols: number, rows: number): PageMessage[] {
+  /**
+   * The pty's size (attach, re-attach, or pty.resized): the size, then whatever was held. With
+   * `windowsBuild` (an attach's windowsPty), xterm is set up for ConPTY first.
+   */
+  size(cols: number, rows: number, windowsBuild?: number): PageMessage[] {
     this.sized = true
-    const out: PageMessage[] = [{ type: 'size', cols, rows }]
+    const out: PageMessage[] = windowsBuild === undefined ? [] : [{ type: 'windowsPty', buildNumber: windowsBuild }]
+    out.push({ type: 'size', cols, rows })
     if (this.held.length) out.push({ type: 'data', data: this.held.join('') })
     this.held = []
     return out

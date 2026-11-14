@@ -20,6 +20,10 @@ import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
 
+// The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
+// which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
+const real = process.platform === 'win32' ? realpathSync.native : realpathSync
+
 // Keep a user's global git config and hooks out of the real git these tests run.
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
 process.env.GIT_CONFIG_NOSYSTEM = '1'
@@ -80,7 +84,7 @@ function fakeSpawner() {
 
 /** A project on a real git repo, a fake pty spawner, and a tool caller for it. */
 async function toolSetup(t, opts = {}) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-mcp-tools-')))
+  const dir = real(mkdtempSync(join(tmpdir(), 'trek-mcp-tools-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
@@ -95,7 +99,8 @@ async function toolSetup(t, opts = {}) {
   const { spawned, spawner } = fakeSpawner()
   const jobs = []
   const schedule = (fn, ms) => { const job = { fn, ms, cancelled: false, fired: false }; jobs.push(job); return { cancel: () => { job.cancelled = true } } }
-  const sessions = new SessionManager({ projects, store, hub, spawner, schedule, discover: async () => undefined })
+  // A POSIX server's launches on any OS (the fake agents are not on a Windows PATH).
+  const sessions = new SessionManager({ projects, store, hub, spawner, schedule, discover: async () => undefined, platform: 'linux' })
   t.after(() => { sessions.stopAll(); poller.stop(); store.close() })
   // The tools' poll timers are unref'd (as in the server, where the listener holds the loop): hold it for the test.
   const keepAlive = setInterval(() => {}, 1000)

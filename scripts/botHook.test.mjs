@@ -8,9 +8,10 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { botPolicyHook } from '../src/host/bot/turnProcess.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 const TOKEN = 'a'.repeat(32) + 'f00d'.repeat(8)
-const skip = process.platform === 'win32' && 'POSIX sh only'
+const skip = posixOnly('the hook is a POSIX sh script (the bot refuses to run on Windows)')
 const INPUT = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } })
 
 /** Runs the hook with sh, as the CLI does, with `bin` first on PATH. */

@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ProjectStore, STORE_SCHEMA } from '../server/src/projects/store.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-projects-')))
@@ -42,7 +43,7 @@ function blockFile(dir, id) {
   return () => rmSync(join(dir, `${id}.json`), { recursive: true, force: true })
 }
 
-const noChmod = process.platform === 'win32' || process.getuid?.() === 0
+const noChmod = posixOnly('a read-only directory (chmod)') || (process.getuid?.() === 0 && 'running as root')
 
 test('save is debounced and writes {schema, project} at 0600', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })

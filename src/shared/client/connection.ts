@@ -38,6 +38,9 @@ export interface WelcomeInfo {
   serverName: string
   daemonVersion: string
   capabilities: string[]
+  /** The server's OS (win32, darwin, linux); undefined from a server before W1 */
+  platform?: string
+  windowsBuild?: number
   /** The server's plugins (plugin system phase 1); undefined from a server older than plugins */
   plugins?: PluginPresence[]
 }
@@ -133,6 +136,8 @@ interface IncomingFrame {
   serverName?: unknown
   daemonVersion?: unknown
   capabilities?: unknown
+  platform?: unknown
+  windowsBuild?: unknown
   plugins?: unknown
 }
 
@@ -322,7 +327,9 @@ export class ServerConnection {
         serverId: String(frame.serverId ?? ''),
         serverName: String(frame.serverName ?? ''),
         daemonVersion: String(frame.daemonVersion ?? ''),
-        capabilities: Array.isArray(frame.capabilities) ? frame.capabilities.map(String) : []
+        capabilities: Array.isArray(frame.capabilities) ? frame.capabilities.map(String) : [],
+        ...(typeof frame.platform === 'string' ? { platform: frame.platform } : {}),
+        ...(typeof frame.windowsBuild === 'number' ? { windowsBuild: frame.windowsBuild } : {})
       }
       const plugins = parsePluginPresence(frame.plugins)
       if (plugins) welcome.plugins = plugins

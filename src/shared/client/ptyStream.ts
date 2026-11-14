@@ -1,7 +1,7 @@
 // Terminal streams over a ServerConnection: attach (with replay), live data,
 // exit, reattach after a reconnect, write/resize/detach.
 import type { PtyInfo, PtyResizedEventWire } from '../protocolV2.ts'
-import { ClientError, type ServerConnection } from './connection.ts'
+import { ClientError, type ServerConnection, type WelcomeInfo } from './connection.ts'
 
 export interface PtyHandlers {
   onData(data: string, replay: boolean): void
@@ -56,6 +56,11 @@ export class PtyStream {
   private retryWait: { timer: unknown; resolve: () => void } | null = null
   /** Handlers whose first `attach()` is still in flight: its rejection reports a close, not onExit. */
   private readonly attaching = new Set<PtyHandlers>()
+
+  /** The connection's welcome (its platform, for a terminal's ConPTY handling); null before one */
+  get welcome(): WelcomeInfo | null {
+    return this.conn.welcome
+  }
 
   constructor(conn: ServerConnection) {
     this.conn = conn

@@ -1,9 +1,9 @@
 // Electron-free: shared by the Electron main process and the remote daemon.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, stat, symlink, utimes } from 'node:fs/promises'
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readlink, realpath, rm, rmdir, stat, symlink, unlink, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, normalize, resolve, sep, win32 } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   ChangedFile,
@@ -15,6 +15,10 @@ import type {
   WorktreeStatus
 } from '../shared/types'
 import { COMMIT_LIST_LIMIT, isCommitSha } from '../shared/review.ts'
+import { hidden } from './childOptions.ts'
+import { commandPath } from './commandPath.ts'
+import { isInside, samePath } from './pathContainment.ts'
+import { constants } from 'node:fs'
 
 const execFileAsync = promisify(execFile)
 
@@ -43,11 +47,20 @@ export function assertSafeBranch(branch: string): void {
   if (bad) throw new Error(`invalid branch name: ${JSON.stringify(branch)}`)
 }
 
+/**
+ * Config every git run of Trek's gets on this platform. Windows: core.longpaths, so a worktree
+ * whose paths pass MAX_PATH (260) still checks out (Git for Windows supports long paths, but
+ * only with this on).
+ */
+export function platformGitConfig(platform: NodeJS.Platform = process.platform): string[] {
+  return platform === 'win32' ? ['-c', 'core.longpaths=true'] : []
+}
+
 export async function git(repoPath: string, args: string[], options: { timeout?: number } = {}): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['-C', repoPath, ...args], {
+  const { stdout } = await execFileAsync(commandPath('git'), [...platformGitConfig(), '-C', repoPath, ...args], hidden({
     timeout: options.timeout ?? 60_000,
     maxBuffer: 64 * 1024 * 1024 // dirty patches (git diff --binary) can be large
-  })
+  }))
   return stdout
 }
 
@@ -73,12 +86,14 @@ export async function defaultBaseBranch(repoPath: string): Promise<string | null
   return null
 }
 
-export function parseWorktreeList(porcelain: string): GitWorktreeInfo[] {
+export function parseWorktreeList(porcelain: string, platform: NodeJS.Platform = process.platform): GitWorktreeInfo[] {
   const entries: GitWorktreeInfo[] = []
   let current: Partial<GitWorktreeInfo> = {}
-  for (const line of porcelain.split('\n')) {
+  for (const line of porcelain.split(/\r?\n/)) {
     if (line.startsWith('worktree ')) {
-      current = { path: line.slice('worktree '.length) }
+      const path = line.slice('worktree '.length)
+      // Git for Windows prints C:/x/y: stored paths use one separator style, the platform's.
+      current = { path: platform === 'win32' ? win32.normalize(path) : path }
     } else if (line.startsWith('HEAD ')) {
       current.head = line.slice('HEAD '.length)
     } else if (line.startsWith('branch ')) {
@@ -227,26 +242,49 @@ async function mainCheckout(worktreePath: string): Promise<string> {
  * symlink into the repository's main checkout. Only these are left out of a move: an entry that is
  * a real (tracked or untracked) directory or file in the worktree was never linked (linkDirs
  * leaves an existing path alone), so its contents are the worktree's own and are carried.
+ * Windows: also an untracked regular file where the main checkout has a file too, which is what
+ * linkDirs copies when Windows allows no file symlink; the target makes its own copy, so carrying
+ * it would fail the apply there ("already exists"). (A copy can't be told from a file of the
+ * worktree's own of the same name; one named in linkedDirs is taken for the copy.)
  * `repoPath`: the main checkout (git's common dir's parent when not given).
  */
-export async function linkedSymlinks(worktreePath: string, entries: readonly unknown[], repoPath?: string): Promise<string[]> {
+export async function linkedSymlinks(
+  worktreePath: string,
+  entries: readonly unknown[],
+  repoPath?: string,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
   const names = [...new Set(entries.map(normalizeLinkedDir).filter((d): d is string => d !== null))]
   if (names.length === 0) return []
   const main = resolve(repoPath ?? (await mainCheckout(worktreePath)))
   const mainReal = await realpath(main).catch(() => main)
+  const isMain = samePath(await realpath(worktreePath).catch(() => resolve(worktreePath)), mainReal)
   const out: string[] = []
   for (const name of names) {
     const link = join(worktreePath, name)
     const info = await lstat(link).catch(() => null)
+    if (platform === 'win32' && !isMain && info?.isFile() && (await isLinkCopy(worktreePath, main, name))) {
+      out.push(name)
+      continue
+    }
     if (!info?.isSymbolicLink()) continue
     const to = await readlink(link).catch(() => null)
     if (to === null) continue
-    const pointed = resolve(dirname(link), to)
-    const into = (root: string, p: string): boolean => p === resolve(root, name)
+    // A junction (Windows' directory link) reads as \\?\C:\…: compare it as C:\….
+    const pointed = resolve(dirname(link), to.replace(/^\\\\\?\\(?!UNC\\)/i, ''))
+    const into = (root: string, p: string): boolean => samePath(p, resolve(root, name))
     const real = await realpath(link).catch(() => null)
     if (into(main, pointed) || into(mainReal, pointed) || (real !== null && into(mainReal, real))) out.push(name)
   }
   return out
+}
+
+/** Whether `name` in the worktree is untracked and the main checkout has a file there: linkDirs' copy. */
+async function isLinkCopy(worktreePath: string, main: string, name: string): Promise<boolean> {
+  const source = await stat(join(main, name)).catch(() => null)
+  if (!source?.isFile()) return false
+  const tracked = await git(worktreePath, ['ls-files', '-z', '--', `:(literal)${name}`]).catch(() => null)
+  return tracked === ''
 }
 
 /**
@@ -254,12 +292,19 @@ export async function linkedSymlinks(worktreePath: string, entries: readonly unk
  * .trek/ folder holding database backups and secrets that aren't
  * committed). Best-effort per entry: a missing source or an already-present
  * target is skipped, so re-linking an existing worktree is a no-op.
+ *
+ * Windows: a directory becomes a junction, which needs neither admin rights nor Developer Mode
+ * (a symlink needs one of them). A file has no such link: it is a symlink where Windows allows
+ * one, and otherwise a copy, which the returned warnings name (the copy no longer follows the
+ * main checkout's file).
  */
 export async function linkDirs(
   repoPath: string,
   worktreePath: string,
-  entries: string[]
-): Promise<void> {
+  entries: string[],
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  const warnings: string[] = []
   const repoRoot = resolve(repoPath)
   const worktreeRoot = resolve(worktreePath)
   for (const entry of entries) {
@@ -268,24 +313,95 @@ export async function linkDirs(
     if (!name) continue
     const source = resolve(repoRoot, name)
     const target = resolve(worktreeRoot, name)
-    if (!source.startsWith(repoRoot + sep) || !target.startsWith(worktreeRoot + sep)) continue
+    if (!isInside(repoRoot, source, platform, true) || !isInside(worktreeRoot, target, platform, true)) continue
     try {
       await lstat(source)
     } catch {
       continue // nothing to link in the main repo
     }
+    // What it is (through a symlink in the main checkout too): a junction only for a directory.
+    const isDir = await stat(source).then((s) => s.isDirectory(), () => false)
     try {
       await mkdir(dirname(target), { recursive: true })
-      await symlink(source, target)
-    } catch {
-      // target already exists (checked-in or previously linked) — leave it
+      await symlink(source, target, platform === 'win32' ? (isDir ? 'junction' : 'file') : undefined)
+    } catch (err) {
+      // EEXIST: target already exists (checked-in or previously linked) — leave it
+      if (platform !== 'win32' || isDir || (err as NodeJS.ErrnoException).code !== 'EPERM') continue
+      try {
+        await copyFile(source, target, constants.COPYFILE_EXCL)
+        warnings.push(`${name} was copied, not linked (Windows allows file symlinks only with Developer Mode on); it won't follow the main checkout's copy`)
+      } catch {
+        // there after all — leave it
+      }
     }
+  }
+  return warnings
+}
+
+/**
+ * Removes the worktree's linkedDirs links (linkedSymlinks: those into the main checkout) and only
+ * the links, never what they point at, and returns their names. Git for Windows may take a
+ * junction for a directory, and `git worktree remove` would then delete the main checkout's
+ * linked contents (.trek backups, secrets) through it; so the links go before git runs. Done on
+ * every platform: git elsewhere removes a symlink itself, so the only difference there is that
+ * Trek's own (untracked) link no longer makes an unforced remove refuse. A Windows file copy
+ * (linkedSymlinks returns those too) is a plain file git deletes itself; it is left.
+ */
+async function unlinkLinkedDirs(repoPath: string, worktreePath: string, linkedDirs: readonly unknown[], platform: NodeJS.Platform): Promise<string[]> {
+  const removed: string[] = []
+  for (const name of await linkedSymlinks(worktreePath, linkedDirs, repoPath, platform)) {
+    const link = join(worktreePath, name)
+    if (!(await lstat(link).catch(() => null))?.isSymbolicLink()) continue
+    await removeLink(link, platform)
+    removed.push(name)
+  }
+  return removed
+}
+
+/**
+ * Removes a symlink or junction itself, never recursively. POSIX: unlink (rmdir refuses a
+ * symlink). Windows: a junction or directory symlink is a directory entry, removed with rmdir
+ * (which removes the link, not the target's contents); a file symlink with unlink.
+ */
+export async function removeLink(link: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+  if (platform !== 'win32') return unlink(link)
+  // A dangling junction can't be stat'd: take it for a directory link.
+  const isDir = await stat(link).then((s) => s.isDirectory(), () => true)
+  try {
+    await (isDir ? rmdir(link) : unlink(link))
+  } catch {
+    await (isDir ? unlink(link) : rmdir(link))
   }
 }
 
-/** Refuses (throws) if the worktree has uncommitted changes — deliberately no --force. */
-export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath, ['worktree', 'remove', '--', worktreePath])
+/** `git worktree remove [--force]` once the linkedDirs links are gone; a failure puts them back (best-effort). */
+async function removeWorktreeVia(
+  repoPath: string,
+  worktreePath: string,
+  linkedDirs: readonly unknown[],
+  force: boolean,
+  platform: NodeJS.Platform
+): Promise<void> {
+  const removed = await unlinkLinkedDirs(repoPath, worktreePath, linkedDirs, platform)
+  try {
+    await git(repoPath, ['worktree', 'remove', ...(force ? ['--force'] : []), '--', worktreePath])
+  } catch (err) {
+    if (removed.length > 0) await linkDirs(repoPath, worktreePath, removed, platform).catch(() => undefined)
+    throw err
+  }
+}
+
+/**
+ * Refuses (throws) if the worktree has uncommitted changes — deliberately no --force.
+ * `linkedDirs`: the repository's, whose links are removed first (unlinkLinkedDirs).
+ */
+export async function removeWorktree(
+  repoPath: string,
+  worktreePath: string,
+  linkedDirs: readonly unknown[],
+  platform: NodeJS.Platform = process.platform
+): Promise<void> {
+  await removeWorktreeVia(repoPath, worktreePath, linkedDirs, false, platform)
 }
 
 export async function checkout(repoPath: string, branch: string): Promise<void> {
@@ -315,6 +431,7 @@ const mb = (bytes: number): string => `${(bytes / 1024 / 1024).toFixed(1)} MB`
  * pinned off.)
  */
 const PATCH_CONFIG = [
+  ...platformGitConfig(),
   '-c', 'core.quotepath=false',
   '-c', 'diff.suppressBlankEmpty=false',
   '-c', 'apply.whitespace=nowarn',
@@ -360,8 +477,8 @@ function overflowed(err: unknown): boolean {
  * --binary -p`, explicit prefixes, context, no textconv, no renames, no external diff), so no
  * git config or .gitattributes diff driver changes what it says. Ignored files never appear,
  * nor do those of `exclude`'s linkedDirs entries that are symlinks into the main checkout here
- * (linkedSymlinks: the target links them itself); an entry that is a real directory in the
- * worktree is carried like any other. The patch puts every change back unstaged. Refuses:
+ * (linkedSymlinks: the target links them itself; on Windows also linkDirs' file copies); an
+ * entry that is a real directory in the worktree is carried like any other. The patch puts every change back unstaged. Refuses:
  * untracked files together over `maxBytes` (measured before git hashes them) or a patch over
  * the buffer (PatchTooBigError); an untracked nested git repository (NestedRepoError: `add -A`
  * would make it a gitlink, its files left behind); a patch that is not valid UTF-8
@@ -372,22 +489,22 @@ function overflowed(err: unknown): boolean {
 export async function exportDirtyPatch(
   worktreePath: string,
   exclude: readonly string[] = [],
-  options: { maxBytes?: number; repoPath?: string; linked?: readonly string[] } = {}
+  options: { maxBytes?: number; repoPath?: string; linked?: readonly string[]; platform?: NodeJS.Platform } = {}
 ): Promise<{ patch: string; headSha: string }> {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_PATCH_BYTES
   // `linked` (5e's demote): the paths to leave out, given — the main checkout's linkedDirs are real
   // folders there, and only those the new worktree links stay behind.
-  const linked = options.linked ? [...options.linked] : await linkedSymlinks(worktreePath, exclude, options.repoPath)
+  const linked = options.linked ? [...options.linked] : await linkedSymlinks(worktreePath, exclude, options.repoPath, options.platform)
   const headSha = (await git(worktreePath, ['rev-parse', '--verify', 'HEAD'])).trim()
   const gitIndex = resolve(worktreePath, (await git(worktreePath, ['rev-parse', '--git-path', 'index'])).trim())
   const pathspec = ['.', ...linked.map((p) => `:(exclude,literal)${p}`)]
   const run = async (args: string[], env: NodeJS.ProcessEnv, maxBuffer = 64 * 1024 * 1024): Promise<Buffer> => {
-    const { stdout } = await execFileAsync('git', [...PATCH_CONFIG, '-C', worktreePath, ...args], {
+    const { stdout } = await execFileAsync(commandPath('git'), [...PATCH_CONFIG, '-C', worktreePath, ...args], hidden({
       env,
       timeout: 60_000,
       maxBuffer,
       encoding: 'buffer'
-    })
+    }))
     return stdout
   }
   // The untracked files' sizes first: `add -A` would hash every one into the object store.
@@ -515,9 +632,9 @@ export async function ignoredOverwrittenBy(path: string, ref: string, cap = 50):
   if (present.length === 0) return { paths: [], count: 0 }
   const ignored = await new Promise<string[]>((resolve, reject) => {
     const child = execFile(
-      'git',
-      ['-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
-      { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      commandPath('git'),
+      [...platformGitConfig(), '-c', 'core.quotepath=false', '-C', path, 'check-ignore', '-z', '--no-index', '--stdin'],
+      hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, stdout) => {
         // 1: none of them is ignored
         if (err && (err as { code?: unknown }).code !== 1) reject(err)
@@ -543,9 +660,9 @@ export async function originUrl(repoPath: string): Promise<string | null> {
 export async function applyPatch(worktreePath: string, patch: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
-      'git',
+      commandPath('git'),
       [...PATCH_CONFIG, '-C', worktreePath, 'apply', '--binary', '--whitespace=nowarn', '-p1', '-'],
-      { env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      hidden({ env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
     )
     child.stdin!.end(patch)
@@ -556,9 +673,9 @@ export async function applyPatch(worktreePath: string, patch: string): Promise<v
 export async function reverseApplyPatch(worktreePath: string, patch: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = execFile(
-      'git',
+      commandPath('git'),
       [...PATCH_CONFIG, '-C', worktreePath, 'apply', '-R', '--binary', '--whitespace=nowarn', '-p1', '-'],
-      { env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 },
+      hidden({ env: patchEnv(), timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }),
       (err, _stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve())
     )
     child.stdin!.end(patch)
@@ -696,9 +813,14 @@ export async function addWorktreeAt(
   await git(repoPath, ['worktree', 'add', '--', worktreePath, branch])
 }
 
-/** Only used after a move is verified on the target — bypasses the dirty check. */
-export async function removeWorktreeForce(repoPath: string, worktreePath: string): Promise<void> {
-  await git(repoPath, ['worktree', 'remove', '--force', '--', worktreePath])
+/** Bypasses the dirty check (a verified move or promote, an explicit forced remove). `linkedDirs`: as removeWorktree. */
+export async function removeWorktreeForce(
+  repoPath: string,
+  worktreePath: string,
+  linkedDirs: readonly unknown[],
+  platform: NodeJS.Platform = process.platform
+): Promise<void> {
+  await removeWorktreeVia(repoPath, worktreePath, linkedDirs, true, platform)
 }
 
 export async function defaultBranch(repoPath: string): Promise<string | null> {
@@ -1071,9 +1193,9 @@ async function untrackedPatch(worktreePath: string, path: string): Promise<strin
           .replace(/^\+\+\+ b\/\.\/-$/m, '+++ b/-')
   try {
     const pending = execFileAsync(
-      'git',
-      ['-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
-      { timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }
+      commandPath('git'),
+      [...platformGitConfig(), '-C', worktreePath, 'diff', '--no-index', ...PATCH_FORMAT_ARGS, '--', '/dev/null', operand],
+      hidden({ timeout: 60_000, maxBuffer: 64 * 1024 * 1024 })
     )
     // Never let git wait on stdin, whatever the file is called.
     pending.child.stdin?.end()

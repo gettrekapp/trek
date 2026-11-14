@@ -24,6 +24,9 @@ import { voiceServerPlugin } from '../plugins/voice/server/index.ts'
 import { migrateConfigFile } from '../plugins/voice/server/configFile.ts'
 import { VOICE_SUMMARY_PROMPT } from '../plugins/voice/server/prompt.ts'
 
+// Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
+const posix = process.platform !== 'win32'
+
 const tempDir = (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-voice-plugin-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
@@ -119,7 +122,7 @@ test('voice.setKey checks the key by listing its voices, picks the first voice, 
   assert.deepEqual(set.result, { ok: true, voices: [{ id: 'v1', name: 'Rachel' }, { id: 'v2', name: 'Adam' }] })
   assert.equal(JSON.stringify(set).includes('good-voice'), false)
   assert.deepEqual((await s.call('voice.settings', {})).result, { voiceId: 'v1', modelId: 'eleven_flash_v2_5', promptSessions: false, hasKey: true })
-  assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
   assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { elevenlabs: 'good-voice' })
   assert.deepEqual((await s.call('voice.voices', {})).result, [{ id: 'v1', name: 'Rachel' }, { id: 'v2', name: 'Adam' }])
   // A voice already chosen is kept by a later key.
@@ -235,7 +238,7 @@ test("the 5b voice.json is copied into plugins/voice/config.json at setup and ke
   assert.deepEqual((await call('voice.settings', {})).result, { voiceId: 'v9', modelId: 'eleven_multilingual_v2', promptSessions: true, hasKey: false })
   const next = join(dir, 'data', 'plugins', 'voice', 'config.json')
   assert.equal(JSON.parse(readFileSync(next, 'utf8')).voiceId, 'v9')
-  assert.equal(statSync(next).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(next).mode & 0o777, 0o600)
   assert.equal(readFileSync(legacy, 'utf8'), original, 'kept as it was')
   // A change goes to the copy only; a later start reads the copy, not voice.json.
   await call('voice.setConfig', { voiceId: 'v2' })

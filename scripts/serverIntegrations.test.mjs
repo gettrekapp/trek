@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile, secretsPathFor } from '../server/src/secrets.ts'
@@ -17,6 +17,12 @@ import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
+import { posixOnly } from './testPlatform.mjs'
+// The server's own realpath: on Windows the native one, which expands 8.3 names (RUNNER~1) as git does.
+import { realPath } from '../src/host/pathContainment.ts'
+
+// Windows has no POSIX file modes: the 0600 checks are POSIX only.
+const posix = process.platform !== 'win32'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-integrations-'))
@@ -36,7 +42,7 @@ test('the secrets file: beside the config, 0600, set, set-if-absent and clear', 
   const file = createSecretFile(path)
   assert.equal(file.get('linear'), null)
   file.set('linear', 'k1')
-  assert.equal(statSync(path).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(path).mode & 0o777, 0o600)
   assert.equal(file.setIfAbsent('linear', 'k2'), false)
   assert.equal(file.get('linear'), 'k1')
   assert.equal(file.setIfAbsent('elevenlabs', 'e1'), true)
@@ -74,7 +80,7 @@ test('TopicHub.emit reaches the subscribers that take events and counts the ones
 test("skills.list reads the worktree's .claude and the server user's ~/.claude; the project shadows the user", async (t) => {
   process.env.GIT_CONFIG_GLOBAL = '/dev/null'
   process.env.GIT_CONFIG_NOSYSTEM = '1'
-  const dir = realpathSync(tempDir(t))
+  const dir = realPath(tempDir(t))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a])
   execFileSync('git', ['-C', a, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', 'init'])
@@ -113,7 +119,7 @@ test("skills.list reads the worktree's .claude and the server user's ~/.claude; 
     { name: 'todo', description: 'List todos', source: 'user', kind: 'command' }
   ])
   // A row the guard does not cover; an unknown worktree.
-  const outside = realpathSync(tempDir(t))
+  const outside = realPath(tempDir(t))
   projects.apply(projectId, (d) => {
     d.repositories[0].worktrees.push({ id: 'out', name: 'out', path: outside, branch: 'x', isMain: false, loaded: false, sessions: [] })
   })
@@ -134,7 +140,7 @@ test('readBodyCapped: content-length over the cap, a stream over the cap, and on
 async function skillsSetup(t) {
   process.env.GIT_CONFIG_GLOBAL = '/dev/null'
   process.env.GIT_CONFIG_NOSYSTEM = '1'
-  const dir = realpathSync(tempDir(t))
+  const dir = realPath(tempDir(t))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a])
   const home = join(dir, 'home')
@@ -148,7 +154,7 @@ const write = (path, text) => {
   writeFileSync(path, text)
 }
 
-test('skills.list skips FIFOs and links to devices, and reads only a file\'s head', { skip: process.platform === 'win32', timeout: 10_000 }, async (t) => {
+test('skills.list skips FIFOs and links to devices, and reads only a file\'s head', { skip: posixOnly('FIFOs and device files'), timeout: 10_000 }, async (t) => {
   const s = await skillsSetup(t)
   for (const root of [join(s.a, '.claude'), join(s.home, '.claude')]) {
     mkdirSync(join(root, 'skills', 'fifo'), { recursive: true })

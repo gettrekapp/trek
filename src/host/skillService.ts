@@ -4,8 +4,9 @@
 import { constants } from 'node:fs'
 import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, sep } from 'node:path'
+import { join } from 'node:path'
 import type { SkillInfo } from '../shared/types'
+import { isInside } from './pathContainment.ts'
 
 const MAX_DESCRIPTION = 120
 /** The most read of one SKILL.md or command: the frontmatter is at its head. */
@@ -38,7 +39,7 @@ async function readHead(path: string, confine?: string): Promise<string | undefi
   }
 }
 
-const within = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep)
+const within = (root: string, path: string): boolean => isInside(root, path)
 
 /** Pulls `description:` out of YAML frontmatter, if present. */
 export function extractDescription(markdown: string): string | undefined {

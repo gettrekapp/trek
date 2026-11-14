@@ -3,6 +3,7 @@
 // and when "Reset local server" may delete the lock.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import {
   DEV_LOCAL_PROFILE,
   LOCAL_ENTRY_ID,
@@ -30,16 +31,17 @@ import {
   spawnFailure
 } from '../src/main/localServerRules.ts'
 
+/** A profile's files on Linux under /home/u, as this machine's join() spells them. */
+const linuxProfile = (segment) => {
+  const dir = join('/home/u', '.config', 'trek-server', segment)
+  return { dir, config: join(dir, 'config.json'), info: join(dir, 'local.json'), lock: join(dir, 'local.lock'), log: join(dir, 'server.log') }
+}
+
 const info = { port: 51234, pid: 4242, token: 'a'.repeat(43), version: '0.2.0', build: '0123456789ab' }
 
 test('the paths: the profile from src/shared/localServer.ts, and the log beside local.json', () => {
-  assert.deepEqual(localPaths('/home/u'), {
-    dir: '/home/u/.config/trek-server/local',
-    config: '/home/u/.config/trek-server/local/config.json',
-    info: '/home/u/.config/trek-server/local/local.json',
-    lock: '/home/u/.config/trek-server/local/local.lock',
-    log: '/home/u/.config/trek-server/local/server.log'
-  })
+  // Linux's layout, joined by this machine's node:path (backslashes on Windows).
+  assert.deepEqual(localPaths('/home/u', undefined, 'linux', {}), linuxProfile('local'))
   assert.equal(localUrl(51234), 'ws://127.0.0.1:51234')
   assert.equal(LOCAL_ENTRY_ID, 'local')
 })
@@ -51,13 +53,7 @@ test('the profile: the default one when packaged, local-dev for a dev build, wit
   assert.deepEqual(localProfileArgs(localProfileName(true)), [])
   assert.deepEqual(localProfileArgs(localProfileName(false)), ['--local-profile', 'dev'])
   assert.deepEqual(localPaths('/home/u', undefined), localPaths('/home/u'))
-  assert.deepEqual(localPaths('/home/u', 'dev'), {
-    dir: '/home/u/.config/trek-server/local-dev',
-    config: '/home/u/.config/trek-server/local-dev/config.json',
-    info: '/home/u/.config/trek-server/local-dev/local.json',
-    lock: '/home/u/.config/trek-server/local-dev/local.lock',
-    log: '/home/u/.config/trek-server/local-dev/server.log'
-  })
+  assert.deepEqual(localPaths('/home/u', 'dev', 'linux', {}), linuxProfile('local-dev'))
   assert.throws(() => localPaths('/home/u', '../x'), /Invalid local profile name/)
   // An invalid name never reaches the command line: localProfileName never returns one, and localProfileArgs throws.
   for (const bad of ['../x', '-', '--local', 'Dev', '']) assert.throws(() => localProfileArgs(bad), /Invalid local profile name/, bad)
@@ -67,7 +63,7 @@ test('TREK_LOCAL_PROFILE: a dev build takes a valid name, an invalid one is dev;
   assert.equal(LOCAL_PROFILE_ENV, 'TREK_LOCAL_PROFILE')
   assert.equal(localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' }), 'dev-wt2')
   assert.deepEqual(localProfileArgs(localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' })), ['--local-profile', 'dev-wt2'])
-  assert.equal(localPaths('/home/u', localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' })).dir, '/home/u/.config/trek-server/local-dev-wt2')
+  assert.equal(localPaths('/home/u', localProfileName(false, { TREK_LOCAL_PROFILE: 'dev-wt2' }), 'linux', {}).dir, join('/home/u', '.config', 'trek-server', 'local-dev-wt2'))
   for (const bad of ['', '../x', '-wt', 'Dev', 'a b', 'x'.repeat(33)]) assert.equal(localProfileName(false, { TREK_LOCAL_PROFILE: bad }), 'dev', bad)
   assert.equal(localProfileName(false, {}), 'dev')
   assert.equal(localProfileName(true, { TREK_LOCAL_PROFILE: 'dev-wt2' }), undefined)

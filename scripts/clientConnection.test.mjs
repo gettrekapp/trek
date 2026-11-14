@@ -26,6 +26,16 @@ test('connect sends hello v2 with the token; welcome makes it connected', () => 
   assert.deepEqual(statuses, ['connecting', 'connected'])
 })
 
+test('the welcome carries the server\'s OS when it says (a Windows server: its build too)', () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome({ platform: 'win32', windowsBuild: 22631 })
+  assert.equal(conn.welcome.platform, 'win32')
+  assert.equal(conn.welcome.windowsBuild, 22631)
+})
+
 test("the welcome's plugins (plugin system phase 1): kept when listed, bad entries dropped; absent from an older server", () => {
   const { server, conn } = setup()
   conn.connect()

@@ -2,16 +2,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore, validateConfig } from '../server/src/configStore.ts'
+import { realPath } from '../src/host/pathContainment.ts'
 
 const loadConfig = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 function tempDir(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-store-')))
+  // realPath: on Windows the OS's (long names, as git and the store resolve them, not RUNNER~1).
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-store-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -62,6 +64,17 @@ test('addRepo outside the allowed roots is PATH_DENIED for RPC callers, allowed 
   assert.equal(codeOf(() => store.addRepo(c, { requireAllowedRoot: true })), 'PATH_DENIED')
   assert.equal(store.config.repos.length, 1)
   assert.equal(store.addRepo(c, { requireAllowedRoot: false }).added, true)
+})
+
+test('Windows: `trek-server add` (no allowed-root check) still refuses a repo on a UNC path, given or resolved', (t) => {
+  const { dir, configPath } = setup(t)
+  const c = gitInit(join(dir, 'outside', 'c'))
+  const realPath = (p) => (p.startsWith(c) ? '\\\\server\\share' + p.slice(c.length) : p)
+  const store = new ConfigStore(configPath, { platform: 'win32', realPath })
+  t.after(() => store.close())
+  assert.equal(codeOf(() => store.addRepo('\\\\server\\share\\c', { requireAllowedRoot: false })), 'PATH_DENIED')
+  assert.equal(codeOf(() => store.addRepo(c, { requireAllowedRoot: false })), 'PATH_DENIED')
+  assert.equal(store.config.repos.length, 1)
 })
 
 test('a permissive store (the local server) lets RPC callers add anywhere, also after a save and a reload', (t) => {

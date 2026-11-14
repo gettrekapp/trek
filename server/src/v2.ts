@@ -39,6 +39,7 @@ import { DEFAULT_WORKTREE_TAGS, type WorktreeTag } from '../../src/shared/types.
 import { applySettingsPatch, isSettingsKey, pruneDeletedTagsReporting, type RemovedTags } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
 import { checkSetGrant, type PushGrants } from './push/grants.ts'
+import { LOCAL_TOKEN_NAME } from '../../src/shared/localServer.ts'
 import {
   assertNoProtoKeys,
   checkExpected,
@@ -86,6 +87,8 @@ export interface V2Context {
   pairing?: PairingCodes
   /** The name of the token this connection signed in with (a web session's token, for a browser) */
   tokenName?: string
+  /** The local server's shutdown (`server.stop`); absent on any other server */
+  requestStop?: () => void
   /** Background push (6b): each token's relay grant */
   push?: { grants: PushGrants }
   /** The server's plugins (plugin system phase 1): a method no core handler has goes to plugin `<id>` */
@@ -357,6 +360,16 @@ const handlers: Record<string, Handler> = {
     const name = optionalName(p.name, 'name')
     const { repo } = ctx.store.addRepo(path, { name, requireAllowedRoot: true })
     return { repoId: repo.id }
+  },
+
+  // `trek-server stop --local` (Windows has no SIGTERM: a signal there is TerminateProcess, so the
+  // shutdown that saves projects and removes local.json would never run). Only the local server,
+  // and only its own `local` token, the one in local.json: a phone, web or other token may not.
+  'server.stop': (_p, ctx) => {
+    if (!ctx.requestStop) throw codedError('NOT_FOUND', 'Only the local server stops over the wire; stop this one where it runs')
+    if (ctx.tokenName !== LOCAL_TOKEN_NAME) throw codedError('UNAUTHORIZED', `Only the "${LOCAL_TOKEN_NAME}" token may stop the local server`)
+    ctx.requestStop()
+    return null
   },
 
   'server.removeRepo': (p, ctx) => {

@@ -2,12 +2,12 @@
 // call these, so every value that reaches a command line or a process environment is checked here:
 // nothing goes through a shell (every command is execFile or spawn with an argument list), and each
 // value is limited to what the method needs. Every failure is BAD_REQUEST.
-import { realpathSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { ENV_PROFILE_PREFIX } from '../../../src/shared/environments.ts'
 import type { ComposeAction, ContainerAction, EnvironmentSettings } from '../../../src/shared/types'
 import { codedError } from '../errors.ts'
 import { isRecord, requireString } from '../validate.ts'
+import { realPath } from '../../../src/host/pathContainment.ts'
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
@@ -116,7 +116,7 @@ export function optionalComposeFile(value: unknown, worktreePath: string): strin
 
 function realOrNull(path: string): string | null {
   try {
-    return realpathSync(path)
+    return realPath(path)
   } catch {
     return null
   }

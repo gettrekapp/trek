@@ -70,10 +70,10 @@ export default function SessionScreen(): React.JSX.Element {
     setEnded(null)
     const feed = new TerminalFeed()
     let live = true
-    const size = (cols: number, rows: number): void => {
+    const size = (cols: number, rows: number, windowsBuild?: number): void => {
       if (!live) return
       rememberPtySize(serverId, sessionId, cols, rows)
-      toPage(feed.size(cols, rows))
+      toPage(feed.size(cols, rows, windowsBuild))
     }
     toPage(feed.reset())
     server.ptys
@@ -83,11 +83,11 @@ export default function SessionScreen(): React.JSX.Element {
         onExit: (code) => setEnded(`The process exited (${code}).`),
         onClosed: (reason) => setEnded(reason === 'gone' ? 'The session ended while the phone was away.' : 'Disconnected.'),
         onError: (err) => setEnded(errorMessage(err)),
-        onReattach: (info) => size(info.cols, info.rows),
+        onReattach: (info) => size(info.cols, info.rows, info.windowsPty?.buildNumber),
         // Another client resized the pty (the desktop's window): follow it. The phone never resizes it.
         onResize: (info) => size(info.cols, info.rows)
       })
-      .then((info) => size(info.cols, info.rows))
+      .then((info) => size(info.cols, info.rows, info.windowsPty?.buildNumber))
       .catch((err) => live && setEnded(errorMessage(err)))
     return () => {
       live = false

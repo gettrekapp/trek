@@ -5,6 +5,10 @@
 // listens on loopback and answers a WebSocket upgrade, and SIGTERM stopping it.
 //
 //   node scripts/server-tarball-smoke.mjs [--notarized] dist-release/trek-server-<version>-<os>-<arch>.tar.gz
+//   node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-win32-x64.zip   (on Windows)
+//
+// On Windows: bin\trek-server.cmd (run through cmd.exe) and bin\trek-server.ps1 (powershell.exe), ConPTY's files in node-pty, a pty running
+// cmd.exe, no symlink check, and taskkill instead of SIGTERM (Windows has no signals).
 //
 // --notarized (macOS, the release's signed and notarized tarball): pty.node and spawn-helper carry
 // a Developer ID Application signature with the hardened runtime, and the tarball is quarantined
@@ -22,12 +26,15 @@ const args = process.argv.slice(2)
 const notarized = args.includes('--notarized')
 const positional = args.filter((a) => a !== '--notarized')
 const tarball = positional.length === 1 && resolve(positional[0])
-const named = tarball && basename(tarball).match(/^trek-server-(.+)-(darwin|linux)-(x64|arm64)\.tar\.gz$/)
+const named = tarball && basename(tarball).match(/^trek-server-(.+)-(?:(darwin|linux)-(x64|arm64)\.tar\.gz|(win32)-(x64)\.zip)$/)
 if (!named || !existsSync(tarball)) {
-  console.error('usage: node scripts/server-tarball-smoke.mjs [--notarized] <path>/trek-server-<version>-<os>-<arch>.tar.gz')
+  console.error('usage: node scripts/server-tarball-smoke.mjs [--notarized] <path>/trek-server-<version>-<os>-<arch>.tar.gz (or -win32-x64.zip)')
   process.exit(2)
 }
-const [, version, os, arch] = named
+const windows = named[4] === 'win32'
+const version = named[1]
+const os = named[2] ?? named[4]
+const arch = named[3] ?? named[5]
 if (notarized && os !== 'darwin') {
   console.error('--notarized is for the macOS tarballs')
   process.exit(2)
@@ -53,7 +60,10 @@ if (notarized) {
   copyFileSync(tarball, unpackFrom)
   execFileSync('xattr', ['-w', 'com.apple.quarantine', `0083;${Math.floor(Date.now() / 1000).toString(16)};Safari;`, unpackFrom])
 }
-execFileSync('tar', ['-xzf', unpackFrom, '-C', work])
+// Windows' own tar (System32's bsdtar) unpacks a zip; by full path, as under Git Bash a bare `tar`
+// is GNU tar, which can't read a zip and reads C:\ as a remote host.
+const tar = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar'
+execFileSync(tar, [windows ? '-xf' : '-xzf', unpackFrom, '-C', work])
 if (unpackFrom !== tarball) rmSync(unpackFrom)
 const top = readdirSync(work)
 const name = `trek-server-${version}-${os}-${arch}`
@@ -61,8 +71,16 @@ check('the tarball holds one folder named after it', top.length === 1 && top[0] 
 const dir = join(work, name)
 
 check(`it is for this machine (${process.platform}-${process.arch})`, os === process.platform && arch === process.arch, `${os}-${arch}`)
-for (const file of ['bin/trek-server', 'trek-server.cjs', 'build.json', 'package.json', 'README.md', 'trek-server.service', 'web-client/index.html', 'node_modules/node-pty/package.json']) {
+const launcherFile = windows ? 'bin/trek-server.cmd' : 'bin/trek-server'
+for (const file of [launcherFile, 'trek-server.cjs', 'build.json', 'package.json', 'README.md', ...(windows ? ['bin/trek-server.ps1'] : ['trek-server.service']), 'web-client/index.html', 'node_modules/node-pty/package.json']) {
   check(`${file} is there`, existsSync(join(dir, file)))
+}
+if (windows) {
+  const native = join(dir, 'node_modules', 'node-pty', 'prebuilds', 'win32-x64')
+  for (const file of ['conpty.node', 'conpty_console_list.node', 'conpty/OpenConsole.exe', 'conpty/conpty.dll', 'pty.node', 'winpty.dll', 'winpty-agent.exe']) {
+    check(`node-pty's ${file} is there (ConPTY, and winpty for older Windows)`, existsSync(join(native, file)))
+  }
+  check('no debug symbols (.pdb)', readdirSync(native).every((f) => !f.endsWith('.pdb')), readdirSync(native).join(' '))
 }
 const helpers = ['build/Release', `prebuilds/${os}-${arch}`].map((d) => join(dir, 'node_modules', 'node-pty', d, 'spawn-helper')).filter((p) => existsSync(p))
 if (os === 'darwin') check('node-pty has exactly one spawn-helper, executable', helpers.length === 1 && (statSync(helpers[0]).mode & 0o111) === 0o111, JSON.stringify(helpers))
@@ -77,32 +95,57 @@ if (notarized) {
     check(`${short} is signed with the hardened runtime and a timestamp`, /flags=.*runtime/.test(sig) && /^Timestamp=/m.test(sig), sig)
   }
 }
-check('bin/trek-server is executable', (statSync(join(dir, 'bin', 'trek-server')).mode & 0o111) === 0o111)
+if (!windows) check('bin/trek-server is executable', (statSync(join(dir, 'bin', 'trek-server')).mode & 0o111) === 0o111)
 check('node_modules holds node-pty only', readdirSync(join(dir, 'node_modules')).filter((e) => !e.startsWith('.')).join() === 'node-pty')
 
 const home = join(work, 'home')
 mkdirSync(home)
 const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config') }
-const launcher = join(dir, 'bin', 'trek-server')
+const launcher = join(dir, ...launcherFile.split('/'))
+// A batch file runs only through cmd.exe (Node refuses to start one without a shell).
+const viaLauncher = (argv) =>
+  windows ? { file: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `"${[`"${launcher}"`, ...argv].join(' ')}"`], opts: { windowsVerbatimArguments: true } } : { file: launcher, args: argv, opts: {} }
+const runLauncher = (argv) => {
+  const { file, args: a, opts } = viaLauncher(argv)
+  return execFileSync(file, a, { ...opts, env, encoding: 'utf8' })
+}
 
 const build = JSON.parse(readFileSync(join(dir, 'build.json'), 'utf8'))
-const printed = execFileSync(launcher, ['--version'], { env, encoding: 'utf8' }).trim()
+const printed = runLauncher(['--version']).trim()
 check(`--version prints ${version}`, printed === version && build.version === version, `printed ${printed}, build.json ${build.version}`)
 
-// The launcher from a symlink elsewhere, as a link in ~/.local/bin runs it.
-const linkDir = join(home, '.local', 'bin')
-mkdirSync(linkDir, { recursive: true })
-symlinkSync(launcher, join(linkDir, 'trek-server'))
-check('the launcher works through a symlink', execFileSync(join(linkDir, 'trek-server'), ['version'], { env, encoding: 'utf8' }).trim() === version)
+// The PowerShell launcher (Windows only; runs there, not on this Mac or Linux).
+if (windows) {
+  const ps = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(dir, 'bin', 'trek-server.ps1'), 'version'], { env, encoding: 'utf8' }).trim()
+  check(`bin\\trek-server.ps1 version prints ${version}`, ps === version, ps)
+}
+
+// The launcher from a symlink elsewhere, as a link in ~/.local/bin runs it (not on Windows: PATH there).
+if (!windows) {
+  const linkDir = join(home, '.local', 'bin')
+  mkdirSync(linkDir, { recursive: true })
+  symlinkSync(launcher, join(linkDir, 'trek-server'))
+  check('the launcher works through a symlink', execFileSync(join(linkDir, 'trek-server'), ['version'], { env, encoding: 'utf8' }).trim() === version)
+}
 
 // A pty from the tarball's node-pty: the native addon loads, and (on macOS) spawn-helper runs.
 // spawnSync, not execFileSync: an addon that fails to load is a FAIL with its error, not a crash.
 const pty = spawnSync(process.execPath, ['-e', `
   const pty = require(${JSON.stringify(join(dir, 'node_modules', 'node-pty'))})
-  const p = pty.spawn('/bin/sh', ['-c', 'echo pty-$((6 * 7))'], { cols: 80, rows: 24, env: { PATH: '/usr/bin:/bin' } })
+  const p = ${windows ? `pty.spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'set /a 6*7 >nul && echo pty-42 && ping -n 2 127.0.0.1 >nul'], { cols: 80, rows: 24 })` : `pty.spawn('/bin/sh', ['-c', 'echo pty-$((6 * 7))'], { cols: 80, rows: 24, env: { PATH: '/usr/bin:/bin' } })`}
   let out = ''
   p.onData((d) => { out += d })
-  p.onExit(({ exitCode }) => { process.stdout.write(out.trim() + ' exit ' + exitCode); process.exit(0) })
+  // ConPTY can report the exit before it flushes the output (hence the ping above, a second's
+  // pause): give the output up to 2s more to arrive after the exit.
+  p.onExit(({ exitCode }) => {
+    const since = Date.now()
+    const report = () => {
+      if (!/pty-42/.test(out) && Date.now() - since < 2000) return setTimeout(report, 50)
+      process.stdout.write(out.trim() + ' exit ' + exitCode)
+      process.exit(0)
+    }
+    report()
+  })
   setTimeout(() => { process.stdout.write('timeout: ' + out); process.exit(1) }, 10000)
 `], { env, encoding: 'utf8' })
 const ptyOut = pty.stdout ?? ''
@@ -118,7 +161,11 @@ const port = await new Promise((done, reject) => {
 const configPath = join(work, 'config.json')
 const tokenHash = createHash('sha256').update(randomBytes(16).toString('base64url'), 'utf8').digest('hex')
 writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [] }), { mode: 0o600 })
-const server = spawn(launcher, ['start', '--config', configPath, '--host', '127.0.0.1', '--port', String(port), '--data-dir', join(work, 'data')], {
+// cmd.exe's line is joined by hand there: a path is quoted.
+const pathArg = (p) => (windows ? `"${p}"` : p)
+const started = viaLauncher(['start', '--config', pathArg(configPath), '--host', '127.0.0.1', '--port', String(port), '--data-dir', pathArg(join(work, 'data'))])
+const server = spawn(started.file, started.args, {
+  ...started.opts,
   env,
   stdio: ['ignore', 'pipe', 'pipe']
 })
@@ -150,9 +197,11 @@ if (listening) {
   check('a WebSocket client connects', opened === 'open', opened)
 }
 
-server.kill('SIGTERM')
+// Windows: no signals; the launcher's cmd.exe and the node under it end with taskkill /T /F.
+if (windows) spawnSync('taskkill', ['/T', '/F', '/PID', String(server.pid)], { stdio: 'ignore' })
+else server.kill('SIGTERM')
 const stopped = await Promise.race([exited, new Promise((done) => setTimeout(() => done(null), 10000))])
-check('SIGTERM stops it within 10 s', stopped !== null && (stopped.code === 0 || stopped.signal === 'SIGTERM'), JSON.stringify(stopped) + '\n' + output)
+check(windows ? 'taskkill ends it within 10 s' : 'SIGTERM stops it within 10 s', stopped !== null && (windows || stopped.code === 0 || stopped.signal === 'SIGTERM'), JSON.stringify(stopped) + '\n' + output)
 
 console.log(failed ? `SERVER TARBALL SMOKE FAILED: ${basename(tarball)}` : `SERVER TARBALL SMOKE PASSED: ${basename(tarball)}`)
 process.exit(failed ? 1 : 0)

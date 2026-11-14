@@ -13,6 +13,7 @@ import { resetRuntime } from '../server/src/projects/model.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 import { FAILS_BEFORE_NOTICE, PrWatcher, pollMsFromEnv, watchTargets } from '../server/src/prWatch/watcher.ts'
 import { ghBinary, ghRunner, isAuthFailure } from '../server/src/prWatch/gh.ts'
+import { posixOnly } from './testPlatform.mjs'
 import { prQueryArgs } from '../src/shared/prWatch.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
@@ -117,6 +118,29 @@ test('ghBinary: gh on the PATH only when TREK_SERVER_GH is unset; an absolute pa
   for (const v of ['', 'gh', './gh', 'stub/gh']) assert.equal(ghBinary(v), null, String(v))
   // The fail-closed runner never runs anything: gh reads as not installed.
   await assert.rejects(ghRunner(null)(['auth', 'status']), /gh is not installed on the server/)
+})
+
+test('ghRunner on Windows: a stub given as a Node script runs with this Node (Windows has no sh stubs)', async (t) => {
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const stub = join(dir, 'gh.mjs')
+  writeFileSync(stub, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n")
+  assert.equal(await ghRunner(stub, 'win32')(['api', 'graphql', '-f', 'query=x y']), JSON.stringify(['api', 'graphql', '-f', 'query=x y']))
+})
+
+test('ghRunner elsewhere: TREK_SERVER_GH runs as it is, whatever its extension', { skip: posixOnly('an executable with a shebang') }, async (t) => {
+  const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const stub = join(dir, 'gh.js')
+  writeFileSync(stub, '#!/bin/sh\necho direct\n')
+  chmodSync(stub, 0o755)
+  assert.equal((await ghRunner(stub, 'darwin')(['auth', 'status'])).trim(), 'direct')
 })
 
 test('isAuthFailure: only sign-in trouble re-checks the sign-in', () => {

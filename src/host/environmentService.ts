@@ -2,7 +2,8 @@
 // registry that maps each VM back to its repository, branch and worktree, and the operations on
 // it. Electron-free: the registry's file is the caller's (the server's data dir), and the server
 // checks every argument before it calls these.
-import { access, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { renameRetry } from './atomicWrite.ts'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import {
@@ -128,7 +129,7 @@ export function createEnvironmentService(options: EnvironmentServiceOptions): En
     // left behind, so that one goes first.
     await rm(tmp, { force: true })
     await writeFile(tmp, JSON.stringify(registry, null, 2), { encoding: 'utf8', mode: 0o600 })
-    await rename(tmp, registryFile)
+    await renameRetry(tmp, registryFile)
   }
   /**
    * Every change goes through here, one at a time: read, change, write. Operations on two

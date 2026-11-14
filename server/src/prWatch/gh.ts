@@ -3,6 +3,8 @@
 // the watcher a fake runner; every smoke points TREK_SERVER_GH at a stub (scripts/smokeGh.mjs).
 import { execFile } from 'node:child_process'
 import { isAbsolute } from 'node:path'
+import { hidden } from '../../../src/host/childOptions.ts'
+import { commandPath } from '../../../src/host/commandPath.ts'
 
 /**
  * Runs `gh <args>`, resolving with its stdout; rejects on a non-zero exit, a timeout, no gh, or
@@ -27,29 +29,39 @@ export function ghBinary(value: string | undefined): string | null {
 const NO_GH = 'gh is not installed on the server'
 
 /** A runner for `binary`; for null, one that always fails as though gh were not installed. */
-export const ghRunner = (binary: string | null): GhRunner => {
+export const ghRunner = (binary: string | null, platform: NodeJS.Platform = process.platform): GhRunner => {
   if (binary === null) return () => Promise.reject(new Error(`${NO_GH} (TREK_SERVER_GH is not an absolute path)`))
+  // Windows: a test stub given as a Node script (TREK_SERVER_GH=/…/gh.mjs) runs with this Node,
+  // as Windows can't run a sh stub and execFile can't start a batch file without a shell.
+  // Elsewhere TREK_SERVER_GH runs as it is.
+  const viaNode = platform === 'win32' && /\.m?js$/i.test(binary)
   return (args, signal) =>
     new Promise((resolve, reject) => {
-      execFile(
-        binary,
-        args,
-        {
-          timeout: GH_TIMEOUT_MS,
-          maxBuffer: GH_MAX_OUTPUT,
-          signal,
-          // Never a prompt, a pager or an update check: the server has no terminal for them.
-          env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
-        },
-        (err, stdout, stderr) => {
-          if (err) {
-            const detail = String(stderr).trim().split('\n')[0] || err.message
-            reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? NO_GH : detail))
-            return
+      try {
+        // On Windows gh is found on PATH, never in the current directory of the server.
+        execFile(
+          viaNode ? process.execPath : commandPath(binary, { platform }),
+          viaNode ? [binary, ...args] : args,
+          hidden({
+            timeout: GH_TIMEOUT_MS,
+            maxBuffer: GH_MAX_OUTPUT,
+            signal,
+            // Never a prompt, a pager or an update check: the server has no terminal for them.
+            env: { ...process.env, GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', GH_PAGER: 'cat', NO_COLOR: '1' }
+          }),
+          (err, stdout, stderr) => {
+            if (err) {
+              const detail = String(stderr).trim().split('\n')[0] || err.message
+              reject(new Error((err as NodeJS.ErrnoException).code === 'ENOENT' ? NO_GH : detail))
+              return
+            }
+            resolve(String(stdout))
           }
-          resolve(String(stdout))
-        }
-      )
+        )
+      } catch (err) {
+        // commandPath: gh is not on PATH
+        reject((err as NodeJS.ErrnoException).code === 'ENOENT' ? new Error(NO_GH) : err)
+      }
     })
 }
 

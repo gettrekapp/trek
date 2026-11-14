@@ -1,11 +1,11 @@
 // Pure helpers for building and inspecting v2 projects on the server.
-import { sep } from 'node:path'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import type { RemoteRepo } from '../../../src/shared/protocolV2'
 import { codedError } from '../errors.ts'
 import { realOrResolved as real } from '../repos.ts'
 import { requireString } from '../validate.ts'
 import { cleanReview, isRevision } from '../review/draft.ts'
+import { isInside } from '../../../src/host/pathContainment.ts'
 
 /** The registered repo at `path` (compared by realpath), or PATH_DENIED. */
 export function findRegistered(registry: readonly RemoteRepo[], path: string): RemoteRepo {
@@ -111,7 +111,7 @@ export function repoIn(project: Project, repoId: unknown): Repository {
 export function assertNotRepository(registry: readonly RemoteRepo[], path: string, where: string, shown = path): void {
   const clash = registry.find((r) => {
     const repo = real(r.path)
-    return repo === path || repo.startsWith(path.endsWith(sep) ? path : path + sep)
+    return isInside(path, repo)
   })
   if (clash) throw codedError('BAD_REQUEST', `${where}: worktree path ${shown} is another repository (${clash.path}) or contains one`)
 }

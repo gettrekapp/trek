@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localProfile } from '../server/src/localProfile.ts'
 import { stopDecision, stopLocal } from '../server/src/localStop.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 const TOKEN = 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU'
 const info = (pid) => ({ port: 4000, pid, token: TOKEN, version: '0.2.0', build: 'abc123def456' })
@@ -46,19 +47,21 @@ function setup(t) {
 }
 
 /**
- * A stand-in local server: writes the lock and local.json, and removes them on SIGTERM (unless
- * `ignoreTerm`). Ready once local.json is there and parses: its SIGTERM handler is set before
+ * A stand-in local server: writes the lock and local.json, and removes them on SIGTERM or an IPC
+ * 'stop' (a real server's server.stop; Windows has no SIGTERM handlers) (unless `ignoreTerm`). Ready once local.json is there and parses: its SIGTERM handler is set before
  * either file is written, and local.json is written last, whole (a rename), so a stop under load
  * never sees a half-written file or a server that a SIGTERM would still kill.
  */
 async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
   const code = `
     const fs = require('node:fs')
-    process.on('SIGTERM', () => {
+    const stop = () => {
       if (${ignoreTerm}) return
       fs.rmSync(${JSON.stringify(profile.infoPath)})
       setTimeout(() => { fs.rmSync(${JSON.stringify(profile.lockPath)}); process.exit(0) }, 100)
-    })
+    }
+    process.on('SIGTERM', stop)
+    process.on('message', stop)
     fs.mkdirSync(${JSON.stringify(profile.dir)}, { recursive: true })
     fs.writeFileSync(${JSON.stringify(profile.lockPath)}, process.pid + '\\n')
     const tmp = ${JSON.stringify(profile.infoPath)} + '.tmp'
@@ -66,7 +69,7 @@ async function fakeServer(t, profile, { ignoreTerm = false } = {}) {
     fs.renameSync(tmp, ${JSON.stringify(profile.infoPath)})
     setInterval(() => {}, 1000)
   `
-  const child = spawn(process.execPath, ['-e', code], { stdio: 'ignore' })
+  const child = spawn(process.execPath, ['-e', code], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })
   const exited = new Promise((resolve) => child.on('exit', (c, s) => resolve(c ?? s)))
   t.after(() => child.kill('SIGKILL'))
   const ready = () => {
@@ -89,14 +92,71 @@ const capture = () => {
   return { lines, log: (l) => lines.push(l), error: (l) => lines.push(`E: ${l}`) }
 }
 
-test('stopLocal: SIGTERMs the server and waits for local.json and the lock to go', async (t) => {
+/** The stand-in servers never listen: a stop request finds nobody. */
+const unreachable = () => 'unreachable'
+
+test('stopLocal: asks the server named by local.json to stop, with its port and token, and never signals it', async (t) => {
   const profile = setup(t)
   const { child, exited } = await fakeServer(t, profile)
   const out = capture()
-  assert.equal(stopLocal(profile, out), 0)
+  const asked = []
+  const kills = []
+  // The stand-in shuts down on a message, as a real server does on server.stop.
+  const requestStop = (i) => {
+    asked.push(i)
+    child.send('stop')
+    return 'accepted'
+  }
+  assert.equal(stopLocal(profile, { ...out, requestStop, kill: (...a) => kills.push(a) }), 0)
+  assert.equal(await exited, 0)
+  assert.deepEqual(asked.map((i) => [i.port, i.pid, i.token]), [[4000, child.pid, TOKEN]])
+  assert.deepEqual(kills, [])
+  assert.deepEqual(out.lines, [`Stopping the local trek-server (pid ${child.pid})…`, 'Stopped.'])
+})
+
+test('stopLocal: a server that does not take the request is SIGTERMed and waited for', { skip: posixOnly('SIGTERM (Windows ends the process tree instead, below)') }, async (t) => {
+  const profile = setup(t)
+  const { child, exited } = await fakeServer(t, profile)
+  const out = capture()
+  assert.equal(stopLocal(profile, { ...out, requestStop: unreachable }), 0)
   assert.equal(await exited, 0)
   assert.equal(existsSync(profile.infoPath) || existsSync(profile.lockPath), false)
-  assert.deepEqual(out.lines, [`Stopping the local trek-server (pid ${child.pid})…`, 'Stopped.'])
+  assert.deepEqual(out.lines, [
+    'The local trek-server did not take a stop request (unreachable); sending SIGTERM.',
+    `Stopping the local trek-server (pid ${child.pid})…`,
+    'Stopped.'
+  ])
+})
+
+test('stopLocal on Windows: no signal; once the wait runs out, the process tree is ended', async (t) => {
+  const profile = setup(t)
+  const { child, exited } = await fakeServer(t, profile, { ignoreTerm: true })
+  const out = capture()
+  const kills = []
+  const forced = []
+  const code = stopLocal(profile, {
+    ...out,
+    timeoutMs: 200,
+    platform: 'win32',
+    // A killed child stays a zombie until this (blocked) thread reaps it: gone once it was ended.
+    alive: () => forced.length === 0,
+    requestStop: () => 'refused',
+    kill: (...a) => kills.push(a),
+    forceKill: (pid) => {
+      forced.push(pid)
+      child.kill('SIGKILL')
+    }
+  })
+  await exited
+  assert.equal(code, 0)
+  assert.deepEqual(kills, [])
+  assert.deepEqual(forced, [child.pid])
+  assert.deepEqual(out.lines, [
+    'The local trek-server did not take a stop request (refused).',
+    `Stopping the local trek-server (pid ${child.pid})…`,
+    'It did not stop within 0.2 s; ending its process tree.',
+    `Stopped, but it left files in ${profile.dir}; the next start cleans them up.`
+  ])
 })
 
 test('stopLocal: nothing running is exit 0', (t) => {
@@ -140,11 +200,11 @@ test('stopLocal: an unverified lock holder says it may still be starting or stop
   assert.match(out.lines[0], /may still be starting or stopping/)
 })
 
-test('stopLocal: a server that ignores SIGTERM times out with exit 1', async (t) => {
+test('stopLocal: a server that ignores SIGTERM times out with exit 1', { skip: posixOnly('SIGTERM (Windows ends the process tree instead)') }, async (t) => {
   const profile = setup(t)
   const { child } = await fakeServer(t, profile, { ignoreTerm: true })
   const out = capture()
-  assert.equal(stopLocal(profile, { ...out, timeoutMs: 300 }), 1)
+  assert.equal(stopLocal(profile, { ...out, timeoutMs: 300, requestStop: unreachable }), 1)
   assert.equal(out.lines.at(-1), `E: The local trek-server (pid ${child.pid}) did not stop within 0.3 s.`)
 })
 

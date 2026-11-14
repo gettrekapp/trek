@@ -24,7 +24,7 @@
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, join, resolve, sep } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
 import { migrateSession } from '../../../src/host/claudeSessionService.ts'
 import type { HistoryValue } from '../../../src/shared/model/history.ts'
@@ -44,6 +44,7 @@ import { codedError } from '../errors.ts'
 import { BY_TREK, recordHistory, tagValue } from '../history/record.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
 import { realOrResolved as real } from '../repos.ts'
+import { isInside } from '../../../src/host/pathContainment.ts'
 import { requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
 import { checkBranchName, checkedOut, defaultWorktreePath, locate, present } from '../worktreeHandlers.ts'
@@ -430,7 +431,7 @@ async function promote(ctx: V2Context, c: PromoteChecked, unblock: { main: () =>
     // The point of commitment: the main checkout holds the branch and its work. The worktree goes
     // after it; a removal that fails (a folder it may not delete) is a note, never an undo.
     try {
-      await gitService.removeWorktreeForce(repo.path, worktree.path)
+      await gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? [])
     } catch (err) {
       removalFailed = true
       notes.push(
@@ -535,7 +536,7 @@ async function checkDemote(ctx: V2Context, p: any, blocked = true): Promise<Demo
   assertNotRepository(ctx.store.config.repos, target, 'path', requested)
   if (blocked) assertNotBlocked(ctx, [main.path, target])
   if (existsSync(target)) throw codedError('CONFLICT', `${requested} already exists`)
-  const inside = (root: string): boolean => target.startsWith(real(root) + sep)
+  const inside = (root: string): boolean => isInside(real(root), target, process.platform, true)
   if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
     throw bad(`${requested} is inside an existing checkout`)
   }
@@ -589,9 +590,9 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
           `the main checkout ${main.path} does not have its uncommitted work back (it changed, or putting it back failed), so it was not put back and the new worktree ${target}, which has the work, was kept (check both with git status)`
         )
       }
-      await gitService.removeWorktreeForce(repo.path, target)
+      await gitService.removeWorktreeForce(repo.path, target, repo.linkedDirs ?? [])
     })
-    await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+    for (const warning of await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])) console.warn(`linkedDirs in ${target}: ${warning}`)
     // What the new worktree links from the main checkout stays there (it is shared, not carried).
     const linked = await gitService.linkedSymlinks(target, repo.linkedDirs ?? [], repo.path)
     const { patch } = await patchOf(main.path, repo, linked)

@@ -83,14 +83,17 @@ version, and the server closes a client with a version it does not support (`400
 
 ```json
 { "type": "welcome", "protocolVersion": 2, "daemonVersion": "0.2.0",
-  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"],
+  "serverId": "6f1c…", "serverName": "build-box", "capabilities": ["mcp"], "platform": "linux",
   "plugins": [{ "id": "voice", "version": "1.0.0", "defaultEnabled": true }] }
 ```
 
 `plugins` lists the server's plugins (see [Plugins](#plugins)); a server older than plugins sends none.
 
 `serverId` is a UUID generated on the server's first start and never changes.
-Clients key everything they cache by it. `repos` is gone; the project list
+Clients key everything they cache by it. `platform` is the server's OS (Node's
+`process.platform`: `win32`, `darwin`, `linux`), and a Windows server adds
+`windowsBuild` (its build number, `22631` for 10.0.22631); a server older than
+Windows support sends neither. `repos` is gone; the project list
 comes from the `server` topic.
 
 `capabilities` names the features a client could not otherwise tell the server
@@ -191,6 +194,7 @@ server restarts. A server without this field simply leaves it out.
 | Terminal stream | `pty.attach`, `pty.detach`, `pty.write`, `pty.resize` (see [Sessions](#sessions)) |
 | Server repo registry | `server.addRepo`, `server.removeRepo` |
 | Agents | `server.agents` |
+| Stopping (local server only) | `server.stop` |
 | Docker | `docker.list`, `docker.container`, `docker.compose` |
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
@@ -209,8 +213,10 @@ results carry only new ids; queries return their data.
 An error reply may carry `error.details`, an object a client can act on without
 reading the message (which may be git's own, localised text). Today the only key
 is `reason`: `dirty` (see `worktree.remove`), or, on a `TOOL_ERROR`, `missing` (the
-tool is not installed on the server) or `registry` (the server's environments registry
-cannot be read; nothing was written). Clients ignore keys and reasons they don't know.
+tool is not installed on the server), `registry` (the server's environments registry
+cannot be read; nothing was written) or `unsupported` (a Windows server's `env.*` and
+`stack.*`: not served there yet, and its welcome lists neither `env` nor `stacks`).
+Clients ignore keys and reasons they don't know.
 
 `project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
 `session.rename`, `session.dequeue` and `repo.update` take an optional `expected`: the value the client believes the
@@ -356,6 +362,16 @@ succeeds, it does the same for that repository's sessions and for the project's
 Global sessions, whose working directory or additional directories it changed.
 The Global session records stay, as `idle`, and `session.restart` runs them with
 the remaining repositories. A refused or failed removal ends nothing.
+
+`server.stop {}` stops the local server (`trek-server start --local`) the way SIGTERM
+does: it answers `null`, then sends `daemon.shutdown`, saves pending project writes,
+removes `local.json` and its lock, ends every session and exits 0. Only the local
+server has it (any other answers `NOT_FOUND`), and only a connection signed in with its
+own `local` token, the one in `local.json`, may call it (any other token gets
+`UNAUTHORIZED`). `trek-server stop --local` uses it on every platform and falls back to
+SIGTERM if it gets no answer; on Windows, where a signal from another process ends a
+process at once without its shutdown, the fallback is `taskkill /T /F` once the wait
+runs out.
 
 `server.addRepo {path, name?}` registers the git repository containing `path`
 and returns `{repoId}`. Both `path` and the repository's top level must be under
@@ -1410,6 +1426,12 @@ from a connection that has not attached to the pty ("attach to the pty first").
 (below). `CAPACITY` for `session.start` or
 `session.restart` over `maxSessions`, and for `session.start` over the 500 records of
 a project. `IN_USE` as above.
+
+**Windows ptys.** On a Windows server a pty is a ConPTY, and `pty.attach`'s
+`PtyInfo` carries `windowsPty: {backend: "conpty", buildNumber}`. A client renders
+it with xterm.js's `windowsPty` option set to that value (ConPTY reflows and wraps
+lines itself, and xterm must not do it again); the server's own headless screen
+does the same. Absent on macOS and Linux.
 
 **Terminal stream.** `pty.attach {ptyId}` replays the pty's recent output (a ring
 buffer of up to 2 Mi UTF-16 code units) as `pty.data` events with `replay: true`, then streams live

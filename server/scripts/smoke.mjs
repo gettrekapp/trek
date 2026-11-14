@@ -9,14 +9,23 @@ import { request as httpRequest } from 'node:http'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { writeFakeAgent } from '../../scripts/fakeAgent.mjs'
 import { createHash, randomBytes } from 'node:crypto'
 import WebSocket from 'ws'
 import { applyStatePatch } from '../../src/shared/sync/topicState.ts'
 
 const PORT = 17345
+// The welcome's capabilities: Windows (W1) serves no environments or dev stacks yet
+// (server/src/capabilities.ts), so there `env` and `stacks` must be absent.
+const WINDOWS_OFF = process.platform === 'win32' ? ['env', 'stacks'] : []
+const EXPECTED_CAPABILITIES = ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills']
+  .filter((c) => !WINDOWS_OFF.includes(c))
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
 
+// The OS's real path (Windows: the long name of an 8.3 temp dir), as the server stores paths.
+const real = (p) => (process.platform === 'win32' ? realpathSync.native(p) : realpathSync(p))
 const work = mkdtempSync(join(tmpdir(), 'trek-server-smoke-'))
 const repo = join(work, 'repo')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
@@ -28,13 +37,15 @@ execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'],
 })
 
 const configPath = join(work, 'config.json')
-// A fake agent: prints its args, lingers briefly, exits 7.
-const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nsleep 1\nexit 7\n', { mode: 0o755 })
+// A fake agent: prints its args, lingers briefly, exits 7 (a Node script, so it runs on Windows too).
+const fakeAgent = writeFakeAgent(work, 'fake-agent', "console.log('FAKE_AGENT ' + process.argv.slice(2).join(' ')); setTimeout(() => process.exit(7), 1000)")
 // A second fake agent for the status section (the local provider's command): prints the
 // done marker, goes quiet for 4 s, rings the bell, then lingers.
-const statusAgent = join(work, 'status-agent.sh')
-writeFileSync(statusAgent, '#!/bin/sh\nprintf "working (esc to interrupt)\\n"\nsleep 4\nprintf "\\a"\nsleep 30\n', { mode: 0o755 })
+const statusAgent = writeFakeAgent(
+  work,
+  'status-agent',
+  "process.stdout.write('working (esc to interrupt)\\n'); setTimeout(() => process.stdout.write('\\x07'), 4000); setTimeout(() => {}, 30000)"
+)
 writeFileSync(configPath, JSON.stringify({
   llm: { providers: { claude: { command: fakeAgent }, local: { command: statusAgent } } },
   tokenHash,
@@ -44,8 +55,8 @@ writeFileSync(configPath, JSON.stringify({
 // `--built` runs the bundled CLI (npm run build) instead of the TypeScript source.
 const [cmd, cmdPrefix] = process.argv.includes('--built')
   ? [process.execPath, ['dist/trek-server.cjs']]
-  : ['npx', ['tsx', 'src/index.ts']]
-const serverDir = new URL('..', import.meta.url).pathname
+  : [process.execPath, ['--import', 'tsx', 'src/index.ts']]
+const serverDir = fileURLToPath(new URL('..', import.meta.url))
 const cli = (...args) =>
   execFileSync(cmd, [...cmdPrefix, ...args, '--config', configPath], { cwd: serverDir, encoding: 'utf8' })
 const daemon = spawn(cmd, [...cmdPrefix, 'start', '--config', configPath, '--port', String(PORT), '--data-dir', join(work, 'data')], {
@@ -164,7 +175,7 @@ async function nextPatch(conn, topic, state, timeoutMs = 4000) {
 const v2 = await connect(2, token)
 if (v2.welcome?.protocolVersion !== 2 || !/^[0-9a-f-]{36}$/.test(v2.welcome.serverId ?? '')) {
   fail(`v2 welcome: ${JSON.stringify(v2.welcome)}`)
-} else if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills'].every((c) => v2.welcome.capabilities?.includes(c))) {
+} else if (!(EXPECTED_CAPABILITIES.every((c) => v2.welcome.capabilities?.includes(c)) && WINDOWS_OFF.every((c) => !v2.welcome.capabilities?.includes(c)))) {
   fail(`v2 welcome capabilities: ${JSON.stringify(v2.welcome.capabilities)}`)
 } else ok(`v2 welcome: server "${v2.welcome.serverName}" ${v2.welcome.serverId}, capabilities ${v2.welcome.capabilities.join(',')}`)
 
@@ -200,7 +211,7 @@ else ok('server.addRepo: NOT_A_REPO for a plain directory')
 const repo3 = mkRepo(join(work, 'repo3'))
 cli('add', repo3)
 serverState = await nextPatch(v2, 'server', serverState)
-if (!serverState.snapshot.repos.some((r) => r.path === realpathSync(repo3))) fail('CLI add not picked up: ' + JSON.stringify(serverState.snapshot.repos))
+if (!serverState.snapshot.repos.some((r) => r.path === real(repo3))) fail('CLI add not picked up: ' + JSON.stringify(serverState.snapshot.repos))
 else ok('CLI add on a running server: picked up without a restart')
 
 const removed = await v2.req('server.removeRepo', { repoId: 'repo2' })
@@ -399,7 +410,7 @@ v2.sock.close()
 // --- projects ---
 const pc = await connect(2, token)
 let srv = (await pc.req('sub.subscribe', { topic: 'server' })).result
-const created = await pc.req('project.create', { name: 'Smoke', repositories: [{ path: realpathSync(repo) }] })
+const created = await pc.req('project.create', { name: 'Smoke', repositories: [{ path: real(repo) }] })
 if (!created.ok) fail(`project.create: ${JSON.stringify(created)}`)
 const projectId = created.result.projectId
 srv = await nextPatch(pc, 'server', srv)

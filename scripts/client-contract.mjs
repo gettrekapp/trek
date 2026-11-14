@@ -10,15 +10,23 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { writeFakeAgent } from './fakeAgent.mjs'
 import { createHash, randomBytes } from 'node:crypto'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 
 const WAIT_MS = 5000
+// The welcome's capabilities: Windows (W1) serves no environments or dev stacks yet
+// (server/src/capabilities.ts), so there `env` and `stacks` must be absent.
+const WINDOWS_OFF = process.platform === 'win32' ? ['env', 'stacks'] : []
+const EXPECTED_CAPABILITIES = ['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills']
+  .filter((c) => !WINDOWS_OFF.includes(c))
 
 const token = randomBytes(16).toString('base64url')
 const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex')
 
-const work = realpathSync(mkdtempSync(join(tmpdir(), 'trek-client-contract-')))
+// The OS's real path (Windows: the long name of an 8.3 temp dir), as the server stores paths.
+const work = (process.platform === 'win32' ? realpathSync.native : realpathSync)(mkdtempSync(join(tmpdir(), 'trek-client-contract-')))
 const repo = join(work, 'repo')
 execFileSync('git', ['init', '-q', '-b', 'main', repo])
 execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'], {
@@ -28,9 +36,8 @@ execFileSync('git', ['-C', repo, 'commit', '--allow-empty', '-q', '-m', 'init'],
   }
 })
 
-// A fake agent: prints its args, lingers 2 s, exits 0.
-const fakeAgent = join(work, 'fake-agent.sh')
-writeFileSync(fakeAgent, '#!/bin/sh\necho "FAKE_AGENT $*"\nsleep 2\nexit 0\n', { mode: 0o755 })
+// A fake agent: prints its args, lingers 2 s, exits 0 (a Node script, so it runs on Windows too).
+const fakeAgent = writeFakeAgent(work, 'fake-agent', "console.log('FAKE_AGENT ' + process.argv.slice(2).join(' ')); setTimeout(() => process.exit(0), 2000)")
 const configPath = join(work, 'config.json')
 writeFileSync(configPath, JSON.stringify({
   llm: { providers: { claude: { command: fakeAgent } } },
@@ -47,7 +54,7 @@ const port = await new Promise((resolve, reject) => {
   })
 })
 
-const serverDir = new URL('../server/', import.meta.url).pathname
+const serverDir = fileURLToPath(new URL('../server/', import.meta.url))
 const daemon = spawn(process.execPath, [
   'dist/trek-server.cjs', 'start', '--config', configPath, '--port', String(port), '--data-dir', join(work, 'data')
 ], { cwd: serverDir, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -108,7 +115,7 @@ const mirror = new TopicMirror(conn)
 const ptys = new PtyStream(conn)
 conn.connect()
 if (!(await waitFor(() => conn.status === 'connected'))) abort(`connect: status ${conn.status} (${statuses.join(' > ')})`)
-if (!['mcp', 'topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'linear', 'voice', 'skills'].every((c) => conn.welcome?.capabilities.includes(c))) fail(`welcome capabilities: ${JSON.stringify(conn.welcome)}`)
+if (!(EXPECTED_CAPABILITIES.every((c) => conn.welcome?.capabilities.includes(c)) && WINDOWS_OFF.every((c) => !conn.welcome?.capabilities.includes(c)))) fail(`welcome capabilities: ${JSON.stringify(conn.welcome)}`)
 else ok(`connected: server "${conn.welcome.serverName}" ${conn.welcome.serverId}, capabilities ${conn.welcome.capabilities.join(',')}`)
 
 // --- 1b. plugins (plugin system phase 1): listed in the welcome; a 0.2.1 client's voice.* still answers ---

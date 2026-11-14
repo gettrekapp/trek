@@ -4,6 +4,7 @@ import type { WireError, WireErrorCode, WireErrorDetails } from '../../src/share
 export type Outcome = { ok: true; result: unknown } | { ok: false; error: WireError }
 
 const PASSTHROUGH: ReadonlySet<string> = new Set<WireErrorCode>([
+  'UNAUTHORIZED',
   'BAD_REQUEST',
   'NOT_FOUND',
   'PATH_DENIED',

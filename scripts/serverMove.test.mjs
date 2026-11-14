@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, symlinkSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
@@ -21,6 +21,8 @@ import { MAX_MOVE_CHUNK_BYTES, MOVE_TRANSFER_IDLE_MS, normalizeOrigin, sameOrigi
 import { MoveTransfers, sweepStaleMoveDirs } from '../server/src/move/transfers.ts'
 import { moveReceiving } from '../server/src/move/moveHandlers.ts'
 import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/host/gitService.ts'
+// realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
+import { realPath } from '../src/host/pathContainment.ts'
 
 const gitEnv = {
   ...process.env,
@@ -54,10 +56,18 @@ async function server(t, dir, name, clone, prWatchable = true) {
 }
 
 async function setup(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-')))
-  const home = process.env.HOME
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-')))
+  // The agents' histories (~/.claude) under a temp home: homedir() reads HOME, or USERPROFILE on Windows.
+  const home = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
   process.env.HOME = join(dir, 'home')
-  t.after(() => { process.env.HOME = home; rmSync(dir, { recursive: true, force: true }) })
+  process.env.USERPROFILE = join(dir, 'home')
+  t.after(() => {
+    for (const [key, value] of Object.entries(home)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
   const origin = join(dir, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: gitEnv })
   const a = join(dir, 'a', 'app')
@@ -301,7 +311,7 @@ test('move.receive validates what it is given', async (t) => {
 })
 
 test('exportDirtyPatch carries a same-size edit made in the second its file was committed (racily clean)', async (t) => {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-racy-')))
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-racy-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: gitEnv })
   writeFileSync(join(dir, 'a.txt'), 'one\ntwo\nthree\n')
@@ -578,7 +588,7 @@ test('two receives of one branch at once: one builds it, the other is refused an
 })
 
 test('transfers: an abort during a write drops the transfer once the write ends', async (t) => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
+  const root = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const transfers = new MoveTransfers(Date.now, root)
   const id = await transfers.begin('p', 'r')
@@ -595,7 +605,7 @@ test('transfers: an abort during a write drops the transfer once the write ends'
 })
 
 test('sweepStaleMoveDirs removes only our own trek-move dirs older than an hour', async (t) => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
+  const root = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const old = (Date.now() - 2 * 3600_000) / 1000
   for (const name of ['trek-move-abc123', 'trek-move-index-abc123', 'trek-move-fresh1', 'other-old']) {
@@ -727,7 +737,7 @@ test('M5: move.unreceive waits its turn behind a receive of the same branch (CON
   const s = await setup(t)
   const { received } = await move(s, { finish: false })
   assert.equal(received.ok, true, JSON.stringify(received))
-  const key = `${realpathSync(s.b)}\0feat`
+  const key = `${realPath(s.b)}\0feat`
   moveReceiving.add(key)
   const held = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken })
   moveReceiving.delete(key)
@@ -747,7 +757,7 @@ test('M6: a carried history that changed after the export makes move.finish CONF
 })
 
 test('M10: a stale-looking trek-move dir with a fresh entry is kept; an append touches the transfer dir', async (t) => {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
+  const root = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const old = (Date.now() - 2 * 3600_000) / 1000
   mkdirSync(join(root, 'trek-move-busy01'))

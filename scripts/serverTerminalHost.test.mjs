@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalHost } from '../server/src/sessions/terminalHost.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 function fakeSpawner() {
   const spawned = []
@@ -36,10 +37,11 @@ const MiB = 1024 * 1024
 const opts = { file: '/bin/sh', args: ['-ilc', 'exec x'], cwd: '/tmp', env: {}, cols: 80, rows: 24 }
 const flush = () => new Promise((r) => setImmediate(r))
 
+// The fake ptys are a POSIX host's unless a test says win32 (its kills, its windowsPty), on any OS.
 function setup(t, extra = {}) {
   const fake = fakeSpawner()
   const exits = []
-  const host = new TerminalHost({ spawner: fake.spawner, onExit: (ptyId, code) => exits.push([ptyId, code]), ...extra })
+  const host = new TerminalHost({ spawner: fake.spawner, onExit: (ptyId, code) => exits.push([ptyId, code]), platform: 'linux', ...extra })
   t.after(() => host.disposeAll())
   return { ...fake, exits, host }
 }
@@ -396,7 +398,7 @@ test('data emitted after exit is ignored', (t) => {
 
 test('an owner onExit that throws is contained', (t) => {
   const fake = fakeSpawner()
-  const host = new TerminalHost({ spawner: fake.spawner, onExit: () => { throw new Error('owner bug') } })
+  const host = new TerminalHost({ spawner: fake.spawner, onExit: () => { throw new Error('owner bug') }, platform: 'linux' })
   t.after(() => host.disposeAll())
   host.spawn('p1', opts)
   assert.doesNotThrow(() => fake.spawned[0].exit(1))
@@ -480,6 +482,71 @@ test('forceKillAll sends SIGKILL to every pty still alive', (t) => {
   assert.deepEqual(signals, ['SIGKILL', 'SIGKILL'])
 })
 
+test('win32: forceKillAll ends each pty\'s tree synchronously, never with a signal', (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  host.spawn('p2', opts)
+  spawned[0].pid = 101
+  spawned[1].pid = 102
+  const signals = []
+  for (const p of spawned) p.kill = (signal) => signals.push(signal)
+  host.forceKillAll()
+  assert.deepEqual(trees, [[101, true], [102, true]])
+  assert.deepEqual(signals, [])
+})
+
+test('win32: kill() sends no signal, and a pty still running at the timeout has its tree killed', async (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', killTimeoutMs: 10, treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  spawned[0].pid = 201
+  const signals = []
+  spawned[0].kill = (signal) => signals.push(signal)
+  host.kill('p1')
+  assert.deepEqual(signals, [undefined], 'node-pty on Windows throws when given a signal')
+  await new Promise((r) => setTimeout(r, 40))
+  assert.deepEqual(trees, [[201, false]])
+})
+
+test('win32: whenGone never kills the tree of a pty that already exited (Windows reuses pids)', async (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  spawned[0].pid = 301
+  host.kill('p1')
+  assert.equal(await host.whenGone(['p1'], 1000), true)
+  assert.deepEqual(trees, [])
+})
+
+test('win32: whenGone kills the tree of a pty that outlives the timeout', async (t) => {
+  const trees = []
+  const { host, spawned } = setup(t, { platform: 'win32', killTimeoutMs: 60_000, treeKiller: (pid, sync) => trees.push([pid, sync]) })
+  host.spawn('p1', opts)
+  spawned[0].pid = 401
+  spawned[0].kill = () => {}
+  host.kill('p1')
+  assert.equal(await host.whenGone(['p1'], 30, 30), false)
+  assert.deepEqual(trees, [[401, false]])
+})
+
+test('a Windows host gives xterm\'s windowsPty in the attach info (and its own screen); elsewhere nothing', (t) => {
+  const { host } = setup(t, { platform: 'win32', osRelease: '10.0.22631', treeKiller: () => {} })
+  host.spawn('p1', opts)
+  assert.deepEqual(host.attach('p1', sink()).windowsPty, { backend: 'conpty', buildNumber: 22631 })
+  const mac = setup(t)
+  mac.host.spawn('p1', opts)
+  assert.equal('windowsPty' in mac.host.attach('p1', sink()), false)
+})
+
+test('windowsBuildNumber', async () => {
+  const { windowsBuildNumber, windowsPtyFor } = await import('../server/src/sessions/terminalHost.ts')
+  assert.equal(windowsBuildNumber('10.0.19045'), 19045)
+  assert.equal(windowsBuildNumber('24.6.0'), undefined)
+  assert.deepEqual(windowsPtyFor('win32', 'odd'), { backend: 'conpty', buildNumber: 0 })
+  assert.equal(windowsPtyFor('linux', '6.1.0'), undefined)
+})
+
 test('spawn and resize cap sizes at 500 columns and 200 rows', (t) => {
   const { host } = setup(t)
   const bad = (e) => e.code === 'BAD_REQUEST'
@@ -504,7 +571,7 @@ test('toWireError carries the details of a passed-through code: only an object, 
   assert.deepEqual(toWireError('worktree.remove', extra), { code: 'GIT_ERROR', message: 'x', details: { reason: 'dirty' } }, 'only the named fields')
 })
 
-test('whenGone SIGKILLs the pty\'s process group: a background child that ignores SIGHUP does not outlive it', { skip: process.platform === 'win32' }, async (t) => {
+test('whenGone SIGKILLs the pty\'s process group: a background child that ignores SIGHUP does not outlive it', { skip: posixOnly('process groups and SIGHUP') }, async (t) => {
   const { mkdtempSync, readFileSync, rmSync, existsSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')

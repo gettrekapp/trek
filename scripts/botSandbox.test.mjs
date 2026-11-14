@@ -2,10 +2,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ancestorsOf, insideUserData, macProfile, sandboxFor } from '../src/host/bot/sandbox.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// The sandbox's macOS and Linux plans read POSIX paths with the host's node:path (win32 on Windows,
+// where the bot refuses to run): only the Windows refusal is checked there.
+const skip = posixOnly('the bot sandbox, POSIX paths through node:path')
 
 const UD = "/Users/me/Library/Application Support/Trek Dev"
 
-test('ancestors run nearest first, up to the root', () => {
+test('ancestors run nearest first, up to the root', { skip }, () => {
   assert.deepEqual(ancestorsOf(UD), ['/Users/me/Library/Application Support', '/Users/me/Library', '/Users/me', '/Users', '/'])
   assert.deepEqual(ancestorsOf('/a'), ['/'])
   assert.deepEqual(ancestorsOf('/'), [])
@@ -27,7 +32,7 @@ test('the macOS profile denies userData, renaming each ancestor, and LaunchServi
   )
 })
 
-test('macOS: sandbox-exec with every path as a -D parameter, one per ancestor', () => {
+test('macOS: sandbox-exec with every path as a -D parameter, one per ancestor', { skip }, () => {
   const plan = sandboxFor('darwin', UD)
   assert.equal(plan.ok, true)
   const { command, args } = plan.sandbox
@@ -43,7 +48,7 @@ test('macOS: sandbox-exec with every path as a -D parameter, one per ancestor', 
   assert.deepEqual(args.slice(-2), ['-p', macProfile(5)])
 })
 
-test('macOS: quotes, parentheses and = in a path stay out of the profile text', () => {
+test('macOS: quotes, parentheses and = in a path stay out of the profile text', { skip }, () => {
   const odd = `/tmp/it's "odd" (x)=y`
   const { args } = sandboxFor('darwin', `${odd}/Trek`).sandbox
   assert.equal(args[1], `USERDATA=${odd}/Trek`)
@@ -51,7 +56,7 @@ test('macOS: quotes, parentheses and = in a path stay out of the profile text', 
   assert.ok(!args.at(-1).includes('odd'))
 })
 
-test('Linux: bwrap with a tmpfs over userData, its own PID namespace and /proc, and no new session', () => {
+test('Linux: bwrap with a tmpfs over userData, its own PID namespace and /proc, and no new session', { skip }, () => {
   const plan = sandboxFor('linux', '/home/me/.config/Trek Dev')
   assert.deepEqual(plan, {
     ok: true,
@@ -79,7 +84,7 @@ test('a path that is not absolute and normal is refused, since the profile would
   }
 })
 
-test('folders inside userData are found, case-folded on macOS', () => {
+test('folders inside userData are found, case-folded on macOS', { skip }, () => {
   assert.equal(insideUserData('darwin', UD, ['/p/x.trekbot', `${UD}/bots/x.trekbot`]), `${UD}/bots/x.trekbot`)
   assert.equal(insideUserData('darwin', UD, [UD.toUpperCase()]), UD.toUpperCase())
   assert.equal(insideUserData('linux', '/home/me/.config/Trek', ['/home/me/.config/TREK/x']), null)

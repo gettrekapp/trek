@@ -150,6 +150,17 @@ export interface PtyInfo {
   rows: number
   /** Byte offset of the next output chunk (total bytes emitted so far). */
   seq: number
+  /**
+   * The pty runs on Windows (ConPTY): pass it to xterm.js's `windowsPty` option, which turns on
+   * the reflow and wrapping behaviour ConPTY output needs. Absent on macOS and Linux.
+   */
+  windowsPty?: WindowsPtyInfo
+}
+
+export interface WindowsPtyInfo {
+  backend: 'conpty'
+  /** The Windows build (the third part of os.release(): 22631 for 10.0.22631) */
+  buildNumber: number
 }
 
 export interface PtyDataEventWire {
@@ -282,6 +293,10 @@ export interface WelcomeFrameV2 {
   serverName: string
   /** Optional features, e.g. "mcp", "bot", "docker"; clients hide what is missing */
   capabilities: string[]
+  /** The server's OS (process.platform: win32, darwin, linux); absent from older servers */
+  platform?: string
+  /** On Windows: its build number (see WindowsPtyInfo) */
+  windowsBuild?: number
   /**
    * The server's plugins (plugin system phase 1), on or off per project in its `plugins` setting;
    * absent from a server older than plugins. A plugin's methods and events are `<id>.*`.
@@ -492,6 +507,8 @@ export interface MethodParamsV2 {
   'server.removeRepo': { repoId: string }
   /** The agents the server can launch; with `projectId`, Claude's command is that project's `claudeCommand` when it has one */
   'server.agents': { projectId?: string }
+  /** The local server only, from its own `local` token: answers, then shuts down as SIGTERM would (`trek-server stop --local`) */
+  'server.stop': Record<string, never>
   // Docker on the server's machine (capability `docker`)
   /** `docker ps -a` */
   'docker.list': Record<string, never>
@@ -598,7 +615,8 @@ export interface MethodResultsV2 {
   'repo.remove': null
   'repo.update': null
   'repo.listBranches': string[]
-  'worktree.create': { worktreeId: string }
+  /** linkWarnings: linkedDirs entries that could not be linked (Windows: a file copied instead) */
+  'worktree.create': { worktreeId: string; linkWarnings?: string[] }
   'worktree.remove': null
   'worktree.load': null
   'worktree.unload': null
@@ -660,6 +678,7 @@ export interface MethodResultsV2 {
   'server.addRepo': { repoId: string }
   'server.removeRepo': null
   'server.agents': ServerAgents
+  'server.stop': null
   'docker.list': ContainerInfo[]
   'docker.container': null
   /** docker compose's exit code; -1 when docker could not run */

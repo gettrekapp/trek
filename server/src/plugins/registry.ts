@@ -4,6 +4,7 @@
 // session prompt in the projects where it is on.
 import { chmodSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { isInside } from '../../../src/host/pathContainment.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import { PLUGIN_ID_RE, pluginEnabled, type PluginManifest, type PluginPresence } from '../../../src/shared/plugins/manifest.ts'
 import type { PluginHandler, PluginInstance, PluginMcpTool, ServerPlugin, ServerPluginHost } from '../../../src/shared/plugins/server.ts'
@@ -19,10 +20,20 @@ import type { TopicHub } from '../topicHub'
 /** Namespaces a plugin may not take, beside those of the core methods. */
 const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp'])
 
-/** A data file's name: one path segment, not `.` or `..` (a plugin keeps to its own directory). */
+/**
+ * A data file's name: one path segment, not `.` or `..` (a plugin keeps to its own directory), and
+ * no `:` (on Windows, `name:stream` is an NTFS alternate data stream and `C:name` a drive-relative path).
+ */
 function checkFileName(name: string): string {
-  if (!name || name === '.' || name === '..' || /[\\/\0]/.test(name)) throw new Error(`not a data file name: ${JSON.stringify(name)}`)
+  if (!name || name === '.' || name === '..' || /[\\/:\0]/.test(name)) throw new Error(`not a data file name: ${JSON.stringify(name)}`)
   return name
+}
+
+/** `name` in `dir`, checked to stay inside it (isInside: either separator and case on Windows). */
+function fileIn(dir: string, name: string): string {
+  const path = join(dir, checkFileName(name))
+  if (!isInside(dir, path, process.platform, true)) throw new Error(`not a data file name: ${JSON.stringify(name)}`)
+  return path
 }
 
 /** The error codes a plugin's method or tool may throw as they are; anything else is TOOL_ERROR. */
@@ -114,9 +125,9 @@ export function createPluginRegistry(options: PluginRegistryOptions): PluginRegi
       dataFile: (name) => {
         mkdirSync(dir, { recursive: true, mode: 0o700 })
         chmodSync(dir, 0o700)
-        return join(dir, checkFileName(name))
+        return fileIn(dir, name)
       },
-      legacyDataFile: (name) => join(options.dataDir, checkFileName(name)),
+      legacyDataFile: (name) => fileIn(options.dataDir, name),
       testEndpoint: (envName) => testEndpoint(envName, env[envName], warn),
       emit: (projectId, event, data) => (enabled(projectId, manifest.id) ? options.hub.emit(projectTopic(projectId), `${manifest.id}.${event}`, data) : 0),
       subscriberCount: (projectId) => options.hub.eventSubscriberCount(projectTopic(projectId)),

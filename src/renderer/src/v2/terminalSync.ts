@@ -182,3 +182,29 @@ export function followResize(
   const foreign = shown && fitted !== undefined && !same(fitted, pty)
   return same(local, pty) ? { foreign } : { resizeLocal: { cols: pty.cols, rows: pty.rows }, foreign }
 }
+
+/** xterm.js's `windowsPty` option (IWindowsPty), without importing xterm here. */
+export interface XtermWindowsPty {
+  backend?: 'conpty' | 'winpty'
+  buildNumber?: number
+}
+
+/**
+ * xterm's `windowsPty` for a terminal of this server, from its welcome: ConPTY's on a Windows
+ * server, none on any other (a server before W1 says no platform: not Windows). Set when the
+ * entry is created or re-pointed at another server, before the attach, because the attach's
+ * replay is written as it arrives, before `pty.attach` resolves; once it does, its
+ * `PtyInfo.windowsPty` is the authority. The value to set, or undefined to leave it as it is
+ * (already so, or no welcome yet).
+ */
+export function welcomeWindowsPty(
+  current: XtermWindowsPty | undefined,
+  welcome: { platform?: string; windowsBuild?: number } | null | undefined
+): XtermWindowsPty | undefined {
+  if (!welcome) return undefined
+  if (welcome.platform === 'win32') {
+    const next: XtermWindowsPty = { backend: 'conpty', ...(typeof welcome.windowsBuild === 'number' ? { buildNumber: welcome.windowsBuild } : {}) }
+    return current?.backend === next.backend && current?.buildNumber === next.buildNumber ? undefined : next
+  }
+  return current?.backend === undefined && current?.buildNumber === undefined ? undefined : {}
+}

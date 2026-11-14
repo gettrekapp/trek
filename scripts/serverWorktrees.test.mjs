@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -16,6 +16,8 @@ import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
+// realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
+import { realPath } from '../src/host/pathContainment.ts'
 
 const gitEnv = {
   ...process.env,
@@ -24,7 +26,7 @@ const gitEnv = {
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
 
 async function setup(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-wt-')))
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-wt-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })

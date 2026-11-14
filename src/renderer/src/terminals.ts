@@ -14,6 +14,7 @@ import {
   sessionConversations,
   recordAttachFailure,
   terminalTargets,
+  welcomeWindowsPty,
   type AttachFailure,
   type Conversation,
   type TermSize
@@ -289,8 +290,15 @@ function cancelV2Sync(): void {
   v2SyncTimer = null
 }
 
+/** A Windows server's ptys are ConPTY's: xterm reflows and wraps their output differently. */
+function applyServerPlatform(term: Terminal, ptys: PtyStream): void {
+  const next = welcomeWindowsPty(term.options.windowsPty, ptys.welcome)
+  if (next) term.options.windowsPty = next
+}
+
 function createV2Entry(id: string, ptys: PtyStream): Entry {
   const { term, fit } = newXterm()
+  applyServerPlatform(term, ptys)
   const link: V2Link = { ptys, ptyId: null, spent: null, failed: null, announced: null, shown: null, attached: null, ptySize: null }
   const entry: Entry = { term, fit, v2: link }
   entries.set(id, entry)
@@ -400,6 +408,14 @@ function fitResized(entry: Entry): boolean {
  * the pty's size instead of sending xterm's default 80x24 or a stale size.
  */
 function applyAttachSize(id: string, entry: Entry, info: PtyInfo): void {
+  // A pty on a Windows server is ConPTY's: xterm reflows and wraps its output differently. The
+  // attach is the authority over the welcome's guess (applyServerPlatform): none means none.
+  const now = entry.term.options.windowsPty
+  if (info.windowsPty && (now?.backend !== info.windowsPty.backend || now?.buildNumber !== info.windowsPty.buildNumber)) {
+    entry.term.options.windowsPty = { backend: info.windowsPty.backend, buildNumber: info.windowsPty.buildNumber }
+  } else if (!info.windowsPty && (now?.backend !== undefined || now?.buildNumber !== undefined)) {
+    entry.term.options.windowsPty = {}
+  }
   const link = entry.v2
   link.ptySize = { cols: info.cols, rows: info.rows }
   setForeignSize(id, null)
@@ -541,6 +557,8 @@ export function syncV2Terminals(project: Project, ptys: PtyStream): void {
     // A new RegisteredServer (the url changed) has a new stream; the old one is closed.
     if (link.ptys !== ptys) {
       link.ptys = ptys
+      // It may be another machine's now: ConPTY's handling on, or off.
+      applyServerPlatform(entry.term, ptys)
       link.ptyId = null
       link.spent = null
       link.ptySize = null

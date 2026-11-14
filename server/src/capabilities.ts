@@ -38,10 +38,18 @@ export const STATIC_CAPABILITIES: readonly string[] = [
  * (5c-1), then `local` on the local server. `plugins`: the registered plugins' legacy capabilities
  * (`voice`), listed after the static ones, for clients older than plugins.
  */
-export function welcomeCapabilities(mcp: boolean, local = false, prWatch = false, plugins: readonly string[] = []): string[] {
+export function welcomeCapabilities(
+  mcp: boolean,
+  local = false,
+  prWatch = false,
+  plugins: readonly string[] = [],
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
+  const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.env, CAPABILITY.stacks] : []
   return [
     ...(mcp ? [CAPABILITY.mcp] : []),
-    ...STATIC_CAPABILITIES,
+    ...STATIC_CAPABILITIES.filter((c) => !windowsOff.includes(c)),
     ...plugins.filter((c) => !STATIC_CAPABILITIES.includes(c)),
     ...(local ? [] : [CAPABILITY.pairing]),
     ...(prWatch ? [CAPABILITY.prWatch] : []),

@@ -6,6 +6,10 @@ import { GLOBAL_SYSTEM_PROMPT, globalAgentPrompt } from '../../../src/shared/pro
 import { getProvider } from '../../../src/shared/providers/registry.ts'
 import { effectiveEffort, sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
 import type { LaunchSpec, LlmSelection, LlmSettings, McpAccess } from '../../../src/shared/providers/types'
+import { readFileSync, statSync } from 'node:fs'
+import { codedError } from '../errors.ts'
+import { NO_CWD_EXE_LOOKUP } from '../../../src/host/commandPath.ts'
+import { winSpawnPlan, type WinLaunchDeps } from './winLaunch.ts'
 
 export interface AgentLaunch {
   llm: LlmSelection
@@ -74,16 +78,57 @@ export function shellLaunch(
   return { file: env.SHELL || '/bin/sh', args: ['-ilc', command] }
 }
 
+/** The process a session's pty runs: `args` is an argv, or (Windows) the raw command line after `file`. */
+export interface SessionProcess {
+  file: string
+  args: string[] | string
+}
+
+const realFiles: Pick<WinLaunchDeps, 'isFile' | 'readFile'> = {
+  isFile: (path) => {
+    try {
+      return statSync(path).isFile()
+    } catch {
+      return false
+    }
+  },
+  readFile: (path) => readFileSync(path, 'utf8')
+}
+
+/**
+ * How `spec` starts in `cwd`. POSIX: its command line through the login shell (shellLaunch).
+ * Windows: no shell (winLaunch.ts); a launch it refuses (not on PATH, a multi-line argument to a
+ * batch file, an env prefix, too long) is a BAD_REQUEST naming why.
+ */
+export function sessionProcess(
+  spec: LaunchSpec,
+  cwd: string,
+  platform: string = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  files: Pick<WinLaunchDeps, 'isFile' | 'readFile'> = realFiles
+): SessionProcess {
+  if (platform !== 'win32') return shellLaunch(spec.command, platform, env)
+  try {
+    return winSpawnPlan(spec, { env, cwd, ...files })
+  } catch (err) {
+    throw codedError('BAD_REQUEST', (err as Error).message)
+  }
+}
+
 /** Tells a session's agent where it runs. The provider's env cannot override the TREK_* identity. */
 export function sessionEnv(
   sessionId: string,
   worktree: { id: string; path: string } | undefined,
-  extra: Record<string, string> = {}
+  extra: Record<string, string> = {},
+  platform: string = process.platform
 ): Record<string, string> {
   return {
     ...extra,
     TREK_SESSION_ID: sessionId,
     TREK_TERMINAL_ID: sessionId,
-    ...(worktree ? { TREK_WORKTREE_ID: worktree.id, TREK_WORKTREE_PATH: worktree.path } : {})
+    ...(worktree ? { TREK_WORKTREE_ID: worktree.id, TREK_WORKTREE_PATH: worktree.path } : {}),
+    // Windows: a session's cmd.exe (a batch-file agent, anything the agent runs through cmd)
+    // never runs a program from the worktree; set last, so no provider env undoes it.
+    ...(platform === 'win32' ? { [NO_CWD_EXE_LOOKUP]: '1' } : {})
   }
 }

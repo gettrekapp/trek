@@ -22,7 +22,7 @@ import { realOrResolved as real } from '../repos.ts'
 import type { TopicHub } from '../topicHub.ts'
 import { checkExpected, isRecord, requireBoolean, requireName, requireString } from '../validate.ts'
 import type { McpAccess } from '../../../src/shared/providers/types'
-import { agentCommand, sessionEnv, shellLaunch } from './launch.ts'
+import { agentCommand, sessionEnv, sessionProcess } from './launch.ts'
 import { MAX_COLS, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH, MAX_ROWS, MAX_SESSIONS_PER_PROJECT, checkQuestion, checkQueue, checkTitle } from './limits.ts'
 import { findSession, findWorktree, sessionList } from './locate.ts'
 import {
@@ -37,7 +37,7 @@ import {
   type Activity
 } from './status.ts'
 import { TerminalHost, type PtySpawner } from './terminalHost.ts'
-import { agentCommands, commandBinary, CommandProbe } from './agents.ts'
+import { agentCommands, commandBinary, CommandProbe, platformCommandExists } from './agents.ts'
 import type { ServerAgents } from '../../../src/shared/protocolV2'
 
 export const LOAD_COLS = 120
@@ -63,10 +63,12 @@ export interface SessionManagerDeps {
   mcpAccess?: (projectId: string) => McpAccess | undefined
   /** Added to the prompt of a session that has the MCP tools: the plugins' prompts in its project (plugin system phase 1) */
   pluginPrompt?: (projectId: string) => string | undefined
-  /** Whether a program resolves in the login shell (server.agents); default agentService.commandExists */
+  /** Whether a program is installed (server.agents); default platformCommandExists for `platform` (the login shell, or Windows' launch lookup) */
   commandExists?: (binary: string) => Promise<boolean>
   /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
   onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
+  /** Default process.platform: how a session is launched (a shell, or Windows' no-shell plan), its env, its pty's kill */
+  platform?: NodeJS.Platform
 }
 
 /** An optional LLM pick from a client. */
@@ -152,7 +154,8 @@ export class SessionManager {
     this.newId = deps.newId ?? randomUUID
     this.now = deps.now ?? Date.now
     this.discover = deps.discover ?? discoverCodexSession
-    this.probe = new CommandProbe(deps.commandExists, this.now)
+    const platform = deps.platform ?? process.platform
+    this.probe = new CommandProbe(deps.commandExists ?? ((binary) => platformCommandExists(binary, platform)), this.now)
     this.schedule =
       deps.schedule ??
       ((fn, ms) => {
@@ -162,6 +165,7 @@ export class SessionManager {
       })
     this.terminals = new TerminalHost({
       spawner: deps.spawner,
+      platform: deps.platform,
       onExit: (ptyId, code) => this.onExit(ptyId, code),
       onOutput: (ptyId, data) => this.onPtyOutput(ptyId, data),
       onBell: (ptyId) => this.onPtyBell(ptyId)
@@ -478,7 +482,7 @@ export class SessionManager {
     const llm = this.deps.store.llmSettings()
     const agents = await Promise.all(
       agentCommands(llm, settings).map(async ({ provider, label, command }) => {
-        const binary = commandBinary(command)
+        const binary = commandBinary(command, this.deps.platform)
         return { provider, label, installed: binary ? await this.probe.installed(binary) : false }
       })
     )
@@ -772,9 +776,9 @@ export class SessionManager {
     )
     const ptyId = this.newId()
     this.terminals.spawn(ptyId, {
-      ...shellLaunch(spec.command),
+      ...sessionProcess(spec, cwd, this.deps.platform),
       cwd,
-      env: sessionEnv(session.id, worktree ? { id: worktree.id, path: worktree.path } : undefined, spec.env ?? {}),
+      env: sessionEnv(session.id, worktree ? { id: worktree.id, path: worktree.path } : undefined, spec.env ?? {}, this.deps.platform),
       cols: run.cols,
       rows: run.rows
     })

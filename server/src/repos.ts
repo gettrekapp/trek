@@ -1,8 +1,11 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import type { RemoteRepo } from '../../src/shared/protocolV2'
 import type { TrekServerConfig } from './config'
+import { hidden } from '../../src/host/childOptions.ts'
+import { commandPath } from '../../src/host/commandPath.ts'
+import { realPath } from '../../src/host/pathContainment.ts'
 
 /**
  * Resolves `path` to the top level of the git checkout containing it, so
@@ -14,21 +17,21 @@ export function resolveRepoRoot(path: string): string {
   if (!existsSync(abs)) throw new Error(`${abs} does not exist`)
   let top: string
   try {
-    top = execFileSync('git', ['-C', abs, 'rev-parse', '--show-toplevel'], {
+    top = execFileSync(commandPath('git'), ['-C', abs, 'rev-parse', '--show-toplevel'], hidden({
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 10_000
-    }).trim()
+    })).trim()
   } catch {
     throw new Error(`${abs} is not inside a git repository`)
   }
-  return realpathSync(top)
+  return realPath(top)
 }
 
 /** The realpath of `path`, or just its resolved form when it does not exist (hand-written paths may be symlinked). */
 export function realOrResolved(path: string): string {
   try {
-    return realpathSync(resolve(path))
+    return realPath(resolve(path))
   } catch {
     return resolve(path)
   }

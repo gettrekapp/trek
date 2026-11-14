@@ -2,7 +2,7 @@
 // the poller before answering, so the client's next patch already shows it.
 // worktree.load / worktree.unload start and stop sessions and arrive in 2d.
 import { existsSync } from 'node:fs'
-import { basename, dirname, join, sep } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import * as gitService from '../../src/host/gitService.ts'
 import type { Project, Repository, Worktree } from '../../src/shared/model/types'
 import { codedError } from './errors.ts'
@@ -15,14 +15,28 @@ import { MAX_REVIEW_COMMENTS } from '../../src/shared/review.ts'
 import { assertNotPromoting } from './promote/changing.ts'
 import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
 import type { HistoryValue } from '../../src/shared/model/history.ts'
+import { isInside } from '../../src/host/pathContainment.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
+/**
+ * A directory name Windows accepts: its forbidden characters (<>:"|?* and control characters)
+ * become -, trailing dots and spaces go, and a reserved device name (CON, NUL, COM1…, with any
+ * extension) gets a - after it. Elsewhere the name is kept as is. The branch is never renamed.
+ */
+export function safeDirName(name: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return name
+  let out = name.replace(/[<>:"|?*\x00-\x1f]/g, '-').replace(/[. ]+$/, '')
+  if (out === '') out = '-'
+  if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i.test(out)) out = out.replace(/^([^.]+)/, '$1-')
+  return out
+}
+
 /** Where a branch's worktree goes by default: next to the repo, as <repo>-<branch>. */
-export function defaultWorktreePath(repoPath: string, branch: string): string {
-  return join(dirname(repoPath), `${basename(repoPath)}-${branch.replace(/[/\\]/g, '-')}`)
+export function defaultWorktreePath(repoPath: string, branch: string, platform: NodeJS.Platform = process.platform): string {
+  return join(dirname(repoPath), safeDirName(`${basename(repoPath)}-${branch.replace(/[/\\]/g, '-')}`, platform))
 }
 
 /** Runs a git operation; any failure reaches the client as GIT_ERROR with git's message. */
@@ -38,9 +52,9 @@ async function viaGit<T>(operation: () => Promise<T>): Promise<T> {
  * `git worktree remove` without --force. A refusal because of modified or untracked
  * files is told apart by reading the worktree's status, not git's localised message.
  */
-async function removeUnforced(repoPath: string, worktreePath: string): Promise<void> {
+async function removeUnforced(repoPath: string, worktreePath: string, linkedDirs: readonly unknown[]): Promise<void> {
   try {
-    await gitService.removeWorktree(repoPath, worktreePath)
+    await gitService.removeWorktree(repoPath, worktreePath, linkedDirs)
   } catch (err) {
     throw codedError('GIT_ERROR', (err as Error).message, (await hasChanges(worktreePath)) ? { reason: 'dirty' } : undefined)
   }
@@ -164,7 +178,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     const target = ctx.store.guard.check(requested)
     assertNotRepository(ctx.store.config.repos, target, 'path', requested)
     if (existsSync(target)) throw bad(`${requested} already exists`)
-    const inside = (root: string): boolean => target.startsWith(real(root) + sep)
+    const inside = (root: string): boolean => isInside(real(root), target, process.platform, true)
     if (ctx.store.config.repos.some((r) => inside(r.path)) || repo.worktrees.some((w) => !w.missing && inside(w.path))) {
       throw bad(`${requested} is inside an existing checkout`)
     }
@@ -184,7 +198,7 @@ export const worktreeHandlers: Record<string, Handler> = {
       }
       await gitService.addWorktreeAt(repo.path, target, branch)
     })
-    await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+    const linkWarnings = await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
     const listed = await ctx.poller.refresh(repo.path)
     if (!listed) {
       throw codedError('GIT_ERROR', `created ${target} but could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
@@ -207,7 +221,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     const projectId = requireString(p.projectId, 'projectId')
     recordHistory(ctx, projectId, repo.id, branchName, [{ kind: 'created', to: { text: target } }])
     if (tagged) recordHistory(ctx, projectId, repo.id, branchName, [{ kind: 'status', to: tagged }], BY_TREK)
-    return { worktreeId }
+    return linkWarnings.length > 0 ? { worktreeId, linkWarnings } : { worktreeId }
   },
 
   'worktree.remove': async (p, ctx) => {
@@ -232,8 +246,8 @@ export const worktreeHandlers: Record<string, Handler> = {
       // The block lasts until the re-read has marked the row missing.
       const unblock = ctx.sessions.blockPath(worktree.path)
       try {
-        if (force) await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path))
-        else await removeUnforced(repo.path, worktree.path)
+        if (force) await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
+        else await removeUnforced(repo.path, worktree.path, repo.linkedDirs ?? [])
         // Git has removed it. Even if the re-read fails, the row goes below.
         await ctx.poller.refresh(repo.path)
       } finally {

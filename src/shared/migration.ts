@@ -16,8 +16,9 @@ export type RawProjectFile = Omit<ProjectFile, 'version' | 'repositories' | 'ser
     globalSessions?: GlobalSession[]
   }
 
+/** The last segment of a path, with either separator (a Windows path from an older file). */
 function directoryName(path: string): string {
-  return path.replace(/\/+$/, '').split('/').pop() ?? path
+  return path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? path
 }
 
 /**

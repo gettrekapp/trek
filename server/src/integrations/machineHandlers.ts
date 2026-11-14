@@ -124,7 +124,7 @@ function environmentOf(ctx: V2Context, p: any) {
   return { repo, worktree, profile: deriveProfileName(envRepoKey(repo), worktree.branch) }
 }
 
-export const machineHandlers: Record<string, Handler> = {
+const allMachineHandlers: Record<string, Handler> = {
   'docker.list': () => viaTool(() => docker.listContainers()),
 
   'docker.container': async (p) => {
@@ -227,3 +227,27 @@ export const machineHandlers: Record<string, Handler> = {
     return viaTool(() => machine(ctx).stacks.log(worktree.path, fileId, offset))
   }
 }
+
+/** Methods this server does not serve on Windows yet (W3 brings Docker Desktop and Git Bash). */
+export const WINDOWS_UNSUPPORTED_PREFIXES = ['env.', 'stack.'] as const
+
+/**
+ * The handlers for `platform`: on Windows, environments (Colima runs only on macOS and Linux) and
+ * dev stacks (stack.sh needs bash) answer TOOL_ERROR `unsupported`, and the welcome leaves their
+ * capabilities out, so clients hide them. Docker stays: the docker CLI works there.
+ */
+export function machineHandlersFor(platform: NodeJS.Platform): Record<string, Handler> {
+  if (platform !== 'win32') return allMachineHandlers
+  const out: Record<string, Handler> = {}
+  for (const [method, handler] of Object.entries(allMachineHandlers)) {
+    const unsupported = WINDOWS_UNSUPPORTED_PREFIXES.some((prefix) => method.startsWith(prefix))
+    out[method] = unsupported
+      ? () => {
+          throw codedError('TOOL_ERROR', `${method.startsWith('env.') ? 'Environments are' : 'Dev stacks are'} not yet supported on Windows servers`, { reason: 'unsupported' })
+        }
+      : handler
+  }
+  return out
+}
+
+export const machineHandlers: Record<string, Handler> = machineHandlersFor(process.platform)

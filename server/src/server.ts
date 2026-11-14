@@ -48,6 +48,8 @@ import { moveTransfers, sweepStaleMoveDirs } from './move/transfers'
 import { createSecretFile } from './secrets'
 import { PushGrants } from './push/grants'
 import { Pusher } from './push/pusher'
+import { release } from 'node:os'
+import { windowsBuildNumber } from './sessions/terminalHost.ts'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -104,6 +106,11 @@ export interface ServerOptions {
    * server answers `push.*` with NOT_FOUND and pushes nothing. `fetch` is for tests.
    */
   push?: { secretsFile: string; fetch?: typeof fetch }
+  /**
+   * The local server's shutdown, for `server.stop` (called after the response is sent). Only with
+   * `local`; elsewhere `server.stop` answers NOT_FOUND.
+   */
+  onStopRequest?: () => void
   /**
    * The plugins' server halves (plugin system phase 1: plugins/builtin.server.ts), with the secrets
    * file and data dir they keep their keys and files in. Without it the server has none.
@@ -503,6 +510,7 @@ export function startServer(
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
           capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities()),
+          ...platformInfo,
           ...(plugins ? { plugins: plugins.presence() } : {}),
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
         })
@@ -537,6 +545,7 @@ export function startServer(
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
         tokenName: callerTokenName,
+        requestStop: options.local && options.onStopRequest ? requestStop : undefined,
         push: pushGrants ? { grants: pushGrants } : undefined,
         plugins,
         history,
@@ -587,7 +596,15 @@ export function startServer(
     })
   })
 
+  // The welcome's OS fields: clients show Windows paths and set xterm up for ConPTY (W1).
+  const build = process.platform === 'win32' ? windowsBuildNumber(release()) : undefined
+  const platformInfo = { platform: process.platform, ...(build !== undefined ? { windowsBuild: build } : {}) }
   let stopped = false
+  // After this tick, so the response goes out before the shutdown closes the sockets.
+  const requestStop = (): void => {
+    const stop = options.onStopRequest
+    if (stop) setImmediate(stop)
+  }
   const callers = new Map<string, ToolCall>()
   const trek: TrekServer = {
     httpServer,

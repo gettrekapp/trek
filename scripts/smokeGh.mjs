@@ -8,7 +8,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const dir = mkdtempSync(join(tmpdir(), 'trek-smoke-gh-'))
-const stub = join(dir, 'gh')
-writeFileSync(stub, "#!/bin/sh\necho 'You are not logged into any GitHub hosts. (a smoke stub)' >&2\nexit 1\n", { mode: 0o755 })
+// Windows has no sh: a Node script there, which the server runs with its own Node (gh.ts).
+const windows = process.platform === 'win32'
+const stub = join(dir, windows ? 'gh.mjs' : 'gh')
+if (windows) writeFileSync(stub, "process.stderr.write('You are not logged into any GitHub hosts. (a smoke stub)\\n')\nprocess.exit(1)\n")
+else writeFileSync(stub, "#!/bin/sh\necho 'You are not logged into any GitHub hosts. (a smoke stub)' >&2\nexit 1\n", { mode: 0o755 })
 process.env.TREK_SERVER_GH = stub
 process.on('exit', () => rmSync(dir, { recursive: true, force: true }))

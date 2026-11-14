@@ -18,6 +18,7 @@ import {
   removeStaleTemps
 } from '../server/src/localLock.ts'
 import { lockText, parseLockText } from '../src/shared/localServer.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-lock-')))
@@ -42,7 +43,7 @@ test('pidAlive: this process is, an exited child is not', () => {
   assert.equal(pidAlive(child.pid), false)
 })
 
-test("pidAlive: another user's process (EPERM) is alive", { skip: process.getuid?.() === 0 ? 'running as root' : process.platform === 'win32' }, () => {
+test("pidAlive: another user's process (EPERM) is alive", { skip: process.getuid?.() === 0 ? 'running as root' : posixOnly('another user\'s process (EPERM)') }, () => {
   // launchd / init is pid 1 and is root's: signal 0 fails with EPERM.
   assert.equal(pidAlive(1), true)
 })
@@ -52,8 +53,9 @@ test('acquireLock creates a 0700 directory and a 0600 lock holding the pid, with
   const path = join(dir, 'local.lock')
   assert.deepEqual(acquireLock(path, 100, alive), { ok: true })
   assert.match(readFileSync(path, 'utf8'), /^100\n[0-9a-f]{32}\n$/, 'the pid, then a nonce')
-  assert.equal(statSync(path).mode & 0o777, 0o600)
-  assert.equal(statSync(dir).mode & 0o777, 0o700)
+  // Windows has no POSIX file modes.
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(statSync(dir).mode & 0o777, 0o700)
   assert.deepEqual(readdirSync(dir), ['local.lock'])
   assert.equal(readLockPid(path), 100)
   assert.equal(holdsLock(path, 100), true)
@@ -123,7 +125,7 @@ test('the lock text: the pid and a nonce; an older server\'s lock (the pid alone
   assert.notEqual(readLock(join(dir, 'x.lock')).nonce, readLock(join(dir, 'y.lock')).nonce)
 })
 
-test('acquireLock keeps the profile directory 0700 even if it already existed looser', (t) => {
+test('acquireLock keeps the profile directory 0700 even if it already existed looser', { skip: posixOnly('file modes') }, (t) => {
   const dir = join(tempDir(t), 'profile')
   mkdirSync(dir, { mode: 0o755 })
   chmodSync(dir, 0o755)
@@ -221,7 +223,7 @@ test('a lock that is a directory throws, and the directory is left', (t) => {
   assert.deepEqual(readdirSync(join(path, '..')), ['local.lock'], 'no temp file is left')
 })
 
-test('a lock that is a symlink is not followed: it holds no pid and is replaced, its target untouched', (t) => {
+test('a lock that is a symlink is not followed: it holds no pid and is replaced, its target untouched', { skip: posixOnly('a file symlink needs Developer Mode on Windows') }, (t) => {
   const dir = tempDir(t)
   const target = join(dir, 'target')
   writeFileSync(target, '100\n')
@@ -233,6 +235,21 @@ test('a lock that is a symlink is not followed: it holds no pid and is replaced,
   assert.equal(lstatSync(path).isSymbolicLink(), false)
   assert.equal(readLockPid(path), 200)
   assert.equal(readFileSync(target, 'utf8'), '100\n')
+})
+
+// Windows has no O_NOFOLLOW (readLock leaves it out there): an lstat first tells the link.
+test("readLock as on Windows: a symlinked lock is not followed, as POSIX's O_NOFOLLOW does", { skip: posixOnly('a file symlink needs Developer Mode on Windows') }, (t) => {
+  const dir = tempDir(t)
+  const target = join(dir, 'target')
+  writeFileSync(target, lockText(100, 'a'.repeat(32)))
+  const path = join(dir, 'local.lock')
+  symlinkSync(target, path)
+  const lock = readLock(path, 'win32')
+  assert.equal(lock.pid, undefined)
+  assert.equal(lock.ino, lstatSync(path).ino, "the link's own identity")
+  assert.deepEqual(readLock(path, 'win32'), readLock(path, 'darwin'))
+  writeFileSync(path + '.real', lockText(300, 'b'.repeat(32)))
+  assert.equal(readLock(path + '.real', 'win32').pid, 300, 'a regular file still reads')
 })
 
 test('running out of retries reports no holder, or only a live one', (t) => {

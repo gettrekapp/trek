@@ -12,6 +12,10 @@ import { startRelay } from '../relay/src/relay.ts'
 import { MAX_BODY_BYTES, RETRY_AFTER_S } from '../relay/src/api.ts'
 import { WindowLimiter, takeAll } from '../relay/src/limits.ts'
 import { pushText, pushGroupOf, PUSH_KINDS, MAX_PUSH_PROJECT } from '../src/shared/push.ts'
+import { posixOnly } from './testPlatform.mjs'
+
+// Windows has no POSIX file modes (stat reports 0666): the 0600/0700 checks are POSIX only.
+const posix = process.platform !== 'win32'
 
 const temp = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-relay-test-'))
@@ -68,7 +72,7 @@ test('push text: a fixed sentence per kind, the project cut and cleaned', () => 
   assert.equal(pushGroupOf('pr-conflict'), 'prWatch')
 })
 
-test('config: refuses a config or credential file others can read; resolves paths against the config', (t) => {
+test('config: refuses a config or credential file others can read; resolves paths against the config', { skip: posixOnly('file modes (the relay refuses a config others can read by its mode)') }, (t) => {
   const dir = temp(t)
   const key = join(dir, 'AuthKey.p8')
   writeFileSync(key, 'k', { mode: 0o600 })
@@ -103,7 +107,7 @@ test('store: secrets are kept only as hashes, the file is 0600 and survives a re
   const text = readFileSync(join(dir, 'relay.json'), 'utf8')
   assert.ok(!text.includes(secret) && !text.includes(grantSecret))
   assert.ok(text.includes(hashSecret(secret)))
-  assert.equal(statSync(join(dir, 'relay.json')).mode & 0o777, 0o600)
+  if (posix) assert.equal(statSync(join(dir, 'relay.json')).mode & 0o777, 0o600)
   const again = new RelayStore(dir)
   assert.equal(again.deviceFor(secret)?.id, device.id)
   assert.equal(again.grantFor(grantSecret)?.device.id, device.id)
@@ -309,10 +313,10 @@ test('store: devices dead for 30 days are pruned on load; bookkeeping is flushed
   now += 1
   const later = new RelayStore(dir, { now: () => now })
   assert.equal(later.deviceCount, 1)
-  assert.equal(statSync(dir).mode & 0o777, 0o700)
+  if (posix) assert.equal(statSync(dir).mode & 0o777, 0o700)
   const fresh = join(dir, 'sub')
   new RelayStore(fresh)
-  assert.equal(statSync(fresh).mode & 0o777, 0o700, 'the data directory is made 0700')
+  if (posix) assert.equal(statSync(fresh).mode & 0o777, 0o700, 'the data directory is made 0700')
 })
 
 test('store: a first delivery is written at once (not debounced)', (t) => {

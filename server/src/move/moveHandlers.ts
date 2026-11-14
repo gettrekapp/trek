@@ -467,7 +467,7 @@ export const moveHandlers: Record<string, Handler> = {
         throw codedError('CONFLICT', `${worktree.path} changed after it was copied; it is kept`)
       }
       if (p.verifyOnly === true) return null
-      await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path))
+      await viaGit(() => gitService.removeWorktreeForce(repo.path, worktree.path, repo.linkedDirs ?? []))
       await ctx.poller.refresh(repo.path)
     } finally {
       unblock()
@@ -609,7 +609,7 @@ async function unreceive(ctx: V2Context, project: Project, repo: Repository, tok
       () => null
     )
     if (now !== receipt.digest) throw codedError('CONFLICT', `${receipt.path} changed after the move; it is kept`)
-    await viaGit(() => gitService.removeWorktreeForce(repo.path, receipt.path))
+    await viaGit(() => gitService.removeWorktreeForce(repo.path, receipt.path, repo.linkedDirs ?? []))
     receipts.delete(token)
   } finally {
     unblock()
@@ -729,8 +729,8 @@ async function build(
     const unblock = ctx.sessions.blockPath(target)
     try {
       await viaGit(() => gitService.addWorktreeAt(repo.path, target, branch))
-      undo.push(() => gitService.removeWorktreeForce(repo.path, target))
-      await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])
+      undo.push(() => gitService.removeWorktreeForce(repo.path, target, repo.linkedDirs ?? []))
+      for (const warning of await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])) console.warn(`linkedDirs in ${target}: ${warning}`)
       const checked = await viaGit(() => gitService.revParseHead(target))
       if (checked !== head) throw codedError('GIT_ERROR', `${target} checked out ${checked.slice(0, 8)}, not ${head.slice(0, 8)}`)
       if (patch !== '') await viaGit(() => gitService.applyPatch(target, patch).catch((err: Error) => {

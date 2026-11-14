@@ -30,6 +30,7 @@ import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
 import { clockFromFile } from './automations/scheduler'
 import { pruneRecoveryFiles } from './promote/promoteHandlers'
+import { hardenWindowsEnv } from '../../src/host/commandPath.ts'
 import {
   addToken,
   DEFAULT_TOKEN_NAME,
@@ -74,7 +75,8 @@ const USAGE = `Usage: trek-server [command] [options]
 Commands:
   start                Run the server (default)
   start --local        Run the Trek app's local server (see --local)
-  stop --local         Stop the local server: SIGTERM, then wait for it to exit
+  stop --local         Stop the local server: server.stop (SIGTERM if it does not
+                       answer), then wait for it to exit
   add [path]           Add the git repo at path (default: current directory)
   list                 List the configured repos
   remove [id|path]     Remove a repo by id or path (default: current directory)
@@ -95,7 +97,8 @@ Options:
                     Not with --local.
   --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
   --local           start/stop: the app's local server. Its own config, data and lock under
-                    ~/.config/trek-server/local and <platform data dir>/local; 127.0.0.1
+                    ~/.config/trek-server/local (Windows: %APPDATA%\\trek-server\\local)
+                    and <platform data dir>/local; 127.0.0.1
                     on a random port; a new token on every start; any path allowed.
                     Writes the port and token to local.json there (0600) while it runs.
                     Takes none of --config, --data-dir, --port, --host, --insecure, --web.
@@ -251,6 +254,10 @@ if (args.command === 'version') {
   console.log(buildInfo().version)
   process.exit(0)
 }
+
+// Windows: no cmd.exe this server starts (nor anything below it: every child inherits this env)
+// looks a program up in its current directory, a worktree a repository could plant one in.
+hardenWindowsEnv(process.env)
 
 /** `start --local`'s profile; its config and data dir replace the defaults. */
 const local: LocalProfile | undefined = args.local ? localProfile(homedir(), defaultDataDir(), args.localProfile) : undefined
@@ -511,7 +518,8 @@ const server = startServer(
     push: { secretsFile: secretsPathFor(resolve(args.configPath)) },
     // The plugins (plugin system phase 1): their keys in the same secrets file, their files in `<dataDir>/plugins/<id>`.
     plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
-    web: webBundle ? { bundle: webBundle } : undefined
+    web: webBundle ? { bundle: webBundle } : undefined,
+    onStopRequest: local ? () => shutdown('server.stop') : undefined
   }
 )
 store.watch()
@@ -587,26 +595,32 @@ const SHUTDOWN_FLUSH_MS = 200
 /** The longest the exit waits for a move's staged histories to be removed */
 const SHUTDOWN_CLEAR_MS = 2000
 let shuttingDown = false
-// SIGHUP: the terminal that ran `start --local` closed. Without a handler the
-// process dies with local.json (and its token) and the lock left behind.
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(signal, () => {
-    if (shuttingDown) return
-    shuttingDown = true
-    // First, so the app stops connecting to a server that is going away.
-    if (local) removeLocalInfo(local.infoPath, process.pid)
-    console.log(`\n${signal} — shutting down (all agent sessions will end)`)
-    store.close()
-    // Settles once a move's staged histories are removed (bounded below, so a slow disk can't hold the exit).
-    const cleared = server.shutdown(signal)
-    // close() flushes pending saves and returns the ids that could not be written.
-    const failed = projectFiles.files.close()
-    if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
-    // Give the daemon.shutdown frames and close handshakes a moment to flush.
-    const flushed = delay(SHUTDOWN_FLUSH_MS)
-    void Promise.all([flushed, Promise.race([cleared, delay(SHUTDOWN_CLEAR_MS)])]).then(() => {
-      server.sessions.terminals.forceKillAll()
-      process.exit(0)
-    })
+
+/**
+ * The one way out: a signal, or `server.stop` (the local server's `stop --local`; on Windows a
+ * signal from another process is TerminateProcess, so this never ran there before).
+ */
+function shutdown(reason: string): void {
+  if (shuttingDown) return
+  shuttingDown = true
+  // First, so the app stops connecting to a server that is going away.
+  if (local) removeLocalInfo(local.infoPath, process.pid)
+  console.log(`\n${reason} — shutting down (all agent sessions will end)`)
+  store.close()
+  // Settles once a move's staged histories are removed (bounded below, so a slow disk can't hold the exit).
+  const cleared = server.shutdown(reason)
+  // close() flushes pending saves and returns the ids that could not be written.
+  const failed = projectFiles.files.close()
+  if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
+  // Give the daemon.shutdown frames and close handshakes a moment to flush.
+  const flushed = delay(SHUTDOWN_FLUSH_MS)
+  void Promise.all([flushed, Promise.race([cleared, delay(SHUTDOWN_CLEAR_MS)])]).then(() => {
+    server.sessions.terminals.forceKillAll()
+    process.exit(0)
   })
 }
+
+// SIGHUP: the terminal that ran `start --local` closed (on Windows: its console window). Without a
+// handler the process dies with local.json (and its token) and the lock left behind. SIGBREAK:
+// Ctrl+Break in a Windows console.
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const) process.on(signal, () => shutdown(signal))

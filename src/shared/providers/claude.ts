@@ -1,5 +1,5 @@
-import { joinCommand, shellQuote } from './shell.ts'
-import type { ApprovalModeOption, LaunchOptions, LaunchSpec, LlmProvider } from './types'
+import { launchSpec, quoted, raw, word } from './shell.ts'
+import type { ApprovalModeOption, LaunchArg, LaunchOptions, LaunchSpec, LlmProvider } from './types'
 
 /** "auto" is what the Claude Code UI calls auto mode; the older "acceptEdits" now shows up as edit mode. */
 export const DEFAULT_PERMISSION_MODE = 'auto'
@@ -17,24 +17,20 @@ export const CLAUDE_PERMISSION_MODES: ApprovalModeOption[] = [
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 /** The claude command line; shared with the Local provider. */
-export function buildClaudeCommand(o: LaunchOptions, effort: string | undefined): string {
+export function buildClaudeLaunch(o: LaunchOptions, effort: string | undefined, env?: Record<string, string>): LaunchSpec {
   // The mode goes on the line unquoted, so only a known one does.
   const mode = o.approvalMode?.trim()
   const known = CLAUDE_PERMISSION_MODES.some((m) => m.value === mode) ? mode : undefined
-  const parts = [
-    o.command?.trim() || 'claude',
-    o.extraArgs?.trim() || `--permission-mode ${known || DEFAULT_PERMISSION_MODE}`
-  ]
-  if (o.model) parts.push(`--model ${shellQuote(o.model)}`)
-  if (effort && CLAUDE_EFFORTS.includes(effort)) parts.push(`--effort ${effort}`)
-  if (o.mcp) {
-    parts.push(`--mcp-config ${shellQuote(o.mcp.configPath)}`, '--allowedTools mcp__trek-dev')
-  }
-  if (o.systemPrompt) parts.push(`--append-system-prompt ${shellQuote(o.systemPrompt)}`)
-  for (const dir of o.addDirs ?? []) parts.push(`--add-dir ${shellQuote(dir)}`)
-  parts.push(o.resume ? `--resume ${o.sessionId}` : `--session-id ${o.sessionId}`)
-  const command = joinCommand(parts)
-  return o.initialMessage ? `${command} ${shellQuote(o.initialMessage)}` : command
+  const extra = o.extraArgs?.trim()
+  const args: LaunchArg[] = extra ? [raw(extra)] : [word('--permission-mode'), word(known || DEFAULT_PERMISSION_MODE)]
+  if (o.model) args.push(word('--model'), quoted(o.model))
+  if (effort && CLAUDE_EFFORTS.includes(effort)) args.push(word('--effort'), word(effort))
+  if (o.mcp) args.push(word('--mcp-config'), quoted(o.mcp.configPath), word('--allowedTools'), word('mcp__trek-dev'))
+  if (o.systemPrompt) args.push(word('--append-system-prompt'), quoted(o.systemPrompt))
+  for (const dir of o.addDirs ?? []) args.push(word('--add-dir'), quoted(dir))
+  args.push(word(o.resume ? '--resume' : '--session-id'), word(o.sessionId))
+  if (o.initialMessage) args.push(quoted(o.initialMessage))
+  return launchSpec(o.command?.trim() || 'claude', args, env)
 }
 
 export const claude: LlmProvider = {
@@ -62,6 +58,6 @@ export const claude: LlmProvider = {
   defaultApprovalMode: DEFAULT_PERMISSION_MODE,
   statusMarkers: ['esc to interrupt'],
   buildLaunch(o: LaunchOptions): LaunchSpec {
-    return { command: buildClaudeCommand(o, o.effort) }
+    return buildClaudeLaunch(o, o.effort)
   }
 }

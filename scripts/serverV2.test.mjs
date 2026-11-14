@@ -14,9 +14,13 @@ import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2, responseRev } from '../server/src/v2.ts'
 import { applyStatePatch } from '../src/shared/sync/topicState.ts'
 
+// The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
+// which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
+const real = process.platform === 'win32' ? realpathSync.native : realpathSync
+
 /** `guardOptions` go to the ConfigStore: `{ permissive: true }` is the local server. */
 function setup(t, guardOptions = {}) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-v2-')))
+  const dir = real(mkdtempSync(join(tmpdir(), 'trek-server-v2-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', a])
@@ -383,13 +387,13 @@ test('project.delete ends the project topic for its subscribers, before the serv
 
 test('welcome capabilities: mcp while the listener is up, then what the server always has and the plugins’ legacy capabilities, pairing except on the local server, then local on the local server', () => {
   const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'skills', 'review', 'move', 'promote', 'push', 'automations', 'history']
-  assert.deepEqual(welcomeCapabilities(true), ['mcp', ...all, 'pairing'])
-  assert.deepEqual(welcomeCapabilities(false), [...all, 'pairing'])
-  assert.deepEqual(welcomeCapabilities(true, false), ['mcp', ...all, 'pairing'])
-  assert.deepEqual(welcomeCapabilities(true, true), ['mcp', ...all, 'local'])
-  assert.deepEqual(welcomeCapabilities(false, true), [...all, 'local'])
+  // A macOS or Linux server's (a Windows one's are in serverWindowsMachine.test.mjs).
+  assert.deepEqual(welcomeCapabilities(true, false, false, [], 'linux'), ['mcp', ...all, 'pairing'])
+  assert.deepEqual(welcomeCapabilities(false, false, false, [], 'linux'), [...all, 'pairing'])
+  assert.deepEqual(welcomeCapabilities(true, true, false, [], 'linux'), ['mcp', ...all, 'local'])
+  assert.deepEqual(welcomeCapabilities(false, true, false, [], 'darwin'), [...all, 'local'])
   // The plugins' legacy capabilities (voice, plugin system phase 1) follow the static ones.
-  assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear']), [...all, 'voice', 'linear', 'pairing'])
+  assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear'], 'linux'), [...all, 'voice', 'linear', 'pairing'])
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {

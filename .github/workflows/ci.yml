@@ -8,6 +8,12 @@
 #   test    typecheck the app, trek-server and trek-relay; the unit tests (npm test)
 #   build   npm run build (app, web client, server) and the relay; the Node-only smokes
 #   mobile  the phone app: typecheck and an `expo export` for iOS and Android (no EAS, no signing)
+#   windows on Windows: the unit tests, then trek-server's own smoke (the built bundle) and the
+#           client contract smoke, whose fake agents are npm-style shims (scripts/fakeAgent.mjs),
+#           then the release's Windows zip (scripts/package-server.mjs) unpacked and run
+#           (scripts/server-tarball-smoke.mjs), as release.yml makes it.
+#           Tests for what Windows doesn't have skip with posixOnly() (scripts/testPlatform.mjs);
+#           tests named "Windows: …" run only here.
 #
 # The Electron smokes need macOS and a GUI session: macos-smokes.yml runs them nightly.
 name: CI
@@ -28,7 +34,7 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  # The Linux jobs never start Electron: skip its ~100 MB binary.
+  # No job here starts Electron (the Linux ones and the Windows one): skip its ~100 MB binary.
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   # Smokes and tests run TypeScript straight from src/ (Node's type stripping, Node >= 22.18).
   NODE_VERSION: '22'
@@ -117,3 +123,55 @@ jobs:
         run: npx expo export --platform ios --output-dir "$RUNNER_TEMP/expo-ios"
       - name: expo export (Android)
         run: npx expo export --platform android --output-dir "$RUNNER_TEMP/expo-android"
+
+  windows:
+    name: Windows (unit tests, server smokes, zip)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        # Git Bash, so the steps read as on Linux.
+        shell: bash
+    steps:
+      # Byte-exact checkouts: fixtures and expected outputs are compared as committed (a test that
+      # wants CRLF, as core.autocrlf=true gives a Windows user, sets it in its own repository).
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            relay/package-lock.json
+      # node-pty comes from its own Windows prebuild (ConPTY), nothing is compiled.
+      - run: npm ci --no-audit --no-fund
+      - name: Unit tests
+        run: npm test
+      - name: Build trek-server
+        if: ${{ !cancelled() }}
+        run: npm --prefix server run build
+      - name: trek-server smoke (the built bundle)
+        if: ${{ !cancelled() }}
+        working-directory: server
+        run: npm run smoke -- --built
+      - name: Client contract smoke
+        if: ${{ !cancelled() }}
+        run: node scripts/client-contract.mjs
+      # The release's Windows zip, as release.yml's server job makes and checks it (not uploaded),
+      # so a packaging break shows up here rather than on a tag.
+      - name: Build the web client
+        if: ${{ !cancelled() }}
+        run: npm run build:web
+      - name: Package trek-server
+        if: ${{ !cancelled() }}
+        run: |
+          node scripts/package-server.mjs --out dist-release
+          version=$(node -p "require('./server/package.json').version")
+          test -f "dist-release/trek-server-$version-win32-x64.zip"
+      - name: Unpack and run it
+        if: ${{ !cancelled() }}
+        run: node scripts/server-tarball-smoke.mjs "dist-release/trek-server-$(node -p "require('./server/package.json').version")-win32-x64.zip"

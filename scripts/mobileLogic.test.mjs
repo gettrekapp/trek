@@ -446,3 +446,13 @@ test('push: a tap waits until the phone has loaded its servers, then is routed o
   assert.equal(routeTap({ ...tap, serverId: 'gone' }, true, routeData, notificationRoute), null)
   assert.equal(routeTap({ kind: 'decision', serverId: 'srv-1', projectId: 'p' }, true, routeData, notificationRoute), null, 'no session or worktree: nothing to open')
 })
+
+test('TerminalFeed: a Windows server\'s pty sets xterm up for ConPTY before the size and the held output', () => {
+  const feed = new TerminalFeed()
+  feed.data('out')
+  assert.deepEqual(feed.size(80, 24, 22631), [
+    { type: 'windowsPty', buildNumber: 22631 },
+    { type: 'size', cols: 80, rows: 24 },
+    { type: 'data', data: 'out' }
+  ])
+})
