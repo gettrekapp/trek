@@ -48,7 +48,12 @@ export interface UpdateServiceDeps {
 export interface UpdateService {
   /** Never throws */
   status(): UpdateStatus
-  /** Reads the feed and answers the status after it. Rejects (TOOL_ERROR) when the feed cannot be read, (CONFLICT, reason `busy`) while an update runs. */
+  /**
+   * Reads the feed and answers the status after it. Rejects (TOOL_ERROR) when the feed cannot be
+   * read, (CONFLICT, reason `busy`) while an update runs. Asked within MIN_CHECK_INTERVAL_MS of
+   * the last read, it does not read again: it answers the status as it is now, or rejects with
+   * that read's error if it failed.
+   */
   check(): Promise<UpdateStatus>
   /** Begins installing `version`. Throws CONFLICT (reason `disabled`, `busy` or `stale`) or BAD_REQUEST. */
   apply(version: unknown): { started: true }
@@ -57,6 +62,14 @@ export interface UpdateService {
 }
 
 type State = UpdateStatus['state']
+
+/**
+ * The feed is read for a check at most once in this long, whoever asks (a client's
+ * `update.check`, the daily check): each read is two requests to GitHub, a write of the state
+ * file and two changes to every client, and any signed-in client can ask in a loop. A check
+ * asked sooner is answered from the last read.
+ */
+export const MIN_CHECK_INTERVAL_MS = 30_000
 
 const STEP_STATE: Record<UpdateStep, State> = {
   checking: 'checking',
@@ -108,7 +121,11 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
    * attempt starts or a check succeeds: it is about this process's last attempt, not the install.
    */
   let failure: UpdateResultWire | null = null
+  /** When the last check's read of the feed began, and why it failed if it did */
+  let lastRead: { at: number; error?: string } | null = null
   const now = (): Date => deps.now?.() ?? new Date()
+  // `cause`: the reason alone, for the server's own log line.
+  const checkFailed = (error: string): Error => Object.assign(codedError('TOOL_ERROR', `Could not check for an update: ${error}`), { cause: error })
 
   /** The last result to report: the state file's, or this service's own failure when that is the newer one. Never both. */
   const lastOf = (recorded: UpdateResultWire | undefined): UpdateResultWire | undefined => {
@@ -163,6 +180,14 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   const check = (): Promise<UpdateStatus> => {
     if (applying || state === 'restarting') return Promise.reject(codedError('CONFLICT', 'An update is running on this server', { reason: 'busy' }))
     if (checking) return checking
+    const at = now().getTime()
+    // Read a moment ago: the answer is what that read found, not another round to the feed (and
+    // not a `checking` and an `idle` to every client).
+    if (lastRead && at - lastRead.at < MIN_CHECK_INTERVAL_MS) {
+      return lastRead.error !== undefined ? Promise.reject(checkFailed(lastRead.error)) : Promise.resolve(status())
+    }
+    const read: { at: number; error?: string } = { at }
+    lastRead = read
     set('checking')
     // Inside a promise: a `find` that throws at once is a failed check like one that rejects.
     const run = new Promise<unknown>((done) => done(deps.find()))
@@ -172,11 +197,11 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       )
       .then((failed) => {
         checking = null
+        if (failed) read.error = failed.error
         // The feed was read: how the last attempt ended is old news.
-        if (!failed) failure = null
+        else failure = null
         set('idle')
-        // `cause`: the reason alone, for the server's own log line.
-        if (failed) throw Object.assign(codedError('TOOL_ERROR', `Could not check for an update: ${failed.error}`), { cause: failed.error })
+        if (failed) throw checkFailed(failed.error)
         return status()
       })
     checking = run

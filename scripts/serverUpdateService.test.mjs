@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { removeDir } from './testPlatform.mjs'
-import { createUpdateService } from '../server/src/update/service.ts'
+import { MIN_CHECK_INTERVAL_MS, createUpdateService } from '../server/src/update/service.ts'
 import { writeState } from '../server/src/update/state.ts'
 
 const NOW = new Date('2026-11-14T10:00:00.000Z')
@@ -23,6 +23,9 @@ function world(over = {}) {
   const changes = []
   const relaunched = []
   const calls = { find: 0, apply: [] }
+  /** The service's clock: NOW until a test moves it on. */
+  let at = NOW.getTime()
+  const clock = { advance: (ms) => { at += ms } }
   const deps = {
     install: { dir, parent: join(root, 'opt'), version: '1.0.0', build: 'b', target: 'linux-x64' },
     configDir,
@@ -31,7 +34,7 @@ function world(over = {}) {
     remoteApply: () => true,
     canRelaunch: () => true,
     relaunchRefusal: () => null,
-    now: () => NOW,
+    now: () => new Date(at),
     onChange: (status) => changes.push(status),
     relaunch: (version) => relaunched.push(version),
     find: async () => {
@@ -55,7 +58,7 @@ function world(over = {}) {
     },
     ...over
   }
-  return { root, dir, configDir, service: createUpdateService(deps), changes, relaunched, calls, setInstalled, done: () => removeDir(root) }
+  return { root, dir, configDir, service: createUpdateService(deps), changes, relaunched, calls, clock, setInstalled, done: () => removeDir(root) }
 }
 const coded = (code, reason) => (err) => err.code === code && (reason === undefined || err.details?.reason === reason)
 const settled = async (service) => { await service.idle() }
@@ -268,7 +271,6 @@ test('check: a feed read that throws at once (not a rejection) rejects the same 
     await assert.rejects(w.service.check(), (err) => err.code === 'TOOL_ERROR' && /no fetch here/.test(err.message))
     assert.equal(w.service.status().state, 'idle')
     assert.deepEqual(w.changes.map((s) => s.state), ['checking', 'idle'])
-    await assert.rejects(w.service.check(), coded('TOOL_ERROR'), 'and the next check is a new read, not the failed one')
   } finally {
     w.done()
   }
@@ -448,11 +450,13 @@ test('the failure kept in memory goes when a new attempt starts, and when a chec
     assert.equal(w.service.status().lastResult, undefined)
     await settled(w.service)
     assert.equal(w.service.status().lastResult, undefined)
-    // A check that succeeds.
+    // A check that succeeds (one that reads the feed: the last read is over half a minute old).
     fail = true
     w.service.apply('2.0.0')
     await settled(w.service)
     assert.equal(w.service.status().lastResult.error, LOCKED)
+    assert.equal((await w.service.check()).lastResult.error, LOCKED, 'a check answered from the last read settles nothing')
+    w.clock.advance(MIN_CHECK_INTERVAL_MS)
     assert.equal((await w.service.check()).lastResult, undefined)
   } finally {
     w.done()
@@ -500,6 +504,95 @@ test('apply is refused while the server is checking: it says so, not that an upd
     assert.throws(() => w.service.apply('2.0.0'), (err) => err.code === 'CONFLICT' && err.details?.reason === 'busy' && err.message === 'This server is checking for an update: try again in a moment')
     release()
     await first
+  } finally {
+    w.done()
+  }
+})
+
+test('check: the feed is read at most once per MIN_CHECK_INTERVAL_MS; a check asked sooner answers the status as it is, with no read and no change', async () => {
+  let sessions = 2
+  const w = world({ sessions: () => sessions })
+  try {
+    assert.equal(MIN_CHECK_INTERVAL_MS, 30_000)
+    const first = await w.service.check()
+    assert.equal(w.calls.find, 1)
+    w.changes.length = 0
+    // A client that asks in a loop: no request to the feed, no write, nothing sent to anyone.
+    sessions = 3
+    for (let n = 0; n < 50; n++) {
+      w.clock.advance(100)
+      assert.deepEqual(await w.service.check(), { ...first, sessions: 3 }, 'the status now, not a copy of the last answer')
+    }
+    assert.equal(w.calls.find, 1)
+    assert.deepEqual(w.changes, [], 'no checking and idle to every client')
+    w.clock.advance(MIN_CHECK_INTERVAL_MS - 5000 - 1)
+    await w.service.check()
+    assert.equal(w.calls.find, 1, 'one millisecond short of the interval')
+    w.clock.advance(1)
+    await w.service.check()
+    assert.equal(w.calls.find, 2)
+    assert.deepEqual(w.changes.map((s) => s.state), ['checking', 'idle'])
+  } finally {
+    w.done()
+  }
+})
+
+test('check: after a read that failed, one asked sooner than the interval is refused with that same error, and the feed is not asked again', async () => {
+  let broken = true
+  const w = world({
+    find: async () => {
+      w.calls.find++
+      if (broken) throw new Error('the feed answered 503')
+      return null
+    }
+  })
+  const same = (err) => err.code === 'TOOL_ERROR' && err.message === 'Could not check for an update: the feed answered 503' && err.cause === 'the feed answered 503'
+  try {
+    await assert.rejects(w.service.check(), same)
+    w.changes.length = 0
+    w.clock.advance(MIN_CHECK_INTERVAL_MS - 1)
+    await assert.rejects(w.service.check(), same)
+    assert.equal(w.calls.find, 1)
+    assert.deepEqual(w.changes, [])
+    // The interval over: a new read, which may succeed.
+    broken = false
+    w.clock.advance(1)
+    assert.equal((await w.service.check()).state, 'idle')
+    assert.equal(w.calls.find, 2)
+    await w.service.check()
+    assert.equal(w.calls.find, 2, 'and what is remembered now is that it was read')
+  } finally {
+    w.done()
+  }
+})
+
+test('check: the interval is counted from when a read began, and one still running is shared, not repeated', async () => {
+  let release
+  const w = world({ find: () => { w.calls.find++; return new Promise((done) => { release = () => done(null) }) } })
+  try {
+    const first = w.service.check()
+    w.clock.advance(MIN_CHECK_INTERVAL_MS + 1)
+    const second = w.service.check()
+    assert.equal(w.calls.find, 1)
+    release()
+    assert.deepEqual(await first, await second)
+    // Over the interval since it began: the next one reads.
+    const third = w.service.check()
+    assert.equal(w.calls.find, 2)
+    release()
+    await third
+  } finally {
+    w.done()
+  }
+})
+
+test('a check asked while an update runs is refused as busy, however recent the last read', async () => {
+  const w = world()
+  try {
+    await w.service.check()
+    w.service.apply('2.0.0')
+    await assert.rejects(w.service.check(), coded('CONFLICT', 'busy'))
+    await settled(w.service)
   } finally {
     w.done()
   }
