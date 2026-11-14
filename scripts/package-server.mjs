@@ -39,37 +39,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers.mjs'
-
-// The launcher. POSIX sh; resolves its own symlinks so a link in ~/.local/bin finds the folder.
-const LAUNCHER = `#!/bin/sh
-# trek-server launcher: runs trek-server.cjs (beside this bin/ folder) with Node.js >= 22,
-# the \`node\` on PATH unless TREK_NODE names one.
-set -e
-self=$0
-while [ -L "$self" ]; do
-  link=$(readlink "$self")
-  case $link in
-    /*) self=$link ;;
-    *) self=$(dirname "$self")/$link ;;
-  esac
-done
-here=$(cd "$(dirname "$self")/.." && pwd)
-node=\${TREK_NODE:-node}
-if ! command -v "$node" >/dev/null 2>&1; then
-  echo "trek-server: Node.js 22 or later is needed, and \\"$node\\" was not found (set TREK_NODE to a node binary)" >&2
-  exit 127
-fi
-major=$("$node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-# Anything but digits (not a Node, a wrapper printing more) counts as too old: \`[ -lt ]\` would
-# fail on it and let it through.
-case $major in ''|*[!0-9]*) major=0 ;; esac
-if [ "$major" -lt 22 ]; then
-  echo "trek-server: Node.js 22 or later is needed; $("$node" --version 2>/dev/null) is $(command -v "$node")" >&2
-  exit 1
-fi
-exec "$node" "$here/trek-server.cjs" "$@"
-`
+import { POSIX_LAUNCHER, WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const dist = join(root, 'server', 'dist')
@@ -130,7 +100,7 @@ try {
     writeFileSync(join(dir, 'bin', 'trek-server.cmd'), WIN_LAUNCHER)
     writeFileSync(join(dir, 'bin', 'trek-server.ps1'), WIN_PS_LAUNCHER)
   }
-  else writeFileSync(join(dir, 'bin', 'trek-server'), LAUNCHER, { mode: 0o755 })
+  else writeFileSync(join(dir, 'bin', 'trek-server'), POSIX_LAUNCHER, { mode: 0o755 })
   writeFileSync(join(dir, 'README.md'), readme(name, version, build))
 
   // node-pty for this platform. A clean environment for npm: no build-from-source override left
