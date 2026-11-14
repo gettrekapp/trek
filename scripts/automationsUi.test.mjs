@@ -1,7 +1,7 @@
 // scripts/automationsUi.test.mjs — the Automations panel's and missed-runs modal's pure helpers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { lastRunLabel, missedKey, missedLabel, missedRows, nextRunLabel } from '../src/renderer/src/automations.ts'
+import { lastRunLabel, missedKey, missedLabel, missedRows, nextRunLabel, resolveMissedError, runOutcomeLabel, runNowError } from '../src/renderer/src/automations.ts'
 
 const a = (id, over = {}) => ({ id, name: id.toUpperCase(), prompt: 'p', schedule: { cron: '0 9 * * *', tz: 'UTC' }, enabled: true, createdAt: 0, lastSlot: 0, history: [], ...over })
 const SINCE = Date.UTC(2026, 0, 5, 20)
@@ -32,4 +32,28 @@ test('nextRunLabel and lastRunLabel', () => {
   assert.equal(lastRunLabel(a('x')), 'Never run')
   assert.equal(lastRunLabel(a('x', { history: [{ at: SINCE, trigger: 'schedule', outcome: 'ran', sessionId: 's' }] })), 'Last: 2026-01-05 20:00 · ran')
   assert.equal(lastRunLabel(a('x', { history: [{ at: SINCE, trigger: 'manual', outcome: 'failed', error: 'boom' }] })), 'Last: 2026-01-05 20:00 · failed: boom')
+  assert.equal(
+    lastRunLabel(a('x', { history: [{ at: SINCE, trigger: 'schedule', outcome: 'skipped', error: 'previous run still working' }] })),
+    'Last: 2026-01-05 20:00 · skipped: previous run still working'
+  )
+})
+
+test('runOutcomeLabel: a skip says why, a failure its error', () => {
+  assert.equal(runOutcomeLabel({ at: 0, trigger: 'schedule', outcome: 'ran', sessionId: 's' }), 'ran')
+  assert.equal(runOutcomeLabel({ at: 0, trigger: 'manual', outcome: 'failed', error: 'boom' }), 'failed: boom')
+  assert.equal(runOutcomeLabel({ at: 0, trigger: 'manual', outcome: 'failed' }), 'failed: unknown error')
+  assert.equal(runOutcomeLabel({ at: 0, trigger: 'schedule', outcome: 'skipped', error: 'previous run still working' }), 'skipped: previous run still working')
+  assert.equal(runOutcomeLabel({ at: 0, trigger: 'missed', outcome: 'skipped' }), 'skipped: previous run still working')
+})
+
+test('runNowError: a CONFLICT (the run tab is busy) reads as the previous run still working', () => {
+  const coded = (code, message) => Object.assign(new Error(message), { code })
+  assert.equal(runNowError(coded('CONFLICT', 'previous run still working')), 'The previous run is still working')
+  assert.equal(runNowError(coded('NOT_FOUND', 'gone')), undefined)
+  assert.equal(runNowError(new Error('x')), undefined)
+})
+
+test('resolveMissedError: a skipped run says so', () => {
+  assert.equal(resolveMissedError('Daily', 'previous run still working'), 'Daily: skipped, the previous run is still working')
+  assert.equal(resolveMissedError('Daily', 'CAPACITY: full'), 'Daily: CAPACITY: full')
 })

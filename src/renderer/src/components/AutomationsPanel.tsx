@@ -4,7 +4,7 @@ import { describeCron, formatWall } from '../../../shared/cron'
 import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { focusTerminal } from '../terminals'
-import { lastRunLabel, missedLabel, nextRunLabel } from '../automations'
+import { lastRunLabel, missedLabel, nextRunLabel, runNowError, runOutcomeLabel } from '../automations'
 import { AutomationEditor } from './AutomationEditor'
 
 interface Props {
@@ -13,16 +13,16 @@ interface Props {
 
 const NONE: Automation[] = []
 
-/** Selects a run's Global tab, opening the Global panel. */
+/** Selects an automation's run tab, opening the Global panel on its Automations view. */
 function showRun(sessionId: string): void {
   const s = useAppStore.getState()
   s.setGlobalPanelOpen(true)
-  s.setGlobalView('sessions')
+  s.setGlobalView('automations')
   s.setActiveTerminal(GLOBAL_WORKTREE_ID, sessionId)
   focusTerminal(sessionId)
 }
 
-/** The project's automations: each run is a new Global tab with the automation's prompt. */
+/** The project's automations: each owns one Global run tab, renewed with the automation's prompt on every run. */
 export function AutomationsPanel({ visible }: Props): React.JSX.Element {
   const automations = useAppStore((s) => s.project?.automations ?? NONE)
   const terminals = useAppStore((s) => s.terminals)
@@ -32,18 +32,19 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const now = Date.now()
 
-  const act = async (fn: () => Promise<unknown>): Promise<void> => {
+  const act = async (fn: () => Promise<unknown>, explain?: (err: unknown) => string | undefined): Promise<void> => {
     setError(null)
     const backend = getBackend()
     try {
       await fn()
     } catch (err) {
-      setError(backend.errors.inline(err))
+      setError(explain?.(err) ?? backend.errors.inline(err))
     }
   }
   const toggle = (a: Automation): Promise<void> =>
     act(() => getBackend().automations.save({ id: a.id, name: a.name, prompt: a.prompt, schedule: a.schedule, enabled: !a.enabled, llm: a.llm ?? null }))
-  const runNow = (a: Automation): Promise<void> => act(async () => showRun(await getBackend().automations.runNow(a.id)))
+  // A busy run tab (its last run still working) refuses with CONFLICT: the run is skipped.
+  const runNow = (a: Automation): Promise<void> => act(async () => showRun(await getBackend().automations.runNow(a.id)), runNowError)
 
   const editingAutomation = editing && editing !== 'new' ? automations.find((a) => a.id === editing) : undefined
   const deletedElsewhere = !!editing && editing !== 'new' && !editingAutomation
@@ -62,7 +63,7 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
         <>
           <div className="automations-header">
             <h2>Automations</h2>
-            <span className="muted">Each run opens a new Global tab with the automation&apos;s prompt.</span>
+            <span className="muted">Each automation has one Global run tab, under the drawer&apos;s Automations view: every run starts it afresh with the prompt, and a run is skipped while the last is still working.</span>
             <button className="primary primary-action" disabled={offline} onClick={() => setEditing('new')}>
               New automation
             </button>
@@ -100,8 +101,10 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
                         ) : (
                           <span>ran</span>
                         )
+                      ) : r.outcome === 'skipped' ? (
+                        <span className="muted">{runOutcomeLabel(r)}</span>
                       ) : (
-                        <span className="error-text">failed: {r.error}</span>
+                        <span className="error-text">{runOutcomeLabel(r)}</span>
                       )}
                     </li>
                   ))}

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import type { Automation } from '../../../shared/model/types'
 import { useAppStore } from '../store'
 import { getBackend } from '../backend'
-import { missedKey, missedLabel, missedRows } from '../automations'
+import { missedKey, missedLabel, missedRows, resolveMissedError } from '../automations'
 
 const NONE: Automation[] = []
 
@@ -68,7 +68,7 @@ export function MissedRunsModal(): React.JSX.Element | null {
     try {
       const started = await backend.automations.resolveMissed(run, dismiss)
       const names = new Map(rows.map((r) => [r.id, r.name]))
-      setErrors(started.filter((s) => s.error).map((s) => `${names.get(s.automationId) ?? s.automationId}: ${s.error}`))
+      setErrors(started.filter((s) => s.error).map((s) => resolveMissedError(names.get(s.automationId) ?? s.automationId, s.error as string)))
     } catch (err) {
       const message = backend.errors.inline(err)
       setErrors(message ? [message] : [])
