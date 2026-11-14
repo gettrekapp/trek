@@ -38,7 +38,15 @@ export interface Session {
    * Runtime only; cleared by input to the session or `session.dismissDecision`.
    */
   decision?: SessionDecision
+  /** What the server opened the session for; set by the server only. Absent: a normal session. */
+  context?: SessionContext
 }
+
+/**
+ * Why a session exists beyond a user opening it. `automation`: the automation's run tab (a Global
+ * session): its runs reuse it, renewing it as a new conversation (PROTOCOL.md, "Automations").
+ */
+export type SessionContext = { kind: 'automation'; automationId: string }
 
 export interface SessionDecision {
   /** One-line summary of the decision needed */
@@ -190,10 +198,11 @@ export interface AutomationRun {
   /** The slot it was for; absent for manual runs */
   slot?: number
   trigger: 'schedule' | 'manual' | 'missed'
-  outcome: 'ran' | 'failed'
-  /** The Global session it started (ran) */
+  /** skipped: the run tab was still busy with the previous run, so nothing was started */
+  outcome: 'ran' | 'failed' | 'skipped'
+  /** The Global session it ran in (ran): the automation's run tab, new or renewed */
   sessionId?: string
-  /** Why it failed (failed), at most 200 characters */
+  /** Why it failed or was skipped, at most 200 characters */
   error?: string
 }
 
@@ -205,7 +214,7 @@ export interface AutomationMissed {
   count: number
 }
 
-/** A project's scheduled prompt: each run opens a new Global session with `prompt` as its first message. */
+/** A project's scheduled prompt: each run starts its run tab (one Global session) anew with `prompt` as its first message. */
 export interface Automation {
   id: string
   name: string

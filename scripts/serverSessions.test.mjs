@@ -1208,3 +1208,104 @@ test('a throwing mcpAccess is logged and the session launches without MCP', (t) 
   assert.doesNotMatch(cmd(s.spawned[0]), /--mcp-config/)
   assert.equal(err.mock.callCount(), 1)
 })
+
+// ---- automation run tabs: Session.context and renew ----
+
+/** Adds an automation `a1` to the project, as automation.save would. */
+function withAutomation(s, id = 'a1') {
+  s.projects.apply(s.projectId, (d) => {
+    d.automations = [...(d.automations ?? []), { id, name: 'Nightly', prompt: 'p', schedule: { cron: '0 9 * * *', tz: 'UTC' }, enabled: true, createdAt: 0, lastSlot: 0, history: [] }]
+  })
+}
+
+test('start: context marks a Global session as an automation\'s run tab; it is checked', (t) => {
+  const s = setup(t)
+  withAutomation(s)
+  const context = { kind: 'automation', automationId: 'a1' }
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, context, ...size })
+  assert.deepEqual(s.project().globalSessions[0].context, context)
+  assert.equal(s.project().globalSessions[0].id, sessionId)
+  assert.ok(s.saves.at(-1).globalSessions[0].context, 'the context is saved')
+  const code = (p) => codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size, ...p }))
+  assert.equal(code({ context: { kind: 'automation', automationId: 'nope' } }), 'BAD_REQUEST')
+  assert.equal(code({ context: { kind: 'other', automationId: 'a1' } }), 'BAD_REQUEST')
+  assert.equal(code({ context: 'automation' }), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', context, ...size })), 'BAD_REQUEST', 'only Global sessions')
+  assert.equal(code({ context }), 'CONFLICT', 'an automation has at most one run tab')
+  assert.equal(s.project().globalSessions.length, 1)
+  s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  assert.equal(s.project().globalSessions[1].context, undefined)
+})
+
+test('renew: same session id, a new conversation launched fresh with the message; the running pty is killed first', async (t) => {
+  const s = setup(t)
+  const { sessionId, ptyId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, title: 'Old', ...size })
+  s.sessions.enqueue({ projectId: s.projectId, sessionId, text: 'later' })
+  s.sessions.requestDecision({ projectId: s.projectId, sessionId, question: 'q' })
+  const out = s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'Triage the inbox', title: 'Nightly · 09:00', llm: { provider: 'claude', model: 'opus' }, cols: 90, rows: 20 })
+  assert.equal(s.spawned[0].killed, true, 'the old pty is killed')
+  assert.equal(s.spawned.length, 2)
+  const session = s.project().globalSessions[0]
+  assert.equal(session.id, sessionId)
+  assert.notEqual(session.agentSessionId, sessionId, 'a new agent conversation')
+  assert.ok(session.agentSessionId)
+  assert.equal(session.ptyId, out.ptyId)
+  assert.notEqual(out.ptyId, ptyId)
+  assert.deepEqual([session.title, session.llm, session.queue, session.decision, session.exitCode, session.status], ['Nightly · 09:00', { provider: 'claude', model: 'opus' }, [], undefined, undefined, 'idle'])
+  const command = cmd(s.spawned[1])
+  assert.match(command, new RegExp(`--session-id ${session.agentSessionId}`))
+  assert.doesNotMatch(command, /--resume/)
+  assert.match(command, /'Triage the inbox'$/)
+  assert.deepEqual([s.spawned[1].opts.cols, s.spawned[1].opts.rows], [90, 20])
+  assert.equal(s.saves.at(-1).globalSessions[0].agentSessionId, session.agentSessionId, 'the new id is saved')
+  await tick()
+  const after = s.project().globalSessions[0]
+  assert.deepEqual([after.status, after.ptyId], ['idle', out.ptyId], "the old pty's exit is not recorded")
+  assert.equal(s.sessions.terminals.has(out.ptyId), true)
+})
+
+test('renew: an exited session starts again fresh; without llm it keeps its agent', (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, llm: { provider: 'gemini' }, ...size })
+  s.spawned[0].exit(2)
+  assert.equal(s.project().globalSessions[0].status, 'exited')
+  s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', ...size })
+  const session = s.project().globalSessions[0]
+  assert.deepEqual([session.status, session.exitCode, session.llm], ['idle', undefined, { provider: 'gemini' }])
+  assert.match(cmd(s.spawned[1]), /^gemini /)
+  assert.doesNotMatch(cmd(s.spawned[1]), /--resume/)
+})
+
+test('renew: a discovered-id agent (Codex) drops its old id, launches fresh and discovers the new one', async (t) => {
+  const s = setup(t)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...codex, ...size })
+  s.sessions.__nextDiscovery = 'cdx-1'
+  await s.scheduled[0].fn()
+  assert.equal(s.project().globalSessions[0].agentSessionId, 'cdx-1')
+  const before = s.scheduled.length
+  s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', ...size })
+  assert.equal(s.project().globalSessions[0].agentSessionId, undefined)
+  assert.doesNotMatch(cmd(s.spawned[1]), /^codex resume/)
+  assert.match(cmd(s.spawned[1]), /-- 'go'$/)
+  assert.equal(s.scheduled.length, before + 1, 'discovery runs again')
+  s.sessions.__nextDiscovery = 'cdx-2'
+  await s.scheduled.at(-1).fn()
+  assert.equal(s.project().globalSessions[0].agentSessionId, 'cdx-2')
+})
+
+test('renew: refusals leave the session alone; a failed spawn shows it exited', (t) => {
+  const s = setup(t, { maxSessions: 1 })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  const p = { projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', ...size }
+  assert.equal(codeOf(() => s.sessions.renew({ ...p, title: '' })), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.renew({ ...p, initialMessage: 3 })), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.renew({ ...p, llm: { provider: 'nope' } })), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.renew({ ...p, sessionId: 'nope' })), 'NOT_FOUND')
+  assert.equal(codeOf(() => s.sessions.renew(p)), 'CAPACITY', 'at the cap, refused before the running pty is killed')
+  assert.equal(s.spawned[0].killed, false)
+  s.spawned[0].exit(0)
+  s.hooks.failAt.add(2)
+  assert.throws(() => s.sessions.renew(p), /spawn 2 failed/)
+  const session = s.project().globalSessions[0]
+  assert.deepEqual([session.id, session.status, session.exitCode, session.ptyId], [sessionId, 'exited', -1, undefined])
+})

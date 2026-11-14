@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { discoverCodexSession } from '../../../src/host/agentService.ts'
 import type { AttentionTopic } from '../../../src/shared/model/topics'
-import type { Project, Session, SessionStatus, Worktree } from '../../../src/shared/model/types'
+import type { Project, Session, SessionContext, SessionStatus, Worktree } from '../../../src/shared/model/types'
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
 import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import {
@@ -67,6 +67,30 @@ export interface SessionManagerDeps {
   commandExists?: (binary: string) => Promise<boolean>
   /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
   onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
+}
+
+/** An optional LLM pick from a client. */
+function checkLlm(value: unknown): LlmSelection | undefined {
+  if (value === undefined) return undefined
+  // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead.
+  if (!isRecord(value) || !isProviderId(value.provider)) throw bad('llm.provider must be a known provider')
+  const pick = sanitizeLlmSelection(value)
+  if (!pick) throw bad('llm must be an LLM selection')
+  return pick
+}
+
+/** A new session's context: an existing automation's, on a Global session; an automation has at most one. */
+function checkContext(project: Project, value: unknown, global: boolean): SessionContext {
+  if (!isRecord(value) || value.kind !== 'automation' || typeof value.automationId !== 'string') {
+    throw bad("context must be { kind: 'automation', automationId }")
+  }
+  const automationId = value.automationId
+  if (!global) throw bad('only a Global session can be an automation\'s run tab')
+  if (!project.automations?.some((a) => a.id === automationId)) throw bad(`No automation with id "${automationId}"`)
+  if (project.globalSessions.some((s) => s.context?.automationId === automationId)) {
+    throw codedError('CONFLICT', 'the automation already has a run tab')
+  }
+  return { kind: 'automation', automationId }
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
@@ -181,13 +205,8 @@ export class SessionManager {
       sessionType = settings.sessionTypes?.find((t) => t.id === id)
       if (!sessionType) throw bad(`No session type with id "${id}"`)
     }
-    let pick: LlmSelection | undefined
-    if (p.llm !== undefined) {
-      // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead.
-      if (!isRecord(p.llm) || !isProviderId(p.llm.provider)) throw bad('llm.provider must be a known provider')
-      pick = sanitizeLlmSelection(p.llm)
-      if (!pick) throw bad('llm must be an LLM selection')
-    }
+    const pick = checkLlm(p.llm)
+    const context = p.context === undefined ? undefined : checkContext(project, p.context, global)
     const serverDefault = this.deps.store.llmSettings().llmDefault
     const llm = global
       ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
@@ -217,6 +236,7 @@ export class SessionManager {
     }
     if (provider.capabilities.presetSessionId) session.agentSessionId = sessionId
     if (sessionType) session.sessionTypeId = sessionType.id
+    if (context) session.context = context
     const systemPrompt = sessionType?.systemPrompt?.trim()
     if (systemPrompt) session.systemPrompt = systemPrompt
 
@@ -251,6 +271,59 @@ export class SessionManager {
       if (!found.worktree.loaded) throw bad('load the worktree first')
     }
     return { ptyId: this.spawnSession(project.id, found.session.id, { cols, rows }) }
+  }
+
+  /**
+   * Starts the session over as a brand-new agent conversation (an automation's next run in its run
+   * tab): its pty, if running, is stopped; queue, decision and exit code are cleared; the agent is
+   * launched fresh, never resumed, with `initialMessage`. The session keeps its id.
+   */
+  renew(p: any): { ptyId: string } {
+    this.assertRunning()
+    const { cols, rows } = requireSize(p)
+    const project = this.deps.projects.require(p.projectId)
+    const found = findSession(project, p.sessionId)
+    if (found.worktree) {
+      this.usableWorktree(project, found.worktree.id)
+      if (!found.worktree.loaded) throw bad('load the worktree first')
+    }
+    const title = checkTitle(requireName(p.title, 'title'), 'title')
+    if (typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
+    const llm = checkLlm(p.llm) ?? found.session.llm
+    // Checked before the running pty is killed: a killed pty holds its slot until it exits.
+    this.assertCapacity()
+    const sessionId = found.session.id
+    this.stopDiscovery(sessionId)
+    this.killSession(found.session)
+    this.mutate(project.id, sessionId, (s) => {
+      delete s.ptyId
+      delete s.exitCode
+      delete s.decision
+      s.queue = []
+      s.status = 'idle'
+      s.title = title
+      s.llm = llm
+      // A preset-id agent gets a new conversation id; a discovered one (Codex) is discovered again.
+      if (getProvider(llm.provider).capabilities.presetSessionId) s.agentSessionId = this.newId()
+      else delete s.agentSessionId
+    })
+    let ptyId: string
+    try {
+      ptyId = this.spawnSession(project.id, sessionId, { cols, rows, fresh: true, initialMessage: p.initialMessage })
+    } catch (err) {
+      try {
+        this.mutate(project.id, sessionId, (s) => {
+          s.status = 'exited'
+          s.exitCode = -1
+        }, false)
+      } catch {
+        // the session is gone
+      }
+      this.publishAttention()
+      throw err
+    }
+    this.publishAttention()
+    return { ptyId }
   }
 
   close(p: any): null {
