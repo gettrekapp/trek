@@ -15,6 +15,11 @@ import type { ProjectState } from '../projects/state.ts'
 import { MAX_TITLE_LENGTH } from '../sessions/limits.ts'
 
 export const AUTOMATION_TICK_MS = 30_000
+/**
+ * A run tab whose pty a run started this recently is busy: the agent may not have printed yet (a
+ * tab is `idle` until it does), and a second run would renew it under the first.
+ */
+export const STARTING_MS = 10_000
 /** A slot this old or less still runs; older, it is missed. */
 export const LATE_MS = 2 * 60_000
 export const AUTOMATION_HISTORY = 20
@@ -65,7 +70,6 @@ export interface StartGlobal {
   initialMessage: string
   cols: number
   rows: number
-  context: SessionContext
 }
 
 export interface RenewSession {
@@ -82,8 +86,9 @@ export interface RenewSession {
 export interface AutomationSchedulerDeps {
   projects: ProjectState
   sessions: {
-    start(p: StartGlobal): { sessionId: string }
-    renew(p: RenewSession): unknown
+    /** `options` is the server's own path: a client's session.start cannot set a context */
+    start(p: StartGlobal, options: { context: SessionContext }): { sessionId: string; ptyId: string }
+    renew(p: RenewSession): { ptyId: string }
   }
   now?: () => number
   tickMs?: number
@@ -94,6 +99,11 @@ export class AutomationScheduler {
   readonly now: () => number
   private readonly deps: AutomationSchedulerDeps
   private timer: ReturnType<typeof setInterval> | undefined
+  /**
+   * automationId → the pty its latest run started and when (the scheduler's clock). In memory only:
+   * after a restart no run tab has a live pty of a run.
+   */
+  private readonly launched = new Map<string, { ptyId: string; at: number }>()
 
   constructor(deps: AutomationSchedulerDeps) {
     this.deps = deps
@@ -160,27 +170,25 @@ export class AutomationScheduler {
     const title = runTitle(a, slot ?? at)
     let run: AutomationRun
     let error: unknown
-    if (tab && isBusy(tab)) {
+    const recent = this.launched.get(automationId)
+    const starting = tab?.ptyId !== undefined && recent?.ptyId === tab.ptyId && at - recent.at < STARTING_MS
+    if (tab && (starting || isBusy(tab))) {
       run = { ...base, outcome: 'skipped', error: SKIPPED }
       error = codedError('CONFLICT', `${a.name}: ${SKIPPED}`)
     } else {
       try {
         let sessionId: string
+        let ptyId: string
         if (tab) {
-          this.deps.sessions.renew({ projectId, sessionId: tab.id, title, llm: a.llm ?? null, initialMessage: a.prompt, cols: RUN_COLS, rows: RUN_ROWS })
+          ;({ ptyId } = this.deps.sessions.renew({ projectId, sessionId: tab.id, title, llm: a.llm ?? null, initialMessage: a.prompt, cols: RUN_COLS, rows: RUN_ROWS }))
           sessionId = tab.id
         } else {
-          ;({ sessionId } = this.deps.sessions.start({
-            projectId,
-            worktreeId: null,
-            title,
-            ...(a.llm ? { llm: a.llm } : {}),
-            initialMessage: a.prompt,
-            cols: RUN_COLS,
-            rows: RUN_ROWS,
-            context: { kind: 'automation', automationId }
-          }))
+          ;({ sessionId, ptyId } = this.deps.sessions.start(
+            { projectId, worktreeId: null, title, ...(a.llm ? { llm: a.llm } : {}), initialMessage: a.prompt, cols: RUN_COLS, rows: RUN_ROWS },
+            { context: { kind: 'automation', automationId } }
+          ))
         }
+        this.launched.set(automationId, { ptyId, at })
         run = { ...base, outcome: 'ran', sessionId }
       } catch (err) {
         error = err
@@ -197,9 +205,12 @@ export class AutomationScheduler {
 
 const SKIPPED = 'previous run still working'
 
-/** A run tab still on the previous run: working, waiting on the user, or with an open decision. */
+/**
+ * A run tab still on the previous run: working, waiting on the user, or with an open decision (a
+ * decision left on an exited tab waits on nothing).
+ */
 function isBusy(s: Session): boolean {
-  return s.status === 'working' || s.status === 'attention' || s.decision !== undefined
+  return s.status === 'working' || s.status === 'attention' || (s.decision !== undefined && s.status !== 'exited')
 }
 
 /** "<name> · HH:MM" in the automation's timezone. */

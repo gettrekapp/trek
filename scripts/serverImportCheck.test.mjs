@@ -242,3 +242,13 @@ test("a branch's pull request watch must be an object; what it saw is dropped, s
     assert.equal(code(() => checkImport(q, ctx)), 'BAD_REQUEST', JSON.stringify(bad))
   }
 })
+
+test("a session's context is dropped: the automations it names are not imported", (t) => {
+  const { registry, guard, project } = setup(t)
+  const p = project()
+  p.globalSessions[0].context = { kind: 'automation', automationId: 'a1' }
+  p.repositories[0].worktrees[1].sessions[0].context = { kind: 'automation', automationId: 'a1' }
+  const out = checkImport(p, { registry, guard, existingIds: new Set(), projectId: 'new-id' })
+  assert.equal('context' in out.globalSessions[0], false)
+  assert.equal('context' in out.repositories[0].worktrees[1].sessions[0], false)
+})

@@ -115,25 +115,28 @@ function setupScheduler(automations, { startFails = false } = {}) {
   const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [project])
   const started = []
   const renewed = []
+  let ptys = 0
   let clock = T0
   // As the SessionManager does: start adds a Global session with its context, renew keeps its id.
   const sessions = {
-    start: (p) => {
+    start: (p, options) => {
       if (startFails) throw Object.assign(new Error('a project holds at most 500 sessions; close some first'), { code: 'CAPACITY' })
-      started.push(p)
+      started.push({ ...p, ...options })
       const id = `s${started.length}`
-      projects.apply(p.projectId, (d) => { d.globalSessions.push({ id, title: p.title, llm: p.llm ?? { provider: 'claude' }, queue: [], status: 'idle', ...(p.context ? { context: p.context } : {}) }) })
-      return { sessionId: id, ptyId: 'x' }
+      const ptyId = `pty${++ptys}`
+      projects.apply(p.projectId, (d) => { d.globalSessions.push({ id, title: p.title, llm: p.llm ?? { provider: 'claude' }, queue: [], status: 'idle', ptyId, ...(options?.context ? { context: options.context } : {}) }) })
+      return { sessionId: id, ptyId }
     },
     renew: (p) => {
       renewed.push(p)
-      projects.apply(p.projectId, (d) => { const g = d.globalSessions.find((x) => x.id === p.sessionId); g.title = p.title; g.status = 'idle' })
-      return { ptyId: 'y' }
+      const ptyId = `pty${++ptys}`
+      projects.apply(p.projectId, (d) => { const g = d.globalSessions.find((x) => x.id === p.sessionId); g.title = p.title; g.status = 'idle'; g.ptyId = ptyId })
+      return { ptyId }
     }
   }
   const scheduler = new AutomationScheduler({ projects, sessions, now: () => clock })
   const setSession = (fn) => projects.apply('p1', (d) => fn(d.globalSessions[0]))
-  return { projects, started, renewed, scheduler, setSession, setClock: (t) => (clock = t), list: () => projects.require('p1').automations, globals: () => projects.require('p1').globalSessions }
+  return { projects, started, renewed, scheduler, setSession, setClock: (t) => (clock = t), advance: (ms) => (clock += ms), list: () => projects.require('p1').automations, globals: () => projects.require('p1').globalSessions }
 }
 
 test('check(): an on-time slot opens a Global session with the prompt, titled after the automation', () => {
@@ -295,8 +298,9 @@ test('run(): a busy run tab is skipped — recorded, nothing started, CONFLICT r
 test('run(): exited and complete run tabs are renewed; a closed one is replaced by a new one', () => {
   const s = setupScheduler([auto()])
   s.scheduler.run('p1', 'a', 'manual')
-  s.setSession((g) => { g.status = 'exited'; g.exitCode = 1 })
+  s.setSession((g) => { g.status = 'exited'; g.exitCode = 1; delete g.ptyId })
   s.scheduler.run('p1', 'a', 'manual')
+  s.advance(60_000)
   s.setSession((g) => { g.status = 'complete' })
   s.scheduler.run('p1', 'a', 'manual')
   assert.deepEqual([s.started.length, s.renewed.length], [1, 2])
@@ -316,6 +320,7 @@ test('run(): exited and complete run tabs are renewed; a closed one is replaced 
 test('run(): a renew failure is recorded as failed', () => {
   const s = setupScheduler([auto()])
   s.scheduler.run('p1', 'a', 'manual')
+  s.advance(60_000)
   s.scheduler.deps.sessions.renew = () => { throw Object.assign(new Error('the server is running its maximum of 1 sessions'), { code: 'CAPACITY' }) }
   const { run, error } = s.scheduler.run('p1', 'a', 'manual')
   assert.deepEqual([run.outcome, run.error, error.code], ['failed', 'the server is running its maximum of 1 sessions', 'CAPACITY'])
@@ -339,4 +344,25 @@ test('automation.delete keeps its run tab, without its context', () => {
   v.call('automation.runNow', { automationId: 'b' })
   assert.equal(v.call('automation.delete', { automationId: 'a' }).ok, true)
   assert.deepEqual(v.globals().map((g) => [g.id, g.context]), [['s1', undefined], ['s2', { kind: 'automation', automationId: 'b' }]])
+})
+
+test('run(): a run tab started less than 10 s ago is busy, even before its agent prints', () => {
+  const s = setupScheduler([auto()])
+  s.scheduler.run('p1', 'a', 'manual')
+  s.advance(9_000)
+  assert.deepEqual([s.scheduler.run('p1', 'a', 'manual').run.outcome, s.renewed.length], ['skipped', 0])
+  s.advance(1_000)
+  assert.deepEqual([s.scheduler.run('p1', 'a', 'manual').run.outcome, s.renewed.length], ['ran', 1])
+  s.advance(5_000)
+  assert.equal(s.scheduler.run('p1', 'a', 'manual').run.outcome, 'skipped', 'a renew counts as a start')
+  // Another pty in the tab since (the user restarted it) is not the run's.
+  s.setSession((g) => { g.ptyId = 'restarted' })
+  assert.equal(s.scheduler.run('p1', 'a', 'manual').run.outcome, 'ran')
+})
+
+test('run(): an exited run tab with a stale decision is renewed, not skipped', () => {
+  const s = setupScheduler([auto()])
+  s.scheduler.run('p1', 'a', 'manual')
+  s.setSession((g) => { g.status = 'exited'; delete g.ptyId; g.decision = { question: 'q', at: 1 } })
+  assert.deepEqual([s.scheduler.run('p1', 'a', 'manual').run.outcome, s.renewed.length], ['ran', 1])
 })

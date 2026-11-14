@@ -1218,23 +1218,34 @@ function withAutomation(s, id = 'a1') {
   })
 }
 
-test('start: context marks a Global session as an automation\'s run tab; it is checked', (t) => {
+test('start: the server\'s context option marks a Global session as an automation\'s run tab; it is checked', (t) => {
   const s = setup(t)
   withAutomation(s)
   const context = { kind: 'automation', automationId: 'a1' }
-  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, context, ...size })
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }, { context })
   assert.deepEqual(s.project().globalSessions[0].context, context)
   assert.equal(s.project().globalSessions[0].id, sessionId)
   assert.ok(s.saves.at(-1).globalSessions[0].context, 'the context is saved')
-  const code = (p) => codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size, ...p }))
-  assert.equal(code({ context: { kind: 'automation', automationId: 'nope' } }), 'BAD_REQUEST')
-  assert.equal(code({ context: { kind: 'other', automationId: 'a1' } }), 'BAD_REQUEST')
-  assert.equal(code({ context: 'automation' }), 'BAD_REQUEST')
-  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', context, ...size })), 'BAD_REQUEST', 'only Global sessions')
-  assert.equal(code({ context }), 'CONFLICT', 'an automation has at most one run tab')
+  const code = (c) => codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size }, { context: c }))
+  assert.equal(code({ kind: 'automation', automationId: 'nope' }), 'BAD_REQUEST')
+  assert.equal(code({ kind: 'other', automationId: 'a1' }), 'BAD_REQUEST')
+  assert.equal(codeOf(() => s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size }, { context })), 'BAD_REQUEST', 'only Global sessions')
+  assert.equal(code(context), 'CONFLICT', 'an automation has at most one run tab')
   assert.equal(s.project().globalSessions.length, 1)
   s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
   assert.equal(s.project().globalSessions[1].context, undefined)
+})
+
+test('session.start refuses a context from a client: only the server sets it', async (t) => {
+  const s = setup(t)
+  withAutomation(s)
+  const context = { kind: 'automation', automationId: 'a1' }
+  const { call } = v2(s)
+  const out = await call('session.start', { projectId: s.projectId, worktreeId: null, context, ...size })
+  assert.deepEqual([out.ok, out.error?.code, out.error?.message], [false, 'BAD_REQUEST', 'context is set by the server'])
+  assert.throws(() => s.sessions.start({ projectId: s.projectId, worktreeId: null, context, ...size }), /context is set by the server/)
+  assert.deepEqual(s.project().globalSessions, [])
+  assert.equal(s.spawned.length, 0)
 })
 
 test('renew: same session id, a new conversation launched fresh with the message; the running pty is killed first', async (t) => {
@@ -1313,4 +1324,44 @@ test('renew: refusals leave the session alone; a failed spawn shows it exited', 
   assert.throws(() => s.sessions.renew(p), /spawn 2 failed/)
   const session = s.project().globalSessions[0]
   assert.deepEqual([session.id, session.status, session.exitCode, session.ptyId], [sessionId, 'exited', -1, undefined])
+  assert.equal(session.agentSessionId, undefined, 'no id of a conversation that never started')
+  s.sessions.restart({ projectId: s.projectId, sessionId, ...size })
+  assert.doesNotMatch(cmd(s.spawned[1]), /--resume/, 'a restart starts a new conversation')
+})
+
+test('renew: only Global sessions; a project it cannot run in is refused before its pty is killed', (t) => {
+  const s = setup(t)
+  const wt = s.sessions.start({ projectId: s.projectId, worktreeId: 'wx', ...size })
+  const p = (sessionId) => ({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', ...size })
+  assert.equal(codeOf(() => s.sessions.renew(p(wt.sessionId))), 'BAD_REQUEST')
+  assert.equal(s.spawned[0].killed, false)
+  const { sessionId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, ...size })
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees[0].missing = true })
+  assert.throws(() => s.sessions.renew(p(sessionId)), (e) => e.code === 'BAD_REQUEST' && /no longer exists/.test(e.message))
+  s.projects.apply(s.projectId, (d) => { d.repositories = [] })
+  assert.throws(() => s.sessions.renew(p(sessionId)), (e) => e.code === 'BAD_REQUEST' && /no repositories/.test(e.message))
+  assert.equal(s.spawned[1].killed, false, 'the running Global session is left alone')
+  assert.equal(s.project().globalSessions[0].ptyId !== undefined, true)
+})
+
+import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
+
+test('the automation scheduler against a real SessionManager: the first run opens the run tab, the next renews it', (t) => {
+  const s = setup(t)
+  withAutomation(s)
+  let now = Date.UTC(2026, 0, 5, 9, 0)
+  const scheduler = new AutomationScheduler({ projects: s.projects, sessions: s.sessions, now: () => now })
+  const first = scheduler.run(s.projectId, 'a1', 'manual')
+  assert.equal(first.error, undefined, String(first.error))
+  const [tab] = s.project().globalSessions
+  assert.deepEqual([tab.id, tab.context, tab.title], [first.run.sessionId, { kind: 'automation', automationId: 'a1' }, 'Nightly · 09:00'])
+  assert.match(cmd(s.spawned[0]), /'p'$/)
+  now += 5 * 60_000
+  const second = scheduler.run(s.projectId, 'a1', 'manual')
+  assert.equal(second.error, undefined, String(second.error))
+  assert.equal(second.run.sessionId, tab.id)
+  assert.deepEqual(s.project().globalSessions.map((g) => [g.id, g.title]), [[tab.id, 'Nightly · 09:05']])
+  assert.equal(s.spawned[0].killed, true)
+  assert.doesNotMatch(cmd(s.spawned[1]), /--resume/)
+  assert.match(cmd(s.spawned[1]), /'p'$/)
 })

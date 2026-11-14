@@ -191,7 +191,11 @@ export class SessionManager {
     return this.blocked.has(real(path))
   }
 
-  start(p: any): { sessionId: string; ptyId: string } {
+  /**
+   * `p` is the client's `session.start`; `options` are the server's own (the scheduler's), out of a
+   * client's reach: `context` marks an automation's run tab.
+   */
+  start(p: any, options: { context?: SessionContext } = {}): { sessionId: string; ptyId: string } {
     this.assertRunning()
     const { cols, rows } = requireSize(p)
     const project = this.deps.projects.require(p.projectId)
@@ -206,7 +210,8 @@ export class SessionManager {
       if (!sessionType) throw bad(`No session type with id "${id}"`)
     }
     const pick = checkLlm(p.llm)
-    const context = p.context === undefined ? undefined : checkContext(project, p.context, global)
+    if (p.context !== undefined) throw bad('context is set by the server')
+    const context = options.context === undefined ? undefined : checkContext(project, options.context, global)
     const llm = this.defaultLlm(project, global, pick, sessionType?.llm)
     if (p.title !== undefined && typeof p.title !== 'string') throw bad('title must be a string')
     const title = p.title?.trim() ? checkTitle(p.title.trim(), 'title') : undefined
@@ -281,10 +286,10 @@ export class SessionManager {
     const { cols, rows } = requireSize(p)
     const project = this.deps.projects.require(p.projectId)
     const found = findSession(project, p.sessionId)
-    if (found.worktree) {
-      this.usableWorktree(project, found.worktree.id)
-      if (!found.worktree.loaded) throw bad('load the worktree first')
-    }
+    // llm null resolves as for a Global session, and an automation's run tab is one.
+    if (found.worktree) throw bad('only a Global session can be renewed')
+    // spawnSession's cheap checks, made before the running pty is killed.
+    this.globalCwd(project)
     const title = checkTitle(requireName(p.title, 'title'), 'title')
     if (typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
     // null: the default for a new session of its kind, as start resolves it without a pick.
@@ -314,7 +319,9 @@ export class SessionManager {
         this.mutate(project.id, sessionId, (s) => {
           s.status = 'exited'
           s.exitCode = -1
-        }, false)
+          // The id names a conversation that never started: a restart must not resume it.
+          if (getProvider(s.llm.provider).capabilities.presetSessionId) delete s.agentSessionId
+        })
       } catch {
         // the session is gone
       }
@@ -734,11 +741,8 @@ export class SessionManager {
       cwd = worktree.path
     } else {
       // A Global session runs in the first repository's main worktree: check it as usableWorktree does.
-      const first = project.repositories[0]
-      if (!first) throw bad('the project has no repositories')
-      const main = first.worktrees.find((w) => w.isMain) ?? first.worktrees[0]
-      if (main?.missing) throw bad(`${main.path} no longer exists`)
-      cwd = main?.path ?? first.path
+      cwd = this.globalCwd(project)
+      const first = project.repositories[0]!
       findRegistered(this.deps.store.config.repos, first.path)
       this.deps.store.guard.check(cwd)
       if (this.blocked.has(real(cwd))) throw codedError('IN_USE', `${cwd} is being removed`)
@@ -796,10 +800,22 @@ export class SessionManager {
       this.terminals.kill(ptyId)
       throw err
     }
+    // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
+    // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
+    // not excluded. restart has the same race; automation runs are minutes apart.
     if (!provider.capabilities.presetSessionId && provider.capabilities.resume && !launch.resume) {
       this.startDiscovery({ projectId, sessionId, repoId: repo?.id, cwd, folder: real(cwd), startedAt: this.now() })
     }
     return ptyId
+  }
+
+  /** Where a Global session runs: the first repository's main worktree (BAD_REQUEST without one). */
+  private globalCwd(project: Project): string {
+    const first = project.repositories[0]
+    if (!first) throw bad('the project has no repositories')
+    const main = first.worktrees.find((w) => w.isMain) ?? first.worktrees[0]
+    if (main?.missing) throw bad(`${main.path} no longer exists`)
+    return main?.path ?? first.path
   }
 
   private killSession(session: Session): void {
