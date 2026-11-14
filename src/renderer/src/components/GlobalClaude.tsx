@@ -88,8 +88,11 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   useEffect(() => {
     if (view === 'bot' || shownId !== undefined) return
     const next = viewTab(tabsView, order, terminals, activeId, lastInView.current[tabsView])
-    if (next !== undefined) useAppStore.getState().setActiveTerminal(GLOBAL_WORKTREE_ID, next)
-  }, [view, tabsView, shownId, order, terminals, activeId])
+    if (next === undefined) return
+    useAppStore.getState().setActiveTerminal(GLOBAL_WORKTREE_ID, next)
+    // As selectTab: the shown tab takes focus, which clears its attention.
+    if (open) focusTerminal(next)
+  }, [open, view, tabsView, shownId, order, terminals, activeId])
 
   // The last run tab closed (or its automation deleted): back to the sessions.
   useEffect(() => {

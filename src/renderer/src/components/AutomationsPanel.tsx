@@ -4,6 +4,7 @@ import { describeCron, formatWall } from '../../../shared/cron'
 import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
 import { getBackend } from '../backend'
 import { focusTerminal } from '../terminals'
+import { tabView } from '../globalTabs'
 import { lastRunLabel, missedLabel, nextRunLabel, runNowError, runOutcomeLabel } from '../automations'
 import { AutomationEditor } from './AutomationEditor'
 
@@ -13,11 +14,11 @@ interface Props {
 
 const NONE: Automation[] = []
 
-/** Selects an automation's run tab, opening the Global panel on its Automations view. */
+/** Selects a run's tab, opening the Global panel on the tab's view (Automations, unless its automation was deleted). */
 function showRun(sessionId: string): void {
   const s = useAppStore.getState()
   s.setGlobalPanelOpen(true)
-  s.setGlobalView('automations')
+  s.setGlobalView(tabView(s.terminals[sessionId]))
   s.setActiveTerminal(GLOBAL_WORKTREE_ID, sessionId)
   focusTerminal(sessionId)
 }
@@ -92,11 +93,12 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
                 <ul className="automation-history">
                   {a.history.length === 0 && <li className="muted">No runs yet.</li>}
                   {a.history.map((r, i) => (
+                    // Only the newest run's output is in its tab: every renew starts the tab afresh.
                     <li key={i}>
                       <span>{formatWall(r.at, a.schedule.tz, true)}</span>
                       <span className="muted">{r.trigger}</span>
                       {r.outcome === 'ran' ? (
-                        r.sessionId && terminals[r.sessionId] ? (
+                        r.sessionId && terminals[r.sessionId] && i === a.history.findIndex((h) => h.outcome === 'ran') ? (
                           <button className="link-button" onClick={() => showRun(r.sessionId as string)}>open tab</button>
                         ) : (
                           <span>ran</span>
