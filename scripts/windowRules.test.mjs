@@ -203,3 +203,53 @@ test('parseOpenWindows takes only a literal true as a hidden sidebar', () => {
   assert.deepEqual(parsed.map((e) => e.sidebarHidden), [true, undefined, undefined, undefined, undefined])
   assert.deepEqual(parsed.slice(1).map((e) => 'sidebarHidden' in e), [false, false, false, false])
 })
+
+test('arrangeTiles: a row is filled left to right by where its windows’ centres are', () => {
+  const tiles = arrangeTiles({ x: 0, y: 0, width: 1440, height: 900 }, [
+    // Wide, so its left edge is the leftmost but its centre is to the right of the next window's.
+    { id: 1, bounds: { x: 50, y: 0, width: 1900, height: 200 } },
+    { id: 2, bounds: { x: 100, y: 50, width: 200, height: 200 } },
+    { id: 3, bounds: { x: 600, y: 700, width: 200, height: 200 } }
+  ])
+  assert.deepEqual(Object.fromEntries(tiles), {
+    2: { x: 0, y: 0, width: 720, height: 450 },
+    1: { x: 720, y: 0, width: 720, height: 450 },
+    3: { x: 0, y: 450, width: 1440, height: 450 }
+  })
+})
+
+test('arrangeTiles: windows level with each other fill the rows left to right', () => {
+  const at = (x) => ({ x, y: 100, width: 200, height: 200 })
+  const tiles = arrangeTiles({ x: 0, y: 0, width: 1440, height: 900 }, [{ id: 1, bounds: at(700) }, { id: 2, bounds: at(1100) }, { id: 3, bounds: at(0) }])
+  assert.deepEqual(Object.fromEntries(tiles), {
+    3: { x: 0, y: 0, width: 720, height: 450 },
+    1: { x: 720, y: 0, width: 720, height: 450 },
+    2: { x: 0, y: 450, width: 1440, height: 450 }
+  })
+})
+
+test('arrangeTiles: two windows are stacked on a portrait display, side by side on a square or landscape one', () => {
+  assert.deepEqual([...arrangeTiles({ x: 0, y: 0, width: 1080, height: 1920 }, pile(2)).values()], [
+    { x: 0, y: 0, width: 1080, height: 960 },
+    { x: 0, y: 960, width: 1080, height: 960 }
+  ])
+  assert.deepEqual([...arrangeTiles({ x: 0, y: 0, width: 1000, height: 1000 }, pile(2)).values()], [
+    { x: 0, y: 0, width: 500, height: 1000 },
+    { x: 500, y: 0, width: 500, height: 1000 }
+  ])
+})
+
+test('arrangeTiles: tiles of exactly the minimum size abut', () => {
+  const tiles = [...arrangeTiles({ x: 0, y: 0, width: 1440, height: 640 }, pile(6)).values()]
+  assert.deepEqual(tiles.map((t) => [t.x, t.y, t.width, t.height]), [
+    [0, 0, 480, 320], [480, 0, 480, 320], [960, 0, 480, 320],
+    [0, 320, 480, 320], [480, 320, 480, 320], [960, 320, 480, 320]
+  ])
+})
+
+test('arrangeTiles: on a work area smaller than the minimum, tiles start at its corner', () => {
+  const work = { x: 0, y: 0, width: 400, height: 300 }
+  assert.deepEqual([...arrangeTiles(work, pile(1)).values()], [work])
+  // Two windows: each is the minimum width (the window would not go narrower), neither starts off the display.
+  assert.deepEqual([...arrangeTiles(work, pile(2)).values()].map((t) => [t.x, t.y, t.width]), [[0, 0, 480], [0, 0, 480]])
+})
