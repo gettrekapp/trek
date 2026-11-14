@@ -46,6 +46,9 @@ const WORKTREE_PARAM = {
     'Worktree id, path, branch or name, as returned by list_worktrees. A branch or name in several repositories is an error: pass the path.'
 }
 const TERMINAL_PARAM = { type: 'string', description: 'Session terminalId from list_worktrees' }
+/** Entries get_worktree_history returns when no limit is given */
+const DEFAULT_HISTORY_TOOL_LIMIT = 20
+
 /** On every tool that changes a worktree: who asks and why, for the worktree's history */
 const ATTRIBUTION_PARAMS = {
   reason: { type: 'string', description: `Why you are making this change, in a sentence; shown in the worktree's history (at most ${MAX_HISTORY_REASON} characters)` },
@@ -394,10 +397,10 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'get_worktree_history',
     description:
-      "Read a worktree branch's history, newest first: when its workflow tag, custom tags, note, ticket or pull request changed, when its PR watch started or ended, and when it was created, removed, promoted or moved — each with who did it (the user, an MCP call and its session, or Trek itself) and the reason given. Kept per branch, so it outlives a removed worktree.",
+      "Read a worktree branch's history, newest first: when its workflow tag, custom tags, note, ticket or pull request changed, when its PR watch started or ended, and when it was created, removed, promoted or moved — each with who did it (the user, an MCP call and its session, or Trek itself) and the reason given.",
     inputSchema: {
       type: 'object',
-      properties: { worktree: WORKTREE_PARAM, limit: { type: 'number', description: `Entries to return (default 20, max ${HISTORY_PAGE_SIZE})` } },
+      properties: { worktree: WORKTREE_PARAM, limit: { type: 'number', description: `Entries to return (default ${DEFAULT_HISTORY_TOOL_LIMIT}, max ${HISTORY_PAGE_SIZE})` } },
       required: ['worktree']
     }
   },
@@ -937,7 +940,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
 
       get_worktree_history: async (args, project) => {
         const { repo, branch } = branchOf(project, args.worktree)
-        const limit = Math.min(Math.max(Math.floor(Number(args.limit)) || 20, 1), HISTORY_PAGE_SIZE)
+        const limit = Math.min(Math.max(Math.floor(Number(args.limit)) || DEFAULT_HISTORY_TOOL_LIMIT, 1), HISTORY_PAGE_SIZE)
         const page = (await v2('history.list', { repoId: repo.id, branch, limit })) as HistoryPage
         return {
           branch,
@@ -945,7 +948,8 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           entries: page.events.map((e) => ({
             at: new Date(e.at).toISOString(),
             change: describeEvent(e),
-            by: actorLabel(e.actor),
+            // "You" would read as the calling agent; name the user plainly.
+            by: e.actor.kind === 'user' ? 'the user' : actorLabel(e.actor),
             ...(e.reason ? { reason: e.reason } : {})
           }))
         }
@@ -957,23 +961,15 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (worktree.isMain) throw bad('That worktree is already the primary checkout')
         const mainPath = repo.worktrees.find((w) => w.isMain)?.path ?? repo.path
         if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD); it can't be promoted`)
-        let from: string | undefined
-        let callerId: string | undefined
+        const by = attributionOf(args, project)
         // The asking session is only looked up in this project (for the dialog's text, and the
-        // queue that hears the outcome if the call drops); nothing else is checked of it.
-        if (typeof args.terminalId === 'string' && args.terminalId) {
-          try {
-            const caller = sessionIn(args.terminalId, project).session
-            from = caller.title
-            callerId = caller.id
-          } catch {
-            // an unknown terminal only loses the dialog's "asked by"
-          }
-        }
+        // queue that hears the outcome if the call drops); an unknown terminal only loses the dialog's "asked by".
+        const from = by.actor.kind === 'mcp' ? by.actor.sessionTitle : undefined
+        const callerId = by.actor.kind === 'mcp' ? by.actor.terminalId : undefined
         const nobody = 'No Trek window has this project open to confirm the promote, so nothing was changed. Ask the user to open the project, or to promote it themselves.'
         if (!deps.promoteRequests) throw codedError('BAD_REQUEST', nobody)
         const branch = worktree.branch
-        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch, ...(from ? { from } : {}) }, signal, attributionOf(args, project))
+        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch, ...(from ? { from } : {}) }, signal, by)
         // The promote went through: describing the main checkout must never turn it into an error.
         const primaryOf = (worktreeId: string): ReturnType<typeof describeById> | undefined => {
           try {
