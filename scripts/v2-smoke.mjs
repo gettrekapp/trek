@@ -551,7 +551,8 @@ try {
   await win.locator('.title-text', { hasText: 'Demo' }).waitFor({ timeout: 5000 })
   check('the title bar and the window title show the project', [await win.locator('.title-text').textContent(), await titleOf('w1')], ['Demo', 'Demo'])
   check('the sidebar lists the repos', await tree.locator('.repo-name').allTextContents(), ['Alpha', 'beta'])
-  check('each with its main worktree', await tree.locator('.wt-name').allTextContents(), ['main', 'main'])
+  // Waited for: a repository's row shows its folder's name until the server's first poll names the branch.
+  check('each with its main worktree', await until(() => tree.locator('.wt-name').allTextContents(), ['main', 'main']), ['main', 'main'])
   // The server has MCP (its data dir has an mcp folder), so the Global panel shows.
   await win.locator('.server-window .global-bar').waitFor({ timeout: 10_000 })
   check('and the Global panel', (await win.locator('.server-window .global-title').textContent()).startsWith('Global · '), true)
