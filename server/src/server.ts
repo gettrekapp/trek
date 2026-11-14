@@ -1,4 +1,6 @@
 import { createServer, type Server } from 'node:http'
+import { HistoryStore } from './history/store.ts'
+import { projectTopic } from '../../src/shared/model/topics.ts'
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import {
   CLOSE_HELLO_TIMEOUT,
@@ -85,6 +87,8 @@ export interface ServerOptions {
   prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
   /** Where a promote or demote saves a copy of the work it carries (5e, `<dataDir>/promote-recovery`; default: the temp dir) */
   promoteRecoveryDir?: string
+  /** Where the worktree history goes (`<dataDir>/history`); without it nothing is recorded */
+  historyDir?: string
   /**
    * The web client (5c-3, `start --web`): its built files, served over HTTP with the sign-in
    * form, and browser sessions signed in by cookie. Without it HTTP answers 426 as before.
@@ -121,6 +125,12 @@ export function startServer(
   // What a killed server left in the temp directory: its moves' staged histories and throwaway indexes (5d).
   void sweepStaleMoveDirs().catch(() => {})
   let refreshServerTopic = (): void => {}
+  const history = options.historyDir
+    ? new HistoryStore(options.historyDir, {
+        onRecorded: (projectId, event) => hub.emit(projectTopic(projectId), 'history.added', { projectId, event }),
+        onHealth: () => refreshServerTopic()
+      })
+    : undefined
   const projects = projectsSetup.create(hub, () => refreshServerTopic())
   store.setUsage((repo) => projects.usage(repo.path))
   const poller = new GitPoller({
@@ -168,6 +178,7 @@ export function startServer(
         projects,
         sessions,
         gh: options.prWatch.gh,
+        history,
         pollMs: options.prWatch.pollMs,
         recheckMs: options.prWatch.recheckMs,
         onAvailability: (available) => prWatchChanged(available),
@@ -265,7 +276,7 @@ export function startServer(
   })
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
-    health: () => [...projectsSetup.store.health(), ...poller.health()]
+    health: () => [...projectsSetup.store.health(), ...poller.health(), ...(history?.health() ?? [])]
   })
   refreshServerTopic = serverState.refresh
   projectsSetup.store.on('health', serverState.refresh)
@@ -516,6 +527,7 @@ export function startServer(
         tokenName: callerTokenName,
         push: pushGrants ? { grants: pushGrants } : undefined,
         plugins,
+        history,
         mcpAccess: access
           ? {
               revoke: (id) => {
