@@ -5,6 +5,7 @@ import { useFeatures } from '../useFeatures'
 import { getBackend } from '../backend'
 import { useEnvironmentPoll } from '../useEnvironmentPoll'
 import { Sidebar } from '../components/Sidebar'
+import { toggleSidebar } from '../sidebarToggle'
 import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
 import { GlobalClaude } from '../components/GlobalClaude'
@@ -26,6 +27,7 @@ export function V2Workspace(): React.JSX.Element {
   const features = useFeatures()
   const [addRepoId, setAddRepoId] = useState<string | null>(null)
   const offline = useAppStore((s) => s.serverOffline)
+  const sidebarHidden = useAppStore((s) => s.sidebarHidden)
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
   useEnvironmentPoll(features.env)
@@ -50,7 +52,15 @@ export function V2Workspace(): React.JSX.Element {
   return (
     <>
       <div className="workspace">
-        <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
+        {sidebarHidden ? (
+          <div className="sidebar-rail">
+            <button className="sidebar-toggle sidebar-show" title="Show sidebar" aria-label="Show sidebar" onClick={toggleSidebar}>
+              »
+            </button>
+          </div>
+        ) : (
+          <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
+        )}
         {/* The mirror refreshes the rows by itself after a pull, push or delete. */}
         <WorktreeDetail info={info} worktrees={worktrees} onWorktreesChanged={() => {}} />
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}

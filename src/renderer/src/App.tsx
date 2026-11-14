@@ -10,6 +10,7 @@ import { loadLlmSettings, watchLlmSettings } from './llm'
 import { PluginRuntimes, PluginSlot } from './plugins/PluginHost'
 import { titleBarForeground } from '../../shared/appearance'
 import { tabView } from './globalTabs'
+import { toggleSidebar } from './sidebarToggle'
 
 export default function App(): React.JSX.Element {
   const serverWindow = useAppStore((s) => s.serverWindow)
@@ -35,6 +36,7 @@ export default function App(): React.JSX.Element {
       // Sent only to an empty window: main opens a new one otherwise.
       window.api.onMenu('new-project', () => showStart('new')),
       window.api.onMenu('open-on-server', () => showStart('connect')),
+      window.api.onMenu('toggle-sidebar', toggleSidebar),
       window.api.onMenu('new-terminal', () => {
         const state = useAppStore.getState()
         // A server window offline: its commands wait for the connection. A missing worktree runs nothing.
@@ -82,7 +84,9 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     window.api
       .takeInitialWindowState()
-      .then(async ({ menu, server, select }) => {
+      .then(async ({ menu, server, select, sidebarHidden }) => {
+        // Main's record, not a toggle: nothing to send back.
+        useAppStore.getState().setSidebarHidden(sidebarHidden)
         if (server) {
           useAppStore.getState().setServerWindow(server)
           // Asked for while this window was loading: shown once the project is in.

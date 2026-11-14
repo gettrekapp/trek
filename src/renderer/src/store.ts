@@ -221,6 +221,8 @@ export interface AppState {
   globalQueuePanelOpen: boolean
   /** Whether the global Claude panel at the bottom of the window is expanded. */
   globalPanelOpen: boolean
+  /** This window's sidebar is hidden (View → Toggle Sidebar). Main remembers it per window. */
+  sidebarHidden: boolean
   /** The Global drawer's view: its normal tabs, the automations' run tabs, or the bot */
   globalView: GlobalView
   /** The missed-runs set the user closed the modal on (MissedRunsModal); null: show it whenever there is one */
@@ -281,6 +283,7 @@ export interface AppState {
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
+  setSidebarHidden: (hidden: boolean) => void
   setGlobalView: (view: GlobalView) => void
   setBotView: (view: BotView) => void
   setBotEvents: (events: BotEvent[]) => void
@@ -371,6 +374,7 @@ export const useAppStore = create<AppState>((set) => ({
   queuePanelOpen: false,
   globalQueuePanelOpen: false,
   globalPanelOpen: false,
+  sidebarHidden: false,
   globalView: 'sessions',
   missedDismissedKey: null,
   botView: OFF_VIEW,
@@ -433,6 +437,7 @@ export const useAppStore = create<AppState>((set) => ({
   setGlobalQueuePanelOpen: (open) => set({ globalQueuePanelOpen: open }),
 
   setGlobalPanelOpen: (open) => set({ globalPanelOpen: open }),
+  setSidebarHidden: (hidden) => set({ sidebarHidden: hidden }),
   setGlobalView: (globalView) => set({ globalView }),
   setMissedDismissedKey: (missedDismissedKey) => set({ missedDismissedKey }),
   setBotView: (botView) => set({ botView }),

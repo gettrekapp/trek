@@ -16,6 +16,7 @@ import {
 import { useTicketViews } from '../plugins/useTickets'
 import { safeStatusColor } from '../plugins/ticketProviders'
 import { NotificationsMenu } from './NotificationsMenu'
+import { toggleSidebar } from '../sidebarToggle'
 import { PluginSlot } from '../plugins/PluginHost'
 import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
@@ -470,6 +471,9 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         />
         <PluginSlot name="sidebarToolbar" />
         <NotificationsMenu />
+        <button className="sidebar-toggle sidebar-hide" title="Hide sidebar" aria-label="Hide sidebar" onClick={toggleSidebar}>
+          «
+        </button>
       </div>
       <div className="sidebar-heading">
         <span>Worktrees · {rows.length}</span>
