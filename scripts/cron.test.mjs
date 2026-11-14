@@ -2,7 +2,7 @@
 // (DST included), the next slot, the 5-minute minimum, picker ⇄ cron and the description.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { CronError, minGapOk, nextSlot, parseCron, slotSpan, slotsBetween, validTimeZone } from '../src/shared/cron.ts'
+import { CronError, cronFromPicker, describeCron, formatWall, minGapOk, nextSlot, parseCron, pickerFromCron, slotSpan, slotsBetween, validTimeZone } from '../src/shared/cron.ts'
 
 const utc = (y, mo, d, h = 0, mi = 0) => Date.UTC(y, mo - 1, d, h, mi)
 const NY = 'America/New_York'
@@ -76,4 +76,41 @@ test('validTimeZone', () => {
   assert.equal(validTimeZone(NY), true)
   assert.equal(validTimeZone('Mars/Olympus'), false)
   assert.equal(validTimeZone(''), false)
+})
+
+test('picker ⇄ cron round trips', () => {
+  const cases = [
+    [{ kind: 'minutes', every: 15 }, '*/15 * * * *'],
+    [{ kind: 'hours', every: 1, minute: 0 }, '0 * * * *'],
+    [{ kind: 'hours', every: 6, minute: 30 }, '30 */6 * * *'],
+    [{ kind: 'daily', hour: 9, minute: 5 }, '5 9 * * *'],
+    [{ kind: 'weekly', days: [1, 3, 5], hour: 17, minute: 0 }, '0 17 * * 1,3,5']
+  ]
+  for (const [picker, cron] of cases) {
+    assert.equal(cronFromPicker(picker), cron)
+    assert.deepEqual(pickerFromCron(cron), picker)
+  }
+  // Weekday 7 is Sunday; days come back sorted.
+  assert.deepEqual(pickerFromCron('0 8 * * 7,1'), { kind: 'weekly', days: [0, 1], hour: 8, minute: 0 })
+  // Not one of the picker's shapes: Advanced.
+  for (const cron of ['*/7 * * * *', '0 9 1 * *', '0 9-17 * * *', '0 */5 * * *', '0 9 * 1 *']) assert.equal(pickerFromCron(cron), null, cron)
+})
+
+test('describeCron', () => {
+  assert.equal(describeCron('*/5 * * * *'), 'Every 5 minutes')
+  assert.equal(describeCron('0 * * * *'), 'Every hour')
+  assert.equal(describeCron('15 * * * *'), 'Every hour at :15')
+  assert.equal(describeCron('0 */2 * * *'), 'Every 2 hours')
+  assert.equal(describeCron('5 9 * * *'), 'Daily at 09:05')
+  assert.equal(describeCron('0 9 * * 1-5'), 'Weekdays at 09:00')
+  assert.equal(describeCron('0 9 * * 1,2,3,4,5'), 'Weekdays at 09:00')
+  assert.equal(describeCron('0 10 * * 0,6'), 'Weekends at 10:00')
+  assert.equal(describeCron('0 9 * * 1,3'), 'Mon, Wed at 09:00')
+  assert.equal(describeCron('0 9 1 * *'), 'Cron: 0 9 1 * *')
+  assert.equal(describeCron('nope'), 'Invalid schedule')
+})
+
+test('formatWall: a slot in the timezone, with or without the date', () => {
+  assert.equal(formatWall(utc(2026, 1, 5, 14, 0), NY), '09:00')
+  assert.equal(formatWall(utc(2026, 1, 5, 14, 0), NY, true), '2026-01-05 09:00')
 })

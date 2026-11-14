@@ -205,3 +205,99 @@ export function minGapOk(spec: CronSpec, tz: string, from: number): boolean {
   }
   return true
 }
+
+// ---- The editor's friendly picker ------------------------------------------------------------
+
+export const MINUTE_STEPS = [5, 10, 15, 20, 30] as const
+export const HOUR_STEPS = [1, 2, 3, 4, 6, 8, 12] as const
+export const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+export type SchedulePicker =
+  | { kind: 'minutes'; every: number }
+  | { kind: 'hours'; every: number; minute: number }
+  | { kind: 'daily'; hour: number; minute: number }
+  | { kind: 'weekly'; days: number[]; hour: number; minute: number }
+
+export function cronFromPicker(p: SchedulePicker): string {
+  switch (p.kind) {
+    case 'minutes':
+      return `*/${p.every} * * * *`
+    case 'hours':
+      return `${p.minute} ${p.every === 1 ? '*' : `*/${p.every}`} * * *`
+    case 'daily':
+      return `${p.minute} ${p.hour} * * *`
+    case 'weekly':
+      return `${p.minute} ${p.hour} * * ${[...new Set(p.days)].sort((a, b) => a - b).join(',')}`
+  }
+}
+
+const NUM = (text: string, min: number, max: number): number | null => {
+  if (!/^\d{1,2}$/.test(text)) return null
+  const n = Number(text)
+  return n >= min && n <= max ? n : null
+}
+
+/** The picker that writes this cron, or null (the editor shows it in Advanced). */
+export function pickerFromCron(cron: string): SchedulePicker | null {
+  const f = cron.trim().split(/\s+/)
+  if (f.length !== 5 || f[2] !== '*' || f[3] !== '*') return null
+  const [min, hour, , , dow] = f
+  const step = /^\*\/(\d+)$/
+  if (hour === '*' && dow === '*') {
+    const m = step.exec(min)
+    if (m && (MINUTE_STEPS as readonly number[]).includes(Number(m[1]))) return { kind: 'minutes', every: Number(m[1]) }
+    const minute = NUM(min, 0, 59)
+    return minute === null ? null : { kind: 'hours', every: 1, minute }
+  }
+  const minute = NUM(min, 0, 59)
+  if (minute === null) return null
+  const h = step.exec(hour)
+  if (h && dow === '*') {
+    const every = Number(h[1])
+    return (HOUR_STEPS as readonly number[]).includes(every) && every !== 1 ? { kind: 'hours', every, minute } : null
+  }
+  const hourN = NUM(hour, 0, 23)
+  if (hourN === null) return null
+  if (dow === '*') return { kind: 'daily', hour: hourN, minute }
+  const days = dow.split(',').map((d) => NUM(d, 0, 7))
+  if (days.some((d) => d === null)) return null
+  return { kind: 'weekly', days: [...new Set(days.map((d) => (d as number) % 7))].sort((a, b) => a - b), hour: hourN, minute }
+}
+
+const pad = (n: number): string => String(n).padStart(2, '0')
+
+/** A short description for the list, e.g. "Weekdays at 09:00". */
+export function describeCron(cron: string): string {
+  let spec: CronSpec
+  try {
+    spec = parseCron(cron)
+  } catch {
+    return 'Invalid schedule'
+  }
+  const f = cron.trim().split(/\s+/)
+  const picker = pickerFromCron(cron)
+  if (picker?.kind === 'minutes') return `Every ${picker.every} minutes`
+  if (picker?.kind === 'hours') {
+    const base = picker.every === 1 ? 'Every hour' : `Every ${picker.every} hours`
+    return picker.minute === 0 ? base : `${base} at :${pad(picker.minute)}`
+  }
+  const singleTime = spec.minutes.length === 1 && spec.hours.length === 1 && f[2] === '*' && f[3] === '*'
+  if (singleTime) {
+    const at = `${pad(spec.hours[0])}:${pad(spec.minutes[0])}`
+    if (!spec.weekdayRestricted) return `Daily at ${at}`
+    const days = [...spec.weekdays].sort((a, b) => a - b)
+    const key = days.join(',')
+    if (key === '1,2,3,4,5') return `Weekdays at ${at}`
+    if (key === '0,6') return `Weekends at ${at}`
+    if (days.length === 7) return `Daily at ${at}`
+    return `${days.map((d) => WEEKDAY_NAMES[d]).join(', ')} at ${at}`
+  }
+  return `Cron: ${cron.trim()}`
+}
+
+/** "09:00", or "2026-01-05 09:00" with the date, in `tz`. */
+export function formatWall(ms: number, tz: string, withDate = false): string {
+  const w = wallTime(ms, tz)
+  const time = `${pad(w.hour)}:${pad(w.minute)}`
+  return withDate ? `${w.year}-${pad(w.month)}-${pad(w.day)} ${time}` : time
+}
