@@ -16,7 +16,7 @@ import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
 import type { PluginPresence } from './plugins/manifest.ts'
-import type { HistoryAddedEvent, HistoryPage } from './model/history.ts'
+import type { HistoryAddedEvent, HistoryEvent, HistoryPage } from './model/history.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type {
   ComposeAction,
@@ -541,11 +541,11 @@ export interface MethodParamsV2 {
   /** Target: drops a transfer; an unknown one is fine */
   'move.abort': { transferId: string }
   /** Source: removes the worktree if it is unchanged since `move.export` (its `fingerprint`); else CONFLICT */
-  'move.finish': WorktreeRef & { fingerprint: string; verifyOnly?: boolean }
+  'move.finish': WorktreeRef & { fingerprint: string; verifyOnly?: boolean; toServer?: string }
   /** Target: where a branch of a repository with this origin can go, in every project */
   'move.candidates': { origin: string; branch: string }
   /** Target: builds the worktree from origin and the export, or undoes all of it */
-  'move.receive': RepoRef & { branch: string; head: string; patch: string; sessions: MoveSession[]; branchData: MoveBranchData; transferId?: string }
+  'move.receive': RepoRef & { branch: string; head: string; patch: string; sessions: MoveSession[]; branchData: MoveBranchData; transferId?: string; history?: HistoryEvent[]; fromServer?: string }
   /** Target: undoes a `move.receive` whole (its `undoToken`): the worktree, the branch it made, the branch data, the PR watch, the histories */
   'move.unreceive': RepoRef & { undoToken: string }
 

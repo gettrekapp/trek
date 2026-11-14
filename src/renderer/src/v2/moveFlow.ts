@@ -161,7 +161,7 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
   let received: MethodResultsV2['move.receive']
   const kept: string[] = []
   try {
-    const { branch, head, patch, sessions } = exported
+    const { branch, head, patch, sessions, history, serverName } = exported
     let { branchData } = exported
     if (branchData.env && !deps.targetCapabilities.includes('env')) {
       const { env: _env, ...rest } = branchData
@@ -169,7 +169,7 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
       kept.push("The branch's Docker .env was not carried: the target server has no environments")
     }
     // Longer than the target's own fetch limit, so a slow fetch is the target's answer, not a lost one.
-    received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData, ...(transferId ? { transferId } : {}) }, { timeoutMs: MOVE_RECEIVE_TIMEOUT_MS })
+    received = await target('move.receive', { ...to, branch, head, patch, sessions, branchData, ...(transferId ? { transferId } : {}), ...(history ? { history } : {}), ...(serverName ? { fromServer: serverName } : {}) }, { timeoutMs: MOVE_RECEIVE_TIMEOUT_MS })
   } catch (err) {
     progress('receive', 'failed', errorText(err))
     // A refusal undid itself on the target. A lost answer may not have.
@@ -202,7 +202,7 @@ export async function moveWorktree(deps: MoveFlowDeps): Promise<MoveOutcome> {
 
   progress('finish', 'active')
   try {
-    await source('move.finish', { ...from, fingerprint: exported.fingerprint }, { timeoutMs: STEP_MS })
+    await source('move.finish', { ...from, fingerprint: exported.fingerprint, ...(received.serverName ? { toServer: received.serverName } : {}) }, { timeoutMs: STEP_MS })
     progress('finish', 'done')
     return { kind: 'moved', worktreeId: received.worktreeId, notes }
   } catch (err) {
