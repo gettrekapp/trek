@@ -122,7 +122,9 @@ function terminalMeta(session: Session, worktreeId: string): TerminalMeta {
     ...(session.sessionTypeId ? { sessionTypeId: session.sessionTypeId } : {}),
     llm: session.llm,
     // Codex: the agent's own id is not known yet, as with a legacy placeholder.
-    ...(session.agentSessionId === undefined ? { sessionPending: true } : {})
+    ...(session.agentSessionId === undefined ? { sessionPending: true } : {}),
+    // An automation's run tab: the Global drawer shows it in its Automations view.
+    ...(session.context ? { context: { ...session.context } } : {})
   }
 }
 

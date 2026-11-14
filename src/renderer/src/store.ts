@@ -6,6 +6,7 @@ import { deriveProfileName } from '../../shared/environments'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
+import type { SessionContext } from '../../shared/model/types'
 import { viaServerAll } from './projectSetters.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
@@ -155,6 +156,8 @@ export interface TerminalMeta {
   llm?: LlmSelection
   /** Codex: the real session id hasn't been discovered yet, so sessionId is a placeholder */
   sessionPending?: boolean
+  /** Why the server opened it (`Session.context`): an automation's run tab. Absent: a normal tab. */
+  context?: SessionContext
 }
 
 /** A session asked the user to make a call (request_decision MCP tool). */

@@ -527,3 +527,12 @@ test('automations are carried into the project file as they are; none, no key', 
   assert.deepEqual(projectV2({ ...fixture(), automations }).slice.project.automations, automations)
   assert.equal('automations' in projectV2(fixture()).slice.project, false)
 })
+
+test("an automation's run tab carries its context; a normal tab has none", () => {
+  const p = fixture()
+  p.globalSessions.push(session('g3', { context: { kind: 'automation', automationId: 'a1' } }))
+  const { slice } = projectV2(p)
+  assert.deepEqual(slice.terminals.g3.context, { kind: 'automation', automationId: 'a1' })
+  assert.equal('context' in slice.terminals.g1, false)
+  assert.deepEqual(slice.terminalOrder.__global__, ['g1', 'g2', 'g3'])
+})
