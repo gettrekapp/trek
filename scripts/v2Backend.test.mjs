@@ -741,6 +741,27 @@ test('branch data: custom tags send the whole list; a note carries what it start
   ])
 })
 
+test('history.list asks for a branch page, with `before` only when given', async () => {
+  const { backend, calls } = setup({ replies: { 'history.list': { events: [], more: false } } })
+  assert.deepEqual(await backend.history.list('r1', 'feat'), { events: [], more: false })
+  await backend.history.list('r1', 'feat', 'e9')
+  const ref = { projectId: 'p1', repoId: 'r1', branch: 'feat' }
+  assert.deepEqual(calls, [['history.list', ref], ['history.list', { ...ref, before: 'e9' }]])
+})
+
+test("history.onRecorded forwards only this window's project's entries, until unsubscribed", () => {
+  const { backend, listeners } = setup()
+  const got = []
+  const off = backend.history.onRecorded((e) => got.push(e.id))
+  for (const l of listeners['history.added']) {
+    l({ projectId: 'other', event: { id: 'x' } })
+    l({ projectId: 'p1', event: { id: 'e1' } })
+  }
+  off()
+  assert.deepEqual(listeners['history.added'], [])
+  assert.deepEqual(got, ['e1'])
+})
+
 test('repos.add registers the typed path with the server, then adds the registered path', async () => {
   const { backend, calls, ui } = setup({ confirms: ['/b/sub'], replies: { 'server.addRepo': { repoId: 'srv-b' }, 'repo.add': { repoId: 'r2' } } })
   await backend.repos.add()

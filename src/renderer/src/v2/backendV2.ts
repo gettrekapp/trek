@@ -749,6 +749,13 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         await request('branch.setEnv', { ...branchRef(repoId, branch), env: text || null })
       }
     },
+    history: {
+      list: async (repoId, branch, before) => request('history.list', { ...branchRef(repoId, branch), ...(before ? { before } : {}) }),
+      onRecorded: (listener) =>
+        deps.onEvent('history.added', (event) => {
+          if (event.projectId === projectId) listener(event.event)
+        })
+    },
     repos: {
       // repo.add only takes a path the server has registered, so register it first.
       add: async () => {

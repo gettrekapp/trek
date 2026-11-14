@@ -41,6 +41,7 @@ import type {
 import type { PluginWelcome } from './plugins/presence'
 import type { ReviewComment } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
+import type { HistoryEvent, HistoryPage } from '../../shared/model/history'
 import type { PromoteAsked } from './v2/promoteFlow'
 
 /** What `review.add` takes: a comment before the server gives it an id and a time. */
@@ -204,6 +205,13 @@ export interface WindowBackend {
     dismissPrNotice(path: string): Promise<void>
     setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
+  /** The worktree history (the `history` feature) */
+  readonly history: {
+    /** A branch's history, newest first: a page, older than the entry `before` names when given */
+    list(repoId: string, branch: string, before?: string): Promise<HistoryPage>
+    /** Each new entry of the window's project (or a newer version of one, same id); returns the unsubscribe */
+    onRecorded(listener: (event: HistoryEvent) => void): () => void
+  }
   /** Both report a failure in their own dialog and resolve. */
   readonly repos: {
     /** Asks the user which repository to add */
@@ -315,6 +323,7 @@ export const idleBackend: WindowBackend = {
     dismissPrNotice: noProject,
     setEnvVars: noProject
   },
+  history: { list: noProject, onRecorded: () => () => {} },
   repos: { add: noProject, remove: noProject },
   errors: {
     show: (title, message) => void window.api.showError(title, message),
