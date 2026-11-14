@@ -6,7 +6,9 @@
 #
 # Jobs (in parallel):
 #   test    typecheck the app, trek-server and trek-relay; the unit tests (npm test)
-#   build   npm run build (app, web client, server) and the relay; the Node-only smokes
+#   build   npm run build (app, web client, server) and the relay; the Node-only smokes, the
+#           server update smoke among them (`trek-server update` against a signed feed on
+#           127.0.0.1, with its own two test builds of the server)
 #   mobile  the phone app: typecheck and an `expo export` for iOS and Android (no EAS, no signing)
 #   windows on Windows: the unit tests, then trek-server's own smoke (the built bundle) and the
 #           client contract smoke, whose fake agents are npm-style shims (scripts/fakeAgent.mjs),
@@ -98,6 +100,9 @@ jobs:
       - name: Push smoke (relay + server + SDK phone)
         if: ${{ !cancelled() }}
         run: npm run smoke:push
+      - name: Server update smoke (a signed local feed, two test builds)
+        if: ${{ !cancelled() }}
+        run: npm run smoke:server-update
 
   mobile:
     name: Phone app (typecheck, expo export)
