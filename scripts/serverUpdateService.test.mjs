@@ -120,7 +120,8 @@ test('check: two at once share one read; a feed that cannot be read rejects and 
     const [a, b] = await Promise.all([w.service.check(), w.service.check()])
     assert.equal(w.calls.find, 1)
     assert.deepEqual(a, b)
-    await assert.rejects(broken.service.check(), (err) => err.code === 'TOOL_ERROR' && /could not read SHA256SUMS/.test(err.message))
+    // `cause`: the reason alone, for the server's own log line.
+    await assert.rejects(broken.service.check(), (err) => err.code === 'TOOL_ERROR' && /could not read SHA256SUMS/.test(err.message) && err.cause === 'could not read SHA256SUMS')
     assert.equal(broken.service.status().state, 'idle')
     assert.deepEqual(broken.changes.map((s) => s.state), ['checking', 'idle'])
   } finally {

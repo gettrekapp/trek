@@ -40,12 +40,13 @@ import {
   revokeToken
 } from './tokens'
 import { USAGE, parseArgs } from './cli.ts'
-import { findUpdate } from './update/apply.ts'
-import { controlPath, listenControl } from './update/control.ts'
+import { applyUpdate, findUpdate } from './update/apply.ts'
+import { controlPath, listenControl, type RelaunchAnswer } from './update/control.ts'
 import { isTestUpdateBuild, updateSource } from './update/keys.ts'
 import { canRelaunch, relaunch, relaunchRefusal } from './update/relaunch.ts'
+import { createUpdateService, installedVersion, type UpdateService } from './update/service.ts'
 import { clearTried, settleStart } from './update/state.ts'
-import { readInstall } from './update/updatable.ts'
+import { readInstall, type Install } from './update/updatable.ts'
 
 /** The bundle's own folder. A source run (tsx) has server/src here: not an install (no build.json, no update marks), so nothing about updates applies to it. */
 const installDir = typeof __dirname === 'string' ? __dirname : ''
@@ -320,6 +321,11 @@ if (args.importEnvFrom !== undefined) {
     console.warn(`environments: could not take over ${args.importEnvFrom}: ${(err as Error).message}`)
   }
 }
+/** A tarball install that is not the local server: the only kind that updates itself. Read once: the service, the control socket and the daily check are all for this install or for none. */
+const updatable = readInstall(installDir, { local: local !== undefined })
+const updateInstall: Install | undefined = updatable.ok ? updatable.install : undefined
+/** The update service (a tarball install only): the protocol's update.* and the daily check. Made by startServer, as it starts. */
+let updateService: UpdateService | undefined
 const server = startServer(
   store,
   version,
@@ -351,7 +357,31 @@ const server = startServer(
     // The plugins (plugin system phase 1): their keys in the same secrets file, their files in `<dataDir>/plugins/<id>`.
     plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
     web: webBundle ? { bundle: webBundle } : undefined,
-    onStopRequest: local ? () => shutdown('server.stop') : undefined
+    onStopRequest: local ? () => shutdown('server.stop') : undefined,
+    update: updateInstall
+      ? (onChange) => {
+          const source = updateSource()
+          const base = { install: updateInstall, configDir: dirname(resolve(args.configPath)), feed: source.feed, keys: source.keys, fetch }
+          updateService = createUpdateService({
+            install: updateInstall,
+            configDir: base.configDir,
+            running: version,
+            sessions: () => server.sessions.terminals.count(),
+            // Read at each request: the config is reloaded when its file changes.
+            remoteApply: () => store.config.updates?.remoteApply !== false,
+            canRelaunch,
+            relaunchRefusal: () => relaunchRefusal(updateInstall.dir),
+            find: () => findUpdate(base),
+            apply: (opts) => applyUpdate({ ...base, expect: opts.expect, onStep: opts.onStep, onProgress: opts.onProgress }),
+            relaunch: (to) => {
+              const answer = requestRelaunch(updateInstall, to)
+              if (!answer.ok) throw new Error(answer.error)
+            },
+            onChange
+          })
+          return updateService
+        }
+      : undefined
   }
 )
 store.watch()
@@ -436,6 +466,8 @@ async function announceLocal(profile: LocalProfile, port: number): Promise<void>
 interface RelaunchInto {
   installDir: string
   argv: readonly string[]
+  /** The version it becomes, which the clients are told (`daemon.shutdown`); absent when the install cannot say */
+  version?: string
 }
 
 /** The control socket `trek-server update` reaches this server on (an updatable install only). */
@@ -452,6 +484,28 @@ const UPDATE_FIRST_CHECK_MS = 30_000
 const UPDATE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000
 
 /**
+ * The one way this server restarts into the version now in its install folder, whoever asks:
+ * `trek-server update` over the control socket, or the update service after an install a client
+ * asked for. Says why not, with the server left as it is; else the restart begins after this
+ * tick (so an answer already written goes out): the usual shutdown, then the relaunch. `to`: the
+ * version the clients are told they are waiting for; the command does not name one, so it is read
+ * from the install folder, which has just been swapped in.
+ */
+function requestRelaunch(install: Install, to?: string): RelaunchAnswer {
+  if (!canRelaunch()) return { ok: false, error: `Node ${process.versions.node} cannot replace a running process (22.15 or later can)` }
+  // Asked twice: the restart the first request started is the answer to both.
+  if (relaunchAccepted) return { ok: true }
+  if (shuttingDown) return { ok: false, error: 'the server is already shutting down' }
+  // Before anything is shut down: a launcher that cannot be run leaves this server up, and whoever asked says a restart is needed.
+  const refusal = relaunchRefusal(install.dir)
+  if (refusal !== null) return { ok: false, error: refusal }
+  relaunchAccepted = true
+  const version = to ?? installedVersion(install.dir)
+  setImmediate(() => shutdown('update', { installDir: install.dir, argv: process.argv.slice(2), version }))
+  return { ok: true }
+}
+
+/**
  * Once listening (never the local server, which follows the app): how the last update went, the
  * socket `trek-server update` asks for a restart on, and a daily look at the release feed. A
  * server that is not a release tarball's (server/dist, a source run) only settles, which finds
@@ -466,25 +520,13 @@ function startUpdates(): void {
     if (settled) console.log(settled.ok ? `update: now running trek-server ${settled.to} (was ${settled.from})` : `update: ${settled.error}`)
   }
 
-  const found = readInstall(installDir)
-  if (!found.ok) return
-  const { install } = found
+  const install = updateInstall
+  const service = updateService
+  if (!install || !service) return
 
   updateControlSettled = listenControl(controlPath(configPath), {
     status: () => ({ pid: process.pid, version, installDir: install.dir, sessions: server.sessions.terminals.count(), canRelaunch: canRelaunch() }),
-    relaunch: () => {
-      if (!canRelaunch()) return { ok: false, error: `Node ${process.versions.node} cannot replace a running process (22.15 or later can)` }
-      // Asked twice: the restart the first request started is the answer to both.
-      if (relaunchAccepted) return { ok: true }
-      if (shuttingDown) return { ok: false, error: 'the server is already shutting down' }
-      // Before anything is shut down: a launcher that cannot be run leaves this server up, and the command says a restart is needed.
-      const refusal = relaunchRefusal(install.dir)
-      if (refusal !== null) return { ok: false, error: refusal }
-      relaunchAccepted = true
-      // After this tick, so the answer goes out before the socket closes.
-      setImmediate(() => shutdown('update', { installDir: install.dir, argv: process.argv.slice(2) }))
-      return { ok: true }
-    }
+    relaunch: () => requestRelaunch(install)
   }).then(
     (control) => {
       // A shutdown that began while the socket was being taken: it is waiting for this.
@@ -494,17 +536,22 @@ function startUpdates(): void {
     (err: unknown) => console.warn(`update: no control socket: ${(err as Error).message}`)
   )
 
-  const source = updateSource()
   // No key built in: nothing could be verified, so nothing is asked.
-  if (source.keys.length === 0) return
+  if (updateSource().keys.length === 0) return
   const check = (): void => {
     // Read each time: the config is reloaded when its file changes.
     if (shuttingDown || store.config.updates?.check === false) return
-    findUpdate({ install, configDir, feed: source.feed, keys: source.keys, fetch }).then(
-      (release) => {
-        if (release) console.log(`update: trek-server ${release.version} is available (this is ${install.version}); run \`trek-server update\``)
+    // Through the service, so the clients hear what it finds (`update.changed`), and so it never
+    // runs beside an update: one that is running refuses it (`busy`), which is not worth a line.
+    service.check().then(
+      (status) => {
+        if (status.latest !== undefined) console.log(`update: trek-server ${status.latest} is available (this is ${version}); run \`trek-server update\``)
       },
-      (err: unknown) => console.warn(`update: could not check for a newer release: ${(err as Error).message}`)
+      (err: unknown) => {
+        if ((err as { details?: { reason?: unknown } } | null)?.details?.reason === 'busy') return
+        const cause = (err as { cause?: unknown } | null)?.cause
+        console.warn(`update: could not check for a newer release: ${typeof cause === 'string' ? cause : (err as Error).message}`)
+      }
     )
   }
   // The update smoke's knob, read by a test build only: how long after listening the first look is.
@@ -522,7 +569,8 @@ let shuttingDown = false
 /**
  * The one way out: a signal, `server.stop` (the local server's `stop --local`; on Windows a
  * signal from another process is TerminateProcess, so this never ran there before), or
- * `trek-server update`'s relaunch request (`into`), which ends in the new version instead of an exit.
+ * a relaunch request (`into`: requestRelaunch, for `trek-server update` or an update a client asked
+ * for), which ends in the new version instead of an exit.
  */
 function shutdown(reason: string, into?: RelaunchInto): void {
   if (shuttingDown) {
@@ -547,7 +595,8 @@ function shutdown(reason: string, into?: RelaunchInto): void {
   for (const timer of updateCheckTimers) clearTimeout(timer)
   store.close()
   // Settles once a move's staged histories are removed (bounded below, so a slow disk can't hold the exit).
-  const cleared = server.shutdown(reason)
+  // A restart into an update names the version, so a client can say what it is waiting for.
+  const cleared = server.shutdown(reason, into?.version !== undefined ? { version: into.version } : undefined)
   // close() flushes pending saves and returns the ids that could not be written.
   const failed = projectFiles.files.close()
   if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)

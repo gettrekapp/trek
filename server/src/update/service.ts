@@ -155,7 +155,8 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       .then((failure) => {
         checking = null
         set('idle')
-        if (failure) throw codedError('TOOL_ERROR', `Could not check for an update: ${failure.error}`)
+        // `cause`: the reason alone, for the server's own log line.
+        if (failure) throw Object.assign(codedError('TOOL_ERROR', `Could not check for an update: ${failure.error}`), { cause: failure.error })
         return status()
       })
     checking = run
