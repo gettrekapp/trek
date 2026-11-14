@@ -40,6 +40,8 @@ export function sameTarget(a: WindowTarget, b: WindowTarget): boolean {
 export interface OpenWindowEntry<T extends WindowTarget = WindowTarget> {
   target: T
   bounds?: WindowBounds
+  /** The window's sidebar is hidden (View → Toggle Sidebar). Absent when shown. */
+  sidebarHidden?: true
 }
 
 function targetKey(t: WindowTarget): string {
@@ -71,8 +73,11 @@ export function parseOpenWindows(raw: unknown): OpenWindowEntry[] {
     if (typeof item !== 'object' || item === null) continue
     const target = readTarget(item as Record<string, unknown>)
     if (!target || entries.has(targetKey(target))) continue
-    const bounds = (item as { bounds?: unknown }).bounds
-    entries.set(targetKey(target), isBounds(bounds) ? { target, bounds } : { target })
+    const { bounds, sidebarHidden } = item as { bounds?: unknown; sidebarHidden?: unknown }
+    const entry: OpenWindowEntry = { target }
+    if (isBounds(bounds)) entry.bounds = bounds
+    if (sidebarHidden === true) entry.sidebarHidden = true
+    entries.set(targetKey(target), entry)
   }
   return [...entries.values()]
 }
@@ -80,7 +85,8 @@ export function parseOpenWindows(raw: unknown): OpenWindowEntry[] {
 /** A window as open-windows.json stores it. */
 export function serializeOpenWindow(entry: OpenWindowEntry<ServerTarget>): Record<string, unknown> {
   const bounds = entry.bounds ? { bounds: entry.bounds } : {}
-  return { kind: 'server', serverEntryId: entry.target.serverEntryId, projectId: entry.target.projectId, ...bounds }
+  const sidebar = entry.sidebarHidden ? { sidebarHidden: true } : {}
+  return { kind: 'server', serverEntryId: entry.target.serverEntryId, projectId: entry.target.projectId, ...bounds, ...sidebar }
 }
 
 export function boundsOnScreen(bounds: WindowBounds, workAreas: WindowBounds[]): boolean {

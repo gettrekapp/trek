@@ -187,3 +187,18 @@ test('arrangeTiles: arranging what it returned changes nothing', () => {
 test('arrangeTiles: no windows, no tiles', () => {
   assert.equal(arrangeTiles({ x: 0, y: 0, width: 1440, height: 900 }, []).size, 0)
 })
+
+test('a hidden sidebar is recorded with its window, and only when hidden', () => {
+  const target = { kind: 'server', serverEntryId: 's', projectId: 'p' }
+  assert.deepEqual(serializeOpenWindow({ target, sidebarHidden: true }), { kind: 'server', serverEntryId: 's', projectId: 'p', sidebarHidden: true })
+  assert.deepEqual(serializeOpenWindow({ target }), { kind: 'server', serverEntryId: 's', projectId: 'p' })
+  const bounds = { x: 0, y: 0, width: 1, height: 1 }
+  assert.deepEqual(parseOpenWindows([serializeOpenWindow({ target, bounds, sidebarHidden: true })]), [{ target, bounds, sidebarHidden: true }])
+})
+
+test('parseOpenWindows takes only a literal true as a hidden sidebar', () => {
+  const entry = (sidebarHidden) => ({ kind: 'server', serverEntryId: 's', projectId: String(sidebarHidden), sidebarHidden })
+  const parsed = parseOpenWindows([entry(true), entry(false), entry('true'), entry(1), entry(null)])
+  assert.deepEqual(parsed.map((e) => e.sidebarHidden), [true, undefined, undefined, undefined, undefined])
+  assert.deepEqual(parsed.slice(1).map((e) => 'sidebarHidden' in e), [false, false, false, false])
+})
