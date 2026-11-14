@@ -10,9 +10,11 @@ function die(err: unknown): never {
   process.exit(1)
 }
 
-if (args.command === 'selfcheck' || args.command === 'update') {
-  // Filled in by the tasks that add these commands.
-  die(`trek-server ${args.command} is not available in this build`)
+if (args.command === 'selfcheck') {
+  void import('./update/selfcheck.ts').then((m) => m.runSelfcheckCommand()).then((code) => process.exit(code), die)
+} else if (args.command === 'update') {
+  // Filled in by the task that adds the command.
+  die('trek-server update is not available in this build')
 } else {
   // An error thrown while main.ts loads is a bug, not a message for the user: keep its stack, as before the split.
   void import('./main.ts').catch((err: unknown) => {
