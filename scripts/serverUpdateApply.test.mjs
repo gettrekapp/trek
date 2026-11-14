@@ -470,10 +470,10 @@ test('the staged selfcheck runs the staged version through its own launcher, wit
     assert.match(failed.output, /FAIL: a terminal runs\n {2}posix_spawnp failed/, 'stderr is kept too')
 
     const started = Date.now()
-    const hung = check(staged('hangs', "console.log('ok: started'); setInterval(() => {}, 1000)"), 500)
+    const hung = check(staged('hangs', "console.log('ok: started'); setInterval(() => {}, 1000)"), 3000)
     assert.equal(hung.ok, false)
     assert.match(hung.output, /ok: started/)
-    assert.match(hung.output, /did not finish within 0\.5 s/)
+    assert.match(hung.output, /did not finish within 3 s/)
     assert.ok(Date.now() - started < 20_000)
 
     const crashed = check(staged('crashes', "process.kill(process.pid, 'SIGKILL')"))

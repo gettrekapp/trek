@@ -358,7 +358,9 @@ const server = startServer(
     plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
     web: webBundle ? { bundle: webBundle } : undefined,
     onStopRequest: local ? () => shutdown('server.stop') : undefined,
-    update: updateInstall
+    // Only with a key built in: without one no release can be verified, so a client is offered nothing
+    // (`trek-server update` on this machine still says why).
+    update: updateInstall && updateSource().keys.length > 0
       ? (onChange) => {
           const source = updateSource()
           const base = { install: updateInstall, configDir: dirname(resolve(args.configPath)), feed: source.feed, keys: source.keys, fetch }
@@ -521,8 +523,7 @@ function startUpdates(): void {
   }
 
   const install = updateInstall
-  const service = updateService
-  if (!install || !service) return
+  if (!install) return
 
   updateControlSettled = listenControl(controlPath(configPath), {
     status: () => ({ pid: process.pid, version, installDir: install.dir, sessions: server.sessions.terminals.count(), canRelaunch: canRelaunch() }),
@@ -536,8 +537,9 @@ function startUpdates(): void {
     (err: unknown) => console.warn(`update: no control socket: ${(err as Error).message}`)
   )
 
-  // No key built in: nothing could be verified, so nothing is asked.
-  if (updateSource().keys.length === 0) return
+  // No key built in (so no service): nothing could be verified, so nothing is asked.
+  const service = updateService
+  if (!service) return
   const check = (): void => {
     // Read each time: the config is reloaded when its file changes.
     if (shuttingDown || store.config.updates?.check === false) return
