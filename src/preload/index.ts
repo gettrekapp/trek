@@ -85,6 +85,10 @@ const api = {
     pairPhone: (id: string): Promise<AppServerPairing> => ipcRenderer.invoke('appServers:pairPhone', id),
     /** Drops a pairing code the server gave (New code, or the panel closing): it no longer redeems */
     cancelPairing: (id: string, code: string): Promise<boolean> => ipcRenderer.invoke('appServers:cancelPairing', id, code),
+    /** Has the server look for a newer release now (a server that can update itself); what it finds comes with `onChanged` */
+    checkUpdate: (id: string): Promise<void> => ipcRenderer.invoke('appServers:checkUpdate', id).then(() => undefined),
+    /** Asks, in a dialog from main, then has the server install its latest release. `started` is false when the user cancelled. */
+    applyUpdate: (id: string): Promise<{ started: boolean }> => ipcRenderer.invoke('appServers:applyUpdate', id),
     /** The list with main's connection statuses (never a token); `onChanged` hears every change after it. */
     links: (): Promise<AppServersChanged> => ipcRenderer.invoke('appServers:links'),
     onChanged: (callback: (snapshot: AppServersChanged) => void): (() => void) =>

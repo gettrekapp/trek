@@ -150,6 +150,9 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
       test: refuse,
       pairPhone: refuse,
       cancelPairing: async () => false,
+      // Updating a server is done from the Trek app: the page's entry never offers it.
+      checkUpdate: refuse,
+      applyUpdate: refuse,
       links: async () => links(),
       onChanged: (cb) => {
         linkListeners.add(cb)

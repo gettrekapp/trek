@@ -6,7 +6,9 @@ import { shouldReconnect, shouldReconnectOnMove } from '../v2/appServerLinks'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
 import { PairPhone } from './PairPhone'
+import { ServerUpdateRow, type ServerUpdateAct } from './ServerUpdateRow'
 import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
+import { canCheckUpdate, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
 import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerLink, AppServerTest } from '../../../shared/types'
@@ -74,6 +76,8 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
   const [tokenValue, setTokenValue] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  /** Each server's last click on an update button: in flight, or how it ended (the update state itself is main's broadcast) */
+  const [updateActs, setUpdateActs] = useState<Record<string, ServerUpdateAct>>({})
   /** Ids from the last snapshot, so the next can drop removed entries' connections. */
   const knownIds = useRef<Set<string>>(new Set())
   const tokenInputId = useId()
@@ -172,6 +176,24 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
     }
   }
 
+  // Check for Update, Update, Try Again, Check Again. Main asks before an install; what the server
+  // then does shows on the row through the broadcast.
+  const updateAction = async (server: AppServerLink, action: ServerUpdateAction): Promise<void> => {
+    const ended = (act: ServerUpdateAct): void => setUpdateActs((a) => ({ ...a, [server.id]: act }))
+    ended({ busy: true, kind: action.kind })
+    try {
+      if (action.kind === 'apply') {
+        await window.api.appServers.applyUpdate(server.id)
+        ended({ busy: false })
+      } else {
+        await window.api.appServers.checkUpdate(server.id)
+        ended({ busy: false, checked: true })
+      }
+    } catch (err) {
+      ended({ busy: false, error: errorText(err) })
+    }
+  }
+
   const remove = async (server: AppServerLink): Promise<void> => {
     const confirmed = await window.api.confirm({
       title: 'Remove Server',
@@ -224,6 +246,7 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
           )
         }
         const testState = tests[server.id]
+        const updateAct = updateActs[server.id]
         const label = server.hasToken ? (server.status ? STATUS_LABELS[server.status] : 'Not connected') : 'Needs a token'
         const message = server.hasToken ? server.message : 'Set a token to connect'
         return (
@@ -264,6 +287,15 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
                     Pair a phone…
                   </button>
                 )}
+                {(canCheckUpdate(server) || (updateAct?.busy && updateAct.kind === 'check')) && (
+                  <button
+                    className="btn btn-ghost"
+                    disabled={updateAct?.busy}
+                    onClick={() => void updateAction(server, { kind: 'check', label: 'Check for Update' })}
+                  >
+                    {updateAct?.busy && updateAct.kind === 'check' ? 'Checking…' : 'Check for Update'}
+                  </button>
+                )}
                 <button className="btn btn-ghost" onClick={() => startEdit(server)}>
                   Edit
                 </button>
@@ -272,6 +304,8 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
                 </button>
               </span>
             </div>
+
+            <ServerUpdateRow server={server} act={updateAct} onAction={(action) => void updateAction(server, action)} />
 
             {tokenFor === server.id && (
               <div className="server-form-row connect-token-row">
