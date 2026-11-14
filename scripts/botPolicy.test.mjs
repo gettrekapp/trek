@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { ALWAYS_ASK_TOOLS, decide, approvalMatches } from '../src/host/bot/policy.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // Every decision reads POSIX paths (/p/My.trekbot, cwd /repo) through node:path, and the bot refuses
 // to run on Windows (src/host/bot/sandbox.ts): none of this is Windows'.
@@ -622,7 +622,7 @@ test('secret checks see through symlinks, .., case and copies of the files', { s
     ], s)
     expectAll('allow', ['cat data-link/notes.json', 'ls sub-link', 'cat data-link/*.png'], s)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeDir(root)
   }
 })
 
@@ -720,6 +720,6 @@ test('protected and secret checks hold for paths under a symlinked parent, both 
     assert.equal(tool('Write', { file_path: '../src/../b.trekbot/HEARTBEAT.md', content: '' }, inBot), 'allow')
     expectAll('allow', ['cat src/../src/a.txt', 'cd src/.. && cat src/a.txt', 'echo x > b.trekbot/knowledge/../MEMORY.md', 'cat b.trekbot/knowledge/../POLICY.json'], inWs)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeDir(root)
   }
 })

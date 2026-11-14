@@ -3,10 +3,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { probeSandbox, sandboxFor, SANDBOX_EXEC } from '../src/host/bot/sandbox.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const skip = process.platform !== 'darwin' && 'macOS only'
 // The LaunchServices check writes an app and opens it for real (the control launches it outside the
@@ -46,7 +47,7 @@ const waitFor = (path, ms) => {
 }
 
 test.after(() => {
-  if (root) rmSync(root, { recursive: true, force: true })
+  if (root) removeDir(root)
 })
 
 test('reads of userData are denied however the path is spelled', { skip }, () => {

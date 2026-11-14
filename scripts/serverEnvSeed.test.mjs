@@ -8,14 +8,14 @@ import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { seedEnvironmentsFromApp } from '../server/src/integrations/envSeed.ts'
 import { createStackService } from '../src/host/stackService.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // Windows has no POSIX file modes (stat reports 0666): the 0600 checks are POSIX only.
 const posix = process.platform !== 'win32'
 
 function dirs(t) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'trek-env-seed-')))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeDir(root))
   const app = join(root, 'Trek Dev')
   const data = join(root, 'data', 'local')
   mkdirSync(join(app, 'stacks'), { recursive: true })

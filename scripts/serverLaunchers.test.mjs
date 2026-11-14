@@ -27,3 +27,20 @@ test('the PowerShell launcher runs trek-server.cjs beside bin with the arguments
 test('the batch launcher keeps CRLF line endings', () => {
   assert.ok(!/(?<!\r)\n/.test(WIN_LAUNCHER))
 })
+
+test('the batch launcher has no for /f, and no parenthesis outside quotes or a rem on a command line', () => {
+  // `for /f … in ('"node" -p "parseInt(…)"')` ended at that ")": the zip's launcher failed to parse.
+  assert.doesNotMatch(WIN_LAUNCHER, /\bfor\s+\/f\b/i)
+  for (const line of WIN_LAUNCHER.split('\r\n')) {
+    if (/^(rem |echo )/.test(line)) continue
+    const outside = line.replace(/"[^"]*"/g, '')
+    assert.doesNotMatch(outside, /[()]/, line)
+  }
+})
+
+test('the batch launcher: node checks its own version, 42 is too old, anything else is not found', () => {
+  assert.match(WIN_LAUNCHER, /"%node%" -e "process\.exit\(parseInt\(process\.versions\.node\)>=22\?0:42\)" 2>nul\r\nif errorlevel 43 goto missing\r\nif errorlevel 42 goto old\r\nif errorlevel 1 goto missing\r\n/)
+  assert.match(WIN_LAUNCHER, /:missing\r\necho trek-server: Node\.js 22 or later is needed, and "%node%" was not found .*1>&2\r\nexit \/b 127\r\n/)
+  assert.match(WIN_LAUNCHER, /:old\r\n.*Node\.js 22 or later is needed; .* is version .*\r\nexit \/b 1\r\n/)
+  assert.match(WIN_LAUNCHER, /"%node%" "%~dp0\.\.\\trek-server\.cjs" %\*\r\nexit \/b %errorlevel%\r\n/)
+})

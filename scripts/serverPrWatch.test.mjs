@@ -13,7 +13,7 @@ import { resetRuntime } from '../server/src/projects/model.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 import { FAILS_BEFORE_NOTICE, PrWatcher, pollMsFromEnv, watchTargets } from '../server/src/prWatch/watcher.ts'
 import { ghBinary, ghRunner, isAuthFailure } from '../server/src/prWatch/gh.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 import { prQueryArgs } from '../src/shared/prWatch.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
@@ -52,7 +52,7 @@ function project({ prWatch = {}, sessions = [session('s1', 'Old'), session('s2',
 let historyDirectory
 let historyCount = 0
 const historyRoot = () => (historyDirectory ??= mkdtempSync(join(tmpdir(), 'trek-prwatch-history-')))
-after(() => { if (historyDirectory) rmSync(historyDirectory, { recursive: true, force: true }) })
+after(() => { if (historyDirectory) removeDir(historyDirectory) })
 
 function setup(initial = project(), ghAnswers = []) {
   const hub = new TopicHub()
@@ -125,7 +125,7 @@ test('ghRunner on Windows: a stub given as a Node script runs with this Node (Wi
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const stub = join(dir, 'gh.mjs')
   writeFileSync(stub, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n")
   assert.equal(await ghRunner(stub, 'win32')(['api', 'graphql', '-f', 'query=x y']), JSON.stringify(['api', 'graphql', '-f', 'query=x y']))
@@ -136,7 +136,7 @@ test('ghRunner elsewhere: TREK_SERVER_GH runs as it is, whatever its extension',
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
   const dir = mkdtempSync(join(tmpdir(), 'trek-gh-stub-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const stub = join(dir, 'gh.js')
   writeFileSync(stub, '#!/bin/sh\necho direct\n')
   chmodSync(stub, 0o755)

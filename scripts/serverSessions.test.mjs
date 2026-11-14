@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { findSession, findWorktree } from '../server/src/sessions/locate.ts'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -70,7 +70,7 @@ const cmd = (proc) => proc.opts.args.at(-1)
 
 function setup(t, { llm, maxSessions, mcpAccess, commandExists } = {}) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-sessions-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   const b = join(dir, 'repos', 'b')
   mkdirSync(a, { recursive: true })
@@ -1351,6 +1351,7 @@ test('renew: only Global sessions; a project it cannot run in is refused before 
 })
 
 import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
+import { removeDir } from './testPlatform.mjs'
 
 test('the automation scheduler against a real SessionManager: the first run opens the run tab, the next renews it', (t) => {
   const s = setup(t)

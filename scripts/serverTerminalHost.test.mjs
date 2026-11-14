@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalHost } from '../server/src/sessions/terminalHost.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 function fakeSpawner() {
   const spawned = []
@@ -519,6 +519,39 @@ test('win32: whenGone never kills the tree of a pty that already exited (Windows
   assert.deepEqual(trees, [])
 })
 
+test('a pty that exits by itself is released, never signalled (Windows may have reused its pid); a killed one is not', async (t) => {
+  for (const platform of ['win32', 'linux']) {
+    const { host, spawned, exits } = setup(t, { platform, treeKiller: () => assert.fail('there is no tree to end') })
+    host.spawn('p1', opts)
+    host.spawn('p2', opts)
+    const calls = []
+    for (const [i, proc] of spawned.entries()) {
+      const kill = proc.kill.bind(proc)
+      proc.kill = (signal) => { calls.push([i, 'kill', signal]); kill(signal) }
+      proc.release = () => calls.push([i, 'release'])
+    }
+    spawned[0].exit(3)
+    assert.deepEqual(calls, [[0, 'release']], platform)
+    assert.deepEqual(exits, [['p1', 3]], 'the owner still hears the exit')
+    host.kill('p2')
+    await new Promise((r) => setImmediate(r))
+    assert.deepEqual(calls, [[0, 'release'], [1, 'kill', undefined]], `${platform}: kill() frees a killed pty itself`)
+  }
+})
+
+test('a pty whose release throws still reports its exit; one without a release is fine', (t) => {
+  const { host, spawned, exits } = setup(t)
+  host.spawn('p1', opts)
+  host.spawn('p2', opts)
+  spawned[0].release = () => { throw new Error('gone') }
+  const warn = console.warn
+  console.warn = () => {}
+  t.after(() => { console.warn = warn })
+  spawned[0].exit(0)
+  spawned[1].exit(1)
+  assert.deepEqual(exits, [['p1', 0], ['p2', 1]])
+})
+
 test('win32: whenGone kills the tree of a pty that outlives the timeout', async (t) => {
   const trees = []
   const { host, spawned } = setup(t, { platform: 'win32', killTimeoutMs: 60_000, treeKiller: (pid, sync) => trees.push([pid, sync]) })
@@ -588,7 +621,7 @@ test('whenGone SIGKILLs the pty\'s process group: a background child that ignore
   }
   t.after(() => {
     if (childPid && alive(childPid)) process.kill(childPid, 'SIGKILL')
-    rmSync(dir, { recursive: true, force: true })
+    removeDir(dir)
   })
   // The real node-pty: the shell is its session's leader; its background child ignores SIGHUP.
   const host = new TerminalHost({ onExit: () => {} })

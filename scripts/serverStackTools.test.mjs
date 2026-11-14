@@ -18,7 +18,7 @@ import { createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { createStackService } from '../src/host/stackService.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // Dev stacks are POSIX only (a Windows server refuses them, W1), and the stubs are bash scripts.
 const skip = posixOnly('bash stubs for stack.sh and docker; no dev stacks on Windows')
@@ -34,7 +34,7 @@ writeFileSync(join(stubDir, 'docker'), `#!/bin/bash\necho "docker|$*" >> '${call
 chmodSync(join(stubDir, 'docker'), 0o755)
 process.env.PATH = `${stubDir}:${process.env.PATH}`
 process.env.TREK_STACK_REGISTRY = join(stubDir, 'registry')
-process.on('exit', () => rmSync(stubDir, { recursive: true, force: true }))
+process.on('exit', () => removeDir(stubDir))
 
 const calls = () => (existsSync(callsFile) ? readFileSync(callsFile, 'utf8').split('\n').filter(Boolean) : [])
 
@@ -42,7 +42,7 @@ async function setup(t, { stackBody = '', machine = true } = {}) {
   rmSync(callsFile, { force: true })
   rmSync(runningFlag, { force: true })
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-stack-tools-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
   mkdirSync(join(a, 'docker', 'stack'), { recursive: true })
@@ -135,7 +135,7 @@ test('the stack tools: a worktree without stack.sh, a failed down, bad arguments
 test('the stack tools refuse a worktree outside the allowlist', { skip }, async (t) => {
   const s = await setup(t)
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-stack-tools-outside-')))
-  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  t.after(() => removeDir(outside))
   s.projects.apply(s.projectId, (d) => {
     d.repositories[0].worktrees.push({ id: 'out', name: 'out', path: outside, branch: 'zzz', isMain: false, loaded: false, sessions: [] })
   })

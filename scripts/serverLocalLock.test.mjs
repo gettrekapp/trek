@@ -18,11 +18,11 @@ import {
   removeStaleTemps
 } from '../server/src/localLock.ts'
 import { lockText, parseLockText } from '../src/shared/localServer.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-lock-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

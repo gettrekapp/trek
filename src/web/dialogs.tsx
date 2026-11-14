@@ -3,7 +3,7 @@
 // it moves in on open (to its default button), Tab and Shift+Tab cycle through
 // its controls, Escape cancels it wherever focus is (a click on the backdrop
 // doesn't take focus out), and on close focus goes back where it was.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { answerDialog, dialogId, pendingDialogs, subscribeDialogs, type DialogRequest } from './dialogQueue.ts'
 
 export function WebDialogHost(): React.JSX.Element | null {
@@ -24,7 +24,9 @@ function Dialog({ request }: { request: DialogRequest }): React.JSX.Element {
   const answerRef = useRef(answer)
   answerRef.current = answer
 
-  useEffect(() => {
+  // A layout effect: focus is in the dialog, and its keys handled, before it is painted. As a
+  // passive effect, a Tab pressed right as the dialog appeared moved focus in the page behind it.
+  useLayoutEffect(() => {
     const before = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const focusCancel = request.kind === 'confirm' && request.defaultCancel
     ;(focusCancel ? cancelRef : confirmRef).current?.focus()

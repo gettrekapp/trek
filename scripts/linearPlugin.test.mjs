@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile } from '../server/src/secrets.ts'
@@ -14,10 +14,11 @@ import { applySettingsPatch } from '../server/src/projects/settings.ts'
 import { linearServerPlugin } from '../plugins/linear/server/index.ts'
 import { linearTickets, workspaceProblem } from '../plugins/linear/shared/ticket.ts'
 import { parseTicketWith, ticketView } from '../src/shared/tickets.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-linear-plugin-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 
@@ -102,7 +103,7 @@ test('linear.setKey checks the key with Linear, stores it 0600 and never sends i
   assert.deepEqual(set.result, { ok: true, user: 'Ada' })
   assert.equal(JSON.stringify(set).includes('good-key'), false)
   assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: true })
-  assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
   assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { linear: 'good-key' })
   assert.deepEqual((await s.call('linear.clearKey', {})).result, null)
   assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })

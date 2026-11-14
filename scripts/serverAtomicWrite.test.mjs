@@ -1,14 +1,14 @@
 // scripts/serverAtomicWrite.test.mjs — write-then-rename with a fixed mode and no temp leftovers.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, chmodSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { writeFileAtomic } from '../src/host/atomicWrite.ts'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-atomic-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 
@@ -36,7 +36,7 @@ test('the result has the requested mode, even over a looser file or stale temp f
 // --- Windows: a rename over a file something holds open is retried ---
 
 import { RENAME_RETRY_DELAYS_MS, renameRetry, renameRetrySync } from '../src/host/atomicWrite.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const busy = (code) => Object.assign(new Error(`${code}: busy`), { code })
 

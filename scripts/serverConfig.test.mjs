@@ -1,9 +1,10 @@
 // scripts/serverConfig.test.mjs — trek-server config: legacy migration, atomic save, identity.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeDir } from './testPlatform.mjs'
 import {
   defaultConfigPath,
   ensureIdentity,
@@ -16,7 +17,7 @@ const loadConfig = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-config-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

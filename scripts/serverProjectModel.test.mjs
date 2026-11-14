@@ -1,9 +1,10 @@
 // scripts/serverProjectModel.test.mjs — building projects, matching registered repos, runtime resets.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { removeDir } from './testPlatform.mjs'
 import {
   assertNotRepository,
   collectIds,
@@ -20,7 +21,7 @@ const newId = () => `id${++n}`
 
 test('findRegistered matches by realpath and refuses the rest with PATH_DENIED', (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-model-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   mkdirSync(join(dir, 'a'))
   symlinkSync(join(dir, 'a'), join(dir, 'link'))
   const registry = [{ id: 'a', name: 'A', path: join(dir, 'a') }]
@@ -83,7 +84,7 @@ test('projectsUsingRepo and collectIds', () => {
 
 test('findRegistered matches when the registry entry itself is the symlink', (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-model-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   mkdirSync(join(dir, 'a'))
   symlinkSync(join(dir, 'a'), join(dir, 'link'))
   const registry = [{ id: 'a', name: 'A', path: join(dir, 'link') }]

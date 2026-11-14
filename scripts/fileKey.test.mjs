@@ -2,17 +2,18 @@
 // that is gone, its folder's realpath and its name (so /var and /private/var still match).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileKey, isFileKey } from '../src/main/fileKey.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const scratch = () => {
   const work = mkdtempSync(join(tmpdir(), 'trek-filekey-'))
   const real = realpathSync(work)
   mkdirSync(join(real, 'files'))
   symlinkSync(join(real, 'files'), join(real, 'link'))
-  return { work, real, done: () => rmSync(real, { recursive: true, force: true }) }
+  return { work, real, done: () => removeDir(real) }
 }
 
 test('fileKey is the realpath, through a symlink and another spelling of the temp dir', () => {

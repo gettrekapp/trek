@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -19,6 +19,7 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { PromoteRequests } from '../server/src/promote/requests.ts'
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDirWhenFree } from './testPlatform.mjs'
 
 export const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 export const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -54,7 +55,7 @@ export async function setup(t, options = {}) {
   process.env.HOME = join(dir, 'home')
   process.env.USERPROFILE = join(dir, 'home')
   const restore = (name, value) => { if (value === undefined) delete process.env[name]; else process.env[name] = value }
-  t.after(() => { restore('HOME', home); restore('USERPROFILE', profile); rmSync(dir, { recursive: true, force: true }) })
+  t.after(() => { restore('HOME', home); restore('USERPROFILE', profile) })
   const origin = join(dir, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: gitEnv })
   const app = join(dir, 'app')
@@ -73,9 +74,12 @@ export async function setup(t, options = {}) {
   const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
   const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {}, onAttentionChange: () => {} })
   const { spawned, spawner } = fakeSpawner()
-  const sessions = new SessionManager({ projects, store, hub, spawner, schedule: () => ({ cancel() {} }), discover: async () => undefined })
+  // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns
+  // (winLaunch.ts, checked in serverWinLaunch.test.mjs), and the fake agents are not there.
+  const sessions = new SessionManager({ projects, store, hub, spawner, schedule: () => ({ cancel() {} }), discover: async () => undefined, platform: 'linux' })
   const promoteRequests = new PromoteRequests(hub, { timeoutMs: 2000, checkMs: 20, ...(options.requests ?? {}) })
-  t.after(() => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close() })
+  // In this order, in one hook: the directory goes once what runs over it is stopped.
+  t.after(async () => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close(); await removeDirWhenFree(dir) })
   const recoveryDir = join(dir, 'recovery')
   const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, promoteRequests, promoteRecoveryDir: recoveryDir }
   const call = (method, params) => dispatchV2(method, params, ctx)

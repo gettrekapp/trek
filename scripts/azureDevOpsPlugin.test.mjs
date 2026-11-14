@@ -3,7 +3,7 @@
 // (`azureDevOpsBaseUrl`) through the server's registry.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { azureDevOpsTickets, baseUrlProblem } from '../plugins/azure-devops/shared/ticket.ts'
@@ -13,6 +13,7 @@ import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
 import { applySettingsPatch } from '../server/src/projects/settings.ts'
 import { parseTicketWith, ticketView } from '../src/shared/tickets.ts'
+import { removeDir } from './testPlatform.mjs'
 
 test('owns: work item numbers only', () => {
   assert.equal(azureDevOpsTickets.owns('42'), true)
@@ -59,7 +60,7 @@ test('the manifest: on by default, built in on servers older than plugins, ownin
 
 test("through the registry: azureDevOpsBaseUrl checked as the plugin's; the provider on where the plugin is", (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-ado-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const projects = {
     require: (id) => {
       if (id === 'on') return { settings: {} }
