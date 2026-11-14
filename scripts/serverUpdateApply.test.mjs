@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCK_FILE, applyUpdate, findUpdate, runStagedSelfcheck } from '../server/src/update/apply.ts'
-import { confirmQuestion, describeOutcome } from '../server/src/update/command.ts'
+import { awaitVersion, confirmQuestion, describeOutcome } from '../server/src/update/command.ts'
 import { PENDING_FILE, readState, writeState } from '../server/src/update/state.ts'
 import { POSIX_LAUNCHER } from './serverLaunchers.mjs'
 import { posixOnly, removeDir } from './testPlatform.mjs'
@@ -418,16 +418,63 @@ test('the staged selfcheck runs the staged version through its own launcher, wit
 })
 
 test('the question says what a restart costs: the running server\'s terminals', () => {
+  const server = (sessions, canRelaunch = true) => ({ pid: 7, sessions, canRelaunch })
   assert.equal(confirmQuestion('1.0.0', '2.0.0', null), 'Update trek-server 1.0.0 to 2.0.0?')
-  assert.equal(confirmQuestion('1.0.0', '2.0.0', { pid: 7, sessions: 0 }), 'Update trek-server 1.0.0 to 2.0.0? The running server (pid 7) restarts into it; it has no terminals open.')
+  assert.equal(confirmQuestion('1.0.0', '2.0.0', server(0)), 'Update trek-server 1.0.0 to 2.0.0? The running server (pid 7) restarts into it; it has no terminals open.')
   assert.equal(
-    confirmQuestion('1.0.0', '2.0.0', { pid: 7, sessions: 1 }),
+    confirmQuestion('1.0.0', '2.0.0', server(1)),
     'Update trek-server 1.0.0 to 2.0.0? The running server (pid 7) restarts into it: its 1 terminal closes, and agent sessions resume when their worktrees are opened again.'
   )
   assert.equal(
-    confirmQuestion('1.0.0', '2.0.0', { pid: 7, sessions: 12 }),
+    confirmQuestion('1.0.0', '2.0.0', server(12)),
     'Update trek-server 1.0.0 to 2.0.0? The running server (pid 7) restarts into it: its 12 terminals close, and agent sessions resume when their worktrees are opened again.'
   )
+  // A server that says it cannot restart itself is not said to.
+  for (const sessions of [0, 3]) {
+    assert.equal(
+      confirmQuestion('1.0.0', '2.0.0', server(sessions, false)),
+      'Update trek-server 1.0.0 to 2.0.0? The running server (pid 7) cannot restart itself into it (its Node is older than 22.15): it keeps running 1.0.0 until you restart it.'
+    )
+  }
+})
+
+test('awaitVersion asks the running server until it says it is the new version, and gives up after its time', async () => {
+  const NEW = { pid: 7, version: '2.0.0', installDir: '/opt/trek-server', sessions: 0, canRelaunch: true }
+  const OLD = { ...NEW, version: '1.0.0' }
+  /** A clock that only sleep() moves, and a server whose answers are `answers` in turn (the last one repeats). */
+  const fake = (answers) => {
+    let t = 0
+    let asked = 0
+    const sleeps = []
+    return {
+      deps: {
+        request: async () => answers[Math.min(asked++, answers.length - 1)],
+        now: () => t,
+        sleep: async (ms) => { sleeps.push(ms); t += ms },
+        timeoutMs: 1000,
+        everyMs: 250
+      },
+      asked: () => asked,
+      sleeps
+    }
+  }
+  // Still the old version, then gone (shutting down, no socket), then garbage, then the new one.
+  const comes = fake([OLD, null, null, { ok: false }, NEW])
+  assert.deepEqual(await awaitVersion('2.0.0', comes.deps), NEW)
+  assert.equal(comes.asked(), 5)
+  assert.deepEqual(comes.sleeps, [250, 250, 250, 250])
+
+  const at_once = fake([NEW])
+  assert.deepEqual(await awaitVersion('2.0.0', at_once.deps), NEW)
+  assert.deepEqual(at_once.sleeps, [], 'no wait when it is already there')
+
+  const never = fake([null])
+  assert.equal(await awaitVersion('2.0.0', never.deps), null)
+  assert.deepEqual(never.sleeps, [250, 250, 250, 250], 'bounded by the clock')
+  assert.equal(never.asked(), 5, 'asked once more when the time is up')
+
+  // A server that stays the old version (the restart did not happen) is not the new one.
+  assert.equal(await awaitVersion('2.0.0', fake([OLD]).deps), null)
 })
 
 test('what `trek-server update` says, and its exit code, for each way it ends', () => {
@@ -448,9 +495,16 @@ test('what `trek-server update` says, and its exit code, for each way it ends', 
   assert.deepEqual(said({ kind: 'failed', current: '1.0.0', error: 'the sha256 is wrong' }), { exitCode: 1, lines: ['The update failed, and trek-server 1.0.0 is as it was:', 'the sha256 is wrong'] })
   assert.deepEqual(said({ kind: 'installed', to: '2.0.0', previous: '/opt/trek-server.previous' }), {
     exitCode: 0,
-    lines: ['Updated to trek-server 2.0.0. The version before it is kept in /opt/trek-server.previous.']
+    lines: [
+      'Updated to trek-server 2.0.0. The version before it is kept in /opt/trek-server.previous.',
+      'No running server answered for this config. A trek-server that is already running from this install still runs the old version: restart it to use 2.0.0.'
+    ]
   })
-  assert.deepEqual(said({ kind: 'restarting', to: '2.0.0', pid: 7 }), { exitCode: 0, lines: ['Installed trek-server 2.0.0; the running server (pid 7) is restarting into it.'] })
+  assert.deepEqual(said({ kind: 'restarted', to: '2.0.0', pid: 7 }), { exitCode: 0, lines: ['Installed trek-server 2.0.0; the running server (pid 7) is now running 2.0.0.'] })
+  assert.deepEqual(said({ kind: 'restart-unconfirmed', to: '2.0.0', pid: 7, seconds: 15 }), {
+    exitCode: 1,
+    lines: ['Installed trek-server 2.0.0. The running server (pid 7) agreed to restart into it, but has not come back as 2.0.0 within 15 s: look at its log, and start it again if it is not running.']
+  })
   assert.deepEqual(said({ kind: 'restart-needed', to: '2.0.0', pid: 7, why: 'Node 22.14.0 cannot replace a running process (22.15 or later can)' }), {
     exitCode: 0,
     lines: ['Installed trek-server 2.0.0. Restart the running server (pid 7) to finish: Node 22.14.0 cannot replace a running process (22.15 or later can).']

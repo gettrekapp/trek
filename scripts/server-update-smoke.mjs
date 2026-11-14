@@ -321,7 +321,7 @@ const DIES_AT_START = `#!/usr/bin/env node\nconst cmd = process.argv[2]\nif (cmd
   check('without --yes and without a terminal, it does not install', unasked.status === 1 && /update --yes/.test(unasked.stderr) && w.versionAt(w.install) === OLD, unasked.out)
 
   const updated = await w.cli(['update', '--yes'])
-  check('with no server running, update --yes installs', updated.status === 0 && updated.out.includes(`Updated to trek-server ${NEW}`), updated.out)
+  check('with no server running, update --yes installs, and says a running server would need a restart', updated.status === 0 && updated.out.includes(`Updated to trek-server ${NEW}`) && /already running from this install still runs the old version/.test(updated.out), updated.out)
   check('the install path holds the new version, the old one is kept', w.versionAt(w.install) === NEW && w.versionAt(`${w.install}.previous`) === OLD)
   check('it is marked as not started yet', w.marks().join() === 'update-pending.json', w.marks().join())
   check('nothing is left beside the install', !existsSync(join(w.base, 'opt', '.trek-update.lock')) && !existsSync(join(w.base, 'opt', `.trek-update-${NEW}`)) && !existsSync(join(w.base, 'opt', `.trek-update-${NEW}.tar.gz`)))
@@ -370,7 +370,7 @@ const DIES_AT_START = `#!/usr/bin/env node\nconst cmd = process.argv[2]\nif (cmd
   const updated = await w.cli(['update', '--yes'])
   check('update --yes installs while the server runs', updated.status === 0 && updated.out.includes(`Installed trek-server ${NEW}`), updated.out)
   if (canExecve) {
-    check('the command says the server is restarting', updated.out.includes(`the running server (pid ${pid}) is restarting into it`), updated.out)
+    check('the command says the server is now the new version', updated.out.includes(`the running server (pid ${pid}) is now running ${NEW}`), updated.out)
     check(`the same process comes back as ${NEW}`, await up(w, run, NEW), run.output)
     check('on the same port', listenings(run, w.port) === 2, run.output)
     check('with the same pid', run.ended === null && (await control(w.socket, 'status'))?.pid === pid)

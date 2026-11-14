@@ -1,6 +1,7 @@
 // `trek-server update`: says what it found, asks, installs, and has a running server restart into
 // the new version. `--check` only looks. Exit 0: up to date, or updated. Exit 1: not possible here,
-// or it failed (the install is then as it was).
+// it failed (the install is then as it was), or the running server did not come back as the new
+// version in time.
 import { createInterface } from 'node:readline/promises'
 import { dirname, resolve } from 'node:path'
 import type { CliArgs } from '../cli.ts'
@@ -32,9 +33,12 @@ export type UpdateOutcome =
   | { kind: 'needs-yes'; latest: string }
   | { kind: 'declined' }
   | { kind: 'failed'; current: string; error: string }
-  /** Installed, with no server running */
+  /** Installed, and no server answered on this config's control socket */
   | { kind: 'installed'; to: string; previous: string }
-  | { kind: 'restarting'; to: string; pid: number }
+  /** Installed, and the running server said it is now the new version */
+  | { kind: 'restarted'; to: string; pid: number }
+  /** Installed, the running server agreed to restart, and has not said it is the new version in time */
+  | { kind: 'restart-unconfirmed'; to: string; pid: number; seconds: number }
   /** Installed, but the running server did not restart into it */
   | { kind: 'restart-needed'; to: string; pid: number; why: string }
 
@@ -61,27 +65,73 @@ export function describeOutcome(outcome: UpdateOutcome): { lines: string[]; exit
     case 'failed':
       return { exitCode: 1, lines: [`The update failed, and trek-server ${outcome.current} is as it was:`, outcome.error] }
     case 'installed':
-      return { exitCode: 0, lines: [`Updated to trek-server ${outcome.to}. The version before it is kept in ${outcome.previous}.`] }
-    case 'restarting':
-      return { exitCode: 0, lines: [`Installed trek-server ${outcome.to}; the running server (pid ${outcome.pid}) is restarting into it.`] }
+      // No answer is not proof that none runs: a server without a control socket (its path too
+      // long, a folder it could not write) or one started with another --config is not found here.
+      return {
+        exitCode: 0,
+        lines: [
+          `Updated to trek-server ${outcome.to}. The version before it is kept in ${outcome.previous}.`,
+          `No running server answered for this config. A trek-server that is already running from this install still runs the old version: restart it to use ${outcome.to}.`
+        ]
+      }
+    case 'restarted':
+      return { exitCode: 0, lines: [`Installed trek-server ${outcome.to}; the running server (pid ${outcome.pid}) is now running ${outcome.to}.`] }
+    case 'restart-unconfirmed':
+      return {
+        exitCode: 1,
+        lines: [
+          `Installed trek-server ${outcome.to}. The running server (pid ${outcome.pid}) agreed to restart into it, but has not come back as ${outcome.to} within ${outcome.seconds} s: look at its log, and start it again if it is not running.`
+        ]
+      }
     case 'restart-needed':
       return { exitCode: 0, lines: [`Installed trek-server ${outcome.to}. Restart the running server (pid ${outcome.pid}) to finish: ${outcome.why}.`] }
   }
 }
 
-/** The question asked before installing; `server`: the one running with this config, which restarts into the new version. */
-export function confirmQuestion(current: string, latest: string, server: Pick<ControlStatus, 'pid' | 'sessions'> | null): string {
+/** The question asked before installing; `server`: the one running with this config, which restarts into the new version if it can. */
+export function confirmQuestion(current: string, latest: string, server: Pick<ControlStatus, 'pid' | 'sessions' | 'canRelaunch'> | null): string {
   const question = `Update trek-server ${current} to ${latest}?`
   if (!server) return question
+  if (!server.canRelaunch) {
+    return `${question} The running server (pid ${server.pid}) cannot restart itself into it (its Node is older than 22.15): it keeps running ${current} until you restart it.`
+  }
   const restarts = `${question} The running server (pid ${server.pid}) restarts into it`
   if (server.sessions === 0) return `${restarts}; it has no terminals open.`
   const closes = server.sessions === 1 ? 'its 1 terminal closes' : `its ${server.sessions} terminals close`
   return `${restarts}: ${closes}, and agent sessions resume when their worktrees are opened again.`
 }
 
+/** How long a server that agreed to restart has to answer as the new version: its shutdown takes up to about 2 s, its start about one. */
+const RESTART_WAIT_MS = 15_000
+const RESTART_POLL_MS = 200
+
+export interface AwaitVersionDeps {
+  /** One `status` request on the control socket; null when nothing answers */
+  request: () => Promise<unknown | null>
+  now: () => number
+  sleep: (ms: number) => Promise<void>
+  timeoutMs?: number
+  everyMs?: number
+}
+
+/**
+ * Asks the running server what it is until it answers as `version`: its status then, or null
+ * when it has not within the time (it is still the old version, or answers nothing: gone, or
+ * not back yet).
+ */
+export async function awaitVersion(version: string, deps: AwaitVersionDeps): Promise<ControlStatus | null> {
+  const deadline = deps.now() + (deps.timeoutMs ?? RESTART_WAIT_MS)
+  for (;;) {
+    const status = await deps.request()
+    if (isStatus(status) && status.version === version) return status
+    if (deps.now() >= deadline) return null
+    await deps.sleep(deps.everyMs ?? RESTART_POLL_MS)
+  }
+}
+
 function isStatus(value: unknown): value is ControlStatus {
   const s = value as ControlStatus | null
-  return s !== null && typeof s === 'object' && typeof s.pid === 'number' && typeof s.installDir === 'string' && typeof s.sessions === 'number'
+  return s !== null && typeof s === 'object' && typeof s.pid === 'number' && typeof s.version === 'string' && typeof s.installDir === 'string' && typeof s.sessions === 'number'
 }
 
 async function confirm(question: string): Promise<boolean> {
@@ -135,7 +185,15 @@ async function update(args: CliArgs, installDir: string): Promise<UpdateOutcome>
   if (result.kind === 'up-to-date') return { kind: 'latest', current: result.current }
   if (!server) return { kind: 'installed', to: result.to, previous: previousDir(install.dir) }
   const answer = (await controlRequest(controlPath(configPath), 'relaunch')) as { ok?: unknown; error?: unknown } | null
-  if (answer !== null && typeof answer === 'object' && answer.ok === true) return { kind: 'restarting', to: result.to, pid: server.pid }
+  if (answer !== null && typeof answer === 'object' && answer.ok === true) {
+    // "ok" is the server agreeing to restart, not the new version running: wait for it to say so.
+    const now = await awaitVersion(result.to, {
+      request: () => controlRequest(controlPath(configPath), 'status'),
+      now: Date.now,
+      sleep: (ms) => new Promise((done) => setTimeout(done, ms))
+    })
+    return now ? { kind: 'restarted', to: result.to, pid: now.pid } : { kind: 'restart-unconfirmed', to: result.to, pid: server.pid, seconds: RESTART_WAIT_MS / 1000 }
+  }
   const why = answer !== null && typeof answer === 'object' && typeof answer.error === 'string' ? answer.error : 'the running server did not answer'
   return { kind: 'restart-needed', to: result.to, pid: server.pid, why }
 }

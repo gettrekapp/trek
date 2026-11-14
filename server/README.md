@@ -483,8 +483,10 @@ working. The folder also keeps its name, version and all: `trek-server version` 
 it. The version before is kept beside it as `<folder>.previous` until the next update replaces it.
 
 **A running server** (one started with the same config) restarts into the new version when the
-update is installed: `Installed trek-server 0.6.0; the running server (pid 1234) is restarting
-into it.` **Its terminals close**; agent sessions resume when their worktrees are opened again.
+update is installed, and the command waits (up to 15 seconds) for it to answer as the new
+version: `Installed trek-server 0.6.0; the running server (pid 1234) is now running 0.6.0.` If
+it does not in that time the command says so and exits 1: look at the server's log.
+**Its terminals close**; agent sessions resume when their worktrees are opened again.
 On Node 22.15 or later the server becomes the new version in the same process, with the same
 process id, arguments and environment, so a terminal, tmux or systemd sees no exit. It comes
 back through `bin/trek-server`, under the same Node binary it was running with (`TREK_NODE` if
@@ -498,9 +500,12 @@ and the command says `Restart the running server (pid 1234) to finish`: restart 
 `update: now running trek-server 0.6.0 (was 0.5.0)`.
 
 The command reaches the running server over a Unix socket, `control.sock`, beside the config file
-(mode 0600: only the server's user). If the server did not restart, look in its log for
-`update: no control socket`: the socket's path must fit in about 100 bytes (103 on macOS, 107 on
-Linux), and a server without one keeps running the old version until you restart it.
+(mode 0600: only the server's user). When nothing answers there, the command installs and says
+`No running server answered for this config. A trek-server that is already running from this
+install still runs the old version: restart it to use 0.6.0.` That is the case with no server
+running, with a `--config` other than the server's, and with a server that has no socket: look
+in its log for `update: no control socket` (the socket's path must fit in about 100 bytes: 103
+on macOS, 107 on Linux). Such a server keeps running the old version until you restart it.
 
 **If the new version does not start.** `bin/trek-server` marks the first start after an update
 as tried, and the server removes the mark once it is listening. A start that still finds the mark,
