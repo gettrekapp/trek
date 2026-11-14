@@ -81,6 +81,52 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+/* While an update is offered, both sides widen to fit its indicator: equally, so the title stays centred. */
+.title-bar:has(.update-indicator) .title-side {
+  width: 170px;
+}
+
+/* The right side: the update indicator, pushed to the edge. */
+.title-side-end {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+/* A button in the drag region must opt out of dragging to be clickable. */
+.update-indicator {
+  -webkit-app-region: no-drag;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.update-indicator-progress {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-indicator-ready {
+  background: var(--done);
+}
+
+.update-indicator:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
 .title-text {
   flex: 1;
   min-width: 0;

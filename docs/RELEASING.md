@@ -56,6 +56,7 @@ left as they were. It refuses to touch a release that is already published.
 | Artifact | Built on | Checked by |
 | --- | --- | --- |
 | `Trek-X.Y.Z-arm64.dmg` | macos-latest (arm64) | `codesign --verify --deep --strict`; a Developer ID Application signature with the hardened runtime and the entitlements; every Mach-O under `app.asar.unpacked` (node-pty's `pty.node` and `spawn-helper`) signed with the hardened runtime and `spawn-helper` executable; `stapler validate` and `spctl --assess` on the app, `stapler validate` on the notarized dmg and on the app inside it; then `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` on the signed app |
+| `Trek-X.Y.Z-arm64.zip`, `Trek-X.Y.Z-arm64.zip.blockmap`, `latest-mac.yml` | macos-latest (arm64), the same build as the dmg | the built `dist/mac-arm64/Trek.app`: `Contents/Resources/app-update.yml` exists and names the repository; the zip and its block map exist; the app unzipped: `codesign --verify --deep --strict`, `stapler validate`, `spctl --assess`; `scripts/latest-mac-yml.mjs` drops the dmg's entry from `latest-mac.yml` and checks the zip's size and SHA-512 against it |
 | `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `codesign` (in `package-server.mjs --sign`) and `notarytool` on node-pty's `pty.node` and `spawn-helper`; `scripts/server-tarball-smoke.mjs --notarized` (Developer ID, hardened runtime, timestamp; unpacked quarantined) |
 | `trek-server-X.Y.Z-darwin-x64.tar.gz` | macos-15-intel | 〃 |
 | `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | `scripts/server-tarball-smoke.mjs` |
@@ -112,6 +113,49 @@ npm run build:web && npm --prefix server run build
 node scripts/package-server.mjs --out dist-release
 node scripts/server-tarball-smoke.mjs dist-release/trek-server-<version>-<os>-<arch>.tar.gz
 ```
+
+## App updates
+
+An installed Trek (the first release that includes the updater, and later ones) checks the latest
+**published** release ten seconds after it starts and once a day, and from **Trek → Check for
+Updates…**. It reads `latest-mac.yml` from the release, and only when the user chooses Download
+does it fetch `Trek-X.Y.Z-arm64.zip`; macOS checks the zip's Developer ID signature before the app
+is replaced. Nothing is offered while the release is a draft or a prerelease, so publishing the
+draft is what ships the update. A Trek from a release before the updater was added never checks:
+it needs one manual install of a newer dmg.
+
+`latest-mac.yml` lists only the zip. electron-builder also lists the dmg, but the workflow staples
+the dmg after that file is written, so `scripts/latest-mac-yml.mjs` removes the dmg's stale entry.
+
+`Trek-X.Y.Z-arm64.zip.blockmap` is electron-builder's block map of the zip. A Trek that has
+updated itself before keeps that update's zip, and uses the two releases' block maps to download
+only the blocks that changed; when either block map is missing it downloads the whole zip.
+
+Do not rename or delete the zip or `latest-mac.yml` on a published release: installed apps would
+find no update, or fail to download it.
+
+The feed is `Contents/Resources/app-update.yml` in the app. electron-builder writes it only when
+the build has a `dmg` or `zip` target (app-builder-lib `out/publish/PublishManager.js`, its
+`onAfterPack` hook), so an app from `npm run dist:dir` has no feed and its update check fails
+quietly; only `npm run dist` or the release workflow produce an app that can update.
+`TREK_NO_UPDATE_CHECK=1` (or `true`, `yes`) turns the checks off and disables the
+menu item: every smoke sets it, the packaged-app smoke included, so no test contacts GitHub.
+
+The updater cannot be tested without two signed, published builds. On the first two releases that
+carry it, with the older one installed in /Applications:
+
+- [ ] Publish the newer release. Within a minute of launching the older Trek, the title bar shows
+      "Update available: X.Y.Z" in every window.
+- [ ] Click it → **Release Notes** opens the release page; the indicator stays.
+- [ ] **Later** hides the indicator; **Check for Updates…** brings the dialog back.
+- [ ] **Skip This Version** hides it; quit and relaunch: nothing is offered. **Check for
+      Updates…** still offers it.
+- [ ] **Download** shows "Downloading N%", then "Restart to Update".
+- [ ] **Restart to Update** → **Restart to Update**: Trek closes and reopens as the new version
+      (Trek → About), its windows restored, and offers to restart the Local server.
+- [ ] Repeat the download, choose **Later**, quit Trek: the next launch is the new version.
+- [ ] With the newest version installed, **Check for Updates…** says it is the latest version.
+- [ ] Offline, **Check for Updates…** shows an error; a launch offline shows nothing.
 
 ## One-time GitHub setup
 

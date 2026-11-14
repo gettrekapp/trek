@@ -350,7 +350,8 @@ const env = {
   HOME: home,
   XDG_DATA_HOME: join(home, '.local', 'share'),
   XDG_STATE_HOME: join(home, '.local', 'state'),
-  SHELL: '/bin/zsh'
+  SHELL: '/bin/zsh',
+  TREK_NO_UPDATE_CHECK: '1'
 }
 // Windows are restored: this run's userData is its own.
 delete env.TREK_NO_WINDOW_RESTORE

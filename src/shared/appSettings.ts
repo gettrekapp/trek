@@ -4,6 +4,12 @@ import { PLUGIN_ID_RE, type PluginPrefValue } from './plugins/manifest.ts'
 
 export type PluginPrefs = Record<string, Record<string, PluginPrefValue>>
 
+/** The app updater's memory: the version the user chose to skip, and when it last checked (epoch ms). */
+export interface AppUpdatePrefs {
+  skippedVersion?: string
+  lastCheckAt?: number
+}
+
 export interface AppSettings {
   /** OS notifications for sessions on the app-wide servers (main's attention); on by default */
   showNotifications: boolean
@@ -14,14 +20,22 @@ export interface AppSettings {
    * plugin's `active` (Active plays spoken summaries in this app's windows; Busy, false, skips them).
    */
   plugins: PluginPrefs
+  /** The app updater's skipped version and last check time */
+  update: AppUpdatePrefs
 }
 
-/** A change to the app settings: any of its fields; `plugins` is merged per plugin and key, and a key set to null is removed. */
-export type AppSettingsPatch = Partial<Omit<AppSettings, 'plugins'>> & {
+/** A change to the app settings: any of its fields; `plugins` is merged per plugin and key, `update` per key, and a key set to null is removed. */
+export type AppSettingsPatch = Partial<Omit<AppSettings, 'plugins' | 'update'>> & {
   plugins?: Record<string, Record<string, PluginPrefValue | null>>
+  update?: { skippedVersion?: string | null; lastCheckAt?: number | null }
 }
 
-export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({ showNotifications: true, stopLocalServerOnQuit: false, plugins: Object.freeze({}) as PluginPrefs })
+export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
+  showNotifications: true,
+  stopLocalServerOnQuit: false,
+  plugins: Object.freeze({}) as PluginPrefs,
+  update: Object.freeze({}) as AppUpdatePrefs
+})
 
 /** The most preferences a plugin keeps, and the longest key or string value. */
 export const MAX_PLUGIN_PREFS = 32
@@ -53,6 +67,26 @@ function mergePluginPrefs(base: PluginPrefs, patch: unknown): PluginPrefs {
   return out
 }
 
+/** A release version as the updater reports it: 1.2.3, or 1.2.3-rc.1. */
+const UPDATE_VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]{1,32})?$/
+
+/** `patch` over `base`, key by key; null removes a key, and a value of the wrong kind is ignored. */
+function mergeUpdatePrefs(base: AppUpdatePrefs | undefined, patch: unknown): AppUpdatePrefs {
+  const out: AppUpdatePrefs = { ...base }
+  if (!isObject(patch)) return out
+  if (Object.hasOwn(patch, 'skippedVersion')) {
+    const version = patch.skippedVersion
+    if (version === null) delete out.skippedVersion
+    else if (typeof version === 'string' && UPDATE_VERSION_RE.test(version)) out.skippedVersion = version
+  }
+  if (Object.hasOwn(patch, 'lastCheckAt')) {
+    const at = patch.lastCheckAt
+    if (at === null) delete out.lastCheckAt
+    else if (typeof at === 'number' && Number.isFinite(at) && at >= 0) out.lastCheckAt = at
+  }
+  return out
+}
+
 /**
  * A stored file (or a patch): known fields of the right type are kept, the rest fall back to `base`.
  * The 0.2.x `voiceActive` reads as the voice plugin's `active` when it has none of its own (so the
@@ -64,5 +98,10 @@ export function parseAppSettings(raw: unknown, base: Readonly<AppSettings> = DEF
   let plugins = mergePluginPrefs(base.plugins, from.plugins)
   const ownActive = isObject(from.plugins) && isObject(from.plugins.voice) && Object.hasOwn(from.plugins.voice, 'active')
   if (typeof from.voiceActive === 'boolean' && !ownActive) plugins = mergePluginPrefs(plugins, { voice: { active: from.voiceActive } })
-  return { showNotifications: flag('showNotifications'), stopLocalServerOnQuit: flag('stopLocalServerOnQuit'), plugins }
+  return {
+    showNotifications: flag('showNotifications'),
+    stopLocalServerOnQuit: flag('stopLocalServerOnQuit'),
+    plugins,
+    update: mergeUpdatePrefs(base.update, from.update)
+  }
 }

@@ -207,7 +207,7 @@ const stopDaemon = async () => {
 
 const userData = join(work, 'user-data')
 // No Local server: this smoke is about a remote one, and must not start one in the real home.
-const env = { ...process.env, TREK_NO_LOCAL_SERVER: '1' }
+const env = { ...process.env, TREK_NO_LOCAL_SERVER: '1', TREK_NO_UPDATE_CHECK: '1' }
 delete env.TREK_NO_WINDOW_RESTORE // the restore step needs it on
 let app = null
 const pageErrors = []

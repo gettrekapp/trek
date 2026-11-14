@@ -14,7 +14,7 @@
 //                                              tag check)
 //
 // The Local server supervisor compares the running server's version with the bundled one
-// (src/main/localServerRules.ts compareVersions), so a new version must not be lower than the
+// (src/shared/versions.ts compareVersions), so a new version must not be lower than the
 // last one shipped in any of the three.
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

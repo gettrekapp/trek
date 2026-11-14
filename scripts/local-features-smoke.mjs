@@ -302,6 +302,7 @@ try {
     XDG_STATE_HOME: join(home, '.local', 'state'),
     SHELL: '/bin/zsh',
     TREK_NO_WINDOW_RESTORE: '1',
+    TREK_NO_UPDATE_CHECK: '1',
     TREK_SERVER_LINEAR_URL: `${servicesUrl}/graphql`,
     TREK_SERVER_ELEVENLABS_URL: `${servicesUrl}/v1`
   }

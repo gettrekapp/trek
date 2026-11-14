@@ -4,7 +4,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_APP_SETTINGS, MAX_PLUGIN_PREFS, parseAppSettings } from '../src/shared/appSettings.ts'
 
-const DEFAULTS = { showNotifications: true, stopLocalServerOnQuit: false, plugins: {} }
+const DEFAULTS = { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} }
 
 test('notifications are on and stopping Local on quit is off by default; a missing, corrupt or mistyped file reads as the defaults', () => {
   assert.deepEqual(DEFAULT_APP_SETTINGS, DEFAULTS)
@@ -15,7 +15,7 @@ test('notifications are on and stopping Local on quit is off by default; a missi
 })
 
 test('a patch changes only the fields it carries, over the current settings', () => {
-  const current = { showNotifications: false, stopLocalServerOnQuit: true, plugins: { voice: { active: true } } }
+  const current = { showNotifications: false, stopLocalServerOnQuit: true, plugins: { voice: { active: true } }, update: {} }
   assert.deepEqual(parseAppSettings({}, current), current)
   assert.deepEqual(parseAppSettings({ showNotifications: true }, current), { ...current, showNotifications: true })
   assert.deepEqual(parseAppSettings({ stopLocalServerOnQuit: false }, current), { ...current, stopLocalServerOnQuit: false })
@@ -53,4 +53,21 @@ test("0.2.x's voiceActive becomes the voice plugin's active, in a file or a patc
   assert.deepEqual(parseAppSettings({ voiceActive: false, plugins: { voice: { active: true } } }).plugins, { voice: { active: true } })
   assert.deepEqual(parseAppSettings({ voiceActive: false, plugins: { voice: { volume: 3 } } }).plugins, { voice: { volume: 3, active: false } }, 'a voice plugin without its own active takes it')
   assert.equal('voiceActive' in parseAppSettings({ voiceActive: true }), false, 'not kept: the next write drops it')
+})
+
+test('the update preferences: a skipped version and the last check time, each kept only when well formed', () => {
+  assert.deepEqual(parseAppSettings({ update: { skippedVersion: '0.4.1', lastCheckAt: 1000 } }).update, { skippedVersion: '0.4.1', lastCheckAt: 1000 })
+  for (const update of [null, 'x', [], { skippedVersion: 5 }, { skippedVersion: 'latest' }, { skippedVersion: 'v0.4.1' }, { lastCheckAt: '1' }, { lastCheckAt: -1 }, { lastCheckAt: Infinity }]) {
+    assert.deepEqual(parseAppSettings({ update }).update, {}, JSON.stringify(update))
+  }
+  assert.deepEqual(parseAppSettings({ update: { skippedVersion: '1.0.0-rc.1' } }).update, { skippedVersion: '1.0.0-rc.1' })
+})
+
+test('an update patch changes only the keys it carries; null removes one', () => {
+  const current = { ...DEFAULTS, update: { skippedVersion: '0.4.1', lastCheckAt: 1000 } }
+  assert.deepEqual(parseAppSettings({}, current).update, current.update)
+  assert.deepEqual(parseAppSettings({ update: { lastCheckAt: 2000 } }, current).update, { skippedVersion: '0.4.1', lastCheckAt: 2000 })
+  assert.deepEqual(parseAppSettings({ update: { skippedVersion: null } }, current).update, { lastCheckAt: 1000 })
+  assert.deepEqual(parseAppSettings({ update: { skippedVersion: 'bad' } }, current).update, current.update)
+  assert.deepEqual(parseAppSettings({ showNotifications: false }, current).update, current.update)
 })

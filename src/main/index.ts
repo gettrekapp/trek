@@ -30,6 +30,7 @@ import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandl
 import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
 import { removeStaleMcpConfigs } from './staleMcpConfigs'
+import { appUpdatesEnabled, requestAppUpdateCheck, startAppUpdates } from './appUpdate'
 import {
   APP_ICON,
   arrangeWindows,
@@ -93,7 +94,26 @@ function localServerMenu(): Electron.MenuItemConstructorOptions[] {
 function buildMenu(): void {
   const isMac = process.platform === 'darwin'
   const template: Electron.MenuItemConstructorOptions[] = [
-    ...(isMac ? [{ role: 'appMenu' as const }] : []),
+    // Built by hand: the stock appMenu takes no extra item. The same items, plus the update check.
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { label: 'Check for Updates…', enabled: appUpdatesEnabled(), click: () => requestAppUpdateCheck(true) },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
     {
       label: 'File',
       submenu: [
@@ -195,6 +215,7 @@ app.whenReady().then(async () => {
   registerV2Relay()
   registerLocalServerHandlers()
   registerLlmHandlers()
+  startAppUpdates({ prepareQuit })
   buildMenu()
   onLocalServerChanged(buildMenu)
   setDockIcon()
@@ -232,15 +253,25 @@ app.on('will-quit', () => {
   closeServerLinks()
 })
 
+/**
+ * The app's own quit steps: every window's close handshake, then the Local server's quit setting.
+ * False when a window refused (the quit, or the update's restart, is off). After a true, the
+ * next quit goes straight through.
+ */
+async function prepareQuit(): Promise<boolean> {
+  if (quitConfirmed) return true
+  if (isQuitting()) return false
+  if (!(await closeAllForQuit())) return false
+  // Keeps running by default; "Stop local server on quit" stops it here.
+  await quitLocalServer(appSettings().stopLocalServerOnQuit)
+  quitConfirmed = true
+  return true
+}
+
 app.on('before-quit', (event) => {
   if (quitConfirmed) return
   event.preventDefault()
-  if (isQuitting()) return
-  void closeAllForQuit().then(async (closed) => {
-    if (!closed) return
-    // Keeps running by default; "Stop local server on quit" stops it here.
-    await quitLocalServer(appSettings().stopLocalServerOnQuit)
-    quitConfirmed = true
-    app.quit()
+  void prepareQuit().then((ready) => {
+    if (ready) app.quit()
   })
 })

@@ -38,6 +38,11 @@ CLIs and sign-ins you already have, so there's no extra account and no API key i
 - **Agents**: install and sign in to the CLIs you want (`claude`, `codex`, `gemini`,
   `grok`) as the user the server runs as. The server's config picks the default agent.
 
+Trek checks for a newer release when it starts and once a day, and shows "Update available" in the
+title bar. Nothing is downloaded or installed until you choose to: **Download**, then **Restart to
+Update**. **Trek → Check for Updates…** checks on demand. (Releases from before the updater was
+added don't have it: install a newer dmg by hand once.)
+
 **Status**: early and moving fast. The desktop app is macOS-only for now. A phone companion
 (`apps/mobile`, iOS and Android) isn't in the stores yet, and Windows support is on the
 way. Issues and feedback are welcome.
@@ -507,6 +512,8 @@ name (1–32 of `a-z`, `0-9` and `-`, starting with a letter or digit), for exam
 ignored (`dev`), and a packaged Trek ignores the variable.
 `TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it);
 only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
+`TREK_NO_UPDATE_CHECK=1` (the same values) turns a packaged Trek's update
+checks off (the smokes set it, so they never contact GitHub).
 
 `npm test` runs the unit tests. The end-to-end smokes build the app and drive it with
 Playwright, each in its own temp user-data directory and HOME, never yours; run them

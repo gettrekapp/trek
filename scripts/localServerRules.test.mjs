@@ -13,7 +13,6 @@ import {
   READY_TIMEOUT_MS,
   afterStop,
   childEnv,
-  compareVersions,
   isLocalServerCommand,
   keepAfterFailure,
   localPaths,
@@ -123,14 +122,6 @@ test('probeVerdict: only a live pid whose hello is welcomed as this profile\'s l
     use: false,
     why: 'the server on port 51234 is another profile ()'
   }, 'a welcome with no serverId is not this profile')
-})
-
-test('compareVersions: numeric, part by part; anything unparsable compares equal', () => {
-  assert.equal(compareVersions('0.2.0', '0.2.0'), 0)
-  assert.equal(compareVersions('0.2.0', '0.10.0'), -1)
-  assert.equal(compareVersions('1.0.0', '0.9.9'), 1)
-  assert.equal(compareVersions('1.0', '1.0.0'), 0)
-  assert.equal(compareVersions('1.0.0-beta', '1.0.0'), 0)
 })
 
 test('skewOf: none for the same version and build; otherwise older, newer or another build', () => {
