@@ -8,6 +8,7 @@ import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
 import type { SessionContext } from '../../shared/model/types'
 import { viaServerAll } from './projectSetters.ts'
+import { nextProjectPage, type ProjectPage } from './projectPage.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
   EnvCheckResult,
@@ -183,6 +184,11 @@ export interface AppState {
   serverAgents: ServerAgents | null
   /** Bumped by a settings conflict's Reload: the Settings panel remounts, dropping its drafts */
   settingsReload: number
+  /** The project-level page open over the worktree detail (left panel rows); null: the detail shows */
+  projectPage: ProjectPage | null
+  /** Opens the page, or closes it when it is the one open */
+  toggleProjectPage: (page: ProjectPage) => void
+  closeProjectPage: () => void
   /** The start screen opens on Connect with this server picked (once), after Pick another project. */
   connectServerId: string | null
   setConnectServerId: (id: string | null) => void
@@ -348,6 +354,9 @@ export const useAppStore = create<AppState>((set) => ({
   serverLink: null,
   serverAgents: null,
   settingsReload: 0,
+  projectPage: null,
+  toggleProjectPage: (page) => set((state) => ({ projectPage: nextProjectPage(state.projectPage, page) })),
+  closeProjectPage: () => set({ projectPage: null }),
   setServerLink: (serverLink) =>
     set((state) => {
       const serverOffline = serverLink !== 'connected'
@@ -385,7 +394,8 @@ export const useAppStore = create<AppState>((set) => ({
         : undefined
       return {
         activeWorktreeId: id,
-        selected: instance ? { path: instance.path } : state.selected
+        selected: instance ? { path: instance.path } : state.selected,
+        projectPage: null
       }
     }),
 
@@ -401,7 +411,7 @@ export const useAppStore = create<AppState>((set) => ({
         (instance
           ? repoOfWorktreeId(state.project, instance.id)
           : repoOfLocator(state.project, state.hostWorktrees, loc))
-      return { selected: { ...loc, repoId: repo?.id }, activeWorktreeId: instance?.id ?? null }
+      return { selected: { ...loc, repoId: repo?.id }, activeWorktreeId: instance?.id ?? null, projectPage: null }
     }),
 
   setActiveTerminal: (worktreeId, terminalId) =>
