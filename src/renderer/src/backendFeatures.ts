@@ -14,6 +14,7 @@ export type FeatureName =
   | 'openInEditor'
   | 'promote'
   | 'automations'
+  | 'history'
   | 'settingsEdit'
   | 'globalPanel'
 
@@ -32,6 +33,7 @@ export const FEATURE_NAMES: readonly FeatureName[] = [
   'openInEditor',
   'promote',
   'automations',
+  'history',
   'settingsEdit',
   'globalPanel'
 ]
@@ -47,6 +49,7 @@ export const NO_FEATURES: BackendFeatures = Object.fromEntries(FEATURE_NAMES.map
  *   checked when it is picked).
  * - Promote to primary and "Promote branch to worktree" (5e) need `promote`.
  * - Automations need `automations`: an older server has no `automation.*`.
+ * - The History tab needs `history`: an older server records nothing.
  * - Settings are edited on the server (every v2 server has
  *   project.updateSettings, so no capability), with the sections
  *   `settingsSections` picks.
@@ -76,6 +79,7 @@ export const V2_FEATURES: BackendFeatures = {
   openInEditor: true,
   promote: true,
   automations: true,
+  history: true,
   settingsEdit: true,
   globalPanel: true
 }
@@ -97,7 +101,8 @@ const CAPABILITY_FOR: Partial<Record<FeatureName, string>> = {
   review: 'review',
   moveWorktree: 'move',
   promote: 'promote',
-  automations: 'automations'
+  automations: 'automations',
+  history: 'history'
 }
 
 /**

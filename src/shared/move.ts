@@ -1,6 +1,7 @@
 // Moving a worktree between servers (phase 5d): the shapes the `move.*` methods carry, their
 // limits, and how two repositories' origin URLs are compared. Pure: shared by the server, the
 // app's move flow and `node --test`.
+import type { HistoryEvent } from './model/history.ts'
 import type { LlmSelection } from './providers/types.ts'
 
 /**
@@ -125,6 +126,10 @@ export interface MoveExport {
   /** Sessions not carried, one line each */
   notCarried: string[]
   branchData: MoveBranchData
+  /** The branch's history on the source, oldest first (absent from a server older than the history) */
+  history?: HistoryEvent[]
+  /** The source server's name, for the target's "moved in from" */
+  serverName?: string
 }
 
 /** One chunk of a history (`move.history`): `data` is base64 of the bytes at `offset`; `done` once it reaches `total`. */
@@ -158,6 +163,8 @@ export interface MoveReceived {
    * restart `move.unreceive` answers NOT_FOUND.
    */
   undoToken: string
+  /** The target server's name, for the source's "moved to" */
+  serverName?: string
 }
 
 /**

@@ -74,9 +74,9 @@ sends every action to its server, and every other window on that project sees it
   "Tag:" dropdown under the worktree list. New worktrees start as **In Progress**. Tags,
   like notes, tickets and PR links, are keyed to the branch, so they survive the
   worktree being deleted and re-created.
-- **Detail pane**: the selected worktree's branch, path and linked ticket/PR, with quick
-  actions (Open in VS Code and Reveal in Finder, in a Local window) and an overflow menu
-  (link ticket/PR, delete worktree). A ticket is a Linear issue (`TOW-123`, or paste its
+- **Detail pane**: the selected worktree's branch, path and linked ticket/PR, with an
+  overflow menu (Open in VS Code and Reveal in Finder in a Local window, link ticket/PR,
+  delete worktree). A ticket is a Linear issue (`TOW-123`, or paste its
   `linear.app/<workspace>/issue/…` URL) or a legacy Azure DevOps work item id; when the
   branch name contains a Linear id the ticket dialog pre-fills it. Add a Linear API key
   in ⚙ Settings to show each issue's status and title on its chip; the key is the

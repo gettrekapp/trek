@@ -493,6 +493,7 @@ const server = startServer(
   {
     mcpDir: resolve(serverDataDir, 'mcp'),
     promoteRecoveryDir: resolve(serverDataDir, 'promote-recovery'),
+    historyDir: resolve(serverDataDir, 'history'),
     local: local !== undefined,
     machine: createMachine(serverDataDir, { local: local !== undefined }),
     integrations: createIntegrations({}),

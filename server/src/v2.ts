@@ -23,6 +23,9 @@ import type { AutomationScheduler } from './automations/scheduler.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
 import { moveHandlers } from './move/moveHandlers.ts'
 import { promoteHandlers } from './promote/promoteHandlers.ts'
+import { historyHandlers } from './history/historyHandlers.ts'
+import type { HistoryStore } from './history/store.ts'
+import { branchChanges, change, recordHistory, tagValue, type Attribution } from './history/record.ts'
 import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
@@ -32,7 +35,8 @@ import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
 import type { SessionManager } from './sessions/manager.ts'
-import { applySettingsPatch, isSettingsKey, pruneDeletedTags } from './projects/settings.ts'
+import { DEFAULT_WORKTREE_TAGS, type WorktreeTag } from '../../src/shared/types.ts'
+import { applySettingsPatch, isSettingsKey, pruneDeletedTagsReporting, type RemovedTags } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
 import { checkSetGrant, type PushGrants } from './push/grants.ts'
 import {
@@ -86,6 +90,10 @@ export interface V2Context {
   push?: { grants: PushGrants }
   /** The server's plugins (plugin system phase 1): a method no core handler has goes to plugin `<id>` */
   plugins?: PluginRegistry
+  /** The worktree history; without it nothing is recorded and history.list is empty */
+  history?: HistoryStore
+  /** Who this request acts as, for the history: absent is a Trek client's user; the MCP tool caller sets `mcp` */
+  attribution?: Attribution
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -105,7 +113,7 @@ function clearableString(value: unknown, field: string): string | null {
 
 const REPO_GUARD_KEYS = ['name', 'linkedDirs', 'environments'] as const
 
-/** Sets or clears one branch-data field; an entry left empty is removed. */
+/** Sets or clears one branch-data field; an entry left empty is removed. The change goes in the history. */
 function setBranchField<K extends keyof BranchData>(
   ctx: V2Context,
   p: any,
@@ -114,16 +122,19 @@ function setBranchField<K extends keyof BranchData>(
   expected?: unknown
 ): null {
   const branch = requireBranch(p.branch)
-  ctx.projects.apply(p.projectId, (d) => {
+  const { repoId, changes } = ctx.projects.apply(p.projectId, (d) => {
     const repo = repoIn(d, p.repoId)
     const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
     checkExpected(`branchData.${field}`, data[field], expected)
+    const before = data[field]
     const empty = value === null || (Array.isArray(value) && value.length === 0)
     if (empty) delete data[field]
     else data[field] = value as BranchData[K]
     if (Object.keys(data).length === 0) delete repo.branchData[branch]
     else repo.branchData[branch] = data
+    return { repoId: repo.id, changes: branchChanges(field, before, data[field], d.settings) }
   })
+  recordHistory(ctx, requireString(p.projectId, 'projectId'), repoId, branch, changes)
   return null
 }
 
@@ -172,6 +183,7 @@ const handlers: Record<string, Handler> = {
   'project.delete': (p, ctx) => {
     const { id } = ctx.projects.require(p.projectId)
     ctx.projects.delete(id)
+    ctx.history?.dropProject(id)
     // Only once the project is gone: a delete that fails leaves its sessions running.
     // The manager tracks its ptys itself, so the records are not needed for this.
     ctx.sessions.forgetProject(id)
@@ -187,16 +199,29 @@ const handlers: Record<string, Handler> = {
   'project.updateSettings': (p, ctx) => {
     const patch = requireRecord(p.settings, 'settings')
     const expected = p.expected === undefined ? undefined : requireRecord(p.expected, 'expected')
+    let removed: RemovedTags[] = []
+    let oldTags: WorktreeTag[] | undefined
+    let oldCustom: WorktreeTag[] | undefined
     ctx.projects.apply(p.projectId, (d) => {
       const current = d.settings as Record<string, unknown>
+      oldTags = d.settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS
+      oldCustom = d.settings.customTags
       for (const [key, value] of Object.entries(expected ?? {})) {
         if (!isSettingsKey(key, ctx.plugins?.settingRules)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
         checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
       }
       d.settings = applySettingsPatch(d.settings, patch, ctx.plugins?.settingRules)
       // A deleted tag comes off every branch in the same change (one patch, one rev).
-      d.repositories = pruneDeletedTags(d.repositories, d.settings, patch)
+      const pruned = pruneDeletedTagsReporting(d.repositories, d.settings, patch)
+      d.repositories = pruned.repositories
+      removed = pruned.removed
     })
+    for (const r of removed) {
+      recordHistory(ctx, p.projectId as string, r.repoId, r.branch, [
+        ...(r.tag ? [change('status', tagValue(oldTags, r.tag))] : []),
+        ...r.customTags.map((id) => change('label.removed', tagValue(oldCustom, id)))
+      ])
+    }
     // The attention topic carries the project's audioAlerts.
     ctx.sessions.refreshAttention()
     return null
@@ -229,6 +254,7 @@ const handlers: Record<string, Handler> = {
       }
       return { projectId: d.id, repoId: repo.id }
     })
+    ctx.history?.dropRepo(projectId, repoId)
     // Only once the repository is removed: a refused remove ends none of its sessions.
     ctx.sessions.forgetRepo(projectId, repoId)
     // Global sessions run in the first repository with the others as additional
@@ -290,21 +316,26 @@ const handlers: Record<string, Handler> = {
   'branch.setPr': (p, ctx) => {
     const pr = clearableString(p.pr, 'pr')
     const branch = requireBranch(p.branch)
-    const ended = ctx.projects.apply(p.projectId, (d) => {
+    const { ended, repoId, changes } = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+      const before = data.pr
       if (pr === null) delete data.pr
       else data.pr = pr
       let ended: string | undefined
+      const changes = branchChanges('pr', before, data.pr, d.settings)
       if (data.prWatch && repo.branchData[branch]?.pr !== pr) {
         delete data.prWatch
         ended = repo.id
+        changes.push({ kind: 'prWatch.off' })
       }
       if (Object.keys(data).length === 0) delete repo.branchData[branch]
       else repo.branchData[branch] = data
-      return ended
+      return { ended, repoId: repo.id, changes }
     })
-    if (ended !== undefined) ctx.prWatch?.forget(requireString(p.projectId, 'projectId'), ended, branch)
+    const projectId = requireString(p.projectId, 'projectId')
+    recordHistory(ctx, projectId, repoId, branch, changes)
+    if (ended !== undefined) ctx.prWatch?.forget(projectId, ended, branch)
     return null
   },
   'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env'), p.expected),
@@ -344,6 +375,7 @@ const handlers: Record<string, Handler> = {
   ...reviewHandlers,
   ...moveHandlers,
   ...promoteHandlers,
+  ...historyHandlers,
 
   // A one-time code a phone redeems at hello for its own token (6a). Any signed-in connection may
   // ask (a web session or a paired phone included): a token already holds shell-level power on
@@ -375,6 +407,9 @@ const handlers: Record<string, Handler> = {
     return { cancelled: ctx.pairing.cancel(p.code, Date.now()) }
   }
 }
+
+/** The branch-data setters (the history's coverage test checks each records its change) */
+export const BRANCH_SET_METHODS: readonly string[] = Object.keys(handlers).filter((m) => m.startsWith('branch.set'))
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */
 const SERVER_TOPIC_METHODS: ReadonlySet<string> = new Set([

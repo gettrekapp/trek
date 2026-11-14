@@ -26,7 +26,7 @@
 //   - The working window (3c-2): Add Worktree creates one on the server and starts a session;
 //     typing is echoed by the fake agent; the shown pane sizes the pty while a tab that was never
 //     shown leaves another client's 150x50 alone; quit and Restart; queue a prompt and send it;
-//     set a tag and a note, and a note set by another client shows in the open panel; the Changes tab and a diff; the Global panel (the server has MCP)
+//     set a tag and a note, and a note set by another client shows in the open panel; the History tab (the tag and note changes, a live entry); the Changes tab and a diff; the Global panel (the server has MCP)
 //     starts exactly one session and has no bot tab; Delete worktree removes it on the server.
 //   - 3c-3b: a tab rename sends the title it started from; removing a queued prompt sends
 //     session.dequeue; a decision asked through the server's MCP shows on the tab and in the bell,
@@ -935,6 +935,19 @@ try {
   const alphaId = (await projectNow()).repositories.find((r) => r.name === 'Alpha').id
   await live.request('branch.setNote', { projectId: target.projectId, repoId: alphaId, branch: 'smoke-wt', note: 'a remote edit' })
   check('a remote edit shows in the open notes panel', await until(() => notes.inputValue(), 'a remote edit'), 'a remote edit')
+
+  // The History tab: the tag this window set (by You) and the notes, newest first; a change made
+  // elsewhere while it is open arrives live.
+  await detail.locator('.panel-btn', { hasText: 'History' }).click()
+  const historyRows = detail.locator('.history-panel .history-row')
+  const historyTexts = () => historyRows.allTextContents()
+  check('the History tab lists the tag change, by You', await until(async () => (await historyTexts()).some((t) => t.includes('In Review') && t.includes('You')), true), true)
+  check('and the note', await until(async () => (await historyTexts()).some((t) => t.includes('Note')), true), true)
+  await live.request('branch.setTicket', { projectId: target.projectId, repoId: alphaId, branch: 'smoke-wt', ticket: 'SMK-1' })
+  check('a remote change shows in the open History tab', await until(async () => ((await historyRows.first().textContent()) ?? '').includes('Ticket set to SMK-1'), true), true)
+  await live.request('branch.setTicket', { projectId: target.projectId, repoId: alphaId, branch: 'smoke-wt', ticket: null })
+  // Back to Notes, so the next step's Notes click closes it as before.
+  await detail.locator('.panel-btn', { hasText: /^Notes$/ }).click()
 
   // Changes and a diff, read from the server.
   writeFileSync(join(created.path, 'smoke.txt'), 'hello from the smoke\n')

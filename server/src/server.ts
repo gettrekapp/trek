@@ -32,11 +32,13 @@ import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './
 import { createEventSink, type Machine } from './integrations/machineHandlers'
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
+import { projectTopic } from '../../src/shared/model/topics.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
 import { mcpContext } from './plugins/mcp'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
 import { AutomationScheduler } from './automations/scheduler'
+import { HistoryStore } from './history/store.ts'
 import { PromoteRequests } from './promote/requests'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
 import { createWebHandler } from './web/http'
@@ -88,6 +90,8 @@ export interface ServerOptions {
   automations?: { tickMs?: number; now?: () => number }
   /** Where a promote or demote saves a copy of the work it carries (5e, `<dataDir>/promote-recovery`; default: the temp dir) */
   promoteRecoveryDir?: string
+  /** Where the worktree history goes (`<dataDir>/history`); without it nothing is recorded */
+  historyDir?: string
   /**
    * The web client (5c-3, `start --web`): its built files, served over HTTP with the sign-in
    * form, and browser sessions signed in by cookie. Without it HTTP answers 426 as before.
@@ -124,6 +128,12 @@ export function startServer(
   // What a killed server left in the temp directory: its moves' staged histories and throwaway indexes (5d).
   void sweepStaleMoveDirs().catch(() => {})
   let refreshServerTopic = (): void => {}
+  const history = options.historyDir
+    ? new HistoryStore(options.historyDir, {
+        onRecorded: (projectId, event) => hub.emit(projectTopic(projectId), 'history.added', { projectId, event }),
+        onHealth: () => refreshServerTopic()
+      })
+    : undefined
   const projects = projectsSetup.create(hub, () => refreshServerTopic())
   store.setUsage((repo) => projects.usage(repo.path))
   const poller = new GitPoller({
@@ -171,6 +181,7 @@ export function startServer(
         projects,
         sessions,
         gh: options.prWatch.gh,
+        history,
         pollMs: options.prWatch.pollMs,
         recheckMs: options.prWatch.recheckMs,
         onAvailability: (available) => prWatchChanged(available),
@@ -276,7 +287,7 @@ export function startServer(
   })
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
-    health: () => [...projectsSetup.store.health(), ...poller.health()]
+    health: () => [...projectsSetup.store.health(), ...poller.health(), ...(history?.health() ?? [])]
   })
   refreshServerTopic = serverState.refresh
   projectsSetup.store.on('health', serverState.refresh)
@@ -528,6 +539,7 @@ export function startServer(
         tokenName: callerTokenName,
         push: pushGrants ? { grants: pushGrants } : undefined,
         plugins,
+        history,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -588,7 +600,7 @@ export function startServer(
     shutdown: (reason) => shutdown(reason)
   }
   if (access) {
-    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests, plugins })
+    const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests, plugins, history })
     const callerFor = (projectId: string): ToolCall => {
       let call = callers.get(projectId)
       if (!call) callers.set(projectId, (call = caller(projectId)))

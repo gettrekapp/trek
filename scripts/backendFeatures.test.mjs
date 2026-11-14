@@ -24,7 +24,7 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'automations', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'automations', 'history', 'settingsEdit', 'globalPanel'])
 })
 
 test('moving a worktree to another server follows move (5d)', () => {
@@ -153,4 +153,9 @@ test('the Global panel without its capability shows the sessions it has, read-on
 test('automations follow the automations capability', () => {
   assert.equal(v2Features(['automations']).automations, true)
   assert.equal(v2Features(['mcp', 'review']).automations, false)
+})
+
+test('history needs the history capability', () => {
+  assert.equal(v2Features(['history']).history, true)
+  assert.equal(v2Features([]).history, false)
 })

@@ -1,8 +1,12 @@
 // scripts/serverPrWatch.test.mjs — the server's pull request watch (phase 5c-1): the PrWatcher's polls
 // against a fake gh (nothing here runs gh or reaches GitHub), what it queues and notices, the
 // attention entry a notice makes, and the v2 methods branch.setPrWatch, branch.setPr and prWatch.dismiss.
-import test from 'node:test'
+import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { resetRuntime } from '../server/src/projects/model.ts'
@@ -44,6 +48,11 @@ function project({ prWatch = {}, sessions = [session('s1', 'Old'), session('s2',
   }
 }
 
+let historyDirectory
+let historyCount = 0
+const historyRoot = () => (historyDirectory ??= mkdtempSync(join(tmpdir(), 'trek-prwatch-history-')))
+after(() => { if (historyDirectory) rmSync(historyDirectory, { recursive: true, force: true }) })
+
 function setup(initial = project(), ghAnswers = []) {
   const hub = new TopicHub()
   const saved = []
@@ -71,8 +80,9 @@ function setup(initial = project(), ghAnswers = []) {
   }
   let clock = 1000
   const jobs = []
-  const watcher = new PrWatcher({ projects, sessions, gh, now: () => clock, schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} }) })
-  return { hub, projects, saved, queued, calls, watcher, jobs, answers, polls: () => calls.filter((a) => a[0] === 'api').length, refreshedCount: () => refreshed, tick: (ms) => (clock += ms), worktree: () => projects.require('p1').repositories[0].worktrees[1], data: () => projects.require('p1').repositories[0].branchData.feature }
+  const history = new HistoryStore(join(historyRoot(), `h${++historyCount}`))
+  const watcher = new PrWatcher({ projects, sessions, history, gh, now: () => clock, schedule: (fn, ms) => (jobs.push({ fn, ms }), { cancel() {} }) })
+  return { history, hub, projects, saved, queued, calls, watcher, jobs, answers, polls: () => calls.filter((a) => a[0] === 'api').length, refreshedCount: () => refreshed, tick: (ms) => (clock += ms), worktree: () => projects.require('p1').repositories[0].worktrees[1], data: () => projects.require('p1').repositories[0].branchData.feature }
 }
 
 /** gh's answer to PR_QUERY (`gh api graphql`), from the flat fields the tests vary. */
@@ -573,4 +583,23 @@ test('prWatch.dismiss clears the notice; an unknown worktree is NOT_FOUND', () =
   assert.deepEqual(c.dismissed, ['w1'])
   assert.equal(c.projects.require('p1').repositories[0].worktrees[1].prNotice, undefined)
   assert.equal(c.call('prWatch.dismiss', { worktreeId: 'nope' }).error.code, 'NOT_FOUND')
+})
+
+test('history: a merged PR ends the watch, recorded as Trek', async () => {
+  const s = setup(project({ prWatch: { seen: { checks: 'aaa passing', conflict: false } } }), [view({ state: 'MERGED' })])
+  await s.watcher.ready
+  await s.watcher.poll(target)
+  const [e] = s.history.list('p1', 'r1', 'feature').events
+  assert.deepEqual([e.kind, e.actor, e.to], ['prWatch.off', { kind: 'trek' }, { text: 'merged' }])
+})
+
+test('history: a closed PR records prWatch.off closed; a watch for another PR url records nothing', async () => {
+  const s = setup(project({ prWatch: { seen: { checks: 'aaa passing', conflict: false } } }), [view({ state: 'CLOSED' }), view({ state: 'MERGED' })])
+  await s.watcher.ready
+  await s.watcher.poll(target)
+  assert.equal(s.history.list('p1', 'r1', 'feature').events[0].to.text, 'closed')
+  const other = setup(project({ prWatch: { seen: { checks: 'aaa passing', conflict: false } } }), [view({ state: 'MERGED' })])
+  await other.watcher.ready
+  await other.watcher.poll({ ...target, url: 'https://github.com/acme/app/pull/99' })
+  assert.deepEqual(other.history.list('p1', 'r1', 'feature').events, [])
 })

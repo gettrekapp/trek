@@ -2,6 +2,7 @@
 // dismissing a worktree's notice. The `prWatch` capability says gh is signed in on the server.
 import type { BranchData } from '../../../src/shared/model/types'
 import { watchableUrl } from '../../../src/shared/prWatch.ts'
+import { recordHistory } from '../history/record.ts'
 import { codedError } from '../errors.ts'
 import { repoIn } from '../projects/model.ts'
 import { requireBoolean, requireBranch, requireString } from '../validate.ts'
@@ -34,6 +35,7 @@ export const prWatchHandlers: Record<string, Handler> = {
       return { repoId: repo.id, changed }
     })
     const projectId = requireString(p.projectId, 'projectId')
+    if (changed) recordHistory(ctx, projectId, repoId, branch, [{ kind: watch ? 'prWatch.on' : 'prWatch.off' }])
     if (watch && changed) ctx.prWatch?.pollSoon(projectId, repoId, branch)
     // Off: its failures are forgotten, so turned on again it can raise a fresh "can't be read" notice.
     if (!watch) ctx.prWatch?.forget(projectId, repoId, branch)

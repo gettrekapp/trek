@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, symlinkSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { HistoryStore } from '../server/src/history/store.ts'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
@@ -42,13 +43,14 @@ async function server(t, dir, name, clone, prWatchable = true) {
   const polled = []
   const prWatch = { available: () => prWatchable, pollSoon: (...a) => polled.push(a), forget: (...a) => forgotten.push(a) }
   const sessions = { blockPath: () => () => {}, refreshAttention: () => {} }
-  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch })
+  const history = new HistoryStore(join(dir, `${name}-history`))
+  const call = (method, params) => dispatchV2(method, params, { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, prWatch, history })
   const created = await call('project.create', { name: `P-${name}`, repositories: [{ path: clone }] })
   const projectId = created.result.projectId
   await poller.refresh(clone)
   const project = () => projects.require(projectId)
   const repoId = project().repositories[0].id
-  return { call, projects, poller, projectId, repoId, project, forgotten, polled, clone }
+  return { call, projects, poller, projectId, repoId, project, forgotten, polled, clone, history }
 }
 
 async function setup(t) {
@@ -129,9 +131,9 @@ async function move(s, { finish = true } = {}) {
   assert.equal(pushed.ok, true, JSON.stringify(pushed))
   const { fingerprint, notCarried, ...rest } = exported.result
   const { transferId, chunks } = await copyHistories(s, rest.sessions)
-  const received = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: rest.branch, head: rest.head, patch: rest.patch, sessions: rest.sessions, branchData: rest.branchData, transferId })
+  const received = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: rest.branch, head: rest.head, patch: rest.patch, sessions: rest.sessions, branchData: rest.branchData, transferId, history: rest.history, fromServer: rest.serverName })
   if (finish && received.ok) {
-    const done = await s.A.call('move.finish', { ...s.ref, fingerprint })
+    const done = await s.A.call('move.finish', { ...s.ref, fingerprint, toServer: received.result.serverName })
     assert.equal(done.ok, true, JSON.stringify(done))
   }
   return { exported: exported.result, received, notCarried, chunks }
@@ -763,4 +765,99 @@ test('M10: a stale-looking trek-move dir with a fresh entry is kept; an append t
   utimesSync(join(root, dir), old, old)
   await transfers.append(id, CLAUDE_ID, 4, chunk)
   assert.ok(Date.now() - statSync(join(root, dir)).mtimeMs < 60_000, 'the append touched the transfer dir')
+})
+
+test('history: a move carries the branch history, and records moved.out on the source and moved.in on the target', async (t) => {
+  const s = await setup(t)
+  const { received } = await move(s)
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const onA = s.A.history.list(s.A.projectId, s.A.repoId, 'feat').events
+  const onB = s.B.history.list(s.B.projectId, s.B.repoId, 'feat').events
+  assert.deepEqual([onA[0].kind, onA[0].to], ['moved.out', { text: 'b' }])
+  assert.deepEqual([onB[0].kind, onB[0].from], ['moved.in', { text: 'a' }])
+  assert.ok(onB.some((e) => e.kind === 'created'), "A's created entry came along")
+  assert.ok(onB.every((e) => e.repoId === s.B.repoId))
+})
+
+test('history: move.unreceive takes the carried history back out', async (t) => {
+  const s = await setup(t)
+  const { received } = await move(s, { finish: false })
+  assert.equal(received.ok, true, JSON.stringify(received))
+  const undone = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: received.result.undoToken })
+  assert.equal(undone.ok, true, JSON.stringify(undone))
+  assert.deepEqual(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat'), [])
+})
+
+const recv = (s, exported, over = {}) => s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: exported.branch, head: exported.head, patch: exported.patch, sessions: [], branchData: exported.branchData, ...over })
+
+test('move.receive drops history entries it cannot read, and says so; a non-list is refused', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const r = await recv(s, exported, { history: [{ id: 'x' }, ...exported.history] })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.ok(r.result.dropped.includes('1 history entry the target could not read'), JSON.stringify(r.result.dropped))
+  assert.ok(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat').some((e) => e.kind === 'created'))
+  const s2 = await setup(t)
+  const exported2 = (await s2.A.call('move.export', s2.ref)).result
+  assert.equal((await recv(s2, exported2, { history: 'x' })).error?.code, 'BAD_REQUEST')
+  assert.equal((await recv(s2, exported2, { fromServer: 5 })).error?.code, 'BAD_REQUEST')
+})
+
+test('move.receive words unreadable and over-cap history entries separately', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const entry = (i) => ({ id: `h${i}`, at: i + 1, repoId: 'x', branch: 'feat', kind: 'note', actor: { kind: 'user' }, to: { text: 'added' } })
+  const history = [{ id: 'bad1' }, { id: 'bad2' }, ...Array.from({ length: 502 }, (_, i) => entry(i))]
+  const r = await recv(s, exported, { history })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.ok(r.result.dropped.includes('2 history entries the target could not read'), JSON.stringify(r.result.dropped))
+  assert.ok(r.result.dropped.some((d) => /^\d+ oldest history entries left out \(over the 500 kept\)$/.test(d)), JSON.stringify(r.result.dropped))
+})
+
+test('history: carried entries are rebuilt from known fields; the other server\'s terminalId is dropped; names are cut', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const carried = { id: 'e1', at: 1, repoId: 'other', branch: 'feat', kind: 'note', actor: { kind: 'mcp', terminalId: 'term-a', sessionTitle: 'Claude 1', extra: 1 }, extra: 'x', to: { text: 'added', extra: 1 } }
+  const r = await recv(s, exported, { history: [carried], fromServer: `  ${'n'.repeat(300)} ` })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  const events = s.B.history.branch(s.B.projectId, s.B.repoId, 'feat')
+  assert.deepEqual(events.find((e) => e.id === 'e1'), { id: 'e1', at: 1, repoId: s.B.repoId, branch: 'feat', kind: 'note', actor: { kind: 'mcp', sessionTitle: 'Claude 1' }, to: { text: 'added' } })
+  assert.equal(events.at(-1).from.text.length, 200)
+})
+
+test('history: move.unreceive leaves the target\'s own entries; a failed receive and a verifyOnly finish record nothing', async (t) => {
+  const s = await setup(t)
+  const own = { id: 'own', at: 5, repoId: s.B.repoId, branch: 'feat', kind: 'note', actor: { kind: 'user' }, to: { text: 'added' } }
+  s.B.history.record(s.B.projectId, own)
+  const base = { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: '', sessions: [], branchData: {} }
+  assert.equal((await s.B.call('move.receive', base)).error?.code, 'GIT_ERROR')
+  assert.deepEqual(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat'), [own])
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const verified = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, verifyOnly: true })
+  assert.equal(verified.ok, true, JSON.stringify(verified))
+  assert.ok(!s.A.history.branch(s.A.projectId, s.A.repoId, 'feat').some((e) => e.kind === 'moved.out'))
+  const r = await recv(s, exported, { history: exported.history })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.ok(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat').length > 2)
+  const undone = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: r.result.undoToken })
+  assert.equal(undone.ok, true, JSON.stringify(undone))
+  assert.deepEqual(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat'), [own])
+})
+
+test('history: without server names, moved.in and moved.out name no server', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const r = await recv(s, exported)
+  assert.equal(r.ok, true, JSON.stringify(r))
+  const done = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint })
+  assert.equal(done.ok, true, JSON.stringify(done))
+  const into = s.B.history.branch(s.B.projectId, s.B.repoId, 'feat').at(-1)
+  const out = s.A.history.branch(s.A.projectId, s.A.repoId, 'feat').at(-1)
+  assert.deepEqual([into.kind, 'from' in into], ['moved.in', false])
+  assert.deepEqual([out.kind, 'to' in out], ['moved.out', false])
 })

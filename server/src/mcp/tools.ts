@@ -29,6 +29,10 @@ import type { Machine } from '../integrations/machineHandlers.ts'
 import { stackState, stackUrls, stripAnsi } from '../../../src/shared/stacks.ts'
 import type { StackStatus } from '../../../src/shared/types'
 import { MAX_INITIAL_LOG } from '../../../src/host/stackService.ts'
+import { HISTORY_PAGE_SIZE, MAX_HISTORY_REASON, type HistoryActor, type HistoryPage } from '../../../src/shared/model/history.ts'
+import { actorLabel, describeEvent } from '../../../src/shared/historyText.ts'
+import type { Attribution } from '../history/record.ts'
+import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
 import { isOutdated, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
 import type { ChangesSource } from '../../../src/shared/types'
@@ -42,6 +46,14 @@ const WORKTREE_PARAM = {
     'Worktree id, path, branch or name, as returned by list_worktrees. A branch or name in several repositories is an error: pass the path.'
 }
 const TERMINAL_PARAM = { type: 'string', description: 'Session terminalId from list_worktrees' }
+/** Entries get_worktree_history returns when no limit is given */
+const DEFAULT_HISTORY_TOOL_LIMIT = 20
+
+/** On every tool that changes a worktree: who asks and why, for the worktree's history */
+const ATTRIBUTION_PARAMS = {
+  reason: { type: 'string', description: `Why you are making this change, in a sentence; shown in the worktree's history (at most ${MAX_HISTORY_REASON} characters)` },
+  terminalId: { type: 'string', description: "Value of $TREK_TERMINAL_ID, so the worktree's history names your session (optional)" }
+}
 const SESSION_TYPE_PARAM = {
   type: 'string',
   description: 'Session type id or name (case-insensitive), as returned by list_session_types'
@@ -109,7 +121,8 @@ export const MCP_TOOLS: ToolDefinition[] = [
           type: 'string',
           description:
             'Repository name or id (the repo field of list_worktrees). Required when the project has more than one repository.'
-        }
+        },
+        ...ATTRIBUTION_PARAMS
       },
       required: ['branch']
     }
@@ -185,7 +198,8 @@ export const MCP_TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         worktree: WORKTREE_PARAM,
-        force: { type: 'boolean', description: 'Remove it even with uncommitted or untracked changes, discarding them. Default false.' }
+        force: { type: 'boolean', description: 'Remove it even with uncommitted or untracked changes, discarding them. Default false.' },
+        ...ATTRIBUTION_PARAMS
       },
       required: ['worktree']
     }
@@ -274,7 +288,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
       "Set a worktree branch's workflow tag, by name (case-insensitive). Tags are configured per project; an unknown name fails with the list of valid tags. Omit tag to clear it.",
     inputSchema: {
       type: 'object',
-      properties: { worktree: WORKTREE_PARAM, tag: { type: 'string' } },
+      properties: { worktree: WORKTREE_PARAM, tag: { type: 'string' }, ...ATTRIBUTION_PARAMS },
       required: ['worktree']
     }
   },
@@ -287,7 +301,8 @@ export const MCP_TOOLS: ToolDefinition[] = [
       properties: {
         worktree: WORKTREE_PARAM,
         tag: { type: 'string' },
-        enabled: { type: 'boolean', description: 'true (default) to add the tag, false to remove it' }
+        enabled: { type: 'boolean', description: 'true (default) to add the tag, false to remove it' },
+        ...ATTRIBUTION_PARAMS
       },
       required: ['worktree', 'tag']
     }
@@ -297,7 +312,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
     description: "Replace a worktree branch's free-form note. An empty note clears it.",
     inputSchema: {
       type: 'object',
-      properties: { worktree: WORKTREE_PARAM, note: { type: 'string' } },
+      properties: { worktree: WORKTREE_PARAM, note: { type: 'string' }, ...ATTRIBUTION_PARAMS },
       required: ['worktree', 'note']
     }
   },
@@ -307,7 +322,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
       'Link a worktree branch to a ticket of a tracker on in this project (its id or URL: a Linear issue such as TOW-123 or https://linear.app/<workspace>/issue/TOW-123, an Azure DevOps work item, as the project has them on). Omit ticket to unlink it. An unrecognised ticket says which trackers are on.',
     inputSchema: {
       type: 'object',
-      properties: { worktree: WORKTREE_PARAM, ticket: { type: 'string' } },
+      properties: { worktree: WORKTREE_PARAM, ticket: { type: 'string' }, ...ATTRIBUTION_PARAMS },
       required: ['worktree']
     }
   },
@@ -355,7 +370,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
       'Link a worktree branch to a GitHub pull request: its URL (https://github.com/<owner>/<repo>/pull/123), or just the number (123 or #123) when the repository already has another PR linked to infer the repo from. Omit pullRequest to unlink it.',
     inputSchema: {
       type: 'object',
-      properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' } },
+      properties: { worktree: WORKTREE_PARAM, pullRequest: { type: 'string' }, ...ATTRIBUTION_PARAMS },
       required: ['worktree']
     }
   },
@@ -373,8 +388,19 @@ export const MCP_TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         worktree: WORKTREE_PARAM,
-        watch: { type: 'boolean', description: 'false stops watching (default true)' }
+        watch: { type: 'boolean', description: 'false stops watching (default true)' },
+        ...ATTRIBUTION_PARAMS
       },
+      required: ['worktree']
+    }
+  },
+  {
+    name: 'get_worktree_history',
+    description:
+      "Read a worktree branch's history, newest first: when its workflow tag, custom tags, note, ticket or pull request changed, when its PR watch started or ended, and when it was created, removed, promoted or moved — each with who did it (the user, an MCP call and its session, or Trek itself) and the reason given.",
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, limit: { type: 'number', description: `Entries to return (default ${DEFAULT_HISTORY_TOOL_LIMIT}, max ${HISTORY_PAGE_SIZE})` } },
       required: ['worktree']
     }
   },
@@ -384,16 +410,18 @@ export const MCP_TOOLS: ToolDefinition[] = [
       "Ask the user to promote a worktree to the primary checkout: its branch is checked out in the repository's main checkout (which must have no uncommitted changes), its own uncommitted work is carried there, and the worktree is removed. Its Claude and local-model sessions move to the main checkout and resume; others are closed. Every Trek window with this project open shows a confirmation; the call waits (up to 15 minutes) for the user's answer and fails if they decline, if the promote fails, or if no window has the project open. A second call for the same worktree while one waits gets the same answer. Returns the main checkout in the same shape as a list_worktrees entry. Pass your $TREK_TERMINAL_ID as terminalId so the dialog can say who asked. If you run in the worktree being promoted, you are stopped and resumed in the main checkout, so this call never returns to you: a prompt saying how it went is queued in your session's Queue panel instead (not sent; the user sends it).",
     inputSchema: {
       type: 'object',
-      properties: { worktree: WORKTREE_PARAM, terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID (optional)' } },
+      properties: { worktree: WORKTREE_PARAM, ...ATTRIBUTION_PARAMS },
       required: ['worktree']
     }
   }
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request, and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
+  /** The worktree history: what the tools change is recorded as theirs */
+  history?: HistoryStore
   /** The server's plugins: their project settings (phase 2) and ticket providers. Without it the tools take no plugin settings and no ticket tracker */
   plugins?: PluginRegistry
   store: ConfigStore
@@ -470,6 +498,25 @@ function rawArg(value: unknown, field: string): string | undefined {
   return value
 }
 
+/** Who an MCP call acts as (its session, when terminalId names one of this project's) and why. */
+function attributionOf(args: Record<string, unknown>, project: Project): Attribution {
+  if (args.reason !== undefined && args.reason !== null && typeof args.reason !== 'string') throw bad('reason must be a string')
+  const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+  if (reason.length > MAX_HISTORY_REASON) throw bad(`reason must be at most ${MAX_HISTORY_REASON} characters`)
+  let actor: HistoryActor = { kind: 'mcp' }
+  if (typeof args.terminalId === 'string' && args.terminalId) {
+    try {
+      const { session } = findSession(project, args.terminalId)
+      actor = { kind: 'mcp', terminalId: session.id, sessionTitle: session.title }
+    } catch {
+      // An unknown terminal only leaves the session out of the history.
+    }
+  }
+  return reason ? { actor, reason } : { actor }
+}
+
+const BY_MCP: Attribution = { actor: { kind: 'mcp' } }
+
 /** Matches a tag by id or name, case-insensitively; skips malformed saved entries. */
 const tagMatches = (t: { id?: unknown; name?: unknown }, name: string): boolean =>
   typeof t?.name === 'string' && (String(t.id).toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase())
@@ -545,6 +592,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     machine: deps.machine,
     prWatch: deps.prWatch,
     plugins: deps.plugins,
+    history: deps.history,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }
@@ -554,9 +602,9 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
   const waits = new Map<string, number>()
 
   return (projectId) => {
-    /** Runs a v2 command on this project; a refusal throws with its code and message. */
-    const v2 = async (method: string, params: Record<string, unknown> = {}): Promise<unknown> => {
-      const outcome = await dispatchV2(method, { ...params, projectId }, ctx)
+    /** Runs a v2 command on this project, as an MCP call (`attribution`: its session and reason); a refusal throws with its code and message. */
+    const v2 = async (method: string, params: Record<string, unknown> = {}, attribution: Attribution = BY_MCP): Promise<unknown> => {
+      const outcome = await dispatchV2(method, { ...params, projectId }, { ...ctx, attribution })
       if (!outcome.ok) throw codedError(outcome.error.code, outcome.error.message, outcome.error.details)
       return outcome.result
     }
@@ -735,6 +783,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         project.repositories.flatMap((repo) => repo.worktrees.map((w) => describeWorktree(project, repo, w))),
 
       create_worktree: async (args, project) => {
+        const by = attributionOf(args, project)
         const branch = text(args.branch)
         if (!branch) throw bad('branch is required')
         const repo = targetRepository(project, args.repo)
@@ -742,7 +791,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           repoId: repo.id,
           branch,
           createBranch: args.existingBranch !== true
-        })) as { worktreeId: string }
+        }, by)) as { worktreeId: string }
         return describeById(worktreeId)
       },
 
@@ -759,10 +808,11 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       remove_worktree: async (args, project) => {
+        const by = attributionOf(args, project)
         if (args.force !== undefined && typeof args.force !== 'boolean') throw bad('force must be a boolean')
         const { worktree } = resolveWorktree(project, args.worktree)
         try {
-          await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true })
+          await v2('worktree.remove', { worktreeId: worktree.id, force: args.force === true }, by)
         } catch (err) {
           if ((err as { details?: { reason?: string } }).details?.reason === 'dirty') {
             throw codedError('GIT_ERROR', `${worktree.path} has uncommitted or untracked changes; pass force: true to discard them`, { reason: 'dirty' })
@@ -773,16 +823,18 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       set_worktree_tag: async (args, project) => {
+        const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
         const name = strArg(args.tag, 'tag')
         const tags = project.settings.worktreeTags ?? []
         const tag = name ? tags.find((t) => tagMatches(t, name)) : null
         if (tag === undefined) throw bad(`Unknown tag "${name}". Valid tags: ${tagNames(tags)}`)
-        await v2('branch.setTag', { repoId: repo.id, branch, tag: tag?.id ?? null })
+        await v2('branch.setTag', { repoId: repo.id, branch, tag: tag?.id ?? null }, by)
         return { branch, tag: tag?.name ?? null }
       },
 
       set_worktree_custom_tag: async (args, project) => {
+        const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
         const name = strArg(args.tag, 'tag')
         if (args.enabled !== undefined && typeof args.enabled !== 'boolean') throw bad('enabled must be a boolean')
@@ -793,21 +845,23 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const next = args.enabled === false
           ? current.filter((id) => id !== tag.id)
           : current.includes(tag.id) ? current : [...current, tag.id]
-        await v2('branch.setCustomTags', { repoId: repo.id, branch, customTags: next })
+        await v2('branch.setCustomTags', { repoId: repo.id, branch, customTags: next }, by)
         return { branch, customTags: next.map((id) => tags.find((t) => t?.id === id)?.name ?? id) }
       },
 
       set_worktree_note: async (args, project) => {
+        const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
-        await v2('branch.setNote', { repoId: repo.id, branch, note: rawArg(args.note, 'note') ?? '' })
+        await v2('branch.setNote', { repoId: repo.id, branch, note: rawArg(args.note, 'note') ?? '' }, by)
         return { branch }
       },
 
       set_worktree_ticket: async (args, project) => {
+        const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
         const input = refArg(args.ticket, 'ticket')
         if (!input) {
-          await v2('branch.setTicket', { repoId: repo.id, branch, ticket: null })
+          await v2('branch.setTicket', { repoId: repo.id, branch, ticket: null }, by)
           return { branch, ticket: null }
         }
         // The trackers on in this project (their plugins').
@@ -819,16 +873,17 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         }
         // A URL's workspace or base, written as the tracker's project settings.
         if (parsed.settings && Object.keys(parsed.settings).length > 0) await v2('project.updateSettings', { settings: parsed.settings })
-        await v2('branch.setTicket', { repoId: repo.id, branch, ticket: parsed.ticketId })
+        await v2('branch.setTicket', { repoId: repo.id, branch, ticket: parsed.ticketId }, by)
         const fresh = deps.projects.require(projectId).settings as Record<string, unknown>
         return { branch, ticket: parsed.ticketId, url: ticketView(providers, fresh, parsed.ticketId).url }
       },
 
       set_worktree_pull_request: async (args, project) => {
+        const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
         const input = refArg(args.pullRequest, 'pullRequest')
         const url = input ? pullRequestUrl(input, repo) : null
-        await v2('branch.setPr', { repoId: repo.id, branch, pr: url })
+        await v2('branch.setPr', { repoId: repo.id, branch, pr: url }, by)
         return { branch, pullRequest: url }
       },
 
@@ -875,11 +930,29 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       watch_pull_request: async (args, project) => {
+        const by = attributionOf(args, project)
         const { repo, branch } = branchOf(project, args.worktree)
         if (args.watch !== undefined && args.watch !== null && typeof args.watch !== 'boolean') throw bad('watch must be a boolean')
         const watch = args.watch !== false
-        await v2('branch.setPrWatch', { repoId: repo.id, branch, watch })
+        await v2('branch.setPrWatch', { repoId: repo.id, branch, watch }, by)
         return { branch, pullRequest: branchData(repo, branch).pr ?? null, watching: watch }
+      },
+
+      get_worktree_history: async (args, project) => {
+        const { repo, branch } = branchOf(project, args.worktree)
+        const limit = Math.min(Math.max(Math.floor(Number(args.limit)) || DEFAULT_HISTORY_TOOL_LIMIT, 1), HISTORY_PAGE_SIZE)
+        const page = (await v2('history.list', { repoId: repo.id, branch, limit })) as HistoryPage
+        return {
+          branch,
+          more: page.more,
+          entries: page.events.map((e) => ({
+            at: new Date(e.at).toISOString(),
+            change: describeEvent(e),
+            // "You" would read as the calling agent; name the user plainly.
+            by: e.actor.kind === 'user' ? 'the user' : actorLabel(e.actor),
+            ...(e.reason ? { reason: e.reason } : {})
+          }))
+        }
       },
 
       // 5e: a window confirms and runs the promote; this waits for its answer.
@@ -888,23 +961,15 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (worktree.isMain) throw bad('That worktree is already the primary checkout')
         const mainPath = repo.worktrees.find((w) => w.isMain)?.path ?? repo.path
         if (!worktree.branch) throw bad(`${worktree.path} has no branch checked out (detached HEAD); it can't be promoted`)
-        let from: string | undefined
-        let callerId: string | undefined
+        const by = attributionOf(args, project)
         // The asking session is only looked up in this project (for the dialog's text, and the
-        // queue that hears the outcome if the call drops); nothing else is checked of it.
-        if (typeof args.terminalId === 'string' && args.terminalId) {
-          try {
-            const caller = sessionIn(args.terminalId, project).session
-            from = caller.title
-            callerId = caller.id
-          } catch {
-            // an unknown terminal only loses the dialog's "asked by"
-          }
-        }
+        // queue that hears the outcome if the call drops); an unknown terminal only loses the dialog's "asked by".
+        const from = by.actor.kind === 'mcp' ? by.actor.sessionTitle : undefined
+        const callerId = by.actor.kind === 'mcp' ? by.actor.terminalId : undefined
         const nobody = 'No Trek window has this project open to confirm the promote, so nothing was changed. Ask the user to open the project, or to promote it themselves.'
         if (!deps.promoteRequests) throw codedError('BAD_REQUEST', nobody)
         const branch = worktree.branch
-        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch, ...(from ? { from } : {}) }, signal)
+        const answer = await deps.promoteRequests.ask(projectId, { worktreeId: worktree.id, branch, ...(from ? { from } : {}) }, signal, by)
         // The promote went through: describing the main checkout must never turn it into an error.
         const primaryOf = (worktreeId: string): ReturnType<typeof describeById> | undefined => {
           try {

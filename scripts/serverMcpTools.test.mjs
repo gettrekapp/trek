@@ -13,6 +13,8 @@ import { GitPoller } from '../server/src/git/poller.ts'
 import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
+import { BY_USER, recordHistory } from '../server/src/history/record.ts'
+import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
@@ -112,7 +114,8 @@ async function toolSetup(t, opts = {}) {
     env: {},
     warn: () => {}
   })
-  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
+  const history = new HistoryStore(join(dir, 'history'))
+  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
     const job = jobs.find((j) => j.ms === 2500 && !j.cancelled && !j.fired)
@@ -120,13 +123,13 @@ async function toolSetup(t, opts = {}) {
     job.fired = true
     job.fn()
   }
-  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub }
+  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub, history }
 }
 
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack',
+    'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
     'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_worktree',
     'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
@@ -756,3 +759,73 @@ test('read_terminal clamps lines', async (t) => {
   assert.equal(await read(1e9), 'one\ntwo\nthree')
 })
 
+test('history: MCP changes record MCP, the session named by terminalId and the reason; get_worktree_history reads them', async (t) => {
+  const s = await toolSetup(t)
+  s.projects.apply(s.projectId, (d) => { d.settings.worktreeTags = [{ id: 'todo', name: 'Todo', color: '#fff' }] })
+  // A saved session in the main checkout, for terminalId to name (no pty needed).
+  const terminalId = 'term-1'
+  const title = 'Fix login'
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].sessions.push({ id: terminalId, title, llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  await s.call('set_worktree_tag', { worktree: 'main', tag: 'todo', reason: '  starting work  ', terminalId })
+  await s.call('set_worktree_ticket', { worktree: 'main', ticket: '', terminalId: 'not-a-session' })
+  await s.call('set_worktree_note', { worktree: 'main', note: 'n' })
+  const repoId = s.projects.require(s.projectId).repositories[0].id
+  const events = s.history.list(s.projectId, repoId, 'main').events
+  assert.deepEqual(events.map((e) => [e.kind, e.actor, e.reason]), [
+    ['note', { kind: 'mcp' }, undefined],
+    ['status', { kind: 'mcp', terminalId, sessionTitle: title }, 'starting work']
+  ])
+  await assert.rejects(s.call('set_worktree_note', { worktree: 'main', note: 'm', reason: 'x'.repeat(501) }), /at most 500/)
+  await assert.rejects(s.call('set_worktree_note', { worktree: 'main', note: 'm', reason: 5 }), /reason must be a string/)
+  const read = await s.call('get_worktree_history', { worktree: 'main', limit: 1 })
+  assert.equal(read.branch, 'main')
+  assert.equal(read.more, true)
+  assert.deepEqual(read.entries.map(({ at, ...rest }) => rest), [{ change: 'Note added', by: 'MCP' }])
+  assert.match(read.entries[0].at, /^\d{4}-\d\d-\d\dT/)
+})
+
+test('every changing tool takes reason and terminalId', () => {
+  for (const name of ['set_worktree_tag', 'set_worktree_custom_tag', 'set_worktree_note', 'set_worktree_ticket', 'set_worktree_pull_request', 'watch_pull_request', 'create_worktree', 'remove_worktree', 'promote_to_primary']) {
+    const props = MCP_TOOLS.find((tool) => tool.name === name).inputSchema.properties
+    assert.ok(props.reason && props.terminalId, name)
+  }
+})
+
+test('history: get_worktree_history names the user plainly, not "You"', async (t) => {
+  const s = await toolSetup(t)
+  const repoId = s.projects.require(s.projectId).repositories[0].id
+  recordHistory({ history: s.history }, s.projectId, repoId, 'main', [{ kind: 'note', to: { text: 'hi' } }], BY_USER)
+  const read = await s.call('get_worktree_history', { worktree: 'main' })
+  assert.deepEqual(read.entries.map((e) => e.by), ['the user'])
+})
+
+test('history: create_worktree and remove_worktree record created and removed as MCP; a bad reason changes nothing', async (t) => {
+  const s = await toolSetup(t)
+  const repoId = s.projects.require(s.projectId).repositories[0].id
+  await assert.rejects(s.call('create_worktree', { branch: 'feat/bad', reason: 7 }), /reason must be a string/)
+  assert.equal((await s.call('list_worktrees', {})).length, 1)
+  assert.equal(s.history.list(s.projectId, repoId, 'feat/bad').events.length, 0)
+  const created = await s.call('create_worktree', { branch: 'feat/h', reason: 'for the task' })
+  await s.call('remove_worktree', { worktree: 'feat/h', reason: 'done' })
+  const events = s.history.list(s.projectId, repoId, 'feat/h').events
+  const by = (kind) => events.find((e) => e.kind === kind)
+  assert.deepEqual([by('created')?.actor, by('created')?.reason], [{ kind: 'mcp' }, 'for the task'])
+  assert.deepEqual([by('removed')?.actor, by('removed')?.reason], [{ kind: 'mcp' }, 'done'])
+  assert.ok(created.path)
+})
+
+test('history: a bad reason on set_worktree_ticket with a URL writes no settings; a terminalId from another project is ignored', async (t) => {
+  const s = await toolSetup(t)
+  const before = JSON.stringify(s.projects.require(s.projectId).settings)
+  await assert.rejects(s.call('set_worktree_ticket', { worktree: 'main', ticket: 'https://linear.app/ws/issue/TOW-1', reason: 'x'.repeat(501) }), /at most 500/)
+  assert.equal(JSON.stringify(s.projects.require(s.projectId).settings), before)
+  const other = s.projects.create('Q', [{ registered: s.registered, name: undefined }])
+  s.projects.apply(other, (d) => {
+    d.repositories[0].worktrees[0].sessions.push({ id: 'foreign', title: 'Foreign', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  await s.call('set_worktree_note', { worktree: 'main', note: 'n', terminalId: 'foreign' })
+  const repoId = s.projects.require(s.projectId).repositories[0].id
+  assert.deepEqual(s.history.list(s.projectId, repoId, 'main').events[0].actor, { kind: 'mcp' })
+})

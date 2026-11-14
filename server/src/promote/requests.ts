@@ -22,6 +22,7 @@
 // The callers going away (their MCP calls dropped) cancels a request only while it is unclaimed:
 // once a window runs the promote, it settles as the promote does.
 import { randomUUID } from 'node:crypto'
+import type { Attribution } from '../history/record.ts'
 import { projectTopic } from '../../../src/shared/model/topics.ts'
 import {
   PROMOTE_ANSWER_TIMEOUT_MS,
@@ -41,6 +42,8 @@ import type { Subscriber, TopicHub } from '../topicHub.ts'
 export type PromoteAsk = PromoteOutcome | { outcome: 'no-window' } | { outcome: 'timeout' } | { outcome: 'cancelled' }
 
 interface Pending {
+  /** Who asked (promote_to_primary's MCP call), for the history */
+  attribution?: Attribution
   projectId: string
   worktreeId: string
   promise: Promise<PromoteAsk>
@@ -72,6 +75,8 @@ export interface PromoteRequestsOptions {
 /** A claimed request bound to the claimant's worktree.promote: `settle` ends it with the promote's result. */
 export interface PromoteBinding {
   settle(outcome: PromoteOutcome): void
+  /** Who asked for the promote it runs */
+  attribution?: Attribution
 }
 
 export class PromoteRequests {
@@ -143,9 +148,10 @@ export class PromoteRequests {
    * Asks the project's windows; resolves with the outcome, or `no-window` (none can confirm, now
    * or any more, before one claims it), `timeout` (nobody claimed or declined in time), or
    * `cancelled` (every caller went away before a window claimed it). A request for a worktree
-   * that already has one joins it.
+   * that already has one joins it (and keeps the first asker's `attribution`: it is one request,
+   * credited to whoever opened it).
    */
-  ask(projectId: string, request: Omit<PromoteRequestEvent, 'projectId' | 'requestId'>, signal?: AbortSignal): Promise<PromoteAsk> {
+  ask(projectId: string, request: Omit<PromoteRequestEvent, 'projectId' | 'requestId'>, signal?: AbortSignal, attribution?: Attribution): Promise<PromoteAsk> {
     const key = `${projectId}\0${request.worktreeId}`
     const joined = this.byWorktree.get(key)
     const existing = joined === undefined ? undefined : this.pending.get(joined)
@@ -180,6 +186,7 @@ export class PromoteRequests {
     const entry: Pending = {
       projectId,
       worktreeId: request.worktreeId,
+      attribution,
       promise,
       settle,
       callers: 0,
@@ -315,7 +322,7 @@ export class PromoteRequests {
     if (!p.claimant) this.take(p, requestId, subscriber)
     p.started = true
     clearTimeout(p.claimTimer)
-    return { settle: (outcome) => p.settle(outcome) }
+    return { settle: (outcome) => p.settle(outcome), attribution: p.attribution }
   }
 
   /** Server shutdown: every waiting tool call ends. */
