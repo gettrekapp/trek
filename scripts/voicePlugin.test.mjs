@@ -325,7 +325,9 @@ async function projectSetup(t, { key = 'good-voice', voiceId = 'v1', promptSessi
     schedule: () => ({ cancel() {} }),
     discover: async () => undefined,
     mcpAccess: () => ({ configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }),
-    pluginPrompt: (projectId) => registry.sessionPrompt(projectId)
+    pluginPrompt: (projectId) => registry.sessionPrompt(projectId),
+    // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns.
+    platform: 'linux'
   })
   t.after(() => {
     sessions.stopAll()
