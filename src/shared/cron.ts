@@ -64,6 +64,7 @@ function parseField(text: string, f: FieldDef): number[] {
 
 /** Throws CronError with a message fit for the user. */
 export function parseCron(expr: string): CronSpec {
+  if (typeof expr !== 'string') throw new CronError('a cron expression must be a string')
   const fields = expr.trim().split(/\s+/)
   if (fields.length !== 5 || fields[0] === '') throw new CronError('a cron expression has 5 fields: minute hour day-of-month month day-of-week')
   const [minutes, hours, days, months, weekdays] = fields.map((text, i) => parseField(text, FIELDS[i]))
@@ -149,12 +150,17 @@ export function* slots(spec: CronSpec, tz: string, after: number, until: number)
   for (let day = Date.UTC(start.year, start.month - 1, start.day); day <= endDay; day += DAY_MS) {
     const date = new Date(day)
     if (!dayMatches(spec, date.getUTCMonth() + 1, date.getUTCDate(), date.getUTCDay())) continue
+    // No offset change within reach of this wall day: every slot is the wall time less one offset.
+    const before = wallAsUtc(day - MAX_OFFSET_MS, tz) - (day - MAX_OFFSET_MS)
+    const afterOff = wallAsUtc(day + DAY_MS + MAX_OFFSET_MS, tz) - (day + DAY_MS + MAX_OFFSET_MS)
+    const steady = before === afterOff
+    const offset = before
     for (const hour of spec.hours) {
       for (const minute of spec.minutes) {
         const guess = day + hour * 3_600_000 + minute * MINUTE_MS
         if (guess + MAX_OFFSET_MS <= after) continue
         if (guess - MAX_OFFSET_MS > until) return
-        const t = zonedToUtc(guess, tz)
+        const t = steady ? guess - offset : zonedToUtc(guess, tz)
         if (t === undefined || t <= after) continue
         if (t > until) return
         yield t
@@ -196,12 +202,25 @@ export function nextSlots(spec: CronSpec, tz: string, after: number, n: number):
   return out
 }
 
-/** No two slots within 5 minutes, over the 8 days after `from` (covers weekly schedules and a DST change). */
+/**
+ * No two slots within 5 minutes: over the 8 days after `from` (covers weekly schedules), and over
+ * the 8 days starting a day before each offset change in the next year (a spring-forward can
+ * squeeze two wall-clock times together, e.g. 01:58 and 03:00).
+ */
 export function minGapOk(spec: CronSpec, tz: string, from: number): boolean {
-  let prev: number | undefined
-  for (const t of slots(spec, tz, from, from + 8 * DAY_MS)) {
-    if (prev !== undefined && t - prev < MIN_GAP_MS) return false
-    prev = t
+  const windows = [from]
+  let prev = wallAsUtc(from, tz) - from
+  for (let t = from + DAY_MS; t <= from + 366 * DAY_MS; t += DAY_MS) {
+    const off = wallAsUtc(t, tz) - t
+    if (off !== prev) windows.push(t - 2 * DAY_MS)
+    prev = off
+  }
+  for (const start of windows) {
+    let last: number | undefined
+    for (const t of slots(spec, tz, start, start + 8 * DAY_MS)) {
+      if (last !== undefined && t - last < MIN_GAP_MS) return false
+      last = t
+    }
   }
   return true
 }
@@ -290,7 +309,8 @@ export function describeCron(cron: string): string {
     if (key === '1,2,3,4,5') return `Weekdays at ${at}`
     if (key === '0,6') return `Weekends at ${at}`
     if (days.length === 7) return `Daily at ${at}`
-    return `${days.map((d) => WEEKDAY_NAMES[d]).join(', ')} at ${at}`
+    const monFirst = [...days.filter((d) => d !== 0), ...days.filter((d) => d === 0)]
+    return `${monFirst.map((d) => WEEKDAY_NAMES[d]).join(', ')} at ${at}`
   }
   return `Cron: ${cron.trim()}`
 }
