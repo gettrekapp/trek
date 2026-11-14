@@ -66,7 +66,9 @@ Error codes: `UNAUTHORIZED`, `BAD_REQUEST`, `NOT_FOUND`, `PATH_DENIED`, `GIT_ERR
 `CAPACITY`, `CONGESTED` and `TOOL_ERROR`. `CAPACITY` means a server or project limit was reached
 (`maxSessions`, the session records of a project, or the waits of an MCP tool); it is
 retryable once something frees up. `TOOL_ERROR` means a docker, colima or stack.sh command on
-the server's machine failed (see [Docker, environments and stacks](#docker-environments-and-stacks)).
+the server's machine failed (see [Docker, environments and stacks](#docker-environments-and-stacks)),
+or that `update.check` could not read or verify the release feed (see
+[Updating the server](#updating-the-server)).
 An unknown method is `NOT_FOUND`.
 
 Every path is realpath-resolved and must fall under a configured repo root or
@@ -120,6 +122,7 @@ new optional field needs no capability: its absence says enough.
 | `automations` | Per-project scheduled prompts (see [Automations](#automations)): `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` |
 | `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server but the local one (a phone can't reach this machine's loopback) |
+| `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
@@ -203,6 +206,7 @@ server restarts. A server without this field simply leaves it out.
 | Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
 | Automations | `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed` |
 | Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
+| Updating the server | `update.status`, `update.check`, `update.apply` (see [Updating the server](#updating-the-server)) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -215,7 +219,9 @@ reading the message (which may be git's own, localised text). Today the only key
 is `reason`: `dirty` (see `worktree.remove`), or, on a `TOOL_ERROR`, `missing` (the
 tool is not installed on the server), `registry` (the server's environments registry
 cannot be read; nothing was written) or `unsupported` (a Windows server's `env.*` and
-`stack.*`: not served there yet, and its welcome lists neither `env` nor `stacks`).
+`stack.*`: not served there yet, and its welcome lists neither `env` nor `stacks`), or,
+on a `CONFLICT` from `update.apply`, `disabled`, `busy` or `stale` (`busy` also from
+`update.check`; see [Updating the server](#updating-the-server)).
 Clients ignore keys and reasons they don't know.
 
 `project.rename`, `project.updateSettings`, `branch.setNote`, `branch.setEnv`,
@@ -528,6 +534,161 @@ never sees them, nor the phone's push token.
   - `429`: recorded in `lastError`; that push is dropped.
 
   Stopping the server aborts the pushes on their way.
+
+## Updating the server
+
+Behind the `update` capability. A trek-server installed from a release tarball replaces itself
+with a newer release (`trek-server update`, server/README.md, "Updating"). These methods let a
+signed-in client read that server's update state, have it look for a newer release, and have it
+install one (the desktop's **Update** on a server's row); the install is the command's own, with
+the same checks and the same result.
+
+| Method | Params | Result |
+|---|---|---|
+| `update.status` | `{}` | `UpdateStatus` |
+| `update.check` | `{}` | `UpdateStatus`, after a fresh read of the release feed |
+| `update.apply` | `{version}` | `{started: true}` |
+
+- **When it is listed:** the server runs from a release tarball's folder on macOS or Linux
+  (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`), its user can write that folder and
+  the folder that holds it, it is not the local server (which is updated with the app), and its
+  build has an update key (`UPDATE_PUBLIC_KEYS` in `server/src/update/keys.ts`). That list is
+  empty in this repository until the project's signing key is generated (docs/RELEASING.md, "The
+  update signing key"), so a server built from the repository as it stands never lists `update`.
+  It is decided once, when the server starts. Any other server leaves `update` out of its welcome,
+  answers all three methods `NOT_FOUND`, and never sends `update.changed`.
+- **`UpdateStatus`** is `update.status`'s and `update.check`'s answer and `update.changed`'s
+  payload, always whole:
+
+  | Field | Meaning |
+  |---|---|
+  | `current` | The version this server is running (the welcome's `daemonVersion`) |
+  | `latest?` | A newer release, as the last read of the feed found it. Present only when it is newer than `current` |
+  | `state` | `idle`, `checking`, `downloading`, `installing` or `restarting` (below) |
+  | `percent?` | 0–100, a whole number: only while `downloading`, and only once the download's size is known |
+  | `sessions` | Terminals running on the server now: they close when it restarts |
+  | `canRelaunch` | False when this server cannot restart itself into a new version (its Node is older than 22.15): an update is then installed and waits for a restart by hand |
+  | `restartNeeded` | The version in the install folder is newer than the one running: restart the server to finish. Derived at each read, so it is true whoever installed it (this server, or `trek-server update` on its machine) |
+  | `remoteApply` | False when the server's config leaves installing to `trek-server update` on its machine (`"updates": {"remoteApply": false}`): `update.apply` is refused |
+  | `checkedAt?` | When the feed was last read and verified (ISO 8601) |
+  | `lastResult?` | How the last update went: `{ok, from, to, at, error?}`, the two versions, when it was settled (ISO 8601) and, when `ok` is false, why |
+
+  ```json
+  { "type": "res", "id": 7, "ok": true, "result": {
+    "current": "0.5.0", "latest": "0.6.0", "state": "idle", "sessions": 3,
+    "canRelaunch": true, "restartNeeded": false, "remoteApply": true,
+    "checkedAt": "2026-11-14T09:30:12.000Z" } }
+  ```
+- **`update.check`** reads the latest published release's signed checksums now and answers the
+  status after it: `latest` is the release when it is newer than this install, and absent when it
+  is not. The state is `checking` meanwhile, then `idle` (an `update.changed` each). A check asked
+  for while another is in flight gets that one's answer. `CONFLICT` with `details.reason: "busy"`
+  while an update is being installed or the server is restarting into one; `TOOL_ERROR` (`Could
+  not check for an update: …`) when the feed cannot be read or its signature does not verify:
+  `latest` and `checkedAt` then stay as they were. The server runs the same check itself 30
+  seconds after it starts and once a day (unless its config says `"updates": {"check": false}`),
+  so a release it finds reaches connected clients as `update.changed` without anyone asking.
+- **`update.apply {version}`** begins installing the latest release and answers `{started: true}`
+  at once; the update goes on after the answer, reported by `update.changed`. `version` is the
+  `latest` the user was shown. The refusals, in the order they are tested:
+
+  | Code | `details.reason` | When |
+  |---|---|---|
+  | `BAD_REQUEST` | | `version` is not a non-empty string |
+  | `CONFLICT` | `disabled` | the config says `"updates": {"remoteApply": false}` |
+  | `CONFLICT` | `busy` | the state is not `idle`: an update is running, or a check is in flight (`update.check`'s, or the server's daily one) |
+  | `CONFLICT` | `stale` | `version` is not the status's `latest` (another release, or none): read the status or check again, and ask the user about that one |
+
+  ```json
+  { "type": "res", "id": 9, "ok": false, "error": { "code": "CONFLICT",
+    "message": "The latest release is now 0.6.1, not 0.6.0: check again",
+    "details": { "reason": "stale" } } }
+  ```
+
+  `stale` is tested against what the last read of the feed found. The install reads the feed
+  again, and fails (below) if the latest release is another one by then: nothing is ever
+  installed that the user was not shown.
+- **The states** of an update, each an `update.changed`: `checking` (set before `update.apply` is
+  answered, so that event precedes the answer; the feed is read again), `downloading` (with
+  `percent` once the size is known), `installing` (the tarball is unpacked, the new version
+  proves it runs on this machine with `trek-server selfcheck`, and it is put in the install's
+  place), then `restarting`, or back to `idle`:
+  - **Failed** (the download, its sha256, the selfcheck, a release that moved): `idle`, with
+    `lastResult` `{ok: false, from, to, at, error}`. The install is as it was. One failure records
+    nothing: when another update holds the install's lock (a `trek-server update` running on the
+    machine), the state returns to `idle` and `lastResult` is that update's to write.
+  - **Installed, and the server cannot restart itself** (`canRelaunch` false, or the new
+    version's `bin/trek-server` cannot be run): `idle`, with `restartNeeded: true`. The server
+    keeps running `current` until someone restarts it on its machine. `lastResult` is not written
+    yet: the new version records it when it starts.
+  - **Nothing to install after all** (the feed no longer offers a newer release): `idle`, with
+    no `latest`.
+- **`update.changed`** carries the whole `UpdateStatus`: a client replaces what it holds, never
+  merges. It goes to every authenticated connection, whatever it subscribes to: once per change
+  of state, once per whole percent of a download (so at most about a hundred for one download;
+  none while the size is unknown), and once when an update settles at `idle`. Nothing is replayed
+  to a connection that signs in later: it reads `update.status`.
+
+  ```json
+  { "type": "event", "event": "update.changed", "payload": {
+    "current": "0.5.0", "latest": "0.6.0", "state": "downloading", "percent": 42, "sessions": 3,
+    "canRelaunch": true, "restartNeeded": false, "remoteApply": true,
+    "checkedAt": "2026-11-14T09:31:40.000Z" } }
+  ```
+- **The restart.** Once the new version is in place the server sends `update.changed` with
+  `restarting`, then shuts down as it does for a signal, except that it comes back: every
+  authenticated connection gets
+
+  ```json
+  { "type": "event", "event": "daemon.shutdown", "payload": { "reason": "update", "version": "0.6.0" } }
+  ```
+
+  and every socket is closed with code `1001`. Its terminals end. The server then becomes the new
+  version, started with the arguments and environment it had, so it listens on the same address
+  (on Node 22.15 or later in the same process, with the same process id). Its welcome's
+  `daemonVersion` is the new version, and `update.status` there has `lastResult` `{ok: true,
+  from, to, at}` and no `latest`. If the new version does not start, its launcher puts the
+  previous one back: the welcome's `daemonVersion` is then the old version, and `lastResult` is
+  `{ok: false, …, error: "trek-server 0.6.0 did not start; went back to 0.5.0"}`, with `latest`
+  still offered. `trek-server update` run on the server's machine restarts a running server the
+  same way: its clients get the same `daemon.shutdown` (`reason: "update"`, and the installed
+  `version` when the install folder names one), but no `update.changed` before it, since the
+  command, not the server, did the installing. Nor is there an event when that command installs
+  on a server that cannot restart itself: `restartNeeded` is true in the next status the server
+  sends or answers.
+- **What a client does:** read `update.status` at every welcome that lists `update` (nothing is
+  replayed, and the server it reconnects to may be another version); take each `update.changed`
+  as the new status; and after a `daemon.shutdown` with `reason: "update"`, show the server as
+  restarting rather than disconnected while it reconnects, for a couple of minutes at most, then
+  treat it as any dropped connection. The next welcome ends the wait, and the status read there
+  says how the update went.
+- **Who may ask:** any signed-in connection, as for `pairing.create`: a token already holds
+  shell-level power on the server's machine. What can be installed is fixed whoever asks: only
+  the latest published release, only when it is newer than the install, and only if its checksums
+  carry a signature that a key built into the running server verifies and the tarball has the
+  sha256 they name. `"updates": {"remoteApply": false}` in the server's config refuses
+  `update.apply` (`disabled`) and leaves installing to `trek-server update` on the machine, which
+  it does not affect; `update.status` and `update.check` still answer, and the status says
+  `remoteApply: false`. The config is read at each request, so an edit takes effect without a
+  restart.
+- **The desktop** reads `update.status` at each welcome of a server that lists `update` and shows
+  a line on that server's row in **Open on server…**: "Update available: 0.6.0" with **Update**
+  (or, when `remoteApply` is false, a note to run `trek-server update` on the server's machine in
+  place of the button), "Checking for an update…", "Downloading 0.6.0… 42%", "Installing 0.6.0…",
+  "Restarting into 0.6.0…", "An update is installed. Restart trek-server on that machine to
+  finish." (`restartNeeded`), "Update failed: …" with **Try Again** (or **Check Again** when no
+  release is offered), "Updated to 0.6.0", and, after a check that found nothing, "trek-server
+  0.5.0 is the latest version". **Update** asks first, in a dialog that names both
+  versions and says how many terminals close, or that the server cannot restart itself; the
+  `version` it then sends is the one the dialog named. **Check for Update** (`update.check`) is on
+  the row while the server is connected and its state is `idle`. After `daemon.shutdown` with
+  `reason: "update"` the row's status says "Restarting to update…" in place of "Disconnected"
+  until the server answers again, for at most 2 minutes (`RESTART_GRACE_MS` in
+  `src/shared/serverUpdate.ts`). The Local server's row has none of this, and the web client and
+  the phone app have no update UI.
+- **The client SDK** does nothing with these itself: `update.changed` and `daemon.shutdown` reach
+  `on('event')` listeners like any event, and a refusal's `details.reason` is on the
+  `ClientError`.
 
 ## Web client
 
@@ -1658,7 +1819,8 @@ URL, each at most 200 characters.
 | `pty.data` | `{ptyId, seq, data, replay?}`, only to connections attached to the pty; `replay: true` chunks are ring-buffer re-sends. Session status is computed on the server from live bytes, never from replay |
 | `pty.exit` | `{ptyId, exitCode}`: the process exited (a dropped socket is not an exit) |
 | `pty.resized` | `{ptyId, cols, rows}`, to connections attached to the pty: a `pty.resize` changed its size (6a) |
-| `daemon.shutdown` | `{reason}`, best-effort before a graceful stop |
+| `daemon.shutdown` | `{reason, version?}`, best-effort before a graceful stop, to every authenticated connection. `reason` is `update` when the server is restarting into a new version, which `version` names (see [Updating the server](#updating-the-server)); a client then shows the server as restarting, not as disconnected |
+| `update.changed` | The whole `UpdateStatus` (see [Updating the server](#updating-the-server)): to every authenticated connection, whatever it subscribes to, for each change of the server's update state and each whole percent of a download. Not replayed to a connection that signs in later: it reads `update.status` |
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
 | `<id>.<event>` | A plugin's event (see [Plugins](#plugins)): the voice plugin's `voice.summary` |

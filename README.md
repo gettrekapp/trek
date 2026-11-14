@@ -178,6 +178,19 @@ other window on that project sees them live.
   server's rule never to expose its plain `ws://` listener beyond loopback (see
   [Security notes](server/README.md#security-notes)). Create tokens on the server
   with `trek-server token add <device>` (see [the server README](server/README.md#projects)).
+- **Updating a server**: a connected remote server that can update itself (one installed
+  from a release tarball on macOS or Linux, of a release built with the project's update
+  key) shows "Update available: X" on its row when a
+  newer release exists, with an **Update** button; **Check for Update** on the row looks
+  on demand. Update asks first, then the server downloads, checks and installs the release
+  itself (the row shows the progress) and restarts: its terminals close, and agent sessions
+  resume when you open their worktrees again. While it is away the row says "Restarting to
+  update…", then "Updated to X", or "Update failed: …" with the reason and the server as it
+  was. A server set to be updated only on its own machine (`updates.remoteApply: false`)
+  shows the release without the button, and one that cannot restart itself asks you to
+  restart it there to finish. The Local server has none of this: it is updated with Trek
+  (**Trek → Check for Updates…**). See
+  [Updating](server/README.md#updating) in the server README.
 - **Tokens** are encrypted with the OS keychain (Electron safeStorage) in
   `app-server-tokens.json` in the user-data directory, owner-only. When no OS
   keyring is available (for example on Linux without one) safeStorage can't

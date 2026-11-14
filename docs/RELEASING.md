@@ -169,7 +169,9 @@ from the latest **published** release, and installs nothing unless the signature
 a public key built into that server (`UPDATE_PUBLIC_KEYS` in `server/src/update/keys.ts`); the
 tarball it then downloads must have the sha256 that `SHA256SUMS` names. A draft or a prerelease is
 never offered, so publishing the draft is what ships the update. A running server also looks once
-a day and only logs what it finds.
+a day: it logs what it finds and tells its connected clients, and a Trek app can then ask it to
+run the same update (the server's row in Open on server…; PROTOCOL.md, "Updating the server").
+It installs nothing by itself.
 
 Do not rename or delete `SHA256SUMS`, `SHA256SUMS.sig` or the server tarballs on a published
 release, and do not replace any of them with other bytes: servers would find no update, or
