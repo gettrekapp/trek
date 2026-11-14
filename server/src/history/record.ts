@@ -48,7 +48,7 @@ function clampActor(actor: HistoryActor): HistoryActor {
   }
 }
 function clampValue(v: HistoryValue): HistoryValue {
-  return { ...v, ...(v.id !== undefined ? { id: v.id.slice(0, MAX_HISTORY_FIELD) } : {}), ...(v.color !== undefined ? { color: v.color.slice(0, MAX_HISTORY_FIELD) } : {}) }
+  return { ...v, text: v.text.slice(0, MAX_VALUE_TEXT), ...(v.id !== undefined ? { id: v.id.slice(0, MAX_HISTORY_FIELD) } : {}), ...(v.color !== undefined ? { color: v.color.slice(0, MAX_HISTORY_FIELD) } : {}) }
 }
 
 export function recordHistory(

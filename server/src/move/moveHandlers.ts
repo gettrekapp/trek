@@ -53,14 +53,14 @@ const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 /**
  * move.receive's `history`: a list (else BAD_REQUEST); entries that are not well-formed are dropped,
  * as are all but the newest MAX_HISTORY_PER_BRANCH (history is cosmetic: it never fails a move).
- * `skipped`: how many were left out.
+ * `unreadable` / `overCap`: how many were left out for each reason.
  */
-function checkHistory(value: unknown): { events: HistoryEvent[]; skipped: number } {
-  if (value === undefined) return { events: [], skipped: 0 }
+function checkHistory(value: unknown): { events: HistoryEvent[]; unreadable: number; overCap: number } {
+  if (value === undefined) return { events: [], unreadable: 0, overCap: 0 }
   if (!Array.isArray(value)) throw bad('history must be a list of history events')
   const valid = value.map(sanitizeHistoryEvent).filter((e): e is HistoryEvent => e !== null)
   const events = valid.slice(-MAX_HISTORY_PER_BRANCH)
-  return { events, skipped: value.length - events.length }
+  return { events, unreadable: value.length - valid.length, overCap: valid.length - events.length }
 }
 /** A server name: trimmed, cut to 200 characters; a non-string is BAD_REQUEST */
 const optionalServerName = (value: unknown, field: string): string | undefined => {
@@ -554,7 +554,9 @@ export const moveHandlers: Record<string, Handler> = {
       const latest = ctx.history?.latest(project.id, repo.id, branch)
       const receipt = receipts.get(received.undoToken)
       if (receipt) receipt.historyIds = latest?.kind === 'moved.in' ? [...ids, latest.id] : ids
-      const unread = carried.skipped > 0 ? [`${carried.skipped} history ${carried.skipped === 1 ? 'entry' : 'entries'} the target could not read`] : []
+      const unread: string[] = []
+      if (carried.unreadable > 0) unread.push(`${carried.unreadable} history ${carried.unreadable === 1 ? 'entry' : 'entries'} the target could not read`)
+      if (carried.overCap > 0) unread.push(`${carried.overCap} oldest history ${carried.overCap === 1 ? 'entry' : 'entries'} left out (over the ${MAX_HISTORY_PER_BRANCH} kept)`)
       return { ...received, dropped: [...received.dropped, ...unread], serverName: ctx.store.config.name ?? '' }
     } finally {
       await staged?.discard()

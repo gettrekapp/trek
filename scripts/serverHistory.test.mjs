@@ -100,6 +100,13 @@ test('long text is clamped when recorded, so the entry survives a reload', (t) =
   assert.equal(again.list('p', 'r', 'feat').events.length, 1)
 })
 
+test('a created/removed path over the text limit is recorded, cut', (t) => {
+  const history = new HistoryStore(dirFor(t))
+  recordHistory({ history }, 'p', 'r', 'feat', [{ kind: 'created', to: { text: '/p'.repeat(2000) } }])
+  const [e] = history.list('p', 'r', 'feat').events
+  assert.equal(e.to.text.length, MAX_VALUE_TEXT)
+})
+
 const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 
 /** A project on a real repo, with a history store and a fake PR watch; `call` throws a refusal. */
