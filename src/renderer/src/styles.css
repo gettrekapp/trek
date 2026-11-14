@@ -2946,6 +2946,7 @@ button:disabled {
 
 .recent-projects {
   width: 420px;
+  max-width: calc(100% - 32px);
   margin-top: 8px;
 }
 
@@ -3220,6 +3221,7 @@ button:disabled {
   border-radius: 12px;
   padding: 20px 24px;
   width: 560px;
+  max-width: calc(100% - 32px);
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
