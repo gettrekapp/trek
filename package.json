@@ -40,13 +40,17 @@
     "smoke:local-window": "npm run build && node scripts/local-window-smoke.mjs",
     "smoke:packaged": "npm run dist:dir && node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app && node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app",
     "rebuild": "electron-rebuild -f -w node-pty",
-    "dist": "npm run build && electron-builder --mac --arm64",
-    "dist:dir": "npm run build && electron-builder --mac --arm64 --dir"
+    "dist": "npm run build && electron-builder --mac --arm64 --publish never",
+    "dist:dir": "npm run build && electron-builder --mac --arm64 --dir --publish never"
   },
   "build": {
     "appId": "com.trek.trekdev",
     "productName": "Trek",
-    "publish": null,
+    "publish": {
+      "provider": "github",
+      "owner": "gettrekapp",
+      "repo": "trek"
+    },
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -74,6 +78,12 @@
           "arch": [
             "arm64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "icon": "resources/AppIcon.icns",
@@ -89,6 +99,7 @@
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "node-pty": "^1.1.0"
   },
   "devDependencies": {
