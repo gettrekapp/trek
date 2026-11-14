@@ -79,3 +79,90 @@ test('deleteAutomation and clearMissed', () => {
   const { list, cleared } = clearMissed([a, b], ['a', 'b', 'c'])
   assert.deepEqual([list[0].missed, cleared], [undefined, ['a']])
 })
+
+import { TopicHub } from '../server/src/topicHub.ts'
+import { ProjectState } from '../server/src/projects/state.ts'
+import { AUTOMATION_HISTORY, AutomationScheduler, LATE_MS, clockFromFile, planTick } from '../server/src/automations/scheduler.ts'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const min = 60_000
+const auto = (over = {}) => ({ id: 'a', name: 'Nightly', prompt: 'Triage', schedule: { cron: '*/5 * * * *', tz: 'UTC' }, enabled: true, createdAt: T0, lastSlot: T0, history: [], ...over })
+
+test('planTick: an on-time slot is due; earlier ones in the batch are dropped; missed cleared', () => {
+  const now = Date.UTC(2026, 0, 5, 9, 11) // slots 9:00, 9:05, 9:10; 9:10 is 1 min old
+  const plan = planTick([auto({ missed: { since: 1, count: 2 } })], now)
+  assert.deepEqual(plan, { updates: [{ id: 'a', lastSlot: Date.UTC(2026, 0, 5, 9, 10), missed: null }], due: [{ id: 'a', slot: Date.UTC(2026, 0, 5, 9, 10) }] })
+})
+
+test('planTick: a late batch adds to missed; disabled and up-to-date automations are left alone', () => {
+  const now = Date.UTC(2026, 0, 5, 11, 2, 30) // 9:00 … 11:00 = 25 slots, 11:00 is 2.5 min old
+  const plan = planTick([auto(), auto({ id: 'b', enabled: false }), auto({ id: 'c', lastSlot: Date.UTC(2026, 0, 5, 11) })], now)
+  assert.deepEqual(plan, { updates: [{ id: 'a', lastSlot: Date.UTC(2026, 0, 5, 11), missed: { since: Date.UTC(2026, 0, 5, 9), count: 25 } }], due: [] })
+  const again = planTick([auto({ missed: { since: 7, count: 3 } })], now)
+  assert.deepEqual(again.updates[0].missed, { since: 7, count: 28 })
+  assert.equal(LATE_MS, 2 * min)
+})
+
+test('planTick: an automation whose stored cron no longer parses is skipped', () => {
+  assert.deepEqual(planTick([auto({ schedule: { cron: 'bad', tz: 'UTC' } })], T0 + 60 * min), { updates: [], due: [] })
+})
+
+function setupScheduler(automations, { startFails = false } = {}) {
+  const hub = new TopicHub()
+  const project = { id: 'p1', name: 'Demo', settings: {}, globalSessions: [], repositories: [{ id: 'r1', name: 'app', path: '/repo', branchData: {}, worktrees: [] }], automations }
+  const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [project])
+  const started = []
+  let clock = T0
+  const sessions = {
+    start: (p) => {
+      if (startFails) throw Object.assign(new Error('a project holds at most 500 sessions; close some first'), { code: 'CAPACITY' })
+      started.push(p)
+      return { sessionId: `s${started.length}`, ptyId: 'x' }
+    }
+  }
+  const scheduler = new AutomationScheduler({ projects, sessions, now: () => clock })
+  return { projects, started, scheduler, setClock: (t) => (clock = t), list: () => projects.require('p1').automations }
+}
+
+test('check(): an on-time slot opens a Global session with the prompt, titled after the automation', () => {
+  const s = setupScheduler([auto()])
+  s.setClock(Date.UTC(2026, 0, 5, 9, 0, 30))
+  s.scheduler.check()
+  assert.deepEqual(s.started, [{ projectId: 'p1', worktreeId: null, title: 'Nightly · 09:00', initialMessage: 'Triage', cols: 120, rows: 32 }])
+  const a = s.list()[0]
+  assert.equal(a.lastSlot, Date.UTC(2026, 0, 5, 9))
+  assert.deepEqual(a.history, [{ at: Date.UTC(2026, 0, 5, 9, 0, 30), slot: Date.UTC(2026, 0, 5, 9), trigger: 'schedule', outcome: 'ran', sessionId: 's1' }])
+  s.scheduler.check()
+  assert.equal(s.started.length, 1, 'the same slot never runs twice')
+})
+
+test('check(): a late batch records missed and starts nothing; the llm is passed when set', () => {
+  const s = setupScheduler([auto({ llm: { provider: 'codex' } })])
+  s.setClock(Date.UTC(2026, 0, 5, 9, 32, 30)) // 9:00 … 9:30 = 7 slots, 9:30 is 2.5 min old
+  s.scheduler.check()
+  assert.deepEqual([s.started.length, s.list()[0].missed], [0, { since: Date.UTC(2026, 0, 5, 9), count: 7 }])
+  s.setClock(Date.UTC(2026, 0, 5, 9, 35, 10))
+  s.scheduler.check()
+  assert.deepEqual([s.started[0].llm, s.list()[0].missed], [{ provider: 'codex' }, undefined])
+})
+
+test('run(): a start failure is recorded and returned; history is capped', () => {
+  const s = setupScheduler([auto({ history: Array.from({ length: AUTOMATION_HISTORY }, (_, i) => ({ at: i, trigger: 'manual', outcome: 'ran' })) })], { startFails: true })
+  const { run, error } = s.scheduler.run('p1', 'a', 'manual')
+  assert.deepEqual([run.outcome, run.trigger, run.error, error.code], ['failed', 'manual', 'a project holds at most 500 sessions; close some first', 'CAPACITY'])
+  const history = s.list()[0].history
+  assert.deepEqual([history.length, history[0].outcome], [AUTOMATION_HISTORY, 'failed'])
+  assert.equal(s.list()[0].lastSlot, T0, 'a manual run leaves the schedule alone')
+})
+
+test('clockFromFile: the number in the file, else Date.now', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-clock-'))
+  const file = join(dir, 'clock')
+  writeFileSync(file, '12345\n')
+  assert.equal(clockFromFile(file)(), 12345)
+  writeFileSync(file, 'nope')
+  assert.ok(Math.abs(clockFromFile(file)() - Date.now()) < 5000)
+  assert.equal(clockFromFile(undefined), undefined)
+})
