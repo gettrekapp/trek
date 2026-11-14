@@ -276,3 +276,18 @@ test('M7: a lost finish answer says the source may or may not have been removed'
     assert.match(result.error, /check/)
   }
 })
+
+test('history and the server name travel: move.receive gets them, only the real move.finish names the target', async () => {
+  const history = [{ id: 'h1' }]
+  const source = src({ 'move.export': { ...EXPORT, history, serverName: 'laptop' } })
+  const target = tgt({ 'move.receive': { worktreeId: 'wb', dropped: [], undoToken: 'u1', serverName: 'desk' } })
+  const result = await run(source, target, { teardown: async () => [] }).outcome
+  assert.equal(result.kind, 'moved')
+  const receive = target.calls.find(([m]) => m === 'move.receive')[1]
+  assert.deepEqual([receive.history, receive.fromServer], [history, 'laptop'])
+  const finishes = source.calls.filter(([m]) => m === 'move.finish').map(([, p]) => p)
+  assert.equal(finishes.length, 2)
+  assert.equal(finishes[0].verifyOnly, true)
+  assert.ok(!('toServer' in finishes[0]))
+  assert.equal(finishes[1].toServer, 'desk')
+})

@@ -69,9 +69,11 @@ export const HISTORY_PAGE_SIZE = 100
 /** The branch's newest entry, when it is a note edit by the same actor (an MCP call without a terminalId counts as one actor) and under this old, is updated instead of a new entry; each fold moves the window */
 export const NOTE_COALESCE_MS = 5 * 60_000
 export const MAX_VALUE_TEXT = 2000
+/** Longest id, colour, terminal id or session title an entry holds */
+export const MAX_HISTORY_FIELD = 200
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
-const optionalString = (v: unknown): boolean => v === undefined || typeof v === 'string'
+const optionalString = (v: unknown): boolean => v === undefined || (typeof v === 'string' && v.length <= MAX_HISTORY_FIELD)
 
 function isValue(v: unknown): boolean {
   if (v === undefined) return true
@@ -88,7 +90,7 @@ function isActor(v: unknown): boolean {
 export function isHistoryEvent(v: unknown): v is HistoryEvent {
   if (!isObject(v)) return false
   return (
-    typeof v.id === 'string' && v.id !== '' &&
+    typeof v.id === 'string' && v.id !== '' && v.id.length <= MAX_HISTORY_FIELD &&
     typeof v.at === 'number' && Number.isFinite(v.at) &&
     typeof v.repoId === 'string' &&
     typeof v.branch === 'string' && v.branch !== '' &&
@@ -98,4 +100,27 @@ export function isHistoryEvent(v: unknown): v is HistoryEvent {
     isValue(v.from) &&
     isValue(v.to)
   )
+}
+
+const valueOf = (v: HistoryValue | undefined): { value?: HistoryValue } => {
+  if (!v) return {}
+  return { value: { ...(v.id !== undefined ? { id: v.id } : {}), text: v.text, ...(v.color !== undefined ? { color: v.color } : {}) } }
+}
+
+/**
+ * An entry that came from another server, rebuilt from the fields this version knows (nothing else
+ * is kept). An mcp actor loses its `terminalId`: it names a session on the other server. Null when
+ * it is not a well-formed entry.
+ */
+export function sanitizeHistoryEvent(v: unknown): HistoryEvent | null {
+  if (!isHistoryEvent(v)) return null
+  const actor: HistoryActor = v.actor.kind === 'mcp' ? { kind: 'mcp', ...(v.actor.sessionTitle !== undefined ? { sessionTitle: v.actor.sessionTitle } : {}) } : { kind: v.actor.kind }
+  const from = valueOf(v.from).value
+  const to = valueOf(v.to).value
+  return {
+    id: v.id, at: v.at, repoId: v.repoId, branch: v.branch, kind: v.kind, actor,
+    ...(v.reason !== undefined ? { reason: v.reason } : {}),
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {})
+  }
 }

@@ -2,7 +2,7 @@
 // for a Trek client (the user), set by the MCP tool caller (`mcp`, its session and reason), or
 // passed as BY_TREK for what the server does by itself. Recording never throws.
 import { randomUUID } from 'node:crypto'
-import { MAX_HISTORY_REASON, MAX_VALUE_TEXT, NOTE_COALESCE_MS, type HistoryActor, type HistoryKind, type HistoryValue } from '../../../src/shared/model/history.ts'
+import { MAX_HISTORY_FIELD, MAX_HISTORY_REASON, MAX_VALUE_TEXT, NOTE_COALESCE_MS, type HistoryActor, type HistoryKind, type HistoryValue } from '../../../src/shared/model/history.ts'
 import type { WorktreeTag } from '../../../src/shared/types'
 import type { HistoryStore } from './store.ts'
 
@@ -38,6 +38,19 @@ const sameActor = (a: HistoryActor, b: HistoryActor): boolean =>
 const foldNote = (first: HistoryValue | undefined, next: HistoryValue | undefined): HistoryValue | undefined =>
   next?.text === 'cleared' ? next : first?.text === 'added' ? first : next
 
+/** Entries keep ids, colours and session names at most MAX_HISTORY_FIELD long (isHistoryEvent refuses longer) */
+function clampActor(actor: HistoryActor): HistoryActor {
+  if (actor.kind !== 'mcp') return actor
+  return {
+    kind: 'mcp',
+    ...(actor.terminalId !== undefined ? { terminalId: actor.terminalId.slice(0, MAX_HISTORY_FIELD) } : {}),
+    ...(actor.sessionTitle !== undefined ? { sessionTitle: actor.sessionTitle.slice(0, MAX_HISTORY_FIELD) } : {})
+  }
+}
+function clampValue(v: HistoryValue): HistoryValue {
+  return { ...v, ...(v.id !== undefined ? { id: v.id.slice(0, MAX_HISTORY_FIELD) } : {}), ...(v.color !== undefined ? { color: v.color.slice(0, MAX_HISTORY_FIELD) } : {}) }
+}
+
 export function recordHistory(
   ctx: Recorder,
   projectId: string,
@@ -50,7 +63,7 @@ export function recordHistory(
   const store = ctx.history
   if (!store || !branch) return
   const reason = attribution.reason?.slice(0, MAX_HISTORY_REASON)
-  attribution = { actor: attribution.actor, ...(reason ? { reason } : {}) }
+  attribution = { actor: clampActor(attribution.actor), ...(reason ? { reason } : {}) }
   for (const c of changes) {
     try {
       const latest = c.kind === 'note' ? store.latest(projectId, repoId, branch) : undefined
@@ -71,8 +84,8 @@ export function recordHistory(
         kind: c.kind,
         actor: attribution.actor,
         ...(attribution.reason ? { reason: attribution.reason } : {}),
-        ...(c.from ? { from: c.from } : {}),
-        ...(c.to ? { to: c.to } : {})
+        ...(c.from ? { from: clampValue(c.from) } : {}),
+        ...(c.to ? { to: clampValue(c.to) } : {})
       })
     } catch (err) {
       console.warn(`[history] could not record ${c.kind} on ${branch}: ${(err as Error).message}`)

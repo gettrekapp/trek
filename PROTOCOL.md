@@ -1088,16 +1088,24 @@ for a trek-dev tool call (the session, when the call passed a `terminalId` of th
 `{kind: 'trek'}` for what the server did by itself. `reason`: the MCP call's, trimmed.
 A promote that answers promote_to_primary is the asking MCP call's.
 
-- `history.list {projectId, repoId, branch, before?, limit?}` -> `{events, more}`: newest first,
-  `limit` (1-100, default 100) entries older than the entry `before` names (an id no longer kept
+- `history.list {projectId, repoId, branch, before?, limit?}` → `{events, more}`: newest first,
+  `limit` (1–100, default 100) entries older than the entry `before` names (an id no longer kept
   gives none). A server without history answers `{events: [], more: false}`.
 - `history.added {projectId, event}` on the project topic: a new entry, or a newer version of one
   (same id: a folded note edit). Clients replace by id.
-- A move carries the branch's history: `move.export` answers `history` (oldest first) and
-  `serverName`; `move.receive` takes them as `history` and `fromServer` (re-keyed to the target's
-  repository, ids already there skipped), answers `serverName`, and records `moved.in`;
-  `move.finish` takes `toServer` and records `moved.out`; `move.unreceive` takes the entries the
-  receive added back out.
+- A move carries the branch's history, and history never makes a move fail: `move.export` answers
+  `history` (oldest first) and `serverName`; when the answer would be over the frame limit the
+  oldest entries are dropped (half at a time) before the move is refused for its patch.
+  `move.receive` takes them as `history` and `fromServer` (a non-list or a non-string name is
+  `BAD_REQUEST`; a name is trimmed and cut to 200 characters). It rebuilds each entry from the
+  fields it knows, re-keyed to the target's repository (an `mcp` actor loses its `terminalId`, which
+  names a session on the other server), skips ids already there, drops entries that are not
+  well-formed and all but the newest 500, and adds one line to `dropped` ("N history entries the
+  target could not read") when it dropped any. It answers `serverName` and records `moved.in`;
+  `move.finish` takes `toServer` and records `moved.out` (not on `verifyOnly`); `move.unreceive`
+  takes the entries the receive added back out. Entries carried in arrive without `history.added`
+  (only `moved.in` is announced). A move ending the source's PR watch records no `prWatch.off`:
+  `moved.out` covers it.
 
 ## Sessions
 

@@ -788,9 +788,64 @@ test('history: move.unreceive takes the carried history back out', async (t) => 
   assert.deepEqual(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat'), [])
 })
 
-test('move.receive refuses a history that is not a list of events', async (t) => {
+const recv = (s, exported, over = {}) => s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: exported.branch, head: exported.head, patch: exported.patch, sessions: [], branchData: exported.branchData, ...over })
+
+test('move.receive drops history entries it cannot read, and says so; a non-list is refused', async (t) => {
   const s = await setup(t)
   const exported = (await s.A.call('move.export', s.ref)).result
-  const r = await s.B.call('move.receive', { projectId: s.B.projectId, repoId: s.B.repoId, branch: exported.branch, head: exported.head, patch: exported.patch, sessions: [], branchData: exported.branchData, history: [{ id: 'x' }] })
-  assert.equal(r.error.code, 'BAD_REQUEST')
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const r = await recv(s, exported, { history: [{ id: 'x' }, ...exported.history] })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.ok(r.result.dropped.includes('1 history entry the target could not read'), JSON.stringify(r.result.dropped))
+  assert.ok(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat').some((e) => e.kind === 'created'))
+  const s2 = await setup(t)
+  const exported2 = (await s2.A.call('move.export', s2.ref)).result
+  assert.equal((await recv(s2, exported2, { history: 'x' })).error?.code, 'BAD_REQUEST')
+  assert.equal((await recv(s2, exported2, { fromServer: 5 })).error?.code, 'BAD_REQUEST')
+})
+
+test('history: carried entries are rebuilt from known fields; the other server\'s terminalId is dropped; names are cut', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const carried = { id: 'e1', at: 1, repoId: 'other', branch: 'feat', kind: 'note', actor: { kind: 'mcp', terminalId: 'term-a', sessionTitle: 'Claude 1', extra: 1 }, extra: 'x', to: { text: 'added', extra: 1 } }
+  const r = await recv(s, exported, { history: [carried], fromServer: `  ${'n'.repeat(300)} ` })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  const events = s.B.history.branch(s.B.projectId, s.B.repoId, 'feat')
+  assert.deepEqual(events.find((e) => e.id === 'e1'), { id: 'e1', at: 1, repoId: s.B.repoId, branch: 'feat', kind: 'note', actor: { kind: 'mcp', sessionTitle: 'Claude 1' }, to: { text: 'added' } })
+  assert.equal(events.at(-1).from.text.length, 200)
+})
+
+test('history: move.unreceive leaves the target\'s own entries; a failed receive and a verifyOnly finish record nothing', async (t) => {
+  const s = await setup(t)
+  const own = { id: 'own', at: 5, repoId: s.B.repoId, branch: 'feat', kind: 'note', actor: { kind: 'user' }, to: { text: 'added' } }
+  s.B.history.record(s.B.projectId, own)
+  const base = { projectId: s.B.projectId, repoId: s.B.repoId, branch: 'feat', head: 'a'.repeat(40), patch: '', sessions: [], branchData: {} }
+  assert.equal((await s.B.call('move.receive', base)).error?.code, 'GIT_ERROR')
+  assert.deepEqual(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat'), [own])
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const verified = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint, verifyOnly: true })
+  assert.equal(verified.ok, true, JSON.stringify(verified))
+  assert.ok(!s.A.history.branch(s.A.projectId, s.A.repoId, 'feat').some((e) => e.kind === 'moved.out'))
+  const r = await recv(s, exported, { history: exported.history })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.ok(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat').length > 2)
+  const undone = await s.B.call('move.unreceive', { projectId: s.B.projectId, repoId: s.B.repoId, undoToken: r.result.undoToken })
+  assert.equal(undone.ok, true, JSON.stringify(undone))
+  assert.deepEqual(s.B.history.branch(s.B.projectId, s.B.repoId, 'feat'), [own])
+})
+
+test('history: without server names, moved.in and moved.out name no server', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const r = await recv(s, exported)
+  assert.equal(r.ok, true, JSON.stringify(r))
+  const done = await s.A.call('move.finish', { ...s.ref, fingerprint: exported.fingerprint })
+  assert.equal(done.ok, true, JSON.stringify(done))
+  const into = s.B.history.branch(s.B.projectId, s.B.repoId, 'feat').at(-1)
+  const out = s.A.history.branch(s.A.projectId, s.A.repoId, 'feat').at(-1)
+  assert.deepEqual([into.kind, 'from' in into], ['moved.in', false])
+  assert.deepEqual([out.kind, 'to' in out], ['moved.out', false])
 })

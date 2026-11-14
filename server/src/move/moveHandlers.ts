@@ -34,7 +34,7 @@ import {
 } from '../../../src/shared/move.ts'
 import { isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
-import { isHistoryEvent, MAX_HISTORY_PER_BRANCH, type HistoryEvent } from '../../../src/shared/model/history.ts'
+import { MAX_HISTORY_PER_BRANCH, sanitizeHistoryEvent, type HistoryEvent } from '../../../src/shared/model/history.ts'
 import { codedError } from '../errors.ts'
 import { recordHistory } from '../history/record.ts'
 import { assertNotPromoting } from '../promote/changing.ts'
@@ -50,18 +50,23 @@ type Handler = (params: any, ctx: V2Context) => unknown
 
 const bad = (message: string): Error => codedError('BAD_REQUEST', message)
 
-/** move.receive's `history`: at most MAX_HISTORY_PER_BRANCH well-formed events */
-function checkHistory(value: unknown): HistoryEvent[] {
-  if (value === undefined) return []
-  if (!Array.isArray(value) || value.length > MAX_HISTORY_PER_BRANCH || !value.every(isHistoryEvent)) {
-    throw bad(`history must be a list of at most ${MAX_HISTORY_PER_BRANCH} history events`)
-  }
-  return value
+/**
+ * move.receive's `history`: a list (else BAD_REQUEST); entries that are not well-formed are dropped,
+ * as are all but the newest MAX_HISTORY_PER_BRANCH (history is cosmetic: it never fails a move).
+ * `skipped`: how many were left out.
+ */
+function checkHistory(value: unknown): { events: HistoryEvent[]; skipped: number } {
+  if (value === undefined) return { events: [], skipped: 0 }
+  if (!Array.isArray(value)) throw bad('history must be a list of history events')
+  const valid = value.map(sanitizeHistoryEvent).filter((e): e is HistoryEvent => e !== null)
+  const events = valid.slice(-MAX_HISTORY_PER_BRANCH)
+  return { events, skipped: value.length - events.length }
 }
+/** A server name: trimmed, cut to 200 characters; a non-string is BAD_REQUEST */
 const optionalServerName = (value: unknown, field: string): string | undefined => {
-  if (value === undefined || value === '') return undefined
-  if (typeof value !== 'string' || value.length > 200) throw bad(`${field} must be a server name`)
-  return value
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw bad(`${field} must be a server name`)
+  return value.trim().slice(0, 200) || undefined
 }
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
@@ -384,7 +389,12 @@ export const moveHandlers: Record<string, Handler> = {
     const out = { branch, head: headSha, patch, sessions, notCarried, branchData: exportBranchData(project, data), history: ctx.history?.branch(project.id, repo.id, branch) ?? [], serverName: ctx.store.config.name ?? '', fingerprint: fingerprint(headSha, patch, fingerprinted(carried)) }
     // The patch travels JSON-escaped, in this answer and again in move.receive's params: a text
     // file of quotes or control characters can grow several times over, past the 16 MiB frame.
-    const framed = Buffer.byteLength(JSON.stringify(out))
+    let framed = Buffer.byteLength(JSON.stringify(out))
+    // The history is cosmetic: the oldest entries go before the move is refused.
+    while (framed > MAX_MOVE_FRAME_JSON_BYTES && out.history.length > 0) {
+      out.history = out.history.slice(Math.ceil(out.history.length / 2))
+      framed = Buffer.byteLength(JSON.stringify(out))
+    }
     if (framed > MAX_MOVE_FRAME_JSON_BYTES) {
       throw bad(`the uncommitted changes make a patch too big to move (${MB(framed)} as the connection carries it; at most ${MB(MAX_MOVE_FRAME_JSON_BYTES)}). Commit or remove the large files first`)
     }
@@ -530,7 +540,7 @@ export const moveHandlers: Record<string, Handler> = {
     if (Buffer.byteLength(patch) > MAX_MOVE_PATCH_BYTES) throw bad(`patch must be at most ${MB(MAX_MOVE_PATCH_BYTES)}`)
     const sessions = checkSessions(p.sessions)
     const incoming = checkBranchData(p.branchData)
-    const carriedHistory = checkHistory(p.history)
+    const carried = checkHistory(p.history)
     const fromServer = optionalServerName(p.fromServer, 'fromServer')
     await moveTransfers.sweep()
     // The transfer is the move's: whatever happens below, its staged files go.
@@ -539,12 +549,13 @@ export const moveHandlers: Record<string, Handler> = {
     else if (sessions.length > 0) throw bad('transferId is needed to carry sessions')
     try {
       const received = await receive(ctx, p, project, repo, branch, head, patch, sessions, incoming, staged)
-      const ids = ctx.history?.import(project.id, repo.id, branch, carriedHistory) ?? []
+      const ids = ctx.history?.import(project.id, repo.id, branch, carried.events) ?? []
       recordHistory(ctx, project.id, repo.id, branch, [{ kind: 'moved.in', ...(fromServer ? { from: { text: fromServer } } : {}) }])
       const latest = ctx.history?.latest(project.id, repo.id, branch)
       const receipt = receipts.get(received.undoToken)
-      if (receipt) receipt.historyIds = latest ? [...ids, latest.id] : ids
-      return { ...received, serverName: ctx.store.config.name ?? '' }
+      if (receipt) receipt.historyIds = latest?.kind === 'moved.in' ? [...ids, latest.id] : ids
+      const unread = carried.skipped > 0 ? [`${carried.skipped} history ${carried.skipped === 1 ? 'entry' : 'entries'} the target could not read`] : []
+      return { ...received, dropped: [...received.dropped, ...unread], serverName: ctx.store.config.name ?? '' }
     } finally {
       await staged?.discard()
     }
