@@ -180,7 +180,8 @@ async function update(args: CliArgs, installDir: string): Promise<UpdateOutcome>
     if (!(await confirm(confirmQuestion(install.version, release.version, server)))) return { kind: 'declined' }
   }
 
-  const result = await applyUpdate(deps)
+  // The release that was shown and agreed to, and no other: the feed is read again under the update's lock.
+  const result = await applyUpdate({ ...deps, expect: { version: release.version } })
   if (result.kind === 'failed') return { kind: 'failed', current: install.version, error: result.error }
   if (result.kind === 'up-to-date') return { kind: 'latest', current: result.current }
   if (!server) return { kind: 'installed', to: result.to, previous: previousDir(install.dir) }

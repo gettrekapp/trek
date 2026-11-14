@@ -361,6 +361,60 @@ test('two updates started together: one installs, the other is refused', tar, as
   }
 })
 
+test('the release installed is the one that was confirmed: a newer one published since fails the update', tar, async () => {
+  const w = world()
+  try {
+    // Asked about 1.9.0; by the time the update runs, the latest release is 2.0.0.
+    const moved = await applyUpdate({ ...w.deps, expect: { version: '1.9.0' } })
+    assert.equal(moved.kind, 'failed')
+    assert.match(moved.error, /the latest release is now trek-server 2\.0\.0, not the 1\.9\.0 that was confirmed/)
+    assert.ok(w.asked.every((url) => !url.endsWith('.tar.gz')), 'nothing was downloaded')
+    untouched(w)
+    assert.deepEqual(await applyUpdate({ ...w.deps, expect: { version: '2.0.0' } }), { kind: 'installed', from: '1.0.0', to: '2.0.0' })
+  } finally {
+    w.done()
+  }
+})
+
+test('under the lock the install is read again: one that another update already brought up to date is left alone', tar, async () => {
+  const w = world()
+  try {
+    // What this updater read before it had the lock says 1.0.0 (w.deps.install); since then
+    // another one installed 2.0.0, with the real 1.0.0 kept beside it.
+    folder(w.parent, 'trek-server.previous', '1.0.0')
+    writeFileSync(join(w.dir, 'build.json'), JSON.stringify({ version: '2.0.0', build: 'b', package: 'tarball', target: 'linux-x64' }))
+    assert.deepEqual(await applyUpdate(w.deps), { kind: 'up-to-date', current: '2.0.0' })
+    assert.ok(w.asked.every((url) => !url.endsWith('.tar.gz')), 'nothing was downloaded')
+    assert.equal(w.versionAt(`${w.dir}.previous`), '1.0.0', 'the version before is still the real one')
+    assert.equal(existsSync(join(w.dir, PENDING_FILE)), false)
+    assert.deepEqual(leftovers(w), [])
+    assert.equal(readState(w.configDir).latest, undefined, 'and the state no longer offers what is installed')
+
+    // An install that cannot be read any more is not replaced on a guess.
+    writeFileSync(join(w.dir, 'build.json'), '{')
+    const broken = await applyUpdate(w.deps)
+    assert.equal(broken.kind, 'failed')
+    assert.match(broken.error, /build\.json/)
+  } finally {
+    w.done()
+  }
+})
+
+test('the version a rollback set aside (<install>.failed) goes when the next update is installed, not when one fails', tar, async () => {
+  const w = world()
+  try {
+    folder(w.parent, 'trek-server.failed', '1.5.0')
+    const failed = await applyUpdate({ ...w.deps, selfcheck: () => ({ ok: false, output: 'FAIL' }) })
+    assert.equal(failed.kind, 'failed')
+    assert.equal(w.versionAt(`${w.dir}.failed`), '1.5.0', 'still there to look at')
+    assert.equal((await applyUpdate(w.deps)).kind, 'installed')
+    assert.equal(existsSync(`${w.dir}.failed`), false)
+    assert.deepEqual(leftovers(w), [])
+  } finally {
+    w.done()
+  }
+})
+
 test('an older <install>.previous from the update before is replaced', tar, async () => {
   const w = world()
   try {

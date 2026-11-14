@@ -4,13 +4,13 @@
 // fails before the swap leaves the install, and a server running from it, untouched. One update
 // at a time per install (lock.ts: a lock beside it).
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
 import { compareVersions } from '../../../src/shared/versions.ts'
 import { fetchRelease, tarballUrl, type Release } from './feed.ts'
-import { download, flushDir, flushTree, swap, sweepLeftovers, unpack, validateStaged } from './install.ts'
+import { download, failedDir, flushDir, flushTree, swap, sweepLeftovers, unpack, validateStaged } from './install.ts'
 import { LEFTOVER_PREFIX, LOCK_FILE, takeLock, type UpdateLock } from './lock.ts'
 import { launcherPath, relaunchEnv } from './relaunch.ts'
 import { writePending, writeState } from './state.ts'
@@ -42,6 +42,8 @@ export interface ApplyDeps extends FindDeps {
   onProgress?: (bytes: number, total: number | undefined) => void
   /** Runs the staged version's `selfcheck`; the default runs it through the staged launcher */
   selfcheck?: (stagedDir: string) => SelfcheckOutcome
+  /** The release the caller showed and had confirmed: the update fails if the latest is another by now */
+  expect?: { version: string }
 }
 
 export type ApplyResult =
@@ -80,6 +82,17 @@ export async function findUpdate(deps: FindDeps): Promise<Release | null> {
   return newer ? release : null
 }
 
+/** The version in the install folder now (its build.json), which another update may have changed since this one read it. */
+function installedVersion(dir: string): string {
+  try {
+    const build = JSON.parse(readFileSync(join(dir, 'build.json'), 'utf8')) as { version?: unknown } | null
+    if (build !== null && typeof build === 'object' && typeof build.version === 'string') return build.version
+  } catch {
+    // Said below.
+  }
+  throw new Error(`${join(dir, 'build.json')} cannot be read any more: not replacing an install that cannot say what it is`)
+}
+
 /** Removes what an update leaves beside the install. Never throws: what cannot be removed is replaced by the next update. */
 function remove(path: string): void {
   try {
@@ -102,6 +115,7 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
   /** This update's own folder beside the install: its download and what it unpacks. */
   let work: string | undefined
   let target: string | undefined
+  let from = install.version
   try {
     held = takeLock(lock)
     // Not recorded as this install's last result: the update that holds the lock records its own.
@@ -115,10 +129,18 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     // What updates that were killed left here: only the holder of the lock removes anything.
     sweepLeftovers(install.parent, now().getTime())
 
+    // Read again now that the lock is held: an update that finished while this one waited to
+    // be confirmed has already replaced the install, and installing over it would put that new
+    // version in <install>.previous in place of the one worth going back to.
+    from = installedVersion(install.dir)
+
     deps.onStep?.('checking')
-    const release = await findUpdate(deps)
-    if (!release) return { kind: 'up-to-date', current: install.version }
+    const release = await findUpdate({ ...deps, install: { ...install, version: from } })
+    if (!release) return { kind: 'up-to-date', current: from }
     target = release.version
+    if (deps.expect && release.version !== deps.expect.version) {
+      throw new Error(`the latest release is now trek-server ${release.version}, not the ${deps.expect.version} that was confirmed: run \`trek-server update\` again`)
+    }
 
     // A new folder (0700) with a name nobody could have known: nothing was put in it beforehand,
     // and nobody else can put anything in it now.
@@ -133,22 +155,24 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
 
     deps.onStep?.('selfcheck')
     const check = (deps.selfcheck ?? runStagedSelfcheck)(staged)
-    if (!check.ok) throw new Error(`trek-server ${release.version} does not run on this machine, so ${install.version} stays:\n${check.output}`)
+    if (!check.ok) throw new Error(`trek-server ${release.version} does not run on this machine, so ${from} stays:\n${check.output}`)
 
     // Nothing has been written into the install up to here. The marker goes into the staged
     // folder, and the swap, which is the only step that touches the install, is the last one.
     deps.onStep?.('installing')
-    writePending(staged, { from: install.version, to: release.version, at: now().toISOString() })
+    writePending(staged, { from, to: release.version, at: now().toISOString() })
+    // What the last rollback set aside to be looked at: kept until an update gets this far.
+    remove(failedDir(install.dir))
     // On disk before it is renamed into place, and the renames after: a power cut must not leave
     // the new version's name on files whose data never arrived.
     flushTree(staged)
     swap(install.dir, staged)
     flushDir(install.parent)
-    return { kind: 'installed', from: install.version, to: release.version }
+    return { kind: 'installed', from, to: release.version }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     try {
-      writeState(deps.configDir, { lastResult: { ok: false, from: install.version, to: target ?? install.version, at: now().toISOString(), error } })
+      writeState(deps.configDir, { lastResult: { ok: false, from, to: target ?? from, at: now().toISOString(), error } })
     } catch {
       // The record is a courtesy: the failure is still returned.
     }

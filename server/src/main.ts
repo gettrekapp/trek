@@ -462,7 +462,7 @@ function startUpdates(): void {
   const configPath = resolve(args.configPath)
   const configDir = dirname(configPath)
   if (installDir) {
-    const settled = settleStart(installDir, configDir)
+    const settled = settleStart(installDir, configDir, new Date(), version)
     if (settled) console.log(settled.ok ? `update: now running trek-server ${settled.to} (was ${settled.from})` : `update: ${settled.error}`)
   }
 

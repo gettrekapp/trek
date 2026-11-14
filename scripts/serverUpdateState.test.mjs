@@ -132,6 +132,45 @@ test('a state file that cannot be written does not throw: the server still start
   }
 })
 
+test('settling forgets a "latest" that is not newer than the version now running', () => {
+  const install = temp()
+  const config = temp()
+  try {
+    // The update to 2.0.0 was found, installed, and has started.
+    writeState(config, { lastCheckAt: '2026-11-14T09:00:00.000Z', latest: '2.0.0' })
+    writePending(install, { from: '1.0.0', to: '2.0.0', at: '2026-11-14T09:59:00.000Z' })
+    const result = settleStart(install, config, NOW, '2.0.0')
+    assert.deepEqual(readState(config), { lastCheckAt: '2026-11-14T09:00:00.000Z', lastResult: result }, 'it no longer says 2.0.0 is available')
+
+    // With nothing to settle too (installed by hand), and for a version beyond it.
+    writeState(config, { latest: '2.0.0' })
+    assert.equal(settleStart(install, config, NOW, '2.1.0'), null)
+    assert.equal(readState(config).latest, undefined)
+
+    // One that is still newer stays.
+    writeState(config, { latest: '3.0.0' })
+    settleStart(install, config, NOW, '2.0.0')
+    assert.equal(readState(config).latest, '3.0.0')
+    // A rollback: 2.0.0 is still newer than the 1.0.0 that runs again.
+    writeState(config, { latest: '2.0.0' })
+    writeFileSync(join(install, ROLLED_BACK_FILE), JSON.stringify({ from: '1.0.0', to: '2.0.0', at: '2026-11-14T09:59:00.000Z' }))
+    assert.equal(settleStart(install, config, NOW, '1.0.0').ok, false)
+    assert.equal(readState(config).latest, '2.0.0')
+
+    // No state file is made for it.
+    const fresh = temp()
+    try {
+      assert.equal(settleStart(install, fresh, NOW, '2.0.0'), null)
+      assert.deepEqual(readdirSync(fresh), [])
+    } finally {
+      removeDir(fresh)
+    }
+  } finally {
+    removeDir(install)
+    removeDir(config)
+  }
+})
+
 test('clearTried removes the tried mark of this very start, and only that', () => {
   const install = temp()
   try {

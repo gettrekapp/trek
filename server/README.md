@@ -524,8 +524,16 @@ holds the first start's process id, and for ten minutes a mark whose process is 
 alone. What does count as failed: a first start ended by SIGKILL or a power cut before it is
 listening, or by any signal in its first moments, before the server's code has loaded. The next
 start then goes back to the previous version: run `trek-server update` again. `start --local`
-(the Trek app's local server) neither marks an update nor rolls one back. Delete `<folder>.failed` when you have looked at it (the next rollback replaces it). A
-server started as `node trek-server.cjs` rather than through `bin/trek-server` has no rollback.
+(the Trek app's local server) neither marks an update nor rolls one back.
+
+`<folder>.failed` is kept for you to look at until the next update that installs (or the next
+rollback) removes it; delete it sooner if you like. A server started as `node trek-server.cjs`
+rather than through `bin/trek-server` has no rollback.
+
+One moment nothing recovers from by itself: an update and a rollback each move the folder in
+two renames, and a crash or power cut exactly between them leaves no folder at the install's
+path. Put it back with `mv <folder>.previous <folder>` (after an update) or
+`mv <folder>.failed <folder>` (after a rollback).
 
 To go back by hand: stop the server, rename the folder away, and rename `<folder>.previous` to
 the folder's name.

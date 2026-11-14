@@ -6,6 +6,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeFileAtomic } from '../../../src/host/atomicWrite.ts'
+import { compareVersions } from '../../../src/shared/versions.ts'
 
 export const PENDING_FILE = 'update-pending.json'
 export const TRIED_FILE = 'update-pending.tried'
@@ -91,9 +92,12 @@ export function clearTried(installDir: string, pid: number = process.pid): void 
  * Once the server is listening: settles what the markers say and records it. A rolled-back marker
  * (this is the version the launcher restored) is a failed update; a pending one (this is the new
  * version, and it started) is a successful one. Returns the result, or null when there was
- * nothing to settle. Never throws: a marker that cannot be read or removed must not stop a server.
+ * nothing to settle. `running`: this server's version; a `latest` in the state that is not newer
+ * than it (the update that was found is the one now running) is forgotten, so nothing says it is
+ * still available until the next look at the feed. Never throws: a marker that cannot be read or
+ * removed must not stop a server.
  */
-export function settleStart(installDir: string, configDir: string, now: Date = new Date()): UpdateResult | null {
+export function settleStart(installDir: string, configDir: string, now: Date = new Date(), running?: string): UpdateResult | null {
   const at = now.toISOString()
   let result: UpdateResult | null = null
   try {
@@ -119,7 +123,10 @@ export function settleStart(installDir: string, configDir: string, now: Date = n
       if (pending) result = { ok: true, from: pending.from, to: pending.to, at }
     }
     rmSync(join(installDir, TRIED_FILE), { force: true })
-    if (result) writeState(configDir, { lastResult: result })
+    const patch: Partial<UpdateState> = result ? { lastResult: result } : {}
+    const { latest } = readState(configDir)
+    if (running !== undefined && typeof latest === 'string' && compareVersions(latest, running) <= 0) patch.latest = undefined
+    if (Object.keys(patch).length > 0) writeState(configDir, patch)
   } catch (err) {
     console.warn(`update: could not settle the last update's markers: ${(err as Error).message}`)
   }
