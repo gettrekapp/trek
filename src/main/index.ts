@@ -32,6 +32,7 @@ import { fixPath } from './env'
 import { removeStaleMcpConfigs } from './staleMcpConfigs'
 import {
   APP_ICON,
+  arrangeWindows,
   closeAllForQuit,
   createWindow,
   isQuitting,
@@ -143,6 +144,13 @@ function buildMenu(): void {
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
+        { type: 'separator' },
+        {
+          label: 'Arrange Windows',
+          // macOS only: Ctrl+Alt is AltGr on Windows and Linux, where AltGr+A types a letter on some layouts.
+          accelerator: isMac ? 'Cmd+Alt+A' : undefined,
+          click: () => arrangeWindows()
+        },
         ...(isMac ? [{ type: 'separator' as const }, { role: 'front' as const }] : [])
       ]
     }

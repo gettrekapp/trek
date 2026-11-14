@@ -7,12 +7,15 @@ import { openUrl } from './openUrl'
 import { getAppServer } from './appServers'
 import { addRecentServer, keepRecentFiles } from './recents'
 import {
+  arrangeTiles,
   boundsOnScreen,
   capLabel,
   decideOpen,
   initialFromTarget,
   isTargetId,
   MAX_TARGET_ID,
+  MIN_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
   parseOpenWindows,
   routeSelect,
   sameTarget,
@@ -215,8 +218,8 @@ export function createWindow(
     width: 1400,
     height: 900,
     ...opts.bounds,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     title: 'Trek Dev',
     icon: APP_ICON, // window icon on Windows/Linux; macOS uses the dock icon
     backgroundColor: '#111113',
@@ -423,6 +426,32 @@ export async function restoreWindows(): Promise<number> {
     ])
   }
   return restored
+}
+
+// ---- Arranging -------------------------------------------------------------
+
+/**
+ * Window → Arrange Windows: tiles every window to fill the display it is on. A minimised or
+ * full-screen window is left as it is; a maximised one is tiled like the rest. No window changes
+ * display. The move and resize handlers record the new bounds.
+ */
+export function arrangeWindows(): void {
+  const displays = new Map<number, { workArea: WindowBounds; wins: BrowserWindow[] }>()
+  for (const { win } of windows.values()) {
+    if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) continue
+    if (win.isMaximized()) win.unmaximize()
+    const display = screen.getDisplayMatching(win.getBounds())
+    const group = displays.get(display.id) ?? { workArea: display.workArea, wins: [] }
+    group.wins.push(win)
+    displays.set(display.id, group)
+  }
+  for (const { workArea, wins } of displays.values()) {
+    const tiles = arrangeTiles(workArea, wins.map((win) => ({ id: win.id, bounds: win.getBounds() })))
+    for (const win of wins) {
+      const tile = tiles.get(win.id)
+      if (tile && !win.isDestroyed()) win.setBounds(tile)
+    }
+  }
 }
 
 // ---- IPC -------------------------------------------------------------------
