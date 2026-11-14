@@ -2,9 +2,9 @@
 // which runs the swapped-in trek-server.cjs. The process id does not change, so a terminal, tmux
 // or systemd sees one continuous process; the environment is handed on, with the Node this server
 // runs under named for the launcher (TREK_NODE), and so are stdin, stdout and stderr (Node opens
-// everything else close-on-exec). Node 22.15 and later, never Windows; without it an update still
+// everything else close-on-exec; what node-pty left open is closed first, closeTerminalDescriptors). Node 22.15 and later, never Windows; without it an update still
 // installs and the server says a restart finishes it.
-import { accessSync, constants, statSync } from 'node:fs'
+import { accessSync, closeSync, constants, fstatSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 type Execve = (file: string, args?: readonly string[], env?: NodeJS.ProcessEnv) => never
@@ -13,9 +13,70 @@ type Execve = (file: string, args?: readonly string[], env?: NodeJS.ProcessEnv) 
 export interface RelaunchHost {
   platform: NodeJS.Platform
   execve?: Execve
+  /** Closes what this process's terminals left open, just before the execve */
+  closeTerminals?: () => void
 }
 
-const HOST = process as unknown as RelaunchHost
+/** What closeTerminalDescriptors uses of node:fs (the tests' stand-in) */
+export interface DescriptorFs {
+  readdirSync(dir: string): string[]
+  fstatSync(fd: number): { isCharacterDevice(): boolean }
+  closeSync(fd: number): void
+}
+
+/**
+ * Closes this process's descriptors above stderr that are character devices, or that the kernel
+ * has revoked: the terminals'.
+ * Only as the very last thing before execve, when nothing in this process will run again.
+ *
+ * Why: execve keeps every descriptor that is not close-on-exec. Node opens its own that way, but
+ * node-pty does not open a pty's, and on macOS (node-pty 1.1.0, pty_posix_spawn) each terminal
+ * ever started also leaves two descriptors nothing in JavaScript knows of: the slave side, and a
+ * spare pty master. TerminalHost.forceKillAll() closes the ones node-pty knows; these it cannot.
+ * Without this, a server that restarted into an update would carry them all, update after update
+ * (an exit and a new start would not).
+ *
+ * Why only character devices, and not everything above 2: a pty (and /dev/null, which the new
+ * process opens for itself) is all that this can close, so a descriptor someone deliberately
+ * handed the server to keep (a service manager's socket, a log pipe) is left alone. Returns how
+ * many it closed. Never throws.
+ */
+export function closeTerminalDescriptors(platform: NodeJS.Platform = process.platform, fs: DescriptorFs = { readdirSync, fstatSync, closeSync }): number {
+  let names: string[]
+  try {
+    names = fs.readdirSync(platform === 'linux' ? '/proc/self/fd' : '/dev/fd')
+  } catch {
+    return 0
+  }
+  let closed = 0
+  for (const name of names) {
+    const fd = Number(name)
+    if (!Number.isInteger(fd) || fd <= 2) continue
+    let terminal: boolean
+    try {
+      terminal = fs.fstatSync(fd).isCharacterDevice()
+    } catch {
+      // A terminal whose shell has just been killed: the kernel revokes its slave side, and
+      // fstat then fails (EBADF) on a descriptor that is still held. (Or the listing's own
+      // descriptor, closed again by now: closing that fails too, and changes nothing.)
+      terminal = true
+    }
+    if (!terminal) continue
+    try {
+      fs.closeSync(fd)
+      closed++
+    } catch {
+      // Not open after all.
+    }
+  }
+  return closed
+}
+
+const HOST: RelaunchHost = {
+  platform: process.platform,
+  execve: typeof process.execve === 'function' ? (file, args, env) => process.execve!(file, args, env) : undefined,
+  closeTerminals: () => void closeTerminalDescriptors()
+}
 
 export function canRelaunch(host: RelaunchHost = HOST): boolean {
   return host.platform !== 'win32' && typeof host.execve === 'function'
@@ -67,6 +128,8 @@ export function relaunch(installDir: string, argv: readonly string[], host: Rela
   const refusal = relaunchRefusal(installDir, host)
   if (refusal !== null || !host.execve) throw new Error(refusal ?? 'this Node cannot replace a running process')
   const launcher = launcherPath(installDir)
+  // From here nothing of this process runs again: Node's execve does not return, and aborts the process if the kernel refuses.
+  host.closeTerminals?.()
   // args[0] is the program's own name, as for execve(2): the arguments start at args[1].
   return host.execve(launcher, [launcher, ...argv], relaunchEnv())
 }

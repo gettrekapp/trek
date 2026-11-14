@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CONTROL_SOCKET, controlPath, controlRequest, listenControl, socketPathFits } from '../server/src/update/control.ts'
-import { canRelaunch, launcherPath, relaunch, relaunchEnv, relaunchRefusal } from '../server/src/update/relaunch.ts'
+import { canRelaunch, closeTerminalDescriptors, launcherPath, relaunch, relaunchEnv, relaunchRefusal } from '../server/src/update/relaunch.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const sockets = { skip: posixOnly('a Unix socket') }
@@ -334,6 +334,47 @@ test('relaunchRefusal says, before anything is shut down, why a relaunch cannot 
   }
 })
 
+test('closeTerminalDescriptors closes the character devices above stderr, and the revoked ones, and nothing else', () => {
+  // 11: a killed shell's terminal, revoked by the kernel: fstat fails on it, and it is still held.
+  // 13: the listing's own descriptor, closed again by the time it is looked at.
+  const kinds = { 0: 'chr', 1: 'chr', 2: 'chr', 3: 'file', 4: 'chr', 5: 'socket', 9: 'chr', 11: 'revoked', 12: 'chr', 13: 'gone' }
+  const closed = []
+  const listed = []
+  const ebadf = () => Object.assign(new Error('EBADF'), { code: 'EBADF' })
+  const fs = {
+    readdirSync: (dir) => { listed.push(dir); return [...Object.keys(kinds), 'not-a-number', '-1', '4.5'] },
+    fstatSync: (fd) => {
+      if (kinds[fd] === 'gone' || kinds[fd] === 'revoked') throw ebadf()
+      return { isCharacterDevice: () => kinds[fd] === 'chr' }
+    },
+    closeSync: (fd) => {
+      if (fd === 9 || kinds[fd] === 'gone') throw ebadf()
+      closed.push(fd)
+    }
+  }
+  assert.equal(closeTerminalDescriptors('darwin', fs), 3)
+  assert.deepEqual(closed, [4, 11, 12], 'never stdin, stdout or stderr, a file or a socket; one that cannot be closed stops nothing')
+  assert.equal(closeTerminalDescriptors('linux', fs), 3)
+  assert.deepEqual(listed, ['/dev/fd', '/proc/self/fd'])
+  assert.equal(closeTerminalDescriptors('linux', { ...fs, readdirSync: () => { throw new Error('ENOENT') } }), 0, 'no listing: nothing is closed, and nothing is thrown')
+})
+
+test('relaunch closes what terminals left open, last thing before the process is replaced', { skip: posixOnly('a launcher that is a sh script') }, () => {
+  const dir = temp()
+  try {
+    const install = installWith(dir, '#!/bin/sh\n')
+    const order = []
+    relaunch(install, [], { platform: 'linux', execve: () => order.push('execve'), closeTerminals: () => order.push('close') })
+    assert.deepEqual(order, ['close', 'execve'])
+    // When it cannot relaunch, nothing is closed: the server lives on.
+    order.length = 0
+    assert.throws(() => relaunch(join(dir, 'gone'), [], { platform: 'linux', execve: () => order.push('execve'), closeTerminals: () => order.push('close') }), /missing or cannot be run/)
+    assert.deepEqual(order, [])
+  } finally {
+    removeDir(dir)
+  }
+})
+
 const execve = { skip: posixOnly('process.execve') || (!canRelaunch() && 'this Node has no process.execve (22.15 or later has)') }
 
 test('relaunch replaces the process with the launcher: same pid, exactly the arguments, the environment, the same stdout and stderr', execve, () => {
@@ -371,6 +412,36 @@ test('relaunch into a launcher that is not there is an error the caller can catc
     assert.match(child.stdout, /^caught: .*missing or cannot be run/, child.stderr)
     assert.equal(child.status, 1)
     assert.equal(child.signal, null)
+  } finally {
+    removeDir(dir)
+  }
+})
+
+/** How the launcher lists what it has open above stderr: /proc on Linux, lsof elsewhere (macOS has it). */
+const LIST_OPEN = '#!/bin/sh\nif [ -d "/proc/$$/fd" ]; then\n  for f in /proc/$$/fd/*; do n=${f##*/}; if [ "$n" -gt 2 ]; then echo "open $n $(readlink "$f")"; fi; done\nelse\n  lsof -a -p $$ -d 3-999 -Fn | sed -n "s/^n/open /p"\nfi\necho listed\n'
+const canList = process.platform === 'linux' || spawnSync('lsof', ['-v'], { encoding: 'utf8' }).error === undefined
+
+test('a server that restarts into an update hands on no descriptor of its terminals', { skip: execve.skip || (!canList && 'no way to list a process\'s descriptors here (no /proc, no lsof)') }, () => {
+  const dir = temp()
+  try {
+    const install = installWith(dir, LIST_OPEN)
+    const src = (path) => JSON.stringify(pathToFileURL(join(process.cwd(), 'server', 'src', ...path)).href)
+    // Three terminals, as the server opens them; then the server's own last steps: kill them all, become the launcher.
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+      import { TerminalHost } from ${src(['sessions', 'terminalHost.ts'])}
+      import { relaunch } from ${src(['update', 'relaunch.ts'])}
+      const host = new TerminalHost({ onExit() {} })
+      for (const id of ['a', 'b', 'c']) host.spawn(id, { file: '/bin/sh', args: ['-c', 'sleep 30'], cwd: ${JSON.stringify(dir)}, env: {}, cols: 80, rows: 24 })
+      setTimeout(() => {
+        console.log('terminals ' + host.count())
+        host.forceKillAll()
+        relaunch(${JSON.stringify(install)}, [])
+      }, 300)
+    `], { encoding: 'utf8', timeout: 60_000 })
+    assert.match(child.stdout, /^terminals 3\n/, child.stdout + child.stderr)
+    assert.match(child.stdout, /\nlisted\n$/, child.stdout + child.stderr)
+    const terminals = child.stdout.split('\n').filter((line) => /ptmx|\/pts\/|\/dev\/tty|revoked/.test(line))
+    assert.deepEqual(terminals, [], `the new process still holds its predecessor's terminals:\n${child.stdout}`)
   } finally {
     removeDir(dir)
   }

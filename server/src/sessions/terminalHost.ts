@@ -58,6 +58,11 @@ export interface PtyProcess {
    * otherwise). Never signals: the pid may be another process's by now.
    */
   release?(): void
+  /**
+   * POSIX: closes the pty's descriptor now, instead of when its process's exit is seen. For the
+   * server's last moment only (forceKillAll): nothing is read from the pty afterwards.
+   */
+  close?(): void
   pause(): void
   resume(): void
   /**
@@ -163,6 +168,9 @@ export const nodePtySpawner: PtySpawner = (opts) => {
     // given to another process. The worker's own dispose is all a finished pty needs; there is no
     // such worker on POSIX.
     release: () => (proc as unknown as { _agent?: { _conoutSocketWorker?: { dispose?: () => void } } })._agent?._conoutSocketWorker?.dispose?.(),
+    // node-pty's destroy() closes the pty's stream, and with it the master descriptor, at once
+    // (it is not in node-pty's typings; the Windows one does something else, and is not used).
+    close: () => (proc as unknown as { destroy?: () => void }).destroy?.(),
     pause: () => proc.pause(),
     resume: () => proc.resume(),
     pid: proc.pid
@@ -276,13 +284,24 @@ export class TerminalHost {
     return this.records.get(ptyId)?.sinks.has(sink) ?? false
   }
 
-  /** Last resort at process exit: SIGKILL every pty that is still alive. */
+  /**
+   * Last resort at process exit: SIGKILL every pty that is still alive. POSIX: and close its
+   * descriptor now. An exit would close it anyway, but a server that becomes its next version
+   * (update/relaunch.ts: execve, the same process) keeps what is open, and node-pty does not open
+   * a pty close-on-exec: each terminal's descriptor would live on in the new server.
+   */
   forceKillAll(): void {
     for (const record of this.records.values()) {
       try {
         this.forceKill(record, true)
       } catch {
         // already gone
+      }
+      if (this.platform === 'win32') continue
+      try {
+        record.proc.close?.()
+      } catch {
+        // already closed
       }
     }
   }
