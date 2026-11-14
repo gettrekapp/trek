@@ -10,6 +10,8 @@
 #                packaged-app smokes run against it. It and server-mac are the only jobs with the
 #                signing secrets: they live in the `release` environment (limited to v* tags), not
 #                the repository.
+#                Also Trek-X.Y.Z-arm64.zip (+ .blockmap) and latest-mac.yml, the app updater's
+#                download and feed.
 #   server       trek-server-X.Y.Z-linux-<arch>.tar.gz on a native runner for each arch, and
 #                trek-server-X.Y.Z-win32-x64.zip on Windows (unsigned: nothing in it is an .exe
 #                SmartScreen checks), each unpacked and run (scripts/server-tarball-smoke.mjs)
@@ -195,16 +197,45 @@ jobs:
           trap 'hdiutil detach "$mnt" -quiet || true' EXIT
           codesign --verify --deep --strict "$mnt/Trek.app"
           xcrun stapler validate "$mnt/Trek.app"
+          # The updater's feed: built in (app-update.yml names the GitHub repository).
+          feed="$app/Contents/Resources/app-update.yml"
+          test -f "$feed" || { echo "::error::Trek.app has no app-update.yml: the publish config is missing"; exit 1; }
+          grep -q '^repo: trek$' "$feed" || { echo "::error::app-update.yml does not name the trek repository"; exit 1; }
+          # The zip is what an installed Trek downloads to update itself: the same signed, stapled app.
+          zip="dist/Trek-$VERSION-arm64.zip"
+          test -f "$zip" || { echo "::error::$zip is missing: the zip target was not built"; exit 1; }
+          # Its block map lets a later update download only the blocks that changed.
+          test -f "$zip.blockmap" || { echo "::error::$zip.blockmap is missing"; exit 1; }
+          unzipped="$RUNNER_TEMP/trek-zip"
+          rm -rf "$unzipped" && mkdir -p "$unzipped"
+          ditto -x -k "$zip" "$unzipped"
+          codesign --verify --deep --strict "$unzipped/Trek.app"
+          xcrun stapler validate "$unzipped/Trek.app"
+          spctl --assess --type execute --verbose=4 "$unzipped/Trek.app"
+          # latest-mac.yml: the dmg was stapled after electron-builder wrote it, so its entry is
+          # stale; drop it, and check the zip against what is left.
+          node scripts/latest-mac-yml.mjs dist/latest-mac.yml
       # smoke:packaged without its dist:dir: the signed app's own binary runs the bundled Local
       # server (node-pty from app.asar.unpacked), then the app itself is driven.
       - name: Packaged-app smokes
         run: |
           node scripts/local-server-smoke.mjs --packaged dist/mac-arm64/Trek.app
           node scripts/local-app-smoke.mjs --packaged dist/mac-arm64/Trek.app
+      # The four files in a folder of their own, uploaded with one pattern as the relay's are: each
+      # lands at the top of the artifact, and a missing one fails here by name.
+      - name: Collect the release files
+        run: |
+          set -euo pipefail
+          mkdir -p dist-release
+          for f in "Trek-$VERSION-arm64.dmg" "Trek-$VERSION-arm64.zip" "Trek-$VERSION-arm64.zip.blockmap" latest-mac.yml; do
+            test -f "dist/$f" || { echo "::error::dist/$f is missing"; exit 1; }
+            mv "dist/$f" dist-release/
+          done
+          ls -l dist-release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mac-app
-          path: dist/Trek-${{ env.VERSION }}-arm64.dmg
+          path: dist-release/*
           if-no-files-found: error
           retention-days: 14
 
@@ -416,7 +447,7 @@ jobs:
       - name: SHA256SUMS
         working-directory: artifacts
         run: |
-          expected=("Trek-$VERSION-arm64.dmg" "trek-relay-$VERSION.cjs" "trek-relay-$VERSION.cjs.sha256")
+          expected=("Trek-$VERSION-arm64.dmg" "Trek-$VERSION-arm64.zip" "Trek-$VERSION-arm64.zip.blockmap" "latest-mac.yml" "trek-relay-$VERSION.cjs" "trek-relay-$VERSION.cjs.sha256")
           for t in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do expected+=("trek-server-$VERSION-$t.tar.gz"); done
           expected+=("trek-server-$VERSION-win32-x64.zip")
           for f in "${expected[@]}"; do [ -f "$f" ] || { echo "::error::missing artifact $f"; exit 1; }; done
@@ -431,6 +462,7 @@ jobs:
           **Trek $VERSION**
 
           - \`Trek-$VERSION-arm64.dmg\`: the desktop app for Apple silicon Macs (signed and notarized).
+          - \`Trek-$VERSION-arm64.zip\`, its \`.blockmap\` and \`latest-mac.yml\`: what an installed Trek downloads to update itself (Trek → Check for Updates…). Not for installing by hand.
           - \`trek-server-$VERSION-<os>-<arch>.tar.gz\`: trek-server for macOS and Linux (x64, arm64); needs Node.js 22 or later. Unpack it and run \`bin/trek-server\` (see its README.md).
           - \`trek-server-$VERSION-win32-x64.zip\`: trek-server for Windows (x64); needs Node.js 22 or later. Unzip it and run \`bin\\trek-server\` (see its README.md and docs/WINDOWS.md).
           - \`trek-relay-$VERSION.cjs\`: the push relay (\`node trek-relay-$VERSION.cjs start --config <file>\`); see relay/README.md.
