@@ -10,7 +10,8 @@ import {
   SUPPORTED_PROTOCOL_VERSIONS,
   type IntegrationsChangedEvent,
   type ServerFrameV2,
-  type TopicRev
+  type TopicRev,
+  type UpdateStatus
 } from '../../src/shared/protocolV2.ts'
 import { welcomeCapabilities } from './capabilities.ts'
 import type { Outcome } from './errors'
@@ -50,6 +51,7 @@ import { PushGrants } from './push/grants.ts'
 import { Pusher } from './push/pusher.ts'
 import { release } from 'node:os'
 import { windowsBuildNumber } from './sessions/terminalHost.ts'
+import type { UpdateService } from './update/service.ts'
 
 const HELLO_TIMEOUT_MS = 5000
 const BAD_TOKEN_CLOSE_DELAY_MS = 500
@@ -73,8 +75,12 @@ export interface TrekServer {
    * a welcome sent after it lists `mcp` if the server will have it. Never rejects.
    */
   ready: Promise<void>
-  /** Stops everything at once; settles when what it removes from disk (a move's staged histories) is gone */
-  shutdown(reason: string): Promise<void>
+  /**
+   * Stops everything at once; settles when what it removes from disk (a move's staged histories)
+   * is gone. `detail.version`: the version this server restarts into (`reason` is then `update`),
+   * which its clients are told.
+   */
+  shutdown(reason: string, detail?: { version?: string }): Promise<void>
 }
 
 export interface ServerOptions {
@@ -121,6 +127,12 @@ export interface ServerOptions {
    * which runs beside a server that is in use and must remove nothing but its own folder.
    */
   sweepStaleMoves?: boolean
+  /**
+   * Makes this server's update service (the `update` capability), given how a change reaches
+   * every signed-in connection. Called once, as the server is made. Absent on a server that
+   * cannot update itself: no capability, and `update.*` answers NOT_FOUND.
+   */
+  update?: (onChange: (status: UpdateStatus) => void) => Pick<UpdateService, 'status' | 'check' | 'apply'>
 }
 
 export interface ProjectsSetup {
@@ -296,6 +308,15 @@ export function startServer(
   plugins?.onChanged((manifest) => {
     for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'plugins.changed', payload: { id: manifest.id } })
     if (manifest.legacyCapability) integrationsChanged({ [manifest.legacyCapability]: true })
+  })
+  /**
+   * The update service, made here: before the listener exists, so before any connection can be
+   * answered. The one value decides both the welcome's `update` capability and whether `update.*`
+   * is served. Its changes go to every authenticated connection, whatever it subscribes to; one
+   * that signs in later asks (`update.status`), nothing is replayed.
+   */
+  const updateService = options.update?.((status) => {
+    for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'update.changed', payload: status })
   })
   const serverState = publishServerState(store, hub, daemonVersion, {
     projects: () => projects.list(),
@@ -514,7 +535,7 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities()),
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined),
           ...platformInfo,
           ...(plugins ? { plugins: plugins.presence() } : {}),
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
@@ -554,6 +575,7 @@ export function startServer(
         push: pushGrants ? { grants: pushGrants } : undefined,
         plugins,
         history,
+        update: updateService,
         mcpAccess: access
           ? {
               revoke: (id) => {
@@ -619,7 +641,7 @@ export function startServer(
     sessions,
     // The first gh check too, so the local server's first welcome lists `prWatch` if it has it.
     ready: prWatch ? prWatch.ready : Promise.resolve(),
-    shutdown: (reason) => shutdown(reason)
+    shutdown: (reason, detail) => shutdown(reason, detail)
   }
   if (access) {
     const caller = createToolCaller({ store, hub, projects, poller, sessions, machine: options.machine, prWatch, promoteRequests, plugins, history })
@@ -652,7 +674,7 @@ export function startServer(
     automations.start()
   }
 
-  const shutdown = (reason: string): Promise<void> => {
+  const shutdown = (reason: string, detail?: { version?: string }): Promise<void> => {
     stopped = true
     stopSweep()
     void trek.mcp?.close()
@@ -669,8 +691,10 @@ export function startServer(
     store.off('change', onConfigChange)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
+    const payload = { reason, ...(detail?.version !== undefined ? { version: detail.version } : {}) }
     for (const ws of wss.clients) {
-      sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload: { reason } })
+      // Only a signed-in connection is told why (and which version): nothing about the server goes out before auth.
+      if (authed.has(ws)) sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload })
       ws.close(1001, 'server shutting down')
     }
     wss.close()

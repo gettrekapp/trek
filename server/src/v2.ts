@@ -3,7 +3,8 @@
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
 // Linear and skills with the server's own key and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
-// moving a worktree between servers (moveHandlers.ts), and automations (automationHandlers.ts).
+// moving a worktree between servers (moveHandlers.ts), and automations (automationHandlers.ts),
+// and the server's own update (update/updateHandlers.ts).
 import type { PairingCodes } from './pairing'
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
@@ -25,6 +26,8 @@ import { moveHandlers } from './move/moveHandlers.ts'
 import { promoteHandlers } from './promote/promoteHandlers.ts'
 import { historyHandlers } from './history/historyHandlers.ts'
 import type { HistoryStore } from './history/store.ts'
+import { updateHandlers } from './update/updateHandlers.ts'
+import type { UpdateService } from './update/service.ts'
 import { branchChanges, change, recordHistory, tagValue, type Attribution } from './history/record.ts'
 import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
@@ -95,6 +98,8 @@ export interface V2Context {
   plugins?: PluginRegistry
   /** The worktree history; without it nothing is recorded and history.list is empty */
   history?: HistoryStore
+  /** The server's update service (the `update` capability); absent on a server that cannot update itself */
+  update?: Pick<UpdateService, 'status' | 'check' | 'apply'>
   /** Who this request acts as, for the history: absent is a Trek client's user; the MCP tool caller sets `mcp` */
   attribution?: Attribution
 }
@@ -389,6 +394,7 @@ const handlers: Record<string, Handler> = {
   ...moveHandlers,
   ...promoteHandlers,
   ...historyHandlers,
+  ...updateHandlers,
 
   // A one-time code a phone redeems at hello for its own token (6a). Any signed-in connection may
   // ask (a web session or a paired phone included): a token already holds shell-level power on
