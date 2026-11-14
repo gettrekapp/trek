@@ -15,6 +15,10 @@
 //   - File → New Project… and Open on Server… (the menu's own items): in an empty window, its view
 //     there and no new window; in a project window, exactly one new window on the view; in an empty
 //     window still loading, the view once it has loaded (main hands it over at boot, sends nothing);
+//   - Window → Arrange Windows tiles the windows over the display's work area, and a second run
+//     moves nothing; a window can be as small as 480x320, with no horizontal overflow;
+//   - a hidden sidebar (its button, and View → Toggle Sidebar's channel) is recorded with its
+//     window and is still hidden after a relaunch and a reload;
 //   - quit and relaunch: both windows come back on their projects, alpha with its size; the
 //     target survives a reload; a window on a server entry that does not exist comes back on its
 //     target, shows Server removed, keeps the target across a reload and is recorded again;
@@ -345,11 +349,57 @@ try {
   await loading.close()
   check('and the menu windows close', await until(windowCount, before), before)
 
+  // ---- Arrange Windows, and the minimum size ---------------------------------------------------------------
+
+  const arrange = () =>
+    app.evaluate(({ BrowserWindow, Menu, screen }) => {
+      Menu.getApplicationMenu().items.flatMap((i) => i.submenu?.items ?? []).find((i) => i.label === 'Arrange Windows').click()
+      const area = screen.getPrimaryDisplay().workArea
+      const tiles = BrowserWindow.getAllWindows().map((w) => w.getBounds()).sort((a, b) => a.y - b.y || a.x - b.x)
+      return { area, tiles }
+    })
+  const arranged = await arrange()
+  const inside = (t, area) => t.x >= area.x && t.y >= area.y && t.x + t.width <= area.x + area.width && t.y + t.height <= area.y + area.height
+  check('Arrange Windows keeps every window inside the work area', arranged.tiles.map((t) => inside(t, arranged.area)), arranged.tiles.map(() => true))
+  // Tiles that fit above the minimum abut (their areas add up to the work area's); a small CI
+  // screen may need them at the minimum, overlapping (then they add up to more).
+  const tiled = arranged.tiles.reduce((sum, t) => sum + t.width * t.height, 0)
+  const fits = arranged.tiles.every((t) => t.width > 480 && t.height > 320)
+  check(`the ${arranged.tiles.length} windows fill the ${arranged.area.width}x${arranged.area.height} work area`, fits ? tiled === arranged.area.width * arranged.area.height : tiled >= arranged.area.width * arranged.area.height, true)
+  check('no two windows share a position', new Set(arranged.tiles.map((t) => `${t.x},${t.y}`)).size, arranged.tiles.length)
+  check('arranging again moves nothing', (await arrange()).tiles, arranged.tiles)
+
+  const small = await app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha')
+    win.setSize(300, 200) // under the minimum: the window stops at it
+    return win.getSize()
+  })
+  check('a window can be as small as 480x320, and no smaller', small, [480, 320])
+  const alphaPage = await pageFor(ids.alpha)
+  check('nothing overflows it sideways', await until(() => alphaPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 5000), true)
+
+  // ---- The sidebar hides ----------------------------------------------------------------------------------------
+
+  const betaPage = await pageFor(ids.beta)
+  const sidebarOf = (page) => page.evaluate(() => [document.querySelectorAll('.sidebar').length, document.querySelectorAll('.sidebar-rail').length])
+  check('a project window shows its sidebar', await until(() => sidebarOf(betaPage), [1, 0]), [1, 0])
+  await betaPage.locator('.sidebar-hide').click()
+  check('its hide button leaves the rail in its place', await until(() => sidebarOf(betaPage), [0, 1]), [0, 1])
+  check('alpha’s sidebar is its own', await sidebarOf(alphaPage), [1, 0])
+  check('the View menu has Toggle Sidebar', await app.evaluate(({ Menu }) => !!Menu.getApplicationMenu().items.find((i) => i.label === 'View')?.submenu.items.find((i) => i.label === 'Toggle Sidebar')), true)
+  // The menu item sends to the focused window, which a test-run app may not have: its channel is
+  // sent to alpha's window directly, twice (hide, show).
+  const sendToggle = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha').webContents.send('menu:toggle-sidebar'))
+  await sendToggle()
+  check('the menu’s channel hides the sidebar', await until(() => sidebarOf(alphaPage), [0, 1]), [0, 1])
+  await sendToggle()
+  check('and shows it again', await until(() => sidebarOf(alphaPage), [1, 0]), [1, 0])
+
   // ---- Quit, relaunch: the windows come back -------------------------------------------------------------
 
   // A size that fits this display's work area (a CI Mac's virtual screen is small, and a restore
   // clamps the window to the work area), so the check below sees what was set.
-  // The window's minimum is 900x600, so the size is between that and 1000x700, placed at the work
+  // The size is between 900x600 and 1000x700 (well over the 480x320 minimum), placed at the work
   // area's corner, and what the window actually took is what the restore must give back.
   const alphaSize = await app.evaluate(({ BrowserWindow, screen }) => {
     const area = screen.getPrimaryDisplay().workArea
@@ -365,6 +415,8 @@ try {
   // A server window whose server is unknown (no such entry): main restores it on its target, keeps
   // that target whatever the renderer shows ("Server removed"), and records it again at quit.
   const openWindowsPath = join(userData, 'open-windows.json')
+  const recordedSidebars = Object.fromEntries(JSON.parse(readFileSync(openWindowsPath, 'utf8')).map((e) => [e.projectId, e.sidebarHidden ?? false]))
+  check('quit records beta’s hidden sidebar, and not alpha’s', [recordedSidebars[ids.beta], recordedSidebars[ids.alpha]], [true, false])
   const missing = { kind: 'server', serverEntryId: 'smoke-missing-server', projectId: 'smoke-missing-project' }
   writeFileSync(openWindowsPath, JSON.stringify([...JSON.parse(readFileSync(openWindowsPath, 'utf8')), missing], null, 2))
   app = await launch()
@@ -393,6 +445,12 @@ try {
   await ra.reload()
   await ra.waitForLoadState('domcontentloaded')
   check('the target survives a reload', await until(() => targetOf(ra), ids.alpha), ids.alpha)
+  check('beta comes back with its sidebar hidden, alpha with it shown', [await until(() => sidebarOf(rb), [0, 1]), await until(() => sidebarOf(ra), [1, 0])], [[0, 1], [1, 0]])
+  await rb.reload()
+  await rb.waitForLoadState('domcontentloaded')
+  check('and it stays hidden across a reload', await until(() => sidebarOf(rb), [0, 1]), [0, 1])
+  await rb.locator('.sidebar-show').click()
+  check('the rail’s button brings it back', await until(() => sidebarOf(rb), [1, 0]), [1, 0])
 
   // ---- The navigation guard -----------------------------------------------------------------------------
 
