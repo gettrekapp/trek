@@ -191,9 +191,9 @@ test('a file that cannot be read is never rewritten or deleted', (t) => {
   const store = new HistoryStore(dir)
   assert.doesNotThrow(() => store.record('p', ev()))
   assert.doesNotThrow(() => store.dropRepo('p', 'r'))
+  assert.equal(store.health()[0].code, 'HISTORY_FAILED')
   assert.doesNotThrow(() => store.dropProject('p'))
   assert.equal(statSync(join(dir, 'p.jsonl')).isDirectory(), true)
-  assert.equal(store.health()[0].code, 'HISTORY_FAILED')
 })
 
 test('list clamps its limit; remove and dropRepo of nothing change nothing', (t) => {
@@ -205,4 +205,18 @@ test('list clamps its limit; remove and dropRepo of nothing change nothing', (t)
   store.remove('p', 'r', 'feat', ['nope'])
   store.dropRepo('p', 'none')
   assert.equal(store.list('p', 'r', 'feat').events.length, 3)
+})
+
+test('dropProject of a project whose file could not be read leaves the file but clears its warning', (t) => {
+  const dir = dirFor(t)
+  mkdirSync(join(dir, 'p.jsonl'), { recursive: true })
+  let changes = 0
+  const store = new HistoryStore(dir, { onHealth: () => changes++ })
+  store.record('p', ev())
+  assert.equal(store.health().length, 1)
+  const before = changes
+  store.dropProject('p')
+  assert.equal(statSync(join(dir, 'p.jsonl')).isDirectory(), true)
+  assert.deepEqual(store.health(), [])
+  assert.equal(changes, before + 1)
 })

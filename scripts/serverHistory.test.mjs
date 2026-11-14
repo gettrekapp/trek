@@ -148,7 +148,7 @@ test('history.list pages a branch newest first; limit and before are checked', a
   assert.deepEqual(await s.call('history.list', { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }, { history: undefined }), { events: [], more: false })
 })
 
-test('project.delete drops its history file; repo.remove its repository\'s entries', async (t) => {
+test('project.delete drops its history', async (t) => {
   const s = await setup(t)
   recordHistory(s.ctx, s.projectId, s.repoId, 'feat', [{ kind: 'created' }])
   recordHistory(s.ctx, s.projectId, 'other-repo', 'feat', [{ kind: 'created' }])
@@ -187,6 +187,37 @@ test('branch setters record what changed, with tag names as they were; the same 
   assert.ok(s.history.list(s.projectId, s.repoId, 'feat').events.every((e) => e.actor.kind === 'user'))
 })
 
+test('setting the same ticket, PR or note again records nothing; the watch toggles record only real changes', async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }
+  const pr = 'https://github.com/o/r/pull/1'
+  await s.call('branch.setTicket', { ...ref, ticket: 'T-1' })
+  await s.call('branch.setNote', { ...ref, note: 'n' })
+  await s.call('branch.setPr', { ...ref, pr })
+  assert.deepEqual(s.kinds(), ['pr', 'note', 'ticket'])
+  await s.call('branch.setTicket', { ...ref, ticket: 'T-1' })
+  await s.call('branch.setNote', { ...ref, note: 'n' })
+  await s.call('branch.setPr', { ...ref, pr })
+  assert.deepEqual(s.kinds(), ['pr', 'note', 'ticket'])
+  await s.call('branch.setPrWatch', { ...ref, watch: false }) // off while off
+  assert.equal(s.kinds().length, 3)
+  await s.call('branch.setPrWatch', { ...ref, watch: true })
+  await s.call('branch.setPrWatch', { ...ref, watch: true }) // on while on
+  assert.equal(s.kinds().length, 4)
+  await s.call('branch.setPr', { ...ref, pr }) // same PR keeps the watch
+  assert.equal(s.kinds().length, 4)
+  await s.call('branch.setPrWatch', { ...ref, watch: false })
+  assert.equal(s.kinds()[0], 'prWatch.off')
+  assert.equal(s.kinds().length, 5)
+})
+
+test('two copies of one label id record one label.added', async (t) => {
+  const s = await setup(t)
+  s.projects.apply(s.projectId, (d) => { d.settings.customTags = [{ id: 'bl', name: 'Blocked', color: '#ff0000' }] })
+  await s.call('branch.setCustomTags', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', customTags: ['bl', 'bl'] })
+  assert.deepEqual(s.kinds(), ['label.added'])
+})
+
 test('a refused setter records nothing', async (t) => {
   const s = await setup(t)
   const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }
@@ -216,6 +247,7 @@ const SETTER_VALUES = {
 const RECORDS_NOTHING = ['branch.setEnv']
 
 test('every branch.set* method records its change (setEnv excepted)', async (t) => {
+  assert.ok(BRANCH_SET_METHODS.includes('branch.setPrWatch') && BRANCH_SET_METHODS.length >= 7)
   for (const method of BRANCH_SET_METHODS) {
     if (RECORDS_NOTHING.includes(method)) continue
     assert.ok(Object.hasOwn(SETTER_VALUES, method), `${method} has no test value: give it one and make it record`)

@@ -103,7 +103,7 @@ export function branchChanges(
       return [change('status', tagValue(settings.worktreeTags, before as string | undefined), tagValue(settings.worktreeTags, after as string | undefined))]
     case 'customTags': {
       const was = Array.isArray(before) ? (before as string[]) : []
-      const now = Array.isArray(after) ? (after as string[]) : []
+      const now = Array.isArray(after) ? [...new Set(after as string[])] : []
       return [
         ...now.filter((id) => !was.includes(id)).map((id) => change('label.added', undefined, tagValue(settings.customTags, id))),
         ...was.filter((id) => !now.includes(id)).map((id) => change('label.removed', tagValue(settings.customTags, id)))
