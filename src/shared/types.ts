@@ -401,6 +401,8 @@ export interface InitialWindowState {
   server: { serverEntryId: string; projectId: string } | null
   /** A session to show once the project is in (asked for before the window was listening) */
   select: SessionSelect | null
+  /** The window's sidebar is hidden (View → Toggle Sidebar): remembered per window by main. */
+  sidebarHidden: boolean
 }
 
 /** One entry in recent-projects.json: a project file, or a project on an app-wide trek-server. */

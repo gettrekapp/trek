@@ -41,6 +41,8 @@ const api = {
   /** A server window gives up its target and becomes an empty window. */
   releaseTarget: (): Promise<void> => ipcRenderer.invoke('window:releaseTarget'),
   takeInitialWindowState: (): Promise<InitialWindowState> => ipcRenderer.invoke('window:takeInitial'),
+  /** Tells main this window's sidebar is hidden or shown, so it comes back that way. */
+  setSidebarHidden: (hidden: boolean): void => ipcRenderer.send('window:setSidebarHidden', hidden),
   onWindowCloseRequest: (callback: () => void): (() => void) =>
     subscribe('window:close-request', callback),
   windowCloseReady: (): void => ipcRenderer.send('window:close-ready'),
@@ -167,7 +169,8 @@ const api = {
       | 'open-on-server'
       | 'new-terminal'
       | 'close-tab'
-      | 'toggle-global-claude',
+      | 'toggle-global-claude'
+      | 'toggle-sidebar',
     callback: () => void
   ): (() => void) =>
     subscribe(`menu:${channel}`, callback)
