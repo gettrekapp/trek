@@ -197,8 +197,9 @@ test('a hidden sidebar is recorded with its window, and only when hidden', () =>
 })
 
 test('parseOpenWindows takes only a literal true as a hidden sidebar', () => {
-  const entry = (sidebarHidden) => ({ kind: 'server', serverEntryId: 's', projectId: String(sidebarHidden), sidebarHidden })
-  const parsed = parseOpenWindows([entry(true), entry(false), entry('true'), entry(1), entry(null)])
+  // A project each: parseOpenWindows keeps one entry per target.
+  const entry = (sidebarHidden, i) => ({ kind: 'server', serverEntryId: 's', projectId: `p${i}`, sidebarHidden })
+  const parsed = parseOpenWindows([true, false, 'true', 1, null].map(entry))
   assert.deepEqual(parsed.map((e) => e.sidebarHidden), [true, undefined, undefined, undefined, undefined])
   assert.deepEqual(parsed.slice(1).map((e) => 'sidebarHidden' in e), [false, false, false, false])
 })
