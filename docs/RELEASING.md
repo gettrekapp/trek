@@ -138,7 +138,7 @@ The feed is `Contents/Resources/app-update.yml` in the app. electron-builder wri
 the build has a `dmg` or `zip` target (app-builder-lib `out/publish/PublishManager.js`, its
 `onAfterPack` hook), so an app from `npm run dist:dir` has no feed and its update check fails
 quietly; only `npm run dist` or the release workflow produce an app that can update.
-`TREK_NO_UPDATE_CHECK` set to any value that is not empty turns the checks off and disables the
+`TREK_NO_UPDATE_CHECK=1` (or `true`, `yes`) turns the checks off and disables the
 menu item: every smoke sets it, the packaged-app smoke included, so no test contacts GitHub.
 
 The updater cannot be tested without two signed, published builds. On the first two releases that

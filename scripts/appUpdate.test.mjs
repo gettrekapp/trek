@@ -127,9 +127,9 @@ test('a request to check: ignored, shown, joined to the check in flight, or star
   assert.equal(checkRequest({ ...idle, manual: false, prompting: true }), 'start', 'background, an answer dialog still open: the check runs silently')
 })
 
-test('TREK_NO_UPDATE_CHECK: any value turns the update checks off', () => {
-  for (const on of ['1', 'true', 'yes', '0', 'x']) assert.equal(updateCheckDisabled({ TREK_NO_UPDATE_CHECK: on }), true, JSON.stringify(on))
-  for (const off of [undefined, '', '  ']) assert.equal(updateCheckDisabled({ TREK_NO_UPDATE_CHECK: off }), false, JSON.stringify(off))
+test('TREK_NO_UPDATE_CHECK: only 1, true or yes turn the update checks off, as TREK_NO_LOCAL_SERVER', () => {
+  for (const on of ['1', 'true', 'yes', ' YES ', 'True']) assert.equal(updateCheckDisabled({ TREK_NO_UPDATE_CHECK: on }), true, JSON.stringify(on))
+  for (const off of [undefined, '', '  ', '0', 'no', 'x']) assert.equal(updateCheckDisabled({ TREK_NO_UPDATE_CHECK: off }), false, JSON.stringify(off))
   assert.equal(updateCheckDisabled({}), false)
 })
 

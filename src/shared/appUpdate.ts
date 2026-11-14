@@ -26,9 +26,9 @@ export const SQUIRREL_TIMEOUT_MS = 5 * 60 * 1000
 /** Set by the smokes, which launch the app (a packaged one too): no update check, so no request to the release feed. */
 export const NO_UPDATE_CHECK_ENV = 'TREK_NO_UPDATE_CHECK'
 
-/** TREK_NO_UPDATE_CHECK is on with any value that is not empty (spaces trimmed); unset or `` is off. */
+/** TREK_NO_UPDATE_CHECK is on only as `1`, `true` or `yes` (any case, spaces trimmed), as TREK_NO_LOCAL_SERVER is; unset, `0`, `` or anything else is off. */
 export function updateCheckDisabled(env: Readonly<Record<string, string | undefined>>): boolean {
-  return (env[NO_UPDATE_CHECK_ENV] ?? '').trim() !== ''
+  return ['1', 'true', 'yes'].includes((env[NO_UPDATE_CHECK_ENV] ?? '').trim().toLowerCase())
 }
 
 export const RELEASES_URL = 'https://github.com/gettrekapp/trek/releases'
