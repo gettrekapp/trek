@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Automation } from '../../../shared/model/types'
 import { describeCron, formatWall } from '../../../shared/cron'
 import { GLOBAL_WORKTREE_ID, useAppStore } from '../store'
@@ -46,9 +46,17 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
   const runNow = (a: Automation): Promise<void> => act(async () => showRun(await getBackend().automations.runNow(a.id)))
 
   const editingAutomation = editing && editing !== 'new' ? automations.find((a) => a.id === editing) : undefined
+  const deletedElsewhere = !!editing && editing !== 'new' && !editingAutomation
+  // Another window deleted it: close the editor rather than let Save create a duplicate.
+  useEffect(() => {
+    if (deletedElsewhere) {
+      setEditing(null)
+      setError('That automation was deleted')
+    }
+  }, [deletedElsewhere])
   return (
     <div className="automations-panel settings-panel" style={{ display: visible ? 'flex' : 'none' }}>
-      {editing ? (
+      {editing && !deletedElsewhere ? (
         <AutomationEditor key={editing} automation={editingAutomation} onDone={() => setEditing(null)} />
       ) : (
         <>
@@ -64,7 +72,7 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
           {automations.map((a) => (
             <div key={a.id} className={`automation-row ${a.enabled ? '' : 'paused'}`}>
               <div className="automation-main">
-                <input type="checkbox" title={a.enabled ? 'Enabled' : 'Paused'} checked={a.enabled} disabled={offline} onChange={() => void toggle(a)} />
+                <input type="checkbox" aria-label={`Enable ${a.name}`} title={a.enabled ? 'Enabled' : 'Paused'} checked={a.enabled} disabled={offline} onChange={() => void toggle(a)} />
                 <span className="automation-name">{a.name}</span>
                 <span className="automation-schedule">{describeCron(a.schedule.cron)}</span>
                 <span className="muted">{nextRunLabel(a, now)}</span>

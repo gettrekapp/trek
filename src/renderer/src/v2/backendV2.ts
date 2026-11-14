@@ -761,7 +761,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       runNow: async (automationId) => {
         const { result, rev } = await requestWithRev('automation.runNow', { projectId, automationId })
-        if (rev) await deps.whenProjected(() => true, rev)
+        // Wait for the run's tab so the caller can focus it.
+        await deps.whenProjected(() => deps.state().terminals[result.sessionId], rev)
         return result.sessionId
       },
       resolveMissed: async (run, dismiss) => {

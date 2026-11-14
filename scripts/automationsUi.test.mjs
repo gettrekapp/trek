@@ -9,9 +9,14 @@ const SINCE = Date.UTC(2026, 0, 5, 20)
 test('missedRows and missedKey: the automations with a pending miss; the key changes with a new miss', () => {
   const list = [a('x', { missed: { since: SINCE, count: 3 } }), a('y'), a('z', { missed: { since: SINCE, count: 1 } })]
   assert.deepEqual(missedRows(list).map((r) => r.id), ['x', 'z'])
-  assert.equal(missedKey(list), 'x:3,z:1')
+  assert.equal(missedKey(list), `x:${SINCE}:3,z:${SINCE}:1`)
   assert.equal(missedKey([a('y')]), '')
-  assert.notEqual(missedKey([a('x', { missed: { since: SINCE, count: 4 } })]), 'x:3')
+  assert.notEqual(missedKey([a('x', { missed: { since: SINCE, count: 4 } })]), `x:${SINCE}:3`)
+  // a miss that recurs with the same count but a later since is a new key
+  assert.notEqual(
+    missedKey([a('x', { missed: { since: SINCE, count: 1 } })]),
+    missedKey([a('x', { missed: { since: SINCE + 86400000, count: 1 } })])
+  )
 })
 
 test('missedLabel', () => {

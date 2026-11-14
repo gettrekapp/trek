@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Automation } from '../../../shared/model/types'
 import { useAppStore } from '../store'
@@ -10,7 +10,8 @@ const NONE: Automation[] = []
 /**
  * Shown while any automation has missed runs (the server was asleep or down at their time). Run
  * all, Run selected (unchecked ones dismissed) or Dismiss all; whichever window answers first wins,
- * and this one closes when the patch clears them. Escape hides it until a new miss arrives.
+ * and this one closes when the patch clears them. Escape hides it until a new miss arrives. The
+ * dialog takes focus when it opens (not a button: Enter must not run everything).
  */
 export function MissedRunsModal(): React.JSX.Element | null {
   const automations = useAppStore((s) => s.project?.automations ?? NONE)
@@ -21,28 +22,34 @@ export function MissedRunsModal(): React.JSX.Element | null {
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [errors, setErrors] = useState<string[]>([])
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const visible = errors.length > 0 || (rows.length > 0 && key !== dismissedKey)
 
   // A new set of misses: everything checked again, old errors gone.
   useEffect(() => {
     setUnchecked(new Set())
     if (key) setErrors([])
+    else useAppStore.getState().setMissedDismissedKey(null)
   }, [key])
 
-  const hide = (): void => useAppStore.getState().setMissedDismissedKey(key)
+  // Take focus from the terminal behind when the dialog (or its errors view) appears.
   useEffect(() => {
-    if (!key || key === dismissedKey) return
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') hide()
+    if (visible) dialogRef.current?.focus()
+  }, [visible, errors.length > 0])
+
+  const hide = (): void => useAppStore.getState().setMissedDismissedKey(key)
+  const onKeyDown = (close: () => void) => (e: React.KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      close()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  })
+  }
 
   if (errors.length > 0) {
     return createPortal(
       <div className="modal-backdrop">
-        <div className="modal missed-runs-modal">
-          <h2>Some automations did not start</h2>
+        <div className="modal missed-runs-modal" role="dialog" tabIndex={-1} ref={dialogRef} aria-labelledby="missed-runs-errors-title" onKeyDown={onKeyDown(() => setErrors([]))}>
+          <h2 id="missed-runs-errors-title">Some automations did not start</h2>
           <ul className="missed-runs-list">{errors.map((e, i) => <li key={i} className="error">{e}</li>)}</ul>
           <div className="modal-footer automation-footer">
             <button className="primary" onClick={() => setErrors([])}>OK</button>
@@ -74,7 +81,7 @@ export function MissedRunsModal(): React.JSX.Element | null {
 
   return createPortal(
     <div className="modal-backdrop">
-      <div className="modal missed-runs-modal" role="dialog" aria-labelledby="missed-runs-title">
+      <div className="modal missed-runs-modal" role="dialog" tabIndex={-1} ref={dialogRef} aria-labelledby="missed-runs-title" onKeyDown={onKeyDown(hide)}>
         <h2 id="missed-runs-title">Missed automations</h2>
         <p className="muted">The server could not run these at their scheduled time. Run them now?</p>
         <ul className="missed-runs-list">
@@ -100,7 +107,7 @@ export function MissedRunsModal(): React.JSX.Element | null {
         <div className="modal-footer automation-footer">
           <button disabled={busy || offline} onClick={() => void answer([])}>Dismiss all</button>
           <span className="spacer" />
-          <button disabled={busy || offline} onClick={() => void answer(selected)}>Run selected</button>
+          <button disabled={busy || offline || selected.length === 0} onClick={() => void answer(selected)}>Run selected</button>
           <button className="primary" disabled={busy || offline} onClick={() => void answer(all)}>Run all</button>
         </div>
       </div>

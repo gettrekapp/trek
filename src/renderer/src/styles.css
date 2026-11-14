@@ -4602,8 +4602,8 @@ body.resizing-row {
 .automation-history li { display: flex; gap: 10px; }
 .automation-editor { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
 .automation-editor textarea { width: 100%; font-family: inherit; }
-.automation-picker { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.automation-days { display: inline-flex; gap: 6px; }
+.automation-picker { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.automation-days { display: inline-flex; flex-wrap: wrap; gap: 6px; }
 .automation-cron { font-family: var(--mono, monospace); }
 .automation-footer { gap: 8px; align-items: center; }
 .automation-footer .spacer { flex: 1; }

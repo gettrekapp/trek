@@ -13,6 +13,7 @@ import {
   type SchedulePicker
 } from '../../../shared/cron'
 import { getBackend } from '../backend'
+import { useAppStore } from '../store'
 import { LlmPicker, useServerPicker } from './LlmPicker'
 
 interface Props {
@@ -48,17 +49,19 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const offline = useAppStore((s) => s.serverOffline)
   const serverPicker = useServerPicker()
   const mcpOnly = (p: LlmProvider): boolean => p.capabilities.mcp && (!serverPicker.filter || serverPicker.filter(p))
 
   const effectiveCron = advanced ? cron : cronFromPicker(picker)
   const preview = useMemo(() => {
+    if (!advanced && picker.kind === 'weekly' && picker.days.length === 0) return 'Pick at least one day'
     try {
       return nextSlots(parseCron(effectiveCron), tz, Date.now(), 3).map((t) => formatWall(t, tz, true))
     } catch (err) {
       return (err as Error).message
     }
-  }, [effectiveCron, tz])
+  }, [effectiveCron, tz, advanced, picker])
 
   const cronInvalid = typeof preview === 'string'
   const noDays = !advanced && picker.kind === 'weekly' && picker.days.length === 0
@@ -92,13 +95,16 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
   }
 
   const remove = async (): Promise<void> => {
-    if (!automation) return
+    if (!automation || busy) return
+    setBusy(true)
     const backend = getBackend()
     try {
       await backend.automations.remove(automation.id)
       onDone()
     } catch (err) {
       setError(backend.errors.inline(err))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -176,7 +182,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
           </div>
         )}
         <label className="llm-inline-check">
-          <input type="checkbox" checked={advanced} onChange={(e) => setAdvancedMode(e.target.checked)} />
+          <input type="checkbox" checked={advanced} disabled={advanced && pickerFromCron(cron) === null} title={advanced && pickerFromCron(cron) === null ? 'This schedule can only be edited as cron' : undefined} onChange={(e) => setAdvancedMode(e.target.checked)} />
           Advanced (cron)
         </label>
       </div>
@@ -204,7 +210,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
           (confirmDelete ? (
             <>
               <span>Delete “{automation.name}”?</span>
-              <button className="danger-button" onClick={() => void remove()}>Delete</button>
+              <button className="danger-button" disabled={busy || offline} onClick={() => void remove()}>Delete</button>
               <button onClick={() => setConfirmDelete(false)}>Keep</button>
             </>
           ) : (
@@ -212,7 +218,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
           ))}
         <span className="spacer" />
         <button onClick={onDone}>Cancel</button>
-        <button className="primary primary-action" disabled={busy || !name.trim() || !prompt.trim() || noDays || cronInvalid} onClick={() => void save()}>
+        <button className="primary primary-action" disabled={busy || offline || !name.trim() || !prompt.trim() || noDays || cronInvalid} onClick={() => void save()}>
           Save
         </button>
       </div>

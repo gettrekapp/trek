@@ -9,7 +9,7 @@ export function missedRows(automations: readonly Automation[] | undefined): Auto
 
 /** Identifies the pending set: a new miss (another automation, a higher count) changes it. */
 export function missedKey(automations: readonly Automation[] | undefined): string {
-  return missedRows(automations).map((a) => `${a.id}:${a.missed?.count}`).join(',')
+  return missedRows(automations).map((a) => `${a.id}:${a.missed?.since}:${a.missed?.count}`).join(',')
 }
 
 export function missedLabel(missed: AutomationMissed, tz: string): string {
