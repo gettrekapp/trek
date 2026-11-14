@@ -155,6 +155,26 @@ test('health is kept while any project is failing', { skip: asRoot }, (t) => {
   assert.deepEqual(store.health(), [])
 })
 
+test('clearing one project\'s problem while another still fails updates the warning and tells clients', { skip: asRoot }, (t) => {
+  const dir = dirFor(t)
+  let changes = 0
+  const store = new HistoryStore(dir, { onHealth: () => changes++ })
+  store.record('p', ev())
+  store.record('q', ev())
+  chmodSync(join(dir, 'p.jsonl'), 0o400)
+  chmodSync(join(dir, 'q.jsonl'), 0o400)
+  store.record('p', ev())
+  store.record('q', ev())
+  const first = store.health()[0].message
+  assert.match(first, /p\.jsonl/)
+  const before = changes
+  chmodSync(join(dir, 'p.jsonl'), 0o600)
+  store.record('p', ev())
+  assert.equal(store.health().length, 1)
+  assert.match(store.health()[0].message, /q\.jsonl/)
+  assert.equal(changes, before + 1)
+})
+
 test('an invalid event is refused: no write, no onRecorded', (t) => {
   const dir = dirFor(t)
   const recorded = []

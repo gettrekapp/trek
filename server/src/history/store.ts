@@ -39,6 +39,8 @@ export class HistoryStore {
   private readonly dirty = new Set<string>()
   /** Projects whose file could not be read: never rewritten or deleted, kept in memory only */
   private readonly readFailed = new Set<string>()
+  /** Read-failed projects already logged as memory-only (once each) */
+  private readonly warnedMemoryOnly = new Set<string>()
 
   constructor(dir: string, options: HistoryStoreOptions = {}) {
     this.dir = dir
@@ -55,7 +57,10 @@ export class HistoryStore {
     const loaded = this.load(projectId)
     this.put(loaded, event)
     if (this.readFailed.has(projectId)) {
-      console.warn(`[history] ${projectId}: kept in memory only (its file could not be read)`)
+      if (!this.warnedMemoryOnly.has(projectId)) {
+        this.warnedMemoryOnly.add(projectId)
+        console.warn(`[history] ${projectId}: kept in memory only (its file could not be read)`)
+      }
     } else if (this.dirty.has(projectId)) {
       this.compact(projectId)
     } else {
@@ -250,7 +255,10 @@ export class HistoryStore {
     this.problems.delete(projectId)
     if (this.problems.size > 0) {
       const shown = this.problems.values().next().value as string
-      if (this.warning && this.warning.message !== shown) this.warning = { ...this.warning, message: shown }
+      if (this.warning && this.warning.message !== shown) {
+        this.warning = { ...this.warning, message: shown }
+        this.healthChanged()
+      }
       return
     }
     this.warning = undefined
