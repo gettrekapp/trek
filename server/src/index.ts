@@ -14,5 +14,9 @@ if (args.command === 'selfcheck' || args.command === 'update') {
   // Filled in by the tasks that add these commands.
   die(`trek-server ${args.command} is not available in this build`)
 } else {
-  void import('./main.ts').catch(die)
+  // An error thrown while main.ts loads is a bug, not a message for the user: keep its stack, as before the split.
+  void import('./main.ts').catch((err: unknown) => {
+    console.error(err)
+    process.exit(1)
+  })
 }
