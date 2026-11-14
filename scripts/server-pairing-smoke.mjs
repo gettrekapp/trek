@@ -177,7 +177,7 @@ try {
   const cli = (...args) => execFileSync(process.execPath, ['dist/trek-server.cjs', ...args, '--config', configPath], { cwd: join(root, 'server'), env: serverEnv, encoding: 'utf8' })
 
   // ---- 2. The app, with the server saved, on the Servers view ---------------------------------------
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1' }
+  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${userData}`], cwd: root, env })
   app.on('window', watch)

@@ -6,11 +6,15 @@ import { autoUpdater } from 'electron-updater'
 import {
   CHECK_TICK_MS,
   FIRST_CHECK_DELAY_MS,
+  SQUIRREL_TIMEOUT_MS,
+  actionApplies,
   checkDue,
+  checkRequest,
   clampPercent,
+  offerAfterCheck,
   promptFor,
   releaseNotesUrl,
-  shouldOffer,
+  updateCheckDisabled,
   type AppUpdateState,
   type UpdateAction
 } from '../shared/appUpdate.ts'
@@ -29,9 +33,12 @@ let prompting = false
 /** Restart to Update is under way: the quit steps, then quitAndInstall. */
 let installing = false
 
-/** A packaged app only: an unpackaged one has no feed and no signature to update. */
+/**
+ * A packaged app only: an unpackaged one has no feed and no signature to update. Off as well
+ * with TREK_NO_UPDATE_CHECK set: the smokes launch a packaged app too, and must not reach the feed.
+ */
 export function appUpdatesEnabled(): boolean {
-  return app.isPackaged
+  return app.isPackaged && !updateCheckDisabled(process.env)
 }
 
 function setState(next: AppUpdateState): void {
@@ -64,17 +71,20 @@ async function ask(options: MessageBoxOptions): Promise<number | null> {
   }
 }
 
-/** A download or an install failed: says so and offers the release's page, where the dmg is. */
-async function showUpdateError(message: string, err: unknown, version: string): Promise<void> {
+/** A download or an install failed: says so (`advice` is what to do about it) and offers the release's page, where the dmg is. */
+async function showUpdateError(message: string, err: unknown, version: string, advice: string): Promise<void> {
   const { response } = await dialog.showMessageBox({
     type: 'error',
     message,
-    detail: `${messageOf(err)}\n\nYou can download the dmg from the release page instead.`,
+    detail: `${messageOf(err)}\n\n${advice}`,
     buttons: ['OK', 'Open Release Page'],
     defaultId: 0,
     cancelId: 0
   })
-  if (response === 1) void shell.openExternal(releaseNotesUrl(version))
+  // Waited for: after a failed install the app quits next.
+  if (response === 1) {
+    await shell.openExternal(releaseNotesUrl(version)).catch((e) => console.warn('trek: could not open the release page', e))
+  }
 }
 
 /** The network check and the state it leads to; no dialog. */
@@ -83,15 +93,18 @@ async function runCheck(manual: boolean): Promise<CheckOutcome> {
   try {
     const result = await autoUpdater.checkForUpdates()
     rememberCheck()
-    // isUpdateAvailable is false for a newer release this Mac cannot take (its minimum system
-    // version, a staged rollout): a download of it would fail, so it is not offered.
-    const found = result?.isUpdateAvailable ? result.updateInfo.version : null
+    // A newer release this Mac cannot take (isUpdateAvailable false) is not one it can install.
+    const found: unknown = result?.isUpdateAvailable ? result.updateInfo.version : null
     const latest = typeof found === 'string' ? found : null
     // Offered unless it is not newer, or the user skipped it (a background check).
-    const offer =
-      latest !== null &&
-      shouldOffer({ version: latest, current: app.getVersion(), skippedVersion: appSettings().update.skippedVersion, manual })
-    setState(offer ? { kind: 'available', version: latest } : { kind: 'idle' })
+    const offer = offerAfterCheck({
+      isUpdateAvailable: result?.isUpdateAvailable,
+      version: latest,
+      current: app.getVersion(),
+      skippedVersion: appSettings().update.skippedVersion,
+      manual
+    })
+    setState(offer !== null ? { kind: 'available', version: offer } : { kind: 'idle' })
     return { latest }
   } catch (err) {
     console.warn('trek: the update check failed', err)
@@ -106,18 +119,13 @@ async function runCheck(manual: boolean): Promise<CheckOutcome> {
  */
 export async function checkForAppUpdates(manual: boolean): Promise<void> {
   if (!appUpdatesEnabled()) return
-  // One of the dialogs is open already: it is the answer.
-  if (manual && prompting) return
-  // Something is already offered, downloading or ready: a manual check shows it.
-  if (state.kind !== 'idle' && state.kind !== 'checking') {
-    if (manual) await openUpdatePrompt()
-    return
-  }
+  // The rules are checkRequest's (src/shared/appUpdate.ts).
+  const request = checkRequest({ manual, prompting, state: state.kind, inFlight: checking && { manual: checking.manual } })
+  if (request === 'ignore') return
+  if (request === 'show') return openUpdatePrompt()
   let outcome: CheckOutcome
-  if (checking) {
-    // A check is in flight. One that already has a manual request waiting answers that one only;
-    // a background one answers this manual request too, without asking the feed twice.
-    if (!manual || checking.manual) return
+  if (request === 'join' && checking) {
+    // A background check is in flight: it answers this manual request too.
     checking.manual = true
     outcome = await checking.outcome
     // The background check failed silently: this request asks again and reports its own result.
@@ -137,12 +145,15 @@ export async function checkForAppUpdates(manual: boolean): Promise<void> {
     return
   }
   // A background check hides a version the user skipped; a manual request offers it all the same.
-  if (
-    state.kind === 'idle' &&
-    outcome.latest !== null &&
-    shouldOffer({ version: outcome.latest, current: app.getVersion(), skippedVersion: appSettings().update.skippedVersion, manual: true })
-  ) {
-    setState({ kind: 'available', version: outcome.latest })
+  if (state.kind === 'idle') {
+    const offer = offerAfterCheck({
+      isUpdateAvailable: outcome.latest !== null,
+      version: outcome.latest,
+      current: app.getVersion(),
+      skippedVersion: appSettings().update.skippedVersion,
+      manual: true
+    })
+    if (offer !== null) setState({ kind: 'available', version: offer })
   }
   if (state.kind === 'idle') await ask({ type: 'info', message: `Trek ${app.getVersion()} is the latest version`, buttons: ['OK'] })
   else await openUpdatePrompt()
@@ -152,22 +163,32 @@ export async function checkForAppUpdates(manual: boolean): Promise<void> {
  * Squirrel.Mac taking the update. downloadUpdate() resolves once the zip has been served to it,
  * before it has unpacked the zip and checked its signature; Electron's own autoUpdater then says
  * 'update-downloaded', or electron-updater relays its failure as 'error'. To be called before
- * downloadUpdate(), so neither event is missed; `stop` removes both listeners.
+ * downloadUpdate(), so neither event is missed. `accepted()` is for after the download: from
+ * then Squirrel has SQUIRREL_TIMEOUT_MS to say either, or the wait fails. `stop` removes both
+ * listeners and the timer; to be called on every exit.
  */
-function waitForSquirrel(): { accepted: Promise<void>; stop: () => void } {
+function waitForSquirrel(): { accepted: () => Promise<void>; stop: () => void } {
   let onDownloaded = (): void => undefined
   let onError = (_err: Error): void => undefined
-  const accepted = new Promise<void>((resolve, reject) => {
+  let timer: NodeJS.Timeout | undefined
+  const settled = new Promise<void>((resolve, reject) => {
     onDownloaded = () => resolve()
     onError = (err) => reject(err)
   })
   // A failed download rejects this too, with nobody waiting for it: downloadUpdate() reports that one.
-  accepted.catch(() => undefined)
+  settled.catch(() => undefined)
   nativeUpdater.once('update-downloaded', onDownloaded)
   autoUpdater.once('error', onError)
   return {
-    accepted,
+    accepted: () => {
+      timer ??= setTimeout(
+        () => onError(new Error(`macOS did not finish preparing the update within ${SQUIRREL_TIMEOUT_MS / 60_000} minutes.`)),
+        SQUIRREL_TIMEOUT_MS
+      )
+      return settled
+    },
     stop: () => {
+      clearTimeout(timer)
       nativeUpdater.removeListener('update-downloaded', onDownloaded)
       autoUpdater.removeListener('error', onError)
     }
@@ -180,23 +201,40 @@ async function download(version: string): Promise<void> {
   try {
     await autoUpdater.downloadUpdate()
     // Ready only once macOS has the update: Restart to Update would otherwise wait for it forever.
-    await squirrel.accepted
+    await squirrel.accepted()
     setState({ kind: 'ready', version })
   } catch (err) {
+    // Before the dialog, which may stay open: the timer must not outlive the wait.
+    squirrel.stop()
     console.warn('trek: the update download failed', err)
     setState({ kind: 'available', version })
-    await showUpdateError(`Could not download Trek ${version}`, err, version)
+    await showUpdateError(`Could not download Trek ${version}`, err, version, 'You can download the dmg from the release page instead.')
   } finally {
     squirrel.stop()
   }
 }
 
-/** The install failed, at once or later from Squirrel: the update is offered again, with the release page. */
+/**
+ * The install failed, at once or later from Squirrel. Only ever after prepareQuit() succeeded:
+ * every window is closed, the quit steps have run and the Local server is no longer watched, so
+ * the app cannot carry on. It says so, offers the release page, and quits (the quit goes
+ * straight through: its steps are done).
+ */
 async function installFailed(version: string, err: unknown): Promise<void> {
   console.warn('trek: the update could not be installed', err)
   installing = false
   setState({ kind: 'available', version })
-  await showUpdateError(`Could not install Trek ${version}`, err, version)
+  try {
+    await showUpdateError(
+      `Could not install Trek ${version}`,
+      err,
+      version,
+      'Trek will now quit. If macOS accepted the update, it is installed the next time Trek starts. ' +
+        'Otherwise, download the dmg from the release page.'
+    )
+  } finally {
+    app.quit()
+  }
 }
 
 async function install(version: string): Promise<void> {
@@ -215,9 +253,11 @@ async function install(version: string): Promise<void> {
     throw err
   }
   // quitAndInstall does not always quit at once, and a failure then arrives as an 'error' event,
-  // not a throw. The windows are closed by now, so the event gets the same dialog rather than
-  // leaving the app with nothing to show.
-  const onError = (err: Error): void => void installFailed(version, err)
+  // not a throw. The windows are closed by now, so the event gets the same dialog (and the same
+  // quit) rather than leaving the app with nothing to show.
+  const onError = (err: Error): void => {
+    void installFailed(version, err).catch((e) => console.warn('trek: the failed install could not be reported', e))
+  }
   autoUpdater.once('error', onError)
   try {
     autoUpdater.quitAndInstall()
@@ -228,31 +268,34 @@ async function install(version: string): Promise<void> {
 }
 
 async function act(action: UpdateAction, at: AppUpdateState): Promise<void> {
-  if (at.kind === 'idle' || at.kind === 'checking') return
   // The dialog may be answered late: it acts only while the state is still the one it was about.
-  const still = (kind: 'available' | 'ready'): boolean => 'version' in state && state.kind === kind && state.version === at.version
+  if (at.kind === 'idle' || at.kind === 'checking' || !actionApplies(action, at, state)) return
   switch (action) {
     case 'download':
-      if (still('available')) await download(at.version)
+      await download(at.version)
       return
     case 'notes':
       void shell.openExternal(releaseNotesUrl(at.version))
       return
     case 'skip':
-      if (!still('available')) return
       await updateAppSettings({ update: { skippedVersion: at.version } }).catch(() => undefined)
       setState({ kind: 'idle' })
       return
     case 'later':
       // An offered update hides until the next check finds it again; a downloaded one stays ready (it installs on quit).
-      if (still('available')) setState({ kind: 'idle' })
+      setState({ kind: 'idle' })
       return
     case 'install':
-      if (still('ready')) await install(at.version)
+      await install(at.version)
       return
     case 'close':
       return
   }
+}
+
+/** A check whose caller does not wait for it (the menu, the timers): a failure is logged, never an unhandled rejection. */
+export function requestAppUpdateCheck(manual: boolean): void {
+  void checkForAppUpdates(manual).catch((err) => console.warn('trek: the update check failed', err))
 }
 
 /** The dialog for the current state (the indicator was clicked, or a manual check found an update), and its answer. */
@@ -304,8 +347,8 @@ export function startAppUpdates(opts: { prepareQuit: () => Promise<boolean> }): 
     if (percent !== state.percent) setState({ kind: 'downloading', version: state.version, percent })
   })
 
-  setTimeout(() => void checkForAppUpdates(false), FIRST_CHECK_DELAY_MS).unref()
+  setTimeout(() => requestAppUpdateCheck(false), FIRST_CHECK_DELAY_MS).unref()
   setInterval(() => {
-    if (checkDue(appSettings().update.lastCheckAt, Date.now())) void checkForAppUpdates(false)
+    if (checkDue(appSettings().update.lastCheckAt, Date.now())) requestAppUpdateCheck(false)
   }, CHECK_TICK_MS).unref()
 }

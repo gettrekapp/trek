@@ -127,7 +127,7 @@ const filesUnder = (dir) =>
   existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? filesUnder(join(dir, e.name)) : [join(dir, e.name)])) : []
 
 try {
-  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: '/bin/zsh', TREK_NO_WINDOW_RESTORE: '1' }
+  const env = { ...process.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), XDG_STATE_HOME: join(home, '.local', 'state'), SHELL: '/bin/zsh', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.TREK_NO_LOCAL_SERVER
   delete env.TREK_LOCAL_PROFILE
   delete env.ELECTRON_RUN_AS_NODE

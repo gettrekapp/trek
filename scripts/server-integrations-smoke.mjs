@@ -265,7 +265,7 @@ try {
 
   // ---- 2. The app, with the server saved, and the project's window ---------------------------------
 
-  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1' }
+  const env = { ...process.env, HOME: appHome, XDG_DATA_HOME: join(appHome, '.local', 'share'), TREK_NO_LOCAL_SERVER: '1', TREK_NO_WINDOW_RESTORE: '1', TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   delete env.TREK_SERVER_LINEAR_URL
   delete env.TREK_SERVER_ELEVENLABS_URL

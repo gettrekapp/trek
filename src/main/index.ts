@@ -30,7 +30,7 @@ import { importFromMenu, offerFirstLaunchImport, openFromOs, registerImportHandl
 import { registerLlmHandlers } from './llmSettings'
 import { fixPath } from './env'
 import { removeStaleMcpConfigs } from './staleMcpConfigs'
-import { appUpdatesEnabled, checkForAppUpdates, startAppUpdates } from './appUpdate'
+import { appUpdatesEnabled, requestAppUpdateCheck, startAppUpdates } from './appUpdate'
 import {
   APP_ICON,
   arrangeWindows,
@@ -101,7 +101,7 @@ function buildMenu(): void {
             label: app.name,
             submenu: [
               { role: 'about' as const },
-              { label: 'Check for Updates…', enabled: appUpdatesEnabled(), click: () => void checkForAppUpdates(true) },
+              { label: 'Check for Updates…', enabled: appUpdatesEnabled(), click: () => requestAppUpdateCheck(true) },
               { type: 'separator' as const },
               { role: 'services' as const },
               { type: 'separator' as const },

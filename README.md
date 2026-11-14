@@ -512,6 +512,8 @@ name (1–32 of `a-z`, `0-9` and `-`, starting with a letter or digit), for exam
 ignored (`dev`), and a packaged Trek ignores the variable.
 `TREK_NO_LOCAL_SERVER=1` turns the Local server off altogether (the smokes set it);
 only `1`, `true` or `yes` turn it off, and `0` or an empty value leaves it on.
+`TREK_NO_UPDATE_CHECK` set to any value that is not empty turns a packaged Trek's update
+checks off (the smokes set it, so they never contact GitHub).
 
 `npm test` runs the unit tests. The end-to-end smokes build the app and drive it with
 Playwright, each in its own temp user-data directory and HOME, never yours; run them

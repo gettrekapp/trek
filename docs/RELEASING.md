@@ -56,7 +56,7 @@ left as they were. It refuses to touch a release that is already published.
 | Artifact | Built on | Checked by |
 | --- | --- | --- |
 | `Trek-X.Y.Z-arm64.dmg` | macos-latest (arm64) | `codesign --verify --deep --strict`; a Developer ID Application signature with the hardened runtime and the entitlements; every Mach-O under `app.asar.unpacked` (node-pty's `pty.node` and `spawn-helper`) signed with the hardened runtime and `spawn-helper` executable; `stapler validate` and `spctl --assess` on the app, `stapler validate` on the notarized dmg and on the app inside it; then `local-server-smoke.mjs --packaged` and `local-app-smoke.mjs --packaged` on the signed app |
-| `Trek-X.Y.Z-arm64.zip`, `Trek-X.Y.Z-arm64.zip.blockmap`, `latest-mac.yml` | macos-latest (arm64), the same build as the dmg | the app unzipped: `codesign --verify --deep --strict`, `stapler validate`, `spctl --assess`; `app-update.yml` is in the app and names the repository; the block map exists; `scripts/latest-mac-yml.mjs` drops the dmg's entry from `latest-mac.yml` and checks the zip's size and SHA-512 against it |
+| `Trek-X.Y.Z-arm64.zip`, `Trek-X.Y.Z-arm64.zip.blockmap`, `latest-mac.yml` | macos-latest (arm64), the same build as the dmg | the built `dist/mac-arm64/Trek.app`: `Contents/Resources/app-update.yml` exists and names the repository; the zip and its block map exist; the app unzipped: `codesign --verify --deep --strict`, `stapler validate`, `spctl --assess`; `scripts/latest-mac-yml.mjs` drops the dmg's entry from `latest-mac.yml` and checks the zip's size and SHA-512 against it |
 | `trek-server-X.Y.Z-darwin-arm64.tar.gz` | macos-latest | `codesign` (in `package-server.mjs --sign`) and `notarytool` on node-pty's `pty.node` and `spawn-helper`; `scripts/server-tarball-smoke.mjs --notarized` (Developer ID, hardened runtime, timestamp; unpacked quarantined) |
 | `trek-server-X.Y.Z-darwin-x64.tar.gz` | macos-15-intel | 〃 |
 | `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | `scripts/server-tarball-smoke.mjs` |
@@ -133,6 +133,13 @@ only the blocks that changed; when either block map is missing it downloads the 
 
 Do not rename or delete the zip or `latest-mac.yml` on a published release: installed apps would
 find no update, or fail to download it.
+
+The feed is `Contents/Resources/app-update.yml` in the app. electron-builder writes it only when
+the build has a `dmg` or `zip` target (app-builder-lib `out/publish/PublishManager.js`, its
+`onAfterPack` hook), so an app from `npm run dist:dir` has no feed and its update check fails
+quietly; only `npm run dist` or the release workflow produce an app that can update.
+`TREK_NO_UPDATE_CHECK` set to any value that is not empty turns the checks off and disables the
+menu item: every smoke sets it, the packaged-app smoke included, so no test contacts GitHub.
 
 The updater cannot be tested without two signed, published builds. On the first two releases that
 carry it, with the older one installed in /Applications:

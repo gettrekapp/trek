@@ -153,6 +153,8 @@ const launch = async (answers = {}) => {
     HOME: home,
     XDG_DATA_HOME: join(home, '.local', 'share'),
     TREK_NO_WINDOW_RESTORE: '1',
+    // A packaged app would ask the release feed for an update: a smoke never contacts GitHub.
+    TREK_NO_UPDATE_CHECK: '1',
     TREK_SMOKE_LEAK: 'leaked',
     SMOKE_ANSWERS: JSON.stringify(answers),
     SMOKE_PICK: repo

@@ -294,7 +294,7 @@ try {
 
   // ---- 4. The page: sign in ------------------------------------------------------------------------
 
-  const env = { ...process.env, HOME: pageHome, TREK_WEB_URL: `${base}/` }
+  const env = { ...process.env, HOME: pageHome, TREK_WEB_URL: `${base}/`, TREK_NO_UPDATE_CHECK: '1' }
   delete env.ELECTRON_RUN_AS_NODE
   app = await electron.launch({ args: [pageMain, `--user-data-dir=${userData}`], cwd: work, env })
   app.on('window', watch)
