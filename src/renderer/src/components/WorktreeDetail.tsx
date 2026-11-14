@@ -541,20 +541,6 @@ export function WorktreeDetail({
               </button>
             </>
           )}
-          {features.openInEditor && (
-            <button className="btn btn-accent" onClick={openVSCode}>
-              Open in VS Code
-            </button>
-          )}
-          {features.reveal && (
-            <button
-              className="btn btn-ghost"
-              title="Reveal in Finder"
-              onClick={() => void window.api.revealInFinder(info.path)}
-            >
-              Reveal
-            </button>
-          )}
           <button
             className={`btn btn-ghost btn-icon ${menuOpen ? 'open' : ''}`}
             title={offline ? 'Server disconnected' : 'Worktree actions'}

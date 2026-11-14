@@ -375,11 +375,18 @@ try {
   await mainRow.click()
   await detail.locator('.detail-path', { hasText: repo }).waitFor({ timeout: 10_000 })
   const actions = detail.locator('.detail-actions')
-  await actions.locator('button', { hasText: 'Open in VS Code' }).waitFor({ timeout: 10_000 })
-  check("main's row has Open in VS Code and Reveal", [await actions.locator('button', { hasText: 'Open in VS Code' }).count(), await actions.locator('button', { hasText: 'Reveal' }).count()], [1, 1])
-  await actions.locator('button', { hasText: 'Open in VS Code' }).click()
+  // Open in VS Code and Reveal live in the overflow menu, not the header.
+  const menuItem = async (name) => {
+    await actions.locator('button[title="Worktree actions"]').click()
+    return detail.locator('.detail-menu .detail-menu-item', { has: win.locator('.detail-menu-name', { hasText: name }) })
+  }
+  check("main's header has no Open in VS Code or Reveal button", await actions.locator('button', { hasText: /VS Code|Reveal/ }).count(), 0)
+  const vscodeItem = await menuItem('Open in VS Code')
+  await vscodeItem.waitFor({ timeout: 10_000 })
+  check("main's menu has Open in VS Code and Reveal in Finder", [await vscodeItem.count(), await detail.locator('.detail-menu .detail-menu-name', { hasText: 'Reveal in Finder' }).count()], [1, 1])
+  await vscodeItem.click()
   check('Open in VS Code runs `code` on the repository', await until(() => callsOf('code'), [repo]), [repo])
-  await actions.locator('button', { hasText: 'Reveal' }).click()
+  await (await menuItem('Reveal in Finder')).click()
   check('Reveal shows the repository in Finder', await until(() => app.evaluate(() => globalThis.__revealed), [repo]), [repo])
   const tabs = () => detail.locator('.session-row .panel-btn').evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()))
   // The repository has docker/stack/stack.sh too, so main has a Stack tab (once its status is read).
@@ -413,7 +420,7 @@ try {
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
   check('its tabs: Env and Stack, no Docker', await until(() => tabs(), ['Changes', 'Notes', 'Env', 'Stack', '⚙']), ['Changes', 'Notes', 'Env', 'Stack', '⚙'])
   check("its header's env chip shows the VM", (await detail.locator('.chip-env').first().innerText()).trim(), 'Env · 192.168.106.5')
-  await actions.locator('button', { hasText: 'Open in VS Code' }).click()
+  await (await menuItem('Open in VS Code')).click()
   check('Open in VS Code runs `code` on the worktree', await until(() => callsOf('code').at(-1), worktree), worktree)
 
   await detail.locator('.panel-btn', { hasText: 'Env' }).click()
