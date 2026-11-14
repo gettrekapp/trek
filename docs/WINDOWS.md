@@ -49,6 +49,9 @@ does not run on Windows.
   `trek-server stop --local` asks the local server to stop over its own connection
   (`server.stop`); a stop from another process by signal is not possible on Windows.
 - **Terminals** are ConPTY. Clients set xterm.js up for it from the server's `pty.attach` answer.
+- **Updating.** `trek-server update` is not available on Windows yet (it says so and exits 1):
+  stop the server, unzip the new release beside the old one and start that. The config and the
+  projects are not in the folder, so they carry over.
 
 ## Manual checklist (before a release)
 

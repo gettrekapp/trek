@@ -11,43 +11,43 @@ import {
   type IntegrationsChangedEvent,
   type ServerFrameV2,
   type TopicRev
-} from '../../src/shared/protocolV2'
-import { welcomeCapabilities } from './capabilities'
+} from '../../src/shared/protocolV2.ts'
+import { welcomeCapabilities } from './capabilities.ts'
 import type { Outcome } from './errors'
-import { isRecord } from './validate'
+import { isRecord } from './validate.ts'
 import type { ConfigStore } from './configStore'
 import type { ProjectState } from './projects/state'
 import type { ProjectStore } from './projects/store'
-import { publishServerState } from './serverState'
-import { activeTokenHashes, listTokens, matchToken } from './tokens'
-import { PairingCodes, PairingLimiter, redeemForPhone } from './pairing'
-import { TopicHub, type Subscriber } from './topicHub'
-import { dispatchV2, isCoreMethod, responseRev } from './v2'
-import { GitPoller } from './git/poller'
-import { SessionManager } from './sessions/manager'
-import { SINK_HIGH_WATER, type TerminalSink } from './sessions/terminalHost'
-import { McpAccessStore } from './mcp/access'
-import { startMcpListener, type McpListener } from './mcp/listener'
-import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools'
-import { createEventSink, type Machine } from './integrations/machineHandlers'
+import { publishServerState } from './serverState.ts'
+import { activeTokenHashes, listTokens, matchToken } from './tokens.ts'
+import { PairingCodes, PairingLimiter, redeemForPhone } from './pairing.ts'
+import { TopicHub, type Subscriber } from './topicHub.ts'
+import { dispatchV2, isCoreMethod, responseRev } from './v2.ts'
+import { GitPoller } from './git/poller.ts'
+import { SessionManager } from './sessions/manager.ts'
+import { SINK_HIGH_WATER, type TerminalSink } from './sessions/terminalHost.ts'
+import { McpAccessStore } from './mcp/access.ts'
+import { startMcpListener, type McpListener } from './mcp/listener.ts'
+import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './mcp/tools.ts'
+import { createEventSink, type Machine } from './integrations/machineHandlers.ts'
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { projectTopic } from '../../src/shared/model/topics.ts'
-import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
-import { mcpContext } from './plugins/mcp'
+import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts'
+import { mcpContext } from './plugins/mcp.ts'
 import type { GhRunner } from './prWatch/gh'
-import { PrWatcher } from './prWatch/watcher'
-import { AutomationScheduler } from './automations/scheduler'
+import { PrWatcher } from './prWatch/watcher.ts'
+import { AutomationScheduler } from './automations/scheduler.ts'
 import { HistoryStore } from './history/store.ts'
-import { PromoteRequests } from './promote/requests'
-import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
-import { createWebHandler } from './web/http'
-import { sweepEvery, WebSocketSignIns } from './web/sockets'
+import { PromoteRequests } from './promote/requests.ts'
+import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth.ts'
+import { createWebHandler } from './web/http.ts'
+import { sweepEvery, WebSocketSignIns } from './web/sockets.ts'
 import type { WebBundle } from './web/bundle'
-import { moveTransfers, sweepStaleMoveDirs } from './move/transfers'
-import { createSecretFile } from './secrets'
-import { PushGrants } from './push/grants'
-import { Pusher } from './push/pusher'
+import { moveTransfers, sweepStaleMoveDirs } from './move/transfers.ts'
+import { createSecretFile } from './secrets.ts'
+import { PushGrants } from './push/grants.ts'
+import { Pusher } from './push/pusher.ts'
 import { release } from 'node:os'
 import { windowsBuildNumber } from './sessions/terminalHost.ts'
 
@@ -116,6 +116,11 @@ export interface ServerOptions {
    * file and data dir they keep their keys and files in. Without it the server has none.
    */
   plugins?: { list: readonly ServerPlugin[]; secretsFile: string; dataDir: string; env?: NodeJS.ProcessEnv }
+  /**
+   * false: what a killed server left in the temp directory is left alone. For `trek-server selfcheck`,
+   * which runs beside a server that is in use and must remove nothing but its own folder.
+   */
+  sweepStaleMoves?: boolean
 }
 
 export interface ProjectsSetup {
@@ -133,7 +138,7 @@ export function startServer(
 ): TrekServer {
   const hub = new TopicHub()
   // What a killed server left in the temp directory: its moves' staged histories and throwaway indexes (5d).
-  void sweepStaleMoveDirs().catch(() => {})
+  if (options.sweepStaleMoves !== false) void sweepStaleMoveDirs().catch(() => {})
   let refreshServerTopic = (): void => {}
   const history = options.historyDir
     ? new HistoryStore(options.historyDir, {

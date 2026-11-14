@@ -380,3 +380,12 @@ test('web (5c-3) is true or false', () => {
     assert.throws(() => validateConfig({ repos: [], web: bad }), /config.web must be true or false/)
   }
 })
+
+test('config.updates: check and remoteApply are booleans when present', () => {
+  assert.deepEqual(validateConfig({ repos: [], updates: { check: false, remoteApply: false } }).updates, { check: false, remoteApply: false })
+  assert.equal(validateConfig({ repos: [] }).updates, undefined)
+  assert.deepEqual(validateConfig({ repos: [], updates: {} }).updates, {})
+  assert.throws(() => validateConfig({ repos: [], updates: 'no' }), /config\.updates must be an object/)
+  assert.throws(() => validateConfig({ repos: [], updates: { check: 'no' } }), /config\.updates\.check must be true or false/)
+  assert.throws(() => validateConfig({ repos: [], updates: { remoteApply: 1 } }), /config\.updates\.remoteApply must be true or false/)
+})

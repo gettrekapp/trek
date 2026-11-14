@@ -482,6 +482,23 @@ test('forceKillAll sends SIGKILL to every pty still alive', (t) => {
   assert.deepEqual(signals, ['SIGKILL', 'SIGKILL'])
 })
 
+test('forceKillAll also closes each pty\'s descriptor at once: a server that becomes its next version must not hand them on', (t) => {
+  const { host, spawned } = setup(t)
+  host.spawn('p1', opts)
+  host.spawn('p2', opts)
+  host.spawn('p3', opts)
+  const calls = []
+  spawned.forEach((p, i) => {
+    p.kill = (signal) => calls.push(`kill ${i} ${signal}`)
+    p.close = () => calls.push(`close ${i}`)
+  })
+  // One that cannot be closed, and one with nothing to close, stop nothing.
+  spawned[1].close = () => { throw new Error('EBADF') }
+  delete spawned[2].close
+  assert.doesNotThrow(() => host.forceKillAll())
+  assert.deepEqual(calls, ['kill 0 SIGKILL', 'close 0', 'kill 1 SIGKILL', 'kill 2 SIGKILL'])
+})
+
 test('win32: forceKillAll ends each pty\'s tree synchronously, never with a signal', (t) => {
   const trees = []
   const { host, spawned } = setup(t, { platform: 'win32', treeKiller: (pid, sync) => trees.push([pid, sync]) })
@@ -491,9 +508,10 @@ test('win32: forceKillAll ends each pty\'s tree synchronously, never with a sign
   spawned[1].pid = 102
   const signals = []
   for (const p of spawned) p.kill = (signal) => signals.push(signal)
+  for (const p of spawned) p.close = () => signals.push('close')
   host.forceKillAll()
   assert.deepEqual(trees, [[101, true], [102, true]])
-  assert.deepEqual(signals, [])
+  assert.deepEqual(signals, [], 'no signal, and no close: ending the tree is what frees a ConPTY')
 })
 
 test('win32: kill() sends no signal, and a pty still running at the timeout has its tree killed', async (t) => {

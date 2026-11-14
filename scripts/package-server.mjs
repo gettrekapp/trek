@@ -10,7 +10,8 @@
 //                          (Windows: bin\trek-server.cmd, the same checks in a batch file, and
 //                          bin\trek-server.ps1, in PowerShell, which Ctrl+C does not ask about)
 //   trek-server.cjs        the bundled server (everything but node-pty)
-//   build.json             its version and build id
+//   build.json             its version and build id, and what `trek-server update` reads:
+//                          package "tarball" and target "<os>-<arch>"
 //   web-client/            the web client (`trek-server start --web`)
 //   node_modules/node-pty  node-pty for this platform only: its lib/ and one native folder
 //                          (pty.node, plus an executable spawn-helper on macOS: node-pty builds
@@ -38,40 +39,21 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers.mjs'
-
-// The launcher. POSIX sh; resolves its own symlinks so a link in ~/.local/bin finds the folder.
-const LAUNCHER = `#!/bin/sh
-# trek-server launcher: runs trek-server.cjs (beside this bin/ folder) with Node.js >= 22,
-# the \`node\` on PATH unless TREK_NODE names one.
-set -e
-self=$0
-while [ -L "$self" ]; do
-  link=$(readlink "$self")
-  case $link in
-    /*) self=$link ;;
-    *) self=$(dirname "$self")/$link ;;
-  esac
-done
-here=$(cd "$(dirname "$self")/.." && pwd)
-node=\${TREK_NODE:-node}
-if ! command -v "$node" >/dev/null 2>&1; then
-  echo "trek-server: Node.js 22 or later is needed, and \\"$node\\" was not found (set TREK_NODE to a node binary)" >&2
-  exit 127
-fi
-major=$("$node" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-# Anything but digits (not a Node, a wrapper printing more) counts as too old: \`[ -lt ]\` would
-# fail on it and let it through.
-case $major in ''|*[!0-9]*) major=0 ;; esac
-if [ "$major" -lt 22 ]; then
-  echo "trek-server: Node.js 22 or later is needed; $("$node" --version 2>/dev/null) is $(command -v "$node")" >&2
-  exit 1
-fi
-exec "$node" "$here/trek-server.cjs" "$@"
-`
+import { POSIX_LAUNCHER, WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const dist = join(root, 'server', 'dist')
+
+/**
+ * tar's flags that record every entry as root's (0:0, no names) rather than the runner's user:
+ * the tarball says nothing about the machine that built it, and unpacked as root without
+ * --no-same-owner its files are not some local user's who happens to have the runner's id.
+ * GNU tar (the Linux runners) and bsdtar (macOS) spell them differently.
+ */
+function rootOwned() {
+  const bsd = /bsdtar/.test(execFileSync('tar', ['--version'], { encoding: 'utf8' }))
+  return bsd ? ['--uid', '0', '--gid', '0', '--numeric-owner'] : ['--owner=0', '--group=0', '--numeric-owner']
+}
 
 function fail(message) {
   console.error(`package-server: ${message}`)
@@ -93,7 +75,9 @@ if (WINDOWS && ARCH !== 'x64') fail('Windows: x64 only (node-pty has no tested a
 for (const need of ['trek-server.cjs', 'build.json', 'web-client/index.html']) {
   if (!existsSync(join(dist, need))) fail(`server/dist/${need} is missing: run \`npm run build:web && npm --prefix server run build\` first`)
 }
-const { version, build } = JSON.parse(readFileSync(join(dist, 'build.json'), 'utf8'))
+const built = JSON.parse(readFileSync(join(dist, 'build.json'), 'utf8'))
+const { version, build } = built
+if (built.testUpdate) fail('server/dist holds a test build (TREK_SERVER_TEST_UPDATE): rebuild it with `npm --prefix server run build`')
 const serverPkg = JSON.parse(readFileSync(join(root, 'server', 'package.json'), 'utf8'))
 if (version !== serverPkg.version) fail(`server/dist was built as ${version}, but server/package.json is ${serverPkg.version}: rebuild it`)
 const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'))
@@ -105,7 +89,9 @@ const stage = mkdtempSync(join(tmpdir(), 'trek-server-package-'))
 const dir = join(stage, name)
 try {
   mkdirSync(join(dir, 'bin'), { recursive: true })
-  for (const file of ['trek-server.cjs', 'build.json']) cpSync(join(dist, file), join(dir, file))
+  cpSync(join(dist, 'trek-server.cjs'), join(dir, 'trek-server.cjs'))
+  // What `trek-server update` reads: this folder came from a release tarball, for this target.
+  writeFileSync(join(dir, 'build.json'), JSON.stringify({ version, build, package: 'tarball', target: `${OS}-${ARCH}` }) + '\n')
   chmodSync(join(dir, 'trek-server.cjs'), 0o755)
   cpSync(join(dist, 'web-client'), join(dir, 'web-client'), { recursive: true })
   // A systemd unit: Linux (and macOS, for the docs); Windows has none.
@@ -125,7 +111,7 @@ try {
     writeFileSync(join(dir, 'bin', 'trek-server.cmd'), WIN_LAUNCHER)
     writeFileSync(join(dir, 'bin', 'trek-server.ps1'), WIN_PS_LAUNCHER)
   }
-  else writeFileSync(join(dir, 'bin', 'trek-server'), LAUNCHER, { mode: 0o755 })
+  else writeFileSync(join(dir, 'bin', 'trek-server'), POSIX_LAUNCHER, { mode: 0o755 })
   writeFileSync(join(dir, 'README.md'), readme(name, version, build))
 
   // node-pty for this platform. A clean environment for npm: no build-from-source override left
@@ -150,7 +136,7 @@ try {
   // which writes no zip and reads C:\ as a remote host.
   // COPYFILE_DISABLE: macOS's tar would add ._ AppleDouble files for extended attributes.
   if (WINDOWS) execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', tarball, '-C', stage, name], { stdio: 'inherit' })
-  else execFileSync('tar', ['-czf', tarball, '-C', stage, name], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdio: 'inherit' })
+  else execFileSync('tar', [...rootOwned(), '-czf', tarball, '-C', stage, name], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdio: 'inherit' })
   const sha = createHash('sha256').update(readFileSync(tarball)).digest('hex')
   console.log(`${tarball}\n  trek-server ${version} (build ${build}), node-pty ${ptyVersion}, ${(statSync(tarball).size / 1e6).toFixed(1)} MB, sha256 ${sha}`)
 } finally {
@@ -253,8 +239,12 @@ trek-server start                  # serve (see --help for --host, --port, --web
 \`trek-server.service\` is a systemd user unit: point its \`ExecStart\` at
 \`${name}/bin/trek-server start\` (an absolute path) and drop its \`WorkingDirectory\`.
 
-To upgrade, unpack the new version beside this one and move the symlink (and the unit's path);
-the configuration and data live in ~/.config/trek-server and the data folder, not here.
+To update, run \`trek-server update\` (\`trek-server update --check\` only looks): it installs the
+latest release in this folder's place, after checking its signature and that it runs here, and a
+running server restarts into it. This folder keeps its path and its name, so the symlink and the
+unit's path keep working; \`trek-server version\` says which version is in it. The version before
+is kept beside it as \`${name}.previous\`. The configuration and data live in
+~/.config/trek-server and the data folder, not here.
 `}${OS !== 'darwin' ? '' : signIdentity !== undefined ? `
 On macOS, a tarball downloaded with a browser is quarantined, and so is what it unpacks. node-pty's
 native files here are signed and notarized, so macOS loads them anyway (it checks the notarization

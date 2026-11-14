@@ -51,6 +51,12 @@ export function validateConfig(raw: unknown): TrekServerConfig {
   }
   if (raw.llm !== undefined && !isRecord(raw.llm)) throw new Error('config.llm must be an object')
   if (raw.web !== undefined && typeof raw.web !== 'boolean') throw new Error('config.web must be true or false')
+  if (raw.updates !== undefined) {
+    if (!isRecord(raw.updates)) throw new Error('config.updates must be an object')
+    for (const key of ['check', 'remoteApply']) {
+      if (raw.updates[key] !== undefined && typeof raw.updates[key] !== 'boolean') throw new Error(`config.updates.${key} must be true or false`)
+    }
+  }
   for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
   }

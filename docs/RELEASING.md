@@ -38,8 +38,11 @@ version (0.2.0 today). A version with a prerelease part (`0.3.0-rc.1`) makes a p
 
 3. Watch **Actions → Release**. It takes the longest of: the macOS smokes (about an hour), the
    signed app (notarization usually takes 5–15 minutes), the server tarballs.
-   The `mac-app` and `server-mac` jobs run in the `release` environment: if you gave it a
-   required reviewer, each waits for an approval (**Review deployments** on the run's page) before it starts.
+   The `mac-app`, `server-mac` and `release` jobs run in the `release` environment: if you gave
+   it a required reviewer, each waits for an approval (**Review deployments** on the run's page)
+   before it starts. `mac-app` and `server-mac` ask at the start of the run; `release` asks once
+   everything else is green, so a release needs one more approval at its end, before the draft
+   is made.
 4. When it is green, open the draft under **Releases**, edit the notes, and publish it. The
    notes start with the workflow's own (the list of files and how to check them), followed by
    GitHub's generated notes (the merged PRs since the last release).
@@ -62,7 +65,8 @@ left as they were. It refuses to touch a release that is already published.
 | `trek-server-X.Y.Z-linux-x64.tar.gz` | ubuntu-22.04 | `scripts/server-tarball-smoke.mjs` |
 | `trek-server-X.Y.Z-linux-arm64.tar.gz` | ubuntu-22.04-arm | 〃 |
 | `trek-relay-X.Y.Z.cjs` and `.cjs.sha256` | ubuntu-latest | `node trek-relay-X.Y.Z.cjs version` |
-| `SHA256SUMS` | | every file above |
+| `SHA256SUMS` | ubuntu-latest (the `release` job) | every file above |
+| `SHA256SUMS.sig` | ubuntu-latest (the `release` job) | `scripts/sign-sums.mjs sign`: signed with `UPDATE_SIGNING_KEY`, then verified against the public keys in `server/src/update/keys.ts`; a mismatch stops the release. Absent (with a warning on the run) until the key is set up; not listed in `SHA256SUMS` |
 
 **The app** is arm64 only (Apple silicon), as `npm run dist` builds it. An x64 or universal build
 would need node-pty built for x64 as well, and `package.json`'s `build.files` leaves node-pty's
@@ -157,28 +161,120 @@ carry it, with the older one installed in /Applications:
 - [ ] With the newest version installed, **Check for Updates…** says it is the latest version.
 - [ ] Offline, **Check for Updates…** shows an error; a launch offline shows nothing.
 
+## Server updates
+
+A trek-server installed from a release tarball on macOS or Linux updates itself with
+`trek-server update` (server/README.md, "Updating"). It reads `SHA256SUMS` and `SHA256SUMS.sig`
+from the latest **published** release, and installs nothing unless the signature verifies against
+a public key built into that server (`UPDATE_PUBLIC_KEYS` in `server/src/update/keys.ts`); the
+tarball it then downloads must have the sha256 that `SHA256SUMS` names. A draft or a prerelease is
+never offered, so publishing the draft is what ships the update. A running server also looks once
+a day and only logs what it finds.
+
+Do not rename or delete `SHA256SUMS`, `SHA256SUMS.sig` or the server tarballs on a published
+release, and do not replace any of them with other bytes: servers would find no update, or
+refuse it.
+
+`scripts/server-update-smoke.mjs` runs a real update, a refused one and a rollback against a
+signed feed on this machine (a test build with its own key; it never contacts GitHub).
+
+### The update signing key
+
+`UPDATE_PUBLIC_KEYS` is empty until this is done. Until then the `release` job warns ("Checksums
+not signed") and signs nothing, and `trek-server update` says it has no update key built in.
+
+Once, before the first release that servers should be able to update from:
+
+1. Generate the pair, on a machine you trust, into a new folder outside the repository:
+
+   ```sh
+   mkdir -m 700 ~/trek-update-key
+   node scripts/sign-sums.mjs generate ~/trek-update-key
+   ```
+
+   The private key is written to `~/trek-update-key/update-signing-key.pem` (mode 0600) and is
+   never printed. The public key is printed. Do not open, print or paste the private key
+   anywhere: the next step reads it from the file.
+2. Add the private key as the `release` environment's secret, from the file, then delete the
+   file (run in a checkout of the repository, signed in to `gh` as someone who may change its
+   environments):
+
+   ```sh
+   gh secret set UPDATE_SIGNING_KEY --env release < ~/trek-update-key/update-signing-key.pem \
+     && rm -rf ~/trek-update-key
+   ```
+
+   The folder is removed only if the secret was set. If you want an offline copy, copy the file
+   to it (`cp`) before this. Without the
+   private key, the only way on is a new key, which servers get by one manual install (see "If
+   the key is lost or leaks").
+3. Add the printed public key (the whole PEM, `-----BEGIN PUBLIC KEY-----` to
+   `-----END PUBLIC KEY-----`, as a template string) to `UPDATE_PUBLIC_KEYS` in
+   `server/src/update/keys.ts`, and commit it. The public key is not a secret.
+
+Do steps 2 and 3 before the same release tag. With only one of them the release stops at "Sign
+SHA256SUMS": a secret with no committed key would sign what no server can verify, and a
+committed key with no secret would publish a release every server refuses.
+
+The first release after that has the key built in and is signed. Servers running it (installed
+by hand, once) can update to the releases after it. A server from an earlier release has no
+`update` command, or has one with no key, which refuses every release: it needs that one manual
+install.
+
+**Rotating the key.** A server accepts a signature from any key in its own `UPDATE_PUBLIC_KEYS`,
+and a release is signed with one key, so servers must have the new public key before a release
+is signed with it:
+
+1. Generate a new pair as above, but do not set the secret yet: keep the private key's file
+   (or move it offline) until step 2. Add its public key to `UPDATE_PUBLIC_KEYS` beside the old
+   one, commit, and release. That release is still signed with the old key, so every server
+   that trusts the old key can update to it, and it carries both keys.
+2. Once that release is published (and for as many releases after it as you want to give
+   servers time), set the secret to the new private key and delete the file, as in step 2
+   above. Not before it is published: a re-run of its `release` job while it is still a draft
+   signs it with whatever key the secret then holds.
+3. From the next release on, checksums are signed with the new key. Remove the old public key
+   from `UPDATE_PUBLIC_KEYS` in that release or any later one (not earlier: the secret must
+   always match a committed key, or the release stops).
+
+A server that is still on a release from before step 1 when the first release signed with the new
+key is published does not have the new key: `trek-server update` there refuses with "no valid
+signature", and it needs one manual install. Every release kept signed with the old key in step
+2 gives such servers longer to catch up.
+
+**If the key is lost or leaks.** Generate a new pair, replace the old public key in
+`UPDATE_PUBLIC_KEYS` with the new one, set the secret to the new private key, and release.
+Servers on earlier versions trust only the old key, so they refuse the new releases and must be
+updated by hand once: say so in the release notes. After a leak, those servers also still accept
+the leaked key until then; an update is only ever read from this repository's releases over
+https, so the leaked key alone does not let anyone install something on them.
+
 ## One-time GitHub setup
 
 The signing and notarization secrets live in a GitHub **environment** named `release`, not in the
-repository's secrets: only the `mac-app` and `server-mac` jobs name that environment, and the environment only
-lets a `v*` tag use it, so no branch, pull request or other workflow can read them. A tag ruleset
-then limits who can create a `v*` tag.
+repository's secrets: only the `mac-app`, `server-mac` and `release` jobs name that environment
+(`release` for the key that signs `SHA256SUMS`, which only its signing step is given), and the
+environment only lets a `v*` tag use it, so no branch, pull request or other workflow can read
+them. A tag ruleset then limits who can create a `v*` tag.
 
 1. **The environment.** Settings → Environments → **New environment** → name it `release`
    (exactly) → Configure environment:
    - **Deployment branches and tags** → *Selected branches and tags* → **Add deployment branch or
      tag rule** → Ref type **Tag**, name pattern `v*`. (Leave no branch rule: the release runs
      only on tags.)
-   - Optional: **Required reviewers** → add yourself (or the release managers). The `mac-app`
-     job then waits for an approval on each release run. Leave *Prevent self-review* off if you
-     are the only reviewer and you push the tags yourself.
+   - Optional: **Required reviewers** → add yourself (or the release managers). Each job that
+     names the environment then waits for an approval on each release run: `mac-app` and
+     `server-mac` when the run starts (they can be approved together), and `release` at the end,
+     when everything else has passed. Leave *Prevent self-review* off if you are the only
+     reviewer and you push the tags yourself.
    - Optional: leave *Allow administrators to bypass configured protection rules* unchecked.
 
    Create it before the first release tag: a workflow that names an environment that does not
    exist makes an empty one with no rules (the release would then stop at its secrets check).
 2. **The secrets**, in that environment: Settings → Environments → `release` → **Environment
-   secrets** → **Add environment secret**, once for each secret in the table below (the
-   certificate's two and one notarization method's three; all eight is fine). Don't add them as
+   secrets** → **Add environment secret**, once for each of the Apple secrets in the table
+   below (the certificate's two and one notarization method's three; all eight is fine).
+   `UPDATE_SIGNING_KEY` is set from a file instead: see "The update signing key". Don't add them as
    repository secrets as well; if they already are, delete those (Settings → Secrets and
    variables → Actions → Repository secrets).
 3. **The tag ruleset.** Settings → Rules → Rulesets → **New ruleset** → **New tag ruleset**:
@@ -208,6 +304,7 @@ macOS server tarball.
 | `APPLE_ID` | Alternative to the API key: the Apple ID email of a team member |
 | `APPLE_APP_SPECIFIC_PASSWORD` | That Apple ID's app-specific password |
 | `APPLE_TEAM_ID` | The team ID (10 characters); needed with `APPLE_ID` |
+| `UPDATE_SIGNING_KEY` | The Ed25519 private key (PEM) that signs `SHA256SUMS`, for `trek-server update` (see "The update signing key"). Optional: without it and without a committed public key, releases build with unsigned checksums and no server can update itself |
 
 With all three `APPLE_API_*` secrets set, the API key is used even if the Apple ID ones are set
 too. The workflow writes the `.p8` to a file in the runner's temp directory (mode 0600) only for
@@ -284,4 +381,5 @@ The workflows were checked locally (YAML parsing, the action schema, actionlint,
 every `run:` script, the packaging and tarball scripts, `dist:dir`), but these run only on
 GitHub: the Linux unit tests and node-pty's Linux builds, the Electron smokes on a runner,
 signing with the real certificate, notarization of the app and the dmg, the `release`
-environment's tag rule and reviewers, and `gh release create` / `upload --clobber`.
+environment's tag rule and reviewers, the `release` job's sparse checkout and its signing with the
+real `UPDATE_SIGNING_KEY`, and `gh release create` / `upload --clobber`.

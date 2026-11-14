@@ -113,6 +113,13 @@ const runLauncher = (argv) => {
 const build = JSON.parse(readFileSync(join(dir, 'build.json'), 'utf8'))
 const printed = runLauncher(['--version']).trim()
 check(`--version prints ${version}`, printed === version && build.version === version, `printed ${printed}, build.json ${build.version}`)
+// What `trek-server update` reads to know this folder can be replaced, and for which target.
+check('build.json marks a release tarball for this target', build.package === 'tarball' && build.target === `${os}-${arch}`, JSON.stringify(build))
+if (!windows) {
+  // The check `trek-server update` runs on a new version before it replaces the old one.
+  const selfcheck = spawnSync(launcher, ['selfcheck'], { env, encoding: 'utf8', timeout: 60000 })
+  check('selfcheck passes', selfcheck.status === 0 && /ok: the server answers a connection/.test(selfcheck.stdout ?? ''), (selfcheck.stdout ?? '') + (selfcheck.stderr ?? ''))
+}
 
 // The PowerShell launcher (Windows only; runs there, not on this Mac or Linux).
 if (windows) {
