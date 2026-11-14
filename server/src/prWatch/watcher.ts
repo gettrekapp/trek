@@ -16,6 +16,8 @@ import {
   type PrView,
   type PromptOutcome
 } from '../../../src/shared/prWatch.ts'
+import type { HistoryStore } from '../history/store.ts'
+import { BY_TREK, recordHistory } from '../history/record.ts'
 import type { ProjectState } from '../projects/state.ts'
 import { MAX_QUEUE_LENGTH } from '../sessions/limits.ts'
 import { ghSignedIn, isAuthFailure, type GhRunner } from './gh.ts'
@@ -53,6 +55,8 @@ export interface PrWatcherDeps {
     refreshAttention(): void
   }
   gh: GhRunner
+  /** The worktree history: a watch ended by a merge or close is recorded (as Trek) */
+  history?: HistoryStore
   /** gh's sign-in changed: the server tells every connection (`integrations.changed` `{prWatch}`) */
   onAvailability?: (available: boolean) => void
   /** A round found something to report (its notice is set): the push (6b) */
@@ -371,21 +375,27 @@ export class PrWatcher {
       if (worktree) this.setNotice(target, worktree.id, undefined, (n) => n?.at === unreadableAt && n.url === target.url)
     }
     let events: PrEvent[] = []
+    let ended: 'merged' | 'closed' | undefined
     try {
-      events = this.deps.projects.apply(target.projectId, (d) => {
+      const applied = this.deps.projects.apply(target.projectId, (d): { events: PrEvent[]; ended?: 'merged' | 'closed' } => {
         const repo = d.repositories.find((r) => r.id === target.repoId)
         const data = repo && Object.hasOwn(repo.branchData, target.branch) ? repo.branchData[target.branch] : undefined
-        if (!repo || !data?.prWatch || data.pr !== target.url || !worktreeOn(repo, target.branch)) return []
+        if (!repo || !data?.prWatch || data.pr !== target.url || !worktreeOn(repo, target.branch)) return { events: [] }
         const step = watchStep(data.prWatch.seen, view)
         if (step.stop) {
           delete data.prWatch
           this.forgetKeys((k) => k === key)
-        } else data.prWatch = { seen: step.seen }
-        return step.events
+          return { events: step.events, ended: view.state === 'MERGED' ? 'merged' : 'closed' }
+        }
+        data.prWatch = { seen: step.seen }
+        return { events: step.events }
       })
+      events = applied.events
+      ended = applied.ended
     } catch {
       return // the project is gone
     }
+    if (ended) recordHistory({ history: this.deps.history }, target.projectId, target.repoId, target.branch, [{ kind: 'prWatch.off', to: { text: ended } }], BY_TREK)
     if (events.length > 0) this.report(target, events)
   }
 
