@@ -2,7 +2,7 @@ import type { ProjectPluginSettings } from './plugins/manifest.ts'
 import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
-import type { ReviewDraft } from './model/types'
+import type { Automation, ReviewDraft } from './model/types'
 
 /** A workflow tag assignable to a branch's worktree, configured per project. */
 export interface WorktreeTag {
@@ -379,6 +379,8 @@ export interface ProjectFile {
   worktreeOrder?: string[]
   /** Tabs of the global (project-wide) Claude panel, in tab order */
   globalSessions?: GlobalSession[]
+  /** The server's automations for the project (projected; never saved in a project file) */
+  automations?: Automation[]
   /** Each plugin's on/off for this project (plugin system phase 1); a plugin not named uses its default */
   plugins?: ProjectPluginSettings
 }
