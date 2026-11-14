@@ -33,6 +33,7 @@ import type { ChangesSource } from '../../../shared/types'
 import { changesTabLabel } from '../../../shared/changes'
 import { AllNotesPanel } from './AllNotesPanel'
 import { SettingsPanel } from './SettingsPanel'
+import { AutomationsPanel } from './AutomationsPanel'
 import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
@@ -64,6 +65,7 @@ type Panel =
   | 'environment'
   | 'stack'
   | 'settings'
+  | 'automations'
 
 const STACK_POLL_MS = 4000
 
@@ -880,6 +882,15 @@ export function WorktreeDetail({
             />
           </button>
         )}
+        {features.automations && (
+          <button
+            className={`panel-btn ${panel === 'automations' ? 'active' : ''}`}
+            title="Automations"
+            onClick={() => setPanel(panel === 'automations' ? 'sessions' : 'automations')}
+          >
+            ⏰
+          </button>
+        )}
         {features.settingsEdit && (
           <button
             className={`panel-btn ${panel === 'settings' ? 'active' : ''}`}
@@ -968,6 +979,7 @@ export function WorktreeDetail({
           />
         )}
         {features.settingsEdit && <SettingsPanel visible={panel === 'settings'} />}
+        {features.automations && <AutomationsPanel visible={panel === 'automations'} />}
       </div>
 
       {showTicket && info.branch && (

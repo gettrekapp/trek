@@ -756,7 +756,8 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         return result.id
       },
       remove: async (automationId) => {
-        await request('automation.delete', { projectId, automationId })
+        const { rev } = await requestWithRev('automation.delete', { projectId, automationId })
+        if (rev) await deps.whenProjected(() => true, rev)
       },
       runNow: async (automationId) => {
         const { result, rev } = await requestWithRev('automation.runNow', { projectId, automationId })
