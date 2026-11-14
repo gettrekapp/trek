@@ -343,7 +343,7 @@ try {
 
   // ---- 6. Settings: audio alerts and the session mode ----------------------------------------------
 
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await sw.locator('.sidebar button[title="App settings"]').click()
   const settings = sw.locator('.settings-panel')
   await settings.waitFor({ timeout: 5000 })
   const audio = settings.getByRole('checkbox', { name: /^Audio alerts/ })
@@ -358,7 +358,7 @@ try {
   await envSwitch.click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check("Settings: the environments' three VM size fields", await until(() => settings.locator('.env-size-inputs input').count(), 3), 3)
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await sw.locator('.sidebar button[title="App settings"]').click()
 
   // ---- 7. The overflow menus ------------------------------------------------------------------------
 

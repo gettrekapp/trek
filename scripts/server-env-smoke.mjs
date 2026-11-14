@@ -286,7 +286,7 @@ try {
   await mainRow.click()
   await detail.locator('.detail-path', { hasText: repo }).waitFor({ timeout: 10_000 })
   const tabs = () => detail.locator('.session-row .panel-btn').evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()))
-  check("main's tabs: Docker and Stack (the server's), and no Open in VS Code or Reveal", [await until(() => tabs(), ['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack', '⏰', '⚙']), await detail.locator('.detail-actions button', { hasText: /VS Code|Reveal/ }).count()], [['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack', '⏰', '⚙'], 0])
+  check("main's tabs: Docker and Stack (the server's), and no Open in VS Code or Reveal", [await until(() => tabs(), ['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack']), await detail.locator('.detail-actions button', { hasText: /VS Code|Reveal/ }).count()], [['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack'], 0])
   await detail.locator('.panel-btn', { hasText: 'Docker' }).click()
   const dockerPanel = detail.locator('.docker-panel')
   check("the Docker panel lists the server's containers", await until(() => dockerPanel.locator('.docker-row .docker-name').allTextContents(), ['web']), ['web'])
@@ -303,20 +303,20 @@ try {
 
   // ---- 4. Settings: the environments, saved on the server; the poll runs there -------------------------
 
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check("the poll's tool check passes on the server's machine", await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
 
   // ---- 5. The feature row: its environment, on the server ----------------------------------------------
 
   const featureRow = rows.filter({ hasText: 'feature-x' })
   await featureRow.click()
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
-  check('its tabs: Env and Stack', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack', '⏰', '⚙']), ['Changes', 'Notes', 'History', 'Env', 'Stack', '⏰', '⚙'])
+  check('its tabs: Env and Stack', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack']), ['Changes', 'Notes', 'History', 'Env', 'Stack'])
   await detail.locator('.panel-btn', { hasText: 'Env' }).click()
   const envPanel = detail.locator('.env-panel:visible')
   await envPanel.waitFor({ timeout: 5000 })
