@@ -114,6 +114,7 @@ new optional field needs no capability: its absence says enough.
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
 | `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`, `move.receive` and `move.unreceive` on the target |
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
+| `automations` | Per-project scheduled prompts (see [Automations](#automations)): `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` |
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server but the local one (a phone can't reach this machine's loopback) |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
@@ -195,6 +196,7 @@ server restarts. A server without this field simply leaves it out.
 | Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize`; the Linear plugin's `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` (see [Plugins](#plugins)) |
 | Skills | `skills.list` |
 | Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
+| Automations | `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed` |
 | Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
@@ -797,6 +799,43 @@ read: <reason>`, once, and the next good poll withdraws it.
 
 `branch.setPr` with a different URL, or none, also removes the branch's watch: it watched the old
 pull request. The MCP tool `watch_pull_request` turns a watch on or off.
+
+## Automations
+
+With the capability `automations`, a project holds scheduled prompts, `Project.automations`
+(saved with the project, so they survive a restart, and published on the project topic). On its
+schedule the server opens a new Global session in the project with the automation's `prompt` as
+its first message and `llm` (the project's Global agent when unset); the session is titled
+`<name> · HH:MM` (the slot's wall-clock time in the automation's timezone).
+
+An `Automation` is `{id, name, prompt, schedule: {cron, tz}, enabled, llm?, createdAt, lastSlot,
+missed?, history}`. `schedule.cron` is five fields (minute hour day-of-month month day-of-week), no
+names or macros, read as wall-clock time in the IANA timezone `tz`; it must match a date and its
+slots must be at least 5 minutes apart. `lastSlot` is the latest slot handled (ran, failed or counted
+as missed) and starts at `createdAt`. `history` is the last 20 runs, newest first, each `{at, slot?,
+trigger: 'schedule' | 'manual' | 'missed', outcome: 'ran' | 'failed', sessionId?, error?}`; a start
+that fails is recorded (`error`, at most 200 characters) and never retried. `missed` is `{since,
+count}`: the slots that passed while the server could not run them, waiting for the user's answer.
+
+Every 30 seconds the server looks at each enabled automation's slots after `lastSlot` up to now. If
+the latest is on time (at most 2 minutes old) it runs, earlier slots in that batch are dropped and
+`missed` is cleared; if it is older, all those slots are added to `missed` (nothing runs) and
+`lastSlot` moves to the latest. The server checks once as it starts, so downtime is reported at
+once. Saving with a changed schedule, or re-enabling a disabled automation, sets `lastSlot` to now
+and clears `missed`; disabling clears `missed`. Every "now" (`createdAt`, `lastSlot`, a run's `at`)
+is the scheduler's clock.
+
+| Method | Params | Result |
+|---|---|---|
+| `automation.save` | `{projectId, automation}` | `{id}`. `automation` is `{id?, name, prompt, schedule, enabled, llm?}`: no `id` creates, an `id` updates (`NOT_FOUND` if unknown); `llm` unset or `null` means the project's Global agent. `name` 1-80 characters without control characters, `prompt` 1-20000 after trimming. `schedule.cron` must be valid, match a date and run no more often than every 5 minutes, and `schedule.tz` an IANA timezone, else `BAD_REQUEST`. `llm.provider` must be a known agent that can use Trek's tools (MCP), else `BAD_REQUEST`. `CAPACITY` at 50 automations per project |
+| `automation.delete` | `{projectId, automationId}` | `null` (`NOT_FOUND` for an unknown automation) |
+| `automation.runNow` | `{projectId, automationId}` | `{sessionId}`: starts the Global session now, even when disabled, recorded in `history` as `manual`, leaving the schedule alone. The start's error is the method's error (e.g. `CAPACITY`) and is also recorded. `NOT_FOUND` for an unknown automation |
+| `automation.resolveMissed` | `{projectId, run: string[], dismiss: string[]}` | `{started: [{automationId, sessionId?, error?}]}`. Clears `missed` on every listed id and starts one session (trigger `missed`) for each `run` id that had one pending; ids with nothing pending (or unknown) are ignored. `BAD_REQUEST` unless both are lists of at most 50 ids |
+
+For the smokes only: `TREK_SERVER_AUTOMATION_TICK_MS` (a whole number of milliseconds, at least
+1000) replaces the 30-second tick, and `TREK_SERVER_AUTOMATION_CLOCK_FILE` names a file whose
+number (milliseconds since the epoch) is the scheduler's "now", read at each use (`Date.now` when it
+can't be read).
 
 ## Changes tab review
 
