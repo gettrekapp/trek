@@ -300,7 +300,7 @@ test('apply: an installer that throws at once (not a rejection) is a failure, no
   }
 })
 
-test('apply: a restart that cannot be begun leaves the install waiting for one by hand', async () => {
+test('apply: a restart that cannot be begun leaves the install waiting for one by hand, and the status says why', async () => {
   for (const over of [
     { relaunch: () => { throw new Error('no') } },
     { relaunchRefusal: () => { throw new Error('no') } },
@@ -314,6 +314,9 @@ test('apply: a restart that cannot be begun leaves the install waiting for one b
       const last = w.changes.at(-1)
       assert.deepEqual([last.state, last.restartNeeded], ['idle', true])
       assert.equal(w.service.status().state, 'idle')
+      // And why: clients that heard `restarting` (or expected it) are not left with a bare idle.
+      assert.deepEqual(last.lastResult, { ok: false, from: '1.0.0', to: '2.0.0', at: NOW.toISOString(), error: 'trek-server 2.0.0 is installed, but the server could not restart into it: no' })
+      assert.deepEqual(w.service.status().lastResult, last.lastResult)
     } finally {
       w.done()
     }
@@ -392,6 +395,111 @@ test('a check asked for while one runs, and an install asked for during a check,
     assert.equal((await first).latest, '2.0.0')
     assert.deepEqual(w.service.apply('2.0.0'), { started: true })
     await settled(w.service)
+  } finally {
+    w.done()
+  }
+})
+
+const LOCKED = 'another update is running for /opt/trek-server: /opt/.trek-update.lock is its lock (a folder that holds that update\'s process id). If no update is running, remove it.'
+
+test('apply: a failure the installer recorded nowhere (the lock is held) is in the status, with the version that was asked for', async () => {
+  const w = world({ apply: async () => ({ kind: 'failed', error: LOCKED }) })
+  try {
+    await w.service.check()
+    w.service.apply('2.0.0')
+    await settled(w.service)
+    const failure = { ok: false, from: '1.0.0', to: '2.0.0', at: NOW.toISOString(), error: LOCKED }
+    assert.deepEqual(w.service.status().lastResult, failure)
+    assert.deepEqual([w.changes.at(-1).state, w.changes.at(-1).lastResult], ['idle', failure], 'and in the change that ends the attempt')
+    assert.equal(w.service.status().latest, '2.0.0', 'what is offered is still offered')
+  } finally {
+    w.done()
+  }
+})
+
+test('apply: an installer that throws leaves its reason in the status too', async () => {
+  const w = world({ apply: async () => { throw new Error('boom') } })
+  try {
+    await w.service.check()
+    w.service.apply('2.0.0')
+    await settled(w.service)
+    assert.deepEqual(w.service.status().lastResult, { ok: false, from: '1.0.0', to: '2.0.0', at: NOW.toISOString(), error: 'boom' })
+  } finally {
+    w.done()
+  }
+})
+
+test('the failure kept in memory goes when a new attempt starts, and when a check succeeds', async () => {
+  let fail = true
+  const w = world({
+    apply: async () => {
+      await Promise.resolve()
+      return fail ? { kind: 'failed', error: LOCKED } : { kind: 'up-to-date', current: '1.0.0' }
+    }
+  })
+  try {
+    await w.service.check()
+    w.service.apply('2.0.0')
+    await settled(w.service)
+    assert.equal(w.service.status().lastResult.error, LOCKED)
+    // A new attempt: what the last one ended with is not said of this one.
+    fail = false
+    w.service.apply('2.0.0')
+    assert.equal(w.service.status().lastResult, undefined)
+    await settled(w.service)
+    assert.equal(w.service.status().lastResult, undefined)
+    // A check that succeeds.
+    fail = true
+    w.service.apply('2.0.0')
+    await settled(w.service)
+    assert.equal(w.service.status().lastResult.error, LOCKED)
+    assert.equal((await w.service.check()).lastResult, undefined)
+  } finally {
+    w.done()
+  }
+})
+
+test('one last result, never two that disagree: the installer\'s own record of this failure is the one reported', async () => {
+  // The installer recorded it (with the version it found in the install folder): that record is the status's.
+  const recorded = { ok: false, from: '1.0.1', to: '2.0.0', at: NOW.toISOString(), error: 'trek-server 2.0.0 does not run on this machine' }
+  const w = world({
+    apply: async () => {
+      writeState(w.configDir, { lastResult: recorded })
+      return { kind: 'failed', error: recorded.error }
+    }
+  })
+  // An older failure is on record, and this attempt recorded nothing: the newer one, from memory.
+  const old = { ok: false, from: '1.0.0', to: '1.5.0', at: '2026-11-01T00:00:00.000Z', error: 'trek-server 1.5.0 did not start; went back to 1.0.0' }
+  const stale = world({ apply: async () => ({ kind: 'failed', error: LOCKED }) })
+  try {
+    await w.service.check()
+    w.service.apply('2.0.0')
+    await settled(w.service)
+    assert.deepEqual(w.service.status().lastResult, recorded)
+
+    await stale.service.check()
+    writeState(stale.configDir, { lastResult: old })
+    stale.service.apply('2.0.0')
+    await settled(stale.service)
+    assert.equal(stale.service.status().lastResult.error, LOCKED)
+    // `trek-server update` on the machine fails later and records it: the record is newer.
+    const later = { ok: false, from: '1.0.0', to: '2.0.0', at: '2026-11-14T11:00:00.000Z', error: 'the download failed' }
+    writeState(stale.configDir, { lastResult: later })
+    assert.deepEqual(stale.service.status().lastResult, later)
+  } finally {
+    w.done()
+    stale.done()
+  }
+})
+
+test('apply is refused while the server is checking: it says so, not that an update is running', async () => {
+  let release
+  const w = world({ find: () => new Promise((done) => { release = () => done(null) }) })
+  try {
+    const first = w.service.check()
+    assert.throws(() => w.service.apply('2.0.0'), (err) => err.code === 'CONFLICT' && err.details?.reason === 'busy' && err.message === 'This server is checking for an update: try again in a moment')
+    release()
+    await first
   } finally {
     w.done()
   }

@@ -78,7 +78,8 @@ test('no question when the fresh status has nothing to install, leaves it to the
   for (const [fresh, message] of [
     [{ ...STATUS, latest: undefined }, 'No update is available for this server'],
     [{ ...STATUS, remoteApply: false }, /set to be updated on its own machine/],
-    [{ ...STATUS, state: 'installing' }, 'An update is already running on this server']
+    [{ ...STATUS, state: 'installing' }, 'An update is already running on this server'],
+    [{ ...STATUS, state: 'checking' }, 'The server is checking for an update: try again in a moment']
   ]) {
     const { w, run } = setup({ fresh })
     await assert.rejects(run(), { message })

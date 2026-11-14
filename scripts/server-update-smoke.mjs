@@ -18,11 +18,12 @@
 // Then the same update asked for by a client, over the protocol (update.status, update.check,
 // update.apply, update.changed): what the welcome lists, each refusal, the states every signed-in
 // connection hears and the restart that names its version; a config that leaves installing to
-// the command; a version that fails its selfcheck. Last, an install whose bundle is a normal build
+// the command; a version that fails its selfcheck; an update that fails before it downloads
+// anything (its lock held, the feed unverifiable) and says why. Last, an install whose bundle is a normal build
 // (no update key built in): it offers clients nothing, and its command says why.
 import './smokeGh.mjs'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createNetServer } from 'node:net'
 import { join } from 'node:path'
 import { SUMS, WAIT_MS, canExecve, connect, control, createUpdateFixture, diesAtStart, ending, escaped, failsSelfcheck, freePort, listeningAs, listenings, stop, until, up, waitFor, within } from './updateFixture.mjs'
@@ -462,7 +463,49 @@ for (const [name, what, tamper, message] of [
   check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)
 }
 
-// ---- 12. an install with no update key built in (a normal build) offers clients nothing ----
+// ---- 12. a client-asked update that fails before it downloads anything says why -----------
+{
+  const w = await world('early')
+  publish('good', newBuild)
+  const run = start(w.launcher, w.startArgs)
+  check(`${OLD} is running`, await up(w, run, OLD), run.output)
+  const a = await connect(w.port, w.token)
+  const found = await a.request('update.check')
+  /** update.apply of NEW, to its end: what it answered, the changes it sent, and the status after. */
+  const attempt = async () => {
+    const mark = a.events.length
+    const started = await a.request('update.apply', { version: NEW }).catch((err) => err)
+    const settled = await waitFor(() => changes(a, mark).at(-1)?.state === 'idle')
+    return { started, settled, heard: changes(a, mark), after: await a.request('update.status') }
+  }
+
+  // The update's lock, held by a live process (this one), taken the way lock.ts takes it: a private
+  // folder that already holds the holder's file (named for it, holding its process id), renamed
+  // into the lock's place. `trek-server update` running on the machine looks the same.
+  const parent = join(w.base, 'opt')
+  const lock = join(parent, '.trek-update.lock')
+  const mine = mkdtempSync(join(parent, '.trek-update-lock-'))
+  writeFileSync(join(mine, `${process.pid}-${randomBytes(6).toString('hex')}`), `${process.pid}\n`, { flag: 'wx' })
+  renameSync(mine, lock)
+  const locked = await attempt()
+  check('with the update\'s lock held by a live process, update.apply starts, and ends at idle', found.latest === NEW && same(locked.started, { started: true }) && locked.settled && same(stateRuns(locked.heard), ['checking', 'idle']), `${JSON.stringify(locked.started)} ${JSON.stringify(locked.heard)}`)
+  const lockedAsSaid = (status) => status?.lastResult?.ok === false && status.lastResult.from === OLD && status.lastResult.to === NEW && (status.lastResult.error ?? '').includes(`${lock} is its lock`) && status.latest === NEW
+  check('its last change and update.status say why: a failed update to the release, naming the lock', lockedAsSaid(locked.heard.at(-1)) && lockedAsSaid(locked.after), `${JSON.stringify(locked.heard.at(-1))}\n${JSON.stringify(locked.after)}`)
+  check('nothing is recorded for the update that holds the lock, and nothing was touched', w.state().lastResult === undefined && existsSync(lock) && w.versionAt(w.install) === OLD && !existsSync(`${w.install}.previous`) && run.ended === null, `${JSON.stringify(w.state())}\n${run.output}`)
+  rmSync(lock, { recursive: true, force: true })
+
+  // The feed fails once the install has begun (here: its signature no longer verifies).
+  publish('sig', newBuild, (files) => files.set(`${SUMS}.sig`, Buffer.from(sign(null, files.get(SUMS), generateKeyPairSync('ed25519').privateKey).toString('base64'))))
+  const unsigned = await attempt()
+  const unsignedAsSaid = (status) => status?.lastResult?.ok === false && status.lastResult.to === NEW && /no valid signature/.test(status.lastResult.error ?? '') && status.latest === NEW
+  check('a feed that fails during the install: the status carries a failed update to the release, with the reason', same(unsigned.started, { started: true }) && unsigned.settled && unsignedAsSaid(unsigned.heard.at(-1)) && unsignedAsSaid(unsigned.after) && w.state().lastResult?.to === NEW, `${JSON.stringify(unsigned.heard.at(-1))}\n${JSON.stringify(unsigned.after)}`)
+  check(`after both, the server still runs ${OLD}, untouched, with nothing left beside the install`, run.ended === null && w.versionAt(w.install) === OLD && !existsSync(`${w.install}.previous`) && w.marks().length === 0 && readdirSync(parent).filter((entry) => entry.startsWith('.trek-update')).length === 0, `${readdirSync(parent).join(' ')}\n${run.output}`)
+  a.close()
+  const ended = await stop(run)
+  check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)
+}
+
+// ---- 13. an install with no update key built in (a normal build) offers clients nothing ----
 {
   const normal = { dir: buildServer('normal', { test: false }) }
   const built = JSON.parse(readFileSync(join(normal.dir, 'build.json'), 'utf8'))

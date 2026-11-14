@@ -41,6 +41,8 @@ export interface UpdateServiceDeps {
   relaunch: (version: string) => void
   /** Every change of state, percent or outcome */
   onChange: (status: UpdateStatus) => void
+  /** The time now (the tests' clock) */
+  now?: () => Date
 }
 
 export interface UpdateService {
@@ -99,12 +101,28 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
   let percent: number | undefined
   let checking: Promise<UpdateStatus> | null = null
   let applying: Promise<void> | null = null
+  /**
+   * How the last install asked of this service failed, when the installer recorded nothing (the
+   * update's lock was held: the update that holds it records its own) or something else (the
+   * install succeeded and the restart could not begin). Kept in memory only, and only until a new
+   * attempt starts or a check succeeds: it is about this process's last attempt, not the install.
+   */
+  let failure: UpdateResultWire | null = null
+  const now = (): Date => deps.now?.() ?? new Date()
+
+  /** The last result to report: the state file's, or this service's own failure when that is the newer one. Never both. */
+  const lastOf = (recorded: UpdateResultWire | undefined): UpdateResultWire | undefined => {
+    if (!failure) return recorded
+    if (!recorded) return failure
+    // An unreadable time on record (the file is the user's to edit) is not newer than anything.
+    return Date.parse(recorded.at) > Date.parse(failure.at) ? recorded : failure
+  }
 
   const status = (): UpdateStatus => {
     const remembered: Record<string, unknown> = careful(() => ({ ...readState(deps.configDir) }), {})
     const latest = typeof remembered.latest === 'string' && compareVersions(remembered.latest, deps.running) > 0 ? remembered.latest : undefined
     const installed = installedVersion(deps.install.dir)
-    const lastResult = resultOf(remembered.lastResult)
+    const lastResult = lastOf(resultOf(remembered.lastResult))
     return {
       current: deps.running,
       ...(latest !== undefined ? { latest } : {}),
@@ -152,11 +170,13 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
         () => undefined,
         (err: unknown) => ({ error: message(err) })
       )
-      .then((failure) => {
+      .then((failed) => {
         checking = null
+        // The feed was read: how the last attempt ended is old news.
+        if (!failed) failure = null
         set('idle')
         // `cause`: the reason alone, for the server's own log line.
-        if (failure) throw Object.assign(codedError('TOOL_ERROR', `Could not check for an update: ${failure.error}`), { cause: failure.error })
+        if (failed) throw Object.assign(codedError('TOOL_ERROR', `Could not check for an update: ${failed.error}`), { cause: failed.error })
         return status()
       })
     checking = run
@@ -168,10 +188,21 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     if (!careful(deps.remoteApply, false)) {
       throw codedError('CONFLICT', "This server's config leaves updating to `trek-server update` on its own machine (updates.remoteApply is false)", { reason: 'disabled' })
     }
-    if (applying || checking || state !== 'idle') throw codedError('CONFLICT', 'An update is already running on this server', { reason: 'busy' })
+    // A check (the daily one, or another client's) is over in a moment, and is not an update.
+    if (checking && !applying) throw codedError('CONFLICT', 'This server is checking for an update: try again in a moment', { reason: 'busy' })
+    if (applying || state !== 'idle') throw codedError('CONFLICT', 'An update is already running on this server', { reason: 'busy' })
     const latest = status().latest
     if (latest !== version) {
       throw codedError('CONFLICT', latest === undefined ? 'This server has found no newer release: check again' : `The latest release is now ${latest}, not ${version}: check again`, { reason: 'stale' })
+    }
+    // A new attempt: how the last one ended is not said of this one.
+    failure = null
+    const started = now().getTime()
+    /** This attempt failed: kept for the status, unless the installer recorded this very failure (then its record is the one reported). */
+    const failed = (error: string): void => {
+      const recorded = resultOf(careful(() => readState(deps.configDir).lastResult, undefined))
+      const itsOwn = recorded !== undefined && !recorded.ok && recorded.error === error && Date.parse(recorded.at) >= started
+      failure = itsOwn ? null : { ok: false, from: deps.running, to: version, at: now().toISOString(), error }
     }
     // Set before returning, so a status read in the same tick already says an update has begun.
     set('checking')
@@ -195,7 +226,10 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       )
       .then((result) => {
         applying = null
-        if (result.kind === 'failed') console.warn(`update: ${result.error}`)
+        if (result.kind === 'failed') {
+          console.warn(`update: ${result.error}`)
+          failed(result.error)
+        }
         if (result.kind === 'installed') {
           try {
             if (deps.canRelaunch() && deps.relaunchRefusal() === null) {
@@ -205,17 +239,21 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
               return
             }
           } catch (err) {
-            console.warn(`update: trek-server ${result.to} is installed, but this server could not restart into it: ${message(err)}`)
+            // Clients may have heard `restarting`: the idle that follows says why (restartNeeded is true too).
+            const why = `trek-server ${result.to} is installed, but the server could not restart into it: ${message(err)}`
+            console.warn(`update: ${why}`)
+            failed(why)
           }
         }
         // Installed with no way to restart (restartNeeded is now true), up to date, or failed
-        // (the installer recorded why).
+        // (the installer recorded why, or `failure` says it).
         settle()
       })
       // Nothing above is expected to throw; a state left at `installing` would refuse every later update.
       .catch((err: unknown) => {
         applying = null
         console.warn(`update: ${message(err)}`)
+        failure = { ok: false, from: deps.running, to: version, at: now().toISOString(), error: message(err) }
         settle()
       })
     return { started: true }

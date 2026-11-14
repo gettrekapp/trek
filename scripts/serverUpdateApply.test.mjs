@@ -306,6 +306,32 @@ test('a failure that cannot be recorded is still the failure that is returned', 
   }
 })
 
+test('a feed that fails during the install is recorded as a failure of the version that was confirmed, not of the one running', tar, async () => {
+  for (const [what, tamper, message] of [
+    ['the feed is gone', (files) => { delete files[`${FEED}/latest/download/SHA256SUMS`] }, /HTTP 404/],
+    ['its signature does not verify', (files) => { files[`${FEED}/latest/download/SHA256SUMS.sig`] = Buffer.from('A'.repeat(88)) }, /signature/]
+  ]) {
+    const w = world({ tamper })
+    try {
+      const result = await applyUpdate({ ...w.deps, expect: { version: '2.0.0' } })
+      assert.equal(result.kind, 'failed', what)
+      assert.match(result.error, message)
+      assert.deepEqual(readState(w.configDir).lastResult, { ok: false, from: '1.0.0', to: '2.0.0', at: NOW.toISOString(), error: result.error }, what)
+      untouched(w)
+    } finally {
+      w.done()
+    }
+  }
+  // With nobody having confirmed a version (none is known), it is recorded as before.
+  const w = world({ tamper: (files) => { delete files[`${FEED}/latest/download/SHA256SUMS`] } })
+  try {
+    await applyUpdate(w.deps)
+    assert.equal(readState(w.configDir).lastResult.to, '1.0.0')
+  } finally {
+    w.done()
+  }
+})
+
 test('one update at a time: a live lock holder is refused and told what the lock is; a lock left behind is taken over', tar, async () => {
   const w = world()
   const lock = join(w.parent, LOCK_FILE)
@@ -367,7 +393,10 @@ test('the release installed is the one that was confirmed: a newer one published
     // Asked about 1.9.0; by the time the update runs, the latest release is 2.0.0.
     const moved = await applyUpdate({ ...w.deps, expect: { version: '1.9.0' } })
     assert.equal(moved.kind, 'failed')
-    assert.match(moved.error, /the latest release is now trek-server 2\.0\.0, not the 1\.9\.0 that was confirmed/)
+    assert.equal(moved.error, 'the latest release is now trek-server 2.0.0, not the 1.9.0 that was confirmed: check again')
+    // The command says what to do in its own words.
+    const told = await applyUpdate({ ...w.deps, expect: { version: '1.9.0', retry: 'run `trek-server update` again' } })
+    assert.equal(told.error, 'the latest release is now trek-server 2.0.0, not the 1.9.0 that was confirmed: run `trek-server update` again')
     assert.ok(w.asked.every((url) => !url.endsWith('.tar.gz')), 'nothing was downloaded')
     untouched(w)
     assert.deepEqual(await applyUpdate({ ...w.deps, expect: { version: '2.0.0' } }), { kind: 'installed', from: '1.0.0', to: '2.0.0' })

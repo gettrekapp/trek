@@ -16,6 +16,8 @@ const MAX_NAME_CHARS = 60
 /** Why a row with a release has no button, and why the app does not ask such a server to install */
 const LEFT_TO_ITS_MACHINE = 'This server is set to be updated on its own machine: run `trek-server update` there.'
 const ALREADY_RUNNING = 'An update is already running on this server'
+/** A check is over in a moment, and is not an update */
+const CHECKING = 'The server is checking for an update: try again in a moment'
 
 export type ServerUpdateAction = { kind: 'apply'; label: string; version: string } | { kind: 'check'; label: string }
 
@@ -156,6 +158,7 @@ export function serverUpdateConfirm(serverName: string, status: UpdateStatus): S
 export function applyUpdateRefusal(status: UpdateStatus | undefined): string | null {
   if (!status?.latest) return 'No update is available for this server'
   if (!status.remoteApply) return LEFT_TO_ITS_MACHINE
+  if (status.state === 'checking') return CHECKING
   if (status.state !== 'idle') return ALREADY_RUNNING
   return null
 }

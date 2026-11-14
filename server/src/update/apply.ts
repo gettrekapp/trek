@@ -42,8 +42,12 @@ export interface ApplyDeps extends FindDeps {
   onProgress?: (bytes: number, total: number | undefined) => void
   /** Runs the staged version's `selfcheck`; the default runs it through the staged launcher */
   selfcheck?: (stagedDir: string) => SelfcheckOutcome
-  /** The release the caller showed and had confirmed: the update fails if the latest is another by now */
-  expect?: { version: string }
+  /**
+   * The release the caller showed and had confirmed: the update fails if the latest is another by
+   * now. `retry`: what that failure says to do next (the command names itself; a client is shown
+   * the default).
+   */
+  expect?: { version: string; retry?: string }
 }
 
 export type ApplyResult =
@@ -139,7 +143,7 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     if (!release) return { kind: 'up-to-date', current: from }
     target = release.version
     if (deps.expect && release.version !== deps.expect.version) {
-      throw new Error(`the latest release is now trek-server ${release.version}, not the ${deps.expect.version} that was confirmed: run \`trek-server update\` again`)
+      throw new Error(`the latest release is now trek-server ${release.version}, not the ${deps.expect.version} that was confirmed: ${deps.expect.retry ?? 'check again'}`)
     }
 
     // A new folder (0700) with a name nobody could have known: nothing was put in it beforehand,
@@ -172,7 +176,9 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     try {
-      writeState(deps.configDir, { lastResult: { ok: false, from, to: target ?? from, at: now().toISOString(), error } })
+      // `to`: the release that was being installed. When the feed could not be read at all, that is
+      // the one the caller confirmed: a failure "from 1.0.0 to 1.0.0" would be a failure of nothing.
+      writeState(deps.configDir, { lastResult: { ok: false, from, to: target ?? deps.expect?.version ?? from, at: now().toISOString(), error } })
     } catch {
       // The record is a courtesy: the failure is still returned.
     }

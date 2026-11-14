@@ -132,6 +132,21 @@ test('a failed update: its reason, and Try Again for the release that failed', (
   assert.equal(serverUpdateRow(withStatus({ latest: '2.0.0', lastResult: failed({ error: undefined }) })).text, 'Update failed: no reason was recorded')
 })
 
+test('a failure for the release that is offered always shows, whoever recorded it and whatever it says it came from', () => {
+  // The update's lock was held, or the feed could not be read: nothing was installed, and the
+  // server reports the attempt with the version that was asked for.
+  const locked = 'another update is running for /opt/trek-server: /opt/.trek-update.lock is its lock'
+  for (const from of ['1.0.0', '0.9.0', '2.0.0', '']) {
+    assert.deepEqual(serverUpdateRow(withStatus({ latest: '2.0.0', lastResult: failed({ from, error: locked }) })), {
+      tone: 'error',
+      text: `Update failed: ${locked}`,
+      action: { kind: 'apply', label: 'Try Again', version: '2.0.0' }
+    }, from)
+  }
+  // What a server recorded before it named the version being installed ("from 1.0.0 to 1.0.0") was never shown.
+  assert.equal(serverUpdateRow(withStatus({ latest: '2.0.0', lastResult: failed({ to: '1.0.0', error: locked }) })).text, 'Update available: 2.0.0')
+})
+
 test('a failed update with no release known any more offers a check, not an install', () => {
   const row = serverUpdateRow(withStatus({ lastResult: failed({ error: 'the download failed' }) }))
   assert.deepEqual(row, { tone: 'error', text: 'Update failed: the download failed', action: { kind: 'check', label: 'Check Again' } })
@@ -255,6 +270,7 @@ test('why the app does not ask a server to install: no release, an install left 
   assert.equal(applyUpdateRefusal(STATUS), 'No update is available for this server')
   assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', remoteApply: false }), HINT)
   assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', state: 'downloading' }), 'An update is already running on this server')
+  assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', state: 'checking' }), 'The server is checking for an update: try again in a moment', 'a check is not an update')
   assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0' }), null)
 })
 
