@@ -32,6 +32,7 @@ import { BRANCH_SOURCE } from '../../../shared/review'
 import type { ChangesSource } from '../../../shared/types'
 import { changesTabLabel } from '../../../shared/changes'
 import { AllNotesPanel } from './AllNotesPanel'
+import { HistoryPanel } from './HistoryPanel'
 import { SettingsPanel } from './SettingsPanel'
 import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
@@ -60,6 +61,7 @@ type Panel =
   | 'changes'
   | 'notes'
   | 'allNotes'
+  | 'history'
   | 'docker'
   | 'environment'
   | 'stack'
@@ -165,6 +167,10 @@ export function WorktreeDetail({
     setCustomTagMenuOpen(false)
     setEditingId(null)
   }, [path])
+
+  useEffect(() => {
+    if (panel === 'history' && !(features.history && info?.branch)) setPanel('sessions')
+  }, [panel, features.history, info?.branch])
 
   useEffect(() => {
     // A server window lost its link: what is open could only fail now, and an edit
@@ -823,6 +829,15 @@ export function WorktreeDetail({
         >
           Notes
         </button>
+        {features.history && info.branch && (
+          <button
+            className={`panel-btn ${panel === 'history' ? 'active' : ''}`}
+            title={`What changed on ${info.branch}, and who changed it`}
+            onClick={() => setPanel(panel === 'history' ? 'sessions' : 'history')}
+          >
+            History
+          </button>
+        )}
         {info.isMain && (
           <button
             className={`panel-btn ${panel === 'allNotes' ? 'active' : ''}`}
@@ -942,6 +957,7 @@ export function WorktreeDetail({
           }}
         />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
+        {features.history && info.branch && <HistoryPanel visible={panel === 'history'} repoId={repo.id} branch={info.branch} />}
         {info.isMain && <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />}
         {showDocker && <DockerPanel key={repo.id} visible={panel === 'docker'} />}
         {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}

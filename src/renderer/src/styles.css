@@ -2380,6 +2380,97 @@ button:disabled {
   word-break: break-word;
 }
 
+/* ─── History panel ───────────────────────────────────────────────────── */
+
+.history-panel {
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  background: var(--bg-darker);
+  overflow: hidden;
+}
+
+.history-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.history-empty,
+.history-error {
+  padding: 20px;
+  text-align: center;
+  font-size: 12.5px;
+}
+
+.history-error {
+  color: var(--danger);
+}
+
+.history-day-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+}
+
+.history-row {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--bg-lighter);
+  font-size: 12.5px;
+}
+
+.history-time {
+  flex: 0 0 64px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 0;
+}
+
+.history-chip {
+  margin: 0 2px;
+}
+
+.history-actor {
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  background: var(--bg-lighter);
+  opacity: 0.85;
+}
+
+.history-reason {
+  margin-top: 2px;
+  font-style: italic;
+  opacity: 0.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.history-more {
+  align-self: center;
+}
+
 /* ─── Settings panel ───────────────────────────────────────────────────── */
 
 .settings-panel {
