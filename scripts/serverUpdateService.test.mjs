@@ -617,3 +617,58 @@ test('a status never carries more of an error than its first 2,000 characters: a
     w.done()
   }
 })
+
+test('notify sends the status as it is now: what changed outside the service (an install by the command on the machine) reaches the clients', () => {
+  const w = world()
+  try {
+    w.service.notify()
+    assert.deepEqual(w.changes, [{ current: '1.0.0', state: 'idle', sessions: 2, canRelaunch: true, restartNeeded: false, remoteApply: true }])
+    // `trek-server update` swapped a new version in, and this server could not restart into it.
+    w.setInstalled('2.0.0')
+    w.service.notify()
+    assert.equal(w.changes.length, 2)
+    assert.equal(w.changes[1].restartNeeded, true)
+  } finally {
+    w.done()
+  }
+})
+
+test('configChanged sends a change when updates.remoteApply is not what the clients last heard, and only then', async () => {
+  let remoteApply = true
+  const w = world({ remoteApply: () => remoteApply })
+  try {
+    // The config file changed, and not in this: nothing to say.
+    w.service.configChanged()
+    assert.deepEqual(w.changes, [])
+    remoteApply = false
+    w.service.configChanged()
+    assert.deepEqual(w.changes.map((s) => s.remoteApply), [false])
+    w.service.configChanged()
+    assert.equal(w.changes.length, 1, 'said once')
+    remoteApply = true
+    w.service.configChanged()
+    assert.deepEqual(w.changes.map((s) => s.remoteApply), [false, true])
+    // What a change of state already told the clients is not told again.
+    remoteApply = false
+    await w.service.check()
+    const heard = w.changes.length
+    assert.equal(w.changes.at(-1).remoteApply, false)
+    w.service.configChanged()
+    assert.equal(w.changes.length, heard)
+  } finally {
+    w.done()
+  }
+})
+
+test('notify and configChanged never throw: a listener that does, a config that cannot be read', () => {
+  const w = world({ onChange: () => { throw new Error('a closed socket') }, remoteApply: () => { throw new Error('boom') } })
+  const warn = console.warn
+  console.warn = () => {}
+  try {
+    assert.doesNotThrow(() => w.service.notify())
+    assert.doesNotThrow(() => w.service.configChanged())
+  } finally {
+    console.warn = warn
+    w.done()
+  }
+})

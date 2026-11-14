@@ -57,6 +57,14 @@ export interface UpdateService {
   check(): Promise<UpdateStatus>
   /** Begins installing `version`. Throws CONFLICT (reason `disabled`, `busy` or `stale`) or BAD_REQUEST. */
   apply(version: unknown): { started: true }
+  /**
+   * Sends the status as it is now to the clients (`onChange`), for what changed outside this
+   * service: `trek-server update` on the machine installed a version this server could not restart
+   * into (`restartNeeded`). Never throws.
+   */
+  notify(): void
+  /** The config was reloaded: sends a change if `updates.remoteApply` is not what the clients last heard. Never throws. */
+  configChanged(): void
   /** Settles when no check or install is running (for the tests and a clean shutdown). Never rejects. */
   idle(): Promise<void>
 }
@@ -155,9 +163,14 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     }
   }
 
+  /** `remoteApply` as the clients last heard it (or as it was when this server started) */
+  let saidRemoteApply = careful(deps.remoteApply, false)
+
   const changed = (): void => {
     try {
-      deps.onChange(status())
+      const now = status()
+      saidRemoteApply = now.remoteApply
+      deps.onChange(now)
     } catch (err) {
       console.warn(`update: a change could not be sent: ${message(err)}`)
     }
@@ -291,5 +304,9 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     await applying
   }
 
-  return { status, check, apply, idle }
+  const configChanged = (): void => {
+    if (careful(deps.remoteApply, false) !== saidRemoteApply) changed()
+  }
+
+  return { status, check, apply, notify: changed, configChanged, idle }
 }

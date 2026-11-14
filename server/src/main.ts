@@ -527,7 +527,13 @@ function startUpdates(): void {
 
   updateControlSettled = listenControl(controlPath(configPath), {
     status: () => ({ pid: process.pid, version, installDir: install.dir, sessions: server.sessions.terminals.count(), canRelaunch: canRelaunch() }),
-    relaunch: () => requestRelaunch(install)
+    relaunch: () => {
+      const answer = requestRelaunch(install)
+      // The command asks only once it has installed: refused, the new version waits in the install
+      // folder for a restart by hand, and nothing has told the clients (`restartNeeded`).
+      if (!answer.ok && !shuttingDown) updateService?.notify()
+      return answer
+    }
   }).then(
     (control) => {
       // A shutdown that began while the socket was being taken: it is waiting for this.
@@ -540,6 +546,8 @@ function startUpdates(): void {
   // No key built in (so no service): nothing could be verified, so nothing is asked.
   const service = updateService
   if (!service) return
+  // The config file was edited (it is reloaded when it changes): clients hear a new `updates.remoteApply`.
+  store.on('change', () => service.configChanged())
   const check = (): void => {
     // Read each time: the config is reloaded when its file changes.
     if (shuttingDown || store.config.updates?.check === false) return

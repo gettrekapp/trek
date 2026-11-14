@@ -153,8 +153,13 @@ let plainWelcome = null
   // A launcher that cannot be run: the server says so before it shuts anything down, and stays up.
   if (canExecve) {
     chmodSync(w.launcher, 0o644)
+    const listener = await connect(w.port, w.token)
     const refused = await control(w.socket, 'relaunch')
     check('a relaunch into a launcher that cannot be run is refused', refused?.ok === false && /bin\/trek-server is missing or cannot be run/.test(refused.error ?? ''), JSON.stringify(refused))
+    // The command asks for a restart only once it has installed: a refusal is told to the clients, with the status as it is now.
+    const told = await waitFor(() => changes(listener).length > 0, 5000)
+    check('and a connected client is sent the server\'s update status: a restart that was refused is not kept from it', told && changes(listener).length === 1 && changes(listener)[0].current === NEW && changes(listener)[0].state === 'idle', JSON.stringify(listener.events))
+    listener.close()
     await new Promise((done) => setTimeout(done, 500))
     check('and the server keeps serving', run.ended === null && !/shutting down/.test(run.output) && (await control(w.socket, 'status'))?.pid === run.child.pid, run.output)
     chmodSync(w.launcher, 0o755)
@@ -447,12 +452,19 @@ for (const [name, what, tamper, message] of [
     }
     return false
   }
+  // A second client that asks nothing: it is told.
+  const quiet = await connect(w.port, w.token)
+  const mark = quiet.events.length
   setRemoteApply(true)
   const on = await saysRemoteApply(true)
+  const toldOn = await waitFor(() => changes(quiet, mark).at(-1)?.remoteApply === true, 5000)
   setRemoteApply(false)
   const off = await saysRemoteApply(false)
+  const toldOff = await waitFor(() => changes(quiet, mark).at(-1)?.remoteApply === false, 5000)
   const again = await refusal(a.request('update.apply', { version: NEW }))
   check('an edit to the config is followed without a restart, both ways', on && off && same(again, ['CONFLICT', 'disabled']) && w.versionAt(w.install) === OLD, `${on} ${off} ${JSON.stringify(again)}`)
+  check('and every client hears it (update.changed), once each way, without asking', toldOn && toldOff && same(changes(quiet, mark).map((status) => status.remoteApply), [true, false]), JSON.stringify(quiet.events.slice(mark)))
+  quiet.close()
 
   const updated = await w.cli(['update', '--yes'])
   check('`trek-server update --yes` on the machine still installs', updated.status === 0 && updated.out.includes(`Installed trek-server ${NEW}`) && w.versionAt(w.install) === NEW, updated.out)
@@ -460,8 +472,11 @@ for (const [name, what, tamper, message] of [
     check('the client of a server restarted by the command is told the version too', (await within(a.closed)) && same(a.events.at(-1), ['daemon.shutdown', { reason: 'update', version: NEW }]), JSON.stringify(a.events.slice(-2)))
     check(`the same process comes back as ${NEW}`, (await up(w, run, NEW)) && run.ended === null && (await control(w.socket, 'status'))?.pid === pid, run.output)
   } else {
+    // The command asked this server to restart, and was refused: the client is told, without asking.
+    const told = await waitFor(() => changes(a).at(-1)?.restartNeeded === true, 5000)
+    check('this Node cannot replace a process: the client hears that a restart is needed (update.changed), though the command installed it', told && changes(a).at(-1).current === OLD && changes(a).at(-1).state === 'idle', JSON.stringify(a.events.slice(-3)))
     const waiting = await a.request('update.status')
-    check('this Node cannot replace a process: update.status says a restart is needed, whoever installed it', waiting.current === OLD && waiting.restartNeeded === true && shutdowns(a).length === 0, JSON.stringify(waiting))
+    check('and update.status says so, whoever installed it', waiting.current === OLD && waiting.restartNeeded === true && shutdowns(a).length === 0, JSON.stringify(waiting))
     a.close()
   }
   const ended = await stop(run)
