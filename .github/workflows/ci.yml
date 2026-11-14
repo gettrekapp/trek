@@ -149,7 +149,19 @@ jobs:
             relay/package-lock.json
       # node-pty comes from its own Windows prebuild (ConPTY), nothing is compiled.
       - run: npm ci --no-audit --no-fund
+      # TEMPORARY, fix/windows-ci only (never merge): repeats the two files whose cleanup raced.
+      - name: Repeat the flaky files
+        run: |
+          failed=""
+          for i in 1 2 3 4 5 6 7 8; do
+            node --test --test-timeout=120000 scripts/serverPromoteTool.test.mjs scripts/voicePlugin.test.mjs > "repeat-$i.log" 2>&1 || failed="$failed $i"
+            echo "run $i: $(grep -E '^# (pass|fail|cancelled)' "repeat-$i.log" | tr '\n' ' ')"
+            grep -n "^not ok\|removeDir\|EBUSY" "repeat-$i.log" | head -40 || true
+          done
+          echo "failed runs:${failed:- none}"
+          [ -z "$failed" ]
       - name: Unit tests
+        if: ${{ !cancelled() }}
         run: npm test
       - name: Build trek-server
         if: ${{ !cancelled() }}
