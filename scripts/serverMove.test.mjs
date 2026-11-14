@@ -671,6 +671,8 @@ test('C1: a real directory on the source where the target links one refuses the 
   assert.match(received.error.message, /\.trek/)
   assert.match(received.error.message, /linked/)
   assert.ok(!existsSync(join(s.dir, 'b', 'app-feat')))
+  // Nothing was written through the link (a junction on Windows) into the target's main checkout.
+  assert.ok(!existsSync(join(s.b, '.trek', 'notes.md')))
   assert.equal(readFileSync(join(s.path, '.trek', 'notes.md'), 'utf8'), 'mine\n')
 })
 
