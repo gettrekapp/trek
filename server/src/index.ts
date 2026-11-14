@@ -28,6 +28,7 @@ import { ghFromEnv } from './prWatch/gh'
 import { loadWebBundle, type WebBundle } from './web/bundle'
 import { webClientDir } from './web/dir'
 import { pollMsFromEnv } from './prWatch/watcher'
+import { clockFromFile } from './automations/scheduler'
 import { pruneRecoveryFiles } from './promote/promoteHandlers'
 import {
   addToken,
@@ -500,6 +501,10 @@ const server = startServer(
       // The smokes' knob: the time between polls, and between sign-in checks.
       pollMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS),
       recheckMs: pollMsFromEnv(process.env.TREK_SERVER_PR_POLL_MS)
+    },
+    automations: {
+      tickMs: pollMsFromEnv(process.env.TREK_SERVER_AUTOMATION_TICK_MS),
+      now: clockFromFile(process.env.TREK_SERVER_AUTOMATION_CLOCK_FILE)
     },
     // Background push (6b): the phones' relay grants live in the same secrets file.
     push: { secretsFile: secretsPathFor(resolve(args.configPath)) },

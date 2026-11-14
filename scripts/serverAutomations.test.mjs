@@ -166,3 +166,53 @@ test('clockFromFile: the number in the file, else Date.now', () => {
   assert.ok(Math.abs(clockFromFile(file)() - Date.now()) < 5000)
   assert.equal(clockFromFile(undefined), undefined)
 })
+
+import { dispatchV2 } from '../server/src/v2.ts'
+import { welcomeCapabilities } from '../server/src/capabilities.ts'
+
+function setupV2(automations = []) {
+  const s = setupScheduler(automations)
+  const call = (method, params) => dispatchV2(method, { projectId: 'p1', ...params }, { hub: new TopicHub(), projects: s.projects, automations: s.scheduler })
+  return { ...s, call }
+}
+
+test('welcome lists automations', () => {
+  assert.ok(welcomeCapabilities(false).includes('automations'))
+})
+
+test('automation.save creates and updates; bad input is BAD_REQUEST', () => {
+  const v = setupV2()
+  const created = v.call('automation.save', { automation: input() })
+  assert.equal(created.ok, true)
+  const id = created.result.id
+  assert.deepEqual(v.list().map((a) => [a.id, a.name, a.lastSlot]), [[id, 'Nightly', T0]])
+  assert.equal(v.call('automation.save', { automation: input({ id, name: 'Renamed' }) }).ok, true)
+  assert.equal(v.list()[0].name, 'Renamed')
+  assert.equal(v.call('automation.save', { automation: input({ schedule: { cron: '* * * * *', tz: 'UTC' } }) }).error.code, 'BAD_REQUEST')
+  assert.equal(v.call('automation.save', { projectId: 'nope', automation: input() }).error.code, 'NOT_FOUND')
+})
+
+test('automation.delete', () => {
+  const v = setupV2([auto()])
+  assert.deepEqual(v.call('automation.delete', { automationId: 'a' }), { ok: true, result: null })
+  assert.equal(v.list(), undefined)
+  assert.equal(v.call('automation.delete', { automationId: 'a' }).error.code, 'NOT_FOUND')
+})
+
+test('automation.runNow starts a session even when disabled; a failure is the error', () => {
+  const v = setupV2([auto({ enabled: false })])
+  assert.deepEqual(v.call('automation.runNow', { automationId: 'a' }), { ok: true, result: { sessionId: 's1' } })
+  assert.equal(v.list()[0].history[0].trigger, 'manual')
+  assert.equal(v.call('automation.runNow', { automationId: 'zz' }).error.code, 'NOT_FOUND')
+})
+
+test('automation.resolveMissed runs and dismisses; ids with nothing pending are ignored', () => {
+  const missed = { since: T0, count: 3 }
+  const v = setupV2([auto({ missed }), auto({ id: 'b', missed }), auto({ id: 'c' })])
+  const out = v.call('automation.resolveMissed', { run: ['a', 'c'], dismiss: ['b'] })
+  assert.deepEqual(out, { ok: true, result: { started: [{ automationId: 'a', sessionId: 's1' }] } })
+  assert.deepEqual(v.list().map((a) => a.missed), [undefined, undefined, undefined])
+  assert.equal(v.list()[0].history[0].trigger, 'missed')
+  assert.deepEqual(v.call('automation.resolveMissed', { run: ['a'], dismiss: [] }).result, { started: [] })
+  assert.equal(v.call('automation.resolveMissed', { run: 'a', dismiss: [] }).error.code, 'BAD_REQUEST')
+})

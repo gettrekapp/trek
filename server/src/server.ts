@@ -36,6 +36,7 @@ import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
 import { mcpContext } from './plugins/mcp'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
+import { AutomationScheduler } from './automations/scheduler'
 import { PromoteRequests } from './promote/requests'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
 import { createWebHandler } from './web/http'
@@ -83,6 +84,8 @@ export interface ServerOptions {
   integrations?: Integrations
   /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
   prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
+  /** Automations' scheduler tweaks, for the smokes: a shorter tick, a controllable clock */
+  automations?: { tickMs?: number; now?: () => number }
   /** Where a promote or demote saves a copy of the work it carries (5e, `<dataDir>/promote-recovery`; default: the temp dir) */
   promoteRecoveryDir?: string
   /**
@@ -175,6 +178,14 @@ export function startServer(
       })
     : undefined
   prWatch?.start()
+  const automations = new AutomationScheduler({
+    projects,
+    sessions,
+    tickMs: options.automations?.tickMs,
+    now: options.automations?.now,
+    log: (message) => console.error(message)
+  })
+  automations.start()
   // promote_to_primary's confirmations (5e): asked of the project's windows.
   const promoteRequests = new PromoteRequests(hub)
 
@@ -510,6 +521,7 @@ export function startServer(
         integrations: options.integrations,
         integrationsChanged,
         prWatch,
+        automations,
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
@@ -608,6 +620,7 @@ export function startServer(
     trek.mcp = undefined
     poller.stop()
     prWatch?.stop()
+    automations.stop()
     promoteRequests.stop()
     pusher?.stop()
     sessions.stopAll()

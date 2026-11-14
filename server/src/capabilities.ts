@@ -10,7 +10,7 @@ import { CAPABILITY } from '../../src/shared/protocolV2.ts'
  * move to or from another server. `promote` (5e): `worktree.promote`, `worktree.demote`,
  * `promote.listen`, `promote.claim` and `promote.answer`, and promote_to_primary's
  * `promote.request` / `promote.settled`. `push` (6b): `push.setGrant`, `push.clearGrant` and
- * `push.status`, a phone's relay grant for background push.
+ * `push.status`, a phone's relay grant for background push. `automations`: `automation.*` and `Project.automations`.
  */
 export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.topicEnd,
@@ -24,7 +24,8 @@ export const STATIC_CAPABILITIES: readonly string[] = [
   CAPABILITY.review,
   CAPABILITY.move,
   CAPABILITY.promote,
-  CAPABILITY.push
+  CAPABILITY.push,
+  CAPABILITY.automations
 ]
 
 /**
