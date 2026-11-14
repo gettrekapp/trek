@@ -3686,6 +3686,15 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+/* The command a hint names (trek-server update): set apart as code, selectable in one click. */
+.server-update-hint code {
+  background: var(--bg-darker);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  user-select: all;
+}
+
 /* "Pair a phone…" (6a): the QR, the address and code, the countdown */
 .pair-phone {
   display: flex;

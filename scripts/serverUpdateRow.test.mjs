@@ -10,10 +10,14 @@ import {
   applyUpdateRefusal,
   canCheckUpdate,
   parseUpdateStatus,
+  restartingBanner,
   restartingToUpdate,
+  settleUpdateActs,
   serverUpdateConfirm,
   serverUpdateRow,
-  updateErrorText
+  updateErrorText,
+  updateRestartOf,
+  updateSignatures
 } from '../src/shared/serverUpdate.ts'
 import { ClientError } from '../src/shared/client/index.ts'
 
@@ -22,7 +26,10 @@ const link = (over = {}) => ({ id: 's1', name: 'build box', url: 'wss://box', ha
 const withStatus = (status, over = {}) => link({ update: { ...STATUS, ...status }, ...over })
 const LOCAL = { state: 'running', message: '', canReset: false, pid: 7, version: '1.0.0' }
 const failed = (over = {}) => ({ ok: false, from: '1.0.0', to: '2.0.0', at: 't', error: 'trek-server 2.0.0 did not start; went back to 1.0.0', ...over })
-const HINT = 'This server is set to be updated on its own machine: run `trek-server update` there.'
+/** Why a row has no button, in parts: the renderer draws the command as code, never from markup. */
+const HINT = [{ text: 'This server is set to be updated on its own machine: run ' }, { command: 'trek-server update' }, { text: ' there.' }]
+/** The same as one sentence, where only text can be shown (a refused request). */
+const HINT_TEXT = 'This server is set to be updated on its own machine: run “trek-server update” there.'
 
 test('nothing to say: no capability, the Local entry, not connected, no status yet, or up to date with no history', () => {
   assert.equal(serverUpdateRow(link({ capabilities: [], update: undefined })), null)
@@ -105,7 +112,7 @@ test("a row's status says restarting, not disconnected, exactly while its update
 test('the restarting mark says nothing once the server has answered: connected again, or refusing this app', () => {
   // Connected again: what the status says is what the row says.
   assert.deepEqual(
-    serverUpdateRow(withStatus({ current: '2.0.0', lastResult: { ok: true, from: '1.0.0', to: '2.0.0', at: 't' } }, { updateRestarting: { version: '2.0.0' } })),
+    serverUpdateRow(withStatus({ current: '2.0.0', lastResult: { ok: true, from: '1.0.0', to: '2.0.0', at: 't' } }, { updateRestarting: { version: '2.0.0' }, updateWitnessed: { version: '2.0.0' } })),
     { tone: 'done', text: 'Updated to 2.0.0' }
   )
   assert.equal(serverUpdateRow(link({ updateRestarting: { version: '2.0.0' } })), null)
@@ -170,13 +177,20 @@ test('a failure is old news once a newer release is offered, or the server runs 
   assert.deepEqual(serverUpdateRow(withStatus({ current: '2.0.1', latest: '2.2.0', lastResult: failed() })).text, 'Update available: 2.2.0')
 })
 
-test('a success: said for the version now running, and only then', () => {
+test('a success is said where it was seen: for the version now running, in the app that saw the server update', () => {
   const ok = { ok: true, from: '1.0.0', to: '2.0.0', at: 't' }
-  assert.deepEqual(serverUpdateRow(withStatus({ current: '2.0.0', lastResult: ok }, { version: '2.0.0' })), { tone: 'done', text: 'Updated to 2.0.0' })
-  assert.equal(serverUpdateRow(withStatus({ current: '2.0.1', lastResult: ok })), null, 'a success for a version it has since moved past is not news')
-  assert.equal(serverUpdateRow(withStatus({ current: '1.0.0', lastResult: ok })), null, 'nor one it is not running')
+  const seen = { updateWitnessed: { version: '2.0.0' } }
+  assert.deepEqual(serverUpdateRow(withStatus({ current: '2.0.0', lastResult: ok }, { version: '2.0.0', ...seen })), { tone: 'done', text: 'Updated to 2.0.0' })
+  // An app that connects later (another machine's, or this one started again) saw nothing happen: nothing to say.
+  assert.equal(serverUpdateRow(withStatus({ current: '2.0.0', lastResult: ok }, { version: '2.0.0' })), null)
+  assert.equal(serverUpdateRow(withStatus({ current: '2.0.0', lastResult: ok }, { updateWitnessed: { version: '1.9.0' } })), null, 'what was seen was another update')
+  assert.equal(serverUpdateRow(withStatus({ current: '2.0.1', lastResult: ok }, seen)), null, 'a success for a version it has since moved past is not news')
+  assert.equal(serverUpdateRow(withStatus({ current: '1.0.0', lastResult: ok }, seen)), null, 'nor one it is not running')
+  assert.equal(serverUpdateRow(withStatus({ current: '2.0.0' }, seen)), null, 'nor without the server saying so')
   // A newer release wins over the news of the last one.
-  assert.deepEqual(serverUpdateRow(withStatus({ current: '2.0.0', latest: '3.0.0', lastResult: ok })), { tone: 'available', text: 'Update available: 3.0.0', action: { kind: 'apply', label: 'Update', version: '3.0.0' } })
+  assert.deepEqual(serverUpdateRow(withStatus({ current: '2.0.0', latest: '3.0.0', lastResult: ok }, seen)), { tone: 'available', text: 'Update available: 3.0.0', action: { kind: 'apply', label: 'Update', version: '3.0.0' } })
+  // A failure is not a matter of who saw it: it is said until the next attempt.
+  assert.equal(serverUpdateRow(withStatus({ latest: '2.0.0', lastResult: failed() })).tone, 'error')
 })
 
 test('a check the user asked for that found nothing says so, until the status has something else to say', () => {
@@ -269,7 +283,7 @@ test("the confirmation's server name: quotes kept, line breaks flattened, a long
 test('why the app does not ask a server to install: no release, an install left to its machine, one already running', () => {
   assert.equal(applyUpdateRefusal(undefined), 'No update is available for this server')
   assert.equal(applyUpdateRefusal(STATUS), 'No update is available for this server')
-  assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', remoteApply: false }), HINT)
+  assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', remoteApply: false }), HINT_TEXT)
   assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', state: 'downloading' }), 'An update is already running on this server')
   assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0', state: 'checking' }), 'The server is checking for an update: try again in a moment', 'a check is not an update')
   assert.equal(applyUpdateRefusal({ ...STATUS, latest: '2.0.0' }), null)
@@ -284,7 +298,10 @@ test("a refused update request as a sentence: the server's own when it has one",
   assert.equal(updateErrorText(new ClientError('CONFLICT', 'request failed', { reason: 'stale' })), 'A newer release appeared: check again')
   assert.equal(updateErrorText(new ClientError('CONFLICT', '', { reason: 'busy' })), 'An update is already running on this server')
   assert.equal(updateErrorText(new ClientError('CONFLICT', 'An update is running on this server', { reason: 'busy' })), 'An update is running on this server')
-  assert.equal(updateErrorText(new ClientError('CONFLICT', '', { reason: 'disabled' })), HINT)
+  assert.equal(updateErrorText(new ClientError('CONFLICT', '', { reason: 'disabled' })), HINT_TEXT)
+  // The server's own sentence for it is written for a terminal (backticks): the app says its own.
+  assert.equal(updateErrorText(new ClientError('CONFLICT', "This server's config leaves updating to `trek-server update` on its own machine (updates.remoteApply is false)", { reason: 'disabled' })), HINT_TEXT)
+  assert.equal(updateErrorText(new ClientError('CONFLICT', '', { reason: 'busy' })), 'An update is already running on this server')
   assert.equal(updateErrorText(new ClientError('CONFLICT', '')), 'The server refused the update')
   assert.equal(updateErrorText(new ClientError('TOOL_ERROR', 'Could not check for an update: the feed answered 503')), 'Could not check for an update: the feed answered 503')
   assert.equal(updateErrorText(new ClientError('NOT_FOUND', '')), 'This server does not update itself')
@@ -376,4 +393,56 @@ test('control and format characters never reach what is shown: stripped from a s
   assert.equal(updateErrorText({ code: 'TOOL_ERROR', message: `Could not${NASTY} check` }), 'Could not check')
   assert.equal(updateErrorText({ code: `INTERNAL${NASTY}`, message: '' }), 'INTERNAL')
   assert.equal(serverUpdateRow(withStatus({ latest: `2.0.0${NASTY}` })).text, 'Update available: 2.0.0')
+})
+
+test('the hint is parts, never markup: text and the command, which is all the renderer draws as code', () => {
+  const { hint } = serverUpdateRow(withStatus({ latest: '2.0.0', remoteApply: false }))
+  assert.deepEqual(hint, HINT)
+  assert.ok(hint.every((part) => Object.keys(part).length === 1 && typeof (part.text ?? part.command) === 'string'))
+  assert.doesNotMatch(JSON.stringify(hint), /`|<|>/)
+  assert.doesNotMatch(HINT_TEXT, /`/)
+})
+
+test("a click's error goes when the server's row moves on, or the server is gone; a click in flight and a check's news stay", () => {
+  const box = withStatus({ latest: '2.0.0' }, { id: 'box' })
+  const lab = link({ id: 'lab' })
+  const before = updateSignatures([box, lab])
+  assert.deepEqual(Object.keys(before).sort(), ['box', 'lab'])
+  const acts = { box: { busy: false, error: 'The server did not answer in time' }, lab: { busy: false, checked: true } }
+  // Nothing moved: the very same object (no render).
+  assert.equal(settleUpdateActs(acts, before, updateSignatures([{ ...box }, { ...lab }])), acts)
+  // The terminals' count is not what a row shows: the error stays.
+  assert.equal(settleUpdateActs(acts, before, updateSignatures([withStatus({ latest: '2.0.0', sessions: 3 }, { id: 'box' }), lab])), acts)
+  // The row's line changes (an install begins): the error was about a moment that is over.
+  const moved = settleUpdateActs(acts, before, updateSignatures([withStatus({ latest: '2.0.0', state: 'downloading' }, { id: 'box' }), lab]))
+  assert.deepEqual(moved, { box: { busy: false }, lab: { busy: false, checked: true } })
+  // So does its connection.
+  assert.deepEqual(settleUpdateActs(acts, before, updateSignatures([{ ...box, status: 'disconnected' }, lab])).box, { busy: false })
+  // A row that only changes keeps what a check found; one whose click is in flight is left alone.
+  const checked = { box: { busy: false, error: 'x', checked: true }, lab: { busy: true, kind: 'check' } }
+  assert.deepEqual(settleUpdateActs(checked, before, updateSignatures([withStatus({ latest: '2.1.0' }, { id: 'box' }), link({ id: 'lab', update: { ...STATUS, state: 'checking' } })])), {
+    box: { busy: false, checked: true },
+    lab: { busy: true, kind: 'check' }
+  })
+  // Removed from the list: nothing is kept for it.
+  assert.deepEqual(settleUpdateActs(acts, before, updateSignatures([lab])), { lab: { busy: false, checked: true } })
+  // A server seen for the first time has not moved on from anything.
+  assert.equal(settleUpdateActs(acts, {}, before), acts)
+})
+
+test('a shutdown notice that announces a restart to update: the version it names, if it is one; any other notice is none', () => {
+  assert.deepEqual(updateRestartOf({ reason: 'update', version: '2.0.0' }), { version: '2.0.0' })
+  assert.deepEqual(updateRestartOf({ reason: 'update' }), {})
+  assert.deepEqual(updateRestartOf({ reason: 'update', version: 7 }), {})
+  assert.deepEqual(updateRestartOf({ reason: 'update', version: `2.0.0\u202e${'x'.repeat(100)}` }), {}, 'a version that is not one is not named')
+  for (const other of [{ reason: 'SIGTERM' }, { reason: 'server.stop', version: '2.0.0' }, {}, null, undefined, 'update', 7]) assert.equal(updateRestartOf(other), undefined, JSON.stringify(other))
+})
+
+test("a project window's banner while its server restarts to update: that, not Disconnected and why the socket closed", () => {
+  assert.deepEqual(restartingBanner({ version: '2.0.0' }, 'disconnected'), { label: 'Restarting to update…', message: 'the server is restarting into 2.0.0; this window reconnects by itself' })
+  assert.deepEqual(restartingBanner({}, 'connecting'), { label: 'Restarting to update…', message: 'the server is restarting into a new version; this window reconnects by itself' })
+  for (const status of ['disconnected', 'connecting', 'error', 'closed']) assert.equal(restartingBanner({}, status)?.label, RESTARTING_STATUS, status)
+  // No notice, or the server has answered (connected again, or refusing this app): the usual banner, or none.
+  assert.equal(restartingBanner(undefined, 'disconnected'), null)
+  for (const status of ['connected', 'needs-auth', 'incompatible']) assert.equal(restartingBanner({ version: '2.0.0' }, status), null, status)
 })

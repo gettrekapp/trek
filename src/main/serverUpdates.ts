@@ -5,12 +5,14 @@
 //
 // No Electron imports, so a test drives it with fake sockets. Never told of the Local entry.
 import { CAPABILITY, type MethodParamsV2, type MethodResultsV2, type UpdateStatus } from '../shared/protocolV2.ts'
-import { RESTART_GRACE_MS, parseUpdateStatus, updateErrorText } from '../shared/serverUpdate.ts'
+import { RESTART_GRACE_MS, parseUpdateStatus, updateErrorText, updateRestartOf } from '../shared/serverUpdate.ts'
 
 /**
- * A download's percents (up to a hundred `update.changed` in a few seconds) reach the links at
- * most once in this long: each is a broadcast of the whole server list to every window. The
- * first of a burst is not delayed; a new state, a result or a restart never is.
+ * What a server says about its update reaches the links at most once in this long: each change is
+ * a broadcast of the whole server list to every window, a download sends up to a hundred percents
+ * in a few seconds, and a server may send whatever it likes as often as it likes. The first change
+ * after a quiet spell is not delayed; one that comes within the wait is sent when it ends, so the
+ * newest (a final state, the restarting mark) is never lost and never later than this.
  */
 export const CHANGED_COALESCE_MS = 100
 
@@ -39,12 +41,23 @@ export interface ServerUpdates {
   statusOf(id: string): UpdateStatus | undefined
   restartingOf(id: string): { version?: string } | undefined
   /**
+   * The update main saw happen on this server, since it began following it: the server went away
+   * to update (it said so, or this app had asked it to install) and came back running the new
+   * version. In memory only: an app that connects to a server updated earlier has seen nothing.
+   */
+  witnessedOf(id: string): { version: string } | undefined
+  /**
    * Reads the server's status now (`update.status`) and answers it: what a question about its
    * terminals is asked with, since no event says when one opens or closes. Remembered too, as any
    * other answer is (unless something newer came while it was asked for). Rejects as `check` does;
    * the last status then stays.
    */
   refresh(id: string): Promise<UpdateStatus>
+  /**
+   * Sends a change that is being held back now (nothing happens when none is). Before a click's
+   * answer goes to its window: the answer is about a state the window must already have.
+   */
+  flush(): void
   /** Has the server read its release feed now. Rejects with a plain Error whose message is for the row. */
   check(id: string): Promise<UpdateStatus>
   /** Has the server install `version` (its latest); resolves once it has begun. Rejects as `check` does. */
@@ -63,6 +76,13 @@ interface Followed {
   restarting?: { version?: string }
   /** Ends `restarting` when the server stays away */
   grace: unknown
+  /**
+   * An update is under way that this app knows of: the server said it was restarting to update
+   * (`version` when it named one), or accepted this app's `update.apply`. Ends when the server
+   * reports how it went.
+   */
+  expecting?: { version?: string }
+  witnessed?: { version: string }
 }
 
 const realTimers: NonNullable<ServerUpdatesDeps['timers']> = {
@@ -74,7 +94,7 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
   const timers = deps.timers ?? realTimers
   const followed = new Map<string, Followed>()
 
-  /** Set while changes are being held back; `held` says one is waiting */
+  /** Set for CHANGED_COALESCE_MS after a change was sent; `held` says another came meanwhile */
   let cooling: unknown = null
   let held = false
   const send = (): void => {
@@ -84,23 +104,15 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
     } catch (err) {
       console.error('trek: the server updates could not tell the links of a change', err)
     }
-  }
-  const cool = (): void => {
     cooling = timers.setTimeout(() => {
       cooling = null
-      if (!held) return
-      send()
-      cool()
+      if (held) send()
     }, CHANGED_COALESCE_MS)
   }
-  /** `minor`: one of many alike (a percent), so it may wait for the newest; anything else goes now, and covers what waited. */
-  const changed = (minor = false): void => {
-    if (minor && cooling !== null) {
-      held = true
-      return
-    }
-    send()
-    if (minor) cool()
+  /** The links are told now, or, within the wait after the last time, when it ends (once, with the newest). */
+  const changed = (): void => {
+    if (cooling !== null) held = true
+    else send()
   }
 
   const live = (id: string, f: Followed): boolean => followed.get(id) === f
@@ -113,6 +125,24 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
     const was = f.restarting !== undefined
     f.restarting = undefined
     return was
+  }
+
+  /**
+   * `status` is the server's newest word. With an update under way that this app knows of, a
+   * success for the version it now runs (the one it said it was restarting into, if it said) is
+   * an update seen here; a failure ends the wait too.
+   */
+  const take = (f: Followed, status: UpdateStatus): void => {
+    f.status = status
+    const last = status.lastResult
+    if (!f.expecting || !last || status.state !== 'idle') return
+    const { version } = f.expecting
+    if (last.ok && last.to === status.current && (version === undefined || version === status.current)) {
+      f.witnessed = { version: status.current }
+      f.expecting = undefined
+    } else if (!last.ok && (version === undefined || version === last.to)) {
+      f.expecting = undefined
+    }
   }
 
   /** `update.status`, kept unless something newer arrives first. A failure leaves no status: an old one may no longer be true. */
@@ -129,7 +159,7 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
       const status = parseUpdateStatus(raw)
       if (!status) return none()
       if (!current()) return
-      f.status = status
+      take(f, status)
       changed()
     }, none)
   }
@@ -155,15 +185,15 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
     if (event.event === 'update.changed') {
       const status = parseUpdateStatus(event.payload)
       if (!status) return
-      const minor = f.status?.state === 'downloading' && status.state === 'downloading'
       f.rev++
-      f.status = status
-      changed(minor)
+      take(f, status)
+      changed()
     } else if (event.event === 'daemon.shutdown') {
-      const { reason, version } = (event.payload ?? {}) as { reason?: unknown; version?: unknown }
-      if (reason !== 'update') return
+      const restarting = updateRestartOf(event.payload)
+      if (!restarting) return
       endRestarting(f)
-      f.restarting = typeof version === 'string' && version ? { version } : {}
+      f.restarting = restarting
+      f.expecting = { ...restarting }
       f.grace = timers.setTimeout(() => {
         f.grace = null
         if (live(id, f) && endRestarting(f)) changed()
@@ -209,6 +239,13 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
     forget,
     statusOf: (id) => followed.get(id)?.status,
     restartingOf: (id) => followed.get(id)?.restarting,
+    witnessedOf: (id) => followed.get(id)?.witnessed,
+    flush: () => {
+      if (!held) return
+      if (cooling !== null) timers.clearTimeout(cooling)
+      cooling = null
+      send()
+    },
     refresh: async (id) => {
       const f = ready(id)
       const mine = ++f.rev
@@ -221,7 +258,7 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
       const status = parseUpdateStatus(raw)
       if (!status) throw new Error('The server did not answer with its update status')
       if (live(id, f) && f.rev === mine) {
-        f.status = status
+        take(f, status)
         changed()
       }
       return status
@@ -240,7 +277,7 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
       // The server's own events during the check are at least as new as this answer.
       if (live(id, f) && f.rev === before) {
         f.rev++
-        f.status = status
+        take(f, status)
         changed()
       }
       return status
@@ -249,6 +286,8 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
       const f = ready(id)
       try {
         await f.connection.request('update.apply', { version })
+        // Begun: if this server comes back running `version`, this app saw it update.
+        if (live(id, f)) f.expecting = { version }
       } catch (err) {
         // The latest release is not the one this app knew of: what the row offers is out of date.
         if ((err as { details?: { reason?: unknown } } | null)?.details?.reason === 'stale' && live(id, f)) read(id, f)

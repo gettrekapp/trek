@@ -34,8 +34,13 @@ function clean(text: string, keep = ''): string {
   return text.replace(/[\p{Cc}\p{Cf}]/gu, (c) => (keep.includes(c) ? c : ''))
 }
 
-/** Why a row with a release has no button, and why the app does not ask such a server to install */
-const LEFT_TO_ITS_MACHINE = 'This server is set to be updated on its own machine: run `trek-server update` there.'
+/** A hint in parts, for the renderer: `text` as it is, `command` as code. Never markup. */
+export type HintPart = { text: string } | { command: string }
+
+/** Why a row with a release has no button */
+const LEFT_TO_ITS_MACHINE_HINT: readonly HintPart[] = [{ text: 'This server is set to be updated on its own machine: run ' }, { command: 'trek-server update' }, { text: ' there.' }]
+/** The same as one sentence, where only text is shown: why the app does not ask such a server to install */
+const LEFT_TO_ITS_MACHINE = LEFT_TO_ITS_MACHINE_HINT.map((part) => ('command' in part ? `“${part.command}”` : part.text)).join('')
 const ALREADY_RUNNING = 'An update is already running on this server'
 /** A check is over in a moment, and is not an update */
 const CHECKING = 'The server is checking for an update: try again in a moment'
@@ -46,9 +51,12 @@ export interface ServerUpdateRowView {
   tone: 'available' | 'progress' | 'attention' | 'error' | 'done'
   text: string
   /** Why there is no button */
-  hint?: string
+  hint?: HintPart[]
   action?: ServerUpdateAction
 }
+
+/** A click on one of a server's update buttons: in flight, or how it ended (until the row moves on, or the next click). */
+export type ServerUpdateAct = { busy: true; kind: ServerUpdateAction['kind'] } | { busy: false; error?: string; checked?: boolean }
 
 /** `text` on one line (runs of whitespace are one space) without control or format characters, cut to `max` characters. */
 function cut(text: string, max: number): string {
@@ -94,6 +102,32 @@ export function restartingToUpdate(link: AppServerLink): boolean {
   return !link.local && !!link.updateRestarting && link.status !== 'connected' && link.status !== 'needs-auth' && link.status !== 'incompatible'
 }
 
+/** The states of a connection in which its server has answered: connected, or refusing this app's token or protocol */
+const ANSWERED: readonly string[] = ['connected', 'needs-auth', 'incompatible']
+
+/**
+ * A `daemon.shutdown` payload that announces a restart to update: the version it names, when it
+ * names one that is a version. Undefined for any other shutdown.
+ */
+export function updateRestartOf(payload: unknown): { version?: string } | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const { reason, version } = payload as { reason?: unknown; version?: unknown }
+  if (reason !== 'update') return undefined
+  const into = versionOf(version)
+  return into ? { version: into } : {}
+}
+
+/**
+ * What a project window's banner says while its own connection is down and its server said it
+ * was restarting to update (`restarting`: updateRestartOf of the notice that connection heard):
+ * that, in place of "Disconnected" and why the socket closed. null once the server has answered
+ * (`status`: the window's connection's), or with no notice.
+ */
+export function restartingBanner(restarting: { version?: string } | undefined, status: string): { label: string; message: string } | null {
+  if (!restarting || ANSWERED.includes(status)) return null
+  return { label: RESTARTING_STATUS, message: `the server is restarting into ${restarting.version ? shown(restarting.version) : 'a new version'}; this window reconnects by itself` }
+}
+
 /**
  * What the row says about updating this server; null when there is nothing to say.
  * `checked`: the user has just had it look for a release, so finding none is said too.
@@ -135,17 +169,48 @@ export function serverUpdateRow(link: AppServerLink, opts: { checked?: boolean }
     const text = `Update failed: ${oneLine(last.error ?? '') || 'no reason was recorded'}`
     if (!status.latest) return { tone: 'error', text, action: { kind: 'check', label: 'Check Again' } }
     // No Try Again the server would refuse.
-    if (!status.remoteApply) return { tone: 'error', text, hint: LEFT_TO_ITS_MACHINE }
+    if (!status.remoteApply) return { tone: 'error', text, hint: [...LEFT_TO_ITS_MACHINE_HINT] }
     return { tone: 'error', text, action: { kind: 'apply', label: 'Try Again', version: status.latest } }
   }
   if (status.latest) {
     const text = `Update available: ${shown(status.latest)}`
-    if (!status.remoteApply) return { tone: 'available', text, hint: LEFT_TO_ITS_MACHINE }
+    if (!status.remoteApply) return { tone: 'available', text, hint: [...LEFT_TO_ITS_MACHINE_HINT] }
     return { tone: 'available', text, action: { kind: 'apply', label: 'Update', version: status.latest } }
   }
   if (opts.checked) return { tone: 'done', text: `trek-server ${shown(status.current)} is the latest version` }
-  if (last && last.ok && last.to === status.current) return { tone: 'done', text: `Updated to ${shown(last.to)}` }
+  // News where it was seen happen (main's memory, for as long as the app runs): an app that
+  // connects to a server updated last week has nothing to announce.
+  if (last && last.ok && last.to === status.current && link.updateWitnessed?.version === last.to) return { tone: 'done', text: `Updated to ${shown(last.to)}` }
   return null
+}
+
+/**
+ * What each server's row shows about its update and its connection, as a string to compare: a
+ * click's error is about the row as it was, and goes when the row moves on (settleUpdateActs).
+ */
+export function updateSignatures(servers: readonly AppServerLink[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const server of servers) out[server.id] = JSON.stringify([server.status, serverUpdateRow(server)])
+  return out
+}
+
+/**
+ * The clicks' states after the list changed from `before` to `now` (updateSignatures): an error
+ * is dropped when its server's row has moved on, and nothing is kept for a server that is no
+ * longer listed. A click in flight, and what a check found, stay. The same object when nothing changes.
+ */
+export function settleUpdateActs(acts: Record<string, ServerUpdateAct>, before: Record<string, string>, now: Record<string, string>): Record<string, ServerUpdateAct> {
+  let next: Record<string, ServerUpdateAct> | null = null
+  for (const [id, act] of Object.entries(acts)) {
+    if (!(id in now)) {
+      next ??= { ...acts }
+      delete next[id]
+    } else if (!act.busy && act.error !== undefined && id in before && before[id] !== now[id]) {
+      next ??= { ...acts }
+      next[id] = { busy: false, ...(act.checked ? { checked: true } : {}) }
+    }
+  }
+  return next ?? acts
 }
 
 export interface ServerUpdateConfirm {
@@ -203,12 +268,12 @@ export function updateErrorText(err: unknown): string {
   const { code, message, details } = err as { code?: unknown; message?: unknown; details?: { reason?: unknown } | null }
   if (code === 'NOT_CONNECTED') return 'Not connected to this server'
   if (code === 'TIMEOUT') return 'The server did not answer in time'
+  const reason = code === 'CONFLICT' ? details?.reason : undefined
+  // The server's sentence for this one is written for its own terminal: the app's says the same.
+  if (reason === 'disabled') return LEFT_TO_ITS_MACHINE
   const text = typeof message === 'string' && message !== NO_MESSAGE ? oneLine(message) : ''
   if (text) return text
-  if (code === 'CONFLICT') {
-    const reason = details?.reason
-    return (typeof reason === 'string' && REFUSALS[reason]) || 'The server refused the update'
-  }
+  if (code === 'CONFLICT') return (typeof reason === 'string' && REFUSALS[reason]) || 'The server refused the update'
   if (code === 'NOT_FOUND') return 'This server does not update itself'
   return (typeof code === 'string' && cut(code, MAX_VERSION_CHARS)) || 'The request failed'
 }

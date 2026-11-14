@@ -8,7 +8,7 @@ import { NewServerProjectModal } from './NewServerProjectModal'
 import { PairPhone } from './PairPhone'
 import { ServerUpdateRow, type ServerUpdateAct } from './ServerUpdateRow'
 import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
-import { RESTARTING_STATUS, canCheckUpdate, restartingToUpdate, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
+import { RESTARTING_STATUS, canCheckUpdate, restartingToUpdate, settleUpdateActs, updateSignatures, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
 import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerLink, AppServerTest } from '../../../shared/types'
@@ -78,6 +78,8 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   /** Each server's last click on an update button: in flight, or how it ended (the update state itself is main's broadcast) */
   const [updateActs, setUpdateActs] = useState<Record<string, ServerUpdateAct>>({})
+  /** What each row showed at the last snapshot: a click's error goes when its row has moved on */
+  const updateShown = useRef<Record<string, string>>({})
   /** Ids from the last snapshot, so the next can drop removed entries' connections. */
   const knownIds = useRef<Set<string>>(new Set())
   const tokenInputId = useId()
@@ -91,6 +93,16 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
     const shown = useAppStore.getState().serverWindow?.serverEntryId
     for (const id of knownIds.current) if (!ids.has(id) && id !== shown) dropServerEntry(id)
     knownIds.current = ids
+  }, [servers])
+
+  // A click's error is about the row as it was: once the server's update line or connection has
+  // changed, or the server is gone from the list, it is dropped (a click in flight is left alone).
+  useEffect(() => {
+    if (!servers) return
+    const before = updateShown.current
+    const now = updateSignatures(servers)
+    updateShown.current = now
+    setUpdateActs((acts) => settleUpdateActs(acts, before, now))
   }, [servers])
 
   // The view goes: so do the connections it opened for the picked server's projects. Not the

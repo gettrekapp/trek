@@ -163,6 +163,11 @@ export interface AppServerLink {
    * until it is connected again, or RESTART_GRACE_MS passes, the row says so instead of "disconnected".
    */
   updateRestarting?: { version?: string }
+  /**
+   * main saw this server update to `version` since the app started (it went away to update and
+   * came back running it): "Updated to X" is said only then, never for an update found already done.
+   */
+  updateWitnessed?: { version: string }
   /** The Local entry only: what the supervisor (src/main/localServer.ts) knows of the server */
   local?: LocalServerStatus
 }

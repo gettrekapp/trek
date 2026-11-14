@@ -19,6 +19,10 @@
 //     Disconnected), and ends at "Updated to X" in both windows; the
 //     server is the same process, now X (a Node that cannot replace a process: the line ends at
 //     "An update is installed…", and a restart by hand finishes it);
+//   - a third window, open on a project of that server, says "Restarting to update…" in its banner
+//     while the server is away (not Disconnected), and is usable again once it is back;
+//   - another app (its own user data), connected after the update, says nothing of it: "Updated
+//     to X" is said where the update was seen;
 //   - a terminal opened on the server since the app last heard its status: the question, asked
 //     with no check in between, still says it closes;
 //   - a release that fails its selfcheck: "Update failed: …" with Try Again, the server untouched
@@ -96,6 +100,8 @@ dialog.showMessageBox = async (...args) => {
 )
 
 let app = null
+/** Another app, with its own user data (step 7b); closed there, or here if the smoke ends first */
+let otherApp = null
 const runs = []
 const conns = []
 const pids = []
@@ -107,11 +113,9 @@ const watch = (page) => {
   })
 }
 
-/** Closes the app: true when it closed by itself, false when it had to be killed. */
-const closeApp = async () => {
-  if (!app) return true
-  const a = app
-  app = null
+/** Closes an app: true when it closed by itself, false when it had to be killed. */
+const closeElectron = async (a) => {
+  if (!a) return true
   let timer
   const closed = await Promise.race([a.close().then(() => true, () => true), new Promise((done) => (timer = setTimeout(() => done(false), APP_CLOSE_MS)))])
   clearTimeout(timer)
@@ -122,6 +126,11 @@ const closeApp = async () => {
     } catch {}
   }
   return closed
+}
+const closeApp = () => {
+  const a = app
+  app = null
+  return closeElectron(a)
 }
 
 let finished = false
@@ -134,6 +143,8 @@ const finish = async (reason) => {
     failed++
   }
   for (const conn of conns) conn.close()
+  await closeElectron(otherApp)
+  otherApp = null
   await closeApp()
   for (const run of runs) await stop(run)
   for (const pid of agents()) killIfOurs(pid, (command) => command === 'sleep 300', 'a fake agent')
@@ -172,6 +183,7 @@ const follow = (page, names) =>
         update: text('.server-update-text'),
         tone: line ? [...line.classList].filter((c) => c.startsWith('server-update-')).join(' ') : null,
         hint: text('.server-update-hint'),
+        hintCommand: text('.server-update-hint code'),
         problem: text('.server-update-problem'),
         button: label(item.querySelector('button.server-update-action')),
         check: label([...item.querySelectorAll('.server-row-actions button')].find((b) => /^Check/.test(b.textContent ?? '')))
@@ -311,7 +323,7 @@ try {
   {
     await checkButton(win, HANDS_OFF).click()
     const found = await rowWhen(win, HANDS_OFF, (r) => r.update === AVAILABLE && r.check === 'Check for Update')
-    check('with updates.remoteApply false, the row shows the release, why there is no button, and no button', found.update === AVAILABLE && found.button === null && found.hint === 'This server is set to be updated on its own machine: run `trek-server update` there.' && found.problem === null, json(found))
+    check('with updates.remoteApply false, the row shows the release, why there is no button (the command set as code, no backticks), and no button', found.update === AVAILABLE && found.button === null && found.hint === 'This server is set to be updated on its own machine: run trek-server update there.' && found.hintCommand === 'trek-server update' && found.problem === null, json(found))
     const refused = await win.evaluate((id) => window.api.appServers.applyUpdate(id).then((r) => `answered ${JSON.stringify(r)}`, (e) => String(e.message ?? e)), saved[HANDS_OFF].id)
     check('and main refuses to ask it, with no question shown', /set to be updated on its own machine/.test(refused) && (await dialogs()).length === 0, `${refused} ${json(await dialogs())}`)
   }
@@ -377,6 +389,52 @@ try {
     check(`the server still runs ${OLD}, untouched`, still.status === 0 && still.out.includes(`trek-server ${OLD}; ${NEW} is available`) && run.ended === null && w.versionAt(w.install) === OLD && !existsSync(`${w.install}.previous`) && w.marks().length === 0, `${still.out}\n${run.output}`)
   }
 
+  // ---- 6b. A third window, open on a project of the server --------------------------------------
+  let projectId
+  let projectWin
+  {
+    const setting = await connect(w.port, w.token, { client: 'server-update-app-smoke' })
+    conns.push(setting)
+    ;({ projectId } = await setting.request('project.create', { name: 'app', repositories: [{ path: repo }] }))
+    setting.close()
+    const opening = app.waitForEvent('window', { timeout: 10_000 })
+    await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.find((i) => i.label === 'File').submenu.items.find((i) => i.label === 'New Window').click())
+    projectWin = await opening
+    watch(projectWin)
+    await projectWin.waitForLoadState('domcontentloaded')
+    await projectWin.locator('.start-actions button', { hasText: 'Open on server…' }).click()
+    const box = item(projectWin, BOX)
+    await box.locator('.connect-server-status', { hasText: /^Connected/ }).waitFor({ timeout: 10_000 })
+    if (!(await box.locator('.connect-projects').count())) await box.locator('button', { hasText: 'Projects' }).click()
+    await box.locator('.connect-project-list li', { hasText: 'app' }).locator('button', { hasText: 'Open' }).click()
+    const tree = projectWin.locator('.server-window .sidebar')
+    const shown = await tree.waitFor({ timeout: 10_000 }).then(() => true, () => false)
+    check('a third window opens a project of the server: its tree shows, with no banner', shown && typeof projectId === 'string' && (await projectWin.locator('.server-window-banner').count()) === 0, json(await projectWin.evaluate(() => document.body.innerText.slice(0, 300))))
+    // Every distinct text of the window's banner from now on (null: no banner).
+    await projectWin.evaluate(() => {
+      window.__banners = []
+      const note = () => {
+        const text = document.querySelector('.server-window-banner')?.textContent ?? null
+        if (window.__banners.at(-1) !== text) window.__banners.push(text)
+      }
+      note()
+      new MutationObserver(note).observe(document.body, { subtree: true, childList: true, characterData: true })
+    })
+  }
+  /** The project window is usable: no banner, its tree with the main worktree, its commands enabled. */
+  const projectUsable = async () => {
+    const gone = await projectWin.locator('.server-window-banner').waitFor({ state: 'detached', timeout: UPDATE_MS }).then(() => true, () => false)
+    const sidebar = projectWin.locator('.server-window .sidebar')
+    const deadline = Date.now() + ROW_MS
+    let state = {}
+    while (Date.now() < deadline) {
+      state = { gone, worktrees: await sidebar.locator('.wt-name').allTextContents(), addDisabled: await sidebar.locator('.footer-btn', { hasText: 'Add repository…' }).isDisabled().catch(() => null) }
+      if (gone && state.worktrees.includes('main') && state.addDisabled === false) return [true, state]
+      await sleep(100)
+    }
+    return [false, state]
+  }
+
   // ---- 7. Update, confirmed -----------------------------------------------------------------------
   const RESTARTING = `Restarting into ${NEW}…`
   const UPDATED = `Updated to ${NEW}`
@@ -410,6 +468,13 @@ try {
       check(`the other window followed: through the install and "${RESTARTING}" to "${UPDATED}"`, there.update === UPDATED && otherSeen.every(known) && otherSeen.some((text) => progress.test(text)) && otherSeen.indexOf(RESTARTING) > 0 && otherSeen.at(-1) === UPDATED && otherLog.filter((r) => r.status !== 'Connected').every((r) => r.update === RESTARTING && r.status === 'Restarting to update…'), json(otherLog.map((r) => [r.at, r.status, r.update])))
       const status = await control(w.socket, 'status')
       check(`the server is the same process (pid ${pid}), now ${NEW}`, run.ended === null && status?.pid === pid && status.version === NEW && w.versionAt(w.install) === NEW && w.versionAt(`${w.install}.previous`) === OLD, `${json(status)}\n${run.output}`)
+      // The window open on a project of the server has its own connection: it heard the same notice.
+      const [usable, state] = await projectUsable()
+      const banners = await projectWin.evaluate(() => window.__banners)
+      const said = banners.filter((text) => text !== null)
+      const RESTART_BANNER = `Restarting to update… — the server is restarting into ${NEW}; this window reconnects by itself`
+      check('the project window\'s banner said the server was restarting to update while it was away: never Disconnected, never why the socket closed', said.length > 0 && said.every((text) => text.startsWith(RESTART_BANNER)) && !said.some((text) => /disconnect|shutting down|error|failed/i.test(text)), json(banners))
+      check('and the window is usable again once the server is back: no banner, its tree, its commands', usable && banners.at(-1) === null, `${json(state)} ${json(banners)}`)
     } else {
       // This Node cannot replace a process: the new version is installed and waits for a restart by hand.
       check('this Node cannot replace a process: the row stayed connected throughout', log.every((r) => r.status === 'Connected'), json(log.map((r) => [r.at, r.status, r.update])))
@@ -425,6 +490,9 @@ try {
       check(`restarted by hand, it is ${NEW}`, await up(w, again, NEW), again.output)
       const back = await rowWhen(win, BOX, (r) => r.update === UPDATED && r.status === 'Connected', UPDATE_MS)
       check(`and the row ends at "${UPDATED}"`, back.update === UPDATED, `${json(back)}\n${await failureLog()}`)
+      // Stopped and started by hand, it sent no restart notice: the project window was merely disconnected, and is back.
+      const [usable, state] = await projectUsable()
+      check('the project window is usable again once the server is back: no banner, its tree, its commands', usable, `${json(state)} ${json(await projectWin.evaluate(() => window.__banners))}`)
     }
     const latest = await w.cli(['update', '--check'])
     check('and the server says it is the latest version', latest.status === 0 && latest.out.includes(`trek-server ${NEW} is the latest version`), latest.out)
@@ -433,6 +501,37 @@ try {
     check('Check for Update is offered again, and main\'s link has the new version and no restart mark', now.check === 'Check for Update' && link?.update?.current === NEW && link.update.state === 'idle' && link.updateRestarting === undefined && link.status === 'connected', `${json(now)}\n${json(link)}`)
     const offNow = await row(win, HANDS_OFF)
     check('the other server\'s row is as it was', offNow.update === AVAILABLE && offNow.status === 'Connected' && offNow.button === null, json(offNow))
+  }
+
+  // ---- 7b. Another app, connected after the update, did not see it happen --------------------------
+  {
+    const home2 = join(work, 'app2-home')
+    const data2 = join(work, 'app2-data')
+    for (const dir of [home2, data2]) mkdirSync(dir, { recursive: true })
+    otherApp = await electron.launch({ args: ['-r', mainStub, 'out/main/index.js', `--user-data-dir=${data2}`], cwd: root, env: { ...env, HOME: home2, XDG_DATA_HOME: join(home2, '.local', 'share') } })
+    pids.push({ what: 'the other app', pid: otherApp.process().pid })
+    otherApp.on('window', watch)
+    const late = await otherApp.firstWindow()
+    watch(late)
+    await late.waitForLoadState('domcontentloaded')
+    const entry = await late.evaluate(([n, u, t]) => window.api.appServers.save({ name: n, url: u, token: t }), [BOX, `ws://127.0.0.1:${w.port}`, w.token])
+    await late.locator('.start-actions button', { hasText: 'Open on server…' }).click()
+    await item(late, BOX).waitFor({ timeout: 10_000 })
+    await follow(late, [BOX])
+    const lateLink = async () => (await late.evaluate(() => window.api.appServers.links())).servers.find((s) => s.id === entry.id)
+    const deadline = Date.now() + ROW_MS
+    while (Date.now() < deadline && (await lateLink())?.update?.current !== NEW) await sleep(100)
+    const link = await lateLink()
+    const there = await rowWhen(late, BOX, (r) => r.status === 'Connected' && r.check === 'Check for Update')
+    await sleep(300)
+    const still = await row(late, BOX)
+    check(`another app, started after the update, knows the server runs ${NEW} and that its last update succeeded`, link?.status === 'connected' && link.update?.current === NEW && link.update.lastResult?.ok === true && link.update.lastResult.to === NEW && link.updateWitnessed === undefined, json(link))
+    check('and says nothing of it: no "Updated to" line for an update it did not see', there.status === 'Connected' && there.update === null && still.update === null && (await rowLog(late, BOX)).every((r) => r.update === null), json(await rowLog(late, BOX)))
+    const here = await row(win, BOX)
+    check(`while the app that saw it still says "${UPDATED}", and its link carries what it saw`, here.update === UPDATED && (await linkOf(BOX))?.updateWitnessed?.version === NEW, `${json(here)} ${json(await linkOf(BOX))}`)
+    const a = otherApp
+    otherApp = null
+    check('the other app quits by itself', await closeElectron(a))
   }
 
   // ---- 8. With a terminal open, the question says it closes; a release that fails its selfcheck ---
@@ -448,7 +547,7 @@ try {
     // again before Update: no update.changed says a terminal opened, so the question has to ask.
     const sdk = await connect(w.port, w.token, { client: 'server-update-app-smoke' })
     conns.push(sdk)
-    const { projectId } = await sdk.request('project.create', { name: 'app', repositories: [{ path: repo }] })
+    // The project made before the update: the server kept it across its restart.
     const { snapshot } = await sdk.request('sub.subscribe', { topic: `project:${projectId}` })
     const worktreeId = snapshot.repositories[0]?.worktrees.find((wt) => wt.isMain)?.id
     const { sessionId } = await sdk.request('session.start', { projectId, worktreeId, cols: 80, rows: 24 })
@@ -493,7 +592,7 @@ try {
 
   // ---- 9. Nothing went wrong on the way; everything ends -------------------------------------------
   check('no error dialogs, and no message box but the five questions', (await dialogs()).every((d) => d.type === 'question') && (await dialogs()).length === 5, json(await dialogs()))
-  check('no console or page errors in either window', pageErrors.length === 0, json(pageErrors))
+  check('no console or page errors in any window', pageErrors.length === 0, json(pageErrors))
   check('the app quits by itself', await closeApp())
   const ends = []
   for (const each of runs) ends.push(await stop(each))

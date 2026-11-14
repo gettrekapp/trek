@@ -433,7 +433,7 @@ test('without the linked and unlinked hooks, an entry with a token is still conn
 
 test("a link carries the server's version from its welcome, and the update fields `extra` gives for its entry", async () => {
   const status = { current: '0.2.0', latest: '0.3.0', state: 'idle', sessions: 0, canRelaunch: true, restartNeeded: false, remoteApply: true }
-  const said = { box: { update: status, updateRestarting: undefined }, lab: { update: undefined, updateRestarting: { version: '0.3.0' } } }
+  const said = { box: { update: status, updateRestarting: undefined, updateWitnessed: { version: '0.2.0' } }, lab: { update: undefined, updateRestarting: { version: '0.3.0' } } }
   const asked = []
   const { links, sockFor, last } = setup({
     entries: [box, lab, { id: 'bare', name: 'Bare', url: 'ws://bare:8800' }],
@@ -451,12 +451,14 @@ test("a link carries the server's version from its welcome, and the update field
   assert.equal(first.version, '0.2.0')
   assert.deepEqual(first.update, status)
   assert.equal('updateRestarting' in first, false, 'an undefined field is left out')
+  assert.deepEqual(first.updateWitnessed, { version: '0.2.0' })
+  assert.equal('updateWitnessed' in second, false)
   assert.deepEqual(second.updateRestarting, { version: '0.3.0' })
   assert.equal('update' in second, false)
   assert.equal('version' in second, false)
   assert.deepEqual(Object.keys(third).sort(), ['hasToken', 'id', 'message', 'name', 'status', 'url'])
   assert.ok(asked.includes('box') && asked.includes('lab'))
-  // Only the two update fields are taken from `extra`.
+  // Only the update fields are taken from `extra`.
   said.box = { update: status, token: SECRET, name: 'other' }
   assert.equal(links.snapshot().servers[0].name, 'Box')
   assert.equal(JSON.stringify(links.snapshot()).includes(SECRET), false)

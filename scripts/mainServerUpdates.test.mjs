@@ -57,15 +57,19 @@ function setup() {
     l.sock().welcome({ capabilities })
     return l
   }
-  /** As `connected`, with the first update.status answered. */
+  /** Lets the waits after a change pass (a held one is sent, and its own wait ends): the next change goes at once, and no throttle timer is left. */
+  const CALM_MS = CHANGED_COALESCE_MS * 2
+  const calm = () => own.advance(CALM_MS)
+  /** As `connected`, with the first update.status answered (and the wait after that change over). */
   const following = async (status = STATUS, id, url) => {
     const l = connected(id, url)
     l.sock().reply(l.sock().lastReq('update.status'), status)
     await settled()
+    calm()
     return l
   }
   const requests = (sock, method) => sock.sent.filter((f) => f.type === 'req' && f.method === method)
-  return { updates, server, clock, own, link, connected, following, requests, changes: () => changes }
+  return { updates, server, clock, own, calm, CALM_MS, link, connected, following, requests, changes: () => changes }
 }
 
 test('a welcome that lists `update` reads the status once; the answer is the status, and the links hear of it', async () => {
@@ -159,14 +163,15 @@ test('daemon.shutdown with reason `update` marks the server as restarting, with 
 })
 
 test('the restarting mark outlives the socket; the reconnect clears it, cancels its timer and reads the status again', async () => {
-  const { updates, following, clock, own, requests, changes } = setup()
+  const { updates, following, clock, own, calm, requests, changes } = setup()
   const { sock } = await following(AVAILABLE)
   const first = sock()
   first.event('update.changed', { ...AVAILABLE, state: 'restarting' })
   first.event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
   first.serverClose(1001, 'going away')
   assert.deepEqual(updates.restartingOf('box'), { version: '2.0.0' })
-  assert.equal(own.pending(), 1)
+  calm()
+  assert.equal(own.pending(), 1, 'the grace timer')
   // Still away after a while: still restarting.
   own.advance(RESTART_GRACE_MS / 2)
   assert.deepEqual(updates.restartingOf('box'), { version: '2.0.0' })
@@ -179,6 +184,7 @@ test('the restarting mark outlives the socket; the reconnect clears it, cancels 
   second.welcome({ capabilities: ['update'], daemonVersion: '2.0.0' })
   assert.equal(updates.restartingOf('box'), undefined)
   assert.equal(changes(), before + 1)
+  calm()
   assert.equal(own.pending(), 0, 'the grace timer is cancelled')
   assert.equal(requests(second, 'update.status').length, 1)
   // Until the new status is in, the old one stands (the row keeps saying restarting).
@@ -192,7 +198,7 @@ test('the restarting mark outlives the socket; the reconnect clears it, cancels 
 })
 
 test('a server not back within RESTART_GRACE_MS is no longer restarting: the row says disconnected again', async () => {
-  const { updates, following, own, changes } = setup()
+  const { updates, following, own, calm, changes } = setup()
   const { sock } = await following()
   sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
   sock().serverClose(1001, 'going away')
@@ -203,25 +209,28 @@ test('a server not back within RESTART_GRACE_MS is no longer restarting: the row
   own.advance(1)
   assert.equal(updates.restartingOf('box'), undefined)
   assert.equal(changes(), before + 1)
+  calm()
   assert.equal(own.pending(), 0)
 })
 
 test('a second shutdown notice starts the wait again, with one timer', async () => {
-  const { updates, following, own } = setup()
+  const { updates, following, own, calm, CALM_MS } = setup()
   const { sock } = await following()
   sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
   own.advance(RESTART_GRACE_MS - 10)
   sock().event('daemon.shutdown', { reason: 'update', version: '2.0.1' })
+  calm()
   assert.equal(own.pending(), 1)
-  own.advance(RESTART_GRACE_MS - 10)
+  own.advance(RESTART_GRACE_MS - 10 - CALM_MS)
   assert.deepEqual(updates.restartingOf('box'), { version: '2.0.1' })
 })
 
 test('forget drops the status, the restarting mark, its timer and the listeners', async () => {
-  const { updates, following, own, changes } = setup()
+  const { updates, following, own, calm, changes } = setup()
   const { sock, listeners } = await following(AVAILABLE)
   assert.equal(listeners(), 2)
   sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
+  calm()
   assert.equal(own.pending(), 1)
   updates.forget('box')
   assert.equal(updates.statusOf('box'), undefined)
@@ -355,7 +364,7 @@ test("a failed check or apply rejects with a plain Error carrying the server's s
   await assert.rejects(busy, { message: 'An update is already running on this server' })
   const disabled = updates.apply('box', '2.0.0')
   sock().fail(sock().lastReq('update.apply'), 'CONFLICT', '', { reason: 'disabled' })
-  await assert.rejects(disabled, { message: 'This server is set to be updated on its own machine: run `trek-server update` there.' })
+  await assert.rejects(disabled, { message: 'This server is set to be updated on its own machine: run “trek-server update” there.' })
 })
 
 test('apply names the version; a refusal because the latest release moved reads the status again', async () => {
@@ -395,11 +404,10 @@ test('check and apply refuse without a connected link', async () => {
   await assert.rejects(checking, { message: 'Not connected to this server' })
 })
 
-test("a download's percents reach the links at most once per CHANGED_COALESCE_MS: the first at once, the newest after the wait", async () => {
+test('every change reaches the links through one throttle: the first at once, then at most one per CHANGED_COALESCE_MS, the newest never lost', async () => {
   const { updates, following, own, changes } = setup()
   const { sock } = await following(AVAILABLE)
   const percent = (n) => sock().event('update.changed', { ...AVAILABLE, state: 'downloading', percent: n })
-  sock().event('update.changed', { ...AVAILABLE, state: 'downloading' })
   const base = changes()
   percent(1)
   assert.equal(changes(), base + 1, 'the first is not delayed')
@@ -421,19 +429,45 @@ test("a download's percents reach the links at most once per CHANGED_COALESCE_MS
   assert.equal(changes(), base + 5)
 })
 
-test('a new state is never held back, and leaves nothing to send later', async () => {
-  const { following, own, changes } = setup()
+test('a server that alternates states costs no more: one broadcast at once, one per wait, whatever it sends', async () => {
+  const { updates, following, own, changes } = setup()
   const { sock } = await following(AVAILABLE)
-  sock().event('update.changed', { ...AVAILABLE, state: 'downloading', percent: 98 })
+  const base = changes()
+  // Not only percents: states, results and restart notices, a thousand of them.
+  for (let n = 0; n < 250; n++) {
+    sock().event('update.changed', { ...AVAILABLE, state: 'checking' })
+    sock().event('update.changed', { ...AVAILABLE, state: 'installing' })
+    sock().event('update.changed', { ...AVAILABLE, lastResult: { ok: false, from: '1.0.0', to: '2.0.0', at: 't', error: String(n) } })
+    sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
+  }
+  assert.equal(changes(), base + 1)
+  own.advance(CHANGED_COALESCE_MS)
+  assert.equal(changes(), base + 2, 'and the last one is not lost')
+  assert.equal(updates.statusOf('box').lastResult.error, '249')
+  own.advance(CHANGED_COALESCE_MS * 5)
+  assert.equal(changes(), base + 2)
+})
+
+test('a final state and the restarting mark appear within the wait, never later, and leave nothing to send after', async () => {
+  const { updates, following, own, changes } = setup()
+  const { sock } = await following(AVAILABLE)
   sock().event('update.changed', { ...AVAILABLE, state: 'downloading', percent: 99 })
   sock().event('update.changed', { ...AVAILABLE, state: 'downloading', percent: 100 })
   const base = changes()
   sock().event('update.changed', { ...AVAILABLE, state: 'installing' })
-  assert.equal(changes(), base + 1)
+  sock().event('update.changed', { ...AVAILABLE, state: 'restarting' })
   sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
-  assert.equal(changes(), base + 2)
+  sock().serverClose(1001, 'going away')
+  // What a window would read now is already the newest, whenever the broadcast goes.
+  assert.equal(updates.statusOf('box').state, 'restarting')
+  assert.deepEqual(updates.restartingOf('box'), { version: '2.0.0' })
+  assert.equal(changes(), base)
+  own.advance(CHANGED_COALESCE_MS - 1)
+  assert.equal(changes(), base)
+  own.advance(1)
+  assert.equal(changes(), base + 1, 'one broadcast covers them all')
   own.advance(CHANGED_COALESCE_MS * 2)
-  assert.equal(changes(), base + 2, 'the held-back percent was already covered')
+  assert.equal(changes(), base + 1)
 })
 
 test('a `changed` that throws does not break the listeners', async () => {
@@ -497,4 +531,114 @@ test('refresh rejects with a sentence: not connected, no capability, a refusal, 
   sock().reply(sock().lastReq('update.status'), 'not a status')
   await assert.rejects(odd, { message: 'The server did not answer with its update status' })
   assert.deepEqual(updates.statusOf('box'), AVAILABLE)
+})
+
+const UPDATED = { ...STATUS, current: '2.0.0', lastResult: { ok: true, from: '1.0.0', to: '2.0.0', at: 't' } }
+
+test('an update this app saw happen is remembered: the server said it was restarting into a version, and came back running it', async () => {
+  const { updates, following, clock } = setup()
+  const { sock } = await following(AVAILABLE)
+  assert.equal(updates.witnessedOf('box'), undefined)
+  sock().event('update.changed', { ...AVAILABLE, state: 'restarting' })
+  sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
+  sock().serverClose(1001, 'going away')
+  assert.equal(updates.witnessedOf('box'), undefined, 'not until it is back')
+  clock.advance(1500)
+  sock().open()
+  sock().welcome({ capabilities: ['update'], daemonVersion: '2.0.0' })
+  assert.equal(updates.witnessedOf('box'), undefined, 'nor until it says what it runs')
+  sock().reply(sock().lastReq('update.status'), UPDATED)
+  await settled()
+  assert.deepEqual(updates.witnessedOf('box'), { version: '2.0.0' })
+  // It stays for as long as main follows the server: a later status changes nothing.
+  sock().event('update.changed', { ...UPDATED, state: 'checking' })
+  sock().event('update.changed', UPDATED)
+  assert.deepEqual(updates.witnessedOf('box'), { version: '2.0.0' })
+})
+
+test('an update this app asked for is witnessed too, when the server is restarted by hand (no restart notice)', async () => {
+  const { updates, following, clock } = setup()
+  const { sock } = await following(AVAILABLE)
+  const applying = updates.apply('box', '2.0.0')
+  sock().reply(sock().lastReq('update.apply'), { started: true })
+  await applying
+  // Installed; its Node cannot replace the process: it waits for a restart on its machine.
+  sock().event('update.changed', { ...AVAILABLE, restartNeeded: true })
+  assert.equal(updates.witnessedOf('box'), undefined)
+  sock().event('daemon.shutdown', { reason: 'SIGTERM' })
+  sock().serverClose(1001, 'going away')
+  clock.advance(1500)
+  sock().open()
+  sock().welcome({ capabilities: ['update'], daemonVersion: '2.0.0' })
+  sock().reply(sock().lastReq('update.status'), UPDATED)
+  await settled()
+  assert.deepEqual(updates.witnessedOf('box'), { version: '2.0.0' })
+})
+
+test('an update nobody here saw is not witnessed: a server found already updated, one that came back as another version, one whose update failed', async () => {
+  // Connected to a server that updated itself yesterday, or before this app started.
+  const found = setup()
+  await found.following(UPDATED)
+  assert.equal(found.updates.witnessedOf('box'), undefined)
+
+  // It said 2.0.0 and came back still 1.0.0 (the launcher went back): a failure, not an update seen.
+  const back = setup()
+  const { sock } = await back.following(AVAILABLE)
+  sock().event('daemon.shutdown', { reason: 'update', version: '2.0.0' })
+  sock().serverClose(1001, 'going away')
+  back.clock.advance(1500)
+  sock().open()
+  sock().welcome({ capabilities: ['update'] })
+  sock().reply(sock().lastReq('update.status'), { ...AVAILABLE, lastResult: { ok: false, from: '1.0.0', to: '2.0.0', at: 't', error: 'trek-server 2.0.0 did not start; went back to 1.0.0' } })
+  await settled()
+  assert.equal(back.updates.witnessedOf('box'), undefined)
+  // And the failure ended the wait: a success that turns up later, by other means, was not seen here.
+  sock().event('update.changed', UPDATED)
+  assert.equal(back.updates.witnessedOf('box'), undefined)
+
+  // An apply the server refused starts no wait.
+  const refused = setup()
+  const box = await refused.following(AVAILABLE)
+  const applying = refused.updates.apply('box', '2.0.0')
+  box.sock().fail(box.sock().lastReq('update.apply'), 'CONFLICT', '', { reason: 'busy' })
+  await assert.rejects(applying)
+  box.sock().event('update.changed', UPDATED)
+  assert.equal(refused.updates.witnessedOf('box'), undefined)
+})
+
+test('a restart notice that names no version is witnessed by whatever version the server comes back updated to; forget drops it', async () => {
+  const { updates, following, clock } = setup()
+  const { sock } = await following(AVAILABLE)
+  sock().event('daemon.shutdown', { reason: 'update' })
+  sock().serverClose(1001, 'going away')
+  clock.advance(1500)
+  sock().open()
+  sock().welcome({ capabilities: ['update'] })
+  sock().reply(sock().lastReq('update.status'), UPDATED)
+  await settled()
+  assert.deepEqual(updates.witnessedOf('box'), { version: '2.0.0' })
+  updates.forget('box')
+  assert.equal(updates.witnessedOf('box'), undefined)
+})
+
+test("flush sends a held change now: a click's answer never reaches a window before the state it is about", async () => {
+  const { updates, following, own, changes } = setup()
+  const { sock } = await following(AVAILABLE)
+  const base = changes()
+  updates.flush()
+  assert.equal(changes(), base, 'nothing held, nothing sent')
+  sock().event('update.changed', { ...AVAILABLE, state: 'checking' })
+  sock().event('update.changed', AVAILABLE)
+  assert.equal(changes(), base + 1)
+  updates.flush()
+  assert.equal(changes(), base + 2)
+  updates.flush()
+  assert.equal(changes(), base + 2)
+  // The wait starts again from it: the next change within it is held as any other.
+  sock().event('update.changed', { ...AVAILABLE, state: 'checking' })
+  assert.equal(changes(), base + 2)
+  own.advance(CHANGED_COALESCE_MS)
+  assert.equal(changes(), base + 3)
+  own.advance(CHANGED_COALESCE_MS * 3)
+  assert.equal(own.pending(), 0)
 })

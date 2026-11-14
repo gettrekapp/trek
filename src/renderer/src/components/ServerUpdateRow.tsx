@@ -2,12 +2,11 @@
 // Update button, an install's progress, a restart, and how the last update ended. What it says is
 // decided by serverUpdateRow (src/shared/serverUpdate.ts) from main's broadcast, so every window
 // shows the same; main asks before anything is installed. The only state here is the list's own:
-// a click in flight, and how it ended.
-import { serverUpdateRow, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
+// a click in flight, and how it ended (ConnectServer drops an error once the row has moved on).
+import { serverUpdateRow, type ServerUpdateAct, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
 import type { AppServerLink } from '../../../shared/types'
 
-/** A click on one of a server's update buttons: in flight, or how it ended (until the next one). */
-export type ServerUpdateAct = { busy: true; kind: ServerUpdateAction['kind'] } | { busy: false; error?: string; checked?: boolean }
+export type { ServerUpdateAct }
 
 interface Props {
   server: AppServerLink
@@ -30,7 +29,11 @@ export function ServerUpdateRow({ server, act, onAction }: Props): React.JSX.Ele
           {action.label}
         </button>
       )}
-      {view?.hint && <span className="server-update-hint">{view.hint}</span>}
+      {view?.hint && (
+        <span className="server-update-hint">
+          {view.hint.map((part, i) => ('command' in part ? <code key={i}>{part.command}</code> : <span key={i}>{part.text}</span>))}
+        </span>
+      )}
       {error && (
         <span className="server-update-problem" role="alert">
           {error}

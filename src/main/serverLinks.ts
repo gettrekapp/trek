@@ -42,7 +42,7 @@ export interface ServerLinksDeps {
    * More to say about an entry's link: its server's update state (src/main/serverUpdates.ts).
    * Only these two fields are taken. When they change, call `refresh`.
    */
-  extra?(id: string): Pick<AppServerLink, 'update' | 'updateRestarting'>
+  extra?(id: string): Pick<AppServerLink, 'update' | 'updateRestarting' | 'updateWitnessed'>
 }
 
 export interface ServerLinks {
@@ -132,9 +132,10 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     }
     if (deps.extra) {
       try {
-        const { update, updateRestarting } = deps.extra(entry.id)
+        const { update, updateRestarting, updateWitnessed } = deps.extra(entry.id)
         if (update) out.update = update
         if (updateRestarting) out.updateRestarting = updateRestarting
+        if (updateWitnessed) out.updateWitnessed = updateWitnessed
       } catch (err) {
         console.error("trek: the server links' extra hook failed", err)
       }

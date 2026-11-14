@@ -378,7 +378,12 @@ async function checkUpdate(id: unknown): Promise<UpdateStatus> {
   const server = requireKnown(id)
   refuseLocalUpdate(server.id)
   if (!updates) throw new Error(NOT_CONNECTED)
-  return updates.check(server.id)
+  try {
+    return await updates.check(server.id)
+  } finally {
+    // What the check changed has reached the windows before its answer (or its error) does.
+    updates.flush()
+  }
 }
 
 /**
@@ -390,6 +395,8 @@ async function applyUpdate(sender: WebContents, id: unknown): Promise<{ started:
   const server = requireKnown(id)
   refuseLocalUpdate(server.id)
   if (!updates) throw new Error(NOT_CONNECTED)
+  const following = updates
+  // What reading the status changed has reached the windows before the answer (or the error) does.
   return applyServerUpdate(server.id, {
     entry: (entryId) => {
       const entry = listed().find((s) => s.id === entryId)
@@ -410,7 +417,7 @@ async function applyUpdate(sender: WebContents, id: unknown): Promise<{ started:
       const { response } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
       return response === 0
     }
-  })
+  }).finally(() => following.flush())
 }
 
 /** Quit: main's connections close for good. */
@@ -453,7 +460,7 @@ export function registerAppServerHandlers(
       following.forget(id)
       hooks.unlinked?.(id)
     },
-    extra: (id) => ({ update: following.statusOf(id), updateRestarting: following.restartingOf(id) })
+    extra: (id) => ({ update: following.statusOf(id), updateRestarting: following.restartingOf(id), updateWitnessed: following.witnessedOf(id) })
   })
   const ready = links.sync()
   // Local's server changed (started, stopped, restarted): main's connection follows its URL and
