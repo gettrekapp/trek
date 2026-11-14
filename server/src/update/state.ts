@@ -29,6 +29,22 @@ export interface UpdateResult {
   error?: string
 }
 
+/**
+ * The most of a failure's reason that is recorded and reported. A selfcheck that fails can have
+ * printed up to about a megabyte, and the reason goes into the state file, every `update.status`
+ * and every `update.changed` to every client.
+ */
+export const MAX_RESULT_ERROR_CHARS = 2000
+const CUT_NOTE = /\n… \(cut: the whole message is \d+ characters\)$/
+
+/** `error`, or its first MAX_RESULT_ERROR_CHARS characters and a line that says it was cut. */
+export function capError(error: string): string {
+  if (error.length <= MAX_RESULT_ERROR_CHARS) return error
+  // Already cut (read back from the state file): not cut again.
+  if (error.length <= MAX_RESULT_ERROR_CHARS + 80 && CUT_NOTE.test(error)) return error
+  return `${error.slice(0, MAX_RESULT_ERROR_CHARS)}\n… (cut: the whole message is ${error.length} characters)`
+}
+
 export interface UpdateState {
   lastCheckAt?: string
   /** A newer version the last check found */
@@ -56,13 +72,15 @@ export function readState(configDir: string): UpdateState {
   return (readJson(join(configDir, STATE_FILE)) ?? {}) as UpdateState
 }
 
-/** Merges `patch` into update-state.json; a key set to undefined is removed. */
+/** Merges `patch` into update-state.json; a key set to undefined is removed. A result's error is recorded up to MAX_RESULT_ERROR_CHARS. */
 export function writeState(configDir: string, patch: Partial<UpdateState>): void {
   const next: Record<string, unknown> = { ...readState(configDir) }
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) delete next[key]
     else next[key] = value
   }
+  const result = patch.lastResult
+  if (result && typeof result.error === 'string') next.lastResult = { ...result, error: capError(result.error) }
   writeFileAtomic(join(configDir, STATE_FILE), JSON.stringify(next, null, 2) + '\n', 0o600)
 }
 

@@ -10,7 +10,7 @@ import { compareVersions } from '../../../src/shared/versions.ts'
 import { codedError } from '../errors.ts'
 import type { ApplyResult, UpdateStep } from './apply.ts'
 import type { Release } from './feed.ts'
-import { readState } from './state.ts'
+import { capError, readState } from './state.ts'
 import type { Install } from './updatable.ts'
 
 /** What `apply` is given: the version to expect, and where to report progress. */
@@ -97,7 +97,8 @@ function resultOf(raw: unknown): UpdateResultWire | undefined {
   if (raw === null || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
   if (typeof r.ok !== 'boolean' || typeof r.from !== 'string' || typeof r.to !== 'string' || typeof r.at !== 'string') return undefined
-  return { ok: r.ok, from: r.from, to: r.to, at: r.at, ...(typeof r.error === 'string' ? { error: r.error } : {}) }
+  // Capped here too: the file may hold what an older version, or its user, wrote whole.
+  return { ok: r.ok, from: r.from, to: r.to, at: r.at, ...(typeof r.error === 'string' ? { error: capError(r.error) } : {}) }
 }
 
 /** `read()`, or `fallback` when it throws: nothing a status is made of may fail it. */
@@ -224,7 +225,8 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
     failure = null
     const started = now().getTime()
     /** This attempt failed: kept for the status, unless the installer recorded this very failure (then its record is the one reported). */
-    const failed = (error: string): void => {
+    const failed = (whole: string): void => {
+      const error = capError(whole)
       const recorded = resultOf(careful(() => readState(deps.configDir).lastResult, undefined))
       const itsOwn = recorded !== undefined && !recorded.ok && recorded.error === error && Date.parse(recorded.at) >= started
       failure = itsOwn ? null : { ok: false, from: deps.running, to: version, at: now().toISOString(), error }
@@ -278,7 +280,7 @@ export function createUpdateService(deps: UpdateServiceDeps): UpdateService {
       .catch((err: unknown) => {
         applying = null
         console.warn(`update: ${message(err)}`)
-        failure = { ok: false, from: deps.running, to: version, at: now().toISOString(), error: message(err) }
+        failed(message(err))
         settle()
       })
     return { started: true }

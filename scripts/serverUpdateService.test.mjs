@@ -597,3 +597,23 @@ test('a check asked while an update runs is refused as busy, however recent the 
     w.done()
   }
 })
+
+test('a status never carries more of an error than its first 2,000 characters: a long one on record, or from this service\'s own attempt', async () => {
+  const long = `it failed:\n${'z'.repeat(500_000)}`
+  const w = world({ apply: async () => ({ kind: 'failed', error: long }) })
+  try {
+    // The state file is the user's to edit, and older servers wrote the whole output there.
+    writeFileSync(join(w.configDir, 'update-state.json'), JSON.stringify({ lastResult: { ok: false, from: '1.0.0', to: '2.0.0', at: '2026-11-01T00:00:00.000Z', error: long } }))
+    const onRecord = w.service.status().lastResult.error
+    assert.ok(onRecord.length < 2100 && onRecord.startsWith(long.slice(0, 2000)) && /cut: the whole message is 500011 characters/.test(onRecord), String(onRecord.length))
+    await w.service.check()
+    w.service.apply('2.0.0')
+    await settled(w.service)
+    const own = w.service.status().lastResult
+    assert.equal(own.at, NOW.toISOString(), 'this attempt\'s')
+    assert.equal(own.error, onRecord)
+    assert.ok(JSON.stringify(w.changes.at(-1)).length < 4096)
+  } finally {
+    w.done()
+  }
+})

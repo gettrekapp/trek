@@ -12,6 +12,27 @@ export const RESTART_GRACE_MS = 2 * 60 * 1000
 const MAX_ERROR_CHARS = 200
 const MAX_VERSION_CHARS = 40
 const MAX_NAME_CHARS = 60
+/**
+ * What main keeps of a server's words, and sends to every window at every change, is bounded
+ * where it comes in (parseUpdateStatus): a server is another machine's program, and its status
+ * ends up in a native dialog. A failure's reason up to this many characters (the server cuts its
+ * own at 2,000 and says so in a line more); a time up to MAX_TIME_CHARS; a terminal count up to
+ * MAX_SESSIONS.
+ */
+export const MAX_STATUS_ERROR_CHARS = 2100
+const MAX_TIME_CHARS = 40
+const MAX_SESSIONS = 9999
+/** A version: digits, letters, dots and hyphens, starting with a digit or a letter, MAX_VERSION_CHARS at most. */
+const VERSION = /^[0-9A-Za-z][0-9A-Za-z.-]*$/
+
+/**
+ * `text` without control characters (Unicode Cc: NUL, BEL, ESC…) and format characters (Cf: the
+ * bidirectional overrides, zero-width marks), which say nothing and can make what is shown read
+ * as something else. `keep`: the ones to leave.
+ */
+function clean(text: string, keep = ''): string {
+  return text.replace(/[\p{Cc}\p{Cf}]/gu, (c) => (keep.includes(c) ? c : ''))
+}
 
 /** Why a row with a release has no button, and why the app does not ask such a server to install */
 const LEFT_TO_ITS_MACHINE = 'This server is set to be updated on its own machine: run `trek-server update` there.'
@@ -29,9 +50,9 @@ export interface ServerUpdateRowView {
   action?: ServerUpdateAction
 }
 
-/** `text` on one line (runs of whitespace are one space), cut to `max` characters. */
+/** `text` on one line (runs of whitespace are one space) without control or format characters, cut to `max` characters. */
 function cut(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim()
+  const flat = clean(text.replace(/\s+/g, ' ')).replace(/ {2,}/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
@@ -189,35 +210,57 @@ export function updateErrorText(err: unknown): string {
     return (typeof reason === 'string' && REFUSALS[reason]) || 'The server refused the update'
   }
   if (code === 'NOT_FOUND') return 'This server does not update itself'
-  return typeof code === 'string' && code ? code : 'The request failed'
+  return (typeof code === 'string' && cut(code, MAX_VERSION_CHARS)) || 'The request failed'
 }
 
 const STATES: readonly UpdateStatus['state'][] = ['idle', 'checking', 'downloading', 'installing', 'restarting']
 
+/** `raw` when it is a version (short and plain: see VERSION), else undefined. */
+function versionOf(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw.length <= MAX_VERSION_CHARS && VERSION.test(raw) ? raw : undefined
+}
+
+/** A time as the server wrote it (ISO), cleaned and cut: never parsed here, only kept. */
+const timeOf = (raw: string): string => clean(raw).slice(0, MAX_TIME_CHARS)
+
+/**
+ * A failure's reason: its line breaks kept as line breaks (the row says the first line, and the
+ * one it introduces), a tab as a space, no other control or format character, cut to
+ * MAX_STATUS_ERROR_CHARS.
+ */
+const errorOf = (raw: string): string => clean(raw.slice(0, MAX_STATUS_ERROR_CHARS * 4).replace(/\r\n?/g, '\n').replace(/\t/g, ' '), '\n').slice(0, MAX_STATUS_ERROR_CHARS)
+
 /**
  * A server's `update.status` answer or `update.changed` payload, field by field: what main
- * remembers and every window is sent holds nothing else the server put there. Undefined when
- * it is not a status (no running version, or no known state).
+ * remembers and every window is sent holds nothing else the server put there, and nothing
+ * longer or stranger than a status needs (a version is short and plain or it is left out, a
+ * count and a percent are whole numbers in range, a reason is cut, control and format characters
+ * are gone). Undefined when it is not a status (no running version that is one, or no known state).
  */
 export function parseUpdateStatus(raw: unknown): UpdateStatus | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   const r = raw as Record<string, unknown>
   const state = STATES.find((s) => s === r.state)
-  if (typeof r.current !== 'string' || !r.current || !state) return undefined
+  const current = versionOf(r.current)
+  if (!current || !state) return undefined
   const status: UpdateStatus = {
-    current: r.current,
+    current,
     state,
-    sessions: typeof r.sessions === 'number' && Number.isInteger(r.sessions) && r.sessions > 0 ? r.sessions : 0,
+    sessions: typeof r.sessions === 'number' && Number.isInteger(r.sessions) && r.sessions > 0 ? Math.min(r.sessions, MAX_SESSIONS) : 0,
     canRelaunch: r.canRelaunch === true,
     restartNeeded: r.restartNeeded === true,
     remoteApply: r.remoteApply === true
   }
-  if (typeof r.latest === 'string' && r.latest) status.latest = r.latest
-  if (typeof r.percent === 'number' && Number.isFinite(r.percent)) status.percent = r.percent
-  if (typeof r.checkedAt === 'string') status.checkedAt = r.checkedAt
+  const latest = versionOf(r.latest)
+  if (latest) status.latest = latest
+  if (typeof r.percent === 'number' && Number.isFinite(r.percent)) status.percent = Math.min(100, Math.max(0, Math.round(r.percent)))
+  if (typeof r.checkedAt === 'string') status.checkedAt = timeOf(r.checkedAt)
   const last = r.lastResult as Record<string, unknown> | null | undefined
-  if (last && typeof last === 'object' && typeof last.ok === 'boolean' && typeof last.from === 'string' && typeof last.to === 'string' && typeof last.at === 'string') {
-    status.lastResult = { ok: last.ok, from: last.from, to: last.to, at: last.at, ...(typeof last.error === 'string' ? { error: last.error } : {}) }
+  if (last && typeof last === 'object' && typeof last.ok === 'boolean' && typeof last.at === 'string') {
+    const from = versionOf(last.from)
+    const to = versionOf(last.to)
+    // Between versions that are not ones, a result says nothing a row could show.
+    if (from && to) status.lastResult = { ok: last.ok, from, to, at: timeOf(last.at), ...(typeof last.error === 'string' ? { error: errorOf(last.error) } : {}) }
   }
   return status
 }

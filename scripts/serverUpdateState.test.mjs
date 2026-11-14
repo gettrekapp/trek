@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PENDING_FILE, ROLLED_BACK_FILE, STATE_FILE, TRIED_FILE, clearTried, readState, settleStart, writePending, writeState } from '../server/src/update/state.ts'
+import { MAX_RESULT_ERROR_CHARS, PENDING_FILE, ROLLED_BACK_FILE, STATE_FILE, TRIED_FILE, capError, clearTried, readState, settleStart, writePending, writeState } from '../server/src/update/state.ts'
 import { removeDir } from './testPlatform.mjs'
 
 const temp = () => mkdtempSync(join(tmpdir(), 'trek-update-state-'))
@@ -214,3 +214,27 @@ function writePendingInto(dir) {
   writePending(dir, { from: '2.0.0', to: '3.0.0', at: NOW.toISOString() })
   return dir
 }
+
+test('a recorded failure\'s error is cut to its first MAX_RESULT_ERROR_CHARS characters, and says so', () => {
+  const dir = temp()
+  try {
+    assert.equal(MAX_RESULT_ERROR_CHARS, 2000)
+    assert.equal(capError('short'), 'short')
+    assert.equal(capError('x'.repeat(2000)), 'x'.repeat(2000), 'exactly the limit is whole')
+    // A selfcheck can print up to about a megabyte before it fails.
+    const long = `trek-server 2.0.0 does not run on this machine, so 1.0.0 stays:\n${'y'.repeat(1024 * 1024)}`
+    const cut = capError(long)
+    assert.ok(cut.startsWith(long.slice(0, 2000)))
+    assert.ok(cut.length < 2100, String(cut.length))
+    assert.match(cut, /\n… \(cut: the whole message is 1048640 characters\)$/)
+    assert.equal(capError(cut), cut, 'cutting what is cut changes nothing')
+    writeState(dir, { lastResult: { ok: false, from: '1.0.0', to: '2.0.0', at: NOW.toISOString(), error: long } })
+    assert.equal(readState(dir).lastResult.error, cut)
+    assert.ok(statSync(join(dir, STATE_FILE)).size < 4096)
+    // A result with no error, and a success, are written as they are.
+    writeState(dir, { lastResult: { ok: true, from: '1.0.0', to: '2.0.0', at: NOW.toISOString() } })
+    assert.deepEqual(readState(dir).lastResult, { ok: true, from: '1.0.0', to: '2.0.0', at: NOW.toISOString() })
+  } finally {
+    removeDir(dir)
+  }
+})

@@ -4,6 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  MAX_STATUS_ERROR_CHARS,
   RESTARTING_STATUS,
   RESTART_GRACE_MS,
   applyUpdateRefusal,
@@ -314,4 +315,65 @@ test('a status from the wire is taken field by field; what is not a status is no
   for (const bad of [null, undefined, 'idle', 7, [], {}, { state: 'idle' }, { current: '', state: 'idle' }, { current: '1.0.0' }, { current: '1.0.0', state: 'napping' }]) {
     assert.equal(parseUpdateStatus(bad), undefined, JSON.stringify(bad))
   }
+})
+
+test('a status from the wire is bounded: a version is short and plain or it is dropped, and without a running version there is no status', () => {
+  for (const version of ['1.0.0', '2.0.0-rc.1', '10.20.30', '0.4.0-beta-2', 'v1']) {
+    assert.equal(parseUpdateStatus({ ...STATUS, current: version, latest: version }).current, version, version)
+    assert.equal(parseUpdateStatus({ ...STATUS, latest: version }).latest, version, version)
+  }
+  const bad = ['x'.repeat(41), `2.0.0-${'y'.repeat(300)}`, '2.0.0\nUpdated', '2.0.0 beta', '2.0.0\u202e', '2.0.0\u0000', '<b>2</b>', '2.0.0+build', '../2', '-2', '.2', '']
+  for (const version of bad) {
+    assert.equal(parseUpdateStatus({ ...STATUS, current: version }), undefined, JSON.stringify(version))
+    assert.deepEqual(parseUpdateStatus({ ...STATUS, latest: version }), STATUS, JSON.stringify(version))
+    // A result between versions that are not ones says nothing that can be shown.
+    assert.equal(parseUpdateStatus({ ...STATUS, lastResult: { ok: false, from: '1.0.0', to: version, at: 't', error: 'e' } }).lastResult, undefined, JSON.stringify(version))
+    assert.equal(parseUpdateStatus({ ...STATUS, lastResult: { ok: true, from: version, to: '2.0.0', at: 't' } }).lastResult, undefined, JSON.stringify(version))
+  }
+  assert.equal(parseUpdateStatus({ ...STATUS, current: 'x'.repeat(40) }).current, 'x'.repeat(40), 'forty characters is a version')
+})
+
+test('a status from the wire is bounded: the terminals are a count from 0 to 9999, the percent a whole number from 0 to 100 or none', () => {
+  const sessions = (value) => parseUpdateStatus({ ...STATUS, sessions: value }).sessions
+  assert.deepEqual([0, 1, 9999, 10_000, 1e300, -1, 1.5, Number.NaN, Infinity, '3', null].map(sessions), [0, 1, 9999, 9999, 9999, 0, 0, 0, 0, 0, 0])
+  assert.match(serverUpdateConfirm('b', parseUpdateStatus({ ...STATUS, latest: '2.0.0', sessions: 1e300 })).detail, /Its 9999 terminals close;/)
+  const percent = (value) => parseUpdateStatus({ ...STATUS, state: 'downloading', percent: value }).percent
+  assert.deepEqual([0, 42, 100, 41.6, 250, -5e9, 1e300, Number.NaN, Infinity, -Infinity, '50', null].map(percent), [0, 42, 100, 42, 100, 0, 100, undefined, undefined, undefined, undefined, undefined])
+})
+
+test('a status from the wire is bounded: an error is cut to MAX_STATUS_ERROR_CHARS, the times to forty characters', () => {
+  assert.ok(MAX_STATUS_ERROR_CHARS >= 2000 && MAX_STATUS_ERROR_CHARS <= 2200)
+  const result = (over) => parseUpdateStatus({ ...STATUS, lastResult: { ok: false, from: '1.0.0', to: '2.0.0', at: 't', ...over } }).lastResult
+  const huge = result({ error: 'e'.repeat(5 * 1024 * 1024) }).error
+  assert.equal(huge.length, MAX_STATUS_ERROR_CHARS)
+  assert.equal(result({ error: 'e'.repeat(MAX_STATUS_ERROR_CHARS) }).error.length, MAX_STATUS_ERROR_CHARS)
+  assert.equal(result({ at: '2026-11-14T10:00:00.000Z' }).at, '2026-11-14T10:00:00.000Z')
+  assert.equal(result({ at: 'a'.repeat(500) }).at, 'a'.repeat(40))
+  assert.equal(parseUpdateStatus({ ...STATUS, checkedAt: 'c'.repeat(500) }).checkedAt, 'c'.repeat(40))
+  assert.equal(parseUpdateStatus({ ...STATUS, checkedAt: '2026-11-14T10:00:00.000Z' }).checkedAt, '2026-11-14T10:00:00.000Z')
+})
+
+test('control and format characters never reach what is shown: stripped from a status at the door, and from a name in the question', () => {
+  // NUL, BEL, ESC, DEL, a C1 control; a right-to-left override, a zero-width joiner, a byte-order mark.
+  const NASTY = '\u0000\u0007\u001b\u007f\u0085\u202e\u200d\ufeff'
+  const status = parseUpdateStatus({
+    ...STATUS,
+    checkedAt: `2026-11-14${NASTY}T10:00:00.000Z`,
+    lastResult: { ok: false, from: '1.0.0', to: '2.0.0', at: `t${NASTY}`, error: `first${NASTY} line:\r\nsecond\tline\rthird${NASTY}` }
+  })
+  assert.equal(status.checkedAt, '2026-11-14T10:00:00.000Z')
+  assert.equal(status.lastResult.at, 't')
+  // Line breaks are kept as line breaks (the row says the first line); a tab is a space; the rest is gone.
+  assert.equal(status.lastResult.error, 'first line:\nsecond line\nthird')
+  assert.equal(serverUpdateRow(link({ update: status })).text, 'Update failed: first line: second line')
+  for (const text of [status.checkedAt, status.lastResult.at, status.lastResult.error.replaceAll('\n', ''), serverUpdateRow(link({ update: status })).text]) {
+    assert.doesNotMatch(text, /[\p{Cc}\p{Cf}]/u)
+  }
+  // The server's name is the user's own, and still never carries a control into the native dialog.
+  const asked = serverUpdateConfirm(`build${NASTY} box\u202e`, { ...STATUS, latest: '2.0.0' })
+  assert.equal(asked.message, 'Update trek-server on “build box” to 2.0.0?')
+  // What is shown without having come through the door (a refused request's message) is cleaned as it is shown.
+  assert.equal(updateErrorText({ code: 'TOOL_ERROR', message: `Could not${NASTY} check` }), 'Could not check')
+  assert.equal(updateErrorText({ code: `INTERNAL${NASTY}`, message: '' }), 'INTERNAL')
+  assert.equal(serverUpdateRow(withStatus({ latest: `2.0.0${NASTY}` })).text, 'Update available: 2.0.0')
 })
