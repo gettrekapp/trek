@@ -7,9 +7,11 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
+import { commandPath } from '../../../src/host/commandPath.ts'
 import { compareVersions } from '../../../src/shared/versions.ts'
 import { fetchRelease, tarballUrl, type Release } from './feed.ts'
 import { download, swap, unpack, validateStaged } from './install.ts'
+import { launcherPath, relaunchEnv } from './relaunch.ts'
 import { writePending, writeState } from './state.ts'
 import type { Install } from './updatable.ts'
 
@@ -37,7 +39,7 @@ export interface FindDeps {
 export interface ApplyDeps extends FindDeps {
   onStep?: (step: UpdateStep) => void
   onProgress?: (bytes: number, total: number | undefined) => void
-  /** Runs the staged version's `selfcheck`; the default runs it with this Node */
+  /** Runs the staged version's `selfcheck`; the default runs it through the staged launcher */
   selfcheck?: (stagedDir: string) => SelfcheckOutcome
 }
 
@@ -46,9 +48,15 @@ export type ApplyResult =
   | { kind: 'installed'; from: string; to: string }
   | { kind: 'failed'; error: string }
 
-/** The staged version's own `trek-server selfcheck`, run with this Node. One that does not finish in time, or is killed, has failed. */
-export function runStagedSelfcheck(stagedDir: string, timeoutMs: number = SELFCHECK_TIMEOUT_MS): SelfcheckOutcome {
-  const run = spawnSync(process.execPath, [join(stagedDir, 'trek-server.cjs'), 'selfcheck'], hidden({ encoding: 'utf8' as const, timeout: timeoutMs, killSignal: 'SIGKILL' as const }))
+/**
+ * The staged version's own `trek-server selfcheck`, run the way the server will be started:
+ * through the staged launcher (so one that is not executable, does not parse or finds no usable
+ * Node fails here, before the swap), with the Node a relaunch hands it (`env`). The launcher marks
+ * nothing for it: selfcheck is not a start, and the staged folder has no pending update yet. One
+ * that does not finish in time, or is killed, has failed.
+ */
+export function runStagedSelfcheck(stagedDir: string, timeoutMs: number = SELFCHECK_TIMEOUT_MS, env: NodeJS.ProcessEnv = relaunchEnv()): SelfcheckOutcome {
+  const run = spawnSync(commandPath(launcherPath(stagedDir)), ['selfcheck'], hidden({ encoding: 'utf8' as const, timeout: timeoutMs, killSignal: 'SIGKILL' as const, env }))
   const output = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim()
   const failed = (why: string): SelfcheckOutcome => ({ ok: false, output: `${output}\n${why}`.trim() })
   if (run.error) {

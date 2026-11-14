@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { LOCK_FILE, applyUpdate, findUpdate, runStagedSelfcheck } from '../server/src/update/apply.ts'
 import { confirmQuestion, describeOutcome } from '../server/src/update/command.ts'
 import { PENDING_FILE, readState, writeState } from '../server/src/update/state.ts'
+import { POSIX_LAUNCHER } from './serverLaunchers.mjs'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const tar = { skip: posixOnly('an update unpacks a release tarball with tar, and Windows has no self-update') }
@@ -20,10 +21,10 @@ const FEED = 'http://127.0.0.1:1/releases'
 const NOW = new Date('2026-11-14T10:00:00.000Z')
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
-function folder(root, name, version, target = 'linux-x64') {
+function folder(root, name, version, target = 'linux-x64', launcher = { text: '#!/bin/sh\n', mode: 0o755 }) {
   const dir = join(root, name)
   mkdirSync(join(dir, 'bin'), { recursive: true })
-  writeFileSync(join(dir, 'bin', 'trek-server'), '#!/bin/sh\n', { mode: 0o755 })
+  writeFileSync(join(dir, 'bin', 'trek-server'), launcher.text, { mode: launcher.mode })
   writeFileSync(join(dir, 'trek-server.cjs'), `// ${version}\n`)
   writeFileSync(join(dir, 'build.json'), JSON.stringify({ version, build: 'b', package: 'tarball', target }))
   return dir
@@ -32,16 +33,16 @@ function folder(root, name, version, target = 'linux-x64') {
 /**
  * An install of `current`, and a feed whose latest release is `latest`. `built`: the version the
  * tarball's own build.json names; `loose`: the tarball also holds a second top-level folder;
- * `tamper` changes what the feed serves after it is signed.
+ * `tamper` changes what the feed serves after it is signed; `launcher`: the released bin/trek-server.
  */
-function world({ current = '1.0.0', latest = '2.0.0', built = latest, loose = false, tamper } = {}) {
+function world({ current = '1.0.0', latest = '2.0.0', built = latest, loose = false, tamper, launcher } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'trek-apply-'))
   const parent = join(root, 'opt')
   const configDir = join(root, 'config')
   mkdirSync(configDir, { recursive: true })
   const dir = folder(parent, 'trek-server', current)
   const name = `trek-server-${latest}-linux-x64`
-  folder(join(root, 'release'), name, built)
+  folder(join(root, 'release'), name, built, 'linux-x64', launcher)
   if (loose) mkdirSync(join(root, 'release', 'extra'))
   const tarball = join(root, `${name}.tar.gz`)
   execFileSync('tar', ['-czf', tarball, '-C', join(root, 'release'), name, ...(loose ? ['extra'] : [])], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
@@ -330,38 +331,79 @@ test('an older <install>.previous from the update before is replaced', tar, asyn
   }
 })
 
-test('the staged selfcheck runs the staged bundle with this Node: its exit code decides, its output is kept', async () => {
+for (const [what, launcher, message] of [
+  ['is not executable', { text: POSIX_LAUNCHER, mode: 0o644 }, /selfcheck could not be run/],
+  ['exits with an error', { text: '#!/bin/sh\necho "launcher: broken" >&2\nexit 3\n', mode: 0o755 }, /launcher: broken/],
+  ['is not a shell script that parses', { text: '#!/bin/sh\nif then fi (\n', mode: 0o755 }, /does not run on this machine/]
+]) {
+  test(`a release whose launcher ${what} fails the update before the swap, and leaves the install untouched`, tar, async () => {
+    const w = world({ launcher })
+    try {
+      // The real selfcheck: it runs the staged version through its own launcher.
+      const result = await applyUpdate({ ...w.deps, selfcheck: undefined })
+      assert.equal(result.kind, 'failed')
+      assert.match(result.error, /2\.0\.0 does not run on this machine/)
+      assert.match(result.error, message)
+      untouched(w)
+      assert.equal(readState(w.configDir).lastResult.ok, false)
+    } finally {
+      w.done()
+    }
+  })
+}
+
+test('the staged selfcheck runs the staged version through its own launcher, with the Node given: its exit code decides, its output is kept', { skip: posixOnly('the launcher is a POSIX sh script') }, async () => {
   const root = mkdtempSync(join(tmpdir(), 'trek-apply-check-'))
-  const staged = (name, source) => {
+  const staged = (name, source, launcher = { text: POSIX_LAUNCHER, mode: 0o755 }) => {
     const dir = join(root, name)
-    mkdirSync(dir)
+    mkdirSync(join(dir, 'bin'), { recursive: true })
     writeFileSync(join(dir, 'trek-server.cjs'), source)
+    if (launcher) writeFileSync(join(dir, 'bin', 'trek-server'), launcher.text, { mode: launcher.mode })
     return dir
   }
+  const env = { ...process.env, TREK_NODE: process.execPath }
+  const check = (dir, timeoutMs) => runStagedSelfcheck(dir, timeoutMs, env)
   try {
     assert.deepEqual(
-      runStagedSelfcheck(staged('fine', "console.log('ok: ' + process.argv.slice(2).join(' ') + ' ' + (process.execPath === " + JSON.stringify(process.execPath) + "))")),
+      check(staged('fine', "console.log('ok: ' + process.argv.slice(2).join(' ') + ' ' + (process.execPath === " + JSON.stringify(process.execPath) + "))")),
       { ok: true, output: 'ok: selfcheck true' }
     )
-    const failed = runStagedSelfcheck(staged('fails', "console.log('ok: node-pty loads'); console.error('FAIL: a terminal runs\\n  posix_spawnp failed'); process.exit(1)"))
+    assert.equal(existsSync(join(root, 'fine', 'update-pending.tried')), false, 'a selfcheck is not a start: nothing is marked')
+    const failed = check(staged('fails', "console.log('ok: node-pty loads'); console.error('FAIL: a terminal runs\\n  posix_spawnp failed'); process.exit(1)"))
     assert.equal(failed.ok, false)
     assert.match(failed.output, /ok: node-pty loads/)
     assert.match(failed.output, /FAIL: a terminal runs\n {2}posix_spawnp failed/, 'stderr is kept too')
 
     const started = Date.now()
-    const hung = runStagedSelfcheck(staged('hangs', "console.log('ok: started'); setInterval(() => {}, 1000)"), 500)
+    const hung = check(staged('hangs', "console.log('ok: started'); setInterval(() => {}, 1000)"), 500)
     assert.equal(hung.ok, false)
     assert.match(hung.output, /ok: started/)
     assert.match(hung.output, /did not finish within 0\.5 s/)
     assert.ok(Date.now() - started < 20_000)
 
-    const crashed = runStagedSelfcheck(staged('crashes', "process.kill(process.pid, 'SIGKILL')"))
+    const crashed = check(staged('crashes', "process.kill(process.pid, 'SIGKILL')"))
     assert.equal(crashed.ok, false)
-    if (process.platform !== 'win32') assert.match(crashed.output, /ended by SIGKILL/)
+    assert.match(crashed.output, /ended by SIGKILL/)
 
-    const missing = runStagedSelfcheck(join(root, 'nowhere'))
+    const missing = check(join(root, 'nowhere'))
     assert.equal(missing.ok, false)
-    assert.match(missing.output, /Cannot find module/)
+    assert.match(missing.output, /selfcheck could not be run/)
+
+    // What the bundle alone would pass, the launcher that will start it must pass too.
+    const fine = "console.log('ok')"
+    const notExecutable = check(staged('mode', fine, { text: POSIX_LAUNCHER, mode: 0o644 }))
+    assert.equal(notExecutable.ok, false)
+    assert.match(notExecutable.output, /selfcheck could not be run/)
+    assert.equal(check(staged('syntax', fine, { text: '#!/bin/sh\nif then fi (\n', mode: 0o755 })).ok, false)
+    assert.equal(check(staged('exits', fine, { text: '#!/bin/sh\nexit 3\n', mode: 0o755 })).ok, false)
+
+    // The Node is the one named: the one the server will be started again with.
+    const noNode = runStagedSelfcheck(staged('no-node', fine), undefined, { ...process.env, TREK_NODE: join(root, 'no-such-node') })
+    assert.equal(noNode.ok, false)
+    assert.match(noNode.output, /Node\.js 22 or later is needed, and .*no-such-node.* was not found/)
+    const other = join(root, 'other-node')
+    writeFileSync(other, '#!/bin/sh\nif [ "$1" = "-p" ]; then echo 22; exit 0; fi\necho "other node ran $2"\n', { mode: 0o755 })
+    assert.deepEqual(runStagedSelfcheck(staged('other', fine), undefined, { ...process.env, TREK_NODE: other }), { ok: true, output: 'other node ran selfcheck' })
   } finally {
     removeDir(root)
   }

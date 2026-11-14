@@ -484,9 +484,12 @@ update is installed: `Installed trek-server 0.6.0; the running server (pid 1234)
 into it.` **Its terminals close**; agent sessions resume when their worktrees are opened again.
 On Node 22.15 or later the server becomes the new version in the same process, with the same
 process id, arguments and environment, so a terminal, tmux or systemd sees no exit. It comes
-back through `bin/trek-server`: a server that was started as
-`node trek-server.cjs …` directly returns under the launcher's Node (`TREK_NODE`, or the `node`
-on PATH), without any Node options it was started with. On an older Node the update is installed
+back through `bin/trek-server`, under the same Node binary it was running with (`TREK_NODE` if
+it was started with one, else the Node it ran under, which is handed on as `TREK_NODE`: its
+terminals see that variable from then on), but without any Node command-line options: a server
+started as `node --some-option trek-server.cjs …` returns as `node trek-server.cjs …`. The new
+version's selfcheck runs through its own `bin/trek-server` with that same Node, so a release
+whose launcher does not run here is refused before anything is replaced. On an older Node the update is installed
 and the command says `Restart the running server (pid 1234) to finish`: restart it yourself
 (`systemctl --user restart trek-server`). Once it is listening, the new version logs
 `update: now running trek-server 0.6.0 (was 0.5.0)`.

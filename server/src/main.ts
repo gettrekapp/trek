@@ -43,7 +43,7 @@ import { USAGE, parseArgs } from './cli.ts'
 import { findUpdate } from './update/apply.ts'
 import { controlPath, listenControl } from './update/control.ts'
 import { isTestUpdateBuild, updateSource } from './update/keys.ts'
-import { canRelaunch, relaunch } from './update/relaunch.ts'
+import { canRelaunch, relaunch, relaunchRefusal } from './update/relaunch.ts'
 import { clearTried, settleStart } from './update/state.ts'
 import { readInstall } from './update/updatable.ts'
 
@@ -477,6 +477,9 @@ function startUpdates(): void {
       // Asked twice: the restart the first request started is the answer to both.
       if (relaunchAccepted) return { ok: true }
       if (shuttingDown) return { ok: false, error: 'the server is already shutting down' }
+      // Before anything is shut down: a launcher that cannot be run leaves this server up, and the command says a restart is needed.
+      const refusal = relaunchRefusal(install.dir)
+      if (refusal !== null) return { ok: false, error: refusal }
       relaunchAccepted = true
       // After this tick, so the answer goes out before the socket closes.
       setImmediate(() => shutdown('update', { installDir: install.dir, argv: process.argv.slice(2) }))

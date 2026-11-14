@@ -4,13 +4,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { CONTROL_SOCKET, controlPath, controlRequest, listenControl, socketPathFits } from '../server/src/update/control.ts'
-import { canRelaunch, launcherPath, relaunch } from '../server/src/update/relaunch.ts'
+import { canRelaunch, launcherPath, relaunch, relaunchEnv, relaunchRefusal } from '../server/src/update/relaunch.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const sockets = { skip: posixOnly('a Unix socket') }
@@ -271,7 +271,10 @@ test('canRelaunch: never on Windows, and only where this Node has process.execve
 function installWith(dir, script, mode = 0o755) {
   const install = join(dir, 'install')
   mkdirSync(join(install, 'bin'), { recursive: true })
-  if (script !== undefined) writeFileSync(join(install, 'bin', 'trek-server'), script, { mode })
+  if (script !== undefined) {
+    writeFileSync(join(install, 'bin', 'trek-server'), script)
+    chmodSync(join(install, 'bin', 'trek-server'), mode)
+  }
   return install
 }
 
@@ -283,7 +286,8 @@ test('relaunch hands the launcher its own path, then the arguments, and this env
     const host = { platform: 'linux', execve(...args) { calls.push([this === host, ...args]) } }
     relaunch(install, ['start', '--port', '9'], host)
     const launcher = launcherPath(install)
-    assert.deepEqual(calls, [[true, launcher, [launcher, 'start', '--port', '9'], process.env]])
+    // The environment, and the Node this server runs under for the launcher to run the new version with.
+    assert.deepEqual(calls, [[true, launcher, [launcher, 'start', '--port', '9'], { ...process.env, TREK_NODE: process.env.TREK_NODE || process.execPath }]])
   } finally {
     removeDir(dir)
   }
@@ -302,6 +306,29 @@ test('relaunch throws, and replaces nothing, when it cannot: no execve, or no la
     assert.throws(() => relaunch(installWith(dir, '#!/bin/sh\n'), [], { platform: 'linux' }), /process\.execve/)
     assert.throws(() => relaunch(installWith(dir, '#!/bin/sh\n'), [], { platform: 'win32', execve: host.execve }), /process\.execve/)
     assert.deepEqual(calls, [])
+  } finally {
+    removeDir(dir)
+  }
+})
+
+test('the relaunched server keeps its Node: TREK_NODE if it was started with one, else the Node it runs under', () => {
+  assert.deepEqual(relaunchEnv({ PATH: '/bin', HOME: '/h' }, '/opt/node/bin/node'), { PATH: '/bin', HOME: '/h', TREK_NODE: '/opt/node/bin/node' })
+  assert.deepEqual(relaunchEnv({ PATH: '/bin', TREK_NODE: '/usr/local/bin/node22' }, '/opt/node/bin/node'), { PATH: '/bin', TREK_NODE: '/usr/local/bin/node22' })
+  assert.equal(relaunchEnv({ TREK_NODE: '' }, '/opt/node/bin/node').TREK_NODE, '/opt/node/bin/node', 'an empty TREK_NODE is none, as for the launcher')
+  const env = { PATH: '/bin' }
+  relaunchEnv(env, '/n')
+  assert.deepEqual(env, { PATH: '/bin' }, 'the environment given is not changed')
+})
+
+test('relaunchRefusal says, before anything is shut down, why a relaunch cannot happen', { skip: posixOnly('file modes') }, () => {
+  const dir = temp()
+  try {
+    const host = { platform: 'linux', execve: () => { throw new Error('not called') } }
+    assert.equal(relaunchRefusal(installWith(dir, '#!/bin/sh\n'), host), null)
+    assert.match(relaunchRefusal(installWith(dir, '#!/bin/sh\n', 0o644), host) ?? '', /bin.trek-server is missing or cannot be run/)
+    assert.match(relaunchRefusal(join(dir, 'gone'), host) ?? '', /missing or cannot be run/)
+    assert.match(relaunchRefusal(installWith(dir, '#!/bin/sh\n'), { platform: 'linux' }) ?? '', /cannot replace a running process/)
+    assert.match(relaunchRefusal(installWith(dir, '#!/bin/sh\n'), { platform: 'win32', execve: host.execve }) ?? '', /cannot replace a running process/)
   } finally {
     removeDir(dir)
   }

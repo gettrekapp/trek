@@ -18,7 +18,7 @@
 import './smokeGh.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -330,6 +330,16 @@ const DIES_AT_START = `#!/usr/bin/env node\nconst cmd = process.argv[2]\nif (cmd
   const run = start(w.launcher, w.startArgs)
   check(`the next start is ${NEW}, and settles the update`, (await up(w, run, NEW)) && (await until(run, new RegExp(`update: now running trek-server ${escaped(NEW)} \\(was ${escaped(OLD)}\\)`))), run.output)
   check('the markers are gone and the result is recorded', w.marks().length === 0 && w.state().lastResult?.ok === true && w.state().lastResult?.to === NEW, `${w.marks().join()} ${JSON.stringify(w.state())}`)
+
+  // A launcher that cannot be run: the server says so before it shuts anything down, and stays up.
+  if (canExecve) {
+    chmodSync(w.launcher, 0o644)
+    const refused = await control(w.socket, 'relaunch')
+    check('a relaunch into a launcher that cannot be run is refused', refused?.ok === false && /bin\/trek-server is missing or cannot be run/.test(refused.error ?? ''), JSON.stringify(refused))
+    await new Promise((done) => setTimeout(done, 500))
+    check('and the server keeps serving', run.ended === null && !/shutting down/.test(run.output) && (await control(w.socket, 'status'))?.pid === run.child.pid, run.output)
+    chmodSync(w.launcher, 0o755)
+  }
 
   // A signal while the server restarts for an update: it exits instead (a service manager stopping the unit wins).
   if (canExecve) {
