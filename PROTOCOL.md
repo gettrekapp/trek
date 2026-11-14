@@ -815,7 +815,9 @@ session; only the server sets it). Each run (scheduled, manual or missed):
 
 - no run tab (never run, or the user closed it): the server starts a new Global session with the
   context, the prompt its first message;
-- the run tab is **busy** (`working` or `attention`, or it has an open `decision`): the run is
+- the run tab is **busy** (`working` or `attention`; an open `decision` unless it is `exited`; or
+  its pty is the one a run of this automation started less than 10 seconds ago, by the
+  scheduler's clock, since the agent may not have printed yet): the run is
   **skipped**, recorded with `outcome: 'skipped'` and `error: 'previous run still working'`; the
   tab is left alone;
 - otherwise (`idle`, `done`, `complete`, `exited`): the server **renews** it: stops its pty if one
@@ -823,10 +825,13 @@ session; only the server sets it). Each run (scheduled, manual or missed):
   and agent, and launches the agent as a brand-new conversation (never a resume) with the prompt.
   `Session.id` stays the same, so the tab keeps its place; it gets a new `ptyId`, and a new
   `agentSessionId` (Codex: unset until the new conversation is discovered). The status is `idle`.
-  If the agent cannot be spawned the tab shows `exited` with `exitCode` -1.
+  If the agent cannot be spawned the tab shows `exited` with `exitCode` -1 and without an
+  `agentSessionId`, so a restart starts a new conversation. The checks that need no pty (the
+  project has repositories, its first one's main worktree is not `missing`) are made before the
+  running pty is stopped.
 
 Deleting an automation leaves its run tab open as a normal Global session (its `context` is
-removed). At most one run tab per automation means at most 50 per project.
+removed). `project.import` drops every session's `context` (automations are not imported). At most one run tab per automation means at most 50 per project.
 
 An `Automation` is `{id, name, prompt, schedule: {cron, tz}, enabled, llm?, createdAt, lastSlot,
 missed?, history}`. `schedule.cron` is five fields (minute hour day-of-month month day-of-week), no
@@ -1156,7 +1161,7 @@ themselves are not sent: they may carry secrets. An unknown `projectId` is
 model's backend may be down, say); `session.start` reports that as usual.
 
 **Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
-initialMessage?, context?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
+initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
 starts a Global session. `cols` is an integer from 1 to 500 and `rows` from 1 to 200 (as for `session.restart`
 and `pty.resize`), else `BAD_REQUEST`. The agent
 is chosen from `llm`, else the session type's, else the project's default, else
@@ -1166,10 +1171,9 @@ repositories (for Global). A worktree that is not loaded is loaded first; at
 `maxSessions` (`CAPACITY`) the call is refused before that load. A title
 (of `session.start`, of a session type's name, or of `session.rename`) is at most
 200 characters with no control characters, else `BAD_REQUEST`. If the agent
-cannot be spawned, no session is left behind. `context` is the server's own (an automation's run
-tab, see [Automations](#automations)): it must be `{kind: 'automation', automationId}` naming an
-automation of the project, on a Global session, else `BAD_REQUEST`; `CONFLICT` if that automation
-already has a run tab.
+cannot be spawned, no session is left behind. `Session.context` is set by the server only (an
+automation's run tab, see [Automations](#automations)): a `context` param is `BAD_REQUEST`
+(`context is set by the server`).
 
 **Running the agent.** The agent runs as the command of a login shell, so the pty
 ends when the agent quits. On POSIX that is `$SHELL -ilc '<command>'` (`/bin/sh`
