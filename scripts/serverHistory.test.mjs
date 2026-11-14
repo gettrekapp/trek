@@ -5,11 +5,19 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
 import { MAX_HISTORY_REASON, MAX_VALUE_TEXT } from '../src/shared/model/history.ts'
+import { saveConfig } from '../server/src/config.ts'
+import { ConfigStore } from '../server/src/configStore.ts'
+import { GitPoller } from '../server/src/git/poller.ts'
+import { ProjectState } from '../server/src/projects/state.ts'
+import { TopicHub } from '../server/src/topicHub.ts'
+import { dispatchV2 } from '../server/src/v2.ts'
+import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { BY_TREK, branchChanges, recordHistory, tagValue } from '../server/src/history/record.ts'
 
 const settings = {
@@ -90,4 +98,65 @@ test('long text is clamped when recorded, so the entry survives a reload', (t) =
   assert.equal(e.reason.length, MAX_HISTORY_REASON)
   const again = new HistoryStore(dir)
   assert.equal(again.list('p', 'r', 'feat').events.length, 1)
+})
+
+const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
+
+/** A project on a real repo, with a history store and a fake PR watch; `call` throws a refusal. */
+async function setup(t) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-history-v2-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const a = join(dir, 'repos', 'a')
+  execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
+  execFileSync('git', ['-C', a, 'commit', '--allow-empty', '-q', '-m', 'init'], { env: gitEnv })
+  const configPath = join(dir, 'config.json')
+  saveConfig(configPath, { serverId: 'sid', name: 'box', repos: [{ id: 'a', name: 'a', path: a }] })
+  const store = new ConfigStore(configPath)
+  const hub = new TopicHub()
+  const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
+  const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {} })
+  t.after(() => { poller.stop(); store.close() })
+  const history = new HistoryStore(join(dir, 'history'))
+  const sessions = { forgetProject() {}, forgetRepo() {}, forgetGlobal() {}, refreshAttention() {}, blockPath: () => () => {} }
+  const prWatch = { available: () => true, pollSoon() {}, forget() {} }
+  const ctx = { store, hub, subscriber: { send() {} }, projects, poller, sessions, terminal: { send() {}, bufferedAmount: () => 0 }, history, prWatch }
+  const call = async (method, params, extra = {}) => {
+    const outcome = await dispatchV2(method, params, { ...ctx, ...extra })
+    if (!outcome.ok) throw Object.assign(new Error(outcome.error.message), { code: outcome.error.code })
+    return outcome.result
+  }
+  const { projectId } = await call('project.create', { name: 'P', repositories: [{ path: a }] })
+  await poller.refresh(a)
+  const repoId = projects.require(projectId).repositories[0].id
+  const kinds = (branch = 'feat') => history.list(projectId, repoId, branch).events.map((e) => e.kind)
+  return { dir, a, call, ctx, projects, projectId, repoId, history, kinds }
+}
+
+test('history.list pages a branch newest first; limit and before are checked', async (t) => {
+  const s = await setup(t)
+  for (const kind of ['created', 'promoted', 'demoted']) recordHistory(s.ctx, s.projectId, s.repoId, 'feat', [{ kind }])
+  const page = await s.call('history.list', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', limit: 2 })
+  assert.deepEqual(page.events.map((e) => e.kind), ['demoted', 'promoted'])
+  assert.equal(page.more, true)
+  const older = await s.call('history.list', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', before: page.events[1].id })
+  assert.deepEqual(older.events.map((e) => e.kind), ['created'])
+  assert.equal(older.more, false)
+  await assert.rejects(s.call('history.list', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', limit: 101 }), (e) => e.code === 'BAD_REQUEST')
+  await assert.rejects(s.call('history.list', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', before: 3 }), (e) => e.code === 'BAD_REQUEST')
+  await assert.rejects(s.call('history.list', { projectId: s.projectId, repoId: 'nope', branch: 'feat' }), (e) => e.code === 'NOT_FOUND')
+  // A server without a history store answers an empty page.
+  assert.deepEqual(await s.call('history.list', { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }, { history: undefined }), { events: [], more: false })
+})
+
+test('project.delete drops its history file; repo.remove its repository\'s entries', async (t) => {
+  const s = await setup(t)
+  recordHistory(s.ctx, s.projectId, s.repoId, 'feat', [{ kind: 'created' }])
+  recordHistory(s.ctx, s.projectId, 'other-repo', 'feat', [{ kind: 'created' }])
+  await s.call('project.delete', { projectId: s.projectId })
+  assert.deepEqual(s.history.branch(s.projectId, s.repoId, 'feat'), [])
+  assert.deepEqual(s.history.branch(s.projectId, 'other-repo', 'feat'), [])
+})
+
+test('the welcome lists the history capability', () => {
+  assert.ok(welcomeCapabilities(false).includes('history'))
 })

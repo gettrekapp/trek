@@ -21,6 +21,9 @@ import { prWatchHandlers } from './prWatch/prWatchHandlers.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
 import { moveHandlers } from './move/moveHandlers.ts'
 import { promoteHandlers } from './promote/promoteHandlers.ts'
+import { historyHandlers } from './history/historyHandlers.ts'
+import type { HistoryStore } from './history/store.ts'
+import { branchChanges, recordHistory, type Attribution } from './history/record.ts'
 import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
@@ -82,6 +85,10 @@ export interface V2Context {
   push?: { grants: PushGrants }
   /** The server's plugins (plugin system phase 1): a method no core handler has goes to plugin `<id>` */
   plugins?: PluginRegistry
+  /** The worktree history; without it nothing is recorded and history.list is empty */
+  history?: HistoryStore
+  /** Who this request acts as, for the history: absent is a Trek client's user; the MCP tool caller sets `mcp` */
+  attribution?: Attribution
 }
 
 type Handler = (params: any, ctx: V2Context) => unknown
@@ -168,6 +175,7 @@ const handlers: Record<string, Handler> = {
   'project.delete': (p, ctx) => {
     const { id } = ctx.projects.require(p.projectId)
     ctx.projects.delete(id)
+    ctx.history?.dropProject(id)
     // Only once the project is gone: a delete that fails leaves its sessions running.
     // The manager tracks its ptys itself, so the records are not needed for this.
     ctx.sessions.forgetProject(id)
@@ -225,6 +233,7 @@ const handlers: Record<string, Handler> = {
       }
       return { projectId: d.id, repoId: repo.id }
     })
+    ctx.history?.dropRepo(projectId, repoId)
     // Only once the repository is removed: a refused remove ends none of its sessions.
     ctx.sessions.forgetRepo(projectId, repoId)
     // Global sessions run in the first repository with the others as additional
@@ -339,6 +348,7 @@ const handlers: Record<string, Handler> = {
   ...reviewHandlers,
   ...moveHandlers,
   ...promoteHandlers,
+  ...historyHandlers,
 
   // A one-time code a phone redeems at hello for its own token (6a). Any signed-in connection may
   // ask (a web session or a paired phone included): a token already holds shell-level power on

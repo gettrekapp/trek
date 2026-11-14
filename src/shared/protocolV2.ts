@@ -16,6 +16,7 @@ import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
 import type { PluginPresence } from './plugins/manifest.ts'
+import type { HistoryAddedEvent, HistoryPage } from './model/history.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
 import type {
   ComposeAction,
@@ -236,6 +237,8 @@ export const CAPABILITY = {
    * `promote.settled`
    */
   promote: 'promote',
+  /** Worktree history: `history.list`, and the `history.added` event on the project topic */
+  history: 'history',
   /**
    * Phone pairing (6a): `pairing.create` gives a signed-in client a one-time code (5 minutes) that
    * a phone redeems once at hello (`pairingCode`) for its own named token (`welcome.pairedToken`)
@@ -418,6 +421,7 @@ export interface MethodParamsV2 {
   'branch.setPr': BranchRef & { pr: string | null }
   /** Turns the branch's pull request watch on or off (5c-1); on needs `prWatch` and a linked github.com PR */
   'branch.setPrWatch': BranchRef & { watch: boolean }
+  'history.list': BranchRef & { before?: string; limit?: number }
   /** Clears the worktree's pull request notice */
   'prWatch.dismiss': WorktreeRef
   'branch.setEnv': BranchRef & { env: string | null; expected?: string | null }
@@ -617,6 +621,7 @@ export interface MethodResultsV2 {
   'branch.setTicket': null
   'branch.setPr': null
   'branch.setPrWatch': null
+  'history.list': HistoryPage
   'prWatch.dismiss': null
   'branch.setEnv': null
   'review.add': { commentId: string }
@@ -729,6 +734,7 @@ export interface EventPayloadsV2 {
   'promote.request': PromoteRequestEvent
   /** 5e: the request ended, or another window claimed it (`claimed`): close its dialog (the claimant carries on) */
   'promote.settled': PromoteSettledEvent
+  'history.added': HistoryAddedEvent
 }
 
 export interface PluginsChangedEvent {
