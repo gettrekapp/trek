@@ -207,10 +207,7 @@ export class SessionManager {
     }
     const pick = checkLlm(p.llm)
     const context = p.context === undefined ? undefined : checkContext(project, p.context, global)
-    const serverDefault = this.deps.store.llmSettings().llmDefault
-    const llm = global
-      ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
-      : resolveNewSessionLlm({ pick, sessionType: sessionType?.llm, projectDefault: settings.llmDefault, appDefault: serverDefault })
+    const llm = this.defaultLlm(project, global, pick, sessionType?.llm)
     if (p.title !== undefined && typeof p.title !== 'string') throw bad('title must be a string')
     const title = p.title?.trim() ? checkTitle(p.title.trim(), 'title') : undefined
     const typeTitle = sessionType?.name ? checkTitle(sessionType.name, `session type "${sessionType.id}" name`) : undefined
@@ -276,7 +273,8 @@ export class SessionManager {
   /**
    * Starts the session over as a brand-new agent conversation (an automation's next run in its run
    * tab): its pty, if running, is stopped; queue, decision and exit code are cleared; the agent is
-   * launched fresh, never resumed, with `initialMessage`. The session keeps its id.
+   * launched fresh, never resumed, with `initialMessage`. The session keeps its id. `llm`: the
+   * agent to run (absent: its own; null: the default a new session there would get).
    */
   renew(p: any): { ptyId: string } {
     this.assertRunning()
@@ -289,7 +287,8 @@ export class SessionManager {
     }
     const title = checkTitle(requireName(p.title, 'title'), 'title')
     if (typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
-    const llm = checkLlm(p.llm) ?? found.session.llm
+    // null: the default for a new session of its kind, as start resolves it without a pick.
+    const llm = p.llm === null ? this.defaultLlm(project, !found.worktree) : checkLlm(p.llm) ?? found.session.llm
     // Checked before the running pty is killed: a killed pty holds its slot until it exits.
     this.assertCapacity()
     const sessionId = found.session.id
@@ -692,6 +691,15 @@ export class SessionManager {
     else assertNotRepository(this.deps.store.config.repos, real(worktree.path), 'worktree')
     if (this.blocked.has(real(worktree.path))) throw codedError('IN_USE', `${worktree.path} is being removed`)
     return worktree
+  }
+
+  /** The agent a new session runs: the pick, else the project's Global agent or the session type's / project's default. */
+  private defaultLlm(project: Project, global: boolean, pick?: LlmSelection, typeLlm?: LlmSelection): LlmSelection {
+    const settings = project.settings
+    const serverDefault = this.deps.store.llmSettings().llmDefault
+    return global
+      ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
+      : resolveNewSessionLlm({ pick, sessionType: typeLlm, projectDefault: settings.llmDefault, appDefault: serverDefault })
   }
 
   private defaultTitle(label: string, existing: number, worktree: Worktree | undefined): string {

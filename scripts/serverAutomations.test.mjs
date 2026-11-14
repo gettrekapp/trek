@@ -114,23 +114,33 @@ function setupScheduler(automations, { startFails = false } = {}) {
   const project = { id: 'p1', name: 'Demo', settings: {}, globalSessions: [], repositories: [{ id: 'r1', name: 'app', path: '/repo', branchData: {}, worktrees: [] }], automations }
   const projects = new ProjectState({ hub, store: { save() {}, remove() {} }, onSummariesChange() {} }, [project])
   const started = []
+  const renewed = []
   let clock = T0
+  // As the SessionManager does: start adds a Global session with its context, renew keeps its id.
   const sessions = {
     start: (p) => {
       if (startFails) throw Object.assign(new Error('a project holds at most 500 sessions; close some first'), { code: 'CAPACITY' })
       started.push(p)
-      return { sessionId: `s${started.length}`, ptyId: 'x' }
+      const id = `s${started.length}`
+      projects.apply(p.projectId, (d) => { d.globalSessions.push({ id, title: p.title, llm: p.llm ?? { provider: 'claude' }, queue: [], status: 'idle', ...(p.context ? { context: p.context } : {}) }) })
+      return { sessionId: id, ptyId: 'x' }
+    },
+    renew: (p) => {
+      renewed.push(p)
+      projects.apply(p.projectId, (d) => { const g = d.globalSessions.find((x) => x.id === p.sessionId); g.title = p.title; g.status = 'idle' })
+      return { ptyId: 'y' }
     }
   }
   const scheduler = new AutomationScheduler({ projects, sessions, now: () => clock })
-  return { projects, started, scheduler, setClock: (t) => (clock = t), list: () => projects.require('p1').automations }
+  const setSession = (fn) => projects.apply('p1', (d) => fn(d.globalSessions[0]))
+  return { projects, started, renewed, scheduler, setSession, setClock: (t) => (clock = t), list: () => projects.require('p1').automations, globals: () => projects.require('p1').globalSessions }
 }
 
 test('check(): an on-time slot opens a Global session with the prompt, titled after the automation', () => {
   const s = setupScheduler([auto()])
   s.setClock(Date.UTC(2026, 0, 5, 9, 0, 30))
   s.scheduler.check()
-  assert.deepEqual(s.started, [{ projectId: 'p1', worktreeId: null, title: 'Nightly · 09:00', initialMessage: 'Triage', cols: 120, rows: 32 }])
+  assert.deepEqual(s.started, [{ projectId: 'p1', worktreeId: null, title: 'Nightly · 09:00', initialMessage: 'Triage', cols: 120, rows: 32, context: { kind: 'automation', automationId: 'a' } }])
   const a = s.list()[0]
   assert.equal(a.lastSlot, Date.UTC(2026, 0, 5, 9))
   assert.deepEqual(a.history, [{ at: Date.UTC(2026, 0, 5, 9, 0, 30), slot: Date.UTC(2026, 0, 5, 9), trigger: 'schedule', outcome: 'ran', sessionId: 's1' }])
@@ -252,4 +262,81 @@ test('check(): one failing start does not keep the next due automation from runn
   s.scheduler.start()
   s.scheduler.start()
   s.scheduler.stop()
+})
+
+// ---- one reused run tab per automation ----
+
+test('run(): the second run renews the automation\'s run tab instead of opening another', () => {
+  const s = setupScheduler([auto({ llm: { provider: 'codex' } })])
+  s.setClock(Date.UTC(2026, 0, 5, 9, 0, 30))
+  assert.equal(s.scheduler.run('p1', 'a', 'manual').run.sessionId, 's1')
+  s.setSession((g) => { g.status = 'done' })
+  s.setClock(Date.UTC(2026, 0, 5, 9, 5, 10))
+  const { run, error } = s.scheduler.run('p1', 'a', 'schedule', Date.UTC(2026, 0, 5, 9, 5))
+  assert.equal(error, undefined)
+  assert.deepEqual(run, { at: Date.UTC(2026, 0, 5, 9, 5, 10), slot: Date.UTC(2026, 0, 5, 9, 5), trigger: 'schedule', outcome: 'ran', sessionId: 's1' })
+  assert.equal(s.started.length, 1, 'no new session')
+  assert.deepEqual(s.renewed, [{ projectId: 'p1', sessionId: 's1', title: 'Nightly · 09:05', llm: { provider: 'codex' }, initialMessage: 'Triage', cols: 120, rows: 32 }])
+  assert.equal(s.globals().length, 1)
+})
+
+test('run(): a busy run tab is skipped — recorded, nothing started, CONFLICT returned', () => {
+  for (const busy of [{ status: 'working' }, { status: 'attention' }, { status: 'idle', decision: { question: 'q', at: 1 } }]) {
+    const s = setupScheduler([auto()])
+    s.scheduler.run('p1', 'a', 'manual')
+    s.setSession((g) => Object.assign(g, busy))
+    const { run, error } = s.scheduler.run('p1', 'a', 'manual')
+    assert.deepEqual([run.outcome, run.error, run.sessionId, error?.code], ['skipped', 'previous run still working', undefined, 'CONFLICT'], JSON.stringify(busy))
+    assert.deepEqual([s.started.length, s.renewed.length], [1, 0])
+    assert.deepEqual(s.list()[0].history.map((r) => r.outcome), ['skipped', 'ran'])
+  }
+})
+
+test('run(): exited and complete run tabs are renewed; a closed one is replaced by a new one', () => {
+  const s = setupScheduler([auto()])
+  s.scheduler.run('p1', 'a', 'manual')
+  s.setSession((g) => { g.status = 'exited'; g.exitCode = 1 })
+  s.scheduler.run('p1', 'a', 'manual')
+  s.setSession((g) => { g.status = 'complete' })
+  s.scheduler.run('p1', 'a', 'manual')
+  assert.deepEqual([s.started.length, s.renewed.length], [1, 2])
+  assert.equal(s.renewed[0].llm, null, "no llm of its own: the project's Global agent")
+  // The user closed the tab; another automation's tab and a normal tab are not taken.
+  s.projects.apply('p1', (d) => {
+    d.globalSessions = [
+      { id: 'other', title: 'o', llm: { provider: 'claude' }, queue: [], status: 'idle', context: { kind: 'automation', automationId: 'b' } },
+      { id: 'plain', title: 'p', llm: { provider: 'claude' }, queue: [], status: 'idle' }
+    ]
+  })
+  const { run } = s.scheduler.run('p1', 'a', 'manual')
+  assert.deepEqual([run.sessionId, s.started.length, s.renewed.length], ['s2', 2, 2])
+  assert.deepEqual(s.globals().at(-1).context, { kind: 'automation', automationId: 'a' })
+})
+
+test('run(): a renew failure is recorded as failed', () => {
+  const s = setupScheduler([auto()])
+  s.scheduler.run('p1', 'a', 'manual')
+  s.scheduler.deps.sessions.renew = () => { throw Object.assign(new Error('the server is running its maximum of 1 sessions'), { code: 'CAPACITY' }) }
+  const { run, error } = s.scheduler.run('p1', 'a', 'manual')
+  assert.deepEqual([run.outcome, run.error, error.code], ['failed', 'the server is running its maximum of 1 sessions', 'CAPACITY'])
+})
+
+test('automation.runNow on a busy run tab is CONFLICT; resolveMissed reports it as error', () => {
+  const v = setupV2([auto({ missed: { since: T0, count: 1 } })])
+  assert.equal(v.call('automation.runNow', { automationId: 'a' }).ok, true)
+  v.setSession((g) => { g.status = 'working' })
+  const now = v.call('automation.runNow', { automationId: 'a' })
+  assert.deepEqual([now.ok, now.error.code], [false, 'CONFLICT'])
+  const out = v.call('automation.resolveMissed', { run: ['a'], dismiss: [] })
+  assert.deepEqual(out.result, { started: [{ automationId: 'a', error: 'previous run still working' }] })
+  assert.deepEqual(v.list()[0].history.map((r) => [r.trigger, r.outcome]), [['missed', 'skipped'], ['manual', 'skipped'], ['manual', 'ran']])
+  assert.deepEqual([v.started.length, v.renewed.length], [1, 0])
+})
+
+test('automation.delete keeps its run tab, without its context', () => {
+  const v = setupV2([auto(), auto({ id: 'b' })])
+  v.call('automation.runNow', { automationId: 'a' })
+  v.call('automation.runNow', { automationId: 'b' })
+  assert.equal(v.call('automation.delete', { automationId: 'a' }).ok, true)
+  assert.deepEqual(v.globals().map((g) => [g.id, g.context]), [['s1', undefined], ['s2', { kind: 'automation', automationId: 'b' }]])
 })

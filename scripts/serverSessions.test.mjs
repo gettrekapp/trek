@@ -1274,6 +1274,11 @@ test('renew: an exited session starts again fresh; without llm it keeps its agen
   assert.deepEqual([session.status, session.exitCode, session.llm], ['idle', undefined, { provider: 'gemini' }])
   assert.match(cmd(s.spawned[1]), /^gemini /)
   assert.doesNotMatch(cmd(s.spawned[1]), /--resume/)
+  // llm null: the project's Global agent now.
+  s.projects.apply(s.projectId, (d) => { d.settings.globalLlm = { provider: 'codex' } })
+  s.sessions.renew({ projectId: s.projectId, sessionId, initialMessage: 'go', title: 'T', llm: null, ...size })
+  assert.deepEqual(s.project().globalSessions[0].llm, { provider: 'codex' })
+  assert.match(cmd(s.spawned[2]), /^codex /)
 })
 
 test('renew: a discovered-id agent (Codex) drops its old id, launches fresh and discovers the new one', async (t) => {

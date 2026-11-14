@@ -39,6 +39,10 @@ export const automationHandlers: Record<string, Handler> = {
       const list = deleteAutomation(d.automations ?? [], id)
       if (list.length > 0) d.automations = list
       else delete d.automations
+      // Its run tab stays open, as a normal Global session.
+      for (const s of d.globalSessions) {
+        if (s.context?.kind === 'automation' && s.context.automationId === id) delete s.context
+      }
     })
     return null
   },

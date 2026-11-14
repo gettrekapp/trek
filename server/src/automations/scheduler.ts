@@ -2,10 +2,12 @@
 // runs the one whose latest slot is on time (at most LATE_MS old) and records the rest as missed
 // (a laptop asleep, the server down), for the user to answer in a window. Everything it needs is
 // on the project (`lastSlot`, `missed`, `history`), so a restart picks up where it left off and
-// its first check reports the downtime. A run is a new Global session with the prompt as its
-// first message; a failure is recorded, never retried.
+// its first check reports the downtime. Each automation has one run tab, a Global session with
+// `context.automationId` set: a run opens it (none yet, or the user closed it) or renews it as a
+// brand-new conversation, the prompt its first message; while the previous run is still busy the
+// run is skipped. A failure or a skip is recorded, never retried.
 import { readFileSync } from 'node:fs'
-import type { Automation, AutomationMissed, AutomationRun, Project } from '../../../src/shared/model/types'
+import type { Automation, AutomationMissed, AutomationRun, Project, Session, SessionContext } from '../../../src/shared/model/types'
 import { formatWall, parseCron, slotSpan } from '../../../src/shared/cron.ts'
 import type { LlmSelection } from '../../../src/shared/providers/types'
 import { codedError } from '../errors.ts'
@@ -63,11 +65,26 @@ export interface StartGlobal {
   initialMessage: string
   cols: number
   rows: number
+  context: SessionContext
+}
+
+export interface RenewSession {
+  projectId: string
+  sessionId: string
+  title: string
+  /** null: the project's Global agent now */
+  llm: LlmSelection | null
+  initialMessage: string
+  cols: number
+  rows: number
 }
 
 export interface AutomationSchedulerDeps {
   projects: ProjectState
-  sessions: { start(p: StartGlobal): { sessionId: string } }
+  sessions: {
+    start(p: StartGlobal): { sessionId: string }
+    renew(p: RenewSession): unknown
+  }
   now?: () => number
   tickMs?: number
   log?: (message: string) => void
@@ -129,28 +146,46 @@ export class AutomationScheduler {
     }
   }
 
-  /** Starts the automation's Global session now and records it. `error`: why it failed, as thrown. */
+  /**
+   * Runs the automation now in its run tab (opened, or renewed) and records it; skips it while the
+   * tab is busy. `error`: why it failed (as thrown) or was skipped (CONFLICT).
+   */
   run(projectId: string, automationId: string, trigger: AutomationRun['trigger'], slot?: number): { run: AutomationRun; error?: unknown } {
-    const a = this.deps.projects.require(projectId).automations?.find((x) => x.id === automationId)
+    const project = this.deps.projects.require(projectId)
+    const a = project.automations?.find((x) => x.id === automationId)
     if (!a) throw codedError('NOT_FOUND', `No automation with id "${automationId}"`)
     const at = this.now()
     const base = { at, ...(slot !== undefined ? { slot } : {}), trigger }
+    const tab = project.globalSessions.find((s) => s.context?.kind === 'automation' && s.context.automationId === automationId)
+    const title = runTitle(a, slot ?? at)
     let run: AutomationRun
     let error: unknown
-    try {
-      const { sessionId } = this.deps.sessions.start({
-        projectId,
-        worktreeId: null,
-        title: runTitle(a, slot ?? at),
-        ...(a.llm ? { llm: a.llm } : {}),
-        initialMessage: a.prompt,
-        cols: RUN_COLS,
-        rows: RUN_ROWS
-      })
-      run = { ...base, outcome: 'ran', sessionId }
-    } catch (err) {
-      error = err
-      run = { ...base, outcome: 'failed', error: (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) }
+    if (tab && isBusy(tab)) {
+      run = { ...base, outcome: 'skipped', error: SKIPPED }
+      error = codedError('CONFLICT', `${a.name}: ${SKIPPED}`)
+    } else {
+      try {
+        let sessionId: string
+        if (tab) {
+          this.deps.sessions.renew({ projectId, sessionId: tab.id, title, llm: a.llm ?? null, initialMessage: a.prompt, cols: RUN_COLS, rows: RUN_ROWS })
+          sessionId = tab.id
+        } else {
+          ;({ sessionId } = this.deps.sessions.start({
+            projectId,
+            worktreeId: null,
+            title,
+            ...(a.llm ? { llm: a.llm } : {}),
+            initialMessage: a.prompt,
+            cols: RUN_COLS,
+            rows: RUN_ROWS,
+            context: { kind: 'automation', automationId }
+          }))
+        }
+        run = { ...base, outcome: 'ran', sessionId }
+      } catch (err) {
+        error = err
+        run = { ...base, outcome: 'failed', error: (err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) }
+      }
     }
     this.deps.projects.apply(projectId, (d) => {
       const target = d.automations?.find((x) => x.id === automationId)
@@ -158,6 +193,13 @@ export class AutomationScheduler {
     })
     return error === undefined ? { run } : { run, error }
   }
+}
+
+const SKIPPED = 'previous run still working'
+
+/** A run tab still on the previous run: working, waiting on the user, or with an open decision. */
+function isBusy(s: Session): boolean {
+  return s.status === 'working' || s.status === 'attention' || s.decision !== undefined
 }
 
 /** "<name> · HH:MM" in the automation's timezone. */
