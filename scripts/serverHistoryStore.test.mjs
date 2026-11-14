@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, statSync, readFileSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
+import { posixOnly } from './testPlatform.mjs'
 
 function dirFor(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-history-store-')))
@@ -99,8 +100,9 @@ test('dropRepo and dropProject', (t) => {
   assert.equal(store.list('p', 'r2', 'feat').events.length, 0)
 })
 
-const asRoot = process.getuid?.() === 0
-test('a failed write never throws: it is a health warning until a write works again', { skip: asRoot }, (t) => {
+// These make a file or folder unwritable with chmod: root ignores the mode bits, and Windows has none.
+const chmodBlocks = process.getuid?.() === 0 ? 'running as root: chmod does not stop root' : posixOnly('chmod permission bits')
+test('a failed write never throws: it is a health warning until a write works again', { skip: chmodBlocks }, (t) => {
   const dir = dirFor(t)
   let healthChanges = 0
   const store = new HistoryStore(dir, { onHealth: () => healthChanges++ })
@@ -127,7 +129,7 @@ test('a torn last line: the next record is not glued onto it', (t) => {
   assert.deepEqual(new HistoryStore(dir).list('p', 'r', 'feat').events.map((e) => e.id), [b.id, a.id])
 })
 
-test('a failed append is rewritten by the next write', { skip: asRoot }, (t) => {
+test('a failed append is rewritten by the next write', { skip: chmodBlocks }, (t) => {
   const dir = dirFor(t)
   const store = new HistoryStore(dir)
   const [x, y, z] = [ev(), ev(), ev()]
@@ -141,7 +143,7 @@ test('a failed append is rewritten by the next write', { skip: asRoot }, (t) => 
   assert.deepEqual(new HistoryStore(dir).list('p', 'r', 'feat').events.map((e) => e.id), [z.id, y.id, x.id])
 })
 
-test('health is kept while any project is failing', { skip: asRoot }, (t) => {
+test('health is kept while any project is failing', { skip: chmodBlocks }, (t) => {
   const dir = dirFor(t)
   const store = new HistoryStore(dir)
   store.record('p', ev())
@@ -155,7 +157,7 @@ test('health is kept while any project is failing', { skip: asRoot }, (t) => {
   assert.deepEqual(store.health(), [])
 })
 
-test('clearing one project\'s problem while another still fails updates the warning and tells clients', { skip: asRoot }, (t) => {
+test('clearing one project\'s problem while another still fails updates the warning and tells clients', { skip: chmodBlocks }, (t) => {
   const dir = dirFor(t)
   let changes = 0
   const store = new HistoryStore(dir, { onHealth: () => changes++ })
