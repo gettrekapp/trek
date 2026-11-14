@@ -4,9 +4,9 @@ import type { HistoryActor, HistoryEvent, HistoryValue } from './model/history.t
 /** Words, and values shown as they were (a tag as a chip in its colour) */
 export type HistoryPart = string | HistoryValue
 
-/** "#42" for a GitHub pull URL, else the text as it is */
+/** "#42" for a GitHub or Azure DevOps pull URL, else the text as it is */
 export function prLabel(url: string): string {
-  const match = url.match(/\/pull\/(\d+)/)
+  const match = url.match(/\/pull(?:request)?\/(\d+)/)
   return match ? `#${match[1]}` : url
 }
 
@@ -48,6 +48,9 @@ export function describeParts(e: HistoryEvent): HistoryPart[] {
       return to ? ['Moved to ', to] : ['Moved to another server']
     case 'moved.in':
       return from ? ['Moved in from ', from] : ['Moved in from another server']
+    default:
+      // A newer server's kind must not break an older client
+      return [String((e as { kind: unknown }).kind)]
   }
 }
 

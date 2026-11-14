@@ -9,6 +9,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
+import { MAX_HISTORY_REASON, MAX_VALUE_TEXT } from '../src/shared/model/history.ts'
 import { BY_TREK, branchChanges, recordHistory, tagValue } from '../server/src/history/record.ts'
 
 const settings = {
@@ -16,11 +17,12 @@ const settings = {
   customTags: [{ id: 'bl', name: 'Blocked', color: '#ff0000' }, { id: 'ui', name: 'UI', color: '#00ff00' }]
 }
 
-function storeFor(t) {
+function dirFor(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-history-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return new HistoryStore(join(dir, 'history'))
+  return join(dir, 'history')
 }
+const storeFor = (t) => new HistoryStore(dirFor(t))
 
 test('tagValue snapshots the name and colour; an unknown id keeps its id as the text', () => {
   assert.deepEqual(tagValue(settings.worktreeTags, 'rv'), { id: 'rv', text: 'Review', color: '#ffaa00' })
@@ -76,4 +78,16 @@ test('recordHistory folds a quick note edit by the same actor into the newest no
   // A clear folded in reads as cleared.
   recordHistory(ctx, 'p', 'r', 'feat', [{ kind: 'note', to: { text: 'cleared' } }], { actor: { kind: 'mcp' } }, 3001 + 5 * 60_000)
   assert.equal(history.list('p', 'r', 'feat').events[0].to.text, 'cleared')
+})
+
+test('long text is clamped when recorded, so the entry survives a reload', (t) => {
+  const dir = dirFor(t)
+  const history = new HistoryStore(dir)
+  const [c] = branchChanges('ticket', undefined, 'T'.repeat(3000), settings)
+  assert.equal(c.to.text.length, MAX_VALUE_TEXT)
+  recordHistory({ history }, 'p', 'r', 'feat', [c], { actor: { kind: 'mcp' }, reason: 'R'.repeat(900) })
+  const [e] = history.list('p', 'r', 'feat').events
+  assert.equal(e.reason.length, MAX_HISTORY_REASON)
+  const again = new HistoryStore(dir)
+  assert.equal(again.list('p', 'r', 'feat').events.length, 1)
 })

@@ -32,7 +32,13 @@ export class HistoryStore {
   private readonly max: number
   private readonly options: HistoryStoreOptions
   private readonly projects = new Map<string, Loaded>()
-  private failed?: HealthWarning
+  /** Projects whose last write or read failed → the message; the warning shows while any is here */
+  private readonly problems = new Map<string, string>()
+  private warning?: HealthWarning
+  /** Projects whose file may lack events held in memory (a failed write, a torn last line): the next write rewrites the file */
+  private readonly dirty = new Set<string>()
+  /** Projects whose file could not be read: never rewritten or deleted, kept in memory only */
+  private readonly readFailed = new Set<string>()
 
   constructor(dir: string, options: HistoryStoreOptions = {}) {
     this.dir = dir
@@ -42,14 +48,24 @@ export class HistoryStore {
 
   /** Records an event (an id already there replaces it). Never throws. */
   record(projectId: string, event: HistoryEvent): void {
+    if (!isHistoryEvent(event)) {
+      console.warn(`[history] refused an invalid ${(event as { kind?: unknown })?.kind} event for ${projectId}`)
+      return
+    }
     const loaded = this.load(projectId)
     this.put(loaded, event)
-    this.write(projectId, () => {
-      mkdirSync(this.dir, { recursive: true, mode: 0o700 })
-      appendFileSync(this.file(projectId), JSON.stringify(event) + '\n', { mode: 0o600 })
-    })
-    loaded.lines++
-    if (loaded.lines > 2 * this.live(loaded) + 50) this.compact(projectId)
+    if (this.readFailed.has(projectId)) {
+      console.warn(`[history] ${projectId}: kept in memory only (its file could not be read)`)
+    } else if (this.dirty.has(projectId)) {
+      this.compact(projectId)
+    } else {
+      const ok = this.write(projectId, () => {
+        mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+        appendFileSync(this.file(projectId), JSON.stringify(event) + '\n', { mode: 0o600 })
+      })
+      loaded.lines++
+      if (ok && loaded.lines > 2 * this.live(loaded) + 50) this.compact(projectId)
+    }
     try {
       this.options.onRecorded?.(projectId, event)
     } catch (err) {
@@ -71,7 +87,8 @@ export class HistoryStore {
       const at = all.findIndex((e) => e.id === options.before)
       end = at >= 0 ? at : 0
     }
-    const start = Math.max(0, end - (options.limit ?? HISTORY_PAGE_SIZE))
+    const asked = Number.isFinite(options.limit) ? Math.floor(options.limit as number) : HISTORY_PAGE_SIZE
+    const start = Math.max(0, end - Math.min(Math.max(asked, 1), HISTORY_PAGE_SIZE))
     return { events: all.slice(start, end).reverse(), more: start > 0 }
   }
 
@@ -99,7 +116,9 @@ export class HistoryStore {
     const loaded = this.load(projectId)
     const key = keyOf(repoId, branch)
     const drop = new Set(ids)
-    const left = (loaded.branches.get(key) ?? []).filter((e) => !drop.has(e.id))
+    const had = loaded.branches.get(key) ?? []
+    const left = had.filter((e) => !drop.has(e.id))
+    if (left.length === had.length) return
     if (left.length > 0) loaded.branches.set(key, left)
     else loaded.branches.delete(key)
     this.compact(projectId)
@@ -108,24 +127,33 @@ export class HistoryStore {
   /** A repository left the project */
   dropRepo(projectId: string, repoId: string): void {
     const loaded = this.load(projectId)
-    for (const key of [...loaded.branches.keys()]) if (key.startsWith(`${repoId}\0`)) loaded.branches.delete(key)
+    const keys = [...loaded.branches.keys()].filter((key) => key.startsWith(`${repoId}\0`))
+    if (keys.length === 0) return
+    for (const key of keys) loaded.branches.delete(key)
     this.compact(projectId)
   }
 
   /** The project was deleted */
   dropProject(projectId: string): void {
-    this.projects.delete(projectId)
-    this.write(projectId, () => {
+    if (this.readFailed.has(projectId)) {
+      console.warn(`[history] ${projectId}: not deleting a file that could not be read`)
+      return
+    }
+    const ok = this.write(projectId, () => {
       try {
         unlinkSync(this.file(projectId))
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
       }
     })
+    if (ok) {
+      this.projects.delete(projectId)
+      this.dirty.delete(projectId)
+    }
   }
 
   health(): HealthWarning[] {
-    return this.failed ? [this.failed] : []
+    return this.warning ? [this.warning] : []
   }
 
   private file(projectId: string): string {
@@ -140,8 +168,14 @@ export class HistoryStore {
     try {
       text = readFileSync(this.file(projectId), 'utf8')
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn(`[history] could not read ${projectId}: ${(err as Error).message}`)
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn(`[history] could not read ${projectId}: ${(err as Error).message}`)
+        this.readFailed.add(projectId)
+        this.setProblem(projectId, `Could not read worktree history: ${(err as Error).message}`)
+      }
     }
+    // A torn last line (a crash mid-append): the next append would be glued to it
+    if (text !== '' && !text.endsWith('\n')) this.dirty.add(projectId)
     for (const line of text.split('\n')) {
       if (!line.trim()) continue
       loaded.lines++
@@ -176,26 +210,51 @@ export class HistoryStore {
 
   private compact(projectId: string): void {
     const loaded = this.load(projectId)
+    if (this.readFailed.has(projectId)) return
     const events = [...loaded.branches.values()].flat().sort((a, b) => a.at - b.at)
-    this.write(projectId, () => writeFileAtomic(this.file(projectId), events.map((e) => JSON.stringify(e) + '\n').join(''), 0o600))
-    loaded.lines = events.length
+    const ok = this.write(projectId, () => {
+      mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+      writeFileAtomic(this.file(projectId), events.map((e) => JSON.stringify(e) + '\n').join(''), 0o600)
+    })
+    if (ok) {
+      this.dirty.delete(projectId)
+      loaded.lines = events.length
+    }
   }
 
-  private write(projectId: string, fn: () => void): void {
+  private write(projectId: string, fn: () => void): boolean {
     try {
       fn()
-      if (this.failed) {
-        this.failed = undefined
-        this.healthChanged()
-      }
+      this.clearProblem(projectId)
+      return true
     } catch (err) {
-      const message = `Could not save worktree history: ${(err as Error).message}`
       console.warn(`[history] ${projectId}: ${(err as Error).message}`)
-      if (this.failed?.message !== message) {
-        this.failed = { code: 'HISTORY_FAILED', message, since: this.failed?.since ?? Date.now() }
-        this.healthChanged()
-      }
+      this.dirty.add(projectId)
+      this.setProblem(projectId, `Could not save worktree history: ${(err as Error).message}`)
+      return false
     }
+  }
+
+  private setProblem(projectId: string, message: string): void {
+    const before = this.warning
+    this.problems.set(projectId, message)
+    const shown = this.problems.values().next().value as string
+    if (before && before.message === shown) return
+    this.warning = { code: 'HISTORY_FAILED', message: shown, since: before?.since ?? Date.now() }
+    this.healthChanged()
+  }
+
+  private clearProblem(projectId: string): void {
+    // A project that could not be read stays a problem until restart
+    if (!this.problems.has(projectId) || this.readFailed.has(projectId)) return
+    this.problems.delete(projectId)
+    if (this.problems.size > 0) {
+      const shown = this.problems.values().next().value as string
+      if (this.warning && this.warning.message !== shown) this.warning = { ...this.warning, message: shown }
+      return
+    }
+    this.warning = undefined
+    this.healthChanged()
   }
 
   private healthChanged(): void {

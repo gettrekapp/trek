@@ -1,7 +1,7 @@
 // scripts/serverHistoryStore.test.mjs — the worktree history's files: append, reload, cap, compaction, health.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, statSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
@@ -99,7 +99,8 @@ test('dropRepo and dropProject', (t) => {
   assert.equal(store.list('p', 'r2', 'feat').events.length, 0)
 })
 
-test('a failed write never throws: it is a health warning until a write works again', (t) => {
+const asRoot = process.getuid?.() === 0
+test('a failed write never throws: it is a health warning until a write works again', { skip: asRoot }, (t) => {
   const dir = dirFor(t)
   let healthChanges = 0
   const store = new HistoryStore(dir, { onHealth: () => healthChanges++ })
@@ -114,4 +115,74 @@ test('a failed write never throws: it is a health warning until a write works ag
   store.record('p2', ev())
   assert.deepEqual(store.health(), [])
   assert.equal(healthChanges, 2)
+})
+
+test('a torn last line: the next record is not glued onto it', (t) => {
+  const dir = dirFor(t)
+  const a = ev(), b = ev()
+  new HistoryStore(dir).record('p', a)
+  writeFileSync(join(dir, 'p.jsonl'), readFileSync(join(dir, 'p.jsonl'), 'utf8') + '{"id":"torn"')
+  const store = new HistoryStore(dir)
+  store.record('p', b)
+  assert.deepEqual(new HistoryStore(dir).list('p', 'r', 'feat').events.map((e) => e.id), [b.id, a.id])
+})
+
+test('a failed append is rewritten by the next write', { skip: asRoot }, (t) => {
+  const dir = dirFor(t)
+  const store = new HistoryStore(dir)
+  const [x, y, z] = [ev(), ev(), ev()]
+  store.record('p', x)
+  chmodSync(join(dir, 'p.jsonl'), 0o400)
+  store.record('p', y)
+  assert.equal(store.health().length, 1)
+  chmodSync(join(dir, 'p.jsonl'), 0o600)
+  store.record('p', z)
+  assert.deepEqual(store.health(), [])
+  assert.deepEqual(new HistoryStore(dir).list('p', 'r', 'feat').events.map((e) => e.id), [z.id, y.id, x.id])
+})
+
+test('health is kept while any project is failing', { skip: asRoot }, (t) => {
+  const dir = dirFor(t)
+  const store = new HistoryStore(dir)
+  store.record('p', ev())
+  store.record('q', ev())
+  chmodSync(join(dir, 'p.jsonl'), 0o400)
+  store.record('p', ev())
+  store.record('q', ev())
+  assert.equal(store.health().length, 1)
+  chmodSync(join(dir, 'p.jsonl'), 0o600)
+  store.record('p', ev())
+  assert.deepEqual(store.health(), [])
+})
+
+test('an invalid event is refused: no write, no onRecorded', (t) => {
+  const dir = dirFor(t)
+  const recorded = []
+  const store = new HistoryStore(dir, { onRecorded: (_p, e) => recorded.push(e.id) })
+  store.record('p', ev({ kind: 'bogus' }))
+  assert.deepEqual(recorded, [])
+  assert.equal(existsSync(join(dir, 'p.jsonl')), false)
+  assert.equal(store.list('p', 'r', 'feat').events.length, 0)
+})
+
+test('a file that cannot be read is never rewritten or deleted', (t) => {
+  const dir = dirFor(t)
+  mkdirSync(join(dir, 'p.jsonl'), { recursive: true })
+  const store = new HistoryStore(dir)
+  assert.doesNotThrow(() => store.record('p', ev()))
+  assert.doesNotThrow(() => store.dropRepo('p', 'r'))
+  assert.doesNotThrow(() => store.dropProject('p'))
+  assert.equal(statSync(join(dir, 'p.jsonl')).isDirectory(), true)
+  assert.equal(store.health()[0].code, 'HISTORY_FAILED')
+})
+
+test('list clamps its limit; remove and dropRepo of nothing change nothing', (t) => {
+  const store = new HistoryStore(dirFor(t))
+  for (let i = 0; i < 3; i++) store.record('p', ev())
+  assert.equal(store.list('p', 'r', 'feat', { limit: 0 }).events.length, 1)
+  assert.equal(store.list('p', 'r', 'feat', { limit: -5 }).events.length, 1)
+  assert.equal(store.list('p', 'r', 'feat', { limit: 1e9 }).events.length, 3)
+  store.remove('p', 'r', 'feat', ['nope'])
+  store.dropRepo('p', 'none')
+  assert.equal(store.list('p', 'r', 'feat').events.length, 3)
 })

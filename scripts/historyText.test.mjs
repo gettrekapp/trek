@@ -77,3 +77,8 @@ test('mergeHistory: union by id (the later `at` wins), newest first', () => {
   const merged = mergeHistory([ev({ id: 'a', at: 3 }), ev({ id: 'b', at: 2 })], [ev({ id: 'b', at: 5, to: { text: 'edited' } }), ev({ id: 'c', at: 1 })])
   assert.deepEqual(merged.map((e) => [e.id, e.at]), [['b', 5], ['a', 3], ['c', 1]])
 })
+
+test('an unknown kind from a newer server reads as itself; Azure DevOps PRs read as #N', () => {
+  assert.deepEqual(describeParts(ev({ kind: 'future.kind' })), ['future.kind'])
+  assert.equal(describeEvent(ev({ kind: 'pr', to: { text: 'https://dev.azure.com/o/p/_git/r/pullrequest/7' } })), 'PR set to #7')
+})

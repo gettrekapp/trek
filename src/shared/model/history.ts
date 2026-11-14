@@ -66,9 +66,9 @@ export const MAX_HISTORY_PER_BRANCH = 500
 export const MAX_HISTORY_REASON = 500
 /** `history.list`'s page, and its largest `limit` */
 export const HISTORY_PAGE_SIZE = 100
-/** A note edit by the same actor this soon after the branch's newest note entry updates it */
+/** The branch's newest entry, when it is a note edit by the same actor (an MCP call without a terminalId counts as one actor) and under this old, is updated instead of a new entry; each fold moves the window */
 export const NOTE_COALESCE_MS = 5 * 60_000
-const MAX_VALUE_TEXT = 2000
+export const MAX_VALUE_TEXT = 2000
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const optionalString = (v: unknown): boolean => v === undefined || typeof v === 'string'

@@ -2,7 +2,7 @@
 // for a Trek client (the user), set by the MCP tool caller (`mcp`, its session and reason), or
 // passed as BY_TREK for what the server does by itself. Recording never throws.
 import { randomUUID } from 'node:crypto'
-import { NOTE_COALESCE_MS, type HistoryActor, type HistoryKind, type HistoryValue } from '../../../src/shared/model/history.ts'
+import { MAX_HISTORY_REASON, MAX_VALUE_TEXT, NOTE_COALESCE_MS, type HistoryActor, type HistoryKind, type HistoryValue } from '../../../src/shared/model/history.ts'
 import type { WorktreeTag } from '../../../src/shared/types'
 import type { HistoryStore } from './store.ts'
 
@@ -49,6 +49,8 @@ export function recordHistory(
 ): void {
   const store = ctx.history
   if (!store || !branch) return
+  const reason = attribution.reason?.slice(0, MAX_HISTORY_REASON)
+  attribution = { actor: attribution.actor, ...(reason ? { reason } : {}) }
   for (const c of changes) {
     try {
       const latest = c.kind === 'note' ? store.latest(projectId, repoId, branch) : undefined
@@ -82,11 +84,11 @@ export function recordHistory(
 export function tagValue(tags: readonly WorktreeTag[] | undefined, id: string | undefined): HistoryValue | undefined {
   if (!id) return undefined
   const tag = tags?.find((t) => t?.id === id)
-  if (!tag || typeof tag.name !== 'string') return { id, text: id }
-  return { id, text: tag.name, ...(typeof tag.color === 'string' ? { color: tag.color } : {}) }
+  if (!tag || typeof tag.name !== 'string') return { id, text: id.slice(0, MAX_VALUE_TEXT) }
+  return { id, text: tag.name.slice(0, MAX_VALUE_TEXT), ...(typeof tag.color === 'string' ? { color: tag.color } : {}) }
 }
 
-const textValue = (value: unknown): HistoryValue | undefined => (typeof value === 'string' && value ? { text: value } : undefined)
+const textValue = (value: unknown): HistoryValue | undefined => (typeof value === 'string' && value ? { text: value.slice(0, MAX_VALUE_TEXT) } : undefined)
 
 /** What setting one branch-data field from `before` to `after` records (nothing for env and prWatch) */
 export function branchChanges(
