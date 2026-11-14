@@ -390,7 +390,7 @@ try {
   check('Reveal shows the repository in Finder', await until(() => app.evaluate(() => globalThis.__revealed), [repo]), [repo])
   const tabs = () => detail.locator('.session-row .panel-btn').evaluateAll((els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()))
   // The repository has docker/stack/stack.sh too, so main has a Stack tab (once its status is read).
-  const mainTabs = ['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack', '⚙']
+  const mainTabs = ['Changes', 'Notes', 'History', 'All Notes', 'Docker ▾', 'Stack', '⏰', '⚙']
   check("main's tabs: All Notes, Docker and Stack", await until(() => tabs(), mainTabs), mainTabs)
   await detail.locator('.docker-menu-trigger').click()
   await win.locator('.docker-menu .skill-menu-item', { hasText: 'compose up -d' }).first().click()
@@ -418,7 +418,7 @@ try {
   check("the feature row has a running env badge, main's row none", [await until(() => featureRow.locator('.mini-chip.env.running').count(), 1), await mainRow.locator('.mini-chip.env').count()], [1, 0])
   await featureRow.click()
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
-  check('its tabs: Env and Stack, no Docker', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack', '⚙']), ['Changes', 'Notes', 'History', 'Env', 'Stack', '⚙'])
+  check('its tabs: Env and Stack, no Docker', await until(() => tabs(), ['Changes', 'Notes', 'History', 'Env', 'Stack', '⏰', '⚙']), ['Changes', 'Notes', 'History', 'Env', 'Stack', '⏰', '⚙'])
   check("its header's env chip shows the VM", (await detail.locator('.chip-env').first().innerText()).trim(), 'Env · 192.168.106.5')
   await (await menuItem('Open in VS Code')).click()
   check('Open in VS Code runs `code` on the worktree', await until(() => callsOf('code').at(-1), worktree), worktree)

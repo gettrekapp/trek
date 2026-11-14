@@ -57,7 +57,7 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
     }
   }, [deletedElsewhere])
   return (
-    <div className="automations-panel settings-panel" style={{ display: visible ? 'flex' : 'none' }}>
+    <div className="automations-panel" style={{ display: visible ? 'flex' : 'none' }}>
       {editing && !deletedElsewhere ? (
         <AutomationEditor key={editing} automation={editingAutomation} onDone={() => setEditing(null)} />
       ) : (
