@@ -156,26 +156,51 @@ function tagIds(tags: unknown): Set<string> {
  * patch. Returns the repositories, the unchanged ones as they were.
  */
 export function pruneDeletedTags(repositories: Repository[], settings: ProjectSettings, patch: Record<string, unknown>): Repository[] {
+  return pruneDeletedTagsReporting(repositories, settings, patch).repositories
+}
+
+/** What a tag cascade took off one branch */
+export interface RemovedTags {
+  repoId: string
+  branch: string
+  tag?: string
+  customTags: string[]
+}
+
+/** pruneDeletedTags, also saying which tag and custom tag ids it took off which branches */
+export function pruneDeletedTagsReporting(
+  repositories: Repository[],
+  settings: ProjectSettings,
+  patch: Record<string, unknown>
+): { repositories: Repository[]; removed: RemovedTags[] } {
+  const removed: RemovedTags[] = []
   const tags = Object.hasOwn(patch, 'worktreeTags') && patch.worktreeTags !== undefined
     ? tagIds(settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS)
     : undefined
   const custom = Object.hasOwn(patch, 'customTags') && patch.customTags !== undefined ? tagIds(settings.customTags) : undefined
-  if (!tags && !custom) return repositories
-  return repositories.map((repo) => {
+  if (!tags && !custom) return { repositories, removed }
+  const next = repositories.map((repo) => {
     let branchData: Record<string, BranchData> | undefined
     for (const [branch, data] of Object.entries(repo.branchData)) {
       const dropTag = tags !== undefined && data.tag !== undefined && !tags.has(data.tag)
       const kept = custom && data.customTags?.filter((id) => custom.has(id))
       const dropCustom = kept !== undefined && kept.length !== data.customTags!.length
       if (!dropTag && !dropCustom) continue
-      const next: BranchData = { ...data }
-      if (dropTag) delete next.tag
-      if (dropCustom && kept.length > 0) next.customTags = kept
-      else if (dropCustom) delete next.customTags
+      const nextData: BranchData = { ...data }
+      if (dropTag) delete nextData.tag
+      if (dropCustom && kept.length > 0) nextData.customTags = kept
+      else if (dropCustom) delete nextData.customTags
+      removed.push({
+        repoId: repo.id,
+        branch,
+        ...(dropTag ? { tag: data.tag } : {}),
+        customTags: dropCustom ? data.customTags!.filter((id) => !custom!.has(id)) : []
+      })
       branchData ??= { ...repo.branchData }
-      if (Object.keys(next).length === 0) delete branchData[branch]
-      else branchData[branch] = next
+      if (Object.keys(nextData).length === 0) delete branchData[branch]
+      else branchData[branch] = nextData
     }
     return branchData ? { ...repo, branchData } : repo
   })
+  return { repositories: next, removed }
 }

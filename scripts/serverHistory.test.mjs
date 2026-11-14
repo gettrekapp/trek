@@ -287,3 +287,23 @@ test('worktree.create records created, and the default tag as Trek; worktree.rem
   events = s.history.list(s.projectId, s.repoId, 'feat').events
   assert.deepEqual([events[0].kind, events[0].from.text], ['removed', join(s.dir, 'repos', 'a-feat')])
 })
+
+test('deleting a tag or label in Settings records status / label.removed on each branch that had it', async (t) => {
+  const s = await setup(t)
+  await s.call('project.updateSettings', { projectId: s.projectId, settings: { worktreeTags: settings.worktreeTags, customTags: settings.customTags } })
+  const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }
+  await s.call('branch.setTag', { ...ref, tag: 'rv' })
+  await s.call('branch.setCustomTags', { ...ref, customTags: ['bl', 'ui'] })
+  const count = s.history.list(s.projectId, s.repoId, 'feat').events.length
+  // A change that removes nothing records nothing.
+  await s.call('project.updateSettings', { projectId: s.projectId, settings: { worktreeTags: [...settings.worktreeTags, { id: 'x', name: 'X', color: '#000000' }] } })
+  assert.equal(s.history.list(s.projectId, s.repoId, 'feat').events.length, count)
+  await s.call('project.updateSettings', { projectId: s.projectId, settings: { worktreeTags: [settings.worktreeTags[0]], customTags: [settings.customTags[1]] } })
+  const events = s.history.list(s.projectId, s.repoId, 'feat').events.slice(0, 2)
+  const status = events.find((e) => e.kind === 'status')
+  const label = events.find((e) => e.kind === 'label.removed')
+  assert.equal(status.from.text, 'Review')
+  assert.equal(status.to, undefined)
+  assert.equal(label.from.text, 'Blocked')
+  assert.deepEqual(events.map((e) => e.actor.kind), ['user', 'user'])
+})

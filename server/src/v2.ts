@@ -23,7 +23,7 @@ import { moveHandlers } from './move/moveHandlers.ts'
 import { promoteHandlers } from './promote/promoteHandlers.ts'
 import { historyHandlers } from './history/historyHandlers.ts'
 import type { HistoryStore } from './history/store.ts'
-import { branchChanges, recordHistory, type Attribution } from './history/record.ts'
+import { branchChanges, change, recordHistory, tagValue, type Attribution } from './history/record.ts'
 import type { PromoteRequests } from './promote/requests.ts'
 import type { PrWatcher } from './prWatch/watcher.ts'
 import type { Integrations } from './integrations/integrations.ts'
@@ -33,7 +33,8 @@ import { checkImport } from './projects/importCheck.ts'
 import { findRegistered, newRepository, repoIn } from './projects/model.ts'
 import type { ProjectState } from './projects/state.ts'
 import type { SessionManager } from './sessions/manager.ts'
-import { applySettingsPatch, isSettingsKey, pruneDeletedTags } from './projects/settings.ts'
+import { DEFAULT_WORKTREE_TAGS, type WorktreeTag } from '../../src/shared/types.ts'
+import { applySettingsPatch, isSettingsKey, pruneDeletedTagsReporting, type RemovedTags } from './projects/settings.ts'
 import { realOrResolved } from './repos.ts'
 import { checkSetGrant, type PushGrants } from './push/grants.ts'
 import {
@@ -194,16 +195,29 @@ const handlers: Record<string, Handler> = {
   'project.updateSettings': (p, ctx) => {
     const patch = requireRecord(p.settings, 'settings')
     const expected = p.expected === undefined ? undefined : requireRecord(p.expected, 'expected')
+    let removed: RemovedTags[] = []
+    let oldTags: WorktreeTag[] | undefined
+    let oldCustom: WorktreeTag[] | undefined
     ctx.projects.apply(p.projectId, (d) => {
       const current = d.settings as Record<string, unknown>
+      oldTags = d.settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS
+      oldCustom = d.settings.customTags
       for (const [key, value] of Object.entries(expected ?? {})) {
         if (!isSettingsKey(key, ctx.plugins?.settingRules)) throw codedError('BAD_REQUEST', `expected.${key} is not a project setting`)
         checkExpected(`settings.${key}`, Object.hasOwn(current, key) ? current[key] : undefined, value)
       }
       d.settings = applySettingsPatch(d.settings, patch, ctx.plugins?.settingRules)
       // A deleted tag comes off every branch in the same change (one patch, one rev).
-      d.repositories = pruneDeletedTags(d.repositories, d.settings, patch)
+      const pruned = pruneDeletedTagsReporting(d.repositories, d.settings, patch)
+      d.repositories = pruned.repositories
+      removed = pruned.removed
     })
+    for (const r of removed) {
+      recordHistory(ctx, p.projectId as string, r.repoId, r.branch, [
+        ...(r.tag ? [change('status', tagValue(oldTags, r.tag))] : []),
+        ...r.customTags.map((id) => change('label.removed', tagValue(oldCustom, id)))
+      ])
+    }
     // The attention topic carries the project's audioAlerts.
     ctx.sessions.refreshAttention()
     return null

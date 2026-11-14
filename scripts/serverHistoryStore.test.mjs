@@ -220,3 +220,16 @@ test('dropProject of a project whose file could not be read leaves the file but 
   assert.deepEqual(store.health(), [])
   assert.equal(changes, before + 1)
 })
+
+test('import: an id repeated in the batch is kept once; an at in the future is clamped to now', (t) => {
+  const store = new HistoryStore(dirFor(t))
+  const a = ev({ at: 100 })
+  const future = ev({ at: Date.now() + 10 * 60_000 })
+  const before = Date.now()
+  const added = store.import('p', 'r2', 'moved', [a, { ...a, kind: 'removed' }, future])
+  assert.deepEqual(added, [a.id, future.id])
+  const events = store.branch('p', 'r2', 'moved')
+  assert.equal(events.length, 2)
+  assert.equal(events[0].kind, 'created', 'the first of the repeated id')
+  assert.ok(events[1].at >= before && events[1].at <= Date.now())
+})

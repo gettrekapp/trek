@@ -102,12 +102,18 @@ export class HistoryStore {
     return [...(this.load(projectId).branches.get(keyOf(repoId, branch)) ?? [])]
   }
 
-  /** A move's events, re-keyed to this repository and branch; ids already here are skipped. The ids added. */
+  /** A move's events, re-keyed to this repository and branch; ids already here (or repeated in the batch) are skipped, and each `at` is capped at now. The ids added. */
   import(projectId: string, repoId: string, branch: string, events: readonly HistoryEvent[]): string[] {
     const loaded = this.load(projectId)
     const current = this.branch(projectId, repoId, branch)
     const have = new Set(current.map((e) => e.id))
-    const added = events.filter((e) => !have.has(e.id)).map((e) => ({ ...e, repoId, branch }))
+    const now = Date.now()
+    // Each id once (the first), and never later than now: a source with a fast clock must not sort after this server's newer entries.
+    const added = events.filter((e) => {
+      if (have.has(e.id)) return false
+      have.add(e.id)
+      return true
+    }).map((e) => ({ ...e, at: Math.min(e.at, now), repoId, branch }))
     if (added.length === 0) return []
     const merged = [...current, ...added].sort((a, b) => a.at - b.at).slice(-this.max)
     loaded.branches.set(keyOf(repoId, branch), merged)
