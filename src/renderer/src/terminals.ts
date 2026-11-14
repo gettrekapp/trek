@@ -19,6 +19,7 @@ import {
   type TermSize
 } from './v2/terminalSync'
 import { errorCode, errorText } from './v2/errors'
+import { tabView } from './globalTabs'
 
 /**
  * Owns the live xterm instances of a server window's sessions. These live
@@ -139,7 +140,8 @@ export function revealTerminal(id: string): void {
   const meta = store.terminals[id]
   if (!meta) return
   if (meta.worktreeId === GLOBAL_WORKTREE_ID) {
-    store.setGlobalView('sessions')
+    // An automation's run tab is in the drawer's Automations view.
+    store.setGlobalView(tabView(meta))
     store.setGlobalPanelOpen(true)
   } else {
     store.setActiveWorktree(meta.worktreeId)

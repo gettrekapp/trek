@@ -41,6 +41,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   const st = {
     project: { name: 'p', version: 3, repositories: [repo()], globalSessions: [] },
     terminals: {},
+    terminalOrder: {},
     terminalQueues: {},
     loadedWorktrees: {},
     hostWorktrees: { 'r1 local': [{ path: '/r', repoId: 'r1', isMain: true }] },
@@ -373,12 +374,18 @@ test('openGlobal starts one session only when there are none, and never twice at
   const { backend, calls, st } = setup({ replies: { 'session.start': { sessionId: 'g1', ptyId: 'pg' } } })
   await Promise.all([backend.sessions.openGlobal(), backend.sessions.openGlobal()])
   assert.deepEqual(calls, [['session.start', { projectId: 'p1', worktreeId: null, ...V2_START_SIZE }]])
-  st.project.globalSessions = [{ sessionId: 'g1', title: 'Claude' }]
+  // Only automation run tabs: they do not count, the drawer still gets a normal tab.
+  st.terminalOrder = { __global__: ['r1'] }
+  st.terminals = { r1: { id: 'r1', worktreeId: '__global__', title: 'Daily · 09:00', sessionId: 'x', status: 'idle', context: { kind: 'automation', automationId: 'a1' } } }
   await backend.sessions.openGlobal()
-  assert.equal(calls.length, 1)
+  assert.equal(calls.length, 2)
+  st.terminalOrder = { __global__: ['r1', 'g1'] }
+  st.terminals.g1 = { id: 'g1', worktreeId: '__global__', title: 'Claude', sessionId: 'g1', status: 'idle' }
+  await backend.sessions.openGlobal()
+  assert.equal(calls.length, 2)
   // A new tab (+) always starts one.
   await backend.sessions.startGlobal()
-  assert.equal(calls.length, 2)
+  assert.equal(calls.length, 3)
 })
 
 test('a failed global start rejects and clears the shared promise', async () => {

@@ -142,6 +142,8 @@ export function pullRequestLabel(url: string): string {
 /** repoId is stamped on selection, so a row that later vanishes still has a repository. */
 export type SelectedWorktree = WorktreeLocator & { repoId?: string }
 
+export type GlobalView = 'sessions' | 'automations' | 'bot'
+
 export interface TerminalMeta {
   id: string
   worktreeId: string
@@ -219,7 +221,8 @@ export interface AppState {
   globalQueuePanelOpen: boolean
   /** Whether the global Claude panel at the bottom of the window is expanded. */
   globalPanelOpen: boolean
-  globalView: 'sessions' | 'bot'
+  /** The Global drawer's view: its normal tabs, the automations' run tabs, or the bot */
+  globalView: GlobalView
   /** The missed-runs set the user closed the modal on (MissedRunsModal); null: show it whenever there is one */
   missedDismissedKey: string | null
   setMissedDismissedKey: (key: string | null) => void
@@ -278,7 +281,7 @@ export interface AppState {
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
-  setGlobalView: (view: 'sessions' | 'bot') => void
+  setGlobalView: (view: GlobalView) => void
   setBotView: (view: BotView) => void
   setBotEvents: (events: BotEvent[]) => void
   addBotEvent: (event: BotEvent) => void

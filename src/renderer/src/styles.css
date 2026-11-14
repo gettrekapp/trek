@@ -3848,6 +3848,23 @@ body.resizing-row {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* The Global drawer's Automations view toggle: at the strip's end, beside the tabs it switches between. */
+.global-tab.automations-tab {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.automations-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+.automations-tab-dot.decision {
+  background: var(--decision);
+}
+
 .stack-starter {
   display: inline-flex;
   align-items: center;
