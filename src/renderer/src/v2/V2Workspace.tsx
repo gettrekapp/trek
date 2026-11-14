@@ -8,6 +8,7 @@ import { Sidebar } from '../components/Sidebar'
 import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
 import { GlobalClaude } from '../components/GlobalClaude'
+import { MissedRunsModal } from '../components/MissedRunsModal'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 
 /**
@@ -56,6 +57,7 @@ export function V2Workspace(): React.JSX.Element {
         <RepoPathPrompt />
       </div>
       {globalMode !== 'hidden' && <GlobalClaude readOnly={globalMode === 'readOnly'} />}
+      {features.automations && <MissedRunsModal />}
     </>
   )
 }

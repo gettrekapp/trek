@@ -27,7 +27,8 @@ import {
 } from './promoteFlow.ts'
 import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
 import type { PluginPresence } from '../../../shared/plugins/manifest.ts'
-import { v2WorktreeOrder, type V2IdMap } from './projector.ts'
+import { V2_GLOBAL_WORKTREE_ID, v2WorktreeOrder, type V2IdMap } from './projector.ts'
+import { hasNormalTabs } from '../globalTabs.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
 import { ClientError } from '../../../shared/client/connection.ts'
@@ -48,6 +49,7 @@ export type V2RequestWithRev = <M extends MethodNameV2>(method: M, params: Metho
 export interface V2BackendState {
   project: ProjectFile | null
   terminals: Record<string, TerminalMeta>
+  terminalOrder: Record<string, string[]>
   terminalQueues: Record<string, string[]>
   loadedWorktrees: Record<string, true>
   hostWorktrees: Record<string, GitWorktreeInfo[]>
@@ -284,12 +286,14 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       startGlobal,
       // Only when there are none, and never twice: the panel asks again on every
       // render with no tabs, and the new session's patch is still on its way.
+      // Automations' run tabs do not count: they live in the drawer's own view.
       openGlobal: async () => {
         if (globalStart) {
           await globalStart
           return
         }
-        if ((deps.state().project?.globalSessions?.length ?? 0) > 0) return
+        const s = deps.state()
+        if (hasNormalTabs(s.terminalOrder[V2_GLOBAL_WORKTREE_ID] ?? [], s.terminals)) return
         await startGlobal()
       },
       restart: (terminalId) =>
@@ -747,6 +751,27 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
       },
       setEnvVars: async (repoId, branch, text) => {
         await request('branch.setEnv', { ...branchRef(repoId, branch), env: text || null })
+      }
+    },
+    automations: {
+      save: async (automation) => {
+        const { result, rev } = await requestWithRev('automation.save', { projectId, automation })
+        if (rev) await deps.whenProjected(() => true, rev)
+        return result.id
+      },
+      remove: async (automationId) => {
+        const { rev } = await requestWithRev('automation.delete', { projectId, automationId })
+        if (rev) await deps.whenProjected(() => true, rev)
+      },
+      runNow: async (automationId) => {
+        const { result, rev } = await requestWithRev('automation.runNow', { projectId, automationId })
+        // Wait for the run's tab so the caller can focus it.
+        await deps.whenProjected(() => deps.state().terminals[result.sessionId], rev)
+        return result.sessionId
+      },
+      resolveMissed: async (run, dismiss) => {
+        const { started } = await request('automation.resolveMissed', { projectId, run, dismiss })
+        return started
       }
     },
     history: {

@@ -9,6 +9,7 @@ import { runningMoveDetail } from './v2/moveFlow'
 import { loadLlmSettings, watchLlmSettings } from './llm'
 import { PluginRuntimes, PluginSlot } from './plugins/PluginHost'
 import { titleBarForeground } from '../../shared/appearance'
+import { tabView } from './globalTabs'
 
 export default function App(): React.JSX.Element {
   const serverWindow = useAppStore((s) => s.serverWindow)
@@ -46,9 +47,10 @@ export default function App(): React.JSX.Element {
         const state = useAppStore.getState()
         if (state.serverOffline) return
         if (focusInGlobalPanel()) {
-          // On the Bot tab the active session is hidden, so there is no tab here to close.
-          const id = state.globalView === 'sessions' ? state.activeTerminal[GLOBAL_WORKTREE_ID] : undefined
-          if (id) void getBackend().sessions.close(id)
+          // On the Bot tab the active session is hidden, so there is no tab here to close;
+          // nor when the active tab is the other view's (the shown view has none).
+          const id = state.globalView !== 'bot' ? state.activeTerminal[GLOBAL_WORKTREE_ID] : undefined
+          if (id && tabView(state.terminals[id]) === state.globalView) void getBackend().sessions.close(id)
         } else if (state.activeWorktreeId) {
           const id = state.activeTerminal[state.activeWorktreeId]
           if (id) void getBackend().sessions.close(id)

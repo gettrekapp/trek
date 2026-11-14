@@ -4,7 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import { discoverCodexSession } from '../../../src/host/agentService.ts'
 import type { AttentionTopic } from '../../../src/shared/model/topics'
-import type { Project, Session, SessionStatus, Worktree } from '../../../src/shared/model/types'
+import type { Project, Session, SessionContext, SessionStatus, Worktree } from '../../../src/shared/model/types'
 import { pickClaimant, pollDelay } from '../../../src/shared/providers/discovery.ts'
 import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import {
@@ -67,6 +67,30 @@ export interface SessionManagerDeps {
   commandExists?: (binary: string) => Promise<boolean>
   /** A session's process ended by itself (not closed, restarted or unloaded): the push (6b) */
   onSessionExit?: (p: { projectId: string; projectName: string; worktreeId: string | null; sessionId: string }) => void
+}
+
+/** An optional LLM pick from a client. */
+function checkLlm(value: unknown): LlmSelection | undefined {
+  if (value === undefined) return undefined
+  // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead.
+  if (!isRecord(value) || !isProviderId(value.provider)) throw bad('llm.provider must be a known provider')
+  const pick = sanitizeLlmSelection(value)
+  if (!pick) throw bad('llm must be an LLM selection')
+  return pick
+}
+
+/** A new session's context: an existing automation's, on a Global session; an automation has at most one. */
+function checkContext(project: Project, value: unknown, global: boolean): SessionContext {
+  if (!isRecord(value) || value.kind !== 'automation' || typeof value.automationId !== 'string') {
+    throw bad("context must be { kind: 'automation', automationId }")
+  }
+  const automationId = value.automationId
+  if (!global) throw bad('only a Global session can be an automation\'s run tab')
+  if (!project.automations?.some((a) => a.id === automationId)) throw bad(`No automation with id "${automationId}"`)
+  if (project.globalSessions.some((s) => s.context?.automationId === automationId)) {
+    throw codedError('CONFLICT', 'the automation already has a run tab')
+  }
+  return { kind: 'automation', automationId }
 }
 
 function requireSize(p: any): { cols: number; rows: number } {
@@ -167,7 +191,11 @@ export class SessionManager {
     return this.blocked.has(real(path))
   }
 
-  start(p: any): { sessionId: string; ptyId: string } {
+  /**
+   * `p` is the client's `session.start`; `options` are the server's own (the scheduler's), out of a
+   * client's reach: `context` marks an automation's run tab.
+   */
+  start(p: any, options: { context?: SessionContext } = {}): { sessionId: string; ptyId: string } {
     this.assertRunning()
     const { cols, rows } = requireSize(p)
     const project = this.deps.projects.require(p.projectId)
@@ -181,17 +209,10 @@ export class SessionManager {
       sessionType = settings.sessionTypes?.find((t) => t.id === id)
       if (!sessionType) throw bad(`No session type with id "${id}"`)
     }
-    let pick: LlmSelection | undefined
-    if (p.llm !== undefined) {
-      // sanitizeLlmSelection turns an unknown provider into Claude: refuse it instead.
-      if (!isRecord(p.llm) || !isProviderId(p.llm.provider)) throw bad('llm.provider must be a known provider')
-      pick = sanitizeLlmSelection(p.llm)
-      if (!pick) throw bad('llm must be an LLM selection')
-    }
-    const serverDefault = this.deps.store.llmSettings().llmDefault
-    const llm = global
-      ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
-      : resolveNewSessionLlm({ pick, sessionType: sessionType?.llm, projectDefault: settings.llmDefault, appDefault: serverDefault })
+    const pick = checkLlm(p.llm)
+    if (p.context !== undefined) throw bad('context is set by the server')
+    const context = options.context === undefined ? undefined : checkContext(project, options.context, global)
+    const llm = this.defaultLlm(project, global, pick, sessionType?.llm)
     if (p.title !== undefined && typeof p.title !== 'string') throw bad('title must be a string')
     const title = p.title?.trim() ? checkTitle(p.title.trim(), 'title') : undefined
     const typeTitle = sessionType?.name ? checkTitle(sessionType.name, `session type "${sessionType.id}" name`) : undefined
@@ -217,6 +238,7 @@ export class SessionManager {
     }
     if (provider.capabilities.presetSessionId) session.agentSessionId = sessionId
     if (sessionType) session.sessionTypeId = sessionType.id
+    if (context) session.context = context
     const systemPrompt = sessionType?.systemPrompt?.trim()
     if (systemPrompt) session.systemPrompt = systemPrompt
 
@@ -251,6 +273,63 @@ export class SessionManager {
       if (!found.worktree.loaded) throw bad('load the worktree first')
     }
     return { ptyId: this.spawnSession(project.id, found.session.id, { cols, rows }) }
+  }
+
+  /**
+   * Starts the session over as a brand-new agent conversation (an automation's next run in its run
+   * tab): its pty, if running, is stopped; queue, decision and exit code are cleared; the agent is
+   * launched fresh, never resumed, with `initialMessage`. The session keeps its id. `llm`: the
+   * agent to run (absent: its own; null: the default a new session there would get).
+   */
+  renew(p: any): { ptyId: string } {
+    this.assertRunning()
+    const { cols, rows } = requireSize(p)
+    const project = this.deps.projects.require(p.projectId)
+    const found = findSession(project, p.sessionId)
+    // llm null resolves as for a Global session, and an automation's run tab is one.
+    if (found.worktree) throw bad('only a Global session can be renewed')
+    // spawnSession's cheap checks, made before the running pty is killed.
+    this.globalCwd(project)
+    const title = checkTitle(requireName(p.title, 'title'), 'title')
+    if (typeof p.initialMessage !== 'string') throw bad('initialMessage must be a string')
+    // null: the default for a new session of its kind, as start resolves it without a pick.
+    const llm = p.llm === null ? this.defaultLlm(project, !found.worktree) : checkLlm(p.llm) ?? found.session.llm
+    // Checked before the running pty is killed: a killed pty holds its slot until it exits.
+    this.assertCapacity()
+    const sessionId = found.session.id
+    this.stopDiscovery(sessionId)
+    this.killSession(found.session)
+    this.mutate(project.id, sessionId, (s) => {
+      delete s.ptyId
+      delete s.exitCode
+      delete s.decision
+      s.queue = []
+      s.status = 'idle'
+      s.title = title
+      s.llm = llm
+      // A preset-id agent gets a new conversation id; a discovered one (Codex) is discovered again.
+      if (getProvider(llm.provider).capabilities.presetSessionId) s.agentSessionId = this.newId()
+      else delete s.agentSessionId
+    })
+    let ptyId: string
+    try {
+      ptyId = this.spawnSession(project.id, sessionId, { cols, rows, fresh: true, initialMessage: p.initialMessage })
+    } catch (err) {
+      try {
+        this.mutate(project.id, sessionId, (s) => {
+          s.status = 'exited'
+          s.exitCode = -1
+          // The id names a conversation that never started: a restart must not resume it.
+          if (getProvider(s.llm.provider).capabilities.presetSessionId) delete s.agentSessionId
+        })
+      } catch {
+        // the session is gone
+      }
+      this.publishAttention()
+      throw err
+    }
+    this.publishAttention()
+    return { ptyId }
   }
 
   close(p: any): null {
@@ -621,6 +700,15 @@ export class SessionManager {
     return worktree
   }
 
+  /** The agent a new session runs: the pick, else the project's Global agent or the session type's / project's default. */
+  private defaultLlm(project: Project, global: boolean, pick?: LlmSelection, typeLlm?: LlmSelection): LlmSelection {
+    const settings = project.settings
+    const serverDefault = this.deps.store.llmSettings().llmDefault
+    return global
+      ? pick ?? resolveGlobalLlm(settings.globalLlm, settings.llmDefault ?? serverDefault)
+      : resolveNewSessionLlm({ pick, sessionType: typeLlm, projectDefault: settings.llmDefault, appDefault: serverDefault })
+  }
+
   private defaultTitle(label: string, existing: number, worktree: Worktree | undefined): string {
     if (existing > 0) return `${label} ${existing + 1}`
     return worktree ? worktree.name : label
@@ -653,11 +741,8 @@ export class SessionManager {
       cwd = worktree.path
     } else {
       // A Global session runs in the first repository's main worktree: check it as usableWorktree does.
-      const first = project.repositories[0]
-      if (!first) throw bad('the project has no repositories')
-      const main = first.worktrees.find((w) => w.isMain) ?? first.worktrees[0]
-      if (main?.missing) throw bad(`${main.path} no longer exists`)
-      cwd = main?.path ?? first.path
+      cwd = this.globalCwd(project)
+      const first = project.repositories[0]!
       findRegistered(this.deps.store.config.repos, first.path)
       this.deps.store.guard.check(cwd)
       if (this.blocked.has(real(cwd))) throw codedError('IN_USE', `${cwd} is being removed`)
@@ -715,10 +800,22 @@ export class SessionManager {
       this.terminals.kill(ptyId)
       throw err
     }
+    // A quick renew of a Codex run tab (within the scan's 2 s skew of its previous launch, before that
+    // launch's id was found) can bind the killed run's rollout: the dead id is no session's, so it is
+    // not excluded. restart has the same race; automation runs are minutes apart.
     if (!provider.capabilities.presetSessionId && provider.capabilities.resume && !launch.resume) {
       this.startDiscovery({ projectId, sessionId, repoId: repo?.id, cwd, folder: real(cwd), startedAt: this.now() })
     }
     return ptyId
+  }
+
+  /** Where a Global session runs: the first repository's main worktree (BAD_REQUEST without one). */
+  private globalCwd(project: Project): string {
+    const first = project.repositories[0]
+    if (!first) throw bad('the project has no repositories')
+    const main = first.worktrees.find((w) => w.isMain) ?? first.worktrees[0]
+    if (main?.missing) throw bad(`${main.path} no longer exists`)
+    return main?.path ?? first.path
   }
 
   private killSession(session: Session): void {

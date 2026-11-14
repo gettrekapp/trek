@@ -44,6 +44,8 @@ function checkSession(raw: unknown, where: string, seen: Set<string>, existing: 
   for (const key of ['agentSessionId', 'sessionTypeId', 'systemPrompt']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw bad(`${where}.${key} must be a string`)
   }
+  // Automations are not imported, so a run tab's context would name none: it becomes a normal session.
+  delete raw.context
   return raw as unknown as Session
 }
 

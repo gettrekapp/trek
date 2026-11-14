@@ -3,7 +3,7 @@
 // the v2 pty.* stream, docker, env and stack on the server's machine (machineHandlers.ts), and
 // Linear and skills with the server's own key and disk (integrationHandlers.ts), and the
 // pull request watch (prWatchHandlers.ts), the Changes tab's review (reviewHandlers.ts), and
-// moving a worktree between servers (moveHandlers.ts).
+// moving a worktree between servers (moveHandlers.ts), and automations (automationHandlers.ts).
 import type { PairingCodes } from './pairing'
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
@@ -18,6 +18,8 @@ import { sessionHandlers } from './sessionHandlers.ts'
 import { machineHandlers, type EventSink, type Machine } from './integrations/machineHandlers.ts'
 import { integrationHandlers } from './integrations/integrationHandlers.ts'
 import { prWatchHandlers } from './prWatch/prWatchHandlers.ts'
+import { automationHandlers } from './automations/automationHandlers.ts'
+import type { AutomationScheduler } from './automations/scheduler.ts'
 import { reviewHandlers } from './review/reviewHandlers.ts'
 import { moveHandlers } from './move/moveHandlers.ts'
 import { promoteHandlers } from './promote/promoteHandlers.ts'
@@ -74,6 +76,8 @@ export interface V2Context {
   integrationsChanged?: (parts: IntegrationsChangedEvent) => void
   /** The pull request watch (5c-1): gh on this machine; without it no PR is watched */
   prWatch?: PrWatcher
+  /** Automations' scheduler; without it the automation.* methods that run anything are TOOL_ERROR */
+  automations?: AutomationScheduler
   /** promote_to_primary's confirmations (5e): `promote.listen`, `promote.claim`, `promote.answer` and `worktree.promote {requestId}` */
   promoteRequests?: PromoteRequests
   /** Where a promote or demote saves a copy of the work it carries (5e; default: the temp dir) */
@@ -367,6 +371,7 @@ const handlers: Record<string, Handler> = {
   ...machineHandlers,
   ...integrationHandlers,
   ...prWatchHandlers,
+  ...automationHandlers,
   ...reviewHandlers,
   ...moveHandlers,
   ...promoteHandlers,

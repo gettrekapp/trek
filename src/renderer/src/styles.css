@@ -3943,6 +3943,23 @@ body.resizing-row {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* The Global drawer's Automations view toggle: at the strip's end, beside the tabs it switches between. */
+.global-tab.automations-tab {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.automations-tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+.automations-tab-dot.decision {
+  background: var(--decision);
+}
+
 .stack-starter {
   display: inline-flex;
   align-items: center;
@@ -4681,3 +4698,28 @@ body.resizing-row {
 .modal button.danger {
   color: var(--danger);
 }
+
+/* Automations panel */
+.automations-panel { flex-direction: column; gap: 12px; padding: 16px; overflow: auto; }
+.automations-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.automations-header h2 { margin: 0; }
+.automations-header .primary { margin-left: auto; }
+.automation-row { border: 1px solid var(--border-strong); border-radius: 6px; padding: 8px 10px; }
+.automation-row.paused .automation-name { opacity: 0.6; }
+.automation-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.automation-main .spacer { flex: 1; }
+.automation-name { font-weight: 600; }
+.automation-missed { color: var(--danger); background: none; border: none; cursor: pointer; text-decoration: underline; padding: 0; }
+.automation-history { margin: 8px 0 0 28px; padding: 0; list-style: none; display: grid; gap: 4px; }
+.automation-history li { display: flex; gap: 10px; }
+.automation-editor { display: flex; flex-direction: column; gap: 10px; max-width: 720px; }
+.automation-editor textarea { width: 100%; font-family: inherit; }
+.automation-picker { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.automation-days { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.automation-cron { font-family: var(--mono, monospace); }
+.automation-footer { gap: 8px; align-items: center; }
+.automation-footer .spacer { flex: 1; }
+.link-button { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
+.error-text { color: var(--danger); }
+.missed-runs-list { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
+.missed-runs-list label { display: flex; gap: 8px; align-items: baseline; }

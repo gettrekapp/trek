@@ -37,6 +37,7 @@ import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
 import { mcpContext } from './plugins/mcp'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
+import { AutomationScheduler } from './automations/scheduler'
 import { HistoryStore } from './history/store.ts'
 import { PromoteRequests } from './promote/requests'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
@@ -85,6 +86,8 @@ export interface ServerOptions {
   integrations?: Integrations
   /** The pull request watch (5c-1): gh on this machine, and how often it polls; without it no PR is watched */
   prWatch?: { gh: GhRunner; pollMs?: number; recheckMs?: number }
+  /** Automations' scheduler tweaks, for the smokes: a shorter tick, a controllable clock */
+  automations?: { tickMs?: number; now?: () => number }
   /** Where a promote or demote saves a copy of the work it carries (5e, `<dataDir>/promote-recovery`; default: the temp dir) */
   promoteRecoveryDir?: string
   /** Where the worktree history goes (`<dataDir>/history`); without it nothing is recorded */
@@ -186,6 +189,14 @@ export function startServer(
       })
     : undefined
   prWatch?.start()
+  const automations = new AutomationScheduler({
+    projects,
+    sessions,
+    tickMs: options.automations?.tickMs,
+    now: options.automations?.now,
+    log: (message) => console.error(message)
+  })
+  // Started once the MCP listener is up (below), so a run the first check starts has the trek-dev tools.
   // promote_to_primary's confirmations (5e): asked of the project's windows.
   const promoteRequests = new PromoteRequests(hub)
 
@@ -521,6 +532,7 @@ export function startServer(
         integrations: options.integrations,
         integrationsChanged,
         prWatch,
+        automations,
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
@@ -595,7 +607,7 @@ export function startServer(
       return call
     }
     const prWatchReady = trek.ready
-    trek.ready = startMcpListener({
+    const mcpUp = startMcpListener({
       access,
       serverVersion: daemonVersion,
       contextFor: (projectId) => mcpContext(projectId, callerFor(projectId), plugins)
@@ -610,7 +622,12 @@ export function startServer(
       },
       (err: unknown) => console.warn(`[mcp] disabled: the listener did not start: ${(err as Error).message}`)
     )
-    trek.ready = Promise.all([prWatchReady, trek.ready]).then(() => undefined)
+    trek.ready = Promise.all([prWatchReady, mcpUp]).then(() => undefined)
+    void mcpUp.then(() => {
+      if (!stopped) automations.start()
+    })
+  } else {
+    automations.start()
   }
 
   const shutdown = (reason: string): Promise<void> => {
@@ -620,6 +637,7 @@ export function startServer(
     trek.mcp = undefined
     poller.stop()
     prWatch?.stop()
+    automations.stop()
     promoteRequests.stop()
     pusher?.stop()
     sessions.stopAll()

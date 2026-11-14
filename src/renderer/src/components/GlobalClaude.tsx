@@ -1,11 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BOT_DECISION_ID, GLOBAL_WORKTREE_ID, useAppStore } from '../store'
-import {
-  cycleTab,
-  focusInGlobalPanel,
-  focusTerminal,
-  tabCycleStep
-} from '../terminals'
+import { focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
+import { cycleInView, tabView, tabsInView, viewFlags, viewTab, type GlobalTabView } from '../globalTabs'
+import { useFeatures } from '../useFeatures'
 import { getBackend } from '../backend'
 import { getProvider } from '../../../shared/providers/registry'
 import { v2GlobalLabel } from '../v2/sessionChoices'
@@ -57,6 +54,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   const terminals = useAppStore((s) => s.terminals)
   const decisions = useAppStore((s) => s.decisions)
   const decisionCount = order.filter((id) => decisions[id]).length + (decisions[BOT_DECISION_ID] ? 1 : 0)
+  const automationsOn = useFeatures().automations
   const botView = useAppStore((s) => s.botView)
   // Subscribed so the bar label follows the configured Global agent.
   const globalLlm = useAppStore((s) => s.project?.globalLlm)
@@ -70,12 +68,39 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   const [draft, setDraft] = useState('')
   /** The title the rename started from: a server window refuses it if the title changed meanwhile */
   const [editFrom, setEditFrom] = useState('')
-  const hasTabs = order.length > 0
-  const attention = order.some((id) => terminals[id]?.status === 'attention')
+  // Automations' run tabs live in their own view: the sessions strip, its count and its
+  // auto-started first tab are the normal tabs only. Attention and decisions count every tab.
+  const flags = viewFlags(order, terminals, decisions)
+  const tabsView: GlobalTabView = view === 'automations' ? 'automations' : 'sessions'
+  const viewIds = tabsInView(order, terminals, tabsView)
+  /** The tab the shown view shows: the active one, when it is that view's */
+  const shownId = activeId !== undefined && viewIds.includes(activeId) ? activeId : undefined
+  const hasTabs = flags.sessions.count > 0
+  // The toggle only once there is a run tab to show: a project without automations keeps its drawer as it was.
+  const showAutomations = automationsOn && flags.automations.count > 0
+  const attention = flags.sessions.attention || flags.automations.attention
   const status = attention ? 'attention' : activeId ? terminals[activeId]?.status : undefined
+  /** The tab each view showed last, so switching back returns to it */
+  const lastInView = useRef<Partial<Record<GlobalTabView, string>>>({})
+  if (activeId !== undefined && terminals[activeId]) lastInView.current[tabView(terminals[activeId])] = activeId
+
+  // The active tab follows the view: switched to a view (or its tab moved away), show that view's tab.
+  useEffect(() => {
+    if (view === 'bot' || shownId !== undefined) return
+    const next = viewTab(tabsView, order, terminals, activeId, lastInView.current[tabsView])
+    if (next === undefined) return
+    useAppStore.getState().setActiveTerminal(GLOBAL_WORKTREE_ID, next)
+    // As selectTab: the shown tab takes focus, which clears its attention.
+    if (open) focusTerminal(next)
+  }, [open, view, tabsView, shownId, order, terminals, activeId])
+
+  // The last run tab closed (or its automation deleted): back to the sessions.
+  useEffect(() => {
+    if (view === 'automations' && !showAutomations) useAppStore.getState().setGlobalView('sessions')
+  }, [view, showAutomations])
 
   useEffect(() => {
-    if (!open || hasTabs || view === 'bot' || offline || readOnly) return
+    if (!open || hasTabs || view !== 'sessions' || offline || readOnly) return
     setError(null)
     const backend = getBackend()
     backend.sessions.openGlobal().catch((err) => setError(backend.errors.inline(err)))
@@ -87,7 +112,14 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
       if (!step || !focusInGlobalPanel()) return
       e.preventDefault()
       e.stopPropagation()
-      if (useAppStore.getState().globalView === 'sessions') cycleTab(GLOBAL_WORKTREE_ID, step)
+      // Within the shown view's tabs.
+      const s = useAppStore.getState()
+      if (s.globalView === 'bot') return
+      const ids = tabsInView(s.terminalOrder[GLOBAL_WORKTREE_ID] ?? [], s.terminals, s.globalView)
+      const id = cycleInView(ids, s.activeTerminal[GLOBAL_WORKTREE_ID], step)
+      if (id === undefined) return
+      s.setActiveTerminal(GLOBAL_WORKTREE_ID, id)
+      focusTerminal(id)
     }
     // Capture phase, so the focused xterm never sees the keystroke.
     window.addEventListener('keydown', onKeyDown, true)
@@ -107,7 +139,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
   }
 
   const selectTab = (id: string): void => {
-    useAppStore.getState().setGlobalView('sessions')
+    useAppStore.getState().setGlobalView(tabView(terminals[id]))
     useAppStore.getState().setActiveTerminal(GLOBAL_WORKTREE_ID, id)
     focusTerminal(id)
   }
@@ -155,14 +187,14 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
       <div className="global-panel" style={{ height, display: open ? 'flex' : 'none' }}>
         <div className="global-resize" onMouseDown={startResize} />
         <div className="global-tabs">
-          {order.map((id) => {
+          {viewIds.map((id) => {
             const meta = terminals[id]
             if (!meta) return null
-            const isActive = id === activeId
+            const isActive = id === shownId && view !== 'bot'
             return (
               <div
                 key={id}
-                className={`global-tab ${isActive && view === 'sessions' ? 'active' : ''} status-${meta.status} ${
+                className={`global-tab ${isActive ? 'active' : ''} status-${meta.status} ${
                   decisions[id] ? 'has-decision' : ''
                 }`}
                 onClick={() => selectTab(id)}
@@ -213,21 +245,42 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
               </div>
             )
           })}
-          <button
-            className="global-tab-add"
-            onClick={newTab}
-            disabled={offline || readOnly}
-            title={offline ? 'Server disconnected' : readOnly ? NO_MCP : 'New Global tab'}
-          >
-            +
-          </button>
+          {view !== 'automations' && (
+            <button
+              className="global-tab-add"
+              onClick={newTab}
+              disabled={offline || readOnly}
+              title={offline ? 'Server disconnected' : readOnly ? NO_MCP : 'New Global tab'}
+            >
+              +
+            </button>
+          )}
+          {showAutomations && (
+            <div
+              className={`global-tab automations-tab ${view === 'automations' ? 'active' : ''} ${
+                flags.automations.attention ? 'status-attention' : ''
+              } ${flags.automations.decisions > 0 ? 'has-decision' : ''}`}
+              role="button"
+              aria-pressed={view === 'automations'}
+              onClick={() => useAppStore.getState().setGlobalView(view === 'automations' ? 'sessions' : 'automations')}
+              title={view === 'automations' ? 'Back to the Global sessions' : "The automations' run tabs"}
+            >
+              {view !== 'automations' && (flags.automations.decisions > 0 || flags.automations.attention) && (
+                <span
+                  className={`automations-tab-dot ${flags.automations.decisions > 0 ? 'decision' : 'attention'}`}
+                  title={flags.automations.decisions > 0 ? 'A run tab needs a decision' : 'A run tab needs you'}
+                />
+              )}
+              <span className="global-tab-title">Automations ({flags.automations.count})</span>
+            </div>
+          )}
         </div>
-        <div className="global-terminal" style={{ display: view === 'sessions' ? undefined : 'none' }}>
+        <div className="global-terminal" style={{ display: view !== 'bot' ? undefined : 'none' }}>
           {order.map((id) => (
             <TerminalPane
               key={id}
               terminalId={id}
-              visible={open && view === 'sessions' && id === activeId}
+              visible={open && view !== 'bot' && id === shownId}
               global
               readOnly={readOnly ? NO_MCP : undefined}
             />
@@ -255,7 +308,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
           {readOnly
             ? "the server's MCP tools are down · no new sessions"
             : hasTabs
-              ? `project-wide ${order.length === 1 ? 'session' : `sessions (${order.length})`} · controls worktree sessions`
+              ? `project-wide ${flags.sessions.count === 1 ? 'session' : `sessions (${flags.sessions.count})`} · controls worktree sessions`
               : botView.needsConsent
                 ? 'bot: waiting for your OK'
                 : botView.phase !== 'off'

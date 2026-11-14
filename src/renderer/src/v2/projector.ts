@@ -122,7 +122,9 @@ function terminalMeta(session: Session, worktreeId: string): TerminalMeta {
     ...(session.sessionTypeId ? { sessionTypeId: session.sessionTypeId } : {}),
     llm: session.llm,
     // Codex: the agent's own id is not known yet, as with a legacy placeholder.
-    ...(session.agentSessionId === undefined ? { sessionPending: true } : {})
+    ...(session.agentSessionId === undefined ? { sessionPending: true } : {}),
+    // An automation's run tab: the Global drawer shows it in its Automations view.
+    ...(session.context ? { context: { ...session.context } } : {})
   }
 }
 
@@ -291,7 +293,8 @@ export function projectV2(project: Project): V2Projection {
     repositories,
     worktreeTags: settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS,
     globalSessions,
-    ...(order ? { worktreeOrder: order } : {})
+    ...(order ? { worktreeOrder: order } : {}),
+    ...(project.automations?.length ? { automations: project.automations } : {})
   }
 
   return {

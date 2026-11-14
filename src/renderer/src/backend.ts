@@ -39,7 +39,7 @@ import type {
   WorktreeLocator
 } from '../../shared/types'
 import type { PluginWelcome } from './plugins/presence'
-import type { ReviewComment } from '../../shared/model/types'
+import type { AutomationInput, ReviewComment } from '../../shared/model/types'
 import type { PromoteOutcome } from '../../shared/promote'
 import type { HistoryEvent, HistoryPage } from '../../shared/model/history'
 import type { PromoteAsked } from './v2/promoteFlow'
@@ -205,6 +205,15 @@ export interface WindowBackend {
     dismissPrNotice(path: string): Promise<void>
     setEnvVars(repoId: string, branch: string, text: string): Promise<void>
   }
+  /** The project's automations (feature `automations`). Each rejects on failure, for the caller to show. */
+  readonly automations: {
+    /** Resolves the automation's id once the window's mirror holds the save */
+    save(automation: AutomationInput): Promise<string>
+    remove(automationId: string): Promise<void>
+    runNow(automationId: string): Promise<string>
+    /** The missed-runs answer: `error` per automation whose run did not start */
+    resolveMissed(run: string[], dismiss: string[]): Promise<{ automationId: string; sessionId?: string; error?: string }[]>
+  }
   /** The worktree history (the `history` feature) */
   readonly history: {
     /** A branch's history, newest first: a page, older than the entry `before` names when given */
@@ -323,6 +332,7 @@ export const idleBackend: WindowBackend = {
     dismissPrNotice: noProject,
     setEnvVars: noProject
   },
+  automations: { save: noProject, remove: noProject, runNow: noProject, resolveMissed: noProject },
   history: { list: noProject, onRecorded: () => () => {} },
   repos: { add: noProject, remove: noProject },
   errors: {

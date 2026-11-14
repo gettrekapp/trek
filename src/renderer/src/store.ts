@@ -6,6 +6,7 @@ import { deriveProfileName } from '../../shared/environments'
 import type { LlmSelection, LlmSettings } from '../../shared/providers/types'
 import type { ConnectionStatus } from '../../shared/client/connection.ts'
 import type { ServerAgents } from '../../shared/protocolV2'
+import type { SessionContext } from '../../shared/model/types'
 import { viaServerAll } from './projectSetters.ts'
 import { isPrimaryWorktreeId, primaryWorktreeId } from '../../shared/repositories'
 import type {
@@ -141,6 +142,8 @@ export function pullRequestLabel(url: string): string {
 /** repoId is stamped on selection, so a row that later vanishes still has a repository. */
 export type SelectedWorktree = WorktreeLocator & { repoId?: string }
 
+export type GlobalView = 'sessions' | 'automations' | 'bot'
+
 export interface TerminalMeta {
   id: string
   worktreeId: string
@@ -155,6 +158,8 @@ export interface TerminalMeta {
   llm?: LlmSelection
   /** Codex: the real session id hasn't been discovered yet, so sessionId is a placeholder */
   sessionPending?: boolean
+  /** Why the server opened it (`Session.context`): an automation's run tab. Absent: a normal tab. */
+  context?: SessionContext
 }
 
 /** A session asked the user to make a call (request_decision MCP tool). */
@@ -216,7 +221,11 @@ export interface AppState {
   globalQueuePanelOpen: boolean
   /** Whether the global Claude panel at the bottom of the window is expanded. */
   globalPanelOpen: boolean
-  globalView: 'sessions' | 'bot'
+  /** The Global drawer's view: its normal tabs, the automations' run tabs, or the bot */
+  globalView: GlobalView
+  /** The missed-runs set the user closed the modal on (MissedRunsModal); null: show it whenever there is one */
+  missedDismissedKey: string | null
+  setMissedDismissedKey: (key: string | null) => void
   botView: BotView
   botEvents: BotEvent[]
   /** Open decision requests by terminal id, at most one per terminal. Not persisted. */
@@ -272,7 +281,7 @@ export interface AppState {
   setQueuePanelOpen: (open: boolean) => void
   setGlobalQueuePanelOpen: (open: boolean) => void
   setGlobalPanelOpen: (open: boolean) => void
-  setGlobalView: (view: 'sessions' | 'bot') => void
+  setGlobalView: (view: GlobalView) => void
   setBotView: (view: BotView) => void
   setBotEvents: (events: BotEvent[]) => void
   addBotEvent: (event: BotEvent) => void
@@ -363,6 +372,7 @@ export const useAppStore = create<AppState>((set) => ({
   globalQueuePanelOpen: false,
   globalPanelOpen: false,
   globalView: 'sessions',
+  missedDismissedKey: null,
   botView: OFF_VIEW,
   botEvents: [],
   decisions: {},
@@ -424,6 +434,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   setGlobalPanelOpen: (open) => set({ globalPanelOpen: open }),
   setGlobalView: (globalView) => set({ globalView }),
+  setMissedDismissedKey: (missedDismissedKey) => set({ missedDismissedKey }),
   setBotView: (botView) => set({ botView }),
   setBotEvents: (botEvents) => set({ botEvents }),
   addBotEvent: (event) => set((state) => ({ botEvents: [...state.botEvents, event].slice(-500) })),

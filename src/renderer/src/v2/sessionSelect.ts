@@ -2,7 +2,9 @@
 // notification or a menu entry), and the sessions it reports in view so main
 // does not notify for them. Pure: attentionSelect.ts carries them out.
 import type { SessionSelect } from '../../../shared/types'
+import type { SessionContext } from '../../../shared/model/types'
 import { V2_GLOBAL_WORKTREE_ID } from './projector.ts'
+import { tabView } from '../globalTabs.ts'
 
 export interface SelectView {
   /** The server project this window shows (null while it boots, or in an empty window) */
@@ -32,7 +34,7 @@ export function selectStep(select: SessionSelect, view: SelectView): SelectStep 
 
 export interface ViewState {
   serverWindow: unknown
-  terminals: Readonly<Record<string, { worktreeId: string }>>
+  terminals: Readonly<Record<string, { worktreeId: string; context?: SessionContext }>>
   activeTerminal: Readonly<Record<string, string | undefined>>
   activeWorktreeId: string | null
   globalPanelOpen: boolean
@@ -42,15 +44,16 @@ export interface ViewState {
 /**
  * The sessions a server window shows (as terminals.ts's isTerminalInView, less
  * the focus, which main checks): the selected worktree's active tab, and the
- * Global panel's while it is open on its sessions. An empty window reports none.
+ * Global panel's while it is open on its sessions or its automations' run tabs. An empty window reports none.
  */
 export function sessionsInView(s: ViewState): string[] {
   if (!s.serverWindow) return []
   const out: string[] = []
   const tab = s.activeWorktreeId ? s.activeTerminal[s.activeWorktreeId] : undefined
   if (tab && s.terminals[tab]?.worktreeId === s.activeWorktreeId) out.push(tab)
-  const global = s.globalPanelOpen && s.globalView === 'sessions' ? s.activeTerminal[V2_GLOBAL_WORKTREE_ID] : undefined
-  if (global && s.terminals[global]) out.push(global)
+  const global = s.globalPanelOpen && s.globalView !== 'bot' ? s.activeTerminal[V2_GLOBAL_WORKTREE_ID] : undefined
+  // Only a tab of the view shown: the active one may be the other view's while that view has none.
+  if (global && s.terminals[global] && tabView(s.terminals[global]) === s.globalView) out.push(global)
   return out
 }
 

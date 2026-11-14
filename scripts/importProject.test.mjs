@@ -162,6 +162,12 @@ test('the server project uses server paths and keeps the saved main worktree', (
   assert.deepEqual(project.globalSessions, [])
 })
 
+test('a file carrying automations does not turn them into a project setting', () => {
+  const file = { ...mixedFile(), automations: [{ id: 'a1' }] }
+  const { projects } = splitProjectByServer(file, ids())
+  for (const { project } of projects) assert.equal('automations' in project.settings, false)
+})
+
 test('branch data is folded per branch and copied to every copy of the repository', () => {
   const { projects } = splitProjectByServer(mixedFile(), ids())
   for (const { project } of projects) {

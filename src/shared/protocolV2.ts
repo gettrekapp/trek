@@ -11,7 +11,7 @@ import type {
   Topic,
   TopicSnapshot
 } from './model/topics.ts'
-import type { ProjectSettings, ProjectSummary, Project } from './model/types.ts'
+import type { AutomationInput, ProjectSettings, ProjectSummary, Project } from './model/types.ts'
 import type { LlmProviderId, LlmSelection } from './providers/types.ts'
 import type { StatePatch } from './sync/topicState.ts'
 import type { PushKinds } from './push.ts'
@@ -248,7 +248,9 @@ export const CAPABILITY = {
    * Background push (6b): a phone hands the server its relay grant (`push.setGrant`, write-only),
    * and the server posts the kinds it switched on to the relay while the phone isn't connected
    */
-  push: 'push'
+  push: 'push',
+  /** Automations: `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` */
+  automations: 'automations'
 } as const
 
 /** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
@@ -408,6 +410,12 @@ export interface MethodParamsV2 {
   'push.clearGrant': Record<string, never>
   /** 6b: this token's grant, without its secret */
   'push.status': Record<string, never>
+
+  // Automations
+  'automation.save': ProjectRef & { automation: AutomationInput }
+  'automation.delete': ProjectRef & { automationId: string }
+  'automation.runNow': ProjectRef & { automationId: string }
+  'automation.resolveMissed': ProjectRef & { run: string[]; dismiss: string[] }
   /**
    * 5e: the user confirmed a `promote.request`: the first claim wins; send it before any teardown.
    * Repeated by the claimant (or with its `claimToken` from a new connection) it refreshes the claim.
@@ -613,6 +621,10 @@ export interface MethodResultsV2 {
   'push.clearGrant': null
   /** null: no grant. `active` false: the relay refused it (`lastError` says why): grant again */
   'push.status': PushStatusResult | null
+  'automation.save': { id: string }
+  'automation.delete': null
+  'automation.runNow': { sessionId: string }
+  'automation.resolveMissed': { started: { automationId: string; sessionId?: string; error?: string }[] }
   'promote.claim': PromoteClaimResult
   'worktree.commits': CommitInfo[]
   'branch.setTag': null

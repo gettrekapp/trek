@@ -7,7 +7,9 @@ import {
   attachResize,
   attachRetryDelay,
   followResize,
+  isNewConversation,
   planTerminalSync,
+  sessionConversations,
   recordAttachFailure,
   shouldRetry,
   terminalTargets
@@ -184,4 +186,40 @@ test('followResize: xterm follows the pty; foreign when shown and fitting would 
   })
   // Shown but unmeasurable: never flagged.
   assert.deepEqual(followResize(true, { cols: 100, rows: 30 }, undefined, { cols: 100, rows: 30 }), { foreign: false })
+})
+
+test('sessionConversations: each live session\'s agent conversation, and whether it is an automation run tab', () => {
+  const project = {
+    id: 'p',
+    name: 'p',
+    settings: {},
+    repositories: [
+      { id: 'r', name: 'r', path: '/r', branchData: {}, worktrees: [wt('a', true, [s('a1', 'pa')]), wt('b', false, [s('b1', 'pb')])] }
+    ],
+    globalSessions: [
+      s('g1', 'pg'),
+      { ...s('g2', 'pg2'), agentSessionId: undefined, context: { kind: 'automation', automationId: 'x' } }
+    ]
+  }
+  assert.deepEqual([...sessionConversations(project)], [
+    ['a1', { agent: 'a1', automation: false }],
+    ['g1', { agent: 'g1', automation: false }],
+    ['g2', { agent: null, automation: true }]
+  ])
+})
+
+test('isNewConversation: a renew (new agent conversation) starts a clean screen; a restart does not', () => {
+  const c = (agent, automation = false) => ({ agent, automation })
+  // A restart resumes the same conversation: the old scrollback stays, marked off.
+  assert.equal(isNewConversation(c('x'), c('x')), false)
+  assert.equal(isNewConversation(c('x', true), c('x', true)), false)
+  // A renew: Claude gets a new id; Codex loses its discovered one.
+  assert.equal(isNewConversation(c('x', true), c('y', true)), true)
+  assert.equal(isNewConversation(c('x', true), c(null, true)), true)
+  // An undiscovered Codex run tab: a new pty on it cannot resume, so it is a new conversation.
+  assert.equal(isNewConversation(c(null, true), c(null, true)), true)
+  assert.equal(isNewConversation(c(null), c(null)), false)
+  // Nothing known yet (a new entry): nothing to clear.
+  assert.equal(isNewConversation(undefined, c('x')), false)
+  assert.equal(isNewConversation(c('x'), undefined), false)
 })

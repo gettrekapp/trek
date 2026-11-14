@@ -39,6 +39,11 @@ test("in view: the selected worktree's tab, and the open Global panel's", () => 
   assert.deepEqual(sessionsInView(state()), ['s1'])
   assert.deepEqual(sessionsInView(state({ globalPanelOpen: true })), ['s1', 'g1'])
   assert.deepEqual(sessionsInView(state({ globalPanelOpen: true, globalView: 'bot' })), ['s1'])
+  // The Automations view shows its active run tab; a tab of the other view is not shown.
+  const run = { terminals: { s1: { worktreeId: 'r1:w1' }, g1: { worktreeId: '__global__', context: { kind: 'automation', automationId: 'a' } } } }
+  assert.deepEqual(sessionsInView(state({ ...run, globalPanelOpen: true, globalView: 'automations' })), ['s1', 'g1'])
+  assert.deepEqual(sessionsInView(state({ ...run, globalPanelOpen: true })), ['s1'])
+  assert.deepEqual(sessionsInView(state({ globalPanelOpen: true, globalView: 'automations' })), ['s1'])
   assert.deepEqual(sessionsInView(state({ activeWorktreeId: null })), [])
   assert.deepEqual(sessionsInView(state({ serverWindow: null, globalPanelOpen: true })), [], 'a file window reports none')
   assert.equal(sameIds(['a', 'b'], ['a', 'b']), true)
