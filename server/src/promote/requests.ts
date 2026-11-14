@@ -148,7 +148,8 @@ export class PromoteRequests {
    * Asks the project's windows; resolves with the outcome, or `no-window` (none can confirm, now
    * or any more, before one claims it), `timeout` (nobody claimed or declined in time), or
    * `cancelled` (every caller went away before a window claimed it). A request for a worktree
-   * that already has one joins it.
+   * that already has one joins it (and keeps the first asker's `attribution`: it is one request,
+   * credited to whoever opened it).
    */
   ask(projectId: string, request: Omit<PromoteRequestEvent, 'projectId' | 'requestId'>, signal?: AbortSignal, attribution?: Attribution): Promise<PromoteAsk> {
     const key = `${projectId}\0${request.worktreeId}`

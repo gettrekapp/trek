@@ -23,12 +23,11 @@
 // `dryRun: true` answers the plan the confirmation shows, after the same checks.
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { BY_TREK, recordHistory, tagValue } from '../history/record.ts'
-import type { HistoryValue } from '../../../src/shared/model/history.ts'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
 import { migrateSession } from '../../../src/host/claudeSessionService.ts'
+import type { HistoryValue } from '../../../src/shared/model/history.ts'
 import type { Project, Repository, Session, Worktree } from '../../../src/shared/model/types'
 import { sessionMigrates } from '../../../src/shared/providers/selection.ts'
 import { getProvider } from '../../../src/shared/providers/registry.ts'
@@ -42,6 +41,7 @@ import {
   type PromoteWindowAnswer
 } from '../../../src/shared/promote.ts'
 import { codedError } from '../errors.ts'
+import { BY_TREK, recordHistory, tagValue } from '../history/record.ts'
 import { assertNotRepository, findRegistered, repoIn } from '../projects/model.ts'
 import { realOrResolved as real } from '../repos.ts'
 import { requireString } from '../validate.ts'
@@ -759,20 +759,21 @@ export const promoteHandlers: Record<string, Handler> = {
     }
     try {
       const first = await checkPromote(ctx, p)
-      const result = await locked(first.repo, async () => {
+      const { result, checked } = await locked(first.repo, async () => {
         // Again, with no await since: no other operation blocks them between this and ours.
         assertNotBlocked(ctx, [first.worktree.path, first.main.path])
         const unblockWorktree = ctx.sessions.blockPath(first.worktree.path)
         const unblockMain = ctx.sessions.blockPath(first.main.path)
         try {
-          return await promote(ctx, await checkPromote(ctx, p, false), { main: unblockMain, worktree: unblockWorktree })
+          const checked = await checkPromote(ctx, p, false)
+          return { result: await promote(ctx, checked, { main: unblockMain, worktree: unblockWorktree }), checked }
         } finally {
           unblockMain()
           unblockWorktree()
         }
       })
       binding?.settle({ outcome: 'promoted', worktreeId: result.worktreeId })
-      recordHistory(ctx, requireString(p.projectId, 'projectId'), first.repo.id, first.branch, [{ kind: 'promoted' }], binding?.attribution ?? ctx.attribution)
+      recordHistory(ctx, requireString(p.projectId, 'projectId'), checked.repo.id, checked.branch, [{ kind: 'promoted' }], binding?.attribution ?? ctx.attribution)
       return result
     } catch (err) {
       binding?.settle({ outcome: 'failed', error: (err as Error).message.slice(0, 2000) })
@@ -784,7 +785,7 @@ export const promoteHandlers: Record<string, Handler> = {
     const dryRun = optionalDryRun(p.dryRun)
     const first = await checkDemote(ctx, p)
     if (dryRun) return first.plan
-    const result = await locked(first.repo, async () => {
+    const { result, checked } = await locked(first.repo, async () => {
       assertNotBlocked(ctx, [first.main.path, first.target])
       const unblockMain = ctx.sessions.blockPath(first.main.path)
       const unblockTarget = ctx.sessions.blockPath(first.target)
@@ -793,12 +794,13 @@ export const promoteHandlers: Record<string, Handler> = {
         unblockMain()
       }
       try {
-        return await demote(ctx, await checkDemote(ctx, p, false), unblock)
+        const checked = await checkDemote(ctx, p, false)
+        return { result: await demote(ctx, checked, unblock), checked }
       } finally {
         unblock()
       }
     })
-    recordHistory(ctx, requireString(p.projectId, 'projectId'), first.repo.id, first.branch, [{ kind: 'demoted' }])
+    recordHistory(ctx, requireString(p.projectId, 'projectId'), checked.repo.id, checked.branch, [{ kind: 'demoted' }])
     return result
   },
 

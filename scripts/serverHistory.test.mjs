@@ -218,6 +218,11 @@ test('two copies of one label id record one label.added', async (t) => {
   assert.deepEqual(s.kinds(), ['label.added'])
 })
 
+test('a stored duplicate label id, cleared, records one label.removed', () => {
+  const settings = { customTags: [{ id: 'bl', name: 'Blocked', color: '#ff0000' }] }
+  assert.deepEqual(branchChanges('customTags', ['bl', 'bl'], undefined, settings).map((c) => c.kind), ['label.removed'])
+})
+
 test('a refused setter records nothing', async (t) => {
   const s = await setup(t)
   const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }

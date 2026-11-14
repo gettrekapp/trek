@@ -144,6 +144,7 @@ export class HistoryStore {
       console.warn(`[history] ${projectId}: not deleting a file that could not be read`)
       // The file stays, but the deleted project's memory and warning go
       this.readFailed.delete(projectId)
+      this.warnedMemoryOnly.delete(projectId)
       this.projects.delete(projectId)
       this.dirty.delete(projectId)
       this.clearProblem(projectId)

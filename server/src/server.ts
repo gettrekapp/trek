@@ -1,6 +1,4 @@
 import { createServer, type Server } from 'node:http'
-import { HistoryStore } from './history/store.ts'
-import { projectTopic } from '../../src/shared/model/topics.ts'
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import {
   CLOSE_HELLO_TIMEOUT,
@@ -34,10 +32,12 @@ import { createToolCaller, type ToolCall, MCP_INSTRUCTIONS, MCP_TOOLS } from './
 import { createEventSink, type Machine } from './integrations/machineHandlers'
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
+import { projectTopic } from '../../src/shared/model/topics.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry'
 import { mcpContext } from './plugins/mcp'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher'
+import { HistoryStore } from './history/store.ts'
 import { PromoteRequests } from './promote/requests'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth'
 import { createWebHandler } from './web/http'

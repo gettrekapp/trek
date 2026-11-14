@@ -583,11 +583,31 @@ test('history: a promote records promoted on its branch, a demote demoted (and t
   const kinds = () => s.ctx.history.list(s.projectId, s.repoId, 'feat').events.map((e) => [e.kind, e.actor.kind])
   assert.deepEqual(kinds()[0], ['promoted', 'user'])
   git(s.app, 'add', 'staged.txt')
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.worktreeTags = [{ id: 'ip', name: 'In Progress', color: '#5dabef' }]
+    delete d.repositories[0].branchData.feat.tag
+  })
   const d = await s.call('worktree.demote', { projectId: s.projectId, repoId: s.repoId })
   assert.equal(d.ok, true, JSON.stringify(d))
-  assert.deepEqual(kinds()[0], ['demoted', 'user'])
+  assert.deepEqual(kinds().slice(0, 2), [['demoted', 'user'], ['status', 'trek']])
+  assert.equal(s.ctx.history.list(s.projectId, s.repoId, 'feat').events[1].to.text, 'In Progress')
   // A dry run records nothing.
   const before = s.ctx.history.branch(s.projectId, s.repoId, 'feat').length
   await s.call('worktree.promote', { projectId: s.projectId, worktreeId: s.repo().worktrees.find((w) => !w.isMain).id, dryRun: true })
   assert.equal(s.ctx.history.branch(s.projectId, s.repoId, 'feat').length, before)
+})
+
+test('PromoteRequests: the attribution given to ask comes back on bind', async (t) => {
+  const s = await setup(t)
+  const events = []
+  const window = { send() {}, event: (event, payload) => (events.push([event, payload]), true) }
+  s.hub.subscribe(`project:${s.projectId}`, window)
+  s.promoteRequests.listen(s.projectId, window)
+  const attribution = { actor: { kind: 'mcp', terminalId: 't1', sessionTitle: 'Claude' }, reason: 'why' }
+  const asked = s.promoteRequests.ask(s.projectId, { worktreeId: s.worktreeId, branch: 'feat' }, undefined, attribution)
+  const { requestId } = events.find(([e]) => e === 'promote.request')[1]
+  const binding = s.promoteRequests.bind(s.projectId, requestId, s.worktreeId, window)
+  assert.deepEqual(binding.attribution, attribution)
+  binding.settle({ outcome: 'cancelled' })
+  await asked
 })
