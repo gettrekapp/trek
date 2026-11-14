@@ -151,6 +151,22 @@ test('a check the user asked for that found nothing says so, until the status ha
   assert.equal(serverUpdateRow(link({ status: 'disconnected' }), { checked: true }), null)
 })
 
+test('a failure whose first line only introduces the next (it ends in a colon) says both', () => {
+  const selfcheck = 'trek-server 2.0.0 does not run on this machine, so 1.0.0 stays:\nFAIL: node-pty loads\n  simulated: this version cannot run here'
+  assert.equal(
+    serverUpdateRow(withStatus({ latest: '2.0.0', lastResult: failed({ error: selfcheck }) })).text,
+    'Update failed: trek-server 2.0.0 does not run on this machine, so 1.0.0 stays: FAIL: node-pty loads'
+  )
+  // Blank lines between them are skipped; a colon with nothing after it is all there is to say.
+  assert.equal(serverUpdateRow(withStatus({ lastResult: failed({ error: 'the selfcheck failed:\n\n   \n  no pty\nmore' }) })).text, 'Update failed: the selfcheck failed: no pty')
+  assert.equal(serverUpdateRow(withStatus({ lastResult: failed({ error: 'the selfcheck failed:\n' }) })).text, 'Update failed: the selfcheck failed:')
+  // Still one line of reasonable length.
+  const long = serverUpdateRow(withStatus({ lastResult: failed({ error: `it failed:\n${'x'.repeat(500)}` }) })).text
+  assert.ok(long.length <= 220 && long.endsWith('…') && !long.includes('\n'), long)
+  // A refused request's message is read the same way.
+  assert.equal(updateErrorText({ code: 'TOOL_ERROR', message: 'Could not check for an update:\nthe feed answered 500' }), 'Could not check for an update: the feed answered 500')
+})
+
 test('a long error is cut to one line of reasonable length; a long version is cut too', () => {
   const row = serverUpdateRow(withStatus({ lastResult: failed({ error: `\n  first line\n${'x'.repeat(500)}` }) }))
   assert.equal(row.text, 'Update failed: first line')

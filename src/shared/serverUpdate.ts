@@ -33,10 +33,15 @@ function cut(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
-/** The first line of `error` that says anything, cut to a reasonable length. */
+/**
+ * The first line of `error` that says anything, cut to a reasonable length. A line that ends in a
+ * colon only introduces the next one (a selfcheck's output after "… does not run on this machine,
+ * so 1.0.0 stays:"), so that one is said with it.
+ */
 function oneLine(error: string): string {
-  const first = error.split('\n').find((line) => line.trim() !== '') ?? ''
-  return cut(first, MAX_ERROR_CHARS)
+  const lines = error.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+  const first = lines[0] ?? ''
+  return cut(first.endsWith(':') && lines.length > 1 ? `${first} ${lines[1]}` : first, MAX_ERROR_CHARS)
 }
 
 /** A version as the row shows it: a server's string, so never trusted to be short. */
