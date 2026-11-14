@@ -8,7 +8,7 @@ import { NewServerProjectModal } from './NewServerProjectModal'
 import { PairPhone } from './PairPhone'
 import { ServerUpdateRow, type ServerUpdateAct } from './ServerUpdateRow'
 import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
-import { canCheckUpdate, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
+import { RESTARTING_STATUS, canCheckUpdate, restartingToUpdate, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
 import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerLink, AppServerTest } from '../../../shared/types'
@@ -247,13 +247,15 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
         }
         const testState = tests[server.id]
         const updateAct = updateActs[server.id]
-        const label = server.hasToken ? (server.status ? STATUS_LABELS[server.status] : 'Not connected') : 'Needs a token'
-        const message = server.hasToken ? server.message : 'Set a token to connect'
+        // Away because it said it is restarting to update: that, not "Disconnected" and why the socket closed.
+        const restarting = restartingToUpdate(server)
+        const label = !server.hasToken ? 'Needs a token' : restarting ? RESTARTING_STATUS : server.status ? STATUS_LABELS[server.status] : 'Not connected'
+        const message = !server.hasToken ? 'Set a token to connect' : restarting ? '' : server.message
         return (
           <div key={server.id} className={`connect-server-item${selectedId === server.id ? ' selected' : ''}`}>
             <div className="server-row">
               <span
-                className={`wt-dot ${server.hasToken ? dotClass(server.status ?? undefined) : 'exited'}`}
+                className={`wt-dot ${!server.hasToken ? 'exited' : restarting ? 'running' : dotClass(server.status ?? undefined)}`}
                 title={message ? `${label}: ${message}` : label}
               />
               <span className="connect-server-name">{server.name}</span>

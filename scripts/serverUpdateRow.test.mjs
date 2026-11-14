@@ -4,10 +4,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  RESTARTING_STATUS,
   RESTART_GRACE_MS,
   applyUpdateRefusal,
   canCheckUpdate,
   parseUpdateStatus,
+  restartingToUpdate,
   serverUpdateConfirm,
   serverUpdateRow,
   updateErrorText
@@ -77,6 +79,26 @@ test('restarting outlives the connection: the server said it was going, so the r
   }
   assert.deepEqual(serverUpdateRow(link({ status: 'disconnected', update: undefined, updateRestarting: {} })), { tone: 'progress', text: 'Restarting to update…' })
   assert.ok(RESTART_GRACE_MS >= 60_000)
+})
+
+test("a row's status says restarting, not disconnected, exactly while its update line does", () => {
+  assert.equal(RESTARTING_STATUS, 'Restarting to update…')
+  for (const status of ['disconnected', 'connecting', 'error', 'closed', null]) {
+    assert.equal(restartingToUpdate(link({ status, updateRestarting: { version: '2.0.0' } })), true, String(status))
+    assert.equal(restartingToUpdate(link({ status, update: undefined, updateRestarting: {} })), true, String(status))
+    // Away for another reason (or after main's grace ended the mark): disconnected is what it is.
+    assert.equal(restartingToUpdate(link({ status })), false, String(status))
+  }
+  // It has answered: connected again, or refusing this app.
+  for (const status of ['connected', 'needs-auth', 'incompatible']) {
+    assert.equal(restartingToUpdate(link({ status, updateRestarting: { version: '2.0.0' } })), false, status)
+  }
+  assert.equal(restartingToUpdate(link({ local: LOCAL, status: 'disconnected', updateRestarting: { version: '2.0.0' } })), false, 'never the Local entry')
+  // The two agree: the status never says restarting without the line, or the line without it.
+  for (const status of ['connected', 'connecting', 'disconnected', 'needs-auth', 'incompatible', 'error', 'closed', null]) {
+    const away = link({ status, update: undefined, updateRestarting: { version: '2.0.0' } })
+    assert.equal(serverUpdateRow(away)?.text === 'Restarting into 2.0.0…', restartingToUpdate(away), String(status))
+  }
 })
 
 test('the restarting mark says nothing once the server has answered: connected again, or refusing this app', () => {

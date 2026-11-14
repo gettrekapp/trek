@@ -59,6 +59,18 @@ export function canCheckUpdate(link: AppServerLink): boolean {
   return updates(link) && !link.updateRestarting && (link.update?.state ?? 'idle') === 'idle'
 }
 
+/** What a row's status says, in place of "Disconnected", while its server is away restarting to update */
+export const RESTARTING_STATUS = 'Restarting to update…'
+
+/**
+ * The server said it was going down to update, and has not answered since: until it does
+ * (connected again, or refusing this app's token or protocol) or main's grace ends, its row says
+ * it is restarting, not that it is disconnected.
+ */
+export function restartingToUpdate(link: AppServerLink): boolean {
+  return !link.local && !!link.updateRestarting && link.status !== 'connected' && link.status !== 'needs-auth' && link.status !== 'incompatible'
+}
+
 /**
  * What the row says about updating this server; null when there is nothing to say.
  * `checked`: the user has just had it look for a release, so finding none is said too.
@@ -67,8 +79,8 @@ export function serverUpdateRow(link: AppServerLink, opts: { checked?: boolean }
   if (link.local) return null
   // The server said it was going down to update: say so while it is away. Once it answers
   // again (connected, or refusing this app's token or protocol), the row's status says more.
-  if (link.updateRestarting && link.status !== 'connected' && link.status !== 'needs-auth' && link.status !== 'incompatible') {
-    const into = link.updateRestarting.version
+  if (restartingToUpdate(link)) {
+    const into = link.updateRestarting?.version
     return { tone: 'progress', text: into ? `Restarting into ${shown(into)}…` : 'Restarting to update…' }
   }
   if (!updates(link)) return null
