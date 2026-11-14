@@ -6,7 +6,8 @@ export function applySidebarHidden(hidden: boolean): void {
   window.api.setSidebarHidden(hidden)
 }
 
-/** View → Toggle Sidebar, and the two buttons. */
+/** View → Toggle Sidebar, and the two buttons. A window with no project has no sidebar: nothing to toggle. */
 export function toggleSidebar(): void {
+  if (!useAppStore.getState().serverWindow) return
   applySidebarHidden(!useAppStore.getState().sidebarHidden)
 }

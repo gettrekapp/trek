@@ -188,6 +188,10 @@ button:disabled {
   color: #fff;
 }
 
+.workspace.sidebar-hidden > .sidebar {
+  display: none;
+}
+
 .sidebar-rail {
   width: 28px;
   flex: 0 0 auto;

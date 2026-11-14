@@ -358,7 +358,13 @@ try {
       const tiles = BrowserWindow.getAllWindows().map((w) => w.getBounds()).sort((a, b) => a.y - b.y || a.x - b.x)
       return { area, tiles }
     })
+  // A third window (an empty one), so the grid has more than one row or column to get right.
+  await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.find((i) => i.label === 'File').submenu.items.find((i) => i.label === 'New Window').click())
+  const third = await pageOtherThan([a, b])
+  await third.waitForLoadState('domcontentloaded')
+  await third.locator('.start-screen').waitFor({ timeout: 10_000 })
   const arranged = await arrange()
+  check('Arrange Windows tiles all three windows', arranged.tiles.length, 3)
   const inside = (t, area) => t.x >= area.x && t.y >= area.y && t.x + t.width <= area.x + area.width && t.y + t.height <= area.y + area.height
   check('Arrange Windows keeps every window inside the work area', arranged.tiles.map((t) => inside(t, arranged.area)), arranged.tiles.map(() => true))
   // Tiles that fit above the minimum abut (their areas add up to the work area's); a small CI
@@ -367,7 +373,16 @@ try {
   const fits = arranged.tiles.every((t) => t.width > 480 && t.height > 320)
   check(`the ${arranged.tiles.length} windows fill the ${arranged.area.width}x${arranged.area.height} work area`, fits ? tiled === arranged.area.width * arranged.area.height : tiled >= arranged.area.width * arranged.area.height, true)
   check('no two windows share a position', new Set(arranged.tiles.map((t) => `${t.x},${t.y}`)).size, arranged.tiles.length)
+  // Three windows: two share a row and the third has a row of its own (or, on a portrait display, the same in columns).
+  check('in two rows, one of two windows', [new Set(arranged.tiles.map((t) => t.y)).size, new Set(arranged.tiles.map((t) => t.x)).size], [2, 2])
   check('arranging again moves nothing', (await arrange()).tiles, arranged.tiles)
+  // A window with no project has no sidebar to hide: the toggle leaves its state alone, so a
+  // project opened in it later shows its sidebar.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() !== 'alpha' && w.getTitle() !== 'beta').webContents.send('menu:toggle-sidebar'))
+  await sleep(300)
+  check('Toggle Sidebar does nothing in a window with no project', await third.evaluate(() => window.__store.getState().sidebarHidden), false)
+  await third.close()
+  await until(windowCount, before)
 
   const small = await app.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'alpha')
@@ -376,15 +391,34 @@ try {
   })
   check('a window can be as small as 480x320, and no smaller', small, [480, 320])
   const alphaPage = await pageFor(ids.alpha)
-  check('nothing overflows it sideways', await until(() => alphaPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 5000), true)
+  // The page clips what overflows it (html, body and #root hide overflow), so the panes' own
+  // right edges are measured, not the page's scroll width.
+  const rightEdges = () => alphaPage.evaluate(() => ['.workspace', '.sidebar', '.detail'].map((sel) => Math.round(document.querySelector(sel).getBoundingClientRect().right) <= window.innerWidth))
+  check('its workspace, sidebar and detail end inside it', await until(rightEdges, [true, true, true], 5000), [true, true, true])
+  // The stylesheet's cap on a modal, on a modal of this page's own classes (no flow opens one here).
+  const modalFits = await alphaPage.evaluate(() => {
+    const backdrop = document.createElement('div')
+    backdrop.className = 'modal-backdrop'
+    const modal = backdrop.appendChild(document.createElement('div'))
+    modal.className = 'modal'
+    document.body.appendChild(backdrop)
+    const { left, right, width } = modal.getBoundingClientRect()
+    backdrop.remove()
+    return [Math.round(width), left >= 0 && right <= window.innerWidth]
+  })
+  check('a modal is capped to the window (448 of 480 wide) and sits inside it', modalFits, [448, true])
 
   // ---- The sidebar hides ----------------------------------------------------------------------------------------
 
   const betaPage = await pageFor(ids.beta)
-  const sidebarOf = (page) => page.evaluate(() => [document.querySelectorAll('.sidebar').length, document.querySelectorAll('.sidebar-rail').length])
+  // [sidebars shown, rails]. A hidden sidebar stays in the page (its filter and collapsed sections are kept), not displayed.
+  const sidebarOf = (page) => page.evaluate(() => [[...document.querySelectorAll('.sidebar')].filter((e) => e.getClientRects().length > 0).length, document.querySelectorAll('.sidebar-rail').length])
   check('a project window shows its sidebar', await until(() => sidebarOf(betaPage), [1, 0]), [1, 0])
+  await betaPage.locator('.sidebar-filter').fill('smoke-filter')
   await betaPage.locator('.sidebar-hide').click()
   check('its hide button leaves the rail in its place', await until(() => sidebarOf(betaPage), [0, 1]), [0, 1])
+  check('the hidden sidebar keeps its filter', await betaPage.locator('.sidebar-filter').inputValue(), 'smoke-filter')
+  await betaPage.locator('.sidebar-filter').evaluate((input) => input.blur())
   check('alpha’s sidebar is its own', await sidebarOf(alphaPage), [1, 0])
   check('the View menu has Toggle Sidebar', await app.evaluate(({ Menu }) => !!Menu.getApplicationMenu().items.find((i) => i.label === 'View')?.submenu.items.find((i) => i.label === 'Toggle Sidebar')), true)
   // The menu item sends to the focused window, which a test-run app may not have: its channel is

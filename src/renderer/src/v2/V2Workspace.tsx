@@ -51,16 +51,16 @@ export function V2Workspace(): React.JSX.Element {
   const info = selectedWorktreeInfo(project, worktrees, selected, activeWorktreeId)
   return (
     <>
-      <div className="workspace">
-        {sidebarHidden ? (
+      <div className={sidebarHidden ? 'workspace sidebar-hidden' : 'workspace'}>
+        {sidebarHidden && (
           <div className="sidebar-rail">
             <button className="sidebar-toggle sidebar-show" title="Show sidebar" aria-label="Show sidebar" onClick={toggleSidebar}>
               »
             </button>
           </div>
-        ) : (
-          <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
         )}
+        {/* Hidden by the stylesheet, not unmounted: its filter and collapsed sections are there when it comes back. */}
+        <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
         {/* The mirror refreshes the rows by itself after a pull, push or delete. */}
         <WorktreeDetail info={info} worktrees={worktrees} onWorktreesChanged={() => {}} />
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}
