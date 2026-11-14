@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
+import { CAPABILITY } from '../src/shared/protocolV2.ts'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
@@ -395,6 +396,15 @@ test('welcome capabilities: mcp while the listener is up, then what the server a
   assert.deepEqual(welcomeCapabilities(false, true, false, [], 'darwin'), [...all, 'local'])
   // The plugins' legacy capabilities (voice, plugin system phase 1) follow the static ones.
   assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear'], 'linux'), [...all, 'voice', 'linear', 'pairing'])
+})
+
+test('the update capability is listed only when the server says it can update itself, never on the local server', () => {
+  const base = { mcp: false, local: false, prWatch: false, plugins: [], platform: 'linux' }
+  const caps = (o) => welcomeCapabilities(o.mcp, o.local, o.prWatch, o.plugins, o.platform, o.update)
+  assert.equal(caps({ ...base }).includes('update'), false, 'not updatable: not listed')
+  assert.equal(caps({ ...base, update: true }).includes('update'), true)
+  assert.equal(caps({ ...base, update: true, local: true }).includes('update'), false, 'the local server follows the app')
+  assert.equal(CAPABILITY.update, 'update')
 })
 
 test('project.import accepts a project from importProjectFile', async (t) => {
