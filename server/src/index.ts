@@ -13,8 +13,10 @@ function die(err: unknown): never {
 if (args.command === 'selfcheck') {
   void import('./update/selfcheck.ts').then((m) => m.runSelfcheckCommand()).then((code) => process.exit(code), die)
 } else if (args.command === 'update') {
-  // Filled in by the task that adds the command.
-  die('trek-server update is not available in this build')
+  // The bundle's own folder (the install). A source run (tsx) has server/src here, or no __dirname
+  // at all as an ES module: neither is an install, and the command says so.
+  const installDir = typeof __dirname === 'string' ? __dirname : ''
+  void import('./update/command.ts').then((m) => m.runUpdateCommand(args, installDir)).then((code) => process.exit(code), die)
 } else {
   // An error thrown while main.ts loads is a bug, not a message for the user: keep its stack, as before the split.
   void import('./main.ts').catch((err: unknown) => {
