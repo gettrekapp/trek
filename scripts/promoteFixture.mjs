@@ -73,7 +73,9 @@ export async function setup(t, options = {}) {
   const projects = new ProjectState({ hub, store: { save: () => {}, remove: () => {} }, onSummariesChange: () => {} })
   const poller = new GitPoller({ projects, hub, registry: () => store.config.repos, onHealth: () => {}, onAttentionChange: () => {} })
   const { spawned, spawner } = fakeSpawner()
-  const sessions = new SessionManager({ projects, store, hub, spawner, schedule: () => ({ cancel() {} }), discover: async () => undefined })
+  // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns
+  // (winLaunch.ts, checked in serverWinLaunch.test.mjs), and the fake agents are not there.
+  const sessions = new SessionManager({ projects, store, hub, spawner, schedule: () => ({ cancel() {} }), discover: async () => undefined, platform: 'linux' })
   const promoteRequests = new PromoteRequests(hub, { timeoutMs: 2000, checkMs: 20, ...(options.requests ?? {}) })
   t.after(() => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close() })
   const recoveryDir = join(dir, 'recovery')

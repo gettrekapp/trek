@@ -43,7 +43,9 @@ test('stopDecision: a live lock holder that local.json does not name is unverifi
 function setup(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-stop-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  return localProfile(join(dir, 'home'), join(dir, 'data'))
+  // The profile's own APPDATA: on Windows the config dir is %APPDATA%\trek-server, whatever `home`
+  // is, so without it every test here (and a developer's real Local server) shares one local.lock.
+  return localProfile(join(dir, 'home'), join(dir, 'data'), undefined, process.platform, { ...process.env, APPDATA: join(dir, 'home', 'AppData', 'Roaming') })
 }
 
 /**
@@ -94,6 +96,14 @@ const capture = () => {
 
 /** The stand-in servers never listen: a stop request finds nobody. */
 const unreachable = () => 'unreachable'
+/**
+ * For a test whose files name this process and that expects no stop: a wrong decision then fails
+ * the test, where the defaults would ask a real port and (on Windows) end this process's tree.
+ */
+const neverStops = {
+  requestStop: () => assert.fail('asked a server to stop'),
+  forceKill: (pid) => assert.fail(`ended the process tree of pid ${pid}`)
+}
 
 test('stopLocal: asks the server named by local.json to stop, with its port and token, and never signals it', async (t) => {
   const profile = setup(t)
@@ -173,7 +183,7 @@ test('stopLocal: an unverified lock holder is never signalled', (t) => {
   writeFileSync(profile.lockPath, `${process.pid}\n`)
   const kills = []
   const out = capture()
-  assert.equal(stopLocal(profile, { ...out, kill: (pid, sig) => kills.push([pid, sig]) }), 1)
+  assert.equal(stopLocal(profile, { ...out, ...neverStops, kill: (pid, sig) => kills.push([pid, sig]) }), 1)
   assert.deepEqual(kills, [])
   assert.match(out.lines[0], /^E: .*is held by pid \d+, but .* does not name it/)
   assert.equal(existsSync(profile.lockPath), true, 'the lock is left alone')
@@ -185,7 +195,7 @@ test('stopLocal: a live pid named by local.json with no lock is exit 1, never si
   writeFileSync(profile.infoPath, JSON.stringify(info(process.pid)))
   const kills = []
   const out = capture()
-  assert.equal(stopLocal(profile, { ...out, kill: (pid, sig) => kills.push([pid, sig]) }), 1)
+  assert.equal(stopLocal(profile, { ...out, ...neverStops, kill: (pid, sig) => kills.push([pid, sig]) }), 1)
   assert.deepEqual(kills, [])
   assert.match(out.lines[0], new RegExp(`^E: .*names pid ${process.pid}, which is running, but there is no .*local\\.lock: a local trek-server is running without its lock`))
   assert.equal(existsSync(profile.infoPath), true, 'local.json is left alone')
@@ -196,7 +206,7 @@ test('stopLocal: an unverified lock holder says it may still be starting or stop
   mkdirSync(profile.dir, { recursive: true })
   writeFileSync(profile.lockPath, `${process.pid}\n`)
   const out = capture()
-  assert.equal(stopLocal(profile, { ...out, kill: () => {} }), 1)
+  assert.equal(stopLocal(profile, { ...out, ...neverStops, kill: () => {} }), 1)
   assert.match(out.lines[0], /may still be starting or stopping/)
 })
 
@@ -218,7 +228,7 @@ test('stopLocal: a lock and local.json from before the last boot are never signa
   const kills = []
   const out = capture()
   // Booted 10 minutes ago; the lock is an hour old.
-  const code = stopLocal(profile, { ...out, clock: { now: () => now, uptime: () => 600 }, kill: (pid, sig) => kills.push([pid, sig]) })
+  const code = stopLocal(profile, { ...out, ...neverStops, clock: { now: () => now, uptime: () => 600 }, kill: (pid, sig) => kills.push([pid, sig]) })
   assert.equal(code, 0)
   assert.deepEqual(kills, [])
   assert.match(out.lines[0], new RegExp(`^No local trek-server is running \\(pid ${process.pid} is gone`))

@@ -7,6 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { realPath } from '../src/host/pathContainment.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
@@ -111,7 +112,8 @@ const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', 
 
 /** A project on a real repo, with a history store and a fake PR watch; `call` throws a refusal. */
 async function setup(t) {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-history-v2-')))
+  // realPath: Windows' TEMP can be an 8.3 short path (C:\Users\RUNNER~1 on the hosted runner), and the server reports the long one.
+  const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-history-v2-')))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })

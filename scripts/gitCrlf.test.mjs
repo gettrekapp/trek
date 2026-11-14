@@ -7,11 +7,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { devNull, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyPatch, exportDirtyPatch, patchDigest, reverseApplyPatch } from '../src/host/gitService.ts'
 
-const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: '1' }
+// '/dev/null', as every test here: Git for Windows maps it itself, and refuses os.devNull's \\.\nul ("unable to access").
+const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
 const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8' })
 
 /** A repository with LF text committed, and a clone of it whose checkout has `autocrlf`. */

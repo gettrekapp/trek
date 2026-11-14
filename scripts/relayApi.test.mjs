@@ -284,7 +284,9 @@ test('api: a body over the cap is refused by its length before reading, and a st
       res.resume()
       resolve(res.statusCode)
     })
-    req.on('error', reject)
+    // The relay closes with the rest of the body unread, which resets the connection. Windows then
+    // drops the 413 it had not read yet and fails the write, so there the cut is all the client sees.
+    req.on('error', (err) => (!posix && err.code === 'ECONNRESET' ? resolve('reset') : reject(err)))
     const chunk = 'x'.repeat(4096)
     let n = 0
     const write = () => {
@@ -293,7 +295,7 @@ test('api: a body over the cap is refused by its length before reading, and a st
     }
     write()
   })
-  assert.equal(status, 413)
+  if (status !== 'reset') assert.equal(status, 413)
 })
 
 test('store: devices dead for 30 days are pruned on load; bookkeeping is flushed', async (t) => {

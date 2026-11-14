@@ -102,7 +102,7 @@ test('linear.setKey checks the key with Linear, stores it 0600 and never sends i
   assert.deepEqual(set.result, { ok: true, user: 'Ada' })
   assert.equal(JSON.stringify(set).includes('good-key'), false)
   assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: true })
-  assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(statSync(s.secretsFile).mode & 0o777, 0o600)
   assert.deepEqual(JSON.parse(readFileSync(s.secretsFile, 'utf8')), { linear: 'good-key' })
   assert.deepEqual((await s.call('linear.clearKey', {})).result, null)
   assert.deepEqual((await s.call('linear.status', {})).result, { hasKey: false })
