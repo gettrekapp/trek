@@ -6,6 +6,9 @@
 // clock file (TREK_SERVER_AUTOMATION_CLOCK_FILE) this script advances; ticks every second. No real
 // Claude, gh or network. The built app runs with a temp HOME and --user-data-dir. Checks: validation,
 // an on-time run, missed runs, the missed-runs modal, the Automations tab (toggle, editor), runNow, delete.
+// Every run reuses the automation's one run tab (a Global session with its context): the first opens
+// it, the later ones renew it — the same session id, a new title, the fake agent launched again with
+// the prompt. (The fake agent's one line of output settles to idle, so runs renew rather than skip.)
 //
 // Prints SERVER AUTOMATIONS SMOKE PASS (n checks) or SERVER AUTOMATIONS SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
@@ -193,8 +196,14 @@ try {
   // On time: 09:00:30 → the 09:00 slot runs.
   setClock(Date.UTC(2026, 0, 5, 9, 0, 30))
   const globalTitles = async () => (await project()).globalSessions.map((s) => s.title)
+  /** The automation's Global sessions: [id, title] */
+  const runTabs = async () => (await project()).globalSessions.filter((s) => s.context?.automationId === autoId).map((s) => [s.id, s.title])
+  /** How many times the fake agent was launched with the prompt */
+  const launches = () => (existsSync(agentArgs) ? readFileSync(agentArgs, 'utf8').split('\n').filter((l) => l.includes(PROMPT)).length : 0)
   check('an on-time slot opens a Global session titled after the automation', await until(globalTitles, ['Smoke run · 09:00']), ['Smoke run · 09:00'])
-  check('its first message is the prompt', await until(() => existsSync(agentArgs) && readFileSync(agentArgs, 'utf8').includes(PROMPT), true), true)
+  const [[tabId]] = await runTabs()
+  check('it is the automation\'s run tab', (await project()).globalSessions[0].context, { kind: 'automation', automationId: autoId })
+  check('its first message is the prompt', await until(launches, 1), 1)
   check('history records the run', await until(async () => (await automation()).history.map((r) => [r.trigger, r.outcome]), [['schedule', 'ran']]), [['schedule', 'ran']])
 
   // Asleep two hours: 09:05 … 11:00 are late at 11:02:30 (24 slots).
@@ -223,8 +232,14 @@ try {
   const modal = win.locator('.missed-runs-modal')
   const MODAL_TEXT = 'Smoke run— missed 24 runs since 2026-01-05 09:05'
   check('the modal lists the automation and what it missed', await until(() => modal.locator('li').first().textContent().catch(() => null), MODAL_TEXT), MODAL_TEXT)
+  // A busy run tab would be skipped, and the tab's pty has printed lately (it is `working` until
+  // 2.5 s of quiet): wait for it to settle.
+  check('the run tab is idle before Run selected', await until(async () => (await project()).globalSessions[0].status, 'idle'), 'idle')
   await modal.locator('button', { hasText: 'Run selected' }).click()
-  check('Run selected runs it and clears missed', await until(async () => [(await automation()).missed ?? null, (await globalTitles()).length], [null, 2]), [null, 2])
+  check('Run selected runs it and clears missed', await until(async () => (await automation()).missed ?? null, null), null)
+  check('the missed run renews the same run tab, retitled', await until(runTabs, [[tabId, 'Smoke run · 11:02']]), [[tabId, 'Smoke run · 11:02']])
+  check('no other Global session', (await globalTitles()).length, 1)
+  check('the agent is launched again with the prompt', await until(launches, 2), 2)
   check('the modal closes', await until(() => modal.count(), 0), 0)
   check('the missed run is in the history', (await automation()).history[0].trigger, 'missed')
 
@@ -249,10 +264,16 @@ try {
   check('back to the list', await until(() => panel.locator('.automation-row').count(), 2), 2)
 
   // ---- 5. runNow and delete through the SDK ----------------------------------------------------------
+  // A busy run tab would be skipped (CONFLICT): wait for the renewed agent's output to settle.
+  check('the run tab settles', await until(async () => (await project()).globalSessions[0].status, 'idle'), 'idle')
+  setClock(Date.UTC(2026, 0, 5, 11, 4, 10))
   const { sessionId } = await sdk.request('automation.runNow', { projectId, automationId: autoId })
-  check('runNow starts a session even while paused', (await project()).globalSessions.some((s) => s.id === sessionId), true)
+  check('runNow runs it even while paused, in the same run tab', [sessionId, await runTabs()], [tabId, [[tabId, 'Smoke run · 11:04']]])
+  check('runNow launches the agent again with the prompt', await until(launches, 3), 3)
+  check('the history has every run', (await automation()).history.map((r) => [r.trigger, r.outcome, r.sessionId]), [['manual', 'ran', tabId], ['missed', 'ran', tabId], ['schedule', 'ran', tabId]])
   await sdk.request('automation.delete', { projectId, automationId: autoId })
-  check('delete removes it; its tabs stay', [(await automation()) ?? null, (await globalTitles()).length], [null, 3])
+  const tabs = (await project()).globalSessions.map((s) => [s.id, s.context ?? null])
+  check('delete removes it; its tab stays, without context', [(await automation()) ?? null, tabs], [null, [[tabId, null]]])
   check('no page errors', pageErrors, [])
   const held = await win.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))
   check("the renderer's store and page never hold the server token", held.includes(token), false)

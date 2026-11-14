@@ -804,17 +804,38 @@ pull request. The MCP tool `watch_pull_request` turns a watch on or off.
 
 With the capability `automations`, a project holds scheduled prompts, `Project.automations`
 (saved with the project, so they survive a restart, and published on the project topic). On its
-schedule the server opens a new Global session in the project with the automation's `prompt` as
-its first message and `llm` (the project's Global agent when unset); the session is titled
-`<name> · HH:MM` in the automation's timezone: the slot's time, or the start time for manual and missed runs.
+schedule the server runs the automation's `prompt` as the first message of a new conversation with
+`llm` (the project's Global agent when unset) in the automation's **run tab**, a Global session that
+is titled `<name> · HH:MM` in the automation's timezone at each run: the slot's time, or the start
+time for manual and missed runs.
+
+**Run tab.** An automation has at most one Global session, the one whose `Session.context` is
+`{kind: 'automation', automationId}` (the session's `context`, saved with it; absent on a normal
+session; only the server sets it). Each run (scheduled, manual or missed):
+
+- no run tab (never run, or the user closed it): the server starts a new Global session with the
+  context, the prompt its first message;
+- the run tab is **busy** (`working` or `attention`, or it has an open `decision`): the run is
+  **skipped**, recorded with `outcome: 'skipped'` and `error: 'previous run still working'`; the
+  tab is left alone;
+- otherwise (`idle`, `done`, `complete`, `exited`): the server **renews** it: stops its pty if one
+  runs (that pty's exit is not recorded), clears its queue, decision and exit code, sets its title
+  and agent, and launches the agent as a brand-new conversation (never a resume) with the prompt.
+  `Session.id` stays the same, so the tab keeps its place; it gets a new `ptyId`, and a new
+  `agentSessionId` (Codex: unset until the new conversation is discovered). The status is `idle`.
+  If the agent cannot be spawned the tab shows `exited` with `exitCode` -1.
+
+Deleting an automation leaves its run tab open as a normal Global session (its `context` is
+removed). At most one run tab per automation means at most 50 per project.
 
 An `Automation` is `{id, name, prompt, schedule: {cron, tz}, enabled, llm?, createdAt, lastSlot,
 missed?, history}`. `schedule.cron` is five fields (minute hour day-of-month month day-of-week), no
 names or macros, read as wall-clock time in the IANA timezone `tz`; it must match a date and its
 slots must be at least 5 minutes apart. `lastSlot` is the latest slot handled (ran, failed or counted
 as missed) and starts at `createdAt`. `history` is the last 20 runs, newest first, each `{at, slot?,
-trigger: 'schedule' | 'manual' | 'missed', outcome: 'ran' | 'failed', sessionId?, error?}`; a start
-that fails is recorded (`error`, at most 200 characters) and never retried. `missed` is `{since,
+trigger: 'schedule' | 'manual' | 'missed', outcome: 'ran' | 'failed' | 'skipped', sessionId?, error?}`
+(`sessionId`: the run tab, for `ran`); a start that fails, or a skipped run, is recorded (`error`,
+at most 200 characters) and never retried. `missed` is `{since,
 count}`: the slots that passed while the server could not run them, waiting for the user's answer.
 
 Every 30 seconds the server looks at each enabled automation's slots after `lastSlot` up to now. If
@@ -828,9 +849,9 @@ is the scheduler's clock.
 | Method | Params | Result |
 |---|---|---|
 | `automation.save` | `{projectId, automation}` | `{id}`. `automation` is `{id?, name, prompt, schedule, enabled, llm?}`: no `id` creates, an `id` updates (`NOT_FOUND` if unknown); `llm` unset or `null` means the project's Global agent. `name` 1-80 characters without control characters, `prompt` 1-20000 after trimming, without control characters other than tab and newline. `schedule.cron` must be valid, match a date and run no more often than every 5 minutes, and `schedule.tz` an IANA timezone, else `BAD_REQUEST`. `llm.provider` must be a known agent that can use Trek's tools (MCP), else `BAD_REQUEST`. `CAPACITY` at 50 automations per project |
-| `automation.delete` | `{projectId, automationId}` | `null` (`NOT_FOUND` for an unknown automation) |
-| `automation.runNow` | `{projectId, automationId}` | `{sessionId}`: starts the Global session now, even when disabled, recorded in `history` as `manual`, leaving the schedule alone. The start's error is the method's error (e.g. `CAPACITY`) and is also recorded. `NOT_FOUND` for an unknown automation |
-| `automation.resolveMissed` | `{projectId, run: string[], dismiss: string[]}` | `{started: [{automationId, sessionId?, error?}]}`. Clears `missed` on every listed id and starts one session (trigger `missed`) for each `run` id that had one pending; ids with nothing pending (or unknown) are ignored, a repeated `run` id starts one session, and an id in both lists runs (`run` wins). `BAD_REQUEST` unless both are lists of at most 50 ids |
+| `automation.delete` | `{projectId, automationId}` | `null` (`NOT_FOUND` for an unknown automation). Its run tab stays, without `context` |
+| `automation.runNow` | `{projectId, automationId}` | `{sessionId}` (the run tab): runs it now, even when disabled, recorded in `history` as `manual`, leaving the schedule alone. The start's or renew's error is the method's error (e.g. `CAPACITY`) and is also recorded; a busy run tab is `CONFLICT` (recorded as `skipped`). `NOT_FOUND` for an unknown automation |
+| `automation.resolveMissed` | `{projectId, run: string[], dismiss: string[]}` | `{started: [{automationId, sessionId?, error?}]}`. Clears `missed` on every listed id and runs each `run` id that had one pending (trigger `missed`), `error` when it failed or was skipped (`previous run still working`); ids with nothing pending (or unknown) are ignored, a repeated `run` id runs once, and an id in both lists runs (`run` wins). `BAD_REQUEST` unless both are lists of at most 50 ids |
 
 For the smokes only: `TREK_SERVER_AUTOMATION_TICK_MS` (a whole number of milliseconds, at least
 1000) replaces the 30-second tick, and `TREK_SERVER_AUTOMATION_CLOCK_FILE` names a file whose
@@ -1135,7 +1156,7 @@ themselves are not sent: they may carry secrets. An unknown `projectId` is
 model's backend may be down, say); `session.start` reports that as usual.
 
 **Starting.** `session.start {projectId, worktreeId, title?, llm?, sessionTypeId?,
-initialMessage?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
+initialMessage?, context?, cols, rows}` returns `{sessionId, ptyId}`. `worktreeId: null`
 starts a Global session. `cols` is an integer from 1 to 500 and `rows` from 1 to 200 (as for `session.restart`
 and `pty.resize`), else `BAD_REQUEST`. The agent
 is chosen from `llm`, else the session type's, else the project's default, else
@@ -1145,7 +1166,10 @@ repositories (for Global). A worktree that is not loaded is loaded first; at
 `maxSessions` (`CAPACITY`) the call is refused before that load. A title
 (of `session.start`, of a session type's name, or of `session.rename`) is at most
 200 characters with no control characters, else `BAD_REQUEST`. If the agent
-cannot be spawned, no session is left behind.
+cannot be spawned, no session is left behind. `context` is the server's own (an automation's run
+tab, see [Automations](#automations)): it must be `{kind: 'automation', automationId}` naming an
+automation of the project, on a Global session, else `BAD_REQUEST`; `CONFLICT` if that automation
+already has a run tab.
 
 **Running the agent.** The agent runs as the command of a login shell, so the pty
 ends when the agent quits. On POSIX that is `$SHELL -ilc '<command>'` (`/bin/sh`
