@@ -114,6 +114,7 @@ new optional field needs no capability: its absence says enough.
 | `review` | The Changes tab's review (see [Changes tab review](#changes-tab-review)): `worktree.changes` and `worktree.diff` take a `source`, `worktree.commits` lists the newest commits, and `review.*` keep a worktree's draft line comments and send them to one of its sessions as one queued prompt. A server without it ignores `source` and has only the branch against its base |
 | `move` | A worktree can be moved to or from another server (see [Moving a worktree](#moving-a-worktree-between-servers)): `move.prepare`, `move.export`, `move.history` and `move.finish` on the source, `move.candidates`, `move.begin`, `move.upload`, `move.abort`, `move.receive` and `move.unreceive` on the target |
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
+| `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server but the local one (a phone can't reach this machine's loopback) |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
@@ -862,6 +863,7 @@ source) to another (the target). The servers never talk to each other: the clien
 two connections. The branch travels through `origin` (both clones need it, the same repository);
 the uncommitted work travels as one patch; a Claude session's history is copied so it resumes on
 the target. Only a worktree on a branch moves, never a repository's main checkout.
+The branch's history travels too (see [Worktree history](#worktree-history)).
 
 The client's order, and what each step leaves behind when it fails:
 
@@ -1060,6 +1062,42 @@ the worktree is stopped by the promote, so its call drops; when the request sett
 saying how it went (`The promote you asked for (promote_to_primary) went through: …` or `… failed:
 …`, a claimant's own error cut to 500 characters) is queued on the asking session
 (`terminalId`), wherever it now is, and never sent by itself.
+
+## Worktree history
+
+The server records what changes on each branch of a project's repositories, per `(repoId, branch)`
+(like `branchData`, so it outlives a removed worktree), in `<dataDir>/history/<projectId>.jsonl`.
+Each branch keeps its newest 500 entries. Recording never fails a command: a write that fails is a
+`HISTORY_FAILED` health warning on the `server` topic until a later write works.
+
+`HistoryEvent`: `{ id, at, repoId, branch, kind, actor, reason?, from?, to? }` (`src/shared/model/history.ts`).
+
+| kind | recorded by | from / to |
+|---|---|---|
+| `created`, `removed` | `worktree.create`, `worktree.remove` | to / from: the path |
+| `status` | `branch.setTag`; the first workflow tag given on create or demote (actor `trek`) | the tag `{id, text: name, color}` as it was |
+| `label.added`, `label.removed` | `branch.setCustomTags`, one per label | the label as it was |
+| `note` | `branch.setNote` | to.text `added` / `edited` / `cleared` (not the note); an edit by the same actor within 5 minutes of the branch's newest note entry updates that entry (same id) |
+| `ticket`, `pr` | `branch.setTicket`, `branch.setPr` | the old and new id / URL |
+| `prWatch.on`, `prWatch.off` | `branch.setPrWatch`; `branch.setPr` ending a watch; the watch ending on a merge or close (actor `trek`, to.text `merged` / `closed`) | |
+| `promoted`, `demoted` | `worktree.promote`, `worktree.demote` (not a `dryRun`) | |
+| `moved.out`, `moved.in` | `move.finish`, `move.receive` | the other server's name, when the client passed it |
+
+`actor`: `{kind: 'user'}` for a request from a Trek client; `{kind: 'mcp', terminalId?, sessionTitle?}`
+for a trek-dev tool call (the session, when the call passed a `terminalId` of the project's);
+`{kind: 'trek'}` for what the server did by itself. `reason`: the MCP call's, trimmed.
+A promote that answers promote_to_primary is the asking MCP call's.
+
+- `history.list {projectId, repoId, branch, before?, limit?}` -> `{events, more}`: newest first,
+  `limit` (1-100, default 100) entries older than the entry `before` names (an id no longer kept
+  gives none). A server without history answers `{events: [], more: false}`.
+- `history.added {projectId, event}` on the project topic: a new entry, or a newer version of one
+  (same id: a folded note edit). Clients replace by id.
+- A move carries the branch's history: `move.export` answers `history` (oldest first) and
+  `serverName`; `move.receive` takes them as `history` and `fromServer` (re-keyed to the target's
+  repository, ids already there skipped), answers `serverName`, and records `moved.in`;
+  `move.finish` takes `toServer` and records `moved.out`; `move.unreceive` takes the entries the
+  receive added back out.
 
 ## Sessions
 
@@ -1448,6 +1486,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
 | `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
 | `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, of only the files commented on in it, with its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source. Because it reads only the commented files, `outdated` does not depend on the full diff's 8 MiB size cap or git's rename limit, so it can differ from what the Changes tab shows when the whole diff hits either |
+| `get_worktree_history` | `worktree`; `limit?` (default 20, at most 100) | `{branch, more, entries: [{at, change, by, reason?}]}`, newest first; `by` is `the user`, an MCP session or `Trek` |
 | `list_session_types` | none | an array of `{id, name, systemPrompt, initialMessage?, llm?}` (no icon) |
 | `save_session_type` | `id?`, `name?`, `systemPrompt?`, `initialMessage?`, `llm?` (`{provider, model?, effort?}` or `null`) | the saved type |
 | `delete_session_type` | `sessionType` (id or name) | `{deleted: <name>}` |
@@ -1458,7 +1497,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `read_stack_log` | `worktree`; `lines?` (default 100, 1 to 2000) | `{output}`: the last lines of the stack's log's last 64 KiB (a line cut at its start left out), colour codes removed |
 | `promote_to_primary` | `worktree`; `terminalId?` (named in the dialog; the session that hears the outcome in its queue if its call drops) | `{promoted: true, primary}` once a window confirmed and promoted (`{promoted: true, path}` if the main checkout can't be described; see [Promote to primary](#promote-to-primary)); a second call for the same worktree joins the first; `BAD_REQUEST` when the user declines, nobody answers in 15 minutes, or no window listens; `GIT_ERROR` when the promote failed (or no open window lists the worktree) |
 
-That is 30 tools. The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 31 tools. Every tool that changes a worktree also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the
@@ -1526,6 +1565,7 @@ URL, each at most 200 characters.
 | `plugins.changed` | `{id}`: a plugin's server-wide state (a key, its config) changed, by any client, to every authenticated connection |
 | `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
 | `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
+| `history.added` | `{projectId, event}`: on the project topic, a new worktree history entry, or a newer version of one (same id; see [Worktree history](#worktree-history)) |
 | `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: to every authenticated connection. `linear` and `voice` are the Linear and voice plugins' legacy capabilities, sent beside their `plugins.changed` for clients older than plugins. `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 
 ## Several clients
