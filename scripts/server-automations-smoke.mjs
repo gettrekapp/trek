@@ -5,7 +5,9 @@
 // A plain `trek-server start` runs with its own HOME, a fake agent that records its arguments, and a
 // clock file (TREK_SERVER_AUTOMATION_CLOCK_FILE) this script advances; ticks every second. No real
 // Claude, gh or network. The built app runs with a temp HOME and --user-data-dir. Checks: validation,
-// an on-time run, missed runs, the missed-runs modal, the Automations tab (toggle, editor), runNow, delete.
+// an on-time run, missed runs, the missed-runs modal, the Automations tab (toggle, editor), runNow,
+// the Global drawer's Automations view (the run tab out of the sessions strip, the toggle, the
+// panel's "open tab" link, a renewed run's clean screen), delete.
 // Every run reuses the automation's one run tab (a Global session with its context): the first opens
 // it, the later ones renew it — the same session id, a new title, the fake agent launched again with
 // the prompt. (The fake agent's one line of output settles to idle, so runs renew rather than skip.)
@@ -271,9 +273,44 @@ try {
   check('runNow runs it even while paused, in the same run tab', [sessionId, await runTabs()], [tabId, [[tabId, 'Smoke run · 11:04']]])
   check('runNow launches the agent again with the prompt', await until(launches, 3), 3)
   check('the history has every run', (await automation()).history.map((r) => [r.trigger, r.outcome, r.sessionId]), [['manual', 'ran', tabId], ['missed', 'ran', tabId], ['schedule', 'ran', tabId]])
+
+  // ---- 6. The Global drawer's Automations view ------------------------------------------------------
+  const RUN_TITLE = 'Smoke run · 11:04'
+  const strip = win.locator('.global-tabs .global-tab:not(.automations-tab) .global-tab-title')
+  const stripTitles = () => strip.allTextContents()
+  const toggleBtn = win.locator('.global-tabs .automations-tab')
+  const store = (fn) => win.evaluate(fn)
+  check('the window shows the renewed run tab', await until(() => store(() => window.__store.getState().terminals[Object.keys(window.__store.getState().terminals).find((id) => window.__store.getState().terminals[id].context)]?.title ?? null), RUN_TITLE), RUN_TITLE)
+  await win.locator('.global-bar').click()
+  // Its only Global tab is the run tab: opening the drawer still starts a normal one.
+  check('opening the drawer starts a normal tab beside the run tab', await until(async () => (await project()).globalSessions.filter((s) => !s.context).length, 1), 1)
+  const normalTitle = await until(async () => (await stripTitles()).length, 1).then(stripTitles)
+  check('the sessions strip has the normal tab, not the run tab', [normalTitle.length, normalTitle.includes(RUN_TITLE)], [1, false])
+  check('the Automations toggle counts the run tab', await until(() => toggleBtn.textContent().catch(() => null), 'Automations (1)'), 'Automations (1)')
+  check('the sessions view has the new-tab button', await win.locator('.global-tab-add').count(), 1)
+  await toggleBtn.click()
+  check('the toggle shows the run tab strip', await until(stripTitles, [RUN_TITLE]), [RUN_TITLE])
+  check('the Automations view has no new-tab button', await win.locator('.global-tab-add').count(), 0)
+  check('its run tab is the active one', await until(() => win.locator('.global-tabs .global-tab.active:not(.automations-tab) .global-tab-title').textContent().catch(() => null), RUN_TITLE), RUN_TITLE)
+  // Renewed twice since this window attached (the missed run, then runNow): each renew starts a
+  // clean screen, so one launch's output shows, with no "[restarted]" line from a resume.
+  const screen = () => win.locator('.global-terminal .terminal-pane:visible .xterm-rows').textContent().catch(() => '')
+  await until(async () => (await screen()).includes('FAKE_AGENT'), true)
+  const shown = await screen()
+  check('a renewed run tab shows only the new run', [shown.split('FAKE_AGENT').length - 1, shown.includes('[restarted]')], [1, false])
+  // Back to the sessions, then the panel's history link opens the run tab in the Automations view.
+  await toggleBtn.click()
+  check('the toggle goes back to the sessions', await until(stripTitles, normalTitle), normalTitle)
+  const smokeRow = panel.locator('.automation-row', { hasText: 'Smoke run' })
+  await smokeRow.locator('button', { hasText: 'History' }).click()
+  await smokeRow.locator('.automation-history button.link-button', { hasText: 'open tab' }).first().click()
+  check("the history's open tab selects the run tab in the Automations view", await until(() => store(() => [window.__store.getState().globalView, window.__store.getState().activeTerminal.__global__]), ['automations', tabId]), ['automations', tabId])
+  check('…and the strip shows it active', await until(() => win.locator('.global-tabs .global-tab.active:not(.automations-tab) .global-tab-title').textContent().catch(() => null), RUN_TITLE), RUN_TITLE)
+
   await sdk.request('automation.delete', { projectId, automationId: autoId })
-  const tabs = (await project()).globalSessions.map((s) => [s.id, s.context ?? null])
+  const tabs = (await project()).globalSessions.filter((s) => s.id === tabId).map((s) => [s.id, s.context ?? null])
   check('delete removes it; its tab stays, without context', [(await automation()) ?? null, tabs], [null, [[tabId, null]]])
+  check('the deleted automation\'s tab joins the sessions strip; the toggle goes', await until(async () => [(await stripTitles()).includes(RUN_TITLE), await toggleBtn.count()], [true, 0]), [true, 0])
   check('no page errors', pageErrors, [])
   const held = await win.evaluate(() => [JSON.stringify(window.__store.getState()), document.documentElement.outerHTML].join('\n'))
   check("the renderer's store and page never hold the server token", held.includes(token), false)
