@@ -23,7 +23,7 @@ import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
 import { voiceServerPlugin } from '../plugins/voice/server/index.ts'
 import { migrateConfigFile } from '../plugins/voice/server/configFile.ts'
 import { VOICE_SUMMARY_PROMPT } from '../plugins/voice/server/prompt.ts'
-import { removeDir } from './testPlatform.mjs'
+import { removeDir, removeDirWhenFree } from './testPlatform.mjs'
 
 // Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
 const posix = process.platform !== 'win32'
@@ -301,7 +301,8 @@ function fakeSpawner() {
 
 /** A project with one worktree session, the voice plugin, and its MCP for the project. */
 async function projectSetup(t, { key = 'good-voice', voiceId = 'v1', promptSessions = false } = {}) {
-  const dir = tempDir(t)
+  // Removed in the hook that stops the sessions and the poller, after them.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-voice-plugin-')))
   const voiceStub = await elevenLabsStub(t)
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
@@ -330,10 +331,11 @@ async function projectSetup(t, { key = 'good-voice', voiceId = 'v1', promptSessi
     // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns.
     platform: 'linux'
   })
-  t.after(() => {
+  t.after(async () => {
     sessions.stopAll()
     poller.stop()
     store.close()
+    await removeDirWhenFree(dir)
   })
   const keepAlive = setInterval(() => {}, 1000)
   t.after(() => clearInterval(keepAlive))

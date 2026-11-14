@@ -19,7 +19,7 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { projectDir } from '../src/host/claudeSessionService.ts'
 import { PromoteRequests } from '../server/src/promote/requests.ts'
 import { realPath } from '../src/host/pathContainment.ts'
-import { removeDir } from './testPlatform.mjs'
+import { removeDirWhenFree } from './testPlatform.mjs'
 
 export const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 export const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: gitEnv, encoding: 'utf8' })
@@ -55,7 +55,7 @@ export async function setup(t, options = {}) {
   process.env.HOME = join(dir, 'home')
   process.env.USERPROFILE = join(dir, 'home')
   const restore = (name, value) => { if (value === undefined) delete process.env[name]; else process.env[name] = value }
-  t.after(() => { restore('HOME', home); restore('USERPROFILE', profile); removeDir(dir) })
+  t.after(() => { restore('HOME', home); restore('USERPROFILE', profile) })
   const origin = join(dir, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: gitEnv })
   const app = join(dir, 'app')
@@ -78,7 +78,8 @@ export async function setup(t, options = {}) {
   // (winLaunch.ts, checked in serverWinLaunch.test.mjs), and the fake agents are not there.
   const sessions = new SessionManager({ projects, store, hub, spawner, schedule: () => ({ cancel() {} }), discover: async () => undefined, platform: 'linux' })
   const promoteRequests = new PromoteRequests(hub, { timeoutMs: 2000, checkMs: 20, ...(options.requests ?? {}) })
-  t.after(() => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close() })
+  // In this order, in one hook: the directory goes once what runs over it is stopped.
+  t.after(async () => { promoteRequests.stop(); sessions.stopAll(); poller.stop(); store.close(); await removeDirWhenFree(dir) })
   const recoveryDir = join(dir, 'recovery')
   const ctx = { store, hub, subscriber: { send: () => {} }, projects, poller, sessions, promoteRequests, promoteRecoveryDir: recoveryDir }
   const call = (method, params) => dispatchV2(method, params, ctx)
