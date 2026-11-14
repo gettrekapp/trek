@@ -77,11 +77,16 @@ button:disabled {
 }
 
 .title-side {
-  width: 170px;
+  width: 120px;
   flex: 0 0 auto;
 }
 
-/* The right side: the update indicator, pushed to the edge. Both sides stay equally wide, so the title stays centred. */
+/* While an update is offered, both sides widen to fit its indicator: equally, so the title stays centred. */
+.title-bar:has(.update-indicator) .title-side {
+  width: 170px;
+}
+
+/* The right side: the update indicator, pushed to the edge. */
 .title-side-end {
   display: flex;
   justify-content: flex-end;
