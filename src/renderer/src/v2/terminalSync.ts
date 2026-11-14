@@ -76,6 +76,41 @@ export function terminalTargets(project: Project): TerminalSlot[] {
   return out
 }
 
+/** The agent conversation a session's pty runs, for telling a renew from a restart. */
+export interface Conversation {
+  /** `Session.agentSessionId`; null while a Codex id is undiscovered */
+  agent: string | null
+  /** An automation's run tab (`Session.context`): the only kind the server renews */
+  automation: boolean
+}
+
+/** Each session with a terminal entry (as terminalTargets), by id: the conversation it runs. */
+export function sessionConversations(project: Project): Map<string, Conversation> {
+  const out = new Map<string, Conversation>()
+  const add = (s: Project['globalSessions'][number]): void => {
+    out.set(s.id, { agent: s.agentSessionId ?? null, automation: s.context?.kind === 'automation' })
+  }
+  for (const repo of project.repositories) {
+    for (const worktree of repo.worktrees) if (worktree.loaded) worktree.sessions.forEach(add)
+  }
+  project.globalSessions.forEach(add)
+  return out
+}
+
+/**
+ * Whether a session's new pty runs a different conversation than the one the
+ * terminal shows (`prev`, as last seen while attached): an automation run's
+ * renew. Its screen then starts clean, where a restart (same conversation,
+ * resumed) keeps the old scrollback under a "[restarted]" line. An
+ * undiscovered Codex run tab cannot be resumed, so a new pty on it is a new
+ * conversation too. Unknown on either side (a new entry): false.
+ */
+export function isNewConversation(prev: Conversation | undefined, next: Conversation | undefined): boolean {
+  if (!prev || !next) return false
+  if (prev.agent !== next.agent) return true
+  return next.agent === null && next.automation
+}
+
 /**
  * `current` reports each entry's attached pty, or the pty it last saw end (so
  * a spent pty still listed by the mirror plans nothing). `now` is only read

@@ -9,10 +9,13 @@ import type { Project } from '../../shared/model/types'
 import {
   attachResize,
   followResize,
+  isNewConversation,
   planTerminalSync,
+  sessionConversations,
   recordAttachFailure,
   terminalTargets,
   type AttachFailure,
+  type Conversation,
   type TermSize
 } from './v2/terminalSync'
 import { errorCode, errorText } from './v2/errors'
@@ -43,6 +46,12 @@ interface V2Link {
   attached: string | null
   /** The attached pty's size as last known (its attach, a `pty.resized`, or this window's own resize); null when none is attached */
   ptySize: TermSize | null
+  /**
+   * The agent conversation the screen shows: the session's, as last seen while
+   * attached to its pty. A new pty on another conversation (an automation
+   * run's renew) clears the screen instead of marking a restart.
+   */
+  conversation?: Conversation
 }
 
 interface Entry {
@@ -398,7 +407,7 @@ function applyAttachSize(id: string, entry: Entry, info: PtyInfo): void {
   if (step.resizeLocal) entry.term.resize(step.resizeLocal.cols, step.resizeLocal.rows)
 }
 
-function attachV2(id: string, ptyId: string): void {
+function attachV2(id: string, ptyId: string, fresh = false): void {
   const entry = entries.get(id)
   const link = entry?.v2
   if (!entry || !link) return
@@ -406,8 +415,10 @@ function attachV2(id: string, ptyId: string): void {
   link.spent = null
   link.attached = null
   // The replay repeats a pty's scrollback: attached again after a failure, the
-  // same pty starts from a clean screen, as onReset does.
-  if (link.shown === ptyId) entry.term.reset()
+  // same pty starts from a clean screen, as onReset does. A new conversation
+  // (a renew) does too, without the "[restarted]" line: the old run is not its past.
+  if (link.shown === ptyId || fresh) entry.term.reset()
+  if (fresh) link.shown = null
   const { ptys } = link
   const current = (): boolean => entries.get(id) === entry && link.ptyId === ptyId
   ptys
@@ -548,8 +559,19 @@ export function syncV2Terminals(project: Project, ptys: PtyStream): void {
     const entry = entries.get(id)
     if (entry) detachV2(entry)
   }
-  for (const { id, ptyId } of plan.attach) attachV2(id, ptyId)
-  for (const { id, to } of plan.reattach) attachV2(id, to)
+  const conversations = sessionConversations(project)
+  const fresh = (id: string): boolean => isNewConversation(entries.get(id)?.v2.conversation, conversations.get(id))
+  for (const { id, ptyId } of plan.attach) attachV2(id, ptyId, fresh(id))
+  for (const { id, to } of plan.reattach) attachV2(id, to, fresh(id))
+  // What each screen shows now: only while attached to the session's pty (a
+  // Codex id discovered meanwhile), or a first look. Not while detached: a renew
+  // clears the pty and changes the conversation before its new pty arrives.
+  for (const { id, ptyId } of targets) {
+    const link = entries.get(id)?.v2
+    if (link && (link.conversation === undefined || (ptyId !== null && link.ptyId === ptyId))) {
+      link.conversation = conversations.get(id)
+    }
+  }
   // Failed attaches still in their back-off: come back when the first is due.
   for (const entry of entries.values()) {
     const link = entry.v2
