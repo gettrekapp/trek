@@ -749,6 +749,25 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         await request('branch.setEnv', { ...branchRef(repoId, branch), env: text || null })
       }
     },
+    automations: {
+      save: async (automation) => {
+        const { result, rev } = await requestWithRev('automation.save', { projectId, automation })
+        if (rev) await deps.whenProjected(() => true, rev)
+        return result.id
+      },
+      remove: async (automationId) => {
+        await request('automation.delete', { projectId, automationId })
+      },
+      runNow: async (automationId) => {
+        const { result, rev } = await requestWithRev('automation.runNow', { projectId, automationId })
+        if (rev) await deps.whenProjected(() => true, rev)
+        return result.sessionId
+      },
+      resolveMissed: async (run, dismiss) => {
+        const { started } = await request('automation.resolveMissed', { projectId, run, dismiss })
+        return started
+      }
+    },
     repos: {
       // repo.add only takes a path the server has registered, so register it first.
       add: async () => {

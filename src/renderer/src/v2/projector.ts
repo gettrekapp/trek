@@ -291,7 +291,8 @@ export function projectV2(project: Project): V2Projection {
     repositories,
     worktreeTags: settings.worktreeTags ?? DEFAULT_WORKTREE_TAGS,
     globalSessions,
-    ...(order ? { worktreeOrder: order } : {})
+    ...(order ? { worktreeOrder: order } : {}),
+    ...(project.automations?.length ? { automations: project.automations } : {})
   }
 
   return {

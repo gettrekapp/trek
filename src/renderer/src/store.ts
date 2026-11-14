@@ -217,6 +217,9 @@ export interface AppState {
   /** Whether the global Claude panel at the bottom of the window is expanded. */
   globalPanelOpen: boolean
   globalView: 'sessions' | 'bot'
+  /** The missed-runs set the user closed the modal on (MissedRunsModal); null: show it whenever there is one */
+  missedDismissedKey: string | null
+  setMissedDismissedKey: (key: string | null) => void
   botView: BotView
   botEvents: BotEvent[]
   /** Open decision requests by terminal id, at most one per terminal. Not persisted. */
@@ -363,6 +366,7 @@ export const useAppStore = create<AppState>((set) => ({
   globalQueuePanelOpen: false,
   globalPanelOpen: false,
   globalView: 'sessions',
+  missedDismissedKey: null,
   botView: OFF_VIEW,
   botEvents: [],
   decisions: {},
@@ -424,6 +428,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   setGlobalPanelOpen: (open) => set({ globalPanelOpen: open }),
   setGlobalView: (globalView) => set({ globalView }),
+  setMissedDismissedKey: (missedDismissedKey) => set({ missedDismissedKey }),
   setBotView: (botView) => set({ botView }),
   setBotEvents: (botEvents) => set({ botEvents }),
   addBotEvent: (event) => set((state) => ({ botEvents: [...state.botEvents, event].slice(-500) })),

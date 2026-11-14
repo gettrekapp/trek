@@ -521,3 +521,9 @@ test('shareSlice: only plain objects are compared by keys; a changed Date is the
   const bare = Object.assign(Object.create(null), { a: 1 })
   assert.equal(shareSlice({ project: bare }, { project: Object.assign(Object.create(null), { a: 1 }) }).project, bare)
 })
+
+test('automations are carried into the project file as they are; none, no key', () => {
+  const automations = [{ id: 'a', name: 'N', prompt: 'p', schedule: { cron: '0 9 * * *', tz: 'UTC' }, enabled: true, createdAt: 1, lastSlot: 1, history: [] }]
+  assert.deepEqual(projectV2({ ...fixture(), automations }).slice.project.automations, automations)
+  assert.equal('automations' in projectV2(fixture()).slice.project, false)
+})
