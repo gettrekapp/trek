@@ -2,20 +2,21 @@
 // unpack it beside the install, ask the new version to prove it runs (its own `selfcheck`), and
 // only then swap it into the install's place, marked pending until it starts. Anything that
 // fails before the swap leaves the install, and a server running from it, untouched. One update
-// at a time per install (a lock file beside it).
+// at a time per install (lock.ts: a lock beside it).
 import { spawnSync } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
 import { compareVersions } from '../../../src/shared/versions.ts'
 import { fetchRelease, tarballUrl, type Release } from './feed.ts'
 import { download, swap, unpack, validateStaged } from './install.ts'
+import { LOCK_FILE, takeLock, type UpdateLock } from './lock.ts'
 import { launcherPath, relaunchEnv } from './relaunch.ts'
 import { writePending, writeState } from './state.ts'
 import type { Install } from './updatable.ts'
 
-export const LOCK_FILE = '.trek-update.lock'
+export { LOCK_FILE }
 const SELFCHECK_TIMEOUT_MS = 60_000
 
 export type UpdateStep = 'checking' | 'downloading' | 'unpacking' | 'selfcheck' | 'installing'
@@ -79,41 +80,6 @@ export async function findUpdate(deps: FindDeps): Promise<Release | null> {
   return newer ? release : null
 }
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    // EPERM: it exists, and is someone else's.
-    return (err as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/**
- * Takes the lock beside the install; false when a live process holds it (this one too: a second
- * update started in a process while its first runs). A dead holder's lock, or one that names no
- * process, is taken over.
- */
-function takeLock(path: string): boolean {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeFileSync(path, String(process.pid), { flag: 'wx' })
-      return true
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-      let holder = NaN
-      try {
-        holder = Number(readFileSync(path, 'utf8').trim())
-      } catch {
-        // Gone again, or unreadable: try once more.
-      }
-      if (Number.isInteger(holder) && holder > 0 && alive(holder)) return false
-      rmSync(path, { force: true })
-    }
-  }
-  return false
-}
-
 /** Removes what an update leaves beside the install. Never throws: what cannot be removed is replaced by the next update. */
 function remove(path: string): void {
   try {
@@ -132,14 +98,19 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
   const { install } = deps
   const now = (): Date => deps.now?.() ?? new Date()
   const lock = join(install.parent, LOCK_FILE)
-  let locked = false
+  let held: UpdateLock | null = null
   let tarball: string | undefined
   let stage: string | undefined
   let target: string | undefined
   try {
+    held = takeLock(lock)
     // Not recorded as this install's last result: the update that holds the lock records its own.
-    if (!takeLock(lock)) return { kind: 'failed', error: `another update is running for ${install.dir} (${lock})` }
-    locked = true
+    if (!held) {
+      return {
+        kind: 'failed',
+        error: `another update is running for ${install.dir}: ${lock} is its lock (a folder that holds that update's process id). If no update is running, remove it.`
+      }
+    }
 
     deps.onStep?.('checking')
     const release = await findUpdate(deps)
@@ -176,6 +147,6 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
   } finally {
     if (tarball) remove(tarball)
     if (stage) remove(stage)
-    if (locked) remove(lock)
+    held?.release()
   }
 }

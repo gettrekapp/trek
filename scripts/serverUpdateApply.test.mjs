@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCK_FILE, applyUpdate, findUpdate, runStagedSelfcheck } from '../server/src/update/apply.ts'
@@ -273,33 +273,41 @@ test('a failure that cannot be recorded is still the failure that is returned', 
   }
 })
 
-test('one update at a time: a live lock holder is refused, a dead one and a garbage lock are taken over', tar, async () => {
+test('one update at a time: a live lock holder is refused and told what the lock is; a lock left behind is taken over', tar, async () => {
   const w = world()
   const lock = join(w.parent, LOCK_FILE)
+  const holder = join(lock, 'holder')
   try {
     assert.equal(LOCK_FILE, '.trek-update.lock')
     // This process is alive: so is a second update started in it while the first runs.
-    writeFileSync(lock, String(process.pid))
+    mkdirSync(lock)
+    writeFileSync(holder, `${process.pid}\n`)
     const busy = await applyUpdate(w.deps)
     assert.equal(busy.kind, 'failed')
     assert.match(busy.error, /another update is running/)
+    assert.ok(busy.error.includes(`${lock} is its lock`), busy.error)
+    assert.match(busy.error, /If no update is running, remove it\./)
     assert.equal(w.versionAt(w.dir), '1.0.0')
-    assert.equal(readFileSync(lock, 'utf8'), String(process.pid), 'the holder keeps its lock')
+    assert.equal(readFileSync(holder, 'utf8'), `${process.pid}\n`, 'the holder keeps its lock')
+    assert.deepEqual(readdirSync(w.parent).sort(), [LOCK_FILE, 'trek-server'], 'and the attempt left nothing beside it')
     assert.deepEqual(w.asked, [], 'and nothing was asked of the feed')
     assert.equal(readState(w.configDir).lastResult, undefined, 'the update that is running records its own result')
 
-    // A pid that cannot be alive.
-    writeFileSync(lock, '2147483646')
+    // After a reboot: the process id is a live process's, and the lock is older than any update takes.
+    const longAgo = new Date(Date.now() - 31 * 60 * 1000)
+    utimesSync(holder, longAgo, longAgo)
     assert.equal((await applyUpdate(w.deps)).kind, 'installed')
     assert.deepEqual(leftovers(w), [])
   } finally {
     w.done()
   }
-  for (const garbage of ['', 'not a pid', '-1', '0', '12.5']) {
+  // A holder that cannot be alive, and one that names no process.
+  for (const left of ['2147483646', '', 'not a pid']) {
     const again = world()
     try {
-      writeFileSync(join(again.parent, LOCK_FILE), garbage)
-      assert.equal((await applyUpdate(again.deps)).kind, 'installed', `a lock holding ${JSON.stringify(garbage)}`)
+      mkdirSync(join(again.parent, LOCK_FILE))
+      writeFileSync(join(again.parent, LOCK_FILE, 'holder'), left)
+      assert.equal((await applyUpdate(again.deps)).kind, 'installed', `a lock holding ${JSON.stringify(left)}`)
       assert.deepEqual(leftovers(again), [])
     } finally {
       again.done()

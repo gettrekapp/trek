@@ -473,7 +473,10 @@ folder that holds the install, checks its sha256, unpacks it, asks the new versi
 runs here (`trek-server selfcheck`: node-pty, a terminal, a loopback server), and only then puts
 it in this install's place. A failure at any of these leaves the install as it was, says why,
 and exits 1. The install folder and the folder that holds it must be writable by the user who
-runs the command, and `tar` must be on PATH.
+runs the command, and `tar` must be on PATH. One update runs at a time per install: while it
+does, `.trek-update.lock` (a folder, holding the updater's process id) sits beside the install
+folder. One left behind by an update that was killed is taken over once its process is gone, or
+after 30 minutes; `another update is running` when none is means you can remove it.
 
 The folder's path does not change, so a symlink in `~/.local/bin`, a systemd unit and PATH keep
 working. The folder also keeps its name, version and all: `trek-server version` says what is in
