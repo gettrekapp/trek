@@ -27,7 +27,8 @@ keeps running on the server; the app reattaches when it reconnects.
 
 A release's `trek-server-<version>-<os>-<arch>.tar.gz` (macOS and Linux, x64 and arm64) needs
 no build tools: unpack it and run `bin/trek-server` with Node.js 22 or later (its README.md says
-more; see ../docs/RELEASING.md). On Windows (x64) it is `trek-server-<version>-win32-x64.zip`
+more; see ../docs/RELEASING.md), and `trek-server update` installs later releases (see
+Updating). On Windows (x64) it is `trek-server-<version>-win32-x64.zip`
 with `bin\trek-server.cmd`; ../docs/WINDOWS.md says how a Windows server differs (config in
 `%APPDATA%\trek-server`, no environments or dev stacks yet, no WSL paths). From a checkout:
 
@@ -442,6 +443,107 @@ it waits up to 10 s for both files to go. It exits 0 once the server has
 stopped, or if none was running, and 1 if it timed out or could not tell
 which process is the server. The server's sessions resume (`--resume`) the
 next time their worktree is loaded.
+
+## Updating
+
+A trek-server unpacked from a release tarball (macOS, Linux) updates itself:
+
+```sh
+trek-server update --check   # is there a newer release? Installs nothing
+trek-server update           # install it, after asking
+trek-server update --yes     # install it without asking (a script, cron, ssh without a terminal)
+```
+
+`update --check` prints one of these and exits 0 either way:
+
+```
+trek-server 0.5.0 is the latest version
+trek-server 0.5.0; 0.6.0 is available (run `trek-server update`)
+```
+
+It exits 1 when it could not check (`Could not check for an update: …`) or this install cannot
+update itself. `update` asks `Update trek-server 0.5.0 to 0.6.0? [y/N]` (and says what happens to
+a running server); answering no installs nothing and exits 0. With no terminal to ask on it
+installs nothing and exits 1, naming `--yes`. Pass the same `--config` the server was started
+with, if it has one: that is how the command finds the running server.
+
+It reads the latest published release's checksums, and goes on only if their signature verifies
+against a key built into this trek-server. Then it downloads this machine's tarball into the
+folder that holds the install, checks its sha256, unpacks it, asks the new version to prove it
+runs here (`trek-server selfcheck`: node-pty, a terminal, a loopback server), and only then puts
+it in this install's place. A failure at any of these leaves the install as it was, says why,
+and exits 1. The install folder and the folder that holds it must be writable by the user who
+runs the command, and `tar` must be on PATH.
+
+The folder's path does not change, so a symlink in `~/.local/bin`, a systemd unit and PATH keep
+working. The folder also keeps its name, version and all: `trek-server version` says what is in
+it. The version before is kept beside it as `<folder>.previous` until the next update replaces it.
+
+**A running server** (one started with the same config) restarts into the new version when the
+update is installed: `Installed trek-server 0.6.0; the running server (pid 1234) is restarting
+into it.` **Its terminals close**; agent sessions resume when their worktrees are opened again.
+On Node 22.15 or later the server becomes the new version in the same process, with the same
+process id, arguments and environment, so a terminal, tmux or systemd sees no exit. It comes
+back through `bin/trek-server`: a server that was started as
+`node trek-server.cjs …` directly returns under the launcher's Node (`TREK_NODE`, or the `node`
+on PATH), without any Node options it was started with. On an older Node the update is installed
+and the command says `Restart the running server (pid 1234) to finish`: restart it yourself
+(`systemctl --user restart trek-server`). Once it is listening, the new version logs
+`update: now running trek-server 0.6.0 (was 0.5.0)`.
+
+The command reaches the running server over a Unix socket, `control.sock`, beside the config file
+(mode 0600: only the server's user). If the server did not restart, look in its log for
+`update: no control socket`: the socket's path must fit in about 100 bytes (103 on macOS, 107 on
+Linux), and a server without one keeps running the old version until you restart it.
+
+**If the new version does not start.** `bin/trek-server` marks the first start after an update
+as tried, and the server removes the mark once it is listening. A start that still finds the mark
+means the new version never got that far: the launcher sets it aside as `<folder>.failed`, puts
+`<folder>.previous` back and starts that, and the server logs
+`update: trek-server 0.6.0 did not start; went back to 0.5.0`. With systemd's `Restart=always`
+that second start happens by itself; otherwise it is you running `trek-server` again. A first
+start that is stopped before it is listening (Ctrl+C, a kill, a power cut) counts as failed in
+the same way, so the next start goes back to the previous version: run `trek-server update`
+again. Delete `<folder>.failed` when you have looked at it (the next rollback replaces it). A
+server started as `node trek-server.cjs` rather than through `bin/trek-server` has no rollback.
+
+To go back by hand: stop the server, rename the folder away, and rename `<folder>.previous` to
+the folder's name.
+
+```sh
+mv trek-server-0.5.0-linux-x64 trek-server-unwanted
+mv trek-server-0.5.0-linux-x64.previous trek-server-0.5.0-linux-x64
+```
+
+**The daily check.** A running tarball server also looks for a newer release 30 seconds after it
+starts and once a day after that, and only logs it:
+
+```
+update: trek-server 0.6.0 is available (this is 0.5.0); run `trek-server update`
+```
+
+It never installs anything by itself. In the config, this turns the check off (the command
+still works):
+
+```json
+{ "updates": { "check": false } }
+```
+
+`updates.remoteApply` is reserved for updating from the app, which does not exist yet: it is
+accepted (true or false) and changes nothing.
+
+A trek-server with no update key built in (a release from before the project's signing key)
+checks nothing, and `trek-server update` says so and exits 1: install the new version by hand
+(unpack the new tarball and move the symlink and the unit's path to it).
+
+**Where `update` is not available.** It says why and exits 1:
+
+- a server run from a source checkout (`npm link`, `dist/trek-server.cjs`, `npm start`): pull,
+  and run `npm run build` again;
+- the Trek app's Local server: it is part of the app and is updated with it;
+- Windows: unzip the new release beside the old one and start that (../docs/WINDOWS.md);
+- an install its user cannot write (the folder, or the folder that holds it): run it as the
+  user who owns it, or unpack the new tarball by hand and move the symlink.
 
 ## Expose it with Caddy (TLS)
 

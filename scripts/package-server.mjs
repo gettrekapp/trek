@@ -228,8 +228,12 @@ trek-server start                  # serve (see --help for --host, --port, --web
 \`trek-server.service\` is a systemd user unit: point its \`ExecStart\` at
 \`${name}/bin/trek-server start\` (an absolute path) and drop its \`WorkingDirectory\`.
 
-To upgrade, unpack the new version beside this one and move the symlink (and the unit's path);
-the configuration and data live in ~/.config/trek-server and the data folder, not here.
+To update, run \`trek-server update\` (\`trek-server update --check\` only looks): it installs the
+latest release in this folder's place, after checking its signature and that it runs here, and a
+running server restarts into it. This folder keeps its path and its name, so the symlink and the
+unit's path keep working; \`trek-server version\` says which version is in it. The version before
+is kept beside it as \`${name}.previous\`. The configuration and data live in
+~/.config/trek-server and the data folder, not here.
 `}${OS !== 'darwin' ? '' : signIdentity !== undefined ? `
 On macOS, a tarball downloaded with a browser is quarantined, and so is what it unpacks. node-pty's
 native files here are signed and notarized, so macOS loads them anyway (it checks the notarization
