@@ -4,13 +4,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandPath, findOnPath, hardenWindowsEnv } from '../src/host/commandPath.ts'
 import { git } from '../src/host/gitService.ts'
 import { samePath } from '../src/host/pathContainment.ts'
-import { windowsOnly } from './testPlatform.mjs'
+import { windowsOnly, removeDir } from './testPlatform.mjs'
 
 const CWD = 'C:\\repo'
 /** A file system of `paths`, case-insensitive as NTFS. */
@@ -78,7 +78,7 @@ test('a git.exe planted in the current directory is never what Trek runs as git'
   const before = process.cwd()
   t.after(() => {
     process.chdir(before)
-    rmSync(repo, { recursive: true, force: true })
+    removeDir(repo)
   })
   execFileSync(commandPath('git'), ['init', '-q', repo], { windowsHide: true })
   // node.exe as git.exe: given git's arguments (`-c core.longpaths=true …`) it fails.

@@ -1,11 +1,12 @@
 // scripts/serverLocalProfile.test.mjs — the local server's profile paths and local.json.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCAL_PROFILE_DIR, isLocalProfileName, localProfileDir, localProfileSegment, parseLocalInfo } from '../src/shared/localServer.ts'
 import { localProfile, readLocalInfo, removeLocalInfo, writeLocalInfo } from '../server/src/localProfile.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // A token as addToken makes one: 32 random bytes, base64url.
 const info = { port: 51234, pid: 4242, token: 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU', version: '0.2.0', build: 'abc123def456' }
@@ -18,7 +19,7 @@ const linuxProfile = (segment) => {
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-local-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

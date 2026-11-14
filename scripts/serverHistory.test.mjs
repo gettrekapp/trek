@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync } from 'node:fs'
 import { realPath } from '../src/host/pathContainment.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +20,7 @@ import { TopicHub } from '../server/src/topicHub.ts'
 import { BRANCH_SET_METHODS, dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { BY_TREK, branchChanges, recordHistory, tagValue } from '../server/src/history/record.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const settings = {
   worktreeTags: [{ id: 'ip', name: 'In Progress', color: '#5dabef' }, { id: 'rv', name: 'Review', color: '#ffaa00' }],
@@ -28,7 +29,7 @@ const settings = {
 
 function dirFor(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-history-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return join(dir, 'history')
 }
 const storeFor = (t) => new HistoryStore(dirFor(t))
@@ -114,7 +115,7 @@ const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', 
 async function setup(t) {
   // realPath: Windows' TEMP can be an 8.3 short path (C:\Users\RUNNER~1 on the hosted runner), and the server reports the long one.
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-history-v2-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
   execFileSync('git', ['-C', a, 'commit', '--allow-empty', '-q', '-m', 'init'], { env: gitEnv })

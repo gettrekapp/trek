@@ -2,7 +2,7 @@
 // against real git in a temp dir and a session manager with a fake pty spawner (promoteFixture.mjs).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HistoryStore } from '../server/src/history/store.ts'
@@ -10,7 +10,7 @@ import { projectDir } from '../src/host/claudeSessionService.ts'
 import { promoteChanging, promoteTestHooks, pruneRecoveryFiles } from '../server/src/promote/promoteHandlers.ts'
 import { CLAUDE_ID, MAIN_ID, branchOf, git, setup, status } from './promoteFixture.mjs'
 import { realPath } from '../src/host/pathContainment.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 test('worktree.promote dryRun: the plan, nothing changed', async (t) => {
   const s = await setup(t)
@@ -536,7 +536,7 @@ test('M3: worktree.promote and worktree.demote refuse paths another operation ha
 
 test('M7: recovery files older than 30 days are pruned; newer ones and other files stay', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-recovery-prune-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   for (const name of ['old.patch', 'new.patch', 'old.txt']) writeFileSync(join(dir, name), 'x')
   const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000)
   utimesSync(join(dir, 'old.patch'), old, old)

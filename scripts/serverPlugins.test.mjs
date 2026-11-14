@@ -4,7 +4,7 @@
 // files, and the welcome's plugins and legacy capabilities.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, statSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, statSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
@@ -15,6 +15,7 @@ import { MCP_INSTRUCTIONS, MCP_TOOLS } from '../server/src/mcp/tools.ts'
 import { pluginError } from '../src/shared/plugins/server.ts'
 import { applySettingsPatch, isSettingsKey, PLUGIN_OWNED_SETTINGS, validateSettings } from '../server/src/projects/settings.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
 const posix = process.platform !== 'win32'
@@ -52,7 +53,7 @@ const manifest = (id, more = {}) => ({ id, version: '1.0.0', name: id, descripti
 
 function setup(t, plugins, { projects = { p1: project('p1'), p2: project('p2', { echo: { enabled: false } }) }, hub = fakeHub() } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-plugins-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const warnings = []
   const registry = createPluginRegistry({
     plugins,

@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { compareVersions, mismatches, PACKAGES, setVersion, versionFromTag } from './set-version.mjs'
+import { removeDir } from './testPlatform.mjs'
 
 test('versionFromTag: v-prefixed, bare and ref tags; prereleases; junk refused', () => {
   assert.equal(versionFromTag('v1.2.3'), '1.2.3')
@@ -14,7 +15,7 @@ test('versionFromTag: v-prefixed, bare and ref tags; prereleases; junk refused',
 
 test('setVersion writes every package.json and lock root; mismatches names the stragglers', (t) => {
   const base = mkdtempSync(join(tmpdir(), 'set-version-')) + '/'
-  t.after(() => rmSync(base, { recursive: true, force: true }))
+  t.after(() => removeDir(base))
   for (const dir of PACKAGES) {
     if (dir) mkdirSync(base + dir)
     writeFileSync(`${base}${dir}package.json`, JSON.stringify({ name: dir || 'root', version: '0.1.0' }, null, 2) + '\n')

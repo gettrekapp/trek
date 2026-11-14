@@ -1,18 +1,19 @@
 // scripts/serverImportCheck.test.mjs — what project.import accepts.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { checkImport } from '../server/src/projects/importCheck.ts'
 import { PathGuard } from '../server/src/paths.ts'
 import { importProjectFile } from '../src/shared/model/importProject.ts'
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDir } from './testPlatform.mjs'
 
 function setup(t) {
   // realPath: on Windows the OS's (long names, as the guard resolves paths, not RUNNER~1).
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-import-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const repo = join(dir, 'repo')
   mkdirSync(repo)
   mkdirSync(join(dir, 'repo-feature'))

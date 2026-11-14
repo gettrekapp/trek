@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -18,6 +18,7 @@ import { dispatchV2 } from '../server/src/v2.ts'
 import { attentionEntries } from '../server/src/sessions/status.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const gitEnv = {
   ...process.env,
@@ -27,7 +28,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: g
 
 async function setup(t) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-wt-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
   git(a, 'commit', '--allow-empty', '-q', '-m', 'init')
@@ -327,7 +328,7 @@ test('a vanished worktree with sessions is kept as missing; remove just drops th
   const wt = await withWorktree(s, 'vanish')
   const session = { id: 'sess-1', title: 'S', llm: { provider: 'claude' }, queue: [], status: 'idle' }
   s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).sessions.push(session) })
-  rmSync(wt.path, { recursive: true, force: true })
+  removeDir(wt.path)
   git(s.a, 'worktree', 'prune')
   await s.poller.refresh(s.a)
   assert.equal(s.worktree(wt.id).missing, true)
@@ -340,7 +341,7 @@ test('a vanished worktree with sessions is kept as missing; remove just drops th
 test('worktree.remove removes a worktree whose directory is gone but git still lists', async (t) => {
   const s = await setup(t)
   const wt = await withWorktree(s, 'stale')
-  rmSync(wt.path, { recursive: true, force: true })
+  removeDir(wt.path)
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(res.ok, true, JSON.stringify(res))
   assert.equal(s.worktree(wt.id), undefined)
@@ -397,8 +398,8 @@ test('worktree.remove of a stale worktree leaves the repo\'s other stale worktre
   const s = await setup(t)
   const wt = await withWorktree(s, 'stale-one')
   const unmounted = await withWorktree(s, 'stale-two')
-  rmSync(wt.path, { recursive: true, force: true })
-  rmSync(unmounted.path, { recursive: true, force: true })
+  removeDir(wt.path)
+  removeDir(unmounted.path)
   const res = await s.call('worktree.remove', { projectId: s.projectId, worktreeId: wt.id })
   assert.equal(res.ok, true, JSON.stringify(res))
   const listed = git(s.a, 'worktree', 'list')
@@ -441,7 +442,7 @@ test('worktree.pull, push and diff refuse a missing worktree', async (t) => {
   const wt = await withWorktree(s, 'gone-soon')
   const session = { id: 'sess-m', title: 'S', llm: { provider: 'claude' }, queue: [], status: 'idle' }
   s.projects.apply(s.projectId, (d) => { d.repositories[0].worktrees.find((w) => w.id === wt.id).sessions.push(session) })
-  rmSync(wt.path, { recursive: true, force: true })
+  removeDir(wt.path)
   git(s.a, 'worktree', 'prune')
   await s.poller.refresh(s.a)
   assert.equal(s.worktree(wt.id).missing, true)

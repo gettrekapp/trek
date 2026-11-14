@@ -6,7 +6,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
@@ -24,6 +24,7 @@ import { ProjectStore } from '../server/src/projects/store.ts'
 import { reconcileWorktrees } from '../server/src/git/reconcile.ts'
 // The server's own realpath: on Windows the native one, which expands 8.3 names (RUNNER~1) as git does.
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const gitEnv = {
   ...process.env,
@@ -33,7 +34,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env: g
 
 async function setup(t) {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-review-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
   writeFileSync(join(a, 'a.txt'), 'one\ntwo\n')
@@ -330,7 +331,7 @@ test('cleanReview: the checks review.add makes, unique ids, one prompt, a sane r
 
 test('a review draft survives the real project store: saved, then loaded from disk', (t) => {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-review-store-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const review = { revision: 12, comments: [{ id: 'c1', source: { kind: 'uncommitted' }, path: 'a.txt', side: 'old', line: 3, lineText: '\tthree', body: 'why\nnot?', at: 5 }] }
   const project = {
     id: 'p1', name: 'P', settings: {}, globalSessions: [],

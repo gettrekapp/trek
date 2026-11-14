@@ -2,16 +2,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { addRepo, formatRepoList, removeRepo, resolveRepoRoot } from '../server/src/repos.ts'
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDir } from './testPlatform.mjs'
 
 function tempDir(t) {
   // realPath: on Windows the OS's (long names, as resolveRepoRoot gives them, not RUNNER~1).
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-repos-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

@@ -17,7 +17,7 @@ import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 // The server's own realpath: on Windows the native one, which expands 8.3 names (RUNNER~1) as git does.
 import { realPath } from '../src/host/pathContainment.ts'
 
@@ -26,7 +26,7 @@ const posix = process.platform !== 'win32'
 
 const tempDir = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-integrations-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

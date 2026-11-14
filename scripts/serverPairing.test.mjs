@@ -1,7 +1,7 @@
 // Phone pairing (6a): the server's one-time codes and the token name, and the client's redeem.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -21,6 +21,7 @@ import { ConfigStore } from '../server/src/configStore.ts'
 import { matchToken } from '../server/src/tokens.ts'
 import { pairingFailureOf, pairingLink, parsePairingLink, redeemPairingCode, PairingError } from '../src/shared/client/pairing.ts'
 import { fakeServer, fakeTimers } from './clientFakes.mjs'
+import { removeDir } from './testPlatform.mjs'
 
 test('a code is 128 random bits as 26 base32 characters', () => {
   assert.equal(newPairingCode(Buffer.alloc(16)), 'A'.repeat(26))
@@ -99,7 +100,7 @@ function storeFor(t, config = { repos: [] }) {
   const store = new ConfigStore(path)
   t.after(() => {
     store.close()
-    rmSync(dir, { recursive: true, force: true })
+    removeDir(dir)
   })
   return { store, path }
 }

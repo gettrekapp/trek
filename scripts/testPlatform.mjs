@@ -4,6 +4,16 @@
 //   test('…', { skip: posixOnly('a POSIX shell') }, () => …)
 //   test('…', { skip: windowsOnly('ConPTY') }, () => …)
 
+import { rmSync } from 'node:fs'
+
+/**
+ * Removes a test's temp directory, waiting out a busy one (up to about 5 s). Windows refuses to
+ * remove a directory a process still runs in (EBUSY), such as a git the test's poller started;
+ * and a cleanup hook that throws stops the hooks after it, so what they would have stopped keeps
+ * the test file's process alive.
+ */
+export const removeDir = (dir) => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+
 /** Skipped on Windows, for a feature that exists only on macOS and Linux. */
 export const posixOnly = (reason) => (process.platform === 'win32' ? `POSIX only: ${reason}` : false)
 

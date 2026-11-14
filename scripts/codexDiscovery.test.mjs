@@ -5,11 +5,11 @@ process.env.TZ = 'Pacific/Kiritimati'
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { commandExists, discoverCodexSession } from '../src/host/agentService.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const pad = (n) => String(n).padStart(2, '0')
 
@@ -36,7 +36,7 @@ function withRoot(fn) {
     try {
       await fn(root)
     } finally {
-      rmSync(root, { recursive: true, force: true })
+      removeDir(root)
     }
   }
 }
@@ -95,7 +95,7 @@ test('a symlinked cwd matches the rollout recorded under its real path, and back
     rollout(root, '2026-11-04T12:00:07.000Z', 'gone', '/no/such/dir')
     assert.equal(await discoverCodexSession('/no/such/dir', AGE, [], root, NOW), 'gone')
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeDir(base)
   }
 })
 
@@ -109,7 +109,7 @@ test('CODEX_HOME moves the sessions folder', async () => {
   } finally {
     if (saved === undefined) delete process.env.CODEX_HOME
     else process.env.CODEX_HOME = saved
-    rmSync(home, { recursive: true, force: true })
+    removeDir(home)
   }
 })
 

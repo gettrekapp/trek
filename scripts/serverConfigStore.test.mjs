@@ -2,19 +2,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore, validateConfig } from '../server/src/configStore.ts'
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const loadConfig = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 function tempDir(t) {
   // realPath: on Windows the OS's (long names, as git and the store resolve them, not RUNNER~1).
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-server-store-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

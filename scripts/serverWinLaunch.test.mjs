@@ -3,7 +3,7 @@
 // OS; the last test spawns real processes and runs only on Windows (the windows-latest CI job).
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -22,7 +22,7 @@ import { sessionProcess, shellLaunch } from '../server/src/sessions/launch.ts'
 import { commandBinary } from '../server/src/sessions/agents.ts'
 import { launchSpec, quoted, raw, word } from '../src/shared/providers/shell.ts'
 import { claude } from '../src/shared/providers/claude.ts'
-import { windowsOnly } from './testPlatform.mjs'
+import { windowsOnly, removeDir } from './testPlatform.mjs'
 
 /**
  * `env` with PATH set to `value`, under the key it already has whatever its case: Windows' is
@@ -257,7 +257,7 @@ test('commandBinary on Windows reads the program as CreateProcess does', () => {
 test('Windows: an .exe, an npm shim and a batch file each receive their argv intact', { skip: windowsOnly('ConPTY spawns') }, async (t) => {
   const { TerminalHost } = await import('../server/src/sessions/terminalHost.ts')
   const dir = mkdtempSync(join(tmpdir(), 'trek-winlaunch-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   // The "agent": prints its argv as JSON between markers.
   const script = join(dir, 'print-argv.js')
   // It stays 200 ms after writing, so ConPTY has flushed the output before the exit closes the pty.

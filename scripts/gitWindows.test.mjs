@@ -3,14 +3,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyPatch, exportDirtyPatch, linkDirs, linkedSymlinks, parseWorktreeList, platformGitConfig, removeWorktree, removeWorktreeForce } from '../src/host/gitService.ts'
 import { defaultWorktreePath, safeDirName } from '../server/src/worktreeHandlers.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
-import { posixOnly, windowsOnly } from './testPlatform.mjs'
+import { posixOnly, windowsOnly, removeDir } from './testPlatform.mjs'
 
 test('parseWorktreeList: Git for Windows paths (C:/x/y, CRLF) come out as C:\\x\\y', () => {
   const porcelain = 'worktree C:/work/repo\r\nHEAD abc\r\nbranch refs/heads/main\r\n\r\nworktree C:/work/repo-feat\r\nHEAD def\r\nbranch refs/heads/feat/x\r\n\r\n'
@@ -47,7 +47,7 @@ test('defaultWorktreePath: <repo>-<branch>, safe on Windows', () => {
 
 test('Windows: a linked directory is a junction, found again by linkedSymlinks', { skip: windowsOnly('junctions') }, async (t) => {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-junction-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const repo = join(dir, 'repo')
   const wt = join(dir, 'repo-feat')
   mkdirSync(join(repo, '.trek'), { recursive: true })
@@ -69,7 +69,7 @@ test("Windows: a linkedDirs file linkDirs copied (no symlink without Developer M
   const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
   const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8' })
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-linked-copy-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const repo = join(dir, 'repo')
   execFileSync('git', ['init', '-q', '-b', 'main', repo], { env })
   writeFileSync(join(repo, 'README'), 'one\n')
@@ -102,7 +102,7 @@ function linkedRepo(t, prefix) {
   const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
   const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, encoding: 'utf8' })
   const dir = realPath(mkdtempSync(join(tmpdir(), prefix)))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const repo = join(dir, 'repo')
   execFileSync('git', ['init', '-q', '-b', 'main', repo], { env })
   writeFileSync(join(repo, 'README'), 'one\n')

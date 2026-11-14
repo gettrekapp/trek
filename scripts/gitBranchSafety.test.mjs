@@ -8,10 +8,11 @@ process.env.GIT_COMMITTER_EMAIL = 't@t'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assertSafeBranch, fetchBranch, push } from '../src/host/gitService.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const refused = [
   '', '-x', '--upload-pack=x', '@', 'HEAD', 'a b', 'a\tb', 'a\nb', 'a\x01b', 'a\x7fb',
@@ -33,7 +34,7 @@ for (const name of accepted) {
 
 test('injection attempts are rejected and have no effect', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-branch-safety-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const g = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim()
   const origin = join(dir, 'origin.git')
   const repo = join(dir, 'repo')

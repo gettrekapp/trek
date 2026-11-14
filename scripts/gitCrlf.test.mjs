@@ -6,10 +6,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyPatch, exportDirtyPatch, patchDigest, reverseApplyPatch } from '../src/host/gitService.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // '/dev/null', as every test here: Git for Windows maps it itself, and refuses os.devNull's \\.\nul ("unable to access").
 const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
@@ -18,7 +19,7 @@ const git = (cwd, ...args) => execFileSync('git', ['-C', cwd, ...args], { env, e
 /** A repository with LF text committed, and a clone of it whose checkout has `autocrlf`. */
 function setup(t, autocrlf) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-crlf-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const lf = join(dir, 'lf')
   execFileSync('git', ['init', '-q', '-b', 'main', lf], { env })
   git(lf, 'config', 'core.autocrlf', 'false')

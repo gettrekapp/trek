@@ -3,7 +3,7 @@
 // token, coalescing, retries, and dropping a grant the relay refused.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile } from '../server/src/secrets.ts'
@@ -11,11 +11,12 @@ import { PushGrants, checkRelayUrl, checkSetGrant } from '../server/src/push/gra
 import { COALESCE_MS, MAX_HELD_WHILE_CONNECTED, MAX_RETRY_AFTER_MS, Pusher, RELAY_PAUSED_NOTE, prPushKind } from '../server/src/push/pusher.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2 } from '../server/src/v2.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const SECRET = 'g'.repeat(43)
 const temp = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-push-test-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

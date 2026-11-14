@@ -1,17 +1,18 @@
 // scripts/jsonFile.test.mjs — a JSON store in userData (migrated.json): read, or a corrupt one set aside.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readJsonStore } from '../src/main/jsonFile.ts'
 import { parseMigrated } from '../src/main/importRules.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const isObject = (raw) => !!raw && typeof raw === 'object' && !Array.isArray(raw)
 
 function dir(t) {
   const d = mkdtempSync(join(tmpdir(), 'trek-json-store-'))
-  t.after(() => rmSync(d, { recursive: true, force: true }))
+  t.after(() => removeDir(d))
   return d
 }
 

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localProfile } from '../server/src/localProfile.ts'
 import { stopDecision, stopLocal } from '../server/src/localStop.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const TOKEN = 'p3Xq9vK_2mZ-8sLwYt4bR7nH1cJ6fA0dE5gU'
 const info = (pid) => ({ port: 4000, pid, token: TOKEN, version: '0.2.0', build: 'abc123def456' })
@@ -42,7 +42,7 @@ test('stopDecision: a live lock holder that local.json does not name is unverifi
 
 function setup(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-stop-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   // The profile's own APPDATA: on Windows the config dir is %APPDATA%\trek-server, whatever `home`
   // is, so without it every test here (and a developer's real Local server) shares one local.lock.
   return localProfile(join(dir, 'home'), join(dir, 'data'), undefined, process.platform, { ...process.env, APPDATA: join(dir, 'home', 'AppData', 'Roaming') })

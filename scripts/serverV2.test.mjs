@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
@@ -13,6 +13,7 @@ import { publishServerState } from '../server/src/serverState.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
 import { dispatchV2, responseRev } from '../server/src/v2.ts'
 import { applyStatePatch } from '../src/shared/sync/topicState.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
 // which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
@@ -21,7 +22,7 @@ const real = process.platform === 'win32' ? realpathSync.native : realpathSync
 /** `guardOptions` go to the ConfigStore: `{ permissive: true }` is the local server. */
 function setup(t, guardOptions = {}) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-server-v2-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', a])
   const configPath = join(dir, 'config.json')

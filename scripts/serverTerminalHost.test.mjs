@@ -3,7 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { TerminalHost } from '../server/src/sessions/terminalHost.ts'
 import { codedError, toWireError } from '../server/src/errors.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 function fakeSpawner() {
   const spawned = []
@@ -621,7 +621,7 @@ test('whenGone SIGKILLs the pty\'s process group: a background child that ignore
   }
   t.after(() => {
     if (childPid && alive(childPid)) process.kill(childPid, 'SIGKILL')
-    rmSync(dir, { recursive: true, force: true })
+    removeDir(dir)
   })
   // The real node-pty: the shell is its session's leader; its background child ignores SIGHUP.
   const host = new TerminalHost({ onExit: () => {} })
