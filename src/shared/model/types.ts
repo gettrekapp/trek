@@ -188,7 +188,7 @@ export interface Project {
 }
 
 export interface HealthWarning {
-  code: 'PERSIST_FAILED' | 'LOAD_FAILED' | 'REPO_UNAVAILABLE'
+  code: 'PERSIST_FAILED' | 'LOAD_FAILED' | 'REPO_UNAVAILABLE' | 'HISTORY_FAILED'
   message: string
   /** Epoch ms when the condition started */
   since: number
