@@ -20,6 +20,7 @@ import { PluginSlot } from '../plugins/PluginHost'
 import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
+import { missedRows } from '../automations'
 import { envRepoKey } from '../../../shared/environments'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, Repository, TerminalStatus } from '../../../shared/types'
@@ -103,6 +104,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
   const features = useFeatures()
+  const projectPage = useAppStore((s) => s.projectPage)
+  const toggleProjectPage = useAppStore((s) => s.toggleProjectPage)
+  const automationCount = project.automations?.length ?? 0
+  const missedCount = missedRows(project.automations).length
   // The window's connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
   const [filter, setFilter] = useState('')
@@ -219,9 +224,11 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     const prNotice = repo.worktreePrNotices?.[info.path]
     const env = features.env ? environmentFor(environments, envRepoKey(repo), info.branch) : undefined
     const envIsBusy = env ? !!envBusy[env.profile] : false
+    // A project page is open over the detail: its row is the one highlighted.
     const isSelected =
-      (selected && sameWorktree(info, selected)) ||
-      (info.isMain && selected?.path === repo.path)
+      !projectPage &&
+      ((selected && sameWorktree(info, selected)) ||
+        (info.isMain && selected?.path === repo.path))
     // A worktree git no longer lists on the server: it can only be deleted (Notes for 3c-2 #9).
     const missing = !!info.prunable
     const key = worktreeKey(info)
@@ -471,6 +478,25 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         <PluginSlot name="sidebarToolbar" />
         <NotificationsMenu />
       </div>
+      {features.automations && (
+        <button
+          className={`sidebar-nav-row sidebar-nav-automations ${projectPage === 'automations' ? 'active' : ''}`}
+          title="Automations"
+          onClick={() => toggleProjectPage('automations')}
+        >
+          <span className="sidebar-nav-icon">⏰</span>
+          <span className="sidebar-nav-label">Automations</span>
+          <span className="sidebar-nav-count">{automationCount}</span>
+          {missedCount > 0 && (
+            <span
+              className="sidebar-nav-badge"
+              title={`${missedCount} automation${missedCount === 1 ? '' : 's'} missed runs`}
+            >
+              {missedCount}
+            </span>
+          )}
+        </button>
+      )}
       <div className="sidebar-heading">
         <span>Worktrees · {rows.length}</span>
         <div className="sidebar-tag-filter">
@@ -567,6 +593,16 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             </button>
           )}
         </div>
+        {features.settingsEdit && (
+          <button
+            className={`sidebar-nav-row ${projectPage === 'settings' ? 'active' : ''}`}
+            title="App settings"
+            onClick={() => toggleProjectPage('settings')}
+          >
+            <span className="sidebar-nav-icon">⚙</span>
+            <span className="sidebar-nav-label">Settings</span>
+          </button>
+        )}
       </div>
     </aside>
   )

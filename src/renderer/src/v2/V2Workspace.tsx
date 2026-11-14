@@ -9,6 +9,8 @@ import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
 import { GlobalClaude } from '../components/GlobalClaude'
 import { MissedRunsModal } from '../components/MissedRunsModal'
+import { SettingsPanel } from '../components/SettingsPanel'
+import { AutomationsPanel } from '../components/AutomationsPanel'
 import { answerRepoPath, cancelRepoPath, useRepoPathRequest } from './repoPathPrompt'
 
 /**
@@ -26,6 +28,7 @@ export function V2Workspace(): React.JSX.Element {
   const features = useFeatures()
   const [addRepoId, setAddRepoId] = useState<string | null>(null)
   const offline = useAppStore((s) => s.serverOffline)
+  const projectPage = useAppStore((s) => s.projectPage)
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
   useEnvironmentPoll(features.env)
@@ -44,6 +47,11 @@ export function V2Workspace(): React.JSX.Element {
     if (offline && document.activeElement instanceof HTMLElement) document.activeElement.blur()
   }, [offline])
 
+  // A page opened over the detail: the terminal under it must not keep taking typing.
+  useEffect(() => {
+    if (projectPage && document.activeElement instanceof HTMLElement) document.activeElement.blur()
+  }, [projectPage])
+
   if (!project) return <p className="muted server-window-loading">Loading…</p>
   const worktrees = mergedWorktrees(project, hostWorktrees)
   const info = selectedWorktreeInfo(project, worktrees, selected, activeWorktreeId)
@@ -51,8 +59,13 @@ export function V2Workspace(): React.JSX.Element {
     <>
       <div className="workspace">
         <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
-        {/* The mirror refreshes the rows by itself after a pull, push or delete. */}
-        <WorktreeDetail info={info} worktrees={worktrees} onWorktreesChanged={() => {}} />
+        {/* The project-level pages cover the detail, which stays mounted under them. */}
+        <div className="workspace-main">
+          {/* The mirror refreshes the rows by itself after a pull, push or delete. */}
+          <WorktreeDetail info={info} worktrees={worktrees} onWorktreesChanged={() => {}} />
+          {features.settingsEdit && <SettingsPanel visible={projectPage === 'settings'} />}
+          {features.automations && <AutomationsPanel visible={projectPage === 'automations'} />}
+        </div>
         {addRepoId && <AddWorktreeModal repoId={addRepoId} onClose={() => setAddRepoId(null)} />}
         <RepoPathPrompt />
       </div>
