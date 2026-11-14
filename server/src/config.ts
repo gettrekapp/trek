@@ -47,6 +47,13 @@ export interface TrekServerConfig {
    * restart). Never on the local server.
    */
   web?: boolean
+  /**
+   * Updates (`trek-server update`). `check: false` stops a running server's daily check for a
+   * newer release (the command still works). `remoteApply: false` makes the server refuse a
+   * client's request to install one, leaving that to the command on this machine. Both default
+   * to true.
+   */
+  updates?: { check?: boolean; remoteApply?: boolean }
 }
 
 export function defaultConfigPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {

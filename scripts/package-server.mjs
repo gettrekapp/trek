@@ -10,7 +10,8 @@
 //                          (Windows: bin\trek-server.cmd, the same checks in a batch file, and
 //                          bin\trek-server.ps1, in PowerShell, which Ctrl+C does not ask about)
 //   trek-server.cjs        the bundled server (everything but node-pty)
-//   build.json             its version and build id
+//   build.json             its version and build id, and what `trek-server update` reads:
+//                          package "tarball" and target "<os>-<arch>"
 //   web-client/            the web client (`trek-server start --web`)
 //   node_modules/node-pty  node-pty for this platform only: its lib/ and one native folder
 //                          (pty.node, plus an executable spawn-helper on macOS: node-pty builds
@@ -93,7 +94,9 @@ if (WINDOWS && ARCH !== 'x64') fail('Windows: x64 only (node-pty has no tested a
 for (const need of ['trek-server.cjs', 'build.json', 'web-client/index.html']) {
   if (!existsSync(join(dist, need))) fail(`server/dist/${need} is missing: run \`npm run build:web && npm --prefix server run build\` first`)
 }
-const { version, build } = JSON.parse(readFileSync(join(dist, 'build.json'), 'utf8'))
+const built = JSON.parse(readFileSync(join(dist, 'build.json'), 'utf8'))
+const { version, build } = built
+if (built.testUpdate) fail('server/dist holds a test build (TREK_SERVER_TEST_UPDATE): rebuild it with `npm --prefix server run build`')
 const serverPkg = JSON.parse(readFileSync(join(root, 'server', 'package.json'), 'utf8'))
 if (version !== serverPkg.version) fail(`server/dist was built as ${version}, but server/package.json is ${serverPkg.version}: rebuild it`)
 const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'))
@@ -105,7 +108,9 @@ const stage = mkdtempSync(join(tmpdir(), 'trek-server-package-'))
 const dir = join(stage, name)
 try {
   mkdirSync(join(dir, 'bin'), { recursive: true })
-  for (const file of ['trek-server.cjs', 'build.json']) cpSync(join(dist, file), join(dir, file))
+  cpSync(join(dist, 'trek-server.cjs'), join(dir, 'trek-server.cjs'))
+  // What `trek-server update` reads: this folder came from a release tarball, for this target.
+  writeFileSync(join(dir, 'build.json'), JSON.stringify({ version, build, package: 'tarball', target: `${OS}-${ARCH}` }) + '\n')
   chmodSync(join(dir, 'trek-server.cjs'), 0o755)
   cpSync(join(dist, 'web-client'), join(dir, 'web-client'), { recursive: true })
   // A systemd unit: Linux (and macOS, for the docs); Windows has none.
