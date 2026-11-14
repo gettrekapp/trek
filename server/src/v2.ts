@@ -108,7 +108,7 @@ function clearableString(value: unknown, field: string): string | null {
 
 const REPO_GUARD_KEYS = ['name', 'linkedDirs', 'environments'] as const
 
-/** Sets or clears one branch-data field; an entry left empty is removed. */
+/** Sets or clears one branch-data field; an entry left empty is removed. The change goes in the history. */
 function setBranchField<K extends keyof BranchData>(
   ctx: V2Context,
   p: any,
@@ -117,16 +117,19 @@ function setBranchField<K extends keyof BranchData>(
   expected?: unknown
 ): null {
   const branch = requireBranch(p.branch)
-  ctx.projects.apply(p.projectId, (d) => {
+  const { repoId, changes } = ctx.projects.apply(p.projectId, (d) => {
     const repo = repoIn(d, p.repoId)
     const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
     checkExpected(`branchData.${field}`, data[field], expected)
+    const before = data[field]
     const empty = value === null || (Array.isArray(value) && value.length === 0)
     if (empty) delete data[field]
     else data[field] = value as BranchData[K]
     if (Object.keys(data).length === 0) delete repo.branchData[branch]
     else repo.branchData[branch] = data
+    return { repoId: repo.id, changes: branchChanges(field, before, data[field], d.settings) }
   })
+  recordHistory(ctx, requireString(p.projectId, 'projectId'), repoId, branch, changes)
   return null
 }
 
@@ -295,21 +298,26 @@ const handlers: Record<string, Handler> = {
   'branch.setPr': (p, ctx) => {
     const pr = clearableString(p.pr, 'pr')
     const branch = requireBranch(p.branch)
-    const ended = ctx.projects.apply(p.projectId, (d) => {
+    const { ended, repoId, changes } = ctx.projects.apply(p.projectId, (d) => {
       const repo = repoIn(d, p.repoId)
       const data: BranchData = { ...(Object.hasOwn(repo.branchData, branch) ? repo.branchData[branch] : {}) }
+      const before = data.pr
       if (pr === null) delete data.pr
       else data.pr = pr
       let ended: string | undefined
+      const changes = branchChanges('pr', before, data.pr, d.settings)
       if (data.prWatch && repo.branchData[branch]?.pr !== pr) {
         delete data.prWatch
         ended = repo.id
+        changes.push({ kind: 'prWatch.off' })
       }
       if (Object.keys(data).length === 0) delete repo.branchData[branch]
       else repo.branchData[branch] = data
-      return ended
+      return { ended, repoId: repo.id, changes }
     })
-    if (ended !== undefined) ctx.prWatch?.forget(requireString(p.projectId, 'projectId'), ended, branch)
+    const projectId = requireString(p.projectId, 'projectId')
+    recordHistory(ctx, projectId, repoId, branch, changes)
+    if (ended !== undefined) ctx.prWatch?.forget(projectId, ended, branch)
     return null
   },
   'branch.setEnv': (p, ctx) => setBranchField(ctx, p, 'env', clearableString(p.env, 'env'), p.expected),
@@ -380,6 +388,9 @@ const handlers: Record<string, Handler> = {
     return { cancelled: ctx.pairing.cancel(p.code, Date.now()) }
   }
 }
+
+/** The branch-data setters (the history's coverage test checks each records its change) */
+export const BRANCH_SET_METHODS: readonly string[] = Object.keys(handlers).filter((m) => m.startsWith('branch.set'))
 
 /** Commands that change the `server` topic (the project list or the repo registry): their responses report its rev. */
 const SERVER_TOPIC_METHODS: ReadonlySet<string> = new Set([

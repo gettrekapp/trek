@@ -16,7 +16,7 @@ import { ConfigStore } from '../server/src/configStore.ts'
 import { GitPoller } from '../server/src/git/poller.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
-import { dispatchV2 } from '../server/src/v2.ts'
+import { BRANCH_SET_METHODS, dispatchV2 } from '../server/src/v2.ts'
 import { welcomeCapabilities } from '../server/src/capabilities.ts'
 import { BY_TREK, branchChanges, recordHistory, tagValue } from '../server/src/history/record.ts'
 
@@ -159,4 +159,74 @@ test('project.delete drops its history file; repo.remove its repository\'s entri
 
 test('the welcome lists the history capability', () => {
   assert.ok(welcomeCapabilities(false).includes('history'))
+})
+
+test('branch setters record what changed, with tag names as they were; the same value again records nothing', async (t) => {
+  const s = await setup(t)
+  s.projects.apply(s.projectId, (d) => {
+    d.settings.worktreeTags = [{ id: 'ip', name: 'In Progress', color: '#5dabef' }, { id: 'rv', name: 'Review', color: '#ffaa00' }]
+    d.settings.customTags = [{ id: 'bl', name: 'Blocked', color: '#ff0000' }]
+  })
+  const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }
+  await s.call('branch.setTag', { ...ref, tag: 'ip' })
+  await s.call('branch.setTag', { ...ref, tag: 'rv' })
+  await s.call('branch.setTag', { ...ref, tag: 'rv' })
+  await s.call('branch.setCustomTags', { ...ref, customTags: ['bl'] })
+  await s.call('branch.setCustomTags', { ...ref, customTags: null })
+  await s.call('branch.setTicket', { ...ref, ticket: 'TOW-1' })
+  await s.call('branch.setPr', { ...ref, pr: 'https://github.com/o/r/pull/1' })
+  await s.call('branch.setPrWatch', { ...ref, watch: true })
+  await s.call('branch.setPr', { ...ref, pr: null })
+  await s.call('branch.setEnv', { ...ref, env: 'A=1' })
+  assert.deepEqual(s.kinds(), ['prWatch.off', 'pr', 'prWatch.on', 'pr', 'ticket', 'label.removed', 'label.added', 'status', 'status'])
+  const status = s.history.list(s.projectId, s.repoId, 'feat').events.find((e) => e.kind === 'status')
+  assert.deepEqual([status.from, status.to], [{ id: 'ip', text: 'In Progress', color: '#5dabef' }, { id: 'rv', text: 'Review', color: '#ffaa00' }])
+  // Renaming the tag later does not rewrite the past.
+  s.projects.apply(s.projectId, (d) => { d.settings.worktreeTags[1].name = 'Renamed' })
+  assert.equal(s.history.list(s.projectId, s.repoId, 'feat').events.find((e) => e.kind === 'status').to.text, 'Review')
+  assert.ok(s.history.list(s.projectId, s.repoId, 'feat').events.every((e) => e.actor.kind === 'user'))
+})
+
+test('a refused setter records nothing', async (t) => {
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }
+  await s.call('branch.setNote', { ...ref, note: 'n' })
+  await assert.rejects(s.call('branch.setNote', { ...ref, note: 'x', expected: 'stale' }), (e) => e.code === 'CONFLICT')
+  await assert.rejects(s.call('branch.setPrWatch', { ...ref, watch: true }), (e) => e.code === 'BAD_REQUEST') // no PR linked
+  assert.deepEqual(s.kinds(), ['note'])
+})
+
+test('a request attributed to MCP records its actor and reason', async (t) => {
+  const s = await setup(t)
+  const attribution = { actor: { kind: 'mcp', terminalId: 't1', sessionTitle: 'Claude' }, reason: 'ready for review' }
+  await s.call('branch.setTicket', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', ticket: 'TOW-9' }, { attribution })
+  const [e] = s.history.list(s.projectId, s.repoId, 'feat').events
+  assert.deepEqual([e.actor, e.reason], [attribution.actor, attribution.reason])
+})
+
+// The guard: a branch.set* method added later must say what it records (or be listed as recording nothing).
+const SETTER_VALUES = {
+  'branch.setTag': { tag: 'x' },
+  'branch.setCustomTags': { customTags: ['x'] },
+  'branch.setNote': { note: 'n' },
+  'branch.setTicket': { ticket: 'T-1' },
+  'branch.setPr': { pr: 'https://github.com/o/r/pull/1' },
+  'branch.setPrWatch': { watch: true }
+}
+const RECORDS_NOTHING = ['branch.setEnv']
+
+test('every branch.set* method records its change (setEnv excepted)', async (t) => {
+  for (const method of BRANCH_SET_METHODS) {
+    if (RECORDS_NOTHING.includes(method)) continue
+    assert.ok(Object.hasOwn(SETTER_VALUES, method), `${method} has no test value: give it one and make it record`)
+  }
+  const s = await setup(t)
+  const ref = { projectId: s.projectId, repoId: s.repoId, branch: 'feat' }
+  await s.call('branch.setPr', { ...ref, pr: 'https://github.com/o/r/pull/1' }) // setPrWatch needs a PR
+  for (const method of Object.keys(SETTER_VALUES)) {
+    const before = s.history.branch(s.projectId, s.repoId, 'feat').length
+    if (method === 'branch.setPr') await s.call(method, { ...ref, pr: 'https://github.com/o/r/pull/2' })
+    else await s.call(method, { ...ref, ...SETTER_VALUES[method] })
+    assert.ok(s.history.branch(s.projectId, s.repoId, 'feat').length > before, `${method} recorded nothing`)
+  }
 })
