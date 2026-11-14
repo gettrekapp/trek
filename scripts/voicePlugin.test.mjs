@@ -6,7 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSecretFile } from '../server/src/secrets.ts'
@@ -23,13 +23,14 @@ import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
 import { voiceServerPlugin } from '../plugins/voice/server/index.ts'
 import { migrateConfigFile } from '../plugins/voice/server/configFile.ts'
 import { VOICE_SUMMARY_PROMPT } from '../plugins/voice/server/prompt.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // Windows has no POSIX mode bits to check (owner-only there is the profile's ACL).
 const posix = process.platform !== 'win32'
 
 const tempDir = (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-voice-plugin-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 
@@ -325,7 +326,9 @@ async function projectSetup(t, { key = 'good-voice', voiceId = 'v1', promptSessi
     schedule: () => ({ cancel() {} }),
     discover: async () => undefined,
     mcpAccess: () => ({ configPath: '/c.json', url: 'http://x/mcp', token: 't', geminiSettingsPath: '/g.json' }),
-    pluginPrompt: (projectId) => registry.sessionPrompt(projectId)
+    pluginPrompt: (projectId) => registry.sessionPrompt(projectId),
+    // A POSIX server's launches on any OS: a Windows one looks the agent up on PATH before it spawns.
+    platform: 'linux'
   })
   t.after(() => {
     sessions.stopAll()

@@ -1,10 +1,11 @@
 // scripts/serverPaths.test.mjs — the path guard: configured roots, and the local server's permissive guard.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PathGuard } from '../server/src/paths.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // The guard resolves as pathContainment's realPath does: on Windows the native one, which also
 // expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
@@ -12,7 +13,7 @@ const real = process.platform === 'win32' ? realpathSync.native : realpathSync
 
 function setup(t) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-server-paths-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   for (const d of ['repos/a', 'roots/extra', 'outside/c']) mkdirSync(join(dir, d), { recursive: true })
   const config = { repos: [{ id: 'a', name: 'a', path: join(dir, 'repos', 'a') }], worktreeRoots: [join(dir, 'roots')] }
   return { dir, config }

@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { request as httpRequest } from 'node:http'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadRelayConfig } from '../relay/src/config.ts'
@@ -12,14 +12,14 @@ import { startRelay } from '../relay/src/relay.ts'
 import { MAX_BODY_BYTES, RETRY_AFTER_S } from '../relay/src/api.ts'
 import { WindowLimiter, takeAll } from '../relay/src/limits.ts'
 import { pushText, pushGroupOf, PUSH_KINDS, MAX_PUSH_PROJECT } from '../src/shared/push.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // Windows has no POSIX file modes (stat reports 0666): the 0600/0700 checks are POSIX only.
 const posix = process.platform !== 'win32'
 
 const temp = (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-relay-test-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 
@@ -284,7 +284,9 @@ test('api: a body over the cap is refused by its length before reading, and a st
       res.resume()
       resolve(res.statusCode)
     })
-    req.on('error', reject)
+    // The relay closes with the rest of the body unread, which resets the connection. Windows then
+    // drops the 413 it had not read yet and fails the write, so there the cut is all the client sees.
+    req.on('error', (err) => (!posix && err.code === 'ECONNRESET' ? resolve('reset') : reject(err)))
     const chunk = 'x'.repeat(4096)
     let n = 0
     const write = () => {
@@ -293,7 +295,7 @@ test('api: a body over the cap is refused by its length before reading, and a st
     }
     write()
   })
-  assert.equal(status, 413)
+  if (status !== 'reset') assert.equal(status, 413)
 })
 
 test('store: devices dead for 30 days are pruned on load; bookkeeping is flushed', async (t) => {

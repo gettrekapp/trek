@@ -23,6 +23,7 @@ import { moveReceiving } from '../server/src/move/moveHandlers.ts'
 import { exportDirtyPatch, normalizeLinkedDir, PatchTooBigError } from '../src/host/gitService.ts'
 // realPath: on Windows the OS's real path (long names, as git and the server resolve them, not RUNNER~1).
 import { realPath } from '../src/host/pathContainment.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const gitEnv = {
   ...process.env,
@@ -66,7 +67,7 @@ async function setup(t) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
-    rmSync(dir, { recursive: true, force: true })
+    removeDir(dir)
   })
   const origin = join(dir, 'origin.git')
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { env: gitEnv })
@@ -312,7 +313,7 @@ test('move.receive validates what it is given', async (t) => {
 
 test('exportDirtyPatch carries a same-size edit made in the second its file was committed (racily clean)', async (t) => {
   const dir = realPath(mkdtempSync(join(tmpdir(), 'trek-racy-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   execFileSync('git', ['init', '-q', '-b', 'main', dir], { env: gitEnv })
   writeFileSync(join(dir, 'a.txt'), 'one\ntwo\nthree\n')
   git(dir, 'add', '.')
@@ -589,7 +590,7 @@ test('two receives of one branch at once: one builds it, the other is refused an
 
 test('transfers: an abort during a write drops the transfer once the write ends', async (t) => {
   const root = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeDir(root))
   const transfers = new MoveTransfers(Date.now, root)
   const id = await transfers.begin('p', 'r')
   const writing = transfers.append(id, CLAUDE_ID, 0, Buffer.alloc(MAX_MOVE_CHUNK_BYTES, 1).toString('base64'))
@@ -606,7 +607,7 @@ test('transfers: an abort during a write drops the transfer once the write ends'
 
 test('sweepStaleMoveDirs removes only our own trek-move dirs older than an hour', async (t) => {
   const root = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeDir(root))
   const old = (Date.now() - 2 * 3600_000) / 1000
   for (const name of ['trek-move-abc123', 'trek-move-index-abc123', 'trek-move-fresh1', 'other-old']) {
     mkdirSync(join(root, name))
@@ -671,6 +672,8 @@ test('C1: a real directory on the source where the target links one refuses the 
   assert.match(received.error.message, /\.trek/)
   assert.match(received.error.message, /linked/)
   assert.ok(!existsSync(join(s.dir, 'b', 'app-feat')))
+  // Nothing was written through the link (a junction on Windows) into the target's main checkout.
+  assert.ok(!existsSync(join(s.b, '.trek', 'notes.md')))
   assert.equal(readFileSync(join(s.path, '.trek', 'notes.md'), 'utf8'), 'mine\n')
 })
 
@@ -758,7 +761,7 @@ test('M6: a carried history that changed after the export makes move.finish CONF
 
 test('M10: a stale-looking trek-move dir with a fresh entry is kept; an append touches the transfer dir', async (t) => {
   const root = realPath(mkdtempSync(join(tmpdir(), 'trek-server-move-root-')))
-  t.after(() => rmSync(root, { recursive: true, force: true }))
+  t.after(() => removeDir(root))
   const old = (Date.now() - 2 * 3600_000) / 1000
   mkdirSync(join(root, 'trek-move-busy01'))
   writeFileSync(join(root, 'trek-move-busy01', 'f'), 'x')

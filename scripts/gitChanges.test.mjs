@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { limitPatches, splitPatch, worktreeChanges, worktreeCommits, worktreeDiff } from '../src/host/gitService.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // Keep a user's global and system git config (signing, log settings, hooks) out of these tests.
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'
@@ -14,7 +14,7 @@ process.env.GIT_CONFIG_NOSYSTEM = '1'
 
 function makeRepo(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const run = (...args) =>
     execFileSync(
       'git',
@@ -143,7 +143,7 @@ test('on the default branch itself, uncommitted work still shows', async (t) => 
 
 test('a repository with no commits compares against the empty tree', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   execFileSync('git', ['-C', dir, 'init', '-q', '-b', 'main'])
   writeFileSync(join(dir, 'staged.txt'), 'a\nb\n')
   execFileSync('git', ['-C', dir, 'add', 'staged.txt'])
@@ -531,7 +531,7 @@ test('worktreeCommits lists HEAD newest first, with subject, author and time', a
 
 test('worktreeCommits: none before the first commit', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   execFileSync('git', ['-C', dir, 'init', '-q'])
   assert.deepEqual(await worktreeCommits(dir), [])
 })
@@ -573,7 +573,7 @@ test('source commit: a merge is compared with its first parent', async (t) => {
 
 test('source uncommitted on an unborn HEAD: everything against the empty tree', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'trek-changes-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   execFileSync('git', ['-C', dir, 'init', '-q'])
   writeFileSync(join(dir, 'staged.txt'), 's\n')
   execFileSync('git', ['-C', dir, 'add', 'staged.txt'])
@@ -605,7 +605,7 @@ test('worktreeDiff with paths: only those files, the same patches, untracked one
 test('source commit: a shallow clone\'s boundary commit is refused, not shown as the whole tree', async (t) => {
   const { dir, sha } = withWork(t)
   const clone = mkdtempSync(join(tmpdir(), 'trek-changes-shallow-'))
-  t.after(() => rmSync(clone, { recursive: true, force: true }))
+  t.after(() => removeDir(clone))
   execFileSync('git', ['clone', '-q', '--depth', '1', '-b', 'feature', pathToFileURL(dir).href, join(clone, 'c')])
   const boundary = sha('HEAD')
   await assert.rejects(worktreeChanges(join(clone, 'c'), { kind: 'commit', sha: boundary }), /shallow clone/)

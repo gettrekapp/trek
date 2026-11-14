@@ -5,14 +5,14 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { McpAccessStore } from '../server/src/mcp/access.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // Windows has no POSIX file modes (stat reports 0666 or 0444): the 0600/0700 checks are POSIX only.
 const posix = process.platform !== 'win32'
 
 function setup(t) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-mcp-access-'))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return { dir, mcpDir: join(dir, 'mcp') }
 }
 

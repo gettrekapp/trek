@@ -53,6 +53,11 @@ export interface PtyProcess {
   resize(cols: number, rows: number): void
   /** Without a signal, node-pty sends SIGHUP */
   kill(signal?: string): void
+  /**
+   * Frees what the pty still holds once its process has exited by itself (kill() frees it
+   * otherwise). Never signals: the pid may be another process's by now.
+   */
+  release?(): void
   pause(): void
   resume(): void
   /**
@@ -153,6 +158,11 @@ export const nodePtySpawner: PtySpawner = (opts) => {
     write: (data) => proc.write(data),
     resize: (cols, rows) => proc.resize(cols, rows),
     kill: (signal) => proc.kill(signal),
+    // Windows: node-pty frees a ConPTY's output worker (a thread, which keeps this process alive)
+    // only in kill(), and its kill() after the exit signals the old pid, which Windows may have
+    // given to another process. The worker's own dispose is all a finished pty needs; there is no
+    // such worker on POSIX.
+    release: () => (proc as unknown as { _agent?: { _conoutSocketWorker?: { dispose?: () => void } } })._agent?._conoutSocketWorker?.dispose?.(),
     pause: () => proc.pause(),
     resume: () => proc.resume(),
     pid: proc.pid
@@ -547,6 +557,14 @@ export class TerminalHost {
     clearInterval(record.drainTimer)
     clearTimeout(record.killTimer)
     this.records.delete(record.ptyId)
+    // kill() frees what the pty holds; a process that exited by itself is released here.
+    if (!record.killed) {
+      try {
+        record.proc.release?.()
+      } catch (err) {
+        console.warn(`pty ${record.ptyId}: release failed`, err)
+      }
+    }
     for (const sink of record.sinks) {
       try {
         sink.send('pty.exit', { ptyId: record.ptyId, exitCode })

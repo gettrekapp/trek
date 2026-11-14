@@ -5,11 +5,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ProjectStore, STORE_SCHEMA } from '../server/src/projects/store.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 function tempDir(t) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-projects-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 
@@ -21,7 +21,7 @@ function lockableDir(t) {
   const unlock = () => chmodSync(projects, 0o700)
   t.after(() => {
     unlock()
-    rmSync(dir, { recursive: true, force: true })
+    removeDir(dir)
   })
   return { projects, lock: () => chmodSync(projects, 0o500), unlock }
 }

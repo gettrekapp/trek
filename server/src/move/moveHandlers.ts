@@ -8,7 +8,7 @@
 // `move.finish` to remove its copy, only if nothing changed since the export.
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
-import { copyFile, chmod, mkdir, open, rm, rmdir, stat } from 'node:fs/promises'
+import { copyFile, chmod, lstat, mkdir, open, rm, rmdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
 import { projectDir } from '../../../src/host/claudeSessionService.ts'
@@ -648,10 +648,27 @@ async function unreceive(ctx: V2Context, project: Project, repo: Repository, tok
  */
 function linkedApplyMessage(stderr: string, repo: Repository): string | null {
   const m = /affected file '([^']+)' is beyond a symbolic link/.exec(stderr)
-  if (!m) return null
-  const file = m[1]
+  return m ? linkedFileMessage(m[1], repo) : null
+}
+
+/** The refusal of `file` (a path in the patch) that is inside a folder this server links. */
+function linkedFileMessage(file: string, repo: Repository): string {
   const dir = (repo.linkedDirs ?? []).map(gitService.normalizeLinkedDir).find((d) => d !== null && (file === d || file.startsWith(d + '/'))) ?? file.split('/')[0]
   return `the uncommitted work has ${file}, inside ${dir}, which the source has as a folder of its own but this server links from ${repo.path} (the repository's linked folders); nothing was moved. Commit or move out what is in ${dir} on the source, or remove ${dir} from ${repo.path} here, first`
+}
+
+/**
+ * The first file of `patch` that is inside one of the repository's linked folders in `target`
+ * (a symlink, or a junction on Windows, into the main checkout); null when there is none. A file
+ * linkDirs copied (Windows without Developer Mode) is not a link: git apply refuses that itself.
+ */
+async function fileThroughLink(target: string, patch: string, repo: Repository): Promise<string | null> {
+  const linked: string[] = []
+  for (const name of await gitService.linkedSymlinks(target, repo.linkedDirs ?? [], repo.path)) {
+    if ((await lstat(join(target, name)).catch(() => null))?.isSymbolicLink()) linked.push(name)
+  }
+  if (linked.length === 0) return null
+  return Object.keys(gitService.splitPatch(patch)).find((file) => gitService.underAny(file, linked)) ?? null
 }
 
 /** move.receive's work, once its params are checked and its transfer taken. */
@@ -733,9 +750,15 @@ async function build(
       for (const warning of await gitService.linkDirs(repo.path, target, repo.linkedDirs ?? [])) console.warn(`linkedDirs in ${target}: ${warning}`)
       const checked = await viaGit(() => gitService.revParseHead(target))
       if (checked !== head) throw codedError('GIT_ERROR', `${target} checked out ${checked.slice(0, 8)}, not ${head.slice(0, 8)}`)
-      if (patch !== '') await viaGit(() => gitService.applyPatch(target, patch).catch((err: Error) => {
-        throw new Error(linkedApplyMessage(err.message, repo) ?? err.message)
-      }))
+      if (patch !== '') {
+        // git apply refuses a file under a symlink, but Git for Windows takes a junction for a plain
+        // folder and writes through it into the main checkout: refuse before applying, everywhere.
+        const through = await fileThroughLink(target, patch, repo)
+        if (through !== null) throw codedError('GIT_ERROR', linkedFileMessage(through, repo))
+        await viaGit(() => gitService.applyPatch(target, patch).catch((err: Error) => {
+          throw new Error(linkedApplyMessage(err.message, repo) ?? err.message)
+        }))
+      }
       // The work as this server's git now sees it must be the source's, exactly: built the same
       // way, the same patch (hunk headers' function context aside).
       const applied = await dirtyPatch(target, repo)

@@ -30,11 +30,12 @@ import { SESSION_SWEEP_MS, SOCKET_TOUCH_MS, WebSocketSignIns, sweepEvery } from 
 import { webClientDir } from '../server/src/web/dir.ts'
 import { hashToken } from '../server/src/tokens.ts'
 import { MAX_LOGIN_BODY, MAX_LOGIN_DRAIN, SECURITY_HEADERS, createWebHandler, loginPage, reloadPage, safeNext } from '../server/src/web/http.ts'
+import { removeDir } from './testPlatform.mjs'
 
 
 const tempDir = (t, prefix) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   return dir
 }
 

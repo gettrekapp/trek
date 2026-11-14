@@ -2,7 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { describeWorktree, resolveWorktree } from '../server/src/mcp/describe.ts'
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -19,6 +19,7 @@ import { TopicHub } from '../server/src/topicHub.ts'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
+import { removeDir } from './testPlatform.mjs'
 
 // The server resolves paths as pathContainment's realPath does: on Windows the native realpath,
 // which also expands an 8.3 temp folder (C:\Users\RUNNER~1\…) to its long name.
@@ -85,7 +86,7 @@ function fakeSpawner() {
 /** A project on a real git repo, a fake pty spawner, and a tool caller for it. */
 async function toolSetup(t, opts = {}) {
   const dir = real(mkdtempSync(join(tmpdir(), 'trek-mcp-tools-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
   execFileSync('git', ['-C', a, 'commit', '--allow-empty', '-q', '-m', 'init'], { env: gitEnv })

@@ -2,10 +2,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { acquireBotLock } from '../src/host/bot/lock.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const folder = () => {
   const dir = mkdtempSync(join(tmpdir(), 'bot-lock-'))
@@ -76,7 +77,7 @@ test('release leaves a lock that has since become someone else\'s', (t) => {
 test('release survives the folder having gone', () => {
   const dir = folder()
   const lock = acquireBotLock(dir)
-  rmSync(dir, { recursive: true, force: true })
+  removeDir(dir)
   lock.release()
 })
 

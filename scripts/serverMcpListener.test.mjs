@@ -1,13 +1,14 @@
 // scripts/serverMcpListener.test.mjs — the MCP HTTP listener: auth, paths, methods, limits, routing by token.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from 'node:http'
 import { connect } from 'node:net'
 import { McpAccessStore } from '../server/src/mcp/access.ts'
 import { startMcpListener } from '../server/src/mcp/listener.ts'
+import { removeDir } from './testPlatform.mjs'
 
 async function setup(t, extra = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'trek-mcp-listener-'))
@@ -23,7 +24,7 @@ async function setup(t, extra = {}) {
     }),
     ...extra
   })
-  t.after(async () => { await listener.close(); rmSync(dir, { recursive: true, force: true }) })
+  t.after(async () => { await listener.close(); removeDir(dir) })
   const url = access.accessFor('p1').url
   const token = access.accessFor('p1').token
   const post = (body, headers = { authorization: `Bearer ${token}` }, path = '/mcp', method = 'POST') =>

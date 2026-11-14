@@ -459,7 +459,7 @@ function nestedRepos(untracked: readonly string[]): string[] {
 }
 
 /** Whether `path` (repo-relative, `/`-separated, maybe with a trailing `/`) is one of `dirs` or inside one. */
-function underAny(path: string, dirs: readonly string[]): boolean {
+export function underAny(path: string, dirs: readonly string[]): boolean {
   const p = path.replace(/\/+$/, '')
   return dirs.some((d) => p === d || p.startsWith(d + '/'))
 }

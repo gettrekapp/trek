@@ -23,7 +23,7 @@ import { createEnvironmentService } from '../src/host/environmentService.ts'
 import { createStackService } from '../src/host/stackService.ts'
 import { deriveProfileName, envListProblem } from '../src/shared/environments.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
-import { posixOnly } from './testPlatform.mjs'
+import { posixOnly, removeDir } from './testPlatform.mjs'
 
 // The stubs are bash scripts, and a Windows server has no environments or dev stacks yet (W1;
 // scripts/serverWindowsMachine.test.mjs checks it refuses them): only the pure checks run there.
@@ -53,14 +53,14 @@ esac
 exit 0`)
 const originalPath = process.env.PATH
 process.env.PATH = `${stubDir}:${originalPath}`
-process.on('exit', () => rmSync(stubDir, { recursive: true, force: true }))
+process.on('exit', () => removeDir(stubDir))
 
 const calls = () => (existsSync(callsFile) ? readFileSync(callsFile, 'utf8').split('\n').filter(Boolean) : [])
 const resetCalls = () => rmSync(callsFile, { force: true })
 
 async function setup(t, options = {}) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'trek-server-machine-')))
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  t.after(() => removeDir(dir))
   resetCalls()
   const a = join(dir, 'repos', 'a')
   execFileSync('git', ['init', '-q', '-b', 'main', a], { env: gitEnv })
@@ -140,7 +140,7 @@ test('a machine without docker or colima: TOOL_ERROR with reason missing, and en
   process.env.PATH = empty
   t.after(() => {
     process.env.PATH = `${stubDir}:${originalPath}`
-    rmSync(empty, { recursive: true, force: true })
+    removeDir(empty)
   })
   refused(await s.call('docker.list', {}), 'TOOL_ERROR', 'missing')
   refused(await s.call('docker.container', { action: 'start', id: 'c1' }), 'TOOL_ERROR', 'missing')
@@ -213,7 +213,7 @@ test('env.up refuses settings, compose files and variables that would steer the 
   }
   // A symlink in the worktree that leads outside it is refused like a ".." path.
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  t.after(() => removeDir(outside))
   writeFileSync(join(outside, 'evil.yml'), 'services: {}\n')
   symlinkSync(join(outside, 'evil.yml'), join(s.feature, 'evil.yml'))
   symlinkSync(outside, join(s.feature, 'outdir'))
@@ -255,7 +255,7 @@ test("a symlinked default docker-compose.yml (into the main checkout, say) is th
   const worktreeId = s.worktreeAt(s.feature).id
   const profile = deriveProfileName(s.a, 'feature-x')
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  t.after(() => removeDir(outside))
   writeFileSync(join(outside, 'docker-compose.yml'), 'services: {}\n')
   unlinkSync(join(s.feature, 'docker-compose.yml'))
   symlinkSync(join(outside, 'docker-compose.yml'), join(s.feature, 'docker-compose.yml'))
@@ -276,7 +276,7 @@ test("a symlinked default docker-compose.yml (into the main checkout, say) is th
 
 test("a Local server's sibling profiles: local and local-* beside its data dir, never itself or another dir", (t) => {
   const parent = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-datadirs-')))
-  t.after(() => rmSync(parent, { recursive: true, force: true }))
+  t.after(() => removeDir(parent))
   for (const name of ['local', 'local-dev', 'local-wt2', 'other', 'local-', 'local-Bad', 'localx']) mkdirSync(join(parent, name))
   writeFileSync(join(parent, 'local-file'), '')
   assert.deepEqual(localSiblingRegistries(join(parent, 'local')).sort(), [join(parent, 'local-dev', 'environments.json'), join(parent, 'local-wt2', 'environments.json')].sort())
@@ -372,7 +372,7 @@ test('worktree.dirty reads git afresh; a worktree outside the allowlist is PATH_
   assert.equal((await s.call('worktree.dirty', ref)).result, true)
   // A row the guard does not cover (a hand-edited project file, say).
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  t.after(() => removeDir(outside))
   s.projects.apply(s.projectId, (d) => {
     d.repositories[0].worktrees.push({ id: 'out', name: 'out', path: outside, branch: 'feature-x', isMain: false, loaded: false, sessions: [] })
   })
@@ -396,7 +396,7 @@ test('a filesystem ENOENT is a TOOL_ERROR, not a missing tool; only a failed spa
 test('stack.sh is refused when its real path leaves the worktree; the outside script never runs', { skip }, async (t) => {
   const s = await setup(t)
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  t.after(() => removeDir(outside))
   const outsideScript = `#!/bin/bash\necho "outside|$*" >> '${callsFile}'\n`
   writeFileSync(join(outside, 'stack.sh'), outsideScript, { mode: 0o755 })
   const script = join(s.feature, 'docker', 'stack', 'stack.sh')
@@ -456,7 +456,7 @@ test('the registry: a file that cannot be read is never overwritten; a leftover 
 test('env.destroy skips docker compose for a registry entry outside the allowlist, and still deletes the VM', { skip }, async (t) => {
   const s = await setup(t)
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'trek-machine-outside-')))
-  t.after(() => rmSync(outside, { recursive: true, force: true }))
+  t.after(() => removeDir(outside))
   writeFileSync(join(outside, 'docker-compose.yml'), 'services: {}\n')
   const profile = 'twb-imported-000000'
   writeFileSync(join(s.data, 'environments.json'), JSON.stringify({ [profile]: { repoPath: s.a, branch: 'x', worktreePath: outside, createdAt: 'then' } }))
