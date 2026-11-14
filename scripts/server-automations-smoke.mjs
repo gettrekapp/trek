@@ -5,7 +5,7 @@
 // A plain `trek-server start` runs with its own HOME, a fake agent that records its arguments, and a
 // clock file (TREK_SERVER_AUTOMATION_CLOCK_FILE) this script advances; ticks every second. No real
 // Claude, gh or network. The built app runs with a temp HOME and --user-data-dir. Checks: validation,
-// an on-time run, missed runs, the missed-runs modal, the Automations tab (toggle, editor), runNow,
+// an on-time run, missed runs, the missed-runs modal, the Automations page (toggle, editor), runNow,
 // the Global drawer's Automations view (the run tab out of the sessions strip, the toggle, the
 // panel's "open tab" link, a renewed run's clean screen), delete.
 // Every run reuses the automation's one run tab (a Global session with its context): the first opens
@@ -234,23 +234,28 @@ try {
   const modal = win.locator('.missed-runs-modal')
   const MODAL_TEXT = 'Smoke run— missed 24 runs since 2026-01-05 09:05'
   check('the modal lists the automation and what it missed', await until(() => modal.locator('li').first().textContent().catch(() => null), MODAL_TEXT), MODAL_TEXT)
+  const missedBadge = win.locator('.server-window .sidebar button[title="Automations"] .sidebar-nav-badge')
+  check('the left panel flags the automation with missed runs', await until(() => missedBadge.textContent().catch(() => null), '1'), '1')
   // A busy run tab would be skipped, and the tab's pty has printed lately (it is `working` until
   // 2.5 s of quiet): wait for it to settle.
   check('the run tab is idle before Run selected', await until(async () => (await project()).globalSessions[0].status, 'idle'), 'idle')
   await modal.locator('button', { hasText: 'Run selected' }).click()
   check('Run selected runs it and clears missed', await until(async () => (await automation()).missed ?? null, null), null)
+  check('and drops the flag once they are resolved', await until(() => missedBadge.count(), 0), 0)
   check('the missed run renews the same run tab, retitled', await until(runTabs, [[tabId, 'Smoke run · 11:02']]), [[tabId, 'Smoke run · 11:02']])
   check('no other Global session', (await globalTitles()).length, 1)
   check('the agent is launched again with the prompt', await until(launches, 2), 2)
   check('the modal closes', await until(() => modal.count(), 0), 0)
   check('the missed run is in the history', (await automation()).history[0].trigger, 'missed')
 
-  // ---- 4. The Automations tab ----------------------------------------------------------------------
+  // ---- 4. The Automations page----------------------------------------------------------------------
   await rows.first().click()
-  const detail = win.locator('.server-window .detail')
-  await detail.locator('button[title="Automations"]').click()
+  const automationsRow = win.locator('.server-window .sidebar button[title="Automations"]')
+  await automationsRow.click()
   const panel = win.locator('.automations-panel')
-  check('the tab lists the automation with its schedule', await until(() => panel.locator('.automation-row .automation-schedule').first().textContent().catch(() => null), 'Every 5 minutes'), 'Every 5 minutes')
+  const navCount = () => automationsRow.locator('.sidebar-nav-count').textContent()
+  check('the left panel counts the automations', await until(navCount, '1'), '1')
+  check('the page lists the automation with its schedule', await until(() => panel.locator('.automation-row .automation-schedule').first().textContent().catch(() => null), 'Every 5 minutes'), 'Every 5 minutes')
   await panel.locator('.automation-row input[type="checkbox"]').first().click()
   check('the toggle pauses it on the server', await until(async () => (await automation()).enabled, false), false)
   await panel.locator('button', { hasText: 'New automation' }).click()
@@ -264,6 +269,7 @@ try {
   const morning = async () => (await project()).automations?.find((a) => a.name === 'Morning') ?? null
   check('the editor saves a daily automation', await until(async () => (await morning())?.schedule ?? null, { cron: '30 9 * * *', tz: 'UTC' }), { cron: '30 9 * * *', tz: 'UTC' })
   check('back to the list', await until(() => panel.locator('.automation-row').count(), 2), 2)
+  check('and counts the new one', await until(navCount, '2'), '2')
 
   // ---- 5. runNow and delete through the SDK ----------------------------------------------------------
   // A busy run tab would be skipped (CONFLICT): wait for the renewed agent's output to settle.

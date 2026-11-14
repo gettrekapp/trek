@@ -303,7 +303,7 @@ try {
   const featureRow = rows.filter({ hasText: 'feature-x' })
   await featureRow.click()
   await detail.locator('.detail-path', { hasText: worktree }).waitFor({ timeout: 10_000 })
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
   check('Settings show Linear, Plugins and Voice summaries', [await settings.locator('h3', { hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: /^Plugins$/ }).count(), await settings.locator('h3', { hasText: 'Voice summaries' }).count()], [1, 1, 1])
@@ -339,7 +339,7 @@ try {
   check('the secrets file holds both keys', existsSync(secrets) ? Object.keys(JSON.parse(readFileSync(secrets, 'utf8'))).sort() : [], ['elevenlabs', 'linear'])
   await settings.locator('.settings-row', { hasText: /^Voice/ }).locator('button', { hasText: 'Test' }).click()
   check('Test synthesizes on the server, in the chosen voice, and plays here', [await until(() => speechRequests().length, 1), speechRequests()[0]?.voice, await until(() => clips(), 1)], [1, 'v2', 1])
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
 
   // ---- 5. speak_summary, from a session, to every window that has the project open --------------------
 
@@ -395,7 +395,7 @@ try {
     return (await res.json()).result.tools.map((t) => t.name)
   }
   check('speak_summary is listed while voice is on', (await toolNames()).includes('speak_summary'), true)
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
   await voiceSwitch.click()
   const pluginsSetting = async () => (await project()).settings.plugins ?? null
   check("off: the project's plugins setting says so, on the server", await until(pluginsSetting, { voice: { enabled: false } }), { voice: { enabled: false } })
@@ -422,16 +422,16 @@ try {
   const offTicket = await tool('set_worktree_ticket', { worktree: 'feature-x', ticket: 'https://linear.app/x/issue/TOW-8' })
   check('off: set_worktree_ticket refuses a Linear URL, naming the trackers on (not Linear)', [offTicket.isError, /Unrecognised ticket.*Azure DevOps work item id or URL/.test(String(offTicket.value)), !/Linear issue id/.test(String(offTicket.value))], [true, true, true])
   check("off: the refused call changed nothing: the branch's ticket, the project's linearWorkspace", [await branchTicket(), await linearWorkspace()], ['TOW-7', workspaceBefore])
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
   // A chip with no link opens the link dialog to add what it needs.
   await headerChip.click()
   check('off: clicking the chip with no link opens the ticket dialog', await until(() => win.locator('.ticket-modal').count(), 1), 1)
   await win.locator('.ticket-modal').locator('button', { hasText: 'Cancel' }).click()
   check('off: Cancel closes the ticket dialog', await until(() => win.locator('.ticket-modal').count(), 0), 0)
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
   await linearSwitch.click()
   check('on again: the chip shows the issue again', await until(chipTitle, 'TOW-7 · In Progress — Ship the integrations'), 'TOW-7 · In Progress — Ship the integrations')
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await win.locator('.server-window .sidebar button[title="App settings"]').click()
 
   // ---- 6. A session's skill menu: the worktree's skill and the server user's command -----------------
 

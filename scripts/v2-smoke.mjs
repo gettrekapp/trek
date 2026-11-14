@@ -964,8 +964,33 @@ try {
 
   // ---- 6c. Settings, edited on the server ---------------------------------------------------
 
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  const selectedIndex = await w1.locator('.server-window .wt-row').evaluateAll((els) => els.findIndex((e) => e.classList.contains('selected')))
+  if (selectedIndex < 0) throw new Error('no selected worktree row before opening Settings')
+  await w1.locator('.server-window .sidebar button[title="App settings"]').click()
   const settings = w1.locator('.server-window .settings-panel')
+  await settings.waitFor({ timeout: 5000 })
+  const settingsRow = w1.locator('.server-window .sidebar button[title="App settings"]')
+  check('Settings cover the whole detail: its row is active, no worktree row is, no terminal pane shows, the session row is hidden', [
+    await settingsRow.evaluate((el) => el.classList.contains('active')),
+    await w1.locator('.server-window .wt-row.selected').count(),
+    await detail.locator('.terminal-pane:visible').count(),
+    // Covered, not display:none, so isVisible() would still say true: test what is on top.
+    await detail.locator('.session-row').evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2))
+    })
+  ], [true, 0, 0, false])
+  await w1.locator('.server-window .wt-row').nth(selectedIndex).click()
+  check('a click on a worktree closes Settings and shows the session row again', [
+    await until(() => settings.isVisible(), false),
+    await settingsRow.evaluate((el) => el.classList.contains('active')),
+    await w1.locator('.server-window .wt-row.selected').count(),
+    await detail.locator('.session-row').evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      return el.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2))
+    })
+  ], [false, false, 1, true])
+  await settingsRow.click()
   await settings.waitFor({ timeout: 5000 })
   // Environments too since 5a: the server runs them on its own machine.
   check("a server window's Settings show the project's sections only", await settings.locator('h3').allTextContents(), [
@@ -1059,7 +1084,8 @@ try {
   check('and remounts the panel', await w1.evaluate(() => window.__store.getState().settingsReload), reloadsBefore + 1)
   check('the server keeps the other client’s edit', (await settingsNow()).sessionSystemPrompt, 'theirs')
   await app.evaluate(() => (globalThis.__answer = null))
-  await detail.locator('.panel-btn[title="App settings"]').click()
+  await w1.locator('.server-window .sidebar button[title="App settings"]').click()
+  await settings.waitFor({ state: 'hidden', timeout: 5000 })
   await detail.locator('.terminal-pane:visible').waitFor({ timeout: 5000 })
 
   // ---- 7. Disconnect: the banner shows, the tree stays; back again once the server is.

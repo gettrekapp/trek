@@ -8,6 +8,7 @@ export const EMPTY: Partial<AppState> = {
   project: null,
   activeWorktreeId: null,
   selected: null,
+  projectPage: null,
   terminals: {},
   terminalOrder: {},
   activeTerminal: {},
