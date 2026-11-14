@@ -681,6 +681,10 @@ button:disabled {
   color: var(--text);
 }
 
+.sidebar-nav-row.active:hover {
+  background: rgba(10, 141, 255, 0.17);
+}
+
 .sidebar-nav-automations {
   margin-bottom: 8px;
 }
@@ -742,10 +746,11 @@ button:disabled {
   position: relative;
 }
 
-/* Above the detail's own menus (z-index 20 and 30) */
+/* Above the detail's content, under the menus' backdrops (z-index 20): a left panel menu open
+   over a page still closes on a click on the page. */
 .workspace-main > .settings-panel,
 .workspace-main > .automations-panel {
-  z-index: 40;
+  z-index: 10;
 }
 
 /* ─── Detail pane ──────────────────────────────────────────────────────── */

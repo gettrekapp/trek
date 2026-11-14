@@ -141,6 +141,8 @@ export function WorktreeDetail({
   const [editFrom, setEditFrom] = useState('')
   // The window's connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
+  // A project page (Settings, Automations) covers the detail: its panes are hidden meanwhile.
+  const projectPage = useAppStore((s) => s.projectPage)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
 
@@ -887,7 +889,7 @@ export function WorktreeDetail({
           <TerminalPane
             key={id}
             terminalId={id}
-            visible={panel === 'sessions' && id === activeId}
+            visible={panel === 'sessions' && id === activeId && !projectPage}
           />
         ))}
         {panel === 'sessions' && order.length === 0 && (

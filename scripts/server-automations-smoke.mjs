@@ -5,7 +5,7 @@
 // A plain `trek-server start` runs with its own HOME, a fake agent that records its arguments, and a
 // clock file (TREK_SERVER_AUTOMATION_CLOCK_FILE) this script advances; ticks every second. No real
 // Claude, gh or network. The built app runs with a temp HOME and --user-data-dir. Checks: validation,
-// an on-time run, missed runs, the missed-runs modal, the Automations tab (toggle, editor), runNow,
+// an on-time run, missed runs, the missed-runs modal, the Automations page (toggle, editor), runNow,
 // the Global drawer's Automations view (the run tab out of the sessions strip, the toggle, the
 // panel's "open tab" link, a renewed run's clean screen), delete.
 // Every run reuses the automation's one run tab (a Global session with its context): the first opens
@@ -248,14 +248,14 @@ try {
   check('the modal closes', await until(() => modal.count(), 0), 0)
   check('the missed run is in the history', (await automation()).history[0].trigger, 'missed')
 
-  // ---- 4. The Automations tab ----------------------------------------------------------------------
+  // ---- 4. The Automations page----------------------------------------------------------------------
   await rows.first().click()
   const automationsRow = win.locator('.server-window .sidebar button[title="Automations"]')
   await automationsRow.click()
   const panel = win.locator('.automations-panel')
   const navCount = () => automationsRow.locator('.sidebar-nav-count').textContent()
   check('the left panel counts the automations', await until(navCount, '1'), '1')
-  check('the tab lists the automation with its schedule', await until(() => panel.locator('.automation-row .automation-schedule').first().textContent().catch(() => null), 'Every 5 minutes'), 'Every 5 minutes')
+  check('the page lists the automation with its schedule', await until(() => panel.locator('.automation-row .automation-schedule').first().textContent().catch(() => null), 'Every 5 minutes'), 'Every 5 minutes')
   await panel.locator('.automation-row input[type="checkbox"]').first().click()
   check('the toggle pauses it on the server', await until(async () => (await automation()).enabled, false), false)
   await panel.locator('button', { hasText: 'New automation' }).click()

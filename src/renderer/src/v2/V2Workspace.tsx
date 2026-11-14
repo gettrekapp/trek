@@ -47,9 +47,11 @@ export function V2Workspace(): React.JSX.Element {
     if (offline && document.activeElement instanceof HTMLElement) document.activeElement.blur()
   }, [offline])
 
-  // A page opened over the detail: the terminal under it must not keep taking typing.
+  // A page opened over the detail: a field under it must not keep taking typing. The row that
+  // opened it keeps its focus, so the keyboard can close it again.
   useEffect(() => {
-    if (projectPage && document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    const focused = document.activeElement
+    if (projectPage && focused instanceof HTMLElement && focused.closest('.detail')) focused.blur()
   }, [projectPage])
 
   if (!project) return <p className="muted server-window-loading">Loading…</p>
