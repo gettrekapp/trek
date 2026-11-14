@@ -4700,7 +4700,7 @@ body.resizing-row {
 }
 
 /* Automations panel */
-.automations-panel { flex-direction: column; gap: 12px; padding: 16px; overflow: auto; }
+.automations-panel { position: absolute; inset: 0; flex-direction: column; gap: 12px; padding: 16px; overflow-y: auto; background: var(--bg-darker); }
 .automations-header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .automations-header h2 { margin: 0; }
 .automations-header .primary { margin-left: auto; }
