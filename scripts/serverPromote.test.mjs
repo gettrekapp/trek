@@ -608,6 +608,6 @@ test('PromoteRequests: the attribution given to ask comes back on bind', async (
   const { requestId } = events.find(([e]) => e === 'promote.request')[1]
   const binding = s.promoteRequests.bind(s.projectId, requestId, s.worktreeId, window)
   assert.deepEqual(binding.attribution, attribution)
-  binding.settle({ outcome: 'cancelled' })
+  binding.settle({ outcome: 'declined' })
   await asked
 })

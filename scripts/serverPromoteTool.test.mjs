@@ -5,10 +5,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { HistoryStore } from '../server/src/history/store.ts'
 import { createToolCaller } from '../server/src/mcp/tools.ts'
 import { CLAUDE_ID, setup } from './promoteFixture.mjs'
 
-const toolsOf = (s) => createToolCaller({ store: s.ctx.store, hub: s.hub, projects: s.projects, poller: s.poller, sessions: s.sessions, promoteRequests: s.promoteRequests })(s.projectId)
+const toolsOf = (s) => createToolCaller({ store: s.ctx.store, hub: s.hub, projects: s.projects, poller: s.poller, sessions: s.sessions, promoteRequests: s.promoteRequests, history: s.ctx.history })(s.projectId)
 
 /** A window connection: subscribed to the project's topic, listening for requests unless told not to. */
 async function windowOf(s, onRequest, { listen = true } = {}) {
@@ -37,6 +39,7 @@ const confirm = (s) => async (payload, window) => {
 
 test('promote_to_primary: refused with no window; a window declines, or confirms and the promote settles it', async (t) => {
   const s = await setup(t)
+  s.ctx.history = new HistoryStore(join(s.dir, 'history'))
   const tools = toolsOf(s)
   await assert.rejects(tools('promote_to_primary', { worktree: 'feat' }), /No Trek window/)
   await assert.rejects(tools('promote_to_primary', { worktree: s.app }), /already the primary/)
@@ -55,11 +58,15 @@ test('promote_to_primary: refused with no window; a window declines, or confirms
   assert.ok(w.events.some(([e, p]) => e === 'promote.settled' && p.requestId === asked.requestId))
   assert.ok(existsSync(s.path))
   reply = 'promoted'
-  const result = await tools('promote_to_primary', { worktree: 'feat' })
+  const result = await tools('promote_to_primary', { worktree: 'feat', terminalId: CLAUDE_ID, reason: 'ready' })
   assert.equal(result.promoted, true)
   assert.equal(result.primary.primary, true)
   assert.equal(result.primary.branch, 'feat')
   assert.ok(!existsSync(s.path))
+  const promoted = s.ctx.history.list(s.projectId, s.repoId, 'feat').events.find((e) => e.kind === 'promoted')
+  assert.equal(promoted.actor.kind, 'mcp')
+  assert.equal(promoted.actor.terminalId, CLAUDE_ID)
+  assert.equal(promoted.reason, 'ready')
 })
 
 test('promote_to_primary: a subscriber that does not listen is no window', async (t) => {
