@@ -169,6 +169,40 @@ button:disabled {
   padding: 12px 12px 8px;
 }
 
+/* Hide (in the sidebar) and show (in the rail that stands in for a hidden sidebar). */
+.sidebar-toggle {
+  width: 24px;
+  height: 32px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.workspace.sidebar-hidden > .sidebar {
+  display: none;
+}
+
+.sidebar-rail {
+  width: 28px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 12px;
+  border-right: 1px solid var(--border);
+  background: #141416;
+}
+
 .sidebar-filter {
   flex: 1;
   min-width: 0;
@@ -2995,6 +3029,7 @@ button:disabled {
 
 .recent-projects {
   width: 420px;
+  max-width: calc(100% - 32px);
   margin-top: 8px;
 }
 
@@ -3269,6 +3304,7 @@ button:disabled {
   border-radius: 12px;
   padding: 20px 24px;
   width: 560px;
+  max-width: calc(100% - 32px);
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);

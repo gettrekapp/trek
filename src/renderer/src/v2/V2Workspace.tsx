@@ -5,6 +5,7 @@ import { useFeatures } from '../useFeatures'
 import { getBackend } from '../backend'
 import { useEnvironmentPoll } from '../useEnvironmentPoll'
 import { Sidebar } from '../components/Sidebar'
+import { toggleSidebar } from '../sidebarToggle'
 import { WorktreeDetail } from '../components/WorktreeDetail'
 import { AddWorktreeModal } from '../components/AddWorktreeModal'
 import { GlobalClaude } from '../components/GlobalClaude'
@@ -28,6 +29,7 @@ export function V2Workspace(): React.JSX.Element {
   const features = useFeatures()
   const [addRepoId, setAddRepoId] = useState<string | null>(null)
   const offline = useAppStore((s) => s.serverOffline)
+  const sidebarHidden = useAppStore((s) => s.sidebarHidden)
   const projectPage = useAppStore((s) => s.projectPage)
   const globalTabs = useAppStore((s) => s.terminalOrder[GLOBAL_WORKTREE_ID]?.length ?? 0)
   const globalMode = globalPanelMode(features, globalTabs)
@@ -59,7 +61,15 @@ export function V2Workspace(): React.JSX.Element {
   const info = selectedWorktreeInfo(project, worktrees, selected, activeWorktreeId)
   return (
     <>
-      <div className="workspace">
+      <div className={sidebarHidden ? 'workspace sidebar-hidden' : 'workspace'}>
+        {sidebarHidden && (
+          <div className="sidebar-rail">
+            <button className="sidebar-toggle sidebar-show" title="Show sidebar" aria-label="Show sidebar" onClick={toggleSidebar}>
+              »
+            </button>
+          </div>
+        )}
+        {/* Hidden by the stylesheet, not unmounted: its filter and collapsed sections are there when it comes back. */}
         <Sidebar worktrees={worktrees} onAdd={setAddRepoId} />
         {/* The project-level pages cover the detail, which stays mounted under them. */}
         <div className="workspace-main">

@@ -40,6 +40,8 @@ export function sameTarget(a: WindowTarget, b: WindowTarget): boolean {
 export interface OpenWindowEntry<T extends WindowTarget = WindowTarget> {
   target: T
   bounds?: WindowBounds
+  /** The window's sidebar is hidden (View → Toggle Sidebar). Absent when shown. */
+  sidebarHidden?: true
 }
 
 function targetKey(t: WindowTarget): string {
@@ -71,8 +73,11 @@ export function parseOpenWindows(raw: unknown): OpenWindowEntry[] {
     if (typeof item !== 'object' || item === null) continue
     const target = readTarget(item as Record<string, unknown>)
     if (!target || entries.has(targetKey(target))) continue
-    const bounds = (item as { bounds?: unknown }).bounds
-    entries.set(targetKey(target), isBounds(bounds) ? { target, bounds } : { target })
+    const { bounds, sidebarHidden } = item as { bounds?: unknown; sidebarHidden?: unknown }
+    const entry: OpenWindowEntry = { target }
+    if (isBounds(bounds)) entry.bounds = bounds
+    if (sidebarHidden === true) entry.sidebarHidden = true
+    entries.set(targetKey(target), entry)
   }
   return [...entries.values()]
 }
@@ -80,7 +85,8 @@ export function parseOpenWindows(raw: unknown): OpenWindowEntry[] {
 /** A window as open-windows.json stores it. */
 export function serializeOpenWindow(entry: OpenWindowEntry<ServerTarget>): Record<string, unknown> {
   const bounds = entry.bounds ? { bounds: entry.bounds } : {}
-  return { kind: 'server', serverEntryId: entry.target.serverEntryId, projectId: entry.target.projectId, ...bounds }
+  const sidebar = entry.sidebarHidden ? { sidebarHidden: true } : {}
+  return { kind: 'server', serverEntryId: entry.target.serverEntryId, projectId: entry.target.projectId, ...bounds, ...sidebar }
 }
 
 export function boundsOnScreen(bounds: WindowBounds, workAreas: WindowBounds[]): boolean {
@@ -91,6 +97,59 @@ export function boundsOnScreen(bounds: WindowBounds, workAreas: WindowBounds[]):
       bounds.y < area.y + area.height &&
       bounds.y + bounds.height > area.y
   )
+}
+
+/** The smallest a window gets: Arrange Windows makes no tile smaller. */
+export const MIN_WINDOW_WIDTH = 480
+export const MIN_WINDOW_HEIGHT = 320
+
+/**
+ * How many windows each row of the arranged grid holds, top row first. Rows and columns are as
+ * equal as they can be; when they cannot be equal, a landscape display gets the extra columns
+ * and a portrait one the extra rows. Fuller rows come first.
+ */
+export function gridRows(count: number, landscape: boolean): number[] {
+  if (count <= 0) return []
+  const side = Math.ceil(Math.sqrt(count))
+  const rows = landscape ? Math.ceil(count / side) : side
+  const base = Math.floor(count / rows)
+  const extra = count % rows
+  return Array.from({ length: rows }, (_, i) => base + (i < extra ? 1 : 0))
+}
+
+/**
+ * `count` spans along `total` from `start`. They abut and end exactly at `start + total`; if
+ * that would make them smaller than `min`, they are `min` long and overlap, spread evenly.
+ */
+function spans(start: number, total: number, count: number, min: number): { at: number; size: number }[] {
+  if (count <= 1 || total / count >= min) {
+    const edge = (i: number): number => start + Math.round((i * total) / count)
+    return Array.from({ length: count }, (_, i) => ({ at: edge(i), size: edge(i + 1) - edge(i) }))
+  }
+  const step = Math.max(0, total - min) / (count - 1)
+  return Array.from({ length: count }, (_, i) => ({ at: start + Math.round(i * step), size: min }))
+}
+
+/**
+ * Arrange Windows on one display: the bounds each window takes so that together they fill
+ * `workArea`. A window gets the tile nearest where it is (rows by its centre's height, then left
+ * to right within the row), so arranging twice changes nothing.
+ */
+export function arrangeTiles(workArea: WindowBounds, windows: { id: number; bounds: WindowBounds }[]): Map<number, WindowBounds> {
+  const centreX = (b: WindowBounds): number => b.x + b.width / 2
+  const centreY = (b: WindowBounds): number => b.y + b.height / 2
+  const sorted = [...windows].sort((a, b) => centreY(a.bounds) - centreY(b.bounds) || centreX(a.bounds) - centreX(b.bounds))
+  const rowSizes = gridRows(sorted.length, workArea.width >= workArea.height)
+  const rows = spans(workArea.y, workArea.height, rowSizes.length, MIN_WINDOW_HEIGHT)
+  const tiles = new Map<number, WindowBounds>()
+  let next = 0
+  rowSizes.forEach((size, r) => {
+    const row = sorted.slice(next, next + size).sort((a, b) => centreX(a.bounds) - centreX(b.bounds))
+    next += size
+    const cols = spans(workArea.x, workArea.width, size, MIN_WINDOW_WIDTH)
+    row.forEach((w, c) => tiles.set(w.id, { x: cols[c].at, y: rows[r].at, width: cols[c].size, height: rows[r].size }))
+  })
+  return tiles
 }
 
 /** What `window:takeInitial` hands a window: the server project to show, if any. */

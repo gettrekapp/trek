@@ -32,6 +32,7 @@ import { fixPath } from './env'
 import { removeStaleMcpConfigs } from './staleMcpConfigs'
 import {
   APP_ICON,
+  arrangeWindows,
   closeAllForQuit,
   createWindow,
   isQuitting,
@@ -136,13 +137,41 @@ function buildMenu(): void {
       ]
     },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    // Built by hand, as the Window menu is: the stock viewMenu takes no extra item.
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Toggle Sidebar',
+          // macOS only: Ctrl+B belongs to the terminal (tmux's prefix, readline's back-a-character).
+          accelerator: isMac ? 'Cmd+B' : undefined,
+          click: () => sendToFocused('menu:toggle-sidebar')
+        },
+        { type: 'separator' },
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
     // Built by hand: the stock windowMenu binds CmdOrCtrl+W to closing the window.
     {
       role: 'window',
       submenu: [
         { role: 'minimize' },
         { role: 'zoom' },
+        { type: 'separator' },
+        {
+          label: 'Arrange Windows',
+          // macOS only: Ctrl+Alt is AltGr on Windows and Linux, where AltGr+A types a letter on some layouts.
+          accelerator: isMac ? 'Cmd+Alt+A' : undefined,
+          click: () => arrangeWindows()
+        },
         ...(isMac ? [{ type: 'separator' as const }, { role: 'front' as const }] : [])
       ]
     }

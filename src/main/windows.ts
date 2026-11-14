@@ -7,12 +7,15 @@ import { openUrl } from './openUrl'
 import { getAppServer } from './appServers'
 import { addRecentServer, keepRecentFiles } from './recents'
 import {
+  arrangeTiles,
   boundsOnScreen,
   capLabel,
   decideOpen,
   initialFromTarget,
   isTargetId,
   MAX_TARGET_ID,
+  MIN_WINDOW_HEIGHT,
+  MIN_WINDOW_WIDTH,
   parseOpenWindows,
   routeSelect,
   sameTarget,
@@ -51,6 +54,8 @@ interface WindowState {
   rendererReady: boolean
   /** A session to show, asked for while the renderer was still loading: handed over by window:takeInitial */
   pendingSelect: SessionSelect | null
+  /** The renderer hid its sidebar: recorded with the window, handed back by window:takeInitial. */
+  sidebarHidden: boolean
   closing: PendingClose | null
   taken: Promise<void>
   markTaken: () => void
@@ -209,14 +214,14 @@ function guardNavigation(contents: WebContents): void {
 }
 
 export function createWindow(
-  opts: { initialTarget?: ServerTarget; menu?: InitialWindowState['menu']; bounds?: WindowBounds } = {}
+  opts: { initialTarget?: ServerTarget; menu?: InitialWindowState['menu']; bounds?: WindowBounds; sidebarHidden?: boolean } = {}
 ): BrowserWindow {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
     ...opts.bounds,
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     title: 'Trek Dev',
     icon: APP_ICON, // window icon on Windows/Linux; macOS uses the dock icon
     backgroundColor: '#111113',
@@ -237,6 +242,7 @@ export function createWindow(
     initial: { server: initialFromTarget(opts.initialTarget ?? null), menu: opts.menu ?? null },
     rendererReady: false,
     pendingSelect: null,
+    sidebarHidden: opts.sidebarHidden === true,
     closing: null,
     taken,
     markTaken
@@ -357,7 +363,9 @@ const openWindowsFile = (): string => join(app.getPath('userData'), 'open-window
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 function entryFor(state: WindowState, target: ServerTarget): OpenWindowEntry<ServerTarget> {
-  return { target, bounds: state.win.getNormalBounds() }
+  const entry: OpenWindowEntry<ServerTarget> = { target, bounds: state.win.getNormalBounds() }
+  if (state.sidebarHidden) entry.sidebarHidden = true
+  return entry
 }
 
 function currentEntries(): OpenWindowEntry<ServerTarget>[] {
@@ -409,11 +417,12 @@ export async function restoreWindows(): Promise<number> {
   const onDisk: string[] = []
   for (const path of files) if (await access(path).then(() => true, () => false)) onDisk.push(path)
   if (onDisk.length > 0) await keepRecentFiles(onDisk).catch((err) => console.warn('[windows] could not keep the unrestored files in the recents:', err))
-  for (const { target, bounds } of entries) {
+  for (const { target, bounds, sidebarHidden } of entries) {
     // A server window comes back even if its entry is gone: it shows "Server removed".
     const win = createWindow({
       initialTarget: target,
-      bounds: bounds && boundsOnScreen(bounds, workAreas) ? bounds : undefined
+      bounds: bounds && boundsOnScreen(bounds, workAreas) ? bounds : undefined,
+      sidebarHidden
     })
     restored++
     const state = windows.get(win.webContents.id)!
@@ -425,12 +434,38 @@ export async function restoreWindows(): Promise<number> {
   return restored
 }
 
+// ---- Arranging -------------------------------------------------------------
+
+/**
+ * Window → Arrange Windows: tiles every window to fill the display it is on. A minimised or
+ * full-screen window is left as it is; a maximised one is tiled like the rest. No window changes
+ * display. The move and resize handlers record the new bounds.
+ */
+export function arrangeWindows(): void {
+  const displays = new Map<number, { workArea: WindowBounds; wins: BrowserWindow[] }>()
+  for (const { win } of windows.values()) {
+    if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) continue
+    if (win.isMaximized()) win.unmaximize()
+    const display = screen.getDisplayMatching(win.getBounds())
+    const group = displays.get(display.id) ?? { workArea: display.workArea, wins: [] }
+    group.wins.push(win)
+    displays.set(display.id, group)
+  }
+  for (const { workArea, wins } of displays.values()) {
+    const tiles = arrangeTiles(workArea, wins.map((win) => ({ id: win.id, bounds: win.getBounds() })))
+    for (const win of wins) {
+      const tile = tiles.get(win.id)
+      if (tile && !win.isDestroyed()) win.setBounds(tile)
+    }
+  }
+}
+
 // ---- IPC -------------------------------------------------------------------
 
 export function registerWindowHandlers(): void {
   ipcMain.handle('window:takeInitial', (event): InitialWindowState => {
     const state = windows.get(event.sender.id)
-    if (!state) return { menu: null, server: null, select: null }
+    if (!state) return { menu: null, server: null, select: null, sidebarHidden: false }
     state.rendererReady = true
     const initial = state.initial
     state.initial = null
@@ -439,12 +474,20 @@ export function registerWindowHandlers(): void {
     state.markTaken()
     // A server window keeps its target across a reload: its state lives on the server.
     const server = initial ? initial.server : initialFromTarget(state.target)
-    return { menu: initial?.menu ?? null, server, select: server ? select : null }
+    // Like the target, the sidebar survives a reload: it is the window's, not the page's.
+    return { menu: initial?.menu ?? null, server, select: server ? select : null, sidebarHidden: state.sidebarHidden }
   })
 
   ipcMain.on('window:reportTitle', (event, name: unknown) => {
     const state = windows.get(event.sender.id)
     if (state && !state.win.isDestroyed()) state.win.setTitle(capLabel(name) || 'Trek Dev')
+  })
+
+  ipcMain.on('window:setSidebarHidden', (event, hidden: unknown) => {
+    const state = windows.get(event.sender.id)
+    if (!state) return
+    state.sidebarHidden = hidden === true
+    schedulePersist()
   })
 
   // A server window gives up its project (Pick another project): it is an empty window again.

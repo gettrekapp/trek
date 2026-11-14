@@ -228,7 +228,8 @@ test('the api: one entry, the page’s server, never editable; machine-only call
     }
     assert.equal(await api.selectDirectory('pick'), null)
     assert.equal(await api.githubPrHeadBranch('a', 'b', 1), null)
-    assert.deepEqual(await api.takeInitialWindowState(), { menu: null, server: null, select: null })
+    assert.deepEqual(await api.takeInitialWindowState(), { menu: null, server: null, select: null, sidebarHidden: false })
+    assert.equal(api.setSidebarHidden(true), undefined) // nothing remembers it in a browser tab
   })
 })
 
