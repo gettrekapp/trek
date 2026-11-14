@@ -182,11 +182,13 @@ other window on that project sees them live.
   from a release tarball on macOS or Linux, of a release built with the project's update
   key) shows "Update available: X" on its row when a
   newer release exists, with an **Update** button; **Check for Update** on the row looks
-  on demand. Update asks first, then the server downloads, checks and installs the release
-  itself (the row shows the progress) and restarts: its terminals close, and agent sessions
-  resume when you open their worktrees again. While it is away the row says "Restarting to
-  update…", then "Updated to X", or "Update failed: …" with the reason and the server as it
-  was. A server set to be updated only on its own machine (`updates.remoteApply: false`)
+  on demand (the server reads the release feed at most once in 30 seconds). Update asks
+  first, saying how many terminals are open on the server at that moment, then the server
+  downloads, checks and installs the release itself (the row shows the progress; the server
+  keeps serving meanwhile) and restarts: its terminals close, and agent sessions resume when
+  you open their worktrees again. While it is away the row says "Restarting to update…" (and
+  so does the banner of a window open on one of its projects), then "Updated to X" in the app
+  that saw it update, or "Update failed: …" with the reason and the server as it was. A server set to be updated only on its own machine (`updates.remoteApply: false`)
   shows the release without the button, and one that cannot restart itself asks you to
   restart it there to finish. The Local server has none of this: it is updated with Trek
   (**Trek → Check for Updates…**). See
@@ -563,6 +565,17 @@ one at a time:
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the
   sign-in limit;
+- `npm run smoke:server-update`: `trek-server update` and the protocol's `update.*`, without
+  Electron: test builds of the server at two versions, installed as a release tarball
+  installs them, against a signed release feed on 127.0.0.1: the command with and without a
+  running server, the restart in place, a bad signature, a tampered tarball, a failed
+  selfcheck, the launcher's rollback, an update asked for by a client with its states and
+  refusals, a held lock, and a server that keeps answering while it installs (macOS and Linux);
+- `npm run smoke:server-update-app`: updating a remote server from its row in **Open on
+  server…**: Check for Update, the question (with the terminals open at that moment), the
+  progress, "Restarting to update…" on the row and in a project window's banner, "Updated to
+  X" only in the app that saw it, a server left to its own machine, and a failed update with
+  Try Again;
 - `npm run smoke:server-pairing`: Pair a phone… for a remote server: the QR's code (no
   token in the window), a phone (the SDK in Node) redeeming it once for its own named
   token, New code withdrawing the code (Done keeps it), and that token's revocation;

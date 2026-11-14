@@ -546,7 +546,7 @@ the same checks and the same result.
 | Method | Params | Result |
 |---|---|---|
 | `update.status` | `{}` | `UpdateStatus` |
-| `update.check` | `{}` | `UpdateStatus`, after a fresh read of the release feed |
+| `update.check` | `{}` | `UpdateStatus`, after a read of the release feed that is at most 30 seconds old |
 | `update.apply` | `{version}` | `{started: true}` |
 
 - **When it is listed:** the server runs from a release tarball's folder on macOS or Linux
@@ -571,7 +571,7 @@ the same checks and the same result.
   | `restartNeeded` | The version in the install folder is newer than the one running: restart the server to finish. Derived at each read, so it is true whoever installed it (this server, or `trek-server update` on its machine) |
   | `remoteApply` | False when the server's config leaves installing to `trek-server update` on its machine (`"updates": {"remoteApply": false}`): `update.apply` is refused |
   | `checkedAt?` | When the feed was last read and verified (ISO 8601) |
-  | `lastResult?` | How the last update went: `{ok, from, to, at, error?}`, the two versions, when it was settled (ISO 8601) and, when `ok` is false, why |
+  | `lastResult?` | How the last update went: `{ok, from, to, at, error?}`, the two versions, when it was settled (ISO 8601) and, when `ok` is false, why (its first 2,000 characters; a longer reason ends in a line that says it was cut). `to` of a failure is the release that was being installed. Usually what the state file records; a failure of the last `update.apply` that recorded nothing is reported from the server's memory instead (below) |
 
   ```json
   { "type": "res", "id": 7, "ok": true, "result": {
@@ -582,12 +582,18 @@ the same checks and the same result.
 - **`update.check`** reads the latest published release's signed checksums now and answers the
   status after it: `latest` is the release when it is newer than this install, and absent when it
   is not. The state is `checking` meanwhile, then `idle` (an `update.changed` each). A check asked
-  for while another is in flight gets that one's answer. `CONFLICT` with `details.reason: "busy"`
+  for while another is in flight gets that one's answer. The feed is read at most once in 30
+  seconds, whoever asks (a client, or the server's own daily check): a check asked sooner reads
+  nothing and sends no `update.changed`; it is answered with the status as it is now, so `latest`
+  and `checkedAt` may be up to 30 seconds old, or, if that last read failed, refused with the same
+  `TOOL_ERROR` again. `CONFLICT` with `details.reason: "busy"`
   while an update is being installed or the server is restarting into one; `TOOL_ERROR` (`Could
   not check for an update: …`) when the feed cannot be read or its signature does not verify:
   `latest` and `checkedAt` then stay as they were. The server runs the same check itself 30
-  seconds after it starts and once a day (unless its config says `"updates": {"check": false}`),
-  so a release it finds reaches connected clients as `update.changed` without anyone asking.
+  seconds after it starts and once a day (unless its config says `"updates": {"check": false}`,
+  which turns off only that periodic check: `update.check` still reads the feed, since a user
+  asked), so a release it finds reaches connected clients as `update.changed` without anyone
+  asking.
 - **`update.apply {version}`** begins installing the latest release and answers `{started: true}`
   at once; the update goes on after the answer, reported by `update.changed`. `version` is the
   `latest` the user was shown. The refusals, in the order they are tested:
@@ -596,7 +602,7 @@ the same checks and the same result.
   |---|---|---|
   | `BAD_REQUEST` | | `version` is not a non-empty string |
   | `CONFLICT` | `disabled` | the config says `"updates": {"remoteApply": false}` |
-  | `CONFLICT` | `busy` | the state is not `idle`: an update is running, or a check is in flight (`update.check`'s, or the server's daily one) |
+  | `CONFLICT` | `busy` | the state is not `idle`: an update is running ("An update is already running on this server"), or a check is in flight, `update.check`'s or the server's daily one ("This server is checking for an update: try again in a moment") |
   | `CONFLICT` | `stale` | `version` is not the status's `latest` (another release, or none): read the status or check again, and ask the user about that one |
 
   ```json
@@ -613,21 +619,33 @@ the same checks and the same result.
   `percent` once the size is known), `installing` (the tarball is unpacked, the new version
   proves it runs on this machine with `trek-server selfcheck`, and it is put in the install's
   place), then `restarting`, or back to `idle`:
-  - **Failed** (the download, its sha256, the selfcheck, a release that moved): `idle`, with
-    `lastResult` `{ok: false, from, to, at, error}`. The install is as it was. One failure records
-    nothing: when another update holds the install's lock (a `trek-server update` running on the
-    machine), the state returns to `idle` and `lastResult` is that update's to write.
+  - **Failed** (the feed, the download, its sha256, the selfcheck, a release that moved): `idle`,
+    with `lastResult` `{ok: false, from, to, at, error}`, `to` being the `version` that was asked
+    for. The install is as it was. One failure is not written to the state file: when another
+    update holds the install's lock (a `trek-server update` running on the machine, or a lock
+    left behind), that update records its own result. The status still carries this attempt's
+    failure as `lastResult` (the error names the lock), from the server's memory: until the next
+    `update.apply` starts, a check reads the feed successfully, the state file records a newer
+    result, or the server restarts.
   - **Installed, and the server cannot restart itself** (`canRelaunch` false, or the new
     version's `bin/trek-server` cannot be run): `idle`, with `restartNeeded: true`. The server
     keeps running `current` until someone restarts it on its machine. `lastResult` is not written
-    yet: the new version records it when it starts.
+    yet: the new version records it when it starts. If the restart was announced (`restarting`)
+    and then could not begin, the `idle` that follows also has `restartNeeded: true`, and a
+    `lastResult` `{ok: false, …}` from the server's memory that says why ("trek-server 0.6.0 is
+    installed, but the server could not restart into it: …").
   - **Nothing to install after all** (the feed no longer offers a newer release): `idle`, with
     no `latest`.
 - **`update.changed`** carries the whole `UpdateStatus`: a client replaces what it holds, never
   merges. It goes to every authenticated connection, whatever it subscribes to: once per change
   of state, once per whole percent of a download (so at most about a hundred for one download;
-  none while the size is unknown), and once when an update settles at `idle`. Nothing is replayed
-  to a connection that signs in later: it reads `update.status`.
+  none while the size is unknown), and once when an update settles at `idle`. Two changes that
+  come from outside an update are sent too, with the state `idle`: `restartNeeded` becoming true
+  because `trek-server update` on the machine installed a version this server could not restart
+  into (sent when the server refuses that command's restart request), and `remoteApply` changing
+  because the config file was edited. `sessions` is not such a change: no event says that a
+  terminal opened or closed, so a client reads `update.status` just before it asks the user about
+  them. Nothing is replayed to a connection that signs in later: it reads `update.status`.
 
   ```json
   { "type": "event", "event": "update.changed", "payload": {
@@ -653,12 +671,14 @@ the same checks and the same result.
   still offered. `trek-server update` run on the server's machine restarts a running server the
   same way: its clients get the same `daemon.shutdown` (`reason: "update"`, and the installed
   `version` when the install folder names one), but no `update.changed` before it, since the
-  command, not the server, did the installing. Nor is there an event when that command installs
-  on a server that cannot restart itself: `restartNeeded` is true in the next status the server
-  sends or answers.
+  command, not the server, did the installing. When that command installs on a server that
+  cannot restart itself, the server refuses its restart request and sends `update.changed` with
+  `restartNeeded: true`.
 - **What a client does:** read `update.status` at every welcome that lists `update` (nothing is
   replayed, and the server it reconnects to may be another version); take each `update.changed`
-  as the new status; and after a `daemon.shutdown` with `reason: "update"`, show the server as
+  as the new status; read `update.status` again just before asking the user to confirm an install
+  (the count of terminals that will close is only as fresh as that read); and after a
+  `daemon.shutdown` with `reason: "update"`, show the server as
   restarting rather than disconnected while it reconnects, for a couple of minutes at most, then
   treat it as any dropped connection. The next welcome ends the wait, and the status read there
   says how the update went.
@@ -670,21 +690,32 @@ the same checks and the same result.
   `update.apply` (`disabled`) and leaves installing to `trek-server update` on the machine, which
   it does not affect; `update.status` and `update.check` still answer, and the status says
   `remoteApply: false`. The config is read at each request, so an edit takes effect without a
-  restart.
+  restart, and connected clients hear of it (`update.changed`).
 - **The desktop** reads `update.status` at each welcome of a server that lists `update` and shows
   a line on that server's row in **Open on server…**: "Update available: 0.6.0" with **Update**
-  (or, when `remoteApply` is false, a note to run `trek-server update` on the server's machine in
-  place of the button), "Checking for an update…", "Downloading 0.6.0… 42%", "Installing 0.6.0…",
+  (or, when `remoteApply` is false, "This server is set to be updated on its own machine: run
+  `trek-server update` there." in place of the button, the command set as code), "Checking for an update…", "Downloading 0.6.0… 42%", "Installing 0.6.0…",
   "Restarting into 0.6.0…", "An update is installed. Restart trek-server on that machine to
   finish." (`restartNeeded`), "Update failed: …" with **Try Again** (or **Check Again** when no
-  release is offered), "Updated to 0.6.0", and, after a check that found nothing, "trek-server
-  0.5.0 is the latest version". **Update** asks first, in a dialog that names both
-  versions and says how many terminals close, or that the server cannot restart itself; the
-  `version` it then sends is the one the dialog named. **Check for Update** (`update.check`) is on
+  release is offered; shown for a failure of the release that is offered, until the next attempt),
+  "Updated to 0.6.0", and, after a check that found nothing, "trek-server 0.5.0 is the latest
+  version". "Updated to 0.6.0" is said only by an app that saw the update happen (the server went
+  away to update, or this app asked it to install, and it came back running that version), and
+  only until that app quits: an app that connects to a server updated earlier says nothing.
+  **Update** reads `update.status` first, then asks, in a dialog built from that answer that
+  names both versions and says how many terminals close, or that the server cannot restart
+  itself; the `version` it then sends is the one the dialog named. If that answer has no `latest`
+  any more, or the server is busy, the row says why and no dialog is shown. The app keeps of a
+  status only what a status needs (`parseUpdateStatus` in `src/shared/serverUpdate.ts`): versions
+  of at most 40 plain characters (a status whose `current` is not one is ignored), `sessions` up
+  to 9999, a whole `percent`, an `error` cut to about 2,000 characters, and no control or format
+  characters. A click's error on a row goes when the row's update line or connection changes. **Check for Update** (`update.check`) is on
   the row while the server is connected and its state is `idle`. After `daemon.shutdown` with
   `reason: "update"` the row's status says "Restarting to update…" in place of "Disconnected"
   until the server answers again, for at most 2 minutes (`RESTART_GRACE_MS` in
-  `src/shared/serverUpdate.ts`). The Local server's row has none of this, and the web client and
+  `src/shared/serverUpdate.ts`); a window open on a project of that server says the same in its
+  banner ("Restarting to update… — the server is restarting into 0.6.0; this window reconnects by
+  itself") and reconnects when the server is back. The Local server's row has none of this, and the web client and
   the phone app have no update UI.
 - **The client SDK** does nothing with these itself: `update.changed` and `daemon.shutdown` reach
   `on('event')` listeners like any event, and a refusal's `details.reason` is on the
