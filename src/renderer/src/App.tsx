@@ -11,6 +11,7 @@ import { PluginRuntimes, PluginSlot } from './plugins/PluginHost'
 import { titleBarForeground } from '../../shared/appearance'
 import { tabView } from './globalTabs'
 import { toggleSidebar } from './sidebarToggle'
+import { UpdateIndicator } from './components/UpdateIndicator'
 
 export default function App(): React.JSX.Element {
   const serverWindow = useAppStore((s) => s.serverWindow)
@@ -117,7 +118,9 @@ export default function App(): React.JSX.Element {
         <span className="title-text">
           {serverWindow ? (serverTitle ?? 'Trek Dev') : 'Trek Dev'}
         </span>
-        <div className="title-side" />
+        <div className="title-side title-side-end">
+          <UpdateIndicator />
+        </div>
       </header>
       {serverWindow ? (
         <ServerProjectWindow

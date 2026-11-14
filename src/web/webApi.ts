@@ -157,6 +157,8 @@ export function createWebApi(Socket: BrowserSocketClass = WebSocket as unknown a
       }
     },
     localServer: { start: refuse, restart: refuse, reset: refuse },
+    // A page has no desktop app to update.
+    appUpdate: { get: async () => ({ kind: 'idle' }), open: async () => {}, onState: none },
     appSettings: {
       get: async () => appSettings,
       update: async (patch: AppSettingsPatch) => {

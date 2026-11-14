@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron'
 import type { AppSettings, AppSettingsPatch } from '../shared/appSettings'
+import type { AppUpdateState } from '../shared/appUpdate'
 import type {
   AppServerInfo,
   AppServersChanged,
@@ -100,6 +101,12 @@ const api = {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('appSettings:get'),
     update: (patch: AppSettingsPatch): Promise<AppSettings> => ipcRenderer.invoke('appSettings:update', patch),
     onChanged: (callback: (settings: AppSettings) => void): (() => void) => subscribe('appSettings:changed', callback)
+  },
+  /** The app's own update: the state behind the title bar's indicator, and its click (main shows the dialog). */
+  appUpdate: {
+    get: (): Promise<AppUpdateState> => ipcRenderer.invoke('appUpdate:get'),
+    open: (): Promise<void> => ipcRenderer.invoke('appUpdate:open'),
+    onState: (callback: (state: AppUpdateState) => void): (() => void) => subscribe('appUpdate:state', callback)
   },
   // Sessions on the app-wide servers that need the user, merged by main (no token, no URL).
   attention: {
