@@ -804,6 +804,18 @@ test('move.receive drops history entries it cannot read, and says so; a non-list
   assert.equal((await recv(s2, exported2, { fromServer: 5 })).error?.code, 'BAD_REQUEST')
 })
 
+test('move.receive words unreadable and over-cap history entries separately', async (t) => {
+  const s = await setup(t)
+  const exported = (await s.A.call('move.export', s.ref)).result
+  await s.A.call('worktree.push', { ...s.ref, setUpstream: true })
+  const entry = (i) => ({ id: `h${i}`, at: i + 1, repoId: 'x', branch: 'feat', kind: 'note', actor: { kind: 'user' }, to: { text: 'added' } })
+  const history = [{ id: 'bad1' }, { id: 'bad2' }, ...Array.from({ length: 502 }, (_, i) => entry(i))]
+  const r = await recv(s, exported, { history })
+  assert.equal(r.ok, true, JSON.stringify(r))
+  assert.ok(r.result.dropped.includes('2 history entries the target could not read'), JSON.stringify(r.result.dropped))
+  assert.ok(r.result.dropped.some((d) => /^\d+ oldest history entries left out \(over the 500 kept\)$/.test(d)), JSON.stringify(r.result.dropped))
+})
+
 test('history: carried entries are rebuilt from known fields; the other server\'s terminalId is dropped; names are cut', async (t) => {
   const s = await setup(t)
   const exported = (await s.A.call('move.export', s.ref)).result

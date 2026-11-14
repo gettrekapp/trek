@@ -2467,6 +2467,10 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.history-retry {
+  margin-left: 8px;
+}
+
 .history-more {
   align-self: center;
 }
