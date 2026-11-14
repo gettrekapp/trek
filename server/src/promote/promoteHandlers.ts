@@ -23,6 +23,8 @@
 // `dryRun: true` answers the plan the confirmation shows, after the same checks.
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { BY_TREK, recordHistory, tagValue } from '../history/record.ts'
+import type { HistoryValue } from '../../../src/shared/model/history.ts'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve, sep } from 'node:path'
 import * as gitService from '../../../src/host/gitService.ts'
@@ -673,6 +675,7 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
   notes.push(...(await moveHistories(moving, main.path, target)))
   const worktreeId = created.id
   let moved = movingIds
+  let tagged: HistoryValue | undefined
   try {
     ctx.projects.apply(project.id, (d) => {
       const r = repoIn(d, repo.id)
@@ -691,12 +694,16 @@ async function demote(ctx: V2Context, c: DemoteChecked, unblock: () => void): Pr
       // As worktree.create: a branch without a tag gets the first workflow tag.
       const firstTag = d.settings.worktreeTags?.[0]?.id
       const data = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
-      if (firstTag && !data?.tag && to.branch === branch) r.branchData[branch] = { ...data, tag: firstTag }
+      if (firstTag && !data?.tag && to.branch === branch) {
+        r.branchData[branch] = { ...data, tag: firstTag }
+        tagged = tagValue(d.settings.worktreeTags, firstTag)
+      }
     })
   } catch (err) {
     moved = []
     notes.push(`${branch} is now at ${target}, but the project's records could not be updated (${(err as Error).message}); its sessions stayed in the main checkout`)
   }
+  if (tagged) recordHistory(ctx, project.id, repo.id, branch, [{ kind: 'status', to: tagged }], BY_TREK)
   if (wasLoaded && movingIds.length > 0) {
     try {
       if (moved.length > 0) ctx.sessions.loadWorktree({ projectId: project.id, worktreeId })
@@ -765,6 +772,7 @@ export const promoteHandlers: Record<string, Handler> = {
         }
       })
       binding?.settle({ outcome: 'promoted', worktreeId: result.worktreeId })
+      recordHistory(ctx, requireString(p.projectId, 'projectId'), first.repo.id, first.branch, [{ kind: 'promoted' }], binding?.attribution ?? ctx.attribution)
       return result
     } catch (err) {
       binding?.settle({ outcome: 'failed', error: (err as Error).message.slice(0, 2000) })
@@ -776,7 +784,7 @@ export const promoteHandlers: Record<string, Handler> = {
     const dryRun = optionalDryRun(p.dryRun)
     const first = await checkDemote(ctx, p)
     if (dryRun) return first.plan
-    return locked(first.repo, async () => {
+    const result = await locked(first.repo, async () => {
       assertNotBlocked(ctx, [first.main.path, first.target])
       const unblockMain = ctx.sessions.blockPath(first.main.path)
       const unblockTarget = ctx.sessions.blockPath(first.target)
@@ -790,6 +798,8 @@ export const promoteHandlers: Record<string, Handler> = {
         unblock()
       }
     })
+    recordHistory(ctx, requireString(p.projectId, 'projectId'), first.repo.id, first.branch, [{ kind: 'demoted' }])
+    return result
   },
 
   /** This connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer). */

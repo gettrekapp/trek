@@ -13,6 +13,8 @@ import type { V2Context } from './v2.ts'
 import { checkPath, checkSource } from './review/draft.ts'
 import { MAX_REVIEW_COMMENTS } from '../../src/shared/review.ts'
 import { assertNotPromoting } from './promote/changing.ts'
+import { BY_TREK, recordHistory, tagValue } from './history/record.ts'
+import type { HistoryValue } from '../../src/shared/model/history.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -188,16 +190,23 @@ export const worktreeHandlers: Record<string, Handler> = {
       throw codedError('GIT_ERROR', `created ${target} but could not re-read the worktrees: ${ctx.poller.warning(repo.path)?.message ?? 'unknown error'}`)
     }
 
-    const worktreeId = ctx.projects.apply(p.projectId, (d) => {
+    const { worktreeId, branchName, tagged } = ctx.projects.apply(p.projectId, (d) => {
       const r = repoIn(d, repo.id)
       const created = r.worktrees.find((w) => !w.isMain && real(w.path) === target)
       if (!created) throw codedError('GIT_ERROR', `git created ${target} but does not list it`)
       const firstTag = d.settings.worktreeTags?.[0]?.id
       const data = Object.hasOwn(r.branchData, branch) ? r.branchData[branch] : undefined
+      let tagged: HistoryValue | undefined
       // Only when git really checked the branch out (a same-named tag would leave HEAD detached).
-      if (firstTag && !data?.tag && created.branch === branch) r.branchData[branch] = { ...data, tag: firstTag }
-      return created.id
+      if (firstTag && !data?.tag && created.branch === branch) {
+        r.branchData[branch] = { ...data, tag: firstTag }
+        tagged = tagValue(d.settings.worktreeTags, firstTag)
+      }
+      return { worktreeId: created.id, branchName: created.branch, tagged }
     })
+    const projectId = requireString(p.projectId, 'projectId')
+    recordHistory(ctx, projectId, repo.id, branchName, [{ kind: 'created', to: { text: target } }])
+    if (tagged) recordHistory(ctx, projectId, repo.id, branchName, [{ kind: 'status', to: tagged }], BY_TREK)
     return { worktreeId }
   },
 
@@ -246,6 +255,7 @@ export const worktreeHandlers: Record<string, Handler> = {
     })
     // The `attention` topic lists the row's PR notice (5c-1), if it had one.
     ctx.sessions.refreshAttention()
+    recordHistory(ctx, requireString(p.projectId, 'projectId'), repo.id, worktree.branch, [{ kind: 'removed', from: { text: worktree.path } }])
     return null
   },
 

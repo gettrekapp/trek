@@ -262,3 +262,16 @@ test('every branch.set* method records its change (setEnv excepted)', async (t) 
     assert.ok(s.history.branch(s.projectId, s.repoId, 'feat').length > before, `${method} recorded nothing`)
   }
 })
+
+test('worktree.create records created, and the default tag as Trek; worktree.remove records removed', async (t) => {
+  const s = await setup(t)
+  s.projects.apply(s.projectId, (d) => { d.settings.worktreeTags = [{ id: 'ip', name: 'In Progress', color: '#5dabef' }] })
+  const { worktreeId } = await s.call('worktree.create', { projectId: s.projectId, repoId: s.repoId, branch: 'feat', createBranch: true })
+  let events = s.history.list(s.projectId, s.repoId, 'feat').events
+  assert.deepEqual(events.map((e) => [e.kind, e.actor.kind]), [['status', 'trek'], ['created', 'user']])
+  assert.equal(events[1].to.text, join(s.dir, 'repos', 'a-feat'))
+  assert.equal(events[0].to.text, 'In Progress')
+  await s.call('worktree.remove', { projectId: s.projectId, worktreeId })
+  events = s.history.list(s.projectId, s.repoId, 'feat').events
+  assert.deepEqual([events[0].kind, events[0].from.text], ['removed', join(s.dir, 'repos', 'a-feat')])
+})
