@@ -460,3 +460,41 @@ test('a `changed` that throws does not break the listeners', async () => {
   }
   assert.equal(updates.statusOf('box').state, 'checking')
 })
+
+test('refresh reads update.status now, answers it and remembers it: a count the events never carried is the new one', async () => {
+  const { updates, following, requests, changes } = setup()
+  const { sock } = await following(AVAILABLE)
+  const before = changes()
+  const reading = updates.refresh('box')
+  assert.equal(requests(sock(), 'update.status').length, 2)
+  sock().reply(sock().lastReq('update.status'), { ...AVAILABLE, sessions: 3 })
+  assert.deepEqual(await reading, { ...AVAILABLE, sessions: 3 })
+  assert.deepEqual(updates.statusOf('box'), { ...AVAILABLE, sessions: 3 })
+  assert.equal(changes(), before + 1)
+})
+
+test('refresh: an answer is given to whoever asked, and kept only if nothing newer came while it was asked for', async () => {
+  const { updates, following } = setup()
+  const { sock } = await following(AVAILABLE)
+  const reading = updates.refresh('box')
+  const asked = sock().lastReq('update.status')
+  sock().event('update.changed', { ...AVAILABLE, state: 'checking' })
+  sock().reply(asked, { ...AVAILABLE, sessions: 3 })
+  assert.equal((await reading).sessions, 3)
+  assert.equal(updates.statusOf('box').state, 'checking')
+})
+
+test('refresh rejects with a sentence: not connected, no capability, a refusal, an answer that is not a status; the last status stays', async () => {
+  const { updates, following, connected } = setup()
+  await assert.rejects(updates.refresh('nobody'), { message: 'Not connected to this server' })
+  connected('plain', 'ws://plain:8800', ['mcp'])
+  await assert.rejects(updates.refresh('plain'), { message: 'This server does not update itself' })
+  const { sock } = await following(AVAILABLE)
+  const refused = updates.refresh('box')
+  sock().fail(sock().lastReq('update.status'), 'INTERNAL', 'boom')
+  await assert.rejects(refused, (err) => err.constructor === Error && err.message === 'boom')
+  const odd = updates.refresh('box')
+  sock().reply(sock().lastReq('update.status'), 'not a status')
+  await assert.rejects(odd, { message: 'The server did not answer with its update status' })
+  assert.deepEqual(updates.statusOf('box'), AVAILABLE)
+})

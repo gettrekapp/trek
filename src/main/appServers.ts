@@ -35,7 +35,7 @@ import { LOCAL_ENTRY_ID } from './localServerRules'
 import { isLocalEntryId, isLoopbackUrl } from '../shared/appServerRules.ts'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
 import { createServerUpdates, type ServerUpdates } from './serverUpdates'
-import { applyUpdateRefusal, serverUpdateConfirm } from '../shared/serverUpdate.ts'
+import { NOT_CONNECTED, applyServerUpdate } from './applyServerUpdate'
 import type { UpdateStatus } from '../shared/protocolV2.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
 import type { AppServerInfo, AppServerPairing, AppServersChanged, AppServerTest } from '../shared/types'
@@ -365,8 +365,6 @@ async function cancelPairing(id: unknown, code: unknown): Promise<boolean> {
   }
 }
 
-const NOT_CONNECTED = 'Not connected to this server'
-
 /** The Local server is the app's own: it is updated with Trek, never over the protocol. */
 function refuseLocalUpdate(id: string): void {
   if (isLocalEntryId(id)) throw new Error('The Local server is updated with Trek')
@@ -384,35 +382,35 @@ async function checkUpdate(id: unknown): Promise<UpdateStatus> {
 }
 
 /**
- * "Update" on a server's row: asks first, in a sheet on the window that asked, then has the server
- * install its latest release. The question and the version sent come from the same status, so
- * nothing is installed that was not shown; the server refuses if its latest has moved since.
- * `started` is false when the user cancelled.
+ * "Update" on a server's row: reads the server's status now, asks in a sheet on the window that
+ * asked, then has the server install its latest release (applyServerUpdate.ts: the question and
+ * the version sent come from that one answer). `started` is false when the user cancelled.
  */
 async function applyUpdate(sender: WebContents, id: unknown): Promise<{ started: boolean }> {
   const server = requireKnown(id)
   refuseLocalUpdate(server.id)
-  const link = links?.get(server.id)
-  if (!updates || !link || link.connection.status !== 'connected') throw new Error(NOT_CONNECTED)
-  const status = updates.statusOf(server.id)
-  const refusal = applyUpdateRefusal(status)
-  if (refusal || !status?.latest) throw new Error(refusal ?? 'No update is available for this server')
-  const confirm = serverUpdateConfirm(server.name, status)
-  const options: MessageBoxOptions = {
-    type: 'question',
-    message: confirm.message,
-    detail: confirm.detail,
-    buttons: confirm.buttons,
-    defaultId: 0,
-    cancelId: 1
-  }
-  const win = BrowserWindow.fromWebContents(sender)
-  const { response } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
-  if (response !== 0) return { started: false }
-  // Removed or re-pointed while the question was open: the answer was about another server.
-  if (links?.get(server.id) !== link) throw new Error(NOT_CONNECTED)
-  await updates.apply(server.id, status.latest)
-  return { started: true }
+  if (!updates) throw new Error(NOT_CONNECTED)
+  return applyServerUpdate(server.id, {
+    entry: (entryId) => {
+      const entry = listed().find((s) => s.id === entryId)
+      const link = links?.get(entryId)
+      return entry && link ? { name: entry.name, link, connected: link.connection.status === 'connected' } : undefined
+    },
+    updates,
+    ask: async (confirm) => {
+      const options: MessageBoxOptions = {
+        type: 'question',
+        message: confirm.message,
+        detail: confirm.detail,
+        buttons: confirm.buttons,
+        defaultId: 0,
+        cancelId: 1
+      }
+      const win = BrowserWindow.fromWebContents(sender)
+      const { response } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+      return response === 0
+    }
+  })
 }
 
 /** Quit: main's connections close for good. */

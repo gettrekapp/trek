@@ -19,7 +19,8 @@
 //     Disconnected), and ends at "Updated to X" in both windows; the
 //     server is the same process, now X (a Node that cannot replace a process: the line ends at
 //     "An update is installed…", and a restart by hand finishes it);
-//   - with a terminal open on the server, the question says it closes;
+//   - a terminal opened on the server since the app last heard its status: the question, asked
+//     with no check in between, still says it closes;
 //   - a release that fails its selfcheck: "Update failed: …" with Try Again, the server untouched
 //     and still connected, its terminal still running;
 //   - no error dialogs, console or page errors; the app quits, the servers stop, nothing is left.
@@ -436,6 +437,15 @@ try {
 
   // ---- 8. With a terminal open, the question says it closes; a release that fails its selfcheck ---
   {
+    fx.publish('newer-fails', failsSelfcheck(NEWER), undefined, NEWER)
+    const NEWER_AVAILABLE = `Update available: ${NEWER}`
+    await checkButton(win, BOX).click()
+    const found = await rowWhen(win, BOX, (r) => r.update === NEWER_AVAILABLE && r.check === 'Check for Update')
+    check(`a newer release is published: Check for Update says "${NEWER_AVAILABLE}"`, found.update === NEWER_AVAILABLE && found.button === 'Update', `${json(found)}\n${await failureLog()}`)
+    check('what main remembers of the server says no terminal is open', (await linkOf(BOX))?.update?.sessions === 0, json(await linkOf(BOX)))
+
+    // The session starts after the app last heard the server's status, and nothing is checked
+    // again before Update: no update.changed says a terminal opened, so the question has to ask.
     const sdk = await connect(w.port, w.token, { client: 'server-update-app-smoke' })
     conns.push(sdk)
     const { projectId } = await sdk.request('project.create', { name: 'app', repositories: [{ path: repo }] })
@@ -446,16 +456,10 @@ try {
     check('a session is started on the server: its agent runs', agentRuns && typeof sessionId === 'string', `${json(agents())}\n${server.output}`)
     for (const agent of agents()) pids.push({ what: 'the fake agent', pid: agent })
 
-    fx.publish('newer-fails', failsSelfcheck(NEWER), undefined, NEWER)
-    const NEWER_AVAILABLE = `Update available: ${NEWER}`
-    await checkButton(win, BOX).click()
-    const found = await rowWhen(win, BOX, (r) => r.update === NEWER_AVAILABLE && r.check === 'Check for Update')
-    check(`a newer release is published: Check for Update says "${NEWER_AVAILABLE}"`, found.update === NEWER_AVAILABLE && found.button === 'Update', `${json(found)}\n${await failureLog()}`)
-
     await answerWith(null)
     await updateButton(win, BOX).click()
     const asked = await dialogNumber(3)
-    check('with a terminal open, the question says it closes', asked?.message === `Update trek-server on “${BOX}” to ${NEWER}?` && asked.detail === restartDetail(NEW, 'Its 1 terminal closes; agent sessions resume when you open their worktrees again.'), json(asked))
+    check('a terminal opened since the app last heard from the server: the question still says it closes', asked?.message === `Update trek-server on “${BOX}” to ${NEWER}?` && asked.detail === restartDetail(NEW, 'Its 1 terminal closes; agent sessions resume when you open their worktrees again.'), json(asked))
     await rowWhen(win, BOX, (r) => r.button === 'Update')
 
     const mark = { win: await logLength(win, BOX), other: await logLength(other, BOX) }

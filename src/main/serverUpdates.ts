@@ -38,6 +38,13 @@ export interface ServerUpdates {
   forget(id: string): void
   statusOf(id: string): UpdateStatus | undefined
   restartingOf(id: string): { version?: string } | undefined
+  /**
+   * Reads the server's status now (`update.status`) and answers it: what a question about its
+   * terminals is asked with, since no event says when one opens or closes. Remembered too, as any
+   * other answer is (unless something newer came while it was asked for). Rejects as `check` does;
+   * the last status then stays.
+   */
+  refresh(id: string): Promise<UpdateStatus>
   /** Has the server read its release feed now. Rejects with a plain Error whose message is for the row. */
   check(id: string): Promise<UpdateStatus>
   /** Has the server install `version` (its latest); resolves once it has begun. Rejects as `check` does. */
@@ -202,6 +209,23 @@ export function createServerUpdates(deps: ServerUpdatesDeps): ServerUpdates {
     forget,
     statusOf: (id) => followed.get(id)?.status,
     restartingOf: (id) => followed.get(id)?.restarting,
+    refresh: async (id) => {
+      const f = ready(id)
+      const mine = ++f.rev
+      let raw: unknown
+      try {
+        raw = await f.connection.request('update.status', {})
+      } catch (err) {
+        throw new Error(updateErrorText(err))
+      }
+      const status = parseUpdateStatus(raw)
+      if (!status) throw new Error('The server did not answer with its update status')
+      if (live(id, f) && f.rev === mine) {
+        f.status = status
+        changed()
+      }
+      return status
+    },
     check: async (id) => {
       const f = ready(id)
       const before = f.rev
