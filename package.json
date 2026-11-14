@@ -28,6 +28,7 @@
     "smoke:local-features": "npm run build && node scripts/local-features-smoke.mjs",
     "smoke:server-env": "npm run build && node scripts/server-env-smoke.mjs",
     "smoke:server-integrations": "npm run build && node scripts/server-integrations-smoke.mjs",
+    "smoke:server-automations": "npm run build && node scripts/server-automations-smoke.mjs",
     "smoke:server-prwatch": "npm run build && node scripts/server-prwatch-smoke.mjs",
     "smoke:server-review": "npm run build && node scripts/server-review-smoke.mjs",
     "smoke:server-pairing": "npm run build && node scripts/server-pairing-smoke.mjs",
