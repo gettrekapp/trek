@@ -38,6 +38,11 @@ export interface ServerLinksDeps {
   linked?(id: string, registered: RegisteredServer): void
   /** The entry's connection was closed: removed, its token cleared, re-pointed, dropped, or quit */
   unlinked?(id: string): void
+  /**
+   * More to say about an entry's link: its server's update state (src/main/serverUpdates.ts).
+   * Only these two fields are taken. When they change, call `refresh`.
+   */
+  extra?(id: string): Pick<AppServerLink, 'update' | 'updateRestarting'>
 }
 
 export interface ServerLinks {
@@ -49,6 +54,11 @@ export interface ServerLinks {
    */
   sync(): Promise<void>
   snapshot(): AppServersChanged
+  /**
+   * Broadcasts the links again, under a new seq (a window drops a snapshot whose seq it has
+   * seen): what `extra` says of an entry changed.
+   */
+  refresh(): void
   /**
    * Reconnects every connection in a status the SDK does not retry out of
    * (needs-auth, incompatible): a token added on the server, or the server
@@ -118,6 +128,16 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
     if (welcome) {
       out.serverName = welcome.serverName
       out.capabilities = [...welcome.capabilities]
+      if (welcome.daemonVersion) out.version = welcome.daemonVersion
+    }
+    if (deps.extra) {
+      try {
+        const { update, updateRestarting } = deps.extra(entry.id)
+        if (update) out.update = update
+        if (updateRestarting) out.updateRestarting = updateRestarting
+      } catch (err) {
+        console.error("trek: the server links' extra hook failed", err)
+      }
     }
     // Local's supervisor status, field by field (it holds no token or port).
     if (entry.local) {
@@ -223,6 +243,7 @@ export function createServerLinks(deps: ServerLinksDeps): ServerLinks {
       return chain
     },
     snapshot,
+    refresh: emit,
     retryStuck: () => {
       if (closed || now() - lastRetry < RETRY_STUCK_MS) return
       const toRetry = registry.list().filter(({ connection }) => stuck(connection))

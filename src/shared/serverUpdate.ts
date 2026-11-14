@@ -171,3 +171,33 @@ export function updateErrorText(err: unknown): string {
   if (code === 'NOT_FOUND') return 'This server does not update itself'
   return typeof code === 'string' && code ? code : 'The request failed'
 }
+
+const STATES: readonly UpdateStatus['state'][] = ['idle', 'checking', 'downloading', 'installing', 'restarting']
+
+/**
+ * A server's `update.status` answer or `update.changed` payload, field by field: what main
+ * remembers and every window is sent holds nothing else the server put there. Undefined when
+ * it is not a status (no running version, or no known state).
+ */
+export function parseUpdateStatus(raw: unknown): UpdateStatus | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const state = STATES.find((s) => s === r.state)
+  if (typeof r.current !== 'string' || !r.current || !state) return undefined
+  const status: UpdateStatus = {
+    current: r.current,
+    state,
+    sessions: typeof r.sessions === 'number' && Number.isInteger(r.sessions) && r.sessions > 0 ? r.sessions : 0,
+    canRelaunch: r.canRelaunch === true,
+    restartNeeded: r.restartNeeded === true,
+    remoteApply: r.remoteApply === true
+  }
+  if (typeof r.latest === 'string' && r.latest) status.latest = r.latest
+  if (typeof r.percent === 'number' && Number.isFinite(r.percent)) status.percent = r.percent
+  if (typeof r.checkedAt === 'string') status.checkedAt = r.checkedAt
+  const last = r.lastResult as Record<string, unknown> | null | undefined
+  if (last && typeof last === 'object' && typeof last.ok === 'boolean' && typeof last.from === 'string' && typeof last.to === 'string' && typeof last.at === 'string') {
+    status.lastResult = { ok: last.ok, from: last.from, to: last.to, at: last.at, ...(typeof last.error === 'string' ? { error: last.error } : {}) }
+  }
+  return status
+}

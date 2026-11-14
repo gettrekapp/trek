@@ -7,6 +7,7 @@ import {
   RESTART_GRACE_MS,
   applyUpdateRefusal,
   canCheckUpdate,
+  parseUpdateStatus,
   serverUpdateConfirm,
   serverUpdateRow,
   updateErrorText
@@ -240,4 +241,23 @@ test("a refused update request as a sentence: the server's own when it has one",
   // One line, of reasonable length.
   const long = updateErrorText(new ClientError('TOOL_ERROR', `Could not check\n${'x'.repeat(900)}`))
   assert.equal(long, 'Could not check')
+})
+
+test('a status from the wire is taken field by field; what is not a status is none', () => {
+  const full = { ...STATUS, latest: '2.0.0', state: 'downloading', percent: 12, sessions: 3, checkedAt: 'c', lastResult: { ok: false, from: '0.9.0', to: '1.0.0', at: 't', error: 'why' } }
+  assert.deepEqual(parseUpdateStatus(full), full)
+  assert.deepEqual(parseUpdateStatus({ ...full, token: 'x', lastResult: { ...full.lastResult, extra: 1 } }), full)
+  assert.deepEqual(parseUpdateStatus(STATUS), STATUS)
+  // Missing or mistyped fields fall to the careful side: nothing to offer, nothing it can do.
+  assert.deepEqual(parseUpdateStatus({ current: '1.0.0', state: 'idle', latest: 2, percent: 'x', sessions: -1, lastResult: { ok: 'yes' } }), {
+    current: '1.0.0',
+    state: 'idle',
+    sessions: 0,
+    canRelaunch: false,
+    restartNeeded: false,
+    remoteApply: false
+  })
+  for (const bad of [null, undefined, 'idle', 7, [], {}, { state: 'idle' }, { current: '', state: 'idle' }, { current: '1.0.0' }, { current: '1.0.0', state: 'napping' }]) {
+    assert.equal(parseUpdateStatus(bad), undefined, JSON.stringify(bad))
+  }
 })
