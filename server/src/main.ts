@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
-import { basename, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { homedir, hostname } from 'node:os'
 import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
@@ -40,6 +40,12 @@ import {
   revokeToken
 } from './tokens'
 import { USAGE, parseArgs } from './cli.ts'
+import { findUpdate } from './update/apply.ts'
+import { controlPath, listenControl } from './update/control.ts'
+import { isTestUpdateBuild, updateSource } from './update/keys.ts'
+import { canRelaunch, relaunch } from './update/relaunch.ts'
+import { settleStart } from './update/state.ts'
+import { readInstall } from './update/updatable.ts'
 
 function fail(message: string): never {
   console.error(message)
@@ -365,6 +371,7 @@ server.httpServer.listen(port, host, () => {
       )
   }
   if (local) void announceLocal(local, bound)
+  else startUpdates()
 })
 
 /**
@@ -397,21 +404,116 @@ async function announceLocal(profile: LocalProfile, port: number): Promise<void>
   console.log(`local: port and token in ${profile.infoPath}`)
 }
 
+/** What a relaunch needs: the install whose launcher this process becomes, and the arguments this server was started with. */
+interface RelaunchInto {
+  installDir: string
+  argv: readonly string[]
+}
+
+/** The control socket `trek-server update` reaches this server on (an updatable install only). */
+let updateControl: { close(): void } | undefined
+/** Settles once the control socket is listening or has given up: a shutdown that starts before then waits for it, to close it. */
+let updateControlSettled: Promise<void> = Promise.resolve()
+/** The release check's timers: the first look, and the daily one. */
+let updateCheckTimers: Array<ReturnType<typeof setTimeout>> = []
+/** A relaunch request was accepted; its shutdown starts after the answer is sent. */
+let relaunchAccepted = false
+/** Set by that shutdown: once it is done, become the install's new version instead of exiting. */
+let relaunchInto: RelaunchInto | undefined
+const UPDATE_FIRST_CHECK_MS = 30_000
+const UPDATE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Once listening (never the local server, which follows the app): how the last update went, the
+ * socket `trek-server update` asks for a restart on, and a daily look at the release feed. A
+ * server that is not a release tarball's (server/dist, a source run) only settles, which finds
+ * nothing: no socket, no timers, no request.
+ */
+function startUpdates(): void {
+  if (shuttingDown) return
+  // The bundle's own folder. A source run (tsx) has server/src here: not an install (no build.json), so nothing below applies to it.
+  const installDir = typeof __dirname === 'string' ? __dirname : ''
+  const configPath = resolve(args.configPath)
+  const configDir = dirname(configPath)
+  if (installDir) {
+    const settled = settleStart(installDir, configDir)
+    if (settled) console.log(settled.ok ? `update: now running trek-server ${settled.to} (was ${settled.from})` : `update: ${settled.error}`)
+  }
+
+  const found = readInstall(installDir)
+  if (!found.ok) return
+  const { install } = found
+
+  updateControlSettled = listenControl(controlPath(configPath), {
+    status: () => ({ pid: process.pid, version, installDir: install.dir, sessions: server.sessions.terminals.count(), canRelaunch: canRelaunch() }),
+    relaunch: () => {
+      if (!canRelaunch()) return { ok: false, error: `Node ${process.versions.node} cannot replace a running process (22.15 or later can)` }
+      // Asked twice: the restart the first request started is the answer to both.
+      if (relaunchAccepted) return { ok: true }
+      if (shuttingDown) return { ok: false, error: 'the server is already shutting down' }
+      relaunchAccepted = true
+      // After this tick, so the answer goes out before the socket closes.
+      setImmediate(() => shutdown('update', { installDir: install.dir, argv: process.argv.slice(2) }))
+      return { ok: true }
+    }
+  }).then(
+    (control) => {
+      // A shutdown that began while the socket was being taken: it is waiting for this.
+      if (shuttingDown) control?.close()
+      else updateControl = control ?? undefined
+    },
+    (err: unknown) => console.warn(`update: no control socket: ${(err as Error).message}`)
+  )
+
+  const source = updateSource()
+  // No key built in: nothing could be verified, so nothing is asked.
+  if (source.keys.length === 0) return
+  const check = (): void => {
+    // Read each time: the config is reloaded when its file changes.
+    if (shuttingDown || store.config.updates?.check === false) return
+    findUpdate({ install, configDir, feed: source.feed, keys: source.keys, fetch }).then(
+      (release) => {
+        if (release) console.log(`update: trek-server ${release.version} is available (this is ${install.version}); run \`trek-server update\``)
+      },
+      (err: unknown) => console.warn(`update: could not check for a newer release: ${(err as Error).message}`)
+    )
+  }
+  // The update smoke's knob, read by a test build only: how long after listening the first look is.
+  const firstMs = (isTestUpdateBuild() && pollMsFromEnv(process.env.TREK_UPDATE_FIRST_CHECK_MS)) || UPDATE_FIRST_CHECK_MS
+  updateCheckTimers = [setTimeout(check, firstMs), setInterval(check, UPDATE_CHECK_EVERY_MS)]
+  // Never what keeps a stopping server alive.
+  for (const timer of updateCheckTimers) timer.unref()
+}
+
 const SHUTDOWN_FLUSH_MS = 200
 /** The longest the exit waits for a move's staged histories to be removed */
 const SHUTDOWN_CLEAR_MS = 2000
 let shuttingDown = false
 
 /**
- * The one way out: a signal, or `server.stop` (the local server's `stop --local`; on Windows a
- * signal from another process is TerminateProcess, so this never ran there before).
+ * The one way out: a signal, `server.stop` (the local server's `stop --local`; on Windows a
+ * signal from another process is TerminateProcess, so this never ran there before), or
+ * `trek-server update`'s relaunch request (`into`), which ends in the new version instead of an exit.
  */
-function shutdown(reason: string): void {
-  if (shuttingDown) return
+function shutdown(reason: string, into?: RelaunchInto): void {
+  if (shuttingDown) {
+    // A signal while restarting into an update: whoever sent it (a service manager stopping the
+    // unit, Ctrl+C) wants the server gone, so it exits. Its next start is the new version.
+    if (relaunchInto && !into) {
+      relaunchInto = undefined
+      console.log(`update: ${reason} during the restart; exiting instead`)
+    }
+    return
+  }
   shuttingDown = true
+  relaunchInto = into
   // First, so the app stops connecting to a server that is going away.
   if (local) removeLocalInfo(local.infoPath, process.pid)
   console.log(`\n${reason} — shutting down (all agent sessions will end)`)
+  // Closing the socket removes its file, so the next start (or the new version) finds none in its way.
+  updateControl?.close()
+  updateControl = undefined
+  for (const timer of updateCheckTimers) clearTimeout(timer)
   store.close()
   // Settles once a move's staged histories are removed (bounded below, so a slow disk can't hold the exit).
   const cleared = server.shutdown(reason)
@@ -420,8 +522,20 @@ function shutdown(reason: string): void {
   if (failed.length > 0) console.error(`could not save ${failed.length} project(s): ${failed.join(', ')}`)
   // Give the daemon.shutdown frames and close handshakes a moment to flush.
   const flushed = delay(SHUTDOWN_FLUSH_MS)
-  void Promise.all([flushed, Promise.race([cleared, delay(SHUTDOWN_CLEAR_MS)])]).then(() => {
+  // A control socket still being taken is closed when it settles (startUpdates); bounded like the rest.
+  const controlClosed = Promise.race([updateControlSettled, delay(SHUTDOWN_CLEAR_MS)])
+  void Promise.all([flushed, Promise.race([cleared, delay(SHUTDOWN_CLEAR_MS)]), controlClosed]).then(() => {
     server.sessions.terminals.forceKillAll()
+    if (relaunchInto) {
+      try {
+        // Does not return: this process becomes the launcher, then the new version, with the same pid.
+        relaunch(relaunchInto.installDir, relaunchInto.argv)
+      } catch (err) {
+        // A service manager (systemd's Restart=always) starts the new version; a hand-started server is restarted by hand.
+        console.error(`update: could not restart into the new version: ${(err as Error).message}`)
+        process.exit(1)
+      }
+    }
     process.exit(0)
   })
 }
