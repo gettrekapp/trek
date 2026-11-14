@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCK_FILE, applyUpdate, findUpdate, runStagedSelfcheck } from '../server/src/update/apply.ts'
@@ -159,6 +159,39 @@ test('the marker is written into the staged folder, and the swap is the last thi
       }
     })
     assert.deepEqual(seen, { install: ['bin', 'build.json', 'trek-server.cjs'], version: '1.0.0', marked: false, previous: false })
+  } finally {
+    w.done()
+  }
+})
+
+test('an update works in a private folder of its own beside the install, and writes through nothing planted there', tar, async () => {
+  const w = world()
+  try {
+    // Where an update used to download to, by a name anyone could know: a link to a file elsewhere.
+    const victim = join(w.root, 'victim')
+    writeFileSync(victim, 'precious')
+    const planted = ['.trek-update-2.0.0.tar.gz', '.trek-update-2.0.0']
+    for (const name of planted) symlinkSync(victim, join(w.parent, name))
+    // And what an update killed long ago left behind.
+    const longAgo = new Date(NOW.getTime() - 31 * 60 * 1000)
+    mkdirSync(join(w.parent, '.trek-update-OLD123', 'stage'), { recursive: true })
+    utimesSync(join(w.parent, '.trek-update-OLD123'), longAgo, longAgo)
+    let seen
+    const result = await applyUpdate({
+      ...w.deps,
+      selfcheck: (staged) => {
+        const work = readdirSync(w.parent).filter((entry) => entry.startsWith('.trek-update-') && !planted.includes(entry))
+        seen = { work, mode: work.length === 1 ? statSync(join(w.parent, work[0])).mode & 0o777 : undefined, staged }
+        return { ok: true, output: '' }
+      }
+    })
+    assert.equal(result.kind, 'installed', result.error)
+    assert.equal(seen.work.length, 1, `one folder for this update, the old one swept: ${seen.work.join(' ')}`)
+    assert.match(seen.work[0], /^\.trek-update-[A-Za-z0-9]{6}$/, 'named by mkdtemp, not by the version')
+    assert.equal(seen.mode, 0o700)
+    assert.equal(seen.staged, join(w.parent, seen.work[0], 'stage', 'trek-server-2.0.0-linux-x64'))
+    assert.equal(readFileSync(victim, 'utf8'), 'precious')
+    assert.deepEqual(leftovers(w).sort(), [...planted].sort(), 'its own folder is gone; a fresh entry that is not its own is left alone')
   } finally {
     w.done()
   }

@@ -4,14 +4,14 @@
 // fails before the swap leaves the install, and a server running from it, untouched. One update
 // at a time per install (lock.ts: a lock beside it).
 import { spawnSync } from 'node:child_process'
-import { rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
 import { compareVersions } from '../../../src/shared/versions.ts'
 import { fetchRelease, tarballUrl, type Release } from './feed.ts'
-import { download, swap, unpack, validateStaged } from './install.ts'
-import { LOCK_FILE, takeLock, type UpdateLock } from './lock.ts'
+import { download, flushDir, flushTree, swap, sweepLeftovers, unpack, validateStaged } from './install.ts'
+import { LEFTOVER_PREFIX, LOCK_FILE, takeLock, type UpdateLock } from './lock.ts'
 import { launcherPath, relaunchEnv } from './relaunch.ts'
 import { writePending, writeState } from './state.ts'
 import type { Install } from './updatable.ts'
@@ -99,8 +99,8 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
   const now = (): Date => deps.now?.() ?? new Date()
   const lock = join(install.parent, LOCK_FILE)
   let held: UpdateLock | null = null
-  let tarball: string | undefined
-  let stage: string | undefined
+  /** This update's own folder beside the install: its download and what it unpacks. */
+  let work: string | undefined
   let target: string | undefined
   try {
     held = takeLock(lock)
@@ -112,18 +112,23 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
       }
     }
 
+    // What updates that were killed left here: only the holder of the lock removes anything.
+    sweepLeftovers(install.parent, now().getTime())
+
     deps.onStep?.('checking')
     const release = await findUpdate(deps)
     if (!release) return { kind: 'up-to-date', current: install.version }
     target = release.version
 
+    // A new folder (0700) with a name nobody could have known: nothing was put in it beforehand,
+    // and nobody else can put anything in it now.
     deps.onStep?.('downloading')
-    tarball = join(install.parent, `.trek-update-${release.version}.tar.gz`)
+    work = mkdtempSync(join(install.parent, LEFTOVER_PREFIX))
+    const tarball = join(work, 'download.tar.gz')
     await download(tarballUrl(deps.feed, release), tarball, release.sha256, { fetch: deps.fetch, onProgress: deps.onProgress })
 
     deps.onStep?.('unpacking')
-    stage = join(install.parent, `.trek-update-${release.version}`)
-    const staged = unpack(tarball, stage)
+    const staged = unpack(tarball, join(work, 'stage'))
     validateStaged(staged, { version: release.version, target: install.target })
 
     deps.onStep?.('selfcheck')
@@ -134,7 +139,11 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     // folder, and the swap, which is the only step that touches the install, is the last one.
     deps.onStep?.('installing')
     writePending(staged, { from: install.version, to: release.version, at: now().toISOString() })
+    // On disk before it is renamed into place, and the renames after: a power cut must not leave
+    // the new version's name on files whose data never arrived.
+    flushTree(staged)
     swap(install.dir, staged)
+    flushDir(install.parent)
     return { kind: 'installed', from: install.version, to: release.version }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
@@ -145,8 +154,7 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     }
     return { kind: 'failed', error }
   } finally {
-    if (tarball) remove(tarball)
-    if (stage) remove(stage)
+    if (work) remove(work)
     held?.release()
   }
 }

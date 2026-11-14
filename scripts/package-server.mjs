@@ -44,6 +44,17 @@ import { POSIX_LAUNCHER, WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers
 const root = fileURLToPath(new URL('..', import.meta.url))
 const dist = join(root, 'server', 'dist')
 
+/**
+ * tar's flags that record every entry as root's (0:0, no names) rather than the runner's user:
+ * the tarball says nothing about the machine that built it, and unpacked as root without
+ * --no-same-owner its files are not some local user's who happens to have the runner's id.
+ * GNU tar (the Linux runners) and bsdtar (macOS) spell them differently.
+ */
+function rootOwned() {
+  const bsd = /bsdtar/.test(execFileSync('tar', ['--version'], { encoding: 'utf8' }))
+  return bsd ? ['--uid', '0', '--gid', '0', '--numeric-owner'] : ['--owner=0', '--group=0', '--numeric-owner']
+}
+
 function fail(message) {
   console.error(`package-server: ${message}`)
   process.exit(1)
@@ -125,7 +136,7 @@ try {
   // which writes no zip and reads C:\ as a remote host.
   // COPYFILE_DISABLE: macOS's tar would add ._ AppleDouble files for extended attributes.
   if (WINDOWS) execFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', tarball, '-C', stage, name], { stdio: 'inherit' })
-  else execFileSync('tar', ['-czf', tarball, '-C', stage, name], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdio: 'inherit' })
+  else execFileSync('tar', [...rootOwned(), '-czf', tarball, '-C', stage, name], { env: { ...process.env, COPYFILE_DISABLE: '1' }, stdio: 'inherit' })
   const sha = createHash('sha256').update(readFileSync(tarball)).digest('hex')
   console.log(`${tarball}\n  trek-server ${version} (build ${build}), node-pty ${ptyVersion}, ${(statSync(tarball).size / 1e6).toFixed(1)} MB, sha256 ${sha}`)
 } finally {

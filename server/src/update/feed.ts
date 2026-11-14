@@ -59,11 +59,28 @@ export interface FeedOptions {
   timeoutMs?: number
 }
 
+/** SHA256SUMS is a few hundred bytes a file, its signature 88: anything near this is not a release's. */
+export const MAX_FEED_BYTES = 1024 * 1024
+
+/** One of the feed's two files, read as it arrives and never past the cap: a running server reads them daily. */
 async function get(opts: FeedOptions, name: string): Promise<Uint8Array> {
   const url = `${opts.feed}/latest/download/${name}`
   const res = await opts.fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000) })
   if (!res.ok) throw new Error(`could not read ${name} from the latest release (${url}: HTTP ${res.status})`)
-  return new Uint8Array(await res.arrayBuffer())
+  const tooLarge = (): Error => new Error(`${name} in the latest release (${url}) is larger than ${MAX_FEED_BYTES / (1024 * 1024)} MB: not reading it`)
+  if (Number(res.headers.get('content-length')) > MAX_FEED_BYTES) {
+    await res.body?.cancel().catch(() => {})
+    throw tooLarge()
+  }
+  const chunks: Uint8Array[] = []
+  let size = 0
+  // Leaving the loop by the throw ends the request.
+  for await (const chunk of (res.body ?? []) as unknown as AsyncIterable<Uint8Array>) {
+    size += chunk.length
+    if (size > MAX_FEED_BYTES) throw tooLarge()
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
 }
 
 /** The latest release's tarball for this target. Throws when the feed cannot be read, is not signed by a built-in key, or has no build for the target. */

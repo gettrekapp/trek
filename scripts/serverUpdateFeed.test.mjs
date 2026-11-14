@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createPublicKey, generateKeyPairSync, sign } from 'node:crypto'
-import { fetchRelease, parseSums, releaseFor, tarballUrl, verifySums } from '../server/src/update/feed.ts'
+import { MAX_FEED_BYTES, fetchRelease, parseSums, releaseFor, tarballUrl, verifySums } from '../server/src/update/feed.ts'
 import { UPDATE_FEED, UPDATE_PUBLIC_KEYS, updateSource } from '../server/src/update/keys.ts'
 
 const pair = () => {
@@ -82,6 +82,49 @@ test('fetchRelease: both files from <feed>/latest/download, verified before anyt
   assert.deepEqual(asked, [], 'with no key nothing is fetched')
   await assert.rejects(fetchRelease({ ...opts, target: 'darwin-x64', fetch: feed({ SHA256SUMS: SUMS, 'SHA256SUMS.sig': sigOf(SUMS, A) }) }), /no build for darwin-x64/)
   await assert.rejects(fetchRelease({ ...opts, fetch: async () => { throw new Error('offline') } }), /offline/)
+})
+
+test('fetchRelease reads no more than 1 MB of either file', async () => {
+  assert.equal(MAX_FEED_BYTES, 1024 * 1024)
+  const opts = { feed: 'http://127.0.0.1:1/releases', keys: [A.pem], target: 'linux-x64' }
+  const good = { SHA256SUMS: SUMS, 'SHA256SUMS.sig': sigOf(SUMS, A) }
+  /** A body of `chunks` chunks of 64 KiB each, with no length declared; counts those that were read. */
+  const endless = (chunks, pulled) =>
+    new Response(
+      new ReadableStream({
+        pull(controller) {
+          if (pulled.count >= chunks) return controller.close()
+          pulled.count++
+          controller.enqueue(new Uint8Array(64 * 1024).fill(0x61))
+        }
+      })
+    )
+  for (const big of ['SHA256SUMS', 'SHA256SUMS.sig']) {
+    const pulled = { count: 0 }
+    const fetch = async (url) => {
+      const name = String(url).split('/').pop()
+      return name === big ? endless(1000, pulled) : new Response(good[name])
+    }
+    await assert.rejects(fetchRelease({ ...opts, fetch }), new RegExp(`${big.replace('.', '\\.')} .*is larger than 1 MB`))
+    assert.ok(pulled.count <= 20, `the read stops at the cap: ${pulled.count} chunks of 64 KiB were taken, of 1000`)
+  }
+  // One that says how long it is, is refused before any of it is read.
+  const pulled = { count: 0 }
+  const declared = async (url) => {
+    const name = String(url).split('/').pop()
+    if (name !== 'SHA256SUMS') return new Response(good[name])
+    const res = endless(1000, pulled)
+    return new Response(res.body, { headers: { 'content-length': String(64 * 1024 * 1000) } })
+  }
+  await assert.rejects(fetchRelease({ ...opts, fetch: declared }), /SHA256SUMS .*is larger than 1 MB/)
+  assert.equal(pulled.count <= 1, true)
+  // Under the cap, in several chunks, it is read whole.
+  const parts = async (url) => {
+    const name = String(url).split('/').pop()
+    const bytes = Buffer.from(good[name])
+    return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array(bytes.subarray(0, 10))); c.enqueue(new Uint8Array(bytes.subarray(10))); c.close() } }))
+  }
+  assert.equal((await fetchRelease({ ...opts, fetch: parts })).version, '0.5.0')
 })
 
 test('fetchRelease gives each request a signal that ends it after the timeout', async () => {

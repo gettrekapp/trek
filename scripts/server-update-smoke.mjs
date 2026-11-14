@@ -18,7 +18,7 @@
 import './smokeGh.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -324,7 +324,7 @@ const DIES_AT_START = `#!/usr/bin/env node\nconst cmd = process.argv[2]\nif (cmd
   check('with no server running, update --yes installs, and says a running server would need a restart', updated.status === 0 && updated.out.includes(`Updated to trek-server ${NEW}`) && /already running from this install still runs the old version/.test(updated.out), updated.out)
   check('the install path holds the new version, the old one is kept', w.versionAt(w.install) === NEW && w.versionAt(`${w.install}.previous`) === OLD)
   check('it is marked as not started yet', w.marks().join() === 'update-pending.json', w.marks().join())
-  check('nothing is left beside the install', !existsSync(join(w.base, 'opt', '.trek-update.lock')) && !existsSync(join(w.base, 'opt', `.trek-update-${NEW}`)) && !existsSync(join(w.base, 'opt', `.trek-update-${NEW}.tar.gz`)))
+  check('nothing is left beside the install', readdirSync(join(w.base, 'opt')).filter((entry) => entry.startsWith('.trek-update')).length === 0, readdirSync(join(w.base, 'opt')).join(' '))
   const again = await w.cli(['update', '--yes'])
   check('a second update finds nothing newer', again.status === 0 && again.out.includes(`trek-server ${NEW} is the latest version`), again.out)
   const run = start(w.launcher, w.startArgs)
@@ -442,7 +442,7 @@ for (const [name, what, tamper, message] of [
   check('a version that fails its selfcheck is refused before the swap', updated.status === 1 && /does not run on this machine/.test(updated.out) && /simulated: this version cannot run here/.test(updated.out), updated.out)
   check('the running server and its install are untouched', run.ended === null && w.versionAt(w.install) === OLD && !existsSync(`${w.install}.previous`) && w.marks().length === 0 && !/shutting down/.test(run.output), run.output)
   check('the failure is recorded', w.state().lastResult?.ok === false && w.state().lastResult?.to === NEW, JSON.stringify(w.state()))
-  check('nothing is left beside the install', !existsSync(join(w.base, 'opt', '.trek-update.lock')) && !existsSync(join(w.base, 'opt', `.trek-update-${NEW}`)) && !existsSync(join(w.base, 'opt', `.trek-update-${NEW}.tar.gz`)))
+  check('nothing is left beside the install', readdirSync(join(w.base, 'opt')).filter((entry) => entry.startsWith('.trek-update')).length === 0, readdirSync(join(w.base, 'opt')).join(' '))
   await stop(run)
 }
 

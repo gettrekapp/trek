@@ -5,10 +5,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkEntries, download, previousDir, swap, undoSwap, unpack, validateStaged } from '../server/src/update/install.ts'
+import { checkEntries, download, flushDir, flushTree, previousDir, swap, sweepLeftovers, undoSwap, unpack, validateStaged } from '../server/src/update/install.ts'
 import { posixOnly, removeDir } from './testPlatform.mjs'
 
 const temp = () => mkdtempSync(join(tmpdir(), 'trek-install-'))
@@ -107,6 +107,109 @@ test('download stops at the size cap part-way through a body, and removes what i
   }
 })
 
+test('download never writes to a path that is already there: not through a symlink, not over a file', { skip: posixOnly('symlinks') }, async () => {
+  const dir = temp()
+  try {
+    const bytes = Buffer.from('tarball bytes')
+    const victim = join(dir, 'victim')
+    writeFileSync(victim, 'precious')
+    const dest = join(dir, 'planted.tar.gz')
+    symlinkSync(victim, dest)
+    await assert.rejects(download('http://127.0.0.1:1/a', dest, sha(bytes), { fetch: serve(bytes) }), /EEXIST/)
+    assert.equal(readFileSync(victim, 'utf8'), 'precious', 'nothing was written through the link')
+    assert.equal(existsSync(dest), true, 'and what was there is not removed: it is not this download')
+    // A link to nowhere would have been created through.
+    const dangling = join(dir, 'dangling.tar.gz')
+    symlinkSync(join(dir, 'made-through-the-link'), dangling)
+    await assert.rejects(download('http://127.0.0.1:1/a', dangling, sha(bytes), { fetch: serve(bytes) }), /EEXIST/)
+    assert.equal(existsSync(join(dir, 'made-through-the-link')), false)
+    const file = join(dir, 'file.tar.gz')
+    writeFileSync(file, 'someone else\'s')
+    await assert.rejects(download('http://127.0.0.1:1/a', file, sha(bytes), { fetch: serve(bytes) }), /EEXIST/)
+    assert.equal(readFileSync(file, 'utf8'), 'someone else\'s')
+  } finally {
+    removeDir(dir)
+  }
+})
+
+test('sweepLeftovers removes old .trek-update-* entries beside the install, and nothing else', () => {
+  const dir = temp()
+  try {
+    const NOW = Date.now()
+    const old = (path) => { const then = new Date(NOW - 31 * 60 * 1000); utimesSync(path, then, then) }
+    const make = (name, { folder = false, aged = false } = {}) => {
+      const path = join(dir, name)
+      if (folder) { mkdirSync(path); writeFileSync(join(path, 'inside'), 'x') } else writeFileSync(path, 'x')
+      if (aged) old(path)
+      return name
+    }
+    make('.trek-update-AbC123', { folder: true, aged: true })
+    make('.trek-update-9.0.1.tar.gz', { aged: true })
+    make('.trek-update-lock-XyZ', { folder: true, aged: true })
+    const kept = [
+      make('.trek-update-fresh', { folder: true }),
+      make('.trek-update.lock', { folder: true, aged: true }),
+      make('trek-server', { folder: true, aged: true }),
+      make('trek-server.previous', { folder: true, aged: true }),
+      make('.trek-updates-are-not-mine', { aged: true }),
+      make('notes.txt', { aged: true })
+    ]
+    sweepLeftovers(dir, NOW)
+    assert.deepEqual(readdirSync(dir).sort(), kept.sort())
+    assert.doesNotThrow(() => sweepLeftovers(join(dir, 'missing'), NOW), 'a folder that cannot be read is not an error')
+  } finally {
+    removeDir(dir)
+  }
+})
+
+test('flushTree flushes every file and folder under a folder, deepest first, and skips symlinks', { skip: posixOnly('symlinks') }, () => {
+  const dir = temp()
+  try {
+    const top = folder(dir, 'staged')
+    mkdirSync(join(top, 'node_modules', 'node-pty'), { recursive: true })
+    writeFileSync(join(top, 'node_modules', 'node-pty', 'pty.node'), 'x')
+    writeFileSync(join(dir, 'outside'), 'x')
+    symlinkSync(join(dir, 'outside'), join(top, 'link'))
+    symlinkSync(dir, join(top, 'link-to-folder'))
+    const seen = []
+    flushTree(top, (path) => seen.push(path))
+    const rel = seen.map((p) => p.slice(top.length + 1))
+    assert.deepEqual([...rel].sort(), ['', 'bin', 'bin/trek-server', 'build.json', 'node_modules', 'node_modules/node-pty', 'node_modules/node-pty/pty.node', 'trek-server.cjs'])
+    assert.equal(rel.at(-1), '', 'the folder itself last: its entries are what name the files')
+    assert.ok(rel.indexOf('bin/trek-server') < rel.indexOf('bin'))
+    // With the real fsync: no error on a tree this process made.
+    assert.doesNotThrow(() => flushTree(top))
+    assert.doesNotThrow(() => flushDir(dir))
+  } finally {
+    removeDir(dir)
+  }
+})
+
+test('a folder that cannot be fsynced here is tolerated; a file that cannot is an error', () => {
+  const dir = temp()
+  try {
+    const top = folder(dir, 'staged')
+    const coded = (code) => Object.assign(new Error(`${code}: fsync`), { code })
+    for (const code of ['EINVAL', 'EISDIR', 'EPERM']) {
+      const files = []
+      const flush = (path) => {
+        if (statSync(path).isDirectory()) throw coded(code)
+        files.push(path)
+      }
+      assert.doesNotThrow(() => flushTree(top, flush), code)
+      assert.equal(files.length, 3, 'the files are still flushed')
+      assert.doesNotThrow(() => flushDir(top, flush), code)
+    }
+    assert.throws(() => flushTree(top, (path) => { if (statSync(path).isDirectory()) throw coded('EIO') }), /EIO/, 'any other error from a folder is one')
+    assert.throws(() => flushDir(top, () => { throw coded('EIO') }), /EIO/)
+    for (const code of ['EINVAL', 'EPERM', 'EIO']) {
+      assert.throws(() => flushTree(top, (path) => { if (path.endsWith('build.json')) throw coded(code) }), new RegExp(code), `a file: ${code}`)
+    }
+  } finally {
+    removeDir(dir)
+  }
+})
+
 test('checkEntries: one top folder, no absolute path, no ..', () => {
   assert.equal(checkEntries(['a/', 'a/bin/', 'a/bin/trek-server', 'a/build.json']), 'a')
   assert.equal(checkEntries(['./a/', './a/x']), 'a')
@@ -149,12 +252,36 @@ test('unpack puts the tarball folder in a staging folder beside the install and 
     assert.deepEqual(readdirSync(staged).sort(), ['bin', 'build.json', 'trek-server.cjs'])
     assert.equal(statSync(join(staged, 'bin', 'trek-server')).mode & 0o111, 0o111, 'the launcher is still executable')
     assert.equal(statSync(stage).mode & 0o777, 0o700)
+    assert.equal(statSync(join(staged, 'trek-server.cjs')).uid, process.getuid(), 'the files are this user\'s')
     assert.doesNotThrow(() => validateStaged(staged, { version: '2.0.0', target: 'linux-x64' }))
     // A leftover staging folder from an interrupted update is replaced.
     writeFileSync(join(stage, 'leftover'), 'x')
     assert.equal(unpack(file, stage), staged)
     assert.deepEqual(readdirSync(stage), ['trek-server-2.0.0-linux-x64'])
   } finally {
+    removeDir(root)
+  }
+})
+
+test('unpack tells tar not to keep the archive\'s owners: as root, the files would be some other user\'s', { skip: posixOnly('the system tar, as the release tarballs are made') }, () => {
+  const root = temp()
+  const path = process.env.PATH
+  try {
+    const file = tarball(root, 'trek-server-2.0.0-linux-x64')
+    // A stand-in for tar that notes how it was called, then runs the real one.
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    const real = execFileSync('/bin/sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).trim()
+    writeFileSync(join(bin, 'tar'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${join(root, 'calls')}"\nexec "${real}" "$@"\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}:${path}`
+    const staged = unpack(file, join(root, 'stage'))
+    const calls = readFileSync(join(root, 'calls'), 'utf8').trim().split('\n')
+    assert.equal(calls.length, 2)
+    assert.match(calls[0], /^-tzf /, 'the listing')
+    assert.match(calls[1], /^--no-same-owner -xzf .* -C /, 'the extraction')
+    assert.equal(statSync(join(staged, 'bin', 'trek-server')).mode & 0o111, 0o111, 'the modes are still the archive\'s')
+  } finally {
+    process.env.PATH = path
     removeDir(root)
   }
 })

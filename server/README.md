@@ -468,10 +468,11 @@ installs nothing and exits 1, naming `--yes`. Pass the same `--config` the serve
 with, if it has one: that is how the command finds the running server.
 
 It reads the latest published release's checksums, and goes on only if their signature verifies
-against a key built into this trek-server. Then it downloads this machine's tarball into the
-folder that holds the install, checks its sha256, unpacks it, asks the new version to prove it
-runs here (`trek-server selfcheck`: node-pty, a terminal, a loopback server), and only then puts
-it in this install's place. A failure at any of these leaves the install as it was, says why,
+against a key built into this trek-server. Then it downloads this machine's tarball into a
+folder of its own beside the install (`.trek-update-…`, removed afterwards), checks its sha256,
+unpacks it as the user who runs the command, asks the new version to prove it runs here
+(`trek-server selfcheck`: node-pty, a terminal, a loopback server), flushes it to disk, and only
+then puts it in this install's place. A failure at any of these leaves the install as it was, says why,
 and exits 1. The install folder and the folder that holds it must be writable by the user who
 runs the command, and `tar` must be on PATH. One update runs at a time per install: while it
 does, `.trek-update.lock` (a folder, holding the updater's process id) sits beside the install
