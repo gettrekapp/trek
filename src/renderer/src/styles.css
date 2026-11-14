@@ -651,6 +651,69 @@ button:disabled {
   color: var(--text);
 }
 
+/* ─── Sidebar navigation rows (Automations, Settings) ──────────────────── */
+
+.sidebar-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  margin: 0 8px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-nav-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.sidebar-nav-row.active {
+  background: rgba(10, 141, 255, 0.13);
+  border-color: rgba(10, 141, 255, 0.35);
+  color: var(--text);
+}
+
+.sidebar-nav-row.active:hover {
+  background: rgba(10, 141, 255, 0.17);
+}
+
+.sidebar-nav-automations {
+  margin-bottom: 8px;
+}
+
+.sidebar-nav-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-nav-count {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.sidebar-nav-badge {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--attention);
+  color: var(--bg-darker);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+/* The footer's own 16px padding: pull the row out to the worktree rows' edges */
+.sidebar-footer .sidebar-nav-row {
+  margin: 2px -8px 0;
+}
+
 .sidebar-footer {
   flex: 0 0 auto;
   padding: 10px 16px;
@@ -672,6 +735,22 @@ button:disabled {
   width: 7px;
   height: 7px;
   animation: none;
+}
+
+/* The detail and the project-level pages (Settings, Automations) that cover it */
+.workspace-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+/* Above the detail's content, under the menus' backdrops (z-index 20): a left panel menu open
+   over a page still closes on a click on the page. */
+.workspace-main > .settings-panel,
+.workspace-main > .automations-panel {
+  z-index: 10;
 }
 
 /* ─── Detail pane ──────────────────────────────────────────────────────── */

@@ -33,8 +33,6 @@ import type { ChangesSource } from '../../../shared/types'
 import { changesTabLabel } from '../../../shared/changes'
 import { AllNotesPanel } from './AllNotesPanel'
 import { HistoryPanel } from './HistoryPanel'
-import { SettingsPanel } from './SettingsPanel'
-import { AutomationsPanel } from './AutomationsPanel'
 import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
 import { PullRequestModal } from './PullRequestModal'
@@ -66,8 +64,6 @@ type Panel =
   | 'docker'
   | 'environment'
   | 'stack'
-  | 'settings'
-  | 'automations'
 
 const STACK_POLL_MS = 4000
 
@@ -145,6 +141,8 @@ export function WorktreeDetail({
   const [editFrom, setEditFrom] = useState('')
   // The window's connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
+  // A project page (Settings, Automations) covers the detail: its panes are hidden meanwhile.
+  const projectPage = useAppStore((s) => s.projectPage)
   const environments = useAppStore((s) => s.environments)
   const envBusy = useAppStore((s) => s.envBusy)
 
@@ -194,6 +192,7 @@ export function WorktreeDetail({
       e.preventDefault()
       e.stopPropagation()
       setPanel('sessions')
+      useAppStore.getState().closeProjectPage()
       cycleTab(worktreeId, step)
     }
     // Capture phase, so the focused xterm never sees the keystroke.
@@ -883,24 +882,6 @@ export function WorktreeDetail({
             />
           </button>
         )}
-        {features.automations && (
-          <button
-            className={`panel-btn ${panel === 'automations' ? 'active' : ''}`}
-            title="Automations"
-            onClick={() => setPanel(panel === 'automations' ? 'sessions' : 'automations')}
-          >
-            ⏰
-          </button>
-        )}
-        {features.settingsEdit && (
-          <button
-            className={`panel-btn ${panel === 'settings' ? 'active' : ''}`}
-            title="App settings"
-            onClick={() => setPanel(panel === 'settings' ? 'sessions' : 'settings')}
-          >
-            ⚙
-          </button>
-        )}
       </div>
 
       <div className="terminal-card">
@@ -908,7 +889,7 @@ export function WorktreeDetail({
           <TerminalPane
             key={id}
             terminalId={id}
-            visible={panel === 'sessions' && id === activeId}
+            visible={panel === 'sessions' && id === activeId && !projectPage}
           />
         ))}
         {panel === 'sessions' && order.length === 0 && (
@@ -980,8 +961,6 @@ export function WorktreeDetail({
             onChanged={refreshStack}
           />
         )}
-        {features.settingsEdit && <SettingsPanel visible={panel === 'settings'} />}
-        {features.automations && <AutomationsPanel visible={panel === 'automations'} />}
       </div>
 
       {showTicket && info.branch && (
