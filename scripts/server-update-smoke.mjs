@@ -18,7 +18,8 @@
 // Then the same update asked for by a client, over the protocol (update.status, update.check,
 // update.apply, update.changed): what the welcome lists, each refusal, the states every signed-in
 // connection hears and the restart that names its version; a config that leaves installing to
-// the command; a version that fails its selfcheck.
+// the command; a version that fails its selfcheck. Last, an install whose bundle is a normal build
+// (no update key built in): it offers clients nothing, and its command says why.
 import './smokeGh.mjs'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
@@ -40,7 +41,7 @@ const check = (what, ok, detail = '') => {
 }
 
 // The temp folder, the two test builds, the feed and the servers' environment (updateFixture.mjs).
-const { work, OLD, NEW, oldBuild, newBuild, installFolder, publish, runToEnd, world, start, cleanup } = await createUpdateFixture()
+const { work, OLD, NEW, oldBuild, newBuild, buildServer, installFolder, publish, feedRequests, runToEnd, world, start, cleanup } = await createUpdateFixture()
 
 /** How a request was refused: [code, details.reason], or what it answered instead. */
 const refusal = (request) => request.then((result) => ['answered', JSON.stringify(result)], (err) => [err.code ?? String(err.message ?? err), err.details?.reason])
@@ -457,6 +458,33 @@ for (const [name, what, tamper, message] of [
   check(`no shutdown: the server still runs ${OLD} and answers`, shutdowns(a).length === 0 && !a.isClosed && same(ping, { t: 7 }) && after.current === OLD && run.ended === null && !/shutting down/.test(run.output) && w.versionAt(w.install) === OLD && !existsSync(`${w.install}.previous`) && w.marks().length === 0, `${JSON.stringify(ping)}\n${run.output}`)
   check('nothing is left beside the install', readdirSync(join(w.base, 'opt')).filter((entry) => entry.startsWith('.trek-update')).length === 0, readdirSync(join(w.base, 'opt')).join(' '))
   a.close()
+  const ended = await stop(run)
+  check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)
+}
+
+// ---- 12. an install with no update key built in (a normal build) offers clients nothing ----
+{
+  const normal = { dir: buildServer('normal', { test: false }) }
+  const built = JSON.parse(readFileSync(join(normal.dir, 'build.json'), 'utf8'))
+  check('a normal build is not a test build', built.testUpdate === undefined && typeof built.version === 'string', JSON.stringify(built))
+  const w = await world('nokey', { bundle: normal, version: built.version })
+  // A newer signed release is there, and the environment names the feed and its key: a normal build reads neither.
+  publish('good', newBuild)
+  const asked = feedRequests()
+  const run = start(w.launcher, w.startArgs)
+  check('an install of a normal build starts, and creates its control socket', (await up(w, run, built.version)) && (await control(w.socket, 'status'))?.pid === run.child.pid, run.output)
+  try {
+    const client = await connect(w.port, w.token)
+    check('its welcome does not list `update`', !client.welcome.capabilities.includes('update'), JSON.stringify(client.welcome.capabilities))
+    const answer = await refusal(client.request('update.status'))
+    check('and it answers NOT_FOUND to update.status', answer[0] === 'NOT_FOUND', JSON.stringify(answer))
+    client.close()
+  } catch (err) {
+    check('a client signs in to it', false, `${err.message}\n${run.output}`)
+  }
+  const checked = await w.cli(['update', '--check'])
+  check('`trek-server update --check` on it exits 1, saying it has no update key', checked.status === 1 && /has no update key built in/.test(checked.stderr), checked.out)
+  check('the feed was never asked, and nothing changed', feedRequests() === asked && w.versionAt(w.install) === built.version && w.marks().length === 0 && run.ended === null, `${feedRequests() - asked} requests\n${run.output}`)
   const ended = await stop(run)
   check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)
 }
