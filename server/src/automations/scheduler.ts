@@ -84,6 +84,7 @@ export class AutomationScheduler {
   }
 
   start(): void {
+    if (this.timer) return
     this.check()
     this.timer = setInterval(() => this.check(), this.deps.tickMs ?? AUTOMATION_TICK_MS)
     this.timer.unref?.()
@@ -119,7 +120,13 @@ export class AutomationScheduler {
         else delete a.missed
       }
     })
-    for (const { id, slot } of plan.due) this.run(project.id, id, 'schedule', slot)
+    for (const { id, slot } of plan.due) {
+      try {
+        this.run(project.id, id, 'schedule', slot)
+      } catch (err) {
+        this.deps.log?.(`automations: ${project.id}/${id}: ${(err as Error).message}`)
+      }
+    }
   }
 
   /** Starts the automation's Global session now and records it. `error`: why it failed, as thrown. */

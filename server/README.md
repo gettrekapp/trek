@@ -200,6 +200,10 @@ path: any other value is logged and gh is treated as not installed. `TREK_SERVER
 (at least 1000) is the time between polls and between sign-in checks. Both are for
 tests, which run a stub gh; leave them unset.
 
+`TREK_SERVER_AUTOMATION_TICK_MS` (at least 1000) replaces the automations scheduler's 30-second
+tick, and `TREK_SERVER_AUTOMATION_CLOCK_FILE` names a file whose number (ms since the epoch) is
+its "now". Both are for smokes; leave them unset.
+
 ## Changes tab review
 
 With the `review` capability a client's Changes tab can compare the branch against

@@ -55,6 +55,7 @@ export function checkInput(raw: unknown, now: number): CheckedInput {
   if (typeof raw.prompt !== 'string' || raw.prompt.trim() === '') throw bad('automation.prompt must not be empty')
   const prompt = raw.prompt.trim()
   if (prompt.length > MAX_AUTOMATION_PROMPT) throw bad(`automation.prompt must be at most ${MAX_AUTOMATION_PROMPT} characters`)
+  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(prompt)) throw bad('automation.prompt must not contain control characters')
   out.prompt = prompt
   out.schedule = checkSchedule(raw.schedule, now)
   out.enabled = requireBoolean(raw.enabled, 'automation.enabled')

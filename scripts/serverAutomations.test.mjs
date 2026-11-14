@@ -216,3 +216,40 @@ test('automation.resolveMissed runs and dismisses; ids with nothing pending are 
   assert.deepEqual(v.call('automation.resolveMissed', { run: ['a'], dismiss: [] }).result, { started: [] })
   assert.equal(v.call('automation.resolveMissed', { run: 'a', dismiss: [] }).error.code, 'BAD_REQUEST')
 })
+
+test('checkInput refuses control characters in a prompt, but takes tabs and newlines', () => {
+  assert.equal(code(() => checkInput(input({ prompt: 'a\u0000b' }), T0)), 'BAD_REQUEST')
+  assert.equal(code(() => checkInput(input({ prompt: 'a\u001bb' }), T0)), 'BAD_REQUEST')
+  assert.equal(code(() => checkInput(input({ prompt: 'a\tb\nc\r\nd' }), T0)), 'ok')
+})
+
+test('resolveMissed: a repeated run id starts one session; run wins over dismiss', () => {
+  const missed = { since: T0, count: 3 }
+  const v = setupV2([auto({ missed })])
+  const out = v.call('automation.resolveMissed', { run: ['a', 'a'], dismiss: ['a'] })
+  assert.deepEqual(out.result, { started: [{ automationId: 'a', sessionId: 's1' }] })
+  assert.equal(v.started.length, 1)
+})
+
+test('resolveMissed: a failed start is returned as { automationId, error }', () => {
+  const s = setupScheduler([auto({ missed: { since: T0, count: 2 } })], { startFails: true })
+  const out = dispatchV2('automation.resolveMissed', { projectId: 'p1', run: ['a'], dismiss: [] }, { hub: new TopicHub(), projects: s.projects, automations: s.scheduler })
+  assert.deepEqual(out.result, { started: [{ automationId: 'a', error: 'a project holds at most 500 sessions; close some first' }] })
+})
+
+test('check(): one failing start does not keep the next due automation from running; start() is idempotent', () => {
+  const s = setupScheduler([auto(), auto({ id: 'b' })])
+  let calls = 0
+  const real = s.scheduler.deps.sessions.start
+  s.scheduler.deps.sessions.start = (p) => {
+    if (calls++ === 0) throw new Error('boom')
+    return real(p)
+  }
+  s.setClock(Date.UTC(2026, 0, 5, 9, 0, 30))
+  s.scheduler.check()
+  assert.equal(s.started.length, 1)
+  assert.deepEqual(s.list().map((a) => a.history[0].outcome), ['failed', 'ran'])
+  s.scheduler.start()
+  s.scheduler.start()
+  s.scheduler.stop()
+})

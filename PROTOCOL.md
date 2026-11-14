@@ -806,7 +806,7 @@ With the capability `automations`, a project holds scheduled prompts, `Project.a
 (saved with the project, so they survive a restart, and published on the project topic). On its
 schedule the server opens a new Global session in the project with the automation's `prompt` as
 its first message and `llm` (the project's Global agent when unset); the session is titled
-`<name> · HH:MM` (the slot's wall-clock time in the automation's timezone).
+`<name> · HH:MM` in the automation's timezone: the slot's time, or the start time for manual and missed runs.
 
 An `Automation` is `{id, name, prompt, schedule: {cron, tz}, enabled, llm?, createdAt, lastSlot,
 missed?, history}`. `schedule.cron` is five fields (minute hour day-of-month month day-of-week), no
@@ -827,10 +827,10 @@ is the scheduler's clock.
 
 | Method | Params | Result |
 |---|---|---|
-| `automation.save` | `{projectId, automation}` | `{id}`. `automation` is `{id?, name, prompt, schedule, enabled, llm?}`: no `id` creates, an `id` updates (`NOT_FOUND` if unknown); `llm` unset or `null` means the project's Global agent. `name` 1-80 characters without control characters, `prompt` 1-20000 after trimming. `schedule.cron` must be valid, match a date and run no more often than every 5 minutes, and `schedule.tz` an IANA timezone, else `BAD_REQUEST`. `llm.provider` must be a known agent that can use Trek's tools (MCP), else `BAD_REQUEST`. `CAPACITY` at 50 automations per project |
+| `automation.save` | `{projectId, automation}` | `{id}`. `automation` is `{id?, name, prompt, schedule, enabled, llm?}`: no `id` creates, an `id` updates (`NOT_FOUND` if unknown); `llm` unset or `null` means the project's Global agent. `name` 1-80 characters without control characters, `prompt` 1-20000 after trimming, without control characters other than tab and newline. `schedule.cron` must be valid, match a date and run no more often than every 5 minutes, and `schedule.tz` an IANA timezone, else `BAD_REQUEST`. `llm.provider` must be a known agent that can use Trek's tools (MCP), else `BAD_REQUEST`. `CAPACITY` at 50 automations per project |
 | `automation.delete` | `{projectId, automationId}` | `null` (`NOT_FOUND` for an unknown automation) |
 | `automation.runNow` | `{projectId, automationId}` | `{sessionId}`: starts the Global session now, even when disabled, recorded in `history` as `manual`, leaving the schedule alone. The start's error is the method's error (e.g. `CAPACITY`) and is also recorded. `NOT_FOUND` for an unknown automation |
-| `automation.resolveMissed` | `{projectId, run: string[], dismiss: string[]}` | `{started: [{automationId, sessionId?, error?}]}`. Clears `missed` on every listed id and starts one session (trigger `missed`) for each `run` id that had one pending; ids with nothing pending (or unknown) are ignored. `BAD_REQUEST` unless both are lists of at most 50 ids |
+| `automation.resolveMissed` | `{projectId, run: string[], dismiss: string[]}` | `{started: [{automationId, sessionId?, error?}]}`. Clears `missed` on every listed id and starts one session (trigger `missed`) for each `run` id that had one pending; ids with nothing pending (or unknown) are ignored, a repeated `run` id starts one session, and an id in both lists runs (`run` wins). `BAD_REQUEST` unless both are lists of at most 50 ids |
 
 For the smokes only: `TREK_SERVER_AUTOMATION_TICK_MS` (a whole number of milliseconds, at least
 1000) replaces the 30-second tick, and `TREK_SERVER_AUTOMATION_CLOCK_FILE` names a file whose

@@ -52,7 +52,7 @@ export const automationHandlers: Record<string, Handler> = {
 
   'automation.resolveMissed': (p, ctx) => {
     const s = scheduler(ctx)
-    const run = idList(p.run, 'run')
+    const run = [...new Set(idList(p.run, 'run'))]
     const dismiss = idList(p.dismiss, 'dismiss')
     const projectId = requireString(p.projectId, 'projectId')
     const cleared = ctx.projects.apply(projectId, (d) => {

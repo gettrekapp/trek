@@ -185,7 +185,7 @@ export function startServer(
     now: options.automations?.now,
     log: (message) => console.error(message)
   })
-  automations.start()
+  // Started once the MCP listener is up (below), so a run the first check starts has the trek-dev tools.
   // promote_to_primary's confirmations (5e): asked of the project's windows.
   const promoteRequests = new PromoteRequests(hub)
 
@@ -595,7 +595,7 @@ export function startServer(
       return call
     }
     const prWatchReady = trek.ready
-    trek.ready = startMcpListener({
+    const mcpUp = startMcpListener({
       access,
       serverVersion: daemonVersion,
       contextFor: (projectId) => mcpContext(projectId, callerFor(projectId), plugins)
@@ -610,7 +610,12 @@ export function startServer(
       },
       (err: unknown) => console.warn(`[mcp] disabled: the listener did not start: ${(err as Error).message}`)
     )
-    trek.ready = Promise.all([prWatchReady, trek.ready]).then(() => undefined)
+    trek.ready = Promise.all([prWatchReady, mcpUp]).then(() => undefined)
+    void mcpUp.then(() => {
+      if (!stopped) automations.start()
+    })
+  } else {
+    automations.start()
   }
 
   const shutdown = (reason: string): Promise<void> => {
