@@ -71,6 +71,23 @@ export function writePending(dir: string, pending: PendingUpdate): void {
 }
 
 /**
+ * Removes the tried mark the launcher left for this very start (it holds this process's id). For
+ * a start that ends on purpose before it is listening (a usage error, a port in use, no token, a
+ * signal): reaching that end shows the new version loads and runs, so it must not count against
+ * the update. Another start's mark stays. `installDir`: the bundle's folder, '' when there is
+ * none (a source run). Never throws.
+ */
+export function clearTried(installDir: string, pid: number = process.pid): void {
+  if (!installDir) return
+  try {
+    const mark = join(installDir, TRIED_FILE)
+    if (readFileSync(mark, 'utf8').trim() === String(pid)) rmSync(mark, { force: true })
+  } catch {
+    // No mark, or one that cannot be read or removed: the launcher decides at the next start.
+  }
+}
+
+/**
  * Once the server is listening: settles what the markers say and records it. A rolled-back marker
  * (this is the version the launcher restored) is a failed update; a pending one (this is the new
  * version, and it started) is a successful one. Returns the result, or null when there was

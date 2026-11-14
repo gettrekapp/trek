@@ -6,6 +6,7 @@ import { LOCAL_ALREADY_RUNNING_EXIT, isLocalProfileName } from '../../src/shared
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocolV2.ts'
 import { defaultConfigPath } from './config.ts'
 import { DEFAULT_TOKEN_NAME } from './tokens.ts'
+import { clearTried } from './update/state.ts'
 
 export const COMMANDS = ['start', 'stop', 'token', 'add', 'list', 'remove', 'update', 'selfcheck', 'help', 'version'] as const
 const TOKEN_ACTIONS = ['add', 'list', 'revoke'] as const
@@ -104,6 +105,10 @@ To add a directory named like a command, use ./<dir>.
 
 function usageError(message: string): never {
   console.error(`${message}\n\n${USAGE}`)
+  // The launcher took this for a start (it does not know every flag) and marked a pending update
+  // tried: a command line that is refused is not a new version that failed to start. The bundle's
+  // own folder; a source run and the tests have no install, and nothing happens.
+  clearTried(typeof __dirname === 'string' ? __dirname : '')
   process.exit(2)
 }
 

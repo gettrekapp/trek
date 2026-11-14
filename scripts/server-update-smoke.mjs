@@ -13,7 +13,8 @@
 // that restart wins; a running server's own look at the feed; another install's update, and a
 // second server, do not get a config's control socket; SIGTERM removes it; a bad signature, a
 // tampered tarball and a version that fails its selfcheck are refused with the server untouched;
-// a version that dies at start is rolled back by the next launch.
+// a version that dies at start is rolled back by the next launch; a usage error, a port in use, a
+// missing token and a second start at the same moment are not failed starts, and roll nothing back.
 import './smokeGh.mjs'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
@@ -454,6 +455,47 @@ for (const [name, what, tamper, message] of [
   check('and records it', w.state().lastResult?.ok === false && /did not start/.test(w.state().lastResult?.error ?? '') && w.marks().length === 0, `${w.marks().join()} ${JSON.stringify(w.state())}`)
   const ended = await stop(second)
   check('SIGTERM stops the restored server', ended?.code === 0, `${JSON.stringify(ended)}\n${second.output}`)
+}
+
+// ---- 8. starts that end before listening, or at the same moment, are not failed starts -----
+{
+  const w = await world('ends')
+  publish('good', newBuild)
+  const updated = await w.cli(['update', '--yes'])
+  check('an update with no server running installs', updated.status === 0 && w.versionAt(w.install) === NEW, updated.out)
+  const pendingOnly = () => w.marks().join() === 'update-pending.json'
+  const notRolledBack = () => w.versionAt(w.install) === NEW && w.versionAt(`${w.install}.previous`) === OLD && !existsSync(`${w.install}.failed`)
+
+  // The launcher takes these for a start (it does not know every flag); the server refuses them.
+  for (const args of [['--prot', '7000'], [`--port=${w.port}`], ['start', 'help']]) {
+    const refused = await runToEnd(w.launcher, args)
+    check(`\`trek-server ${args.join(' ')}\` is a usage error, and leaves the update untried`, refused.status === 2 && /Usage: trek-server/.test(refused.stderr) && pendingOnly() && notRolledBack(), `${refused.status} ${w.marks().join()}\n${refused.out}`)
+  }
+
+  // Something else has the port.
+  const squatter = createNetServer()
+  await new Promise((done) => squatter.listen(w.port, '127.0.0.1', done))
+  const busy = await runToEnd(w.launcher, w.startArgs)
+  check('a start whose port is in use fails, and leaves the update untried', busy.status === 1 && /already in use/.test(busy.stderr) && pendingOnly() && notRolledBack(), `${busy.status} ${w.marks().join()}\n${busy.out}`)
+  await new Promise((done) => squatter.close(done))
+
+  // No token configured.
+  const bare = join(w.base, 'c', 'bare.json')
+  writeFileSync(bare, JSON.stringify({ repos: [] }), { mode: 0o600 })
+  const tokenless = await runToEnd(w.launcher, ['start', '--config', bare, '--host', '127.0.0.1', '--port', String(w.port), '--data-dir', join(w.base, 'data')])
+  check('a start with no token configured fails, and leaves the update untried', tokenless.status === 1 && /No token configured/.test(tokenless.stderr) && pendingOnly() && notRolledBack(), `${tokenless.status} ${w.marks().join()}\n${tokenless.out}`)
+
+  // Two starts of one install at the same moment (two units, or a start by hand beside a service
+  // manager's): the second comes while the first is marked tried and not listening yet.
+  const first = start(w.launcher, w.startArgs)
+  const marked = await waitFor(() => existsSync(join(w.install, 'update-pending.tried')) || first.ended !== null)
+  const second = start(w.launcher, ['start', '--config', w.configPath, '--host', '127.0.0.1', '--port', String(await freePort()), '--data-dir', join(w.base, 'data2')])
+  check('the first start is marked tried while it starts', marked && first.ended === null, first.output)
+  check(`both starts come up as ${NEW}`, (await until(first, listeningAs(NEW))) && (await until(second, listeningAs(NEW))), `${first.output}\n---\n${second.output}`)
+  check('neither moved the install from under the other', notRolledBack() && !/going back/.test(first.output + second.output), `${first.output}\n---\n${second.output}`)
+  check('and the update is settled', (await waitFor(() => w.marks().length === 0)) && w.state().lastResult?.ok === true && w.state().lastResult?.to === NEW, `${w.marks().join()} ${JSON.stringify(w.state())}`)
+  const ends = [await stop(second), await stop(first)]
+  check('SIGTERM stops both', ends.every((e) => e?.code === 0), JSON.stringify(ends))
 }
 
 cleanup()

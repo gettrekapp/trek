@@ -3,7 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { POSIX_LAUNCHER, WIN_LAUNCHER, WIN_PS_LAUNCHER } from './serverLaunchers.mjs'
@@ -72,7 +72,7 @@ function fakeNode(root) {
   // Each argument also goes to <root>/args, one a line: what `$*` would blur.
   writeFileSync(
     node,
-    '#!/bin/sh\nif [ "$1" = "-p" ]; then echo 22; exit 0; fi\ncjs=$1; shift\necho "RAN $(cat "$(dirname "$cjs")/label") $*"\n: > "$(dirname "$0")/args"\nfor a in "$@"; do printf \'%s\\n\' "$a" >> "$(dirname "$0")/args"; done\n',
+    '#!/bin/sh\nif [ "$1" = "-p" ]; then echo 22; exit 0; fi\ncjs=$1; shift\necho "RAN $(cat "$(dirname "$cjs")/label") $*"\necho $$ > "$(dirname "$0")/pid"\n: > "$(dirname "$0")/args"\nfor a in "$@"; do printf \'%s\\n\' "$a" >> "$(dirname "$0")/args"; done\n',
     { mode: 0o755 }
   )
   return node
@@ -111,6 +111,8 @@ test('the first start after an update marks it tried and runs the new version', 
     pending(dir)
     assert.deepEqual(run(dir, w.node, ['start']), { out: 'RAN two start', err: '', status: 0 })
     assert.equal(tried(dir), true)
+    // exec keeps the process id: the launcher's is the server's.
+    assert.equal(readFileSync(join(dir, 'update-pending.tried'), 'utf8'), readFileSync(join(w.root, 'pid'), 'utf8'), 'the mark holds the id of the process that started')
     assert.equal(existsSync(join(w.root, 'trek-server.previous')), true)
   } finally {
     w.done()
@@ -162,7 +164,7 @@ test('only a start counts: other commands neither mark the update tried nor roll
     const dir = install(w.root, 'trek-server', 'two')
     install(w.root, 'trek-server.previous', 'one')
     pending(dir)
-    for (const args of [['version'], ['token', 'list'], ['--config', '/x/config.json', 'update', '--check'], ['selfcheck'], ['-h'], ['start', '--help'], ['--version'], ['start', '-v'], ['.'], ['--web', 'stop']]) {
+    for (const args of [['version'], ['token', 'list'], ['--config', '/x/config.json', 'update', '--check'], ['selfcheck'], ['-h'], ['start', '--help'], ['--version'], ['start', '-v'], ['.'], ['--web', 'stop'], ['start', '--local'], ['--local'], ['--local-profile', 'dev', '--local', 'start']]) {
       assert.equal(run(dir, w.node, args).out, `RAN two ${args.join(' ')}`)
       assert.equal(tried(dir), false, args.join(' '))
     }
@@ -303,6 +305,103 @@ test('a previous version that cannot be moved into place leaves the new one wher
     assert.equal(readFileSync(join(w.root, 'trek-server.previous', 'label'), 'utf8'), 'one')
     assert.equal(tried(dir), true, 'and the next start tries the rollback again')
     assert.equal(run(dir, w.node, ['start']).out, 'RAN one start')
+  } finally {
+    w.done()
+  }
+})
+
+const MARK = 'update-pending.tried'
+/** An updated install whose first start left `content` in the tried mark, `ageMinutes` ago. */
+function triedWorld(content, ageMinutes = 0) {
+  const w = world()
+  const dir = install(w.root, 'trek-server', 'two')
+  install(w.root, 'trek-server.previous', 'one')
+  pending(dir)
+  const mark = join(dir, MARK)
+  writeFileSync(mark, content)
+  if (ageMinutes > 0) {
+    const then = new Date(Date.now() - ageMinutes * 60_000)
+    utimesSync(mark, then, then)
+  }
+  return { ...w, dir, mark }
+}
+/** The id of a process that has exited. */
+const deadPid = () => String(spawnSync(process.execPath, ['-e', '']).pid)
+
+test('a start while the start that left the mark is still alive does not roll back, and leaves the mark alone', posix, () => {
+  // This test's own process stands in for a server that is still starting.
+  const w = triedWorld(`${process.pid}\n`)
+  try {
+    const before = statSync(w.mark).mtimeMs
+    assert.deepEqual(run(w.dir, w.node, ['start']), { out: 'RAN two start', err: '', status: 0 })
+    assert.equal(readFileSync(w.mark, 'utf8'), `${process.pid}\n`)
+    assert.equal(statSync(w.mark).mtimeMs, before, 'not rewritten: its age still bounds how long it is believed')
+    assert.equal(existsSync(join(w.root, 'trek-server.previous')), true)
+    assert.equal(existsSync(join(w.root, 'trek-server.failed')), false)
+  } finally {
+    w.done()
+  }
+})
+
+test('a mark left by a process that is gone is a start that failed: the next start rolls back', posix, () => {
+  const w = triedWorld(`${deadPid()}\n`)
+  try {
+    const second = run(w.dir, w.node, ['start'])
+    assert.equal(second.out, 'RAN one start', second.err)
+    assert.match(second.err, /did not start.*going back/)
+    assert.equal(readFileSync(join(w.root, 'trek-server.failed', 'label'), 'utf8'), 'two')
+  } finally {
+    w.done()
+  }
+})
+
+test('an old mark is a failed start even when its process id is alive: the id was reused', posix, () => {
+  const w = triedWorld(`${process.pid}\n`, 60)
+  try {
+    assert.equal(run(w.dir, w.node, ['start']).out, 'RAN one start')
+    assert.equal(existsSync(join(w.root, 'trek-server.failed')), true)
+  } finally {
+    w.done()
+  }
+})
+
+test('a mark that names no process (empty, garbage, more than one word) is a start that failed', posix, () => {
+  for (const content of ['', '\n', 'not a pid', `${process.pid} ${process.pid}`, `-${process.pid}`, `${process.pid}\n${process.pid}\n`, `${process.pid}.5`]) {
+    const w = triedWorld(content)
+    try {
+      assert.equal(run(w.dir, w.node, ['start']).out, 'RAN one start', JSON.stringify(content))
+    } finally {
+      w.done()
+    }
+  }
+})
+
+test("a mark with the launcher's own process id is a start that is gone (a container restarts with the same id)", posix, () => {
+  const w = triedWorld('')
+  try {
+    // sh writes its id into the mark and becomes the launcher: the same process.
+    const r = spawnSync('/bin/sh', ['-c', 'echo $$ > "$1"; exec "$2" start', 'sh', w.mark, join(w.dir, 'bin', 'trek-server')], { env: { PATH: process.env.PATH, TREK_NODE: w.node }, encoding: 'utf8' })
+    assert.equal(r.stdout.trim(), 'RAN one start', r.stderr)
+  } finally {
+    w.done()
+  }
+})
+
+test('an updated version that cannot be set aside is started again, and says so', posix, () => {
+  const w = triedWorld('')
+  try {
+    // A stand-in for mv that refuses to move the install to <install>.failed.
+    const fakeBin = join(w.root, 'fake-bin')
+    mkdirSync(fakeBin)
+    const realMv = ['/bin/mv', '/usr/bin/mv'].find((p) => existsSync(p))
+    writeFileSync(join(fakeBin, 'mv'), `#!/bin/sh\ncase $2 in *.failed) echo "mv: $1: Operation not permitted" >&2; exit 1 ;; esac\nexec ${realMv} "$@"\n`, { mode: 0o755 })
+    const again = run(w.dir, w.node, ['start'], { path: `${fakeBin}${delimiter}${process.env.PATH}` })
+    assert.equal(again.out, 'RAN two start', again.err)
+    assert.equal(again.status, 0)
+    assert.match(again.err, /could not be set aside as .*trek-server\.failed; starting it again/)
+    assert.equal(readFileSync(join(w.root, 'trek-server.previous', 'label'), 'utf8'), 'one', 'the previous version is still there')
+    assert.equal(tried(w.dir), true, 'and the next start tries the rollback again')
+    assert.equal(run(w.dir, w.node, ['start']).out, 'RAN one start')
   } finally {
     w.done()
   }

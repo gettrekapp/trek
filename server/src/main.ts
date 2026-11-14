@@ -44,11 +44,20 @@ import { findUpdate } from './update/apply.ts'
 import { controlPath, listenControl } from './update/control.ts'
 import { isTestUpdateBuild, updateSource } from './update/keys.ts'
 import { canRelaunch, relaunch } from './update/relaunch.ts'
-import { settleStart } from './update/state.ts'
+import { clearTried, settleStart } from './update/state.ts'
 import { readInstall } from './update/updatable.ts'
 
+/** The bundle's own folder. A source run (tsx) has server/src here: not an install (no build.json, no update marks), so nothing about updates applies to it. */
+const installDir = typeof __dirname === 'string' ? __dirname : ''
+
+/**
+ * An exit on purpose before the server is listening (no token, a config that cannot be read, a
+ * port in use, a signal). Getting here shows this version loads and runs, so the launcher's mark
+ * for this start goes: only a start that crashed, or was killed outright, counts against an update.
+ */
 function fail(message: string): never {
   console.error(message)
+  clearTried(installDir)
   process.exit(1)
 }
 
@@ -65,6 +74,17 @@ if (args.command === 'help') {
 if (args.command === 'version') {
   console.log(buildInfo().version)
   process.exit(0)
+}
+
+// SIGHUP: the terminal that ran `start --local` closed (on Windows: its console window). Without a
+// handler the process dies with local.json (and its token) and the lock left behind. SIGBREAK:
+// Ctrl+Break in a Windows console.
+// Taken here, before the checks and the loading below: a handler runs only once this file has run
+// to its end (all of it is synchronous), so a signal during startup is a shutdown() that finds
+// everything it needs, and not a start killed half-way, which the launcher would count against
+// a pending update. The other commands exit before a handler could run, as they did before.
+if (args.command === 'start') {
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const) process.on(signal, () => shutdown(signal))
 }
 
 // Windows: no cmd.exe this server starts (nor anything below it: every child inherits this env)
@@ -335,12 +355,17 @@ const server = startServer(
   }
 )
 store.watch()
-server.httpServer.on('error', (err: NodeJS.ErrnoException) => {
+// First in line: the WebSocket server (ws) hands the HTTP server's errors on to its own 'error'
+// event, which nobody listens to, so behind it this would never run: the error would be thrown
+// instead, and a port in use would look like a crash (to the user, and to the launcher).
+server.httpServer.prependListener('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`Port ${port} on ${host} is already in use (is trek-daemon or another trek-server still running?)`)
   } else {
     console.error(err.message)
   }
+  // Not this version's fault: the update it may be the first start of stays untried.
+  clearTried(installDir)
   process.exit(1)
 })
 server.httpServer.listen(port, host, () => {
@@ -370,8 +395,11 @@ server.httpServer.listen(port, host, () => {
         'web client: cookies are not port-scoped: opened on 127.0.0.1/localhost, any other local web server the browser visits (a dev stack, a worktree\'s dev server) sees the session cookie; use a host name nothing else is reached on (see the README)'
       )
   }
-  if (local) void announceLocal(local, bound)
-  else startUpdates()
+  if (local) {
+    // The local server settles no update (it follows the app); the launcher does not mark its start, and a mark for it would go here.
+    clearTried(installDir)
+    void announceLocal(local, bound)
+  } else startUpdates()
 })
 
 /**
@@ -431,8 +459,6 @@ const UPDATE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000
  */
 function startUpdates(): void {
   if (shuttingDown) return
-  // The bundle's own folder. A source run (tsx) has server/src here: not an install (no build.json), so nothing below applies to it.
-  const installDir = typeof __dirname === 'string' ? __dirname : ''
   const configPath = resolve(args.configPath)
   const configDir = dirname(configPath)
   if (installDir) {
@@ -507,6 +533,8 @@ function shutdown(reason: string, into?: RelaunchInto): void {
   }
   shuttingDown = true
   relaunchInto = into
+  // Asked to stop before it was listening (Ctrl+C, a service manager's stop): not a failed start.
+  if (!server.httpServer.listening) clearTried(installDir)
   // First, so the app stops connecting to a server that is going away.
   if (local) removeLocalInfo(local.infoPath, process.pid)
   console.log(`\n${reason} — shutting down (all agent sessions will end)`)
@@ -540,7 +568,3 @@ function shutdown(reason: string, into?: RelaunchInto): void {
   })
 }
 
-// SIGHUP: the terminal that ran `start --local` closed (on Windows: its console window). Without a
-// handler the process dies with local.json (and its token) and the lock left behind. SIGBREAK:
-// Ctrl+Break in a Windows console.
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'] as const) process.on(signal, () => shutdown(signal))

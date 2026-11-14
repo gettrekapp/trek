@@ -2,10 +2,10 @@
 // carry it across a restart, and update-state.json's record of how the last one went.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PENDING_FILE, ROLLED_BACK_FILE, STATE_FILE, TRIED_FILE, readState, settleStart, writePending, writeState } from '../server/src/update/state.ts'
+import { PENDING_FILE, ROLLED_BACK_FILE, STATE_FILE, TRIED_FILE, clearTried, readState, settleStart, writePending, writeState } from '../server/src/update/state.ts'
 import { removeDir } from './testPlatform.mjs'
 
 const temp = () => mkdtempSync(join(tmpdir(), 'trek-update-state-'))
@@ -127,6 +127,45 @@ test('a state file that cannot be written does not throw: the server still start
     assert.equal(existsSync(join(install, PENDING_FILE)), false, 'the marker is still settled')
     assert.equal(warn.mock.callCount(), 1)
     assert.match(String(warn.mock.calls[0].arguments[0]), /could not settle/)
+  } finally {
+    removeDir(install)
+  }
+})
+
+test('clearTried removes the tried mark of this very start, and only that', () => {
+  const install = temp()
+  try {
+    const mark = join(install, TRIED_FILE)
+    writePending(install, { from: '1.0.0', to: '2.0.0', at: NOW.toISOString() })
+    // As the launcher writes it: its process id (which exec hands to the server) and a newline.
+    writeFileSync(mark, `${process.pid}\n`)
+    clearTried(install)
+    assert.equal(existsSync(mark), false)
+    assert.equal(existsSync(join(install, PENDING_FILE)), true, 'the update is still pending: its next start is a first start')
+
+    // Another start's mark (two starts at once; a command that is not the start) stays.
+    for (const other of [`${process.pid + 1}\n`, '', 'garbage', `${process.pid} 7`]) {
+      writeFileSync(mark, other)
+      clearTried(install)
+      assert.equal(readFileSync(mark, 'utf8'), other, JSON.stringify(other))
+    }
+    writeFileSync(mark, '4242\n')
+    clearTried(install, 4242)
+    assert.equal(existsSync(mark), false, 'the process id is the one given')
+  } finally {
+    removeDir(install)
+  }
+})
+
+test('clearTried never throws: no install (a source run), no folder, no mark, a mark that is a folder', () => {
+  const install = temp()
+  try {
+    assert.doesNotThrow(() => clearTried(''))
+    assert.doesNotThrow(() => clearTried(install))
+    assert.doesNotThrow(() => clearTried(join(install, 'missing')))
+    mkdirSync(join(install, TRIED_FILE))
+    assert.doesNotThrow(() => clearTried(install))
+    assert.deepEqual(readdirSync(install), [TRIED_FILE])
   } finally {
     removeDir(install)
   }

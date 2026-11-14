@@ -497,14 +497,22 @@ The command reaches the running server over a Unix socket, `control.sock`, besid
 Linux), and a server without one keeps running the old version until you restart it.
 
 **If the new version does not start.** `bin/trek-server` marks the first start after an update
-as tried, and the server removes the mark once it is listening. A start that still finds the mark
-means the new version never got that far: the launcher sets it aside as `<folder>.failed`, puts
-`<folder>.previous` back and starts that, and the server logs
+as tried, and the server removes the mark once it is listening. A start that still finds the mark,
+left by a start that is gone, means the new version never got that far: the launcher sets it
+aside as `<folder>.failed`, puts `<folder>.previous` back and starts that, and the server logs
 `update: trek-server 0.6.0 did not start; went back to 0.5.0`. With systemd's `Restart=always`
-that second start happens by itself; otherwise it is you running `trek-server` again. A first
-start that is stopped before it is listening (Ctrl+C, a kill, a power cut) counts as failed in
-the same way, so the next start goes back to the previous version: run `trek-server update`
-again. Delete `<folder>.failed` when you have looked at it (the next rollback replaces it). A
+that second start happens by itself; otherwise it is you running `trek-server` again.
+
+Only a start that crashed, or was killed outright, counts. A start that ends on purpose before
+it is listening does not, and the next start is the new version's first again: a command line
+the server refuses, a port in use, no token, a config that cannot be read, and Ctrl+C, SIGTERM
+or SIGHUP once the server's code is running. Neither does a second start while the first is
+still starting (two units on one install, a start by hand beside a service manager's): the mark
+holds the first start's process id, and for ten minutes a mark whose process is alive is left
+alone. What does count as failed: a first start ended by SIGKILL or a power cut before it is
+listening, or by any signal in its first moments, before the server's code has loaded. The next
+start then goes back to the previous version: run `trek-server update` again. `start --local`
+(the Trek app's local server) neither marks an update nor rolls one back. Delete `<folder>.failed` when you have looked at it (the next rollback replaces it). A
 server started as `node trek-server.cjs` rather than through `bin/trek-server` has no rollback.
 
 To go back by hand: stop the server, rename the folder away, and rename `<folder>.previous` to
