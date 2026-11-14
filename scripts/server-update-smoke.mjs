@@ -19,7 +19,8 @@
 // update.apply, update.changed): what the welcome lists, each refusal, the states every signed-in
 // connection hears and the restart that names its version; a config that leaves installing to
 // the command; a version that fails its selfcheck; an update that fails before it downloads
-// anything (its lock held, the feed unverifiable) and says why. Last, an install whose bundle is a normal build
+// anything (its lock held, the feed unverifiable) and says why, and a server that keeps answering
+// while it installs. Last, an install whose bundle is a normal build
 // (no update key built in): it offers clients nothing, and its command says why.
 import './smokeGh.mjs'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
@@ -52,6 +53,35 @@ const changes = (conn, from = 0) => conn.events.slice(from).filter(([event]) => 
 const stateRuns = (list) => list.map((status) => status.state).filter((state, i, all) => state !== all[i - 1])
 const shutdowns = (conn) => conn.events.filter(([event]) => event === 'daemon.shutdown').map(([, payload]) => payload)
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
+/** The longest a server may leave a request unanswered while it installs an update (its event loop held up) */
+const MAX_ANSWER_GAP_MS = 2000
+/**
+ * Asks `update.status` every 50 ms until stopped: the longest time between two answers (or from
+ * the last one to the stop), how many came, and the states they named. A server whose event loop
+ * is held up answers nothing meanwhile: its terminals and every client wait as long.
+ */
+const probe = (conn) => {
+  let last = Date.now()
+  let longest = 0
+  let answers = 0
+  const states = []
+  const timer = setInterval(() => {
+    if (conn.isClosed) return
+    conn.request('update.status').then((status) => {
+      const now = Date.now()
+      longest = Math.max(longest, now - last)
+      last = now
+      answers++
+      if (states.at(-1) !== status.state) states.push(status.state)
+    }, () => {})
+  }, 50)
+  return {
+    stop: () => {
+      clearInterval(timer)
+      return { longest: Math.max(longest, Date.now() - last), answers, states }
+    }
+  }
+}
 
 check('the builds are marked as test builds', JSON.parse(readFileSync(join(oldBuild.dir, 'build.json'), 'utf8')).testUpdate === true)
 {
@@ -500,6 +530,18 @@ for (const [name, what, tamper, message] of [
   const unsignedAsSaid = (status) => status?.lastResult?.ok === false && status.lastResult.to === NEW && /no valid signature/.test(status.lastResult.error ?? '') && status.latest === NEW
   check('a feed that fails during the install: the status carries a failed update to the release, with the reason', same(unsigned.started, { started: true }) && unsigned.settled && unsignedAsSaid(unsigned.heard.at(-1)) && unsignedAsSaid(unsigned.after) && w.state().lastResult?.to === NEW, `${JSON.stringify(unsigned.heard.at(-1))}\n${JSON.stringify(unsigned.after)}`)
   check(`after both, the server still runs ${OLD}, untouched, with nothing left beside the install`, run.ended === null && w.versionAt(w.install) === OLD && !existsSync(`${w.install}.previous`) && w.marks().length === 0 && readdirSync(parent).filter((entry) => entry.startsWith('.trek-update')).length === 0, `${readdirSync(parent).join(' ')}\n${run.output}`)
+
+  // The release is good again: while it is unpacked, checked and flushed to disk, the server keeps answering.
+  publish('good', newBuild)
+  const mark = a.events.length
+  const probing = probe(a)
+  const started = await a.request('update.apply', { version: NEW }).catch((err) => err)
+  const over = await waitFor(() => ['restarting', 'idle'].includes(changes(a, mark).at(-1)?.state))
+  const measured = probing.stop()
+  console.log(`  (the longest wait for an answer during the install: ${measured.longest} ms, over ${measured.answers} answers)`)
+  check('Try again with the release good: the update installs', same(started, { started: true }) && over && stateRuns(changes(a, mark)).includes('installing') && w.versionAt(w.install) === NEW, `${JSON.stringify(started)} ${JSON.stringify(stateRuns(changes(a, mark)))}\n${run.output}`)
+  check(`and while it installs the server keeps answering: update.status says \`installing\`, and no answer takes ${MAX_ANSWER_GAP_MS / 1000} s`, measured.states.includes('installing') && measured.longest < MAX_ANSWER_GAP_MS, JSON.stringify(measured))
+  if (canExecve) check(`the server comes back as ${NEW}`, (await within(a.closed)) && (await up(w, run, NEW)), run.output)
   a.close()
   const ended = await stop(run)
   check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)

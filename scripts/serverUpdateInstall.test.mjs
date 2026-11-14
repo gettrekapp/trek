@@ -162,7 +162,7 @@ test('sweepLeftovers removes old .trek-update-* entries beside the install, and 
   }
 })
 
-test('flushTree flushes every file and folder under a folder, deepest first, and skips symlinks', { skip: posixOnly('symlinks') }, () => {
+test('flushTree flushes every file and folder under a folder, deepest first, and skips symlinks', { skip: posixOnly('symlinks') }, async () => {
   const dir = temp()
   try {
     const top = folder(dir, 'staged')
@@ -172,20 +172,28 @@ test('flushTree flushes every file and folder under a folder, deepest first, and
     symlinkSync(join(dir, 'outside'), join(top, 'link'))
     symlinkSync(dir, join(top, 'link-to-folder'))
     const seen = []
-    flushTree(top, (path) => seen.push(path))
+    await flushTree(top, (path) => seen.push(path))
     const rel = seen.map((p) => p.slice(top.length + 1))
     assert.deepEqual([...rel].sort(), ['', 'bin', 'bin/trek-server', 'build.json', 'node_modules', 'node_modules/node-pty', 'node_modules/node-pty/pty.node', 'trek-server.cjs'])
     assert.equal(rel.at(-1), '', 'the folder itself last: its entries are what name the files')
     assert.ok(rel.indexOf('bin/trek-server') < rel.indexOf('bin'))
     // With the real fsync: no error on a tree this process made.
-    assert.doesNotThrow(() => flushTree(top))
-    assert.doesNotThrow(() => flushDir(dir))
+    await flushTree(top)
+    await flushDir(dir)
+    // A flush that takes its time is waited for, one path at a time.
+    const order = []
+    await flushTree(top, async (path) => {
+      order.push(`start ${path.slice(top.length + 1)}`)
+      await new Promise((done) => setTimeout(done, 1))
+      order.push(`end ${path.slice(top.length + 1)}`)
+    })
+    assert.ok(order.every((entry, i) => i % 2 === 0 ? entry.startsWith('start ') && order[i + 1] === entry.replace('start ', 'end ') : true), order.join(', '))
   } finally {
     removeDir(dir)
   }
 })
 
-test('a folder that cannot be fsynced here is tolerated; a file that cannot is an error', () => {
+test('a folder that cannot be fsynced here is tolerated; a file that cannot is an error', async () => {
   const dir = temp()
   try {
     const top = folder(dir, 'staged')
@@ -196,14 +204,14 @@ test('a folder that cannot be fsynced here is tolerated; a file that cannot is a
         if (statSync(path).isDirectory()) throw coded(code)
         files.push(path)
       }
-      assert.doesNotThrow(() => flushTree(top, flush), code)
+      await flushTree(top, flush)
       assert.equal(files.length, 3, 'the files are still flushed')
-      assert.doesNotThrow(() => flushDir(top, flush), code)
+      await flushDir(top, flush)
     }
-    assert.throws(() => flushTree(top, (path) => { if (statSync(path).isDirectory()) throw coded('EIO') }), /EIO/, 'any other error from a folder is one')
-    assert.throws(() => flushDir(top, () => { throw coded('EIO') }), /EIO/)
+    await assert.rejects(flushTree(top, (path) => { if (statSync(path).isDirectory()) throw coded('EIO') }), /EIO/, 'any other error from a folder is one')
+    await assert.rejects(flushDir(top, () => { throw coded('EIO') }), /EIO/)
     for (const code of ['EINVAL', 'EPERM', 'EIO']) {
-      assert.throws(() => flushTree(top, (path) => { if (path.endsWith('build.json')) throw coded(code) }), new RegExp(code), `a file: ${code}`)
+      await assert.rejects(flushTree(top, (path) => { if (path.endsWith('build.json')) throw coded(code) }), new RegExp(code), `a file: ${code}`)
     }
   } finally {
     removeDir(dir)
@@ -232,7 +240,7 @@ test('checkEntries: one top folder, no absolute path, no ..', () => {
   assert.throws(() => checkEntries(['a', 'a/x']), /one folder/)
 })
 
-test('unpack puts the tarball folder in a staging folder beside the install and returns it', { skip: posixOnly('the system tar, as the release tarballs are made') }, () => {
+test('unpack puts the tarball folder in a staging folder beside the install and returns it', { skip: posixOnly('the system tar, as the release tarballs are made') }, async () => {
   const root = temp()
   try {
     const file = tarball(root, 'trek-server-2.0.0-linux-x64')
@@ -246,7 +254,7 @@ test('unpack puts the tarball folder in a staging folder beside the install and 
       'trek-server-2.0.0-linux-x64/trek-server.cjs'
     ])
     const stage = join(root, '.trek-update-2.0.0')
-    const staged = unpack(file, stage)
+    const staged = await unpack(file, stage)
     assert.equal(staged, join(stage, 'trek-server-2.0.0-linux-x64'))
     assert.deepEqual(readdirSync(stage), ['trek-server-2.0.0-linux-x64'])
     assert.deepEqual(readdirSync(staged).sort(), ['bin', 'build.json', 'trek-server.cjs'])
@@ -256,14 +264,14 @@ test('unpack puts the tarball folder in a staging folder beside the install and 
     assert.doesNotThrow(() => validateStaged(staged, { version: '2.0.0', target: 'linux-x64' }))
     // A leftover staging folder from an interrupted update is replaced.
     writeFileSync(join(stage, 'leftover'), 'x')
-    assert.equal(unpack(file, stage), staged)
+    assert.equal(await unpack(file, stage), staged)
     assert.deepEqual(readdirSync(stage), ['trek-server-2.0.0-linux-x64'])
   } finally {
     removeDir(root)
   }
 })
 
-test('unpack tells tar not to keep the archive\'s owners: as root, the files would be some other user\'s', { skip: posixOnly('the system tar, as the release tarballs are made') }, () => {
+test('unpack tells tar not to keep the archive\'s owners: as root, the files would be some other user\'s', { skip: posixOnly('the system tar, as the release tarballs are made') }, async () => {
   const root = temp()
   const path = process.env.PATH
   try {
@@ -274,7 +282,7 @@ test('unpack tells tar not to keep the archive\'s owners: as root, the files wou
     const real = execFileSync('/bin/sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).trim()
     writeFileSync(join(bin, 'tar'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${join(root, 'calls')}"\nexec "${real}" "$@"\n`, { mode: 0o755 })
     process.env.PATH = `${bin}:${path}`
-    const staged = unpack(file, join(root, 'stage'))
+    const staged = await unpack(file, join(root, 'stage'))
     const calls = readFileSync(join(root, 'calls'), 'utf8').trim().split('\n')
     assert.equal(calls.length, 2)
     assert.match(calls[0], /^-tzf /, 'the listing')
@@ -286,7 +294,31 @@ test('unpack tells tar not to keep the archive\'s owners: as root, the files wou
   }
 })
 
-test('unpack refuses a tarball that is not one folder before it unpacks anything', { skip: posixOnly('the system tar, as the release tarballs are made') }, () => {
+test('unpack does not hold the event loop while tar runs', { skip: posixOnly('the system tar, as the release tarballs are made') }, async () => {
+  const root = temp()
+  const path = process.env.PATH
+  let ticks = 0
+  const ticking = setInterval(() => { ticks++ }, 50)
+  try {
+    const file = tarball(root, 'trek-server-2.0.0-linux-x64')
+    // A stand-in for tar that takes half a second each time, then runs the real one.
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    const real = execFileSync('/bin/sh', ['-c', 'command -v tar'], { encoding: 'utf8' }).trim()
+    writeFileSync(join(bin, 'tar'), `#!/bin/sh\nsleep 0.5\nexec "${real}" "$@"\n`, { mode: 0o755 })
+    process.env.PATH = `${bin}:${path}`
+    const unpacking = unpack(file, join(root, 'stage'))
+    assert.equal(typeof unpacking?.then, 'function', 'it answers with a promise')
+    assert.equal(await unpacking, join(root, 'stage', 'trek-server-2.0.0-linux-x64'))
+    assert.ok(ticks >= 5, `a 50 ms timer fired ${ticks} times while tar ran for a second`)
+  } finally {
+    clearInterval(ticking)
+    process.env.PATH = path
+    removeDir(root)
+  }
+})
+
+test('unpack refuses a tarball that is not one folder before it unpacks anything', { skip: posixOnly('the system tar, as the release tarballs are made') }, async () => {
   const root = temp()
   try {
     folder(join(root, 'src'), 'one')
@@ -298,12 +330,12 @@ test('unpack refuses a tarball that is not one folder before it unpacks anything
       execFileSync('tar', ['-czf', file, '-C', join(root, 'src'), ...entries], { env: { ...process.env, ...TAR } })
       return file
     }
-    assert.throws(() => unpack(pack('two.tar.gz', ['one', 'two']), stage), /one folder/)
-    assert.throws(() => unpack(pack('loose.tar.gz', ['one', 'loose']), stage), /one folder/)
-    assert.throws(() => unpack(pack('file.tar.gz', ['loose']), stage), /one folder/)
+    await assert.rejects(unpack(pack('two.tar.gz', ['one', 'two']), stage), /one folder/)
+    await assert.rejects(unpack(pack('loose.tar.gz', ['one', 'loose']), stage), /one folder/)
+    await assert.rejects(unpack(pack('file.tar.gz', ['loose']), stage), /one folder/)
     assert.equal(existsSync(stage), false, 'nothing was unpacked')
     writeFileSync(join(root, 'junk.tar.gz'), 'not a tarball')
-    assert.throws(() => unpack(join(root, 'junk.tar.gz'), stage))
+    await assert.rejects(unpack(join(root, 'junk.tar.gz'), stage))
     assert.equal(existsSync(stage), false)
   } finally {
     removeDir(root)

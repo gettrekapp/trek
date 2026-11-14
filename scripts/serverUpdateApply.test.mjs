@@ -489,45 +489,79 @@ test('the staged selfcheck runs the staged version through its own launcher, wit
   const check = (dir, timeoutMs) => runStagedSelfcheck(dir, timeoutMs, env)
   try {
     assert.deepEqual(
-      check(staged('fine', "console.log('ok: ' + process.argv.slice(2).join(' ') + ' ' + (process.execPath === " + JSON.stringify(process.execPath) + "))")),
+      await check(staged('fine', "console.log('ok: ' + process.argv.slice(2).join(' ') + ' ' + (process.execPath === " + JSON.stringify(process.execPath) + "))")),
       { ok: true, output: 'ok: selfcheck true' }
     )
     assert.equal(existsSync(join(root, 'fine', 'update-pending.tried')), false, 'a selfcheck is not a start: nothing is marked')
-    const failed = check(staged('fails', "console.log('ok: node-pty loads'); console.error('FAIL: a terminal runs\\n  posix_spawnp failed'); process.exit(1)"))
+    const failed = await check(staged('fails', "console.log('ok: node-pty loads'); console.error('FAIL: a terminal runs\\n  posix_spawnp failed'); process.exit(1)"))
     assert.equal(failed.ok, false)
     assert.match(failed.output, /ok: node-pty loads/)
     assert.match(failed.output, /FAIL: a terminal runs\n {2}posix_spawnp failed/, 'stderr is kept too')
 
     const started = Date.now()
-    const hung = check(staged('hangs', "console.log('ok: started'); setInterval(() => {}, 1000)"), 3000)
+    const hung = await check(staged('hangs', "console.log('ok: started'); setInterval(() => {}, 1000)"), 3000)
     assert.equal(hung.ok, false)
     assert.match(hung.output, /ok: started/)
     assert.match(hung.output, /did not finish within 3 s/)
     assert.ok(Date.now() - started < 20_000)
 
-    const crashed = check(staged('crashes', "process.kill(process.pid, 'SIGKILL')"))
+    const crashed = await check(staged('crashes', "process.kill(process.pid, 'SIGKILL')"))
     assert.equal(crashed.ok, false)
     assert.match(crashed.output, /ended by SIGKILL/)
 
-    const missing = check(join(root, 'nowhere'))
+    const missing = await check(join(root, 'nowhere'))
     assert.equal(missing.ok, false)
     assert.match(missing.output, /selfcheck could not be run/)
 
     // What the bundle alone would pass, the launcher that will start it must pass too.
     const fine = "console.log('ok')"
-    const notExecutable = check(staged('mode', fine, { text: POSIX_LAUNCHER, mode: 0o644 }))
+    const notExecutable = await check(staged('mode', fine, { text: POSIX_LAUNCHER, mode: 0o644 }))
     assert.equal(notExecutable.ok, false)
     assert.match(notExecutable.output, /selfcheck could not be run/)
-    assert.equal(check(staged('syntax', fine, { text: '#!/bin/sh\nif then fi (\n', mode: 0o755 })).ok, false)
-    assert.equal(check(staged('exits', fine, { text: '#!/bin/sh\nexit 3\n', mode: 0o755 })).ok, false)
+    assert.equal((await check(staged('syntax', fine, { text: '#!/bin/sh\nif then fi (\n', mode: 0o755 }))).ok, false)
+    assert.equal((await check(staged('exits', fine, { text: '#!/bin/sh\nexit 3\n', mode: 0o755 }))).ok, false)
 
     // The Node is the one named: the one the server will be started again with.
-    const noNode = runStagedSelfcheck(staged('no-node', fine), undefined, { ...process.env, TREK_NODE: join(root, 'no-such-node') })
+    const noNode = await runStagedSelfcheck(staged('no-node', fine), undefined, { ...process.env, TREK_NODE: join(root, 'no-such-node') })
     assert.equal(noNode.ok, false)
     assert.match(noNode.output, /Node\.js 22 or later is needed, and .*no-such-node.* was not found/)
     const other = join(root, 'other-node')
     writeFileSync(other, '#!/bin/sh\nif [ "$1" = "-p" ]; then echo 22; exit 0; fi\necho "other node ran $2"\n', { mode: 0o755 })
-    assert.deepEqual(runStagedSelfcheck(staged('other', fine), undefined, { ...process.env, TREK_NODE: other }), { ok: true, output: 'other node ran selfcheck' })
+    assert.deepEqual(await runStagedSelfcheck(staged('other', fine), undefined, { ...process.env, TREK_NODE: other }), { ok: true, output: 'other node ran selfcheck' })
+  } finally {
+    removeDir(root)
+  }
+})
+
+test('the staged selfcheck does not hold the event loop: a server that installs an update keeps answering while the new version proves itself', { skip: posixOnly('the launcher is a POSIX sh script') }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'trek-apply-loop-'))
+  let ticks = 0
+  const ticking = setInterval(() => { ticks++ }, 50)
+  try {
+    const dir = join(root, 'slow')
+    mkdirSync(join(dir, 'bin'), { recursive: true })
+    // A stand-in selfcheck that takes a second.
+    writeFileSync(join(dir, 'bin', 'trek-server'), '#!/bin/sh\nsleep 1\necho "ok: slept"\n', { mode: 0o755 })
+    const running = runStagedSelfcheck(dir, 30_000, process.env)
+    assert.equal(typeof running?.then, 'function', 'it answers with a promise')
+    assert.deepEqual(await running, { ok: true, output: 'ok: slept' })
+    assert.ok(ticks >= 5, `a 50 ms timer fired ${ticks} times during a selfcheck of a second`)
+  } finally {
+    clearInterval(ticking)
+    removeDir(root)
+  }
+})
+
+test('a selfcheck that prints without end is stopped, and has failed', { skip: posixOnly('the launcher is a POSIX sh script') }, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'trek-apply-flood-'))
+  try {
+    const dir = join(root, 'flood')
+    mkdirSync(join(dir, 'bin'), { recursive: true })
+    writeFileSync(join(dir, 'bin', 'trek-server'), '#!/bin/sh\nexec yes "FAIL: on and on"\n', { mode: 0o755 })
+    const flooded = await runStagedSelfcheck(dir, 30_000, process.env)
+    assert.equal(flooded.ok, false)
+    assert.match(flooded.output, /selfcheck could not be run: .*ENOBUFS/)
+    assert.ok(flooded.output.length < 1024 * 1024 + 4096, String(flooded.output.length))
   } finally {
     removeDir(root)
   }
