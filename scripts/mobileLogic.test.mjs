@@ -2,7 +2,8 @@
 // attention list and its notifications, the key bar, the diff colouring, the terminal feed and
 // the ref counts, the connection notices, the per-server generations, the held topic view and
 // the value a promote request waits for, the quick buttons' list and built-in context, and the
-// rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow)
+// rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow,
+// and state/teardown.ts' check for what only the desktop can tear down first)
 // and a ticket's label, link and input through the project's trackers, and what the worktree list
 // says about a branch (its tag, custom tags, ticket and pull request on one line).
 import test from 'node:test'
@@ -17,6 +18,7 @@ import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/qu
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
+import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
 import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
@@ -734,6 +736,103 @@ test('worktrees: a failed removal loads again what the phone unloaded, and never
   const askFails = removal({ loaded: true }, { remove: rejects(dirtyRefusal()), confirmDiscard: rejects(boom) })
   assert.deepEqual(await askFails.run(), { kind: 'failed', error: boom })
   assert.deepEqual(askFails.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
+
+  // The first question throwing: nothing was asked of the server.
+  const firstAskFails = removal({ loaded: true }, { confirmRemove: rejects(boom) })
+  assert.deepEqual(await firstAskFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(firstAskFails.calls, ['confirmRemove'])
+
+  // A worktree with changes that can't be unloaded is neither removed nor loaded.
+  const dirtyUnloadFails = removal({ dirty: true, loaded: true }, { unload: rejects(boom) })
+  assert.deepEqual(await dirtyUnloadFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(dirtyUnloadFails.calls, ['confirmDiscard', 'unload'])
+})
+
+test('worktrees: a reload that throws instead of rejecting does not break the remove flow', async () => {
+  const boom = new Error('boom')
+  // `load` here is not async: it throws before it returns a promise.
+  const throwingLoad = (over) => {
+    const calls = []
+    const step = (name, result) => async (...args) => {
+      calls.push(args.length ? `${name}(${args.join(',')})` : name)
+      return typeof result === 'function' ? result(...args) : result
+    }
+    const run = () =>
+      removeWorktree({
+        worktree: { id: 'w1', name: 'feat', loaded: true },
+        unload: step('unload'),
+        load: () => {
+          calls.push('load')
+          throw new Error('load threw')
+        },
+        remove: step('remove', over.remove),
+        confirmRemove: step('confirmRemove', true),
+        confirmDiscard: step('confirmDiscard', over.confirmDiscard ?? true),
+        refusedAsDirty
+      })
+    return { calls, run }
+  }
+  const failed = throwingLoad({ remove: rejects(boom) })
+  assert.deepEqual(await failed.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(failed.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
+
+  const declined = throwingLoad({ remove: rejects(dirtyRefusal()), confirmDiscard: false })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled' })
+  assert.deepEqual(declined.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
+})
+
+/** A server whose stack.status and env.list answer (or reject with) what is given; `asked` lists the requests. */
+const teardownServer = (capabilities, answers) => {
+  const asked = []
+  const request = async (method) => {
+    asked.push(method)
+    const answer = answers[method]
+    if (answer instanceof Error) throw answer
+    return answer
+  }
+  return { asked, server: { connection: { welcome: { capabilities }, request } } }
+}
+const tdWorktree = { id: 'w1', path: '/r/x' }
+const tdCheck = (capabilities, answers, options) => {
+  const { asked, server } = teardownServer(capabilities, answers)
+  return teardownBlocker(server, 'p1', 'r1', tdWorktree, options).then((why) => ({ why, asked }))
+}
+
+test("teardown: a running dev stack or Docker VM is the desktop's to tear down; a server without them has none", async () => {
+  const idle = { containers: 0, upRunning: false }
+  const vm = (vmState, worktreePath = '/r/x') => ({ worktreePath, vmState, profile: 'trek-x' })
+  for (const options of [undefined, { strict: true }]) {
+    assert.deepEqual(await tdCheck(['stacks', 'env'], { 'stack.status': idle, 'env.list': [] }, options), { why: null, asked: ['stack.status', 'env.list'] })
+    assert.equal((await tdCheck(['stacks', 'env'], { 'stack.status': { containers: 2, upRunning: false }, 'env.list': [] }, options)).why, 'its dev stack is running')
+    assert.equal((await tdCheck(['stacks', 'env'], { 'stack.status': { containers: 0, upRunning: true }, 'env.list': [] }, options)).why, 'its dev stack is running')
+    assert.equal((await tdCheck(['stacks', 'env'], { 'stack.status': idle, 'env.list': [vm('running')] }, options)).why, 'its Docker VM (trek-x) is running')
+    assert.equal((await tdCheck(['stacks', 'env'], { 'stack.status': idle, 'env.list': [vm('stopped'), vm('running', '/r/other')] }, options)).why, null)
+    // Without the capabilities nothing is asked, and that is not a failed check.
+    assert.deepEqual(await tdCheck(['agents'], {}, options), { why: null, asked: [] })
+    assert.deepEqual(await tdCheck(['env'], { 'env.list': [] }, options), { why: null, asked: ['env.list'] })
+  }
+})
+
+test('teardown: a check that fails counts as nothing running for a promote, and stops a removal', async () => {
+  const down = new Error('Not connected')
+  const idle = { containers: 0, upRunning: false }
+  const cases = [
+    { 'stack.status': down, 'env.list': [] },
+    { 'stack.status': idle, 'env.list': down },
+    { 'stack.status': down, 'env.list': down }
+  ]
+  for (const answers of cases) {
+    assert.equal((await tdCheck(['stacks', 'env'], answers)).why, null)
+    assert.equal((await tdCheck(['stacks', 'env'], answers, {})).why, null)
+    assert.equal((await tdCheck(['stacks', 'env'], answers, { strict: true })).why, TEARDOWN_UNCHECKED)
+  }
+  assert.equal(TEARDOWN_UNCHECKED, 'it could not be checked whether its dev stack or Docker VM is running')
+  // What was seen running is still the reason, whatever else failed.
+  assert.equal((await tdCheck(['stacks', 'env'], { 'stack.status': { containers: 1, upRunning: false }, 'env.list': down }, { strict: true })).why, 'its dev stack is running')
+  assert.equal(
+    (await tdCheck(['stacks', 'env'], { 'stack.status': down, 'env.list': [{ worktreePath: '/r/x', vmState: 'running', profile: 'trek-x' }] }, { strict: true })).why,
+    'its Docker VM (trek-x) is running'
+  )
 })
 
 test("tickets: the providers on for the project, by the server's plugin list and the project's plugins setting", () => {
@@ -789,7 +888,9 @@ test("tickets: typed or pasted input is taken as the desktop's ticket dialog tak
   assert.deepEqual(parseTicketInput(linearOnly, 'https://dev.azure.com/org/Proj/_workitems/edit/123'), { error: 'Enter a Linear issue id (TOW-123) or issue URL.' })
   assert.deepEqual(parseTicketInput(both, ''), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
   assert.deepEqual(parseTicketInput(both, '   '), { error: 'Enter a Linear issue id (TOW-123) or issue URL, or an Azure DevOps work item id or URL.' })
-  assert.deepEqual(parseTicketInput([], 'TOW-12'), { error: 'No ticket tracker is on in this project (Settings → Plugins).' })
+  // No tracker on: where to turn one on, in the phone's words (the phone has no Settings → Plugins).
+  assert.deepEqual(parseTicketInput([], 'TOW-12'), { error: "No ticket tracker is on in this project. Turn one on in the desktop app's Settings → Plugins." })
+  assert.deepEqual(parseTicketInput([], ''), { error: "No ticket tracker is on in this project. Turn one on in the desktop app's Settings → Plugins." })
 })
 
 test("worktree list: a branch's line is its tag, custom tags, ticket and pull request, when present", () => {

@@ -71,8 +71,10 @@ export function ticketView(providers: readonly TicketProvider[], settings: Proje
  * What the user typed or pasted → the ticket id to store, or why not: the desktop's ticket dialog
  * rule (ticketLinkPlan), which refuses what no provider on for the project reads, saying what they
  * take. The settings a URL implies are dropped: its ticket links only if the project has them.
+ * With no tracker on, nothing is read: the phone says where one is turned on (not on the phone).
  */
 export function parseTicketInput(providers: readonly TicketProvider[], input: string): { ticketId: string } | { error: string } {
+  if (providers.length === 0) return { error: "No ticket tracker is on in this project. Turn one on in the desktop app's Settings → Plugins." }
   const plan = ticketLinkPlan(providers, {}, input)
   return plan.ticketId && !plan.problem ? { ticketId: plan.ticketId } : { error: plan.problem ?? 'Enter a ticket id or URL.' }
 }

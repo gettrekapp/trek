@@ -7,7 +7,7 @@ import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router
 import { CAPABILITY, type AgentInfo, type Project, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
 import { refusedAsDirty, removeWorktree } from '../../../../src/logic/worktrees.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
-import { teardownBlocker } from '../../../../src/state/teardown.ts'
+import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../src/state/teardown.ts'
 import { confirmAlert } from '../../../../src/ui/alerts.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
@@ -128,8 +128,13 @@ export default function WorktreeScreen(): React.JSX.Element {
     setError(null)
     setBlocked(null)
     try {
-      const why = await teardownBlocker(server, projectId, repo.id, target)
+      // Strict: a check that fails stops the removal (its dev stack may be running).
+      const why = await teardownBlocker(server, projectId, repo.id, target, { strict: true })
       if (!shown.current) return
+      if (why === TEARDOWN_UNCHECKED) {
+        setError("Could not check whether this worktree's dev stack or Docker VM is running, so it was not removed. Try again.")
+        return
+      }
       if (why) {
         setBlocked(`Remove this worktree on the desktop: ${why}, and only the desktop can tear it down first.`)
         return

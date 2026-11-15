@@ -78,9 +78,12 @@ export type RemoveOutcome = { kind: 'removed' } | { kind: 'cancelled' } | { kind
 export async function removeWorktree(deps: RemoveDeps): Promise<RemoveOutcome> {
   const dirty = deps.worktree.dirty === true
   let unloaded = false
-  // The removal's own error is the one to report.
+  // The removal's own error is the one to report, also when `load` throws instead of rejecting.
   const reload = async (): Promise<void> => {
-    if (unloaded) await deps.load().catch(() => {})
+    if (!unloaded) return
+    try {
+      await deps.load()
+    } catch {}
   }
   try {
     if (!(await (dirty ? deps.confirmDiscard() : deps.confirmRemove()))) return { kind: 'cancelled' }
