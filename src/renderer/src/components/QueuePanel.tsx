@@ -1,17 +1,36 @@
 import { useState } from 'react'
 import { useAppStore } from '../store'
 import { getBackend } from '../backend'
+import { queueLabel } from '../quickButtonRow'
 
 interface Props {
   terminalId: string
   global?: boolean
 }
 
+/** The queue's chip, at the end of the quick buttons' row: it opens and closes the panel, and counts what is queued. */
+export function QueueChip({ terminalId, global = false }: Props): React.JSX.Element {
+  const queued = useAppStore((s) => s.terminalQueues[terminalId]?.length ?? 0)
+  const open = useAppStore((s) => (global ? s.globalQueuePanelOpen : s.queuePanelOpen))
+  const setOpen = useAppStore((s) => (global ? s.setGlobalQueuePanelOpen : s.setQueuePanelOpen))
+  return (
+    <button
+      className={`queue-toggle ${open ? 'open' : ''} ${queued > 0 ? 'has-items' : ''}`}
+      title={open ? 'Close queue' : 'Open queue'}
+      aria-expanded={open}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={() => setOpen(!open)}
+    >
+      {queueLabel(queued)}
+    </button>
+  )
+}
+
 /**
- * Collapsible queue beside the terminal. Blocks are stored oldest-first
+ * Collapsible queue beside the terminal (opened from its chip). Blocks are stored oldest-first
  * (first in at the top); clicking one sends it to the terminal and submits.
  */
-export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Element {
+export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Element | null {
   const queue = useAppStore((s) => s.terminalQueues[terminalId]) ?? []
   const open = useAppStore((s) => (global ? s.globalQueuePanelOpen : s.queuePanelOpen))
   const setOpen = useAppStore((s) => (global ? s.setGlobalQueuePanelOpen : s.setQueuePanelOpen))
@@ -19,19 +38,7 @@ export function QueuePanel({ terminalId, global = false }: Props): React.JSX.Ele
   const removeAt = useAppStore((s) => s.removeQueuedText)
   const [draft, setDraft] = useState('')
 
-  if (!open) {
-    return (
-      <button
-        className="queue-toggle"
-        title="Open queue"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => setOpen(true)}
-      >
-        <span className="queue-toggle-label">Queue</span>
-        {queue.length > 0 && <span className="queue-count">{queue.length}</span>}
-      </button>
-    )
-  }
+  if (!open) return null
 
   const addDraft = (): void => {
     const text = draft.trim()

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   branchCustomTags,
   branchTag,
@@ -9,12 +9,10 @@ import {
   pullRequestLabel,
   repoOfInfo,
   repoWorktrees,
-  tagStyle,
   useAppStore,
   worktreeStatus
 } from '../store'
 import { useTicketViews } from '../plugins/useTickets'
-import { safeStatusColor } from '../plugins/ticketProviders'
 import { NotificationsMenu } from './NotificationsMenu'
 import { toggleSidebar } from '../sidebarToggle'
 import { PluginSlot } from '../plugins/PluginHost'
@@ -22,6 +20,22 @@ import { removalBlock } from '../repoRemoval'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
 import { missedRows } from '../automations'
+import {
+  ATTENTION_GROUP_LABELS,
+  attentionGroup,
+  cardAnchor,
+  gitWords,
+  groupByAttention,
+  isUnloaded,
+  parseSidebarView,
+  rowGit,
+  rowReason,
+  sessionLine,
+  sidebarViewChanged,
+  type DotKind,
+  type SidebarView
+} from '../sidebarRow'
+import { WorktreeHoverCard, type HoverCardProps } from './WorktreeHoverCard'
 import { envRepoKey } from '../../../shared/environments'
 import { sameWorktree, worktreeKey } from '../../../shared/types'
 import type { GitWorktreeInfo, Repository, TerminalStatus } from '../../../shared/types'
@@ -43,16 +57,16 @@ export function branchLabel(info: GitWorktreeInfo): string {
   return info.branch ?? (info.head ? `${info.head.slice(0, 8)} (detached)` : info.path)
 }
 
-/** "↑2 ↓1 ● dirty" — empty string when the worktree is clean/unknown. Structural, so a v2 `Worktree` works too. */
-export function gitStatusLabel(info: Pick<GitWorktreeInfo, 'ahead' | 'behind' | 'dirty'>): string {
-  const bits: string[] = []
-  if (info.ahead) bits.push(`↑${info.ahead}`)
-  if (info.behind) bits.push(`↓${info.behind}`)
-  if (info.dirty) bits.push('● dirty')
-  return bits.join(' ')
-}
+/** The Sort menu's choices, kept per window (as the Global panel's height is). */
+const VIEW_KEY = 'trek.sidebar.view'
 
-type DotKind = 'none' | 'dormant' | 'idle' | 'running' | 'attention' | 'done' | 'exited'
+function storedView(): SidebarView {
+  try {
+    return parseSidebarView(localStorage.getItem(VIEW_KEY))
+  } catch {
+    return parseSidebarView(null)
+  }
+}
 
 const DOT_TITLES: Record<DotKind, string> = {
   none: 'No session',
@@ -108,6 +122,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const projectPage = useAppStore((s) => s.projectPage)
   const toggleProjectPage = useAppStore((s) => s.toggleProjectPage)
   const automationCount = project.automations?.length ?? 0
+  const noteCount = project.repositories.reduce((n, r) => n + Object.keys(r.branchNotes ?? {}).length, 0)
   const missedCount = missedRows(project.automations).length
   // The window's connection is down: its commands are disabled until it is back.
   const offline = useAppStore((s) => s.serverOffline)
@@ -115,6 +130,18 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   // Tag ids (or 'untagged'); a worktree matching any of them is shown. Empty = all.
   const [tagFilterValue, setTagFilter] = useState<string[]>([])
   const [tagFilterOpen, setTagFilterOpen] = useState(false)
+  // How the list is ordered and how dense its rows are (the Sort menu).
+  const [view, setViewState] = useState<SidebarView>(storedView)
+  const [sortOpen, setSortOpen] = useState(false)
+  const setView = (patch: Partial<SidebarView>): void => {
+    const next = { ...view, ...patch }
+    setViewState(next)
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify(next))
+    } catch {
+      // No storage (a locked-down browser): the choice lasts for this window only.
+    }
+  }
   const setWorktreeOrder = useAppStore((s) => s.setWorktreeOrder)
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ key: string; after: boolean } | null>(null)
@@ -173,6 +200,29 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           ? 'Untagged'
           : filterTags[0]?.name
 
+  // The hover card: shown beside a row once the pointer has rested on it, and at once when
+  // moving on from a row whose card was just up. A press, a drag or a scroll puts it away.
+  const [hover, setHover] = useState<{ key: string; rect: { top: number; bottom: number; right: number } } | null>(null)
+  const hoverTimer = useRef<number | undefined>(undefined)
+  const cardHiddenAt = useRef(0)
+  const hideCard = (): void => {
+    window.clearTimeout(hoverTimer.current)
+    setHover((shown) => {
+      if (shown) cardHiddenAt.current = Date.now()
+      return null
+    })
+  }
+  const showCardSoon = (key: string, row: HTMLElement): void => {
+    window.clearTimeout(hoverTimer.current)
+    const delay = Date.now() - cardHiddenAt.current < 300 ? 80 : 450
+    hoverTimer.current = window.setTimeout(() => {
+      if (!row.isConnected) return
+      const { top, bottom, right } = row.getBoundingClientRect()
+      setHover({ key, rect: { top, bottom, right } })
+    }, delay)
+  }
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), [])
+
   const endDrag = (): void => {
     setDragKey(null)
     setDropTarget(null)
@@ -199,7 +249,8 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     (id) => (terminalOrder[id]?.length ?? 0) > 0
   ).length
 
-  const renderRow = (info: GitWorktreeInfo): React.JSX.Element => {
+  /** Everything a row — and its hover card — derives from a worktree. */
+  const rowModel = (info: GitWorktreeInfo) => {
     const repo = repoOfInfo(project, info)
     const instance = instanceForInfo(project, info)
     const order = instance ? terminalOrder[instance.id] : undefined
@@ -213,7 +264,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
       dormant.length > 0
     )
     const { prefix, name } = splitBranch(branchLabel(info))
-    const git = gitStatusLabel(info)
+    const git = rowGit(info)
     const tag = branchTag(project, repo, info.branch)
     const rowCustomTags = branchCustomTags(project, repo, info.branch)
     const ticket = info.branch ? repo.branchTickets?.[info.branch] : undefined
@@ -232,6 +283,26 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         (info.isMain && selected?.path === repo.path))
     // A worktree git no longer lists on the server: it can only be deleted (Notes for 3c-2 #9).
     const missing = !!info.prunable
+    // What takes over the second line: the row says why it wants the user, not that it does.
+    const reason = rowReason({
+      missing,
+      questions: rowDecisions.map((d) => d.question),
+      prNotice,
+      prLabel: pullRequest ? pullRequestLabel(pullRequest) : undefined
+    })
+    // Bold until looked at: an agent finished or is waiting, or the row has a decision or notice.
+    const unseen = dot === 'done' || dot === 'attention' || reason?.kind === 'decision' || reason?.kind === 'notice'
+    return {
+      repo, instance, order, loaded, rowDecisions, dormant, dot, name, prefix, git, tag, rowCustomTags,
+      ticket, ticketInfo, pullRequest, prNotice, env, envIsBusy, isSelected, missing, reason, unseen
+    }
+  }
+
+  const renderRow = (info: GitWorktreeInfo): React.JSX.Element => {
+    const {
+      instance, order, loaded, dormant, dot, name, git, tag, rowCustomTags, ticket, ticketInfo,
+      pullRequest, env, envIsBusy, isSelected, missing, reason, unseen
+    } = rowModel(info)
     const key = worktreeKey(info)
     const dropClass =
       dropTarget?.key === key && dragKey !== key
@@ -242,9 +313,14 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
     return (
       <div
         key={key}
-        className={`wt-row ${isSelected ? 'selected' : ''} ${dragKey === key ? 'dragging' : ''} ${dropClass}`}
-        draggable={!offline}
+        className={`wt-row ${isSelected ? 'selected' : ''} ${unseen ? 'unseen' : ''} ${dot === 'dormant' ? 'dormant' : ''} ${missing ? 'missing' : ''} ${view.compact ? 'compact' : ''} ${dragKey === key ? 'dragging' : ''} ${dropClass}`}
+        // Attention first is a view of the list, not an order: rows only drag in the manual order.
+        draggable={!offline && view.sort === 'manual'}
+        onMouseEnter={(e) => showCardSoon(key, e.currentTarget)}
+        onMouseLeave={hideCard}
+        onMouseDown={hideCard}
         onDragStart={(e) => {
+          hideCard()
           e.dataTransfer.effectAllowed = 'move'
           setDragKey(key)
           setDragRepoId(info.repoId)
@@ -264,7 +340,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         }}
         onDragEnd={endDrag}
         onClick={() => selectWorktree({ path: info.path }, instance?.id)}
-        title={`${branchLabel(info)} — ${info.path}`}
       >
         {dot === 'attention' ? (
           <span className="wt-attn" title={DOT_TITLES.attention}>
@@ -278,36 +353,68 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             <span className="wt-branch-label">
               <span className="wt-name">{name}</span>
             </span>
-            {rowDecisions.length > 0 && (
-              <span
-                className="decision-icon"
-                title={`Needs a decision:\n${rowDecisions.map((d) => d.question).join('\n')}`}
-              >
-                ⚑
+            {info.isMain && <span className="primary-tag">primary</span>}
+            {/* A compact row has no second line, so its PR number moves up beside the git marks */}
+            {view.compact && !reason && pullRequest && <span className="wt-compact-pr">{pullRequestLabel(pullRequest)}</span>}
+            {git && (
+              <span className={`wt-git ${git.dirty ? 'dirty' : ''}`}>
+                {git.dirty && <span className="wt-dirty-dot" title="Uncommitted changes" />}
+                {git.counts}
               </span>
             )}
-            {prNotice && <PrNoticeFlag title={prNotice} />}
-            {info.isMain && <span className="primary-tag">PRIMARY</span>}
+            {/* Unload shows on hover or focus, in place of the git marks; Load stays, as the saved-session count */}
+            {instance && loaded && (order?.length ?? 0) > 0 && (
+              <button
+                className="wt-power loaded"
+                title="Unload — end this worktree's sessions (they stay saved)"
+                disabled={offline}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void getBackend().worktrees.unload(instance.id)
+                }}
+              >
+                Unload
+              </button>
+            )}
+            {instance && dormant.length > 0 && !missing && (
+              <button
+                className="wt-power dormant"
+                title={`Load ${dormant.length} saved session${dormant.length === 1 ? '' : 's'}`}
+                disabled={offline}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  void getBackend().worktrees.load(instance.id)
+                }}
+              >
+                ▸{dormant.length}
+              </button>
+            )}
           </div>
-          {prefix && <div className="wt-prefix-line">{prefix}</div>}
-          {(tag || rowCustomTags.length > 0 || ticket || pullRequest || env || git || missing) && (
-            <div className="wt-bottom">
-              <div className="wt-chips">
-                {missing && (
-                  <span className="mini-chip wt-missing" title="Git no longer lists this worktree on the server; delete it to drop it">
-                    missing
-                  </span>
-                )}
+          {reason ? (
+            <div className={`wt-meta wt-reason ${reason.kind}`}>
+              <span
+                className={reason.kind === 'notice' ? 'wt-pr-flag' : reason.kind === 'missing' ? 'mini-chip wt-missing' : 'wt-decision'}
+                title={reason.title}
+              >
+                {reason.text}
+              </span>
+            </div>
+          ) : (
+            !view.compact &&
+            (tag || rowCustomTags.length > 0 || ticket || pullRequest || env) && (
+              <div className="wt-meta">
                 {tag && (
-                  <span className="mini-chip" style={tagStyle(tag)}>
+                  <span className="mini-chip" style={{ color: tag.color }}>
                     {tag.name}
                   </span>
                 )}
-                {rowCustomTags.map((t) => (
-                  <span key={t.id} className="mini-chip" style={tagStyle(t)}>
-                    {t.name}
+                {rowCustomTags.length > 0 && (
+                  <span className="wt-tag-squares">
+                    {rowCustomTags.map((t) => (
+                      <span key={t.id} className="mini-chip wt-tag-square" style={{ background: t.color }} title={t.name} />
+                    ))}
                   </span>
-                ))}
+                )}
                 {ticket && ticketInfo && (
                   <span
                     className="mini-chip ticket"
@@ -317,20 +424,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                         : undefined
                     }
                   >
-                    {ticketInfo.info && (
-                      <span
-                        className="ticket-status-dot"
-                        style={{ background: safeStatusColor(ticketInfo.info.statusColor) }}
-                      />
-                    )}
                     {ticketInfo.label}
                   </span>
                 )}
-                {pullRequest && (
-                  <span className="mini-chip pr" title={prNotice}>
-                    {pullRequestLabel(pullRequest)}
-                  </span>
-                )}
+                {pullRequest && <span className="mini-chip pr">{pullRequestLabel(pullRequest)}</span>}
                 {env && (
                   <span
                     className={`mini-chip env ${envIsBusy ? 'busy' : env.vmState === 'running' ? 'running' : ''}`}
@@ -344,41 +441,51 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
                   </span>
                 )}
               </div>
-              {git && <span className={`wt-git ${info.dirty ? 'dirty' : ''}`}>{git}</span>}
-            </div>
-          )}
-        </div>
-        {/* Always rendered so the row content doesn't shift between rows */}
-        <div className="wt-power-slot">
-          {instance && loaded && (order?.length ?? 0) > 0 && (
-            <button
-              className="wt-power loaded"
-              title="Unload — end this worktree's sessions (they stay saved)"
-              disabled={offline}
-              onClick={(e) => {
-                e.stopPropagation()
-                void getBackend().worktrees.unload(instance.id)
-              }}
-            >
-              ⏏
-            </button>
-          )}
-          {instance && dormant.length > 0 && !missing && (
-            <button
-              className="wt-power dormant"
-              title={`Load ${dormant.length} saved session${dormant.length === 1 ? '' : 's'}`}
-              disabled={offline}
-              onClick={(e) => {
-                e.stopPropagation()
-                void getBackend().worktrees.load(instance.id)
-              }}
-            >
-              ▸{dormant.length}
-            </button>
+            )
           )}
         </div>
       </div>
     )
+  }
+
+  const cardProps = (info: GitWorktreeInfo, rect: { top: number; bottom: number; right: number }): HoverCardProps => {
+    const m = rowModel(info)
+    const watching = !!m.pullRequest && !!info.branch && !!m.repo.branchPrWatches?.[info.branch]
+    return {
+      anchor: cardAnchor(rect, window.innerHeight),
+      prefix: m.prefix,
+      name: m.name,
+      path: info.path,
+      isMain: !!info.isMain,
+      missing: m.missing,
+      tags: [...(m.tag ? [m.tag] : []), ...m.rowCustomTags],
+      ticket:
+        m.ticket && m.ticketInfo
+          ? {
+              label: m.ticketInfo.label,
+              status: m.ticketInfo.info?.status,
+              statusColor: m.ticketInfo.info?.statusColor,
+              title: m.ticketInfo.info?.title
+            }
+          : undefined,
+      pullRequest: m.pullRequest
+        ? {
+            label: pullRequestLabel(m.pullRequest),
+            watch: watching ? (features.prWatch ? 'watching' : 'paused') : undefined,
+            notice: m.prNotice
+          }
+        : undefined,
+      git: gitWords(info),
+      environment: m.env ? `${m.envIsBusy ? 'busy' : m.env.vmState}${m.env.address ? ` — ${m.env.address}` : ''}` : undefined,
+      questions: m.rowDecisions.map((d) => d.question).filter((q): q is string => !!q),
+      sessions: [
+        ...(m.order ?? []).flatMap((id) => {
+          const meta = terminals[id]
+          return meta ? [{ key: id, title: meta.title, ...sessionLine(meta.status) }] : []
+        }),
+        ...m.dormant.map((t, i) => ({ key: `saved-${i}`, title: t.title, dot: 'dormant' as const, word: 'saved' }))
+      ]
+    }
   }
 
   /** Highest-priority dot across a repository's sessions, shown when collapsed. */
@@ -394,7 +501,13 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const filtering = !!query || tagFilter.length > 0
 
   const renderSection = (repo: Repository): React.JSX.Element | null => {
-    const repoRows = rows.filter((w) => w.repoId === repo.id)
+    const repoRows = rows.filter((w) => {
+      if (w.repoId !== repo.id) return false
+      if (!view.hideUnloaded) return true
+      // Hide unloaded leaves out rows with no loaded session — never the one you are on.
+      const m = rowModel(w)
+      return m.isSelected || !isUnloaded(m.dot)
+    })
     if (filtering && repoRows.length === 0) return null
     const isCollapsed = !!collapsed[repo.id]
     const dot = repoDot(repo)
@@ -456,10 +569,26 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             </>
           )}
         </div>
-        {!isCollapsed && repoRows.map(renderRow)}
+        {!isCollapsed &&
+          (view.sort === 'attention'
+            ? groupByAttention(repoRows, (w) => {
+                const m = rowModel(w)
+                return attentionGroup(m.dot, m.reason?.kind)
+              }).map((g) => (
+                <div className="wt-group" key={g.group}>
+                  <div className="wt-group-label">
+                    {ATTENTION_GROUP_LABELS[g.group]} · {g.rows.length}
+                  </div>
+                  {g.rows.map(renderRow)}
+                </div>
+              ))
+            : repoRows.map(renderRow))}
       </section>
     )
   }
+
+  const hoveredInfo = hover ? worktrees.find((w) => worktreeKey(w) === hover.key) : undefined
+  const hoverCard = hover && hoveredInfo ? cardProps(hoveredInfo, hover.rect) : null
 
   return (
     <aside className="sidebar">
@@ -483,7 +612,64 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         </button>
       </div>
       <div className="sidebar-heading">
-        <span>Worktrees · {rows.length}</span>
+        <span className="sidebar-heading-label">Worktrees · {rows.length}</span>
+        <div className="sidebar-sort">
+          <button
+            className={`sort-btn ${sidebarViewChanged(view) ? 'filtered' : ''}`}
+            title="Order and density of the worktree list"
+            aria-expanded={sortOpen}
+            onClick={() => setSortOpen((v) => !v)}
+          >
+            Sort
+            <span className="chip-caret">▾</span>
+          </button>
+          {sortOpen && (
+            <>
+              <div className="detail-menu-backdrop" onClick={() => setSortOpen(false)} />
+              <div className="tag-menu sort-menu">
+                <div
+                  className={`tag-menu-item ${view.sort === 'manual' ? 'active' : ''}`}
+                  title="The order you dragged the rows into"
+                  onClick={() => {
+                    setView({ sort: 'manual' })
+                    setSortOpen(false)
+                  }}
+                >
+                  Manual order
+                  {view.sort === 'manual' && <span className="tag-check">✓</span>}
+                </div>
+                <div
+                  className={`tag-menu-item ${view.sort === 'attention' ? 'active' : ''}`}
+                  title="Group each repository's rows: Needs you, Working, Quiet — in your order within each. Rows don't drag in this view."
+                  onClick={() => {
+                    setView({ sort: 'attention' })
+                    setSortOpen(false)
+                  }}
+                >
+                  Attention first
+                  {view.sort === 'attention' && <span className="tag-check">✓</span>}
+                </div>
+                <div className="detail-menu-divider" />
+                <div
+                  className={`tag-menu-item ${view.compact ? 'active' : ''}`}
+                  title="One line a row; a row that needs you keeps its second line"
+                  onClick={() => setView({ compact: !view.compact })}
+                >
+                  Compact rows
+                  {view.compact && <span className="tag-check">✓</span>}
+                </div>
+                <div
+                  className={`tag-menu-item ${view.hideUnloaded ? 'active' : ''}`}
+                  title="Leave out worktrees with no loaded session; the selected one always stays"
+                  onClick={() => setView({ hideUnloaded: !view.hideUnloaded })}
+                >
+                  Hide unloaded
+                  {view.hideUnloaded && <span className="tag-check">✓</span>}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
         <div className="sidebar-tag-filter">
           <button
             className={`tag-filter-btn ${tagFilter.length ? 'filtered' : ''}`}
@@ -555,9 +741,10 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           )}
         </div>
       </div>
-      <div className="sidebar-list">
+      <div className="sidebar-list" onScroll={hideCard}>
         {project.repositories.map(renderSection)}
       </div>
+      {hoverCard && <WorktreeHoverCard {...hoverCard} />}
       <div className="sidebar-footer">
         <button
           className="sidebar-nav-row"
@@ -567,6 +754,15 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         >
           <span className="sidebar-nav-icon">＋</span>
           <span className="sidebar-nav-label">Add repository…</span>
+        </button>
+        <button
+          className={`sidebar-nav-row ${projectPage === 'notes' ? 'active' : ''}`}
+          title="Every branch note in this project, including branches whose worktree is gone"
+          onClick={() => toggleProjectPage('notes')}
+        >
+          <span className="sidebar-nav-icon">✎</span>
+          <span className="sidebar-nav-label">All Notes</span>
+          {noteCount > 0 && <span className="sidebar-nav-count">{noteCount}</span>}
         </button>
         {features.automations && (
           <button

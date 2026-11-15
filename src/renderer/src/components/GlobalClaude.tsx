@@ -291,7 +291,7 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
       <div
         className={`global-bar ${open ? 'open' : ''} ${attention ? 'attention' : ''}`}
         onClick={toggle}
-        title={open ? 'Hide the Global panel (⌘J)' : 'Show the Global panel (⌘J)'}
+        title={`${open ? 'Hide' : 'Show'} the Global panel (⌘J): project-wide sessions, which control the worktrees' sessions`}
       >
         <span className="global-chevron">{open ? '▾' : '▴'}</span>
         <span className="global-title">
@@ -308,13 +308,14 @@ export function GlobalClaude({ readOnly = false }: Props): React.JSX.Element {
           {readOnly
             ? "the server's MCP tools are down · no new sessions"
             : hasTabs
-              ? `project-wide ${flags.sessions.count === 1 ? 'session' : `sessions (${flags.sessions.count})`} · controls worktree sessions`
+              ? `${flags.sessions.count} ${flags.sessions.count === 1 ? 'session' : 'sessions'}`
               : botView.needsConsent
                 ? 'bot: waiting for your OK'
                 : botView.phase !== 'off'
                   ? `bot: ${botView.phase}`
-                  : 'click to start a project-wide session'}
+                  : 'start a project-wide session'}
         </span>
+        <span className="global-key">⌘J</span>
       </div>
     </div>
   )

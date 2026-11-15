@@ -301,7 +301,7 @@ try {
   const firstNote = { title: 'PR #12 changed', body: `prwatch · Remote\n${notice}` }
   check('main raises one OS notification: title and body', await until(prNotes, [firstNote]), [firstNote])
   // The entry selects the worktree: the primary is selected first.
-  await rows.filter({ hasText: 'PRIMARY' }).click()
+  await rows.filter({ hasText: 'primary' }).click()
   check('(the primary worktree selected)', await until(() => detail.locator('.detail-path').textContent(), repo), repo)
   const bell = win.locator('.notif-bell')
   check('the bell counts the notice as a notice', await until(async () => /\b1 pull request notice waiting on you$/.test((await bell.getAttribute('title')) ?? ''), true), true)
@@ -314,9 +314,9 @@ try {
   check('and closes the menu', await until(() => win.locator('.notif-menu').count(), 0), 0)
   check("the sidebar flags the worktree's row", await until(() => featureRow.locator('.wt-pr-flag').getAttribute('title').catch(() => null), notice), notice)
   check('beside its status dot, which still shows', await featureRow.locator('.wt-dot').count(), 1)
-  check('the detail pane shows the notice', await until(() => detail.locator('.chip-pr-notice').textContent().catch(() => null), `${notice}×`), `${notice}×`)
-  check("the notice's × says Dismiss", await detail.locator('.chip-pr-notice .chip-dismiss').getAttribute('title'), 'Dismiss')
-  await detail.locator('.chip-pr-notice .chip-dismiss').click()
+  check('the detail pane shows the notice', await until(() => detail.locator('.chip-pr-notice').textContent().catch(() => null), notice), notice)
+  check('its strip has Dismiss', await detail.locator('.detail-notice .chip-dismiss').getAttribute('title'), 'Dismiss')
+  await detail.locator('.detail-notice .chip-dismiss').click()
   check('its × clears the notice on the server', await until(async () => (await feature()).prNotice ?? null, null), null)
   check('and the row is no longer flagged', await until(() => featureRow.locator('.wt-pr-flag').count(), 0), 0)
 
@@ -357,7 +357,7 @@ try {
   const mergedNote = { title: 'PR #12 changed', body: `prwatch · Remote\n${merged}` }
   check('main raises its OS notification', await until(async () => (await prNotes())[1] ?? null, mergedNote), mergedNote)
   // Its click selects the worktree, as the menu's entry does.
-  await rows.filter({ hasText: 'PRIMARY' }).click()
+  await rows.filter({ hasText: 'primary' }).click()
   await until(() => detail.locator('.detail-path').textContent(), repo)
   await app.evaluate(() => globalThis.__notes.filter((n) => n.title.startsWith('PR #12'))[1].n.emit('click'))
   check('clicking the notification selects the feature worktree', await until(() => detail.locator('.detail-path').textContent(), worktree), worktree)

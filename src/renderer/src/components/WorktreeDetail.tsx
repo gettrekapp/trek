@@ -8,15 +8,13 @@ import {
   instanceForInfo,
   pullRequestLabel,
   repoOfInfo,
-  tagStyle,
   useAppStore
 } from '../store'
 import { useTicketViews } from '../plugins/useTickets'
-import { safeStatusColor } from '../plugins/ticketProviders'
 import { cycleTab, focusInGlobalPanel, focusTerminal, tabCycleStep } from '../terminals'
 import { getBackend } from '../backend'
 import { useFeatures } from '../useFeatures'
-import { branchLabel, gitStatusLabel, splitBranch } from './Sidebar'
+import { branchLabel, splitBranch } from './Sidebar'
 import { StatusBadge } from './StatusBadge'
 import { DecisionIcon } from './DecisionIcon'
 import { SkillMenu } from './SkillMenu'
@@ -31,7 +29,6 @@ import { ChangesPanel, useWorktreeChanges, type ReviewTarget } from './ChangesPa
 import { BRANCH_SOURCE } from '../../../shared/review'
 import type { ChangesSource } from '../../../shared/types'
 import { changesTabLabel } from '../../../shared/changes'
-import { AllNotesPanel } from './AllNotesPanel'
 import { HistoryPanel } from './HistoryPanel'
 import { TerminalPane } from './TerminalPane'
 import { TicketModal } from './TicketModal'
@@ -49,8 +46,6 @@ interface Props {
   info: GitWorktreeInfo | undefined
   /** Set when there is no row to show because the selected repository can't be read. */
   unreadableRepo?: Repository
-  /** All live git worktrees, for the All Notes panel's "no worktree" markers */
-  worktrees: GitWorktreeInfo[]
   /** Called after actions that change the set of worktrees (delete/promote). */
   onWorktreesChanged: () => void
 }
@@ -59,7 +54,6 @@ type Panel =
   | 'sessions'
   | 'changes'
   | 'notes'
-  | 'allNotes'
   | 'history'
   | 'docker'
   | 'environment'
@@ -100,7 +94,6 @@ function useStackStatus(
 export function WorktreeDetail({
   info,
   unreadableRepo,
-  worktrees,
   onWorktreesChanged
 }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
@@ -118,6 +111,17 @@ export function WorktreeDetail({
 
   const [panel, setPanel] = useState<Panel>('sessions')
   const [menuOpen, setMenuOpen] = useState(false)
+  // The Run menu (Docker, Env, Stack): a press anywhere outside it, or the Docker ▾ menu, closes it.
+  const [runOpen, setRunOpen] = useState(false)
+  useEffect(() => {
+    if (!runOpen) return
+    const onMouseDown = (e: MouseEvent): void => {
+      const target = e.target as HTMLElement
+      if (!target.closest('.run-group') && !target.closest('.docker-menu')) setRunOpen(false)
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [runOpen])
   const [tagMenuOpen, setTagMenuOpen] = useState(false)
   const [customTagMenuOpen, setCustomTagMenuOpen] = useState(false)
   const [menuBusy, setBusy] = useState(false)
@@ -231,8 +235,6 @@ export function WorktreeDetail({
   // Sessions saved for an unloaded worktree — what loading it resumes.
   const dormant = instance ? dormantSessions({ project, loadedWorktrees }, instance.id) : []
   const { prefix, name } = splitBranch(branchLabel(info))
-  const git = gitStatusLabel(info)
-  const clean = !git && info.dirty === false
   const tag = branchTag(project, repo, info.branch)
   const customTags = project.customTags ?? []
   const enabledCustomTags = branchCustomTags(project, repo, info.branch)
@@ -328,6 +330,55 @@ export function WorktreeDetail({
     }
   }
 
+  // The runtime panels: Docker (the repository's compose), the worktree's environment, its stack.
+  const runGrouped = [showDocker, showEnv, showStack].filter(Boolean).length >= 2
+  const runActive = panel === 'docker' || panel === 'environment' || panel === 'stack'
+  const stackBusy = showStack && stackStateNow !== 'running' && stackStateNow !== 'stopped'
+  const runDot =
+    envOpBusy || stackBusy
+      ? 'attention'
+      : (showEnv && env?.vmState === 'running') || (showStack && stackStateNow === 'running')
+        ? 'running'
+        : 'exited'
+  const runtimeButtons = (
+    <>
+          {showDocker && (
+            <button
+              className={`panel-btn ${panel === 'docker' ? 'active' : ''}`}
+              onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
+            >
+              Docker <DockerMenu key={repo.id} repoId={repo.id} />
+            </button>
+          )}
+          {showEnv && (
+            <button
+              className={`panel-btn ${panel === 'environment' ? 'active' : ''}`}
+              title="Isolated Docker environment for this worktree"
+              onClick={() => setPanel(panel === 'environment' ? 'sessions' : 'environment')}
+            >
+              Env
+              {env && (
+                <span
+                  className={`docker-dot ${envOpBusy ? 'attention' : env.vmState === 'running' ? 'running' : 'exited'}`}
+                />
+              )}
+            </button>
+          )}
+          {showStack && (
+            <button
+              className={`panel-btn ${panel === 'stack' ? 'active' : ''}`}
+              title="This worktree's dev stack (docker/stack/stack.sh)"
+              onClick={() => setPanel(panel === 'stack' ? 'sessions' : 'stack')}
+            >
+              Stack
+              <span
+                className={`docker-dot ${stackStateNow === 'running' ? 'running' : stackStateNow === 'stopped' ? 'exited' : 'attention'}`}
+              />
+            </button>
+          )}
+    </>
+  )
+
   return (
     <main className="detail">
       <div className="detail-header">
@@ -338,14 +389,15 @@ export function WorktreeDetail({
           </div>
           <div className="detail-path">{info.path}</div>
           <div className="detail-chips">
+            {offline && <span className="chip chip-offline">Server disconnected</span>}
             {info.branch && (
               <span className="tag-chip-wrap">
                 <span
                   className={`chip chip-tag ${tag ? '' : 'untagged'}`}
-                  style={tag ? tagStyle(tag) : undefined}
                   title="Set the workflow tag for this branch"
                   onClick={() => !offline && setTagMenuOpen((v) => !v)}
                 >
+                  <span className={`tag-dot ${tag ? '' : 'hollow'}`} style={tag ? { color: tag.color } : undefined} />
                   {tag?.name ?? 'No tag'} <span className="chip-caret">▾</span>
                 </span>
                 {tagMenuOpen && (
@@ -391,10 +443,10 @@ export function WorktreeDetail({
                   <span
                     key={t.id}
                     className="chip chip-tag"
-                    style={tagStyle(t)}
                     title="Toggle custom tags for this branch"
                     onClick={() => !offline && setCustomTagMenuOpen((v) => !v)}
                   >
+                    <span className="wt-tag-square" style={{ background: t.color }} />
                     {t.name}
                   </span>
                 ))}
@@ -433,6 +485,11 @@ export function WorktreeDetail({
                 )}
               </span>
             )}
+            {info.branch && !ticket && (
+              <button className="chip chip-link" disabled={offline} onClick={() => setShowTicket(true)}>
+                Link ticket
+              </button>
+            )}
             {ticket && (
               <span
                 className="chip chip-ticket"
@@ -440,7 +497,7 @@ export function WorktreeDetail({
                 tabIndex={0}
                 title={
                   linkedTicketUrl
-                    ? `Open ticket ${ticketInfo!.label}${issue ? ` — ${issue.title}` : ''}`
+                    ? `Open ticket ${ticketInfo!.label}${issue ? ` · ${issue.status} — ${issue.title}` : ''}`
                     : `Ticket ${ticketInfo!.label}: click to add what its link needs`
                 }
                 onClick={openTicketChip}
@@ -452,19 +509,12 @@ export function WorktreeDetail({
                 }}
               >
                 {issue ? ticketInfo!.label : `Ticket ${ticketInfo!.label}`}
-                {issue && (
-                  <>
-                    <span className="ticket-status">
-                      <span
-                        className="ticket-status-dot"
-                        style={{ background: safeStatusColor(issue.statusColor) }}
-                      />
-                      {issue.status}
-                    </span>
-                    <span className="ticket-title">{issue.title}</span>
-                  </>
-                )}
               </span>
+            )}
+            {info.branch && !pullRequest && (
+              <button className="chip chip-link" disabled={offline} onClick={() => setShowPR(true)}>
+                Link pull request
+              </button>
             )}
             {pullRequest && (
               <span
@@ -479,24 +529,12 @@ export function WorktreeDetail({
                 )}
               </span>
             )}
-            {prNotice && (
-              <span className="chip chip-pr-notice">
-                {prNotice}
-                <button
-                  className="chip-dismiss"
-                  title="Dismiss"
-                  aria-label="Dismiss pull request notice"
-                  disabled={offline}
-                  onClick={() => {
-                    if (!offline) void getBackend().branch.dismissPrNotice(info.path).catch((err: unknown) => getBackend().errors.report('Could not dismiss the notice', err))
-                  }}
-                >
-                  ×
-                </button>
+            {info.dirty && (
+              <span className="chip chip-git">
+                <span className="wt-dirty-dot" />
+                Uncommitted changes
               </span>
             )}
-            {git && <span className="chip chip-git">{git}</span>}
-            {clean && <span className="chip chip-clean">Clean</span>}
             {showEnv && (env || envOpBusy) && (
               <span
                 className={`chip chip-env ${envOpBusy ? 'busy' : env?.vmState === 'running' ? 'running' : 'stopped'}`}
@@ -529,9 +567,9 @@ export function WorktreeDetail({
         </div>
         <div className="detail-actions">
           {info.branch && (
-            <>
+            <div className="detail-sync">
               <button
-                className="btn btn-ghost"
+                className={`btn btn-ghost ${info.behind ? '' : 'idle'}`}
                 disabled={offline || syncBusy !== null}
                 title={offline ? 'Server disconnected' : `git pull --ff-only origin ${info.branch}`}
                 onClick={() => void runGitSync('pull')}
@@ -539,14 +577,14 @@ export function WorktreeDetail({
                 {syncBusy === 'pull' ? 'Pulling…' : `Pull${info.behind ? ` ↓${info.behind}` : ''}`}
               </button>
               <button
-                className="btn btn-ghost"
+                className={`btn btn-ghost ${info.ahead ? '' : 'idle'}`}
                 disabled={offline || syncBusy !== null}
                 title={offline ? 'Server disconnected' : `git push origin ${info.branch}`}
                 onClick={() => void runGitSync('push')}
               >
                 {syncBusy === 'push' ? 'Pushing…' : `Push${info.ahead ? ` ↑${info.ahead}` : ''}`}
               </button>
-            </>
+            </div>
           )}
           <button
             className={`btn btn-ghost btn-icon ${menuOpen ? 'open' : ''}`}
@@ -559,10 +597,36 @@ export function WorktreeDetail({
         </div>
       </div>
 
+      {/* A watched pull request's report: one line under the header until it is dismissed */}
+      {prNotice && (
+        <div className="detail-notice">
+          <span className="chip-pr-notice">{prNotice}</span>
+          {pullRequest && (
+            <button className="detail-notice-link" onClick={() => window.open(pullRequest)}>
+              Open PR
+            </button>
+          )}
+          <button
+            className="chip-dismiss"
+            title="Dismiss"
+            aria-label="Dismiss pull request notice"
+            disabled={offline}
+            onClick={() => {
+              if (!offline) void getBackend().branch.dismissPrNotice(info.path).catch((err: unknown) => getBackend().errors.report('Could not dismiss the notice', err))
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {menuOpen && (
         <>
           <div className="detail-menu-backdrop" onClick={() => setMenuOpen(false)} />
           <div className="detail-menu">
+            <div className="detail-menu-path" title={info.path}>
+              {info.path}
+            </div>
             {features.openInEditor && (
               <div
                 className="detail-menu-item"
@@ -572,7 +636,6 @@ export function WorktreeDetail({
                 }}
               >
                 <div className="detail-menu-name">Open in VS Code</div>
-                <div className="detail-menu-desc">{info.path}</div>
               </div>
             )}
             {features.reveal && (
@@ -586,6 +649,15 @@ export function WorktreeDetail({
                 <div className="detail-menu-name">Reveal in Finder</div>
               </div>
             )}
+            <div
+              className="detail-menu-item"
+              onClick={() => {
+                setMenuOpen(false)
+                void navigator.clipboard.writeText(info.path)
+              }}
+            >
+              <div className="detail-menu-name">Copy path</div>
+            </div>
             {info.branch && (
               <>
                 <div className="detail-menu-divider" />
@@ -596,10 +668,9 @@ export function WorktreeDetail({
                     setShowTicket(true)
                   }}
                 >
-                  <div className="detail-menu-name">
+                  <div className="detail-menu-name" title="Change or unlink the linked ticket">
                     Ticket {ticketInfo ? ticketInfo.label : '(none)'}…
                   </div>
-                  <div className="detail-menu-desc">Change or unlink the linked ticket</div>
                 </div>
                 <div
                   className="detail-menu-item"
@@ -608,11 +679,8 @@ export function WorktreeDetail({
                     setShowPR(true)
                   }}
                 >
-                  <div className="detail-menu-name">
+                  <div className="detail-menu-name" title="Change or unlink the linked pull request">
                     Pull request {pullRequest ? pullRequestLabel(pullRequest) : '(none)'}…
-                  </div>
-                  <div className="detail-menu-desc">
-                    Change or unlink the linked pull request
                   </div>
                 </div>
                 {pullRequest && info.branch && (features.prWatch || watchingPr) && (
@@ -628,11 +696,15 @@ export function WorktreeDetail({
                       )
                     }}
                   >
-                    <div className="detail-menu-name">{watchingPr ? 'Stop watching pull request' : 'Watch pull request'}</div>
-                    <div className="detail-menu-desc">
-                      {watchingPr
-                        ? 'The server stops following its checks and reviews'
-                        : "The server follows its checks, reviews and merge state, and queues a prompt on this worktree's newest session"}
+                    <div
+                      className="detail-menu-name"
+                      title={
+                        watchingPr
+                          ? 'The server stops following its checks and reviews'
+                          : "The server follows its checks, reviews and merge state, and queues a prompt on this worktree's newest session"
+                      }
+                    >
+                      {watchingPr ? 'Stop watching pull request' : 'Watch pull request'}
                     </div>
                   </div>
                 )}
@@ -651,6 +723,22 @@ export function WorktreeDetail({
               </>
             )}
             <div className="detail-menu-divider" />
+            {instance && loaded && order.length > 0 && (
+              <div
+                className={`detail-menu-item ${offline ? 'disabled' : ''}`}
+                onClick={() => {
+                  setMenuOpen(false)
+                  void getBackend().worktrees.unload(instance.id)
+                }}
+              >
+                <div
+                  className="detail-menu-name"
+                  title="End this worktree's sessions to free CPU — they stay saved and resume when you load it again"
+                >
+                  Unload sessions
+                </div>
+              </div>
+            )}
             {/* 5e: worktree.promote and worktree.demote, each one request on the server. */}
             {features.promote && info.branch && info.isMain && (
               <div
@@ -661,9 +749,11 @@ export function WorktreeDetail({
                   void runAction(() => getBackend().worktrees.demote({ ...info, repoId: info.repoId ?? repo.id }))
                 }}
               >
-                <div className="detail-menu-name">Promote branch to worktree…</div>
-                <div className="detail-menu-desc">
-                  Move {info.branch} and its uncommitted work to its own worktree; the main checkout returns to the default branch
+                <div
+                  className="detail-menu-name"
+                  title={`Move ${info.branch} and its uncommitted work to its own worktree; the main checkout returns to the default branch`}
+                >
+                  Promote branch to worktree…
                 </div>
               </div>
             )}
@@ -678,8 +768,9 @@ export function WorktreeDetail({
                   })
                 }}
               >
-                <div className="detail-menu-name">Promote to primary…</div>
-                <div className="detail-menu-desc">Check out {info.branch} in the main checkout, with its uncommitted work and sessions</div>
+                <div className="detail-menu-name" title={`Check out ${info.branch} in the main checkout, with its uncommitted work and sessions`}>
+                  Promote to primary…
+                </div>
               </div>
             )}
             {canMove && !info.isMain && info.branch && getBackend().worktrees.moveRef(info.path) && (
@@ -692,8 +783,12 @@ export function WorktreeDetail({
                   if (from) setMoving({ from, info, name: info.branch })
                 }}
               >
-                <div className="detail-menu-name">Move to another server…</div>
-                <div className="detail-menu-desc">Push the branch and carry the uncommitted work and Claude sessions to a clone on another server</div>
+                <div
+                  className="detail-menu-name"
+                  title="Push the branch and carry the uncommitted work and Claude sessions to a clone on another server"
+                >
+                  Move to another server…
+                </div>
               </div>
             )}
             {!info.isMain && (
@@ -703,8 +798,9 @@ export function WorktreeDetail({
                   if (!offline && !busy) void runAction(() => getBackend().worktrees.remove(info, instance))
                 }}
               >
-                <div className="detail-menu-name">Delete worktree…</div>
-                <div className="detail-menu-desc">git worktree remove — deletes the folder</div>
+                <div className="detail-menu-name" title="git worktree remove — deletes the folder">
+                  Delete worktree…
+                </div>
               </div>
             )}
           </div>
@@ -806,16 +902,6 @@ export function WorktreeDetail({
           }}
         />
         <div className="session-row-spacer" />
-        {instance && loaded && order.length > 0 && (
-          <button
-            className="panel-btn"
-            title="End this worktree's sessions to free CPU — they stay saved and resume when you load it again"
-            disabled={offline}
-            onClick={() => void getBackend().worktrees.unload(instance.id)}
-          >
-            ⏏ Unload
-          </button>
-        )}
         <button
           className={`panel-btn ${panel === 'changes' ? 'active' : ''}`}
           title={features.review ? 'Changes: the branch against its base, the uncommitted work or one commit, with line comments' : 'Changes compared to the default branch, including uncommitted work'}
@@ -839,48 +925,25 @@ export function WorktreeDetail({
             History
           </button>
         )}
-        {info.isMain && (
-          <button
-            className={`panel-btn ${panel === 'allNotes' ? 'active' : ''}`}
-            title="All notes collected across branches"
-            onClick={() => setPanel(panel === 'allNotes' ? 'sessions' : 'allNotes')}
-          >
-            All Notes
-          </button>
-        )}
-        {showDocker && (
-          <button
-            className={`panel-btn ${panel === 'docker' ? 'active' : ''}`}
-            onClick={() => setPanel(panel === 'docker' ? 'sessions' : 'docker')}
-          >
-            Docker <DockerMenu key={repo.id} repoId={repo.id} />
-          </button>
-        )}
-        {showEnv && (
-          <button
-            className={`panel-btn ${panel === 'environment' ? 'active' : ''}`}
-            title="Isolated Docker environment for this worktree"
-            onClick={() => setPanel(panel === 'environment' ? 'sessions' : 'environment')}
-          >
-            Env
-            {env && (
-              <span
-                className={`docker-dot ${envOpBusy ? 'attention' : env.vmState === 'running' ? 'running' : 'exited'}`}
-              />
-            )}
-          </button>
-        )}
-        {showStack && (
-          <button
-            className={`panel-btn ${panel === 'stack' ? 'active' : ''}`}
-            title="This worktree's dev stack (docker/stack/stack.sh)"
-            onClick={() => setPanel(panel === 'stack' ? 'sessions' : 'stack')}
-          >
-            Stack
-            <span
-              className={`docker-dot ${stackStateNow === 'running' ? 'running' : stackStateNow === 'stopped' ? 'exited' : 'attention'}`}
-            />
-          </button>
+        {/* Two or more of Docker, Env and Stack share one Run button; one alone stays its own button */}
+        {runGrouped ? (
+          <div className="run-group">
+            <button
+              className={`run-btn ${runActive ? 'active' : ''}`}
+              title="What this worktree runs: Docker, its environment, its stack"
+              aria-expanded={runOpen}
+              onClick={() => setRunOpen((v) => !v)}
+            >
+              <span className={`docker-dot ${runDot}`} />
+              Run <span className="chip-caret">▾</span>
+            </button>
+            {/* Kept mounted while closed: the Docker ▾ menu inside it holds a running compose action */}
+            <div className={`run-menu ${runOpen ? '' : 'closed'}`} onClick={() => setRunOpen(false)}>
+              {runtimeButtons}
+            </div>
+          </div>
+        ) : (
+          runtimeButtons
         )}
       </div>
 
@@ -950,7 +1013,6 @@ export function WorktreeDetail({
         />
         <NotesPanel visible={panel === 'notes'} repoId={repo.id} noteKey={noteKey} />
         {features.history && info.branch && <HistoryPanel visible={panel === 'history'} repoId={repo.id} branch={info.branch} />}
-        {info.isMain && <AllNotesPanel visible={panel === 'allNotes'} worktrees={worktrees} />}
         {showDocker && <DockerPanel key={repo.id} visible={panel === 'docker'} />}
         {showEnv && <EnvironmentPanel visible={panel === 'environment'} info={info} />}
         {showStack && stack && (
