@@ -13,7 +13,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
 <style>${read('node_modules/@xterm/xterm/css/xterm.css')}
-html,body{margin:0;padding:0;background:#111113;overflow-x:auto}#t{padding:4px}</style>
+html,body{margin:0;padding:0;height:100%;background:#111113;overflow-x:auto;overflow-y:hidden}#t{padding:4px}</style>
 </head><body><div id="t"></div>
 <script>${safe(read('node_modules/@xterm/xterm/lib/xterm.js'))}</script>
 <script>${safe(read('src/terminal/page.js'))}</script>

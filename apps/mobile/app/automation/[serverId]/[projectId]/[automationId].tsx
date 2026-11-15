@@ -4,7 +4,7 @@
 // always built from the snapshot's automation (logic/automations.ts' automationInput), and an edit
 // is not saved over a name or prompt that changed elsewhere meanwhile (saveAutomationEdit).
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
+import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { CAPABILITY, type AgentInfo, type Automation, type ServerConnection } from '../../../../src/shared.ts'
@@ -201,7 +201,7 @@ export default function AutomationScreen(): React.JSX.Element {
 
   // The edit's boxes stay above the keyboard, and one tap on Save works with it up.
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
       <Stack.Screen options={{ title: automation?.name ?? 'Automation' }} />
       <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
         {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}

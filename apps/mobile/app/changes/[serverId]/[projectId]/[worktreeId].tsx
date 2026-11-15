@@ -5,7 +5,7 @@
 // worktree's sessions or discards it. The rules are logic/review.ts'. Without the capability (an
 // older server): the branch against its base, read-only (6a).
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react'
-import { Keyboard, KeyboardAvoidingView, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Keyboard, KeyboardAvoidingView, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -535,7 +535,7 @@ function ReviewChanges({ serverId, projectId, worktreeId }: Params): React.JSX.E
   const hasDraft = draft !== undefined && draft.comments.length > 0
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
       <ReviewContext.Provider value={reviewUi}>
         <View ref={port} collapsable={false} style={styles.port}>
           <ScrollView

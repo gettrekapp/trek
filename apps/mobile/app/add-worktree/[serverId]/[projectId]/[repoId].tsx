@@ -2,7 +2,7 @@
 // (the desktop's Add Worktree dialog). The phone has no `gh`, so a pull request's branch is
 // pr/<n>. The new worktree's screen replaces this one; no session is started.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native'
+import { KeyboardAvoidingView, Pressable, ScrollView, Switch, Text, TextInput, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { branchSuggestions, parsePullRequestUrl, prBranch } from '../../../../src/logic/worktrees.ts'
@@ -135,7 +135,7 @@ export default function AddWorktreeScreen(): React.JSX.Element {
   const blocked = busy !== null || !server || !repo
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
       <Stack.Screen options={{ title: 'Add worktree' }} />
       <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
         {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}

@@ -1,11 +1,13 @@
-// A session (6a): its terminal (xterm.js in a WebView, fed by the pty stream, at the pty's own
-// size: the phone never resizes the pty, it follows pty.resized from the desktop) across the
-// screen, its state mark beside its title, and under it one row of chips — Keys, which opens the
+// A session (6a): its terminal (xterm.js in a WebView, fed by the pty stream) across the screen.
+// While the screen shows the session the phone sizes the pty to fit it (on attach, a re-attach,
+// and when the WebView's size changes, the keyboard included); the desktop follows that size
+// until it takes the pty back with its Fit bar, and the phone then follows the desktop's. Its state mark is
+// beside its title, and under the terminal is one row of chips — Keys, which opens the
 // key bar, then the project's quick buttons (set up on the desktop) — and one composer: the
 // prompt, Queue, and send. The queue is a line under the composer that opens its list. A decision
 // the agent asked for is answered here too.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
+import { Keyboard, KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native'
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -75,6 +77,16 @@ export default function SessionScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [keysOpen, setKeysOpen] = useState(keysOpenDefault)
   const [queueOpen, setQueueOpen] = useState(false)
+  // While the keyboard is up it covers the home indicator / nav bar: no bottom inset under the composer.
+  const [keyboardUp, setKeyboardUp] = useState(false)
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardUp(true))
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardUp(false))
+    return () => {
+      show.remove()
+      hide.remove()
+    }
+  }, [])
   // Quick buttons: the project's (or the Global ones), and the one whose sheet is open.
   const project = topic.state === 'ready' ? topic.snapshot : null
   // While this screen is the one shown, the server knows the phone shows this session and its
@@ -110,8 +122,21 @@ export default function SessionScreen(): React.JSX.Element {
     let live = true
     const size = (cols: number, rows: number, windowsBuild?: number): void => {
       if (!live) return
+      current = { cols, rows }
       rememberPtySize(serverId, sessionId, cols, rows)
       toPage(feed.size(cols, rows, windowsBuild))
+    }
+    // The pty as last known, and the phone's claim on it: resized to the page's fit when that differs.
+    let current: { cols: number; rows: number } | null = null
+    const claim = (): void => {
+      const fit = fitRef.current
+      if (!live || !fit || !current || (fit.cols === current.cols && fit.rows === current.rows)) return
+      void server.ptys.resize(ptyId, fit.cols, fit.rows).catch(() => {})
+    }
+    claimRef.current = claim
+    const attached = (cols: number, rows: number, windowsBuild?: number): void => {
+      size(cols, rows, windowsBuild)
+      claim()
     }
     toPage(feed.reset())
     server.ptys
@@ -121,24 +146,30 @@ export default function SessionScreen(): React.JSX.Element {
         onExit: (code) => setEnded(`The process exited (${code}).`),
         onClosed: (reason) => setEnded(reason === 'gone' ? 'The session ended while the phone was away.' : 'Disconnected.'),
         onError: (err) => setEnded(errorMessage(err)),
-        onReattach: (info) => size(info.cols, info.rows, info.windowsPty?.buildNumber),
-        // Another client resized the pty (the desktop's window): follow it. The phone never resizes it.
+        onReattach: (info) => attached(info.cols, info.rows, info.windowsPty?.buildNumber),
+        // A resize (the echo of the phone's own, or the desktop taking the pty back): follow it,
+        // without claiming it again, so the two never fight over the size.
         onResize: (info) => size(info.cols, info.rows)
       })
-      .then((info) => size(info.cols, info.rows, info.windowsPty?.buildNumber))
+      .then((info) => attached(info.cols, info.rows, info.windowsPty?.buildNumber))
       .catch((err) => live && setEnded(errorMessage(err)))
     return () => {
       live = false
+      if (claimRef.current === claim) claimRef.current = () => {}
       void server.ptys.detach(ptyId).catch(() => {})
     }
   }, [server, ptyId, pageReady, page?.n, serverId, sessionId, toPage])
+
+  // The size that fills the page (its 'fit'), and the attached stream's claim with it.
+  const fitRef = useRef<{ cols: number; rows: number } | null>(null)
+  const claimRef = useRef<() => void>(() => {})
 
   const write = (data: string): void => {
     if (server && ptyId) void server.ptys.write(ptyId, data).catch((err) => setError(errorMessage(err)))
   }
 
   const onMessage = (event: WebViewMessageEvent): void => {
-    let m: { type?: string; data?: unknown }
+    let m: { type?: string; data?: unknown; cols?: unknown; rows?: unknown }
     try {
       m = JSON.parse(event.nativeEvent.data)
     } catch {
@@ -150,6 +181,10 @@ export default function SessionScreen(): React.JSX.Element {
       const id = ptyRef.current
       if (id) setPage((p) => ({ ptyId: id, n: (p?.n ?? 0) + 1 }))
     } else if (m.type === 'input' && typeof m.data === 'string') write(m.data)
+    else if (m.type === 'fit' && typeof m.cols === 'number' && typeof m.rows === 'number' && m.cols > 0 && m.rows > 0) {
+      fitRef.current = { cols: Math.floor(m.cols), rows: Math.floor(m.rows) }
+      claimRef.current()
+    }
   }
 
   const run = async (fn: () => Promise<unknown>): Promise<void> => {
@@ -207,7 +242,7 @@ export default function SessionScreen(): React.JSX.Element {
   }
 
   return (
-    <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
+    <KeyboardAvoidingView style={ui.screen} behavior="padding" keyboardVerticalOffset={headerHeight}>
       <Stack.Screen
         options={{
           title: session?.title ?? 'Session',
@@ -278,7 +313,7 @@ export default function SessionScreen(): React.JSX.Element {
           </Pressable>
         }
       />
-      <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: Math.max(insets.bottom, 10), gap: 8 }}>
+      <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: keyboardUp ? 10 : Math.max(insets.bottom, 10), gap: 8 }}>
         <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, backgroundColor: colors.panel, borderRadius: 20, paddingLeft: 14, paddingRight: 5, paddingVertical: 5 }}>
           <TextInput
             style={{ flex: 1, color: colors.text, fontSize: 15, maxHeight: 120, paddingVertical: 6 }}
