@@ -220,7 +220,8 @@ most 100 comments of at most 4000 characters (no control characters but tabs and
 line breaks, in a comment or its quoted line), and no more than fits in one queued
 prompt (100,000 characters). A worktree git no longer lists is kept, as missing,
 while it holds a draft. Agents can read a draft with the `get_review_comments`
-MCP tool, which never changes it. See PROTOCOL.md, "Changes tab review".
+MCP tool, add a line comment to it with `add_review_comment` and remove an agent's with
+`remove_review_comment`. See PROTOCOL.md, "Changes tab review".
 
 ## Moving a worktree between servers
 

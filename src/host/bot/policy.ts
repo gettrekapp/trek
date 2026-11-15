@@ -32,22 +32,25 @@ const TREK_PREFIX = 'mcp__trek-dev__'
 
 const FREE_TOOLS = new Set([
   'Read', 'Glob', 'Grep', 'LS', 'ToolSearch', 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList',
-  'list_worktrees', 'get_selected_worktree', 'list_session_types',
+  'list_worktrees', 'get_selected_worktree', 'list_session_types', 'list_automations',
   'enqueue_prompt', 'remove_queued_prompt',
-  'read_terminal', 'wait_for_sessions',
+  'read_terminal', 'wait_for_sessions', 'rename_session', 'mark_session_complete',
   'get_stack', 'stop_stack', 'read_stack_log',
   'set_worktree_tag', 'set_worktree_custom_tag', 'set_worktree_note',
-  'set_worktree_ticket', 'set_worktree_pull_request', 'request_approval'
+  'set_worktree_ticket', 'set_worktree_pull_request', 'request_approval',
+  'get_review_comments', 'add_review_comment', 'remove_review_comment', 'get_pull_request'
 ])
 
 /**
- * Trek tools that run or delete something outside the bot's OS sandbox: a worktree session (start,
- * prompt, keys), a stack's scripts, a worktree's setup or removal, or a session type that later sessions run. They
+ * Trek tools that run or delete something outside the bot's OS sandbox: a worktree session (start, restart,
+ * prompt, keys), a stack's scripts, a worktree's setup or removal, a session type that later sessions run,
+ * or an automation (a prompt that runs unattended, now or on a schedule). They
  * always need the user's approval: POLICY.json can't make them free. `enqueue_prompt` stays free.
  */
 export const ALWAYS_ASK_TOOLS: ReadonlySet<string> = new Set([
-  'start_session', 'send_prompt', 'send_keys',
-  'start_stack', 'create_worktree', 'load_worktree', 'remove_worktree', 'save_session_type', 'delete_session_type'
+  'start_session', 'restart_session', 'send_prompt', 'send_keys',
+  'start_stack', 'create_worktree', 'load_worktree', 'remove_worktree', 'save_session_type', 'delete_session_type',
+  'save_automation', 'delete_automation', 'run_automation'
 ])
 
 const FILE_WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit'])

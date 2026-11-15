@@ -8,7 +8,7 @@ import { MAX_QUEUE_ENTRY, MAX_QUEUE_LENGTH } from '../sessions/limits.ts'
 import { isRecord, requireString } from '../validate.ts'
 import type { V2Context } from '../v2.ts'
 import { locate } from '../worktreeHandlers.ts'
-import { checkBody, checkComment, fitsOnePrompt, lastRevision } from './draft.ts'
+import { checkBody, checkComment, cleanAuthor, fitsOnePrompt, lastRevision } from './draft.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -60,10 +60,13 @@ export const reviewHandlers: Record<string, Handler> = {
     const fields = checkComment(p)
     const now = Date.now()
     const commentId = ctx.projects.newId()
+    // Only an MCP call carries this attribution (the tools set it): a client cannot claim an author.
+    const actor = ctx.attribution?.actor
+    const by = actor?.kind === 'mcp' ? cleanAuthor({ kind: 'mcp', sessionTitle: actor.sessionTitle }) : undefined
     onWorktree(ctx, p, (worktree) => {
       const comments = worktree.review?.comments ?? []
       if (comments.length >= MAX_REVIEW_COMMENTS) throw bad(`a review holds at most ${MAX_REVIEW_COMMENTS} comments`)
-      const next = [...comments, { id: commentId, ...fields, at: now }]
+      const next = [...comments, { id: commentId, ...fields, at: now, ...(by ? { by } : {}) }]
       checkFits(worktree, next)
       worktree.review = { revision: nextRevision(worktree), comments: next }
     })

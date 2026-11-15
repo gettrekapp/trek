@@ -21,6 +21,7 @@ import {
 } from './v2/terminalSync'
 import { errorCode, errorText } from './v2/errors'
 import { tabView } from './globalTabs'
+import { quietReveals } from './v2/sessionSelect'
 
 /**
  * Owns the live xterm instances of a server window's sessions. These live
@@ -130,8 +131,20 @@ export function terminalLabel(id: string): string {
   return `${prefix}${worktree.name} · ${meta.title}`
 }
 
-/** Select a terminal's worktree (or open the global panel) and its tab. */
-export function revealTerminal(id: string): void {
+const quiet = quietReveals(() => performance.now())
+
+/** Whether the tab was just revealed quietly: its pane, shown now, does not call focusTerminal. */
+export function isQuietReveal(id: string): boolean {
+  return quiet.quiet(id)
+}
+
+/**
+ * Select a terminal's worktree (or open the global panel) and its tab. `quiet` (an agent's
+ * `ui.focus`): the pane that shows for it does not take the keyboard focus or mark the session seen.
+ */
+export function revealTerminal(id: string, options: { quiet?: boolean } = {}): void {
+  if (options.quiet) quiet.mark(id)
+  else quiet.clear(id)
   const store = useAppStore.getState()
   if (id === BOT_DECISION_ID) {
     store.setGlobalView('bot')
@@ -192,6 +205,7 @@ export function readTerminal(id: string, lines: number): string | null {
 }
 
 export function focusTerminal(id: string): void {
+  quiet.clear(id)
   entries.get(id)?.term.focus()
   useAppStore.getState().clearTerminalAttention(id)
 }

@@ -44,6 +44,12 @@ export function V2Workspace(): React.JSX.Element {
   useEffect(() => {
     if (promote) backend.worktrees.followPromoteRequests()
   }, [promote, backend])
+  // What this window shows, for get_selected_worktree, and focus_session's requests: started the
+  // same way, and kept by the backend until the window leaves the project.
+  const ui = features.ui
+  useEffect(() => {
+    if (ui) backend.worktrees.followSelection()
+  }, [ui, backend])
 
   // The link dropped: a focused field or button must not take Enter or typing meanwhile.
   useEffect(() => {

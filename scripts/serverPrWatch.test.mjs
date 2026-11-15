@@ -627,3 +627,37 @@ test('history: a closed PR records prWatch.off closed; a watch for another PR ur
   await other.watcher.poll({ ...target, url: 'https://github.com/acme/app/pull/99' })
   assert.deepEqual(other.history.list('p1', 'r1', 'feature').events, [])
 })
+
+const PR = { url: 'https://github.com/o/r/pull/12', number: 12, owner: 'o', repo: 'r' }
+
+test('read: the pull request now, with the watch\'s query; nothing a watch remembers changes', async () => {
+  const s = setup(project(), [view({ mergeable: 'CONFLICTING', reviews: [{ author: { login: 'rev' }, submittedAt: '2026-01-02T03:04:05Z' }] })])
+  const before = structuredClone(s.data())
+  const got = await s.watcher.read(PR)
+  assert.deepEqual([got.number, got.state, got.mergeable, got.checks, got.commentTimes], [12, 'OPEN', 'CONFLICTING', 'none', ['2026-01-02T03:04:05Z']])
+  const call = s.calls.filter((a) => a[0] === 'api').at(-1)
+  assert.ok(call.includes('owner=o') && call.includes('name=r') && call.includes('number=12'))
+  assert.deepEqual(s.data(), before, 'the watch\'s seen is untouched')
+  assert.deepEqual(s.queued, [])
+  assert.equal(s.worktree().prNotice, undefined)
+})
+
+test('read: callers for the same pull request while one runs share one gh call', async () => {
+  const s = setup(project(), [view()])
+  const [a, b] = await Promise.all([s.watcher.read(PR), s.watcher.read(PR)])
+  assert.equal(a, b)
+  assert.equal(s.polls(), 1)
+  // Once it settled, the next read asks gh again.
+  s.answers.push(view({ state: 'MERGED' }))
+  assert.equal((await s.watcher.read(PR)).state, 'MERGED')
+  assert.equal(s.polls(), 2)
+})
+
+test('read: a gh failure rejects with its first line and raises no notice', async () => {
+  const s = setup(project(), [new Error('HTTP 502: bad gateway\nmore detail')])
+  await assert.rejects(s.watcher.read(PR), (e) => e.message === 'HTTP 502: bad gateway')
+  assert.equal(s.worktree().prNotice, undefined)
+  // The failed read is not kept: the next one asks again.
+  s.answers.push(view())
+  assert.equal((await s.watcher.read(PR)).state, 'OPEN')
+})

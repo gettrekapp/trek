@@ -2,9 +2,10 @@
 // what `review.add` accepts and what a saved or imported draft may hold. Imports nothing from the
 // handlers, so the project model (load and import) and the worktree handlers can use it without a
 // cycle.
-import type { ReviewComment, ReviewDraft, Worktree } from '../../../src/shared/model/types'
+import type { ReviewAuthor, ReviewComment, ReviewDraft, Worktree } from '../../../src/shared/model/types'
 import type { ChangesSource } from '../../../src/shared/types'
 import {
+  MAX_REVIEW_AUTHOR,
   MAX_REVIEW_BODY,
   MAX_REVIEW_COMMENTS,
   MAX_REVIEW_LINE,
@@ -76,6 +77,17 @@ export function checkComment(c: Record<string, unknown>): Omit<ReviewComment, 'i
   return { source, path, side: c.side, line, lineText, body }
 }
 
+/**
+ * A comment's `by` as it is kept: an agent's, with its session's title when that is one clean line.
+ * Anything else is undefined, which reads as the user's.
+ */
+export function cleanAuthor(value: unknown): ReviewAuthor | undefined {
+  if (!isRecord(value) || value.kind !== 'mcp') return undefined
+  const title = value.sessionTitle
+  const ok = typeof title === 'string' && title !== '' && title.length <= MAX_REVIEW_AUTHOR && !LINE_CONTROLS.test(title)
+  return ok ? { kind: 'mcp', sessionTitle: title } : { kind: 'mcp' }
+}
+
 /** Whether the prompt `comments` would send fits in one queued prompt. */
 export const fitsOnePrompt = (worktreeName: string, comments: readonly ReviewComment[]): boolean =>
   reviewPrompt(worktreeName, comments).length <= MAX_QUEUE_ENTRY
@@ -103,7 +115,8 @@ export function cleanReview(value: unknown, worktreeName: string, lastRevision =
     if (!isRecord(c) || typeof c.id !== 'string' || c.id === '' || ids.has(c.id)) continue
     if (typeof c.at !== 'number' || !Number.isFinite(c.at)) continue
     try {
-      comments.push({ id: c.id, ...checkComment(c), at: c.at })
+      const by = cleanAuthor(c.by)
+      comments.push({ id: c.id, ...checkComment(c), at: c.at, ...(by ? { by } : {}) })
       ids.add(c.id)
     } catch {
       // the wrong shape: dropped

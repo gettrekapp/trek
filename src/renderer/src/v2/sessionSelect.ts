@@ -17,19 +17,54 @@ export interface SelectView {
   legacyByWorktree: Readonly<Record<string, string>>
 }
 
-export type SelectStep = { wait: true } | { drop: true } | { reveal: string } | { worktree: string }
+/** `quiet`: reveal the tab without giving it the keyboard focus or marking it seen */
+export type SelectStep = { wait: true } | { drop: true } | { reveal: string; quiet?: true } | { worktree: string }
+
+export interface SelectOptions {
+  /** Select the worktree and the tab only (`ui.focus`, an agent's request): the terminal takes no keyboard focus and is not marked seen */
+  revealOnly?: boolean
+}
 
 /**
  * What to do with a select now: wait while the window boots or the session is
  * not in yet; reveal its tab once it is; select its worktree if the session
  * has no tab (an unloaded worktree); drop it once the window shows another project.
+ * A reveal-only select's reveal is `quiet`.
  */
-export function selectStep(select: SessionSelect, view: SelectView): SelectStep {
+export function selectStep(select: SessionSelect, view: SelectView, options: SelectOptions = {}): SelectStep {
   if (!view.here || !view.projected) return { wait: true }
   if (view.here.projectId !== select.projectId) return { drop: true }
-  if (view.terminals[select.sessionId]) return { reveal: select.sessionId }
+  if (view.terminals[select.sessionId]) return options.revealOnly ? { reveal: select.sessionId, quiet: true } : { reveal: select.sessionId }
   const worktree = select.worktreeId === null ? undefined : view.legacyByWorktree[select.worktreeId]
   return worktree ? { worktree } : { wait: true }
+}
+
+/** A quietly revealed tab stays quiet this long: its pane shows within a frame or two of the reveal. */
+export const QUIET_REVEAL_MS = 1000
+
+export interface QuietReveals {
+  /** The tab was revealed quietly; a newer one replaces it */
+  mark(id: string): void
+  /** Whether the tab's pane, shown now, leaves the keyboard focus and the session's attention alone */
+  quiet(id: string): boolean
+  /** The tab was focused or revealed in the usual way: no longer quiet */
+  clear(id: string): void
+}
+
+/**
+ * The tab a reveal-only select revealed, for a short while: a pane takes the focus (and marks
+ * its session seen) when it is shown, and this one must not. Not used up by asking, as a pane
+ * can be shown twice for one reveal (React's StrictMode).
+ */
+export function quietReveals(now: () => number): QuietReveals {
+  let marked: { id: string; until: number } | null = null
+  return {
+    mark: (id) => void (marked = { id, until: now() + QUIET_REVEAL_MS }),
+    quiet: (id) => marked !== null && marked.id === id && now() <= marked.until,
+    clear: (id) => {
+      if (marked?.id === id) marked = null
+    }
+  }
 }
 
 export interface ViewState {

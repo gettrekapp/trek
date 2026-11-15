@@ -1,7 +1,7 @@
 // scripts/v2SessionSelect.test.mjs — main asking a server window to show a session, and what it reports in view.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { sameIds, selectStep, sessionsInView, viewReporter } from '../src/renderer/src/v2/sessionSelect.ts'
+import { QUIET_REVEAL_MS, quietReveals, sameIds, selectStep, sessionsInView, viewReporter } from '../src/renderer/src/v2/sessionSelect.ts'
 
 const select = { projectId: 'p1', sessionId: 's1', worktreeId: 'w1' }
 const view = (more = {}) => ({
@@ -23,6 +23,41 @@ test('a session with no tab selects its worktree; another project drops the sele
   assert.deepEqual(selectStep(select, view({ terminals: {} })), { worktree: 'r1:w1' })
   assert.deepEqual(selectStep({ ...select, worktreeId: null }, view({ terminals: {} })), { wait: true }, 'a Global session waits for its tab')
   assert.deepEqual(selectStep(select, view({ here: { serverEntryId: 'box', projectId: 'p2' } })), { drop: true })
+})
+
+test('a reveal-only select (ui.focus) reveals the tab quietly: the step says no focus', () => {
+  const quiet = { revealOnly: true }
+  assert.deepEqual(selectStep(select, view(), quiet), { reveal: 's1', quiet: true })
+  // A notification click's step carries no such mark: its tab takes focus, as before.
+  assert.deepEqual(selectStep(select, view(), {}), { reveal: 's1' })
+  assert.deepEqual(selectStep(select, view(), { revealOnly: false }), { reveal: 's1' })
+  // It waits, drops and falls back to the worktree as any select does.
+  assert.deepEqual(selectStep(select, view({ projected: false }), quiet), { wait: true })
+  assert.deepEqual(selectStep(select, view({ terminals: {} }), quiet), { worktree: 'r1:w1' })
+  assert.deepEqual(selectStep(select, view({ here: { serverEntryId: 'box', projectId: 'p2' } }), quiet), { drop: true })
+})
+
+test('a quietly revealed tab is quiet for a short while, and only that tab', () => {
+  let clock = 5000
+  const reveals = quietReveals(() => clock)
+  assert.equal(reveals.quiet('s1'), false)
+  reveals.mark('s1')
+  assert.equal(reveals.quiet('s1'), true)
+  assert.equal(reveals.quiet('s1'), true, 'asked twice (a pane shown twice) it is still quiet')
+  assert.equal(reveals.quiet('s2'), false)
+  clock += QUIET_REVEAL_MS
+  assert.equal(reveals.quiet('s1'), true)
+  clock += 1
+  assert.equal(reveals.quiet('s1'), false, 'later shows of the tab take focus again')
+  // A newer quiet reveal replaces the older one.
+  reveals.mark('s1')
+  reveals.mark('s2')
+  assert.deepEqual([reveals.quiet('s1'), reveals.quiet('s2')], [false, true])
+  // The user choosing the tab themselves ends it.
+  reveals.clear('s1')
+  assert.equal(reveals.quiet('s2'), true)
+  reveals.clear('s2')
+  assert.equal(reveals.quiet('s2'), false)
 })
 
 const state = (more = {}) => ({

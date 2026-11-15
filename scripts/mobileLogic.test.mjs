@@ -12,7 +12,8 @@
 // commit's row) and the pull request watch (the switch, its label, a notice's line and dismissal),
 // and automations (a card's lines, next runs in the schedule's timezone, the missed-runs answer, the
 // edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
-// tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries).
+// tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries),
+// and what the phone tells the server it shows (ui.report) and when it opens a session it is asked to (ui.focus).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -71,6 +72,7 @@ import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
 import { RefCounts } from '../apps/mobile/src/logic/refCount.ts'
+import { focusEventOf, focusNavigation, focusRoute, reportParams, shouldFollow, worktreeOfSession } from '../apps/mobile/src/logic/uiSelection.ts'
 
 test('wss:// is always allowed; ws:// only to a private address, with a warning', () => {
   assert.deepEqual(checkServerUrl(' wss://dev.example.com '), { ok: true, url: 'wss://dev.example.com' })
@@ -2604,4 +2606,63 @@ test("history: a branch's name survives the route as a parameter, whatever it ho
   assert.equal(branchFromParam(undefined), '')
   assert.equal(branchFromParam(['feature~002fx', 'other']), 'feature/x')
   assert.equal(branchFromParam('plain~zz'), 'plain~zz')
+})
+
+test('ui selection: the worktree holding a session; none for a Global session, an unknown one or a project not loaded', () => {
+  const project = qbProject()
+  assert.equal(worktreeOfSession(project, 's1'), 'w1')
+  assert.equal(worktreeOfSession(project, 's3'), 'w2')
+  assert.equal(worktreeOfSession(project, 'g'), null)
+  assert.equal(worktreeOfSession(project, 'nope'), null)
+  assert.equal(worktreeOfSession(null, 's1'), null)
+})
+
+test('ui selection: a report goes only to a server with the ui capability, and only once the screen knows what it shows', () => {
+  const selection = { worktreeId: 'w1', sessionId: 's1' }
+  assert.deepEqual(reportParams(['promote', 'ui'], 'p', selection, true), { projectId: 'p', worktreeId: 'w1', sessionId: 's1' })
+  assert.deepEqual(reportParams(['ui'], 'p', { worktreeId: null, sessionId: null }, true), { projectId: 'p', worktreeId: null, sessionId: null })
+  // An older server, or no welcome yet: nothing is sent.
+  assert.equal(reportParams(['promote'], 'p', selection, true), null)
+  assert.equal(reportParams(undefined, 'p', selection, true), null)
+  // The session screen before the project's snapshot: its worktree is not known, so it does not say "a Global session".
+  assert.equal(reportParams(['ui'], 'p', { worktreeId: null, sessionId: 's1' }, false), null)
+  // Only the selection's two ids go: nothing else a caller's object carries.
+  assert.deepEqual(reportParams(['ui'], 'p', { worktreeId: 'w1', sessionId: null, extra: 1 }, true), { projectId: 'p', worktreeId: 'w1', sessionId: null })
+})
+
+test('ui.focus: the session screen to open, as the worktree screen pushes it', () => {
+  assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), {
+    pathname: '/session/[serverId]/[projectId]/[sessionId]',
+    params: { serverId: 'srv', projectId: 'p', sessionId: 's1' }
+  })
+})
+
+test('ui.focus: followed for this project, unless its session is already the one shown', () => {
+  const focus = { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }
+  // Another project's: not this screen's to open.
+  assert.equal(shouldFollow(focus, 'other', { worktreeId: null, sessionId: null }), false)
+  // Already on that session's screen.
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: 's1' }), false)
+  // From the project screen, the worktree's screen, and another session's screen.
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: null, sessionId: null }), true)
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: null }), true)
+  assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: 's2' }), true)
+})
+
+test('ui.focus: a session screen is replaced, any other screen is pushed onto', () => {
+  // From the project's or a worktree's screen: Back returns to it.
+  assert.equal(focusNavigation({ worktreeId: null, sessionId: null }), 'push')
+  assert.equal(focusNavigation({ worktreeId: 'w1', sessionId: null }), 'push')
+  // From a session's screen (a Global session's too): repeated requests do not grow the stack.
+  assert.equal(focusNavigation({ worktreeId: 'w1', sessionId: 's2' }), 'replace')
+  assert.equal(focusNavigation({ worktreeId: null, sessionId: 'g1' }), 'replace')
+})
+
+test('ui.focus: read from a server event; any other event, or one without a session to show, is not one', () => {
+  const payload = { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }
+  assert.deepEqual(focusEventOf({ event: 'ui.focus', payload }), payload)
+  assert.equal(focusEventOf({ event: 'promote.request', payload }), null)
+  assert.equal(focusEventOf({ event: 'ui.focus', payload: { projectId: 'p', worktreeId: 'w1' } }), null)
+  assert.equal(focusEventOf({ event: 'ui.focus', payload: { projectId: 'p', worktreeId: 'w1', sessionId: '' } }), null)
+  assert.equal(focusEventOf({ event: 'ui.focus', payload: null }), null)
 })

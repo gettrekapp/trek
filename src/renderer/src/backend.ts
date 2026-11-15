@@ -122,6 +122,13 @@ export interface WindowBackend {
      * reconnects, and says `promote.listen` on each connect.
      */
     followPromoteRequests(): void
+    /**
+     * Tells the server what this window shows (`ui.report`, feature `ui`): now, on each connect,
+     * when the selection changes and when the window gains focus; and shows the session a
+     * `ui.focus` asks for, without raising the window. One per backend (later calls do nothing),
+     * until the window leaves the project.
+     */
+    followSelection(): void
   }
   readonly git: {
     listWorktrees(repoId: string): Promise<GitWorktreeInfo[]>
@@ -304,7 +311,8 @@ export const idleBackend: WindowBackend = {
     moveRef: () => null,
     promote: noProject,
     demote: noProject,
-    followPromoteRequests: () => {}
+    followPromoteRequests: () => {},
+    followSelection: () => {}
   },
   git: { listWorktrees: noProject, listBranches: noProject, changes: noProject, diff: noProject, commits: noProject, pull: noProject, push: noProject, dirty: noProject },
   docker: { list: noProject, container: noProject, compose: noProject, onLog: () => () => {} },
