@@ -38,7 +38,10 @@ import { createEventSink, type Machine } from './integrations/machineHandlers.ts
 import type { Integrations } from './integrations/integrations'
 import type { ServerPlugin } from '../../src/shared/plugins/server.ts'
 import { projectTopic } from '../../src/shared/model/topics.ts'
+import type { PluginPresence } from '../../src/shared/plugins/manifest.ts'
 import { createPluginRegistry, type PluginRegistry } from './plugins/registry.ts'
+import { createInstalledPlugins, type InstalledPlugins } from './plugins/installed.ts'
+import { installedIdReserved } from './plugins/reserved.ts'
 import { mcpContext } from './plugins/mcp.ts'
 import type { GhRunner } from './prWatch/gh'
 import { PrWatcher } from './prWatch/watcher.ts'
@@ -54,6 +57,7 @@ import { createSecretFile } from './secrets.ts'
 import { PushGrants } from './push/grants.ts'
 import { Pusher } from './push/pusher.ts'
 import { release } from 'node:os'
+import { join } from 'node:path'
 import { windowsBuildNumber } from './sessions/terminalHost.ts'
 import type { UpdateService } from './update/service.ts'
 
@@ -130,8 +134,9 @@ export interface ServerOptions {
   /**
    * The plugins' server halves (plugin system phase 1: plugins/builtin.server.ts), with the secrets
    * file and data dir they keep their keys and files in. Without it the server has none.
+   * Installed plugins (theme plugins) live in `<dataDir>/plugins-installed`; `fetch` reads one from a URL (default: the global).
    */
-  plugins?: { list: readonly ServerPlugin[]; secretsFile: string; dataDir: string; env?: NodeJS.ProcessEnv }
+  plugins?: { list: readonly ServerPlugin[]; secretsFile: string; dataDir: string; env?: NodeJS.ProcessEnv; fetch?: typeof fetch }
   /**
    * false: what a killed server left in the temp directory is left alone. For `trek-server selfcheck`,
    * which runs beside a server that is in use and must remove nothing but its own folder.
@@ -199,6 +204,13 @@ export function startServer(
         coreToolNames: MCP_TOOLS.map((t) => t.name)
       })
     : undefined
+  // The installed plugins (theme plugins phase 1): stored and handed to clients, never run here.
+  const installedPlugins: InstalledPlugins | undefined = options.plugins
+    ? createInstalledPlugins({ dir: join(options.plugins.dataDir, 'plugins-installed'), reserved: installedIdReserved(options.plugins.list) })
+    : undefined
+  const remoteInstall = (): boolean => store.config.plugins?.remoteInstall !== false
+  /** The welcome's `plugins`: the built-ins, then the installed ones. */
+  const pluginPresence = (): PluginPresence[] => [...(plugins?.presence() ?? []), ...(installedPlugins?.presence() ?? [])]
   const sessions = new SessionManager({
     projects,
     store,
@@ -317,6 +329,16 @@ export function startServer(
     for (const ws of authed.keys()) sendFrame(ws, { type: 'event', event: 'plugins.changed', payload: { id: manifest.id } })
     if (manifest.legacyCapability) integrationsChanged({ [manifest.legacyCapability]: true })
   })
+  // An installed plugin added, replaced or removed, here or by `trek-server plugin` on this machine:
+  // the list (a welcome is sent once), then each one's plugins.changed.
+  installedPlugins?.onChange((ids) => {
+    const list = pluginPresence()
+    for (const ws of authed.keys()) {
+      sendFrame(ws, { type: 'event', event: 'plugins.list', payload: { plugins: list } })
+      for (const id of ids) sendFrame(ws, { type: 'event', event: 'plugins.changed', payload: { id } })
+    }
+  })
+  installedPlugins?.watch()
   /**
    * The update service, made here: before the listener exists, so before any connection can be
    * answered. The one value decides both the welcome's `update` capability and whether `update.*`
@@ -639,9 +661,9 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined, phoneAccess !== undefined),
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined, installedPlugins !== undefined && remoteInstall(), phoneAccess !== undefined),
           ...platformInfo,
-          ...(plugins ? { plugins: plugins.presence() } : {}),
+          ...(plugins ? { plugins: pluginPresence() } : {}),
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
         })
         return
@@ -679,6 +701,7 @@ export function startServer(
         requestStop: options.local && options.onStopRequest ? requestStop : undefined,
         push: pushGrants ? { grants: pushGrants } : undefined,
         plugins,
+        installed: installedPlugins ? { store: installedPlugins, remoteInstall, fetch: options.plugins?.fetch ?? fetch } : undefined,
         history,
         update: updateService,
         mcpAccess: access
@@ -792,6 +815,7 @@ export function startServer(
     pusher?.stop()
     sessions.stopAll()
     plugins?.dispose()
+    installedPlugins?.dispose()
     // A move's staged histories (5d) are only of use to the connection that was sending them.
     const cleared = moveTransfers.clear().catch(() => {})
     store.off('change', onConfigChange)

@@ -8,8 +8,9 @@ import { defaultConfigPath } from './config.ts'
 import { DEFAULT_TOKEN_NAME } from './tokens.ts'
 import { clearTried } from './update/state.ts'
 
-export const COMMANDS = ['start', 'stop', 'token', 'add', 'list', 'remove', 'update', 'selfcheck', 'help', 'version'] as const
+export const COMMANDS = ['start', 'stop', 'token', 'add', 'list', 'remove', 'plugin', 'update', 'selfcheck', 'help', 'version'] as const
 const TOKEN_ACTIONS = ['add', 'list', 'revoke'] as const
+const PLUGIN_ACTIONS = ['add', 'list', 'remove'] as const
 /**
  * The flags that take a value. bin/trek-server (the POSIX launcher) skips each one's value when
  * it works out whether the command is `start`: keep scripts/serverLaunchers.mjs in step.
@@ -28,13 +29,17 @@ export interface CliArgs {
   /** `token <action>`; none means rotate "default" */
   tokenAction?: (typeof TOKEN_ACTIONS)[number]
   tokenName?: string
+  /** `plugin <action>` */
+  pluginAction?: (typeof PLUGIN_ACTIONS)[number]
+  /** `plugin add`: a folder, a .trekplugin file or an https URL. `plugin remove`: an id. */
+  pluginTarget?: string
   port?: number
   host?: string
   dataDir?: string
   insecure: boolean
   /** `start --web`: serve the web client (5c-3); `web: true` in the config does the same */
   web: boolean
-  /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
+  /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it; `plugin … --local` works on its plugins. */
   local: boolean
   /** `--local-profile <name>`: a named local profile (local-<name>) instead of the default one */
   localProfile?: string
@@ -61,6 +66,12 @@ Commands:
   token add <name>     Create or rotate a named token (one per device)
   token list           List tokens
   token revoke <name>  Revoke a token; a running server closes its connections
+  plugin add <source>  Install a theme plugin: a folder with manifest.json and client.js, a
+                       .trekplugin file, or an https URL of one. Replaces one of the same id
+  plugin list          List the installed plugins
+  plugin remove <id>   Remove an installed plugin, or a folder left there that is not listed
+  plugin … --local     The same for the Trek app's local server, which has its own data
+                       dir (with --local-profile <name> for a named one)
   update               Install the latest release, after asking. A running server restarts
                        into it: its terminals close, and agent sessions resume when their
                        worktrees are opened again
@@ -78,13 +89,14 @@ Options:
                     same port; a browser signs in by pasting a token once (config: "web": true).
                     Not with --local.
   --yes             update: do not ask before installing
-  --data-dir <path> start/remove: project storage (default: config.dataDir or platform dir)
-  --local           start/stop: the app's local server. Its own config, data and lock under
+  --data-dir <path> start/remove/plugin: project storage (default: config.dataDir or platform dir)
+  --local           start/stop/plugin: the app's local server. Its own config, data and lock under
                     ~/.config/trek-server/local (Windows: %APPDATA%\\trek-server\\local)
                     and <platform data dir>/local; 127.0.0.1
                     on a random port; a new token on every start; any path allowed.
                     Writes the port and token to local.json there (0600) while it runs.
                     Takes none of --config, --data-dir, --port, --host, --insecure, --web.
+                    plugin: installs into, lists or removes from <platform data dir>/local.
                     Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
   --local-profile <name>
                     With --local: a separate local server, under local-<name> in both
@@ -99,7 +111,7 @@ Options:
   -h, --help        Show this help
   -v, --version     Print the server version
 
-A running server picks up repo and token changes without a restart.
+A running server picks up repo, token and plugin changes without a restart.
 To add a directory named like a command, use ./<dir>.
 `
 
@@ -148,6 +160,11 @@ export function parseArgs(argv: string[]): CliArgs {
       args.tokenName === undefined
     ) {
       args.tokenName = arg
+    } else if (positional && args.command === 'plugin' && args.pluginAction === undefined) {
+      if (!(PLUGIN_ACTIONS as readonly string[]).includes(arg)) usageError(`Unknown plugin action: ${arg}`)
+      args.pluginAction = arg as CliArgs['pluginAction']
+    } else if (positional && args.command === 'plugin' && (args.pluginAction === 'add' || args.pluginAction === 'remove') && args.pluginTarget === undefined) {
+      args.pluginTarget = arg
     } else if (
       positional &&
       (args.command === 'add' || args.command === 'remove') &&
@@ -194,7 +211,7 @@ export function parseArgs(argv: string[]): CliArgs {
     args.command = wantHelp ? 'help' : 'version'
     return args
   }
-  if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
+  if (args.local && args.command !== 'start' && args.command !== 'stop' && args.command !== 'plugin') usageError('--local only applies to `start`, `stop` and `plugin`')
   if ((args.check || args.yes) && args.command !== 'update') usageError('--check and --yes only apply to `update`')
   if (args.localProfile !== undefined && !args.local) usageError('--local-profile only applies with --local')
   if (args.importEnvFrom !== undefined && !(args.local && args.command === 'start')) usageError('--import-env-from only applies to `start --local`')
@@ -207,8 +224,13 @@ export function parseArgs(argv: string[]): CliArgs {
   if ((args.port !== undefined || args.host !== undefined || args.insecure || args.web) && args.command !== 'start') {
     usageError('--port, --host, --insecure and --web only apply to `start`')
   }
-  if (args.dataDir !== undefined && args.command !== 'start' && args.command !== 'remove') {
-    usageError('--data-dir only applies to `start` and `remove`')
+  if (args.dataDir !== undefined && args.command !== 'start' && args.command !== 'remove' && args.command !== 'plugin') {
+    usageError('--data-dir only applies to `start`, `remove` and `plugin`')
+  }
+  if (args.command === 'plugin') {
+    if (args.pluginAction === undefined) usageError('plugin needs an action: add, list or remove')
+    if (args.pluginAction === 'add' && args.pluginTarget === undefined) usageError('plugin add needs a folder, a .trekplugin file or an https URL')
+    if (args.pluginAction === 'remove' && args.pluginTarget === undefined) usageError("plugin remove needs the plugin's id")
   }
   if ((args.repoId !== undefined || args.repoName !== undefined) && args.command !== 'add') {
     usageError('--id and --name only apply to `add`')

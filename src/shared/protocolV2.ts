@@ -280,7 +280,9 @@ export const CAPABILITY = {
    */
   update: 'update',
   /** Automations: `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` */
-  automations: 'automations'
+  automations: 'automations',
+  /** `plugins.install` and `plugins.remove`: a client may install a plugin on the server, or remove one (theme plugins) */
+  pluginInstall: 'pluginInstall'
 } as const
 
 /** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
@@ -801,6 +803,8 @@ export interface EventPayloadsV2 {
   'integrations.changed': IntegrationsChangedEvent
   /** A plugin's server-wide state changed (a key, its config), by any client: its windows re-read it */
   'plugins.changed': PluginsChangedEvent
+  /** The welcome's `plugins` as it is now, before the `plugins.changed` of each installed plugin added, replaced or removed. To every authenticated connection. */
+  'plugins.list': { plugins: PluginPresence[] }
   /** 5e: promote_to_primary asks the project's listening windows to confirm (`promote.claim` / `promote.answer`) */
   'promote.request': PromoteRequestEvent
   /** 5e: the request ended, or another window claimed it (`claimed`): close its dialog (the claimant carries on) */

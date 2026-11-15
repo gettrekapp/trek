@@ -352,6 +352,35 @@ trek-server token revoke phone     # closes that device's open connections
 `trek-server token` on its own creates or rotates the token named `default`.
 Paste a token into the app under **Open on server…** on the start screen (Add server or Set token).
 
+## Theme plugins
+
+The server keeps installed theme plugins in `plugins-installed/` in its data dir and hands them
+to the apps that connect; it never runs them.
+
+```sh
+trek-server plugin add ./my-theme                                 # a folder with manifest.json and client.js
+trek-server plugin add ./nord.trekplugin                          # or a package file
+trek-server plugin add https://example.com/nord.trekplugin        # or an https URL of one
+trek-server plugin list
+trek-server plugin remove nord
+trek-server plugin add ./my-theme --local                         # for the Trek app's local server
+```
+
+A running server picks the change up within a minute, usually at once; no restart needed. The
+commands use the same data dir as `start` (`--data-dir`, else the config's `dataDir`, else the
+platform's). The app's local server has its own: add `--local` (and `--local-profile <name>` for
+a named profile) to work on that one.
+
+A connected app can install and remove them too; the server's log names the token that did. To
+leave it to the command on this machine, refuse it to clients in the config:
+
+```json
+{ "plugins": { "remoteInstall": false } }
+```
+
+The setting is read at each request, so a change to the config file needs no restart. See
+PROTOCOL.md, "Installed plugins".
+
 ## Run
 
 ```sh
@@ -679,6 +708,11 @@ through, which the web client's same-origin checks compare with the browser's
   checksums are signed with a key built into the running server. `"updates":
   { "remoteApply": false }` refuses it and leaves updating to `trek-server update`
   on the machine (see Updating).
+- **Any client with a token can install a theme plugin**, from a package it sends or an
+  `https` URL the server fetches. The server stores it and never runs it: its code is for the
+  apps that connect, where a theme is on only once the user picks it. `"plugins": { "remoteInstall": false }`
+  refuses it and leaves installing to `trek-server plugin add` on the machine (see Theme
+  plugins).
 - Auth failures are logged with the peer address; bad tokens get a delayed
   close to blunt brute force.
 - Never expose the plain `ws://` listener beyond loopback (`--insecure`

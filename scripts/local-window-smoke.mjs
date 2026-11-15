@@ -38,6 +38,7 @@
 // ~/.config/trek-server/local-dev) and a temp --user-data-dir. Prints LOCAL WINDOW SMOKE PASS
 // (n checks) or LOCAL WINDOW SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -351,11 +352,13 @@ try {
   check('Audio alerts start off', await audio.isChecked(), false)
   await audio.click()
   check('and are saved on the server', await until(async () => (await project()).settings.audioAlerts ?? false, true), true)
+  await openSettingsTab(settings, 'Agents')
   const mode = settings.locator('select.settings-select').first()
   check('the session mode starts at the default', await mode.inputValue(), '')
   await mode.selectOption('acceptEdits')
   check('a picked mode is saved on the server', await until(async () => (await project()).settings.claudePermissionMode ?? null, 'acceptEdits'), 'acceptEdits')
   const envSwitch = settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input')
+  await openSettingsTab(settings, 'Environments')
   await envSwitch.click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check("Settings: the environments' three VM size fields", await until(() => settings.locator('.env-size-inputs input').count(), 3), 3)

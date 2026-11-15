@@ -164,7 +164,7 @@ test('only a start counts: other commands neither mark the update tried nor roll
     const dir = install(w.root, 'trek-server', 'two')
     install(w.root, 'trek-server.previous', 'one')
     pending(dir)
-    for (const args of [['version'], ['token', 'list'], ['--config', '/x/config.json', 'update', '--check'], ['selfcheck'], ['-h'], ['start', '--help'], ['--version'], ['start', '-v'], ['.'], ['--web', 'stop'], ['start', '--local'], ['--local'], ['--local-profile', 'dev', '--local', 'start']]) {
+    for (const args of [['version'], ['token', 'list'], ['--config', '/x/config.json', 'update', '--check'], ['selfcheck'], ['-h'], ['start', '--help'], ['--version'], ['start', '-v'], ['.'], ['--web', 'stop'], ['start', '--local'], ['--local'], ['--local-profile', 'dev', '--local', 'start'], ['plugin', 'add', 'x'], ['plugin', 'list'], ['plugin', 'list', '--local', '--local-profile', 'dev'], ['--local-profile', 'dev', '--local', 'plugin', 'add', 'x']]) {
       assert.equal(run(dir, w.node, args).out, `RAN two ${args.join(' ')}`)
       assert.equal(tried(dir), false, args.join(' '))
     }

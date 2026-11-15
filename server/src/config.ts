@@ -60,6 +60,12 @@ export interface TrekServerConfig {
    * Read through phoneAccessOf (phoneAccess.ts); a change applies without a restart.
    */
   phoneAccess?: { enabled?: boolean; port?: number; url?: string }
+  /**
+   * Installed plugins (`trek-server plugin`). `remoteInstall: false` makes the server refuse a
+   * client's request to install or remove one, leaving that to the command on this machine.
+   * Defaults to true.
+   */
+  plugins?: { remoteInstall?: boolean }
 }
 
 export function defaultConfigPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {

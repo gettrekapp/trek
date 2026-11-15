@@ -38,6 +38,7 @@ export const STATIC_CAPABILITIES: readonly string[] = [
  * it has one to offer) and `local`. `plugins`: the registered plugins' legacy capabilities
  * (`voice`), listed after the static ones, for clients older than plugins. `update` (after
  * `pairing`) on a server that can update itself (never the local one).
+ * `pluginInstall` (after `update`): the server takes `plugins.install` and `plugins.remove` from a client.
  */
 export function welcomeCapabilities(
   mcp: boolean,
@@ -46,6 +47,7 @@ export function welcomeCapabilities(
   plugins: readonly string[] = [],
   platform: NodeJS.Platform = process.platform,
   update = false,
+  pluginInstall = false,
   phoneAccess = false
 ): string[] {
   // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
@@ -56,6 +58,7 @@ export function welcomeCapabilities(
     ...plugins.filter((c) => !STATIC_CAPABILITIES.includes(c)),
     CAPABILITY.pairing,
     ...(update && !local ? [CAPABILITY.update] : []),
+    ...(pluginInstall ? [CAPABILITY.pluginInstall] : []),
     ...(prWatch ? [CAPABILITY.prWatch] : []),
     ...(local && phoneAccess ? [CAPABILITY.phoneAccess] : []),
     ...(local ? [CAPABILITY.local] : [])

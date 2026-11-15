@@ -90,6 +90,8 @@ version, and the server closes a client with a version it does not support (`400
 ```
 
 `plugins` lists the server's plugins (see [Plugins](#plugins)); a server older than plugins sends none.
+An installed plugin's entry (see [Installed plugins](#installed-plugins)) also carries `type`,
+`name`, `description`, `contract` and `sha256`; installed plugins come after the built-in ones.
 
 `serverId` is a UUID generated on the server's first start and never changes.
 Clients key everything they cache by it. `platform` is the server's OS (Node's
@@ -123,6 +125,7 @@ new optional field needs no capability: its absence says enough.
 | `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server; a phone reaches the local one only through its phone listener (`phoneAccess`) |
 | `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
+| `pluginInstall` | The server takes `plugins.install` and `plugins.remove` from a client (see [Installed plugins](#installed-plugins)). Not listed when its config has `"plugins": {"remoteInstall": false}`; the local server lists it too. Read from the config as each welcome is sent |
 | `phoneAccess` | The local server only: its listener for phones on this machine's Tailscale address (see [Phone access on the local server](#phone-access-on-the-local-server)): `phoneAccess.get`, `phoneAccess.set`, `phoneAccess.revoke` and the `phoneAccess.changed` event, all for its own `local` token |
 | `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only unless phone access is on (see [Phone access on the local server](#phone-access-on-the-local-server)): it then also listens on this machine's Tailscale address, where the `local` token is refused, and a paired phone's token has the same any-path access. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
@@ -202,7 +205,7 @@ server restarts. A server without this field simply leaves it out.
 | Docker | `docker.list`, `docker.container`, `docker.compose` |
 | Environments | `env.check`, `env.list`, `env.up`, `env.stop`, `env.destroy`, `env.ps`, `env.composeFiles`, `env.logs` |
 | Stacks | `stack.status`, `stack.up`, `stack.down`, `stack.destroy`, `stack.log` |
-| Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize`; the Linear plugin's `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` (see [Plugins](#plugins)) |
+| Plugins | `<id>.*`, each plugin's own: the voice plugin's `voice.settings`, `voice.setKey`, `voice.clearKey`, `voice.voices`, `voice.setConfig`, `voice.synthesize`; the Linear plugin's `linear.status`, `linear.setKey`, `linear.clearKey`, `linear.issues` (see [Plugins](#plugins)). Installed plugins: `plugins.bundle`, `plugins.install`, `plugins.remove` (see [Installed plugins](#installed-plugins)) |
 | Skills | `skills.list` |
 | Pull request watch | `prWatch.dismiss` (and `branch.setPrWatch`) |
 | Automations | `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed` |
@@ -1041,6 +1044,104 @@ links nowhere. A server older than plugins handled Linear (its `linear` capabili
 | `voice` | [The voice plugin](plugins/voice/README.md): `voice.*`, `voice.summary`, `speak_summary` |
 | `linear` | [The Linear plugin](plugins/linear/README.md): `linear.*`, Linear tickets, `linearWorkspace` |
 | `azure-devops` | [The Azure DevOps plugin](plugins/azure-devops/README.md): Azure DevOps tickets, `azureDevOpsBaseUrl` |
+
+### Installed plugins
+
+A server also keeps plugins that are not built into Trek (theme plugins phase 1), in
+`plugins-installed/<id>/` in its data dir: a `manifest.json` and a `client.js`. Only theme plugins
+(`"type": "theme"`) can be installed. The server stores them and hands them to clients; it never
+runs `client.js`.
+
+A package (a `.trekplugin` file) is the two files as one JSON document:
+
+```json
+{ "manifest": { "id": "solarized", "version": "1.0.0", "name": "Solarized",
+                "description": "A calm theme.", "type": "theme", "contract": 1 },
+  "client": "<the text of client.js>" }
+```
+
+**The manifest.** A package's manifest is checked by these six fields:
+
+| Field | Rule |
+|---|---|
+| `id` | A plugin id: lowercase letters, digits and `-`, starting with a letter, at most 32 characters. Refused: `constructor`, a built-in plugin's id, a core namespace (`plugins`, `integrations`, `sys`, `sub`, `mcp`, and the prefix of any core method: `session`, `update`), and the names Windows keeps for devices (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`) |
+| `version` | Semver (`1.2.3`, `1.2.3-beta.1`), at most 64 characters |
+| `name` | 1 to 64 visible characters (UTF-16 code units) once trimmed, with no control or invisible (format) characters |
+| `description` | The same, 1 to 300 |
+| `type` | `"theme"` |
+| `contract` | `1`: the plugin contract's version the bundle was built for |
+
+A manifest that declares `secrets`, `projectSettings`, `legacyCapability` or `legacyBuiltIn` is
+refused: only a built-in plugin may. Any other field is dropped: the `manifest.json` the server
+stores has the six fields (`name` and `description` trimmed) and `"defaultEnabled": false`, and
+nothing else, whatever installed it. The manifest is at most 16 KB (as
+compact JSON, in UTF-8), `client` is not empty and at most 1 MB of UTF-8 text, and a package's text
+is at most 6 MB (6,308,864: characters when a client sends it, bytes when it is read from a URL).
+
+Its entry in the welcome's `plugins`:
+
+```json
+{ "id": "solarized", "version": "1.0.0", "defaultEnabled": false, "type": "theme",
+  "name": "Solarized", "description": "A calm theme.", "contract": 1, "sha256": "9f2c…" }
+```
+
+`sha256` is of the bundle's UTF-8 bytes, in lowercase hex. `defaultEnabled` is always false: a
+theme is on nowhere until a client picks it.
+
+| Method | Params | Result |
+|---|---|---|
+| `plugins.bundle` | `{id}` | `{sha256, client}`: the bundle's text as it is now, and its hash |
+| `plugins.install` | `{url}` or `{package}` (a `.trekplugin`'s text): one of the two | The plugin's welcome entry. Replaces an installed plugin of the same id |
+| `plugins.remove` | `{id}` | `{}` |
+
+- `url` is an `https` URL of a package, with no user name or password in it and at most 2,048
+  characters. The server reads it with one GET, within 30 seconds, and follows at most five
+  redirects, each to an `https` URL without credentials; a 3xx with no `location` is refused. The
+  body is UTF-8 text.
+- Errors:
+
+  | Code | Method | When |
+  |---|---|---|
+  | `BAD_REQUEST` | `plugins.bundle`, `plugins.remove` | `id` is missing or not a string (`id is required`), or not a plugin id by its form (`id is not a plugin id`) |
+  | `BAD_REQUEST` | `plugins.install` | Both or neither of `url` and `package`; one that is not a string; a `url` that is too long, not a URL, not `https`, or has credentials; one that cannot be read (the connection, the time, a status that is not 2xx, a redirect that is refused, a sixth redirect); a body that is not UTF-8; a package that is too large, not JSON, or not installable (the message names the manifest rule or the size it broke); an `id` that is reserved |
+  | `NOT_FOUND` | `plugins.bundle`, `plugins.remove` | No installed plugin has the id. `plugins.bundle` also when the plugin's files were changed on the disk into something that cannot be installed: it is then no longer listed |
+  | `NOT_FOUND` | `plugins.install`, `plugins.remove` | The server's config has `"plugins": {"remoteInstall": false}`. Checked before the params |
+
+  A message that names a URL leaves out its user name, password, query and fragment. A `url`
+  that is too long, and an `id` that is not a plugin id, are not sent back.
+- Any authenticated connection may call them. A server whose config has `"plugins":
+  {"remoteInstall": false}` leaves installing and removing to the command on its machine: it does
+  not list the `pluginInstall` capability, and `plugins.bundle` is still answered. The config is
+  read at each call and the capability at each welcome, so a client that still holds
+  `pluginInstall` from before the config changed gets `NOT_FOUND`.
+- After any change to the installed plugins (one added, replaced or removed, or its entry
+  different), every authenticated connection gets `plugins.list {plugins}`, the welcome's `plugins`
+  as it now is (the built-ins, then the installed ones), and then `plugins.changed {id}` for each
+  plugin that changed. That is so whoever made the change: a client, `trek-server plugin` on the
+  machine, or an edit in the folder, which a running server notices by watching it (a moment
+  later) or, for a `client.js` edited in place, when its bundle is next asked for. The watch is
+  not all it relies on: the server also reads the folder again about two seconds after the watch
+  starts and then every minute, so a change the watch missed is announced within a minute. A
+  server that cannot watch the folder says so in its log, still reads it every minute, and tries
+  to watch it again every 30 seconds until it can.
+- The server's log names each install and removal a client made: `[plugins] token "<name>"
+  installed <id> <version> (sha256 <hash>) from <url>` (the URL without its query or fragment; `from
+  a package` for `{package}`) and `[plugins] token "<name>" removed <id>`.
+- A folder in `plugins-installed` that cannot be installed (a name that is not its manifest's
+  `id`, a broken manifest, a file that is a symbolic link) is not listed; the server's log says why.
+
+`trek-server plugin add <source>` installs a package on the server's machine, from a folder with
+`manifest.json` and `client.js`, a `.trekplugin` file, or an `https` URL of one, under the same
+rules, replacing a plugin of the same id; `trek-server plugin list` prints each installed plugin's
+id, version, type and name; `trek-server plugin remove <id>` removes one, or a folder there named
+as an id that is not listed (one whose manifest broke; never a symbolic link). They work on the
+data dir's folder (`--data-dir`, else the config's `dataDir`, else the platform's; a config that
+is there but cannot be read is a warning, and the platform's is used) with no connection to a
+server, whatever `remoteInstall` says; one that is running picks the change up by its watch, or
+within a minute. The Trek app's local server has a data dir of its own, which none of these
+reach: `trek-server plugin add <source> --local` (and `list --local`, `remove <id> --local`)
+works on it, with `--local-profile <name>` for a named profile, and takes neither `--data-dir`
+nor `--config`.
 
 ## Pull request watch
 
@@ -1927,7 +2028,8 @@ URL, each at most 200 characters.
 | `docker.log` | `{data, done?}`: a `docker.compose` run's output, only to the connection that asked for it (chunks may be dropped under backpressure, see [Docker, environments and stacks](#docker-environments-and-stacks)); `done` on its last |
 | `env.log` | `{profile, data, done?, step?}`: an `env.up`, `env.stop` or `env.destroy`'s output, only to the connection that asked for it; `step` (`vm`, `compose`, `ready`) marks an `env.up` phase, `done` its last |
 | `<id>.<event>` | A plugin's event (see [Plugins](#plugins)): the voice plugin's `voice.summary` |
-| `plugins.changed` | `{id}`: a plugin's server-wide state (a key, its config) changed, by any client, to every authenticated connection |
+| `plugins.changed` | `{id}`: a plugin's server-wide state (a key, its config) changed, by any client, to every authenticated connection. Also sent for an installed plugin that was added, replaced or removed, after that change's `plugins.list` |
+| `plugins.list` | `{plugins}`: the welcome's `plugins` as it now is, after an installed plugin was added, replaced or removed (see [Installed plugins](#installed-plugins)), to every authenticated connection |
 | `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
 | `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
 | `history.added` | `{projectId, event}`: on the project topic, a new worktree history entry, or a newer version of one (same id; see [Worktree history](#worktree-history)) |

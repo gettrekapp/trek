@@ -394,8 +394,8 @@ test('welcome capabilities: mcp while the listener is up, then what the server a
   assert.deepEqual(welcomeCapabilities(false, false, false, [], 'linux'), [...all, 'pairing'])
   // The local server pairs phones too; `phoneAccess` only when it has a phone listener to offer.
   assert.deepEqual(welcomeCapabilities(true, true, false, [], 'linux'), ['mcp', ...all, 'pairing', 'local'])
-  assert.deepEqual(welcomeCapabilities(false, true, false, [], 'darwin', false, true), [...all, 'pairing', 'phoneAccess', 'local'])
-  assert.equal(welcomeCapabilities(false, false, false, [], 'linux', false, true).includes('phoneAccess'), false, 'never on a remote server')
+  assert.deepEqual(welcomeCapabilities(false, true, false, [], 'darwin', false, false, true), [...all, 'pairing', 'phoneAccess', 'local'])
+  assert.equal(welcomeCapabilities(false, false, false, [], 'linux', false, false, true).includes('phoneAccess'), false, 'never on a remote server')
   // The plugins' legacy capabilities (voice, plugin system phase 1) follow the static ones.
   assert.deepEqual(welcomeCapabilities(false, false, false, ['voice', 'linear'], 'linux'), [...all, 'voice', 'linear', 'pairing'])
 })

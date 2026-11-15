@@ -25,6 +25,7 @@
 //
 // Prints SERVER ENV SMOKE PASS (n checks) or SERVER ENV SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -306,6 +307,7 @@ try {
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
+  await openSettingsTab(settings, 'Environments')
   await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check("the poll's tool check passes on the server's machine", await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)
