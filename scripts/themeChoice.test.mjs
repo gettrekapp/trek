@@ -2,7 +2,7 @@
 // server lists, how the app's stored choice stands against them, and what Settings says about it.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { installedThemes, themeKey, themeNote, themeState } from '../src/renderer/src/plugins/theme.ts'
+import { STALE_GAVE_UP, STALE_RETRIES, STALE_RETRY_MS, installedThemes, themeKey, themeNote, themeState } from '../src/renderer/src/plugins/theme.ts'
 
 const SHA_A = 'a'.repeat(64)
 const SHA_B = 'b'.repeat(64)
@@ -50,6 +50,12 @@ test('themeNote: what the Theme row says', () => {
     text: 'Could not load this theme: the bundle does not match its hash. The window shows the default look.',
     problem: true
   })
+  // Once the stale retries are used up, the row no longer says "for now".
+  assert.deepEqual(themeNote(ready, STALE_GAVE_UP), {
+    text: 'Could not load this theme: the server kept changing it; choose it again to retry. The window shows the default look.',
+    problem: true
+  })
+  assert.deepEqual([STALE_RETRIES, STALE_RETRY_MS], [5, 3000], 'the numbers PROTOCOL.md states')
   assert.deepEqual(themeNote(themeState({ id: 'nord', sha256: SHA_B }, [nord]), { kind: 'idle' }), {
     text: 'This theme was updated on the server. The window shows the default look until you apply the new version.',
     apply: true

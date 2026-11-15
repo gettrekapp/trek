@@ -8,12 +8,9 @@ import type { WindowBackend } from '../backend'
 import { loadInstalledPlugin } from './installedLoader'
 import { PluginScope, themeEntry } from './PluginHost'
 import { exposePluginGlobals } from './pluginGlobals'
+import { STALE_GAVE_UP, STALE_RETRIES, STALE_RETRY_MS } from './theme'
 import { setThemeLoad } from './themeLoadStore'
 import { useThemeChoice } from './useThemeChoice'
-
-/** A `stale` answer is followed by a new list; if none changes anything, the load goes again: this long after, this many times. */
-const STALE_RETRY_MS = 3000
-const STALE_RETRIES = 5
 
 interface Loaded {
   backend: WindowBackend
@@ -68,11 +65,18 @@ export function ThemeHost(): React.JSX.Element | null {
         }
         // Whatever was applied before is not this load's: a load that did not succeed is the default look.
         setLoaded(null)
-        setThemeLoad(result)
+        if (result.kind !== 'stale') {
+          setThemeLoad(result)
+          return
+        }
         // Stale, and then the server lists this same bundle again: no new list starts a load, so this does.
-        if (result.kind === 'stale' && staleTries.current < STALE_RETRIES) {
+        if (staleTries.current < STALE_RETRIES) {
           staleTries.current += 1
+          setThemeLoad(result)
           retry = setTimeout(() => setAttempt((n) => n + 1), STALE_RETRY_MS)
+        } else {
+          // The retries are used up: "for now" would no longer be true.
+          setThemeLoad(STALE_GAVE_UP)
         }
       })
     return () => {

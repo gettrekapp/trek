@@ -23,6 +23,20 @@ names may change between releases; a theme that targets them may break.
 A project's own appearance (title bar color, logo, banner) still applies on top of a theme. The
 native title bar is not recolored.
 
+## Rules for a theme's code
+
+- Keep side effects inside `Runtime`'s effects, and undo them in the effect's cleanup. Anything a bundle
+  does at its top level (timers, listeners, globals) is never undone when the theme stops being
+  active.
+- The bundle's module may not export `then`: such a bundle is refused.
+- The bundle must finish loading within 15 seconds, top-level `await`s included.
+- The build refuses any import other than `react`, `react/jsx-runtime` and the plugin contract:
+  packages, Node built-ins and path aliases alike. A theme's own files, by relative path, are fine.
+- `theme.styles` must be a string, and `Runtime` and `slots.overlay` functions, where present; the
+  window reads them once, when the bundle loads.
+- In the web client, themes need a secure context (https or localhost): the page must be able to
+  compute SHA-256 to check a bundle.
+
 ## Build and install
 
     npm run build:example-theme

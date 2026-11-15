@@ -2,7 +2,7 @@
 // window's server has installed. The choice is this app's, per server and project; it records the
 // theme's id and the bundle hash the user accepted. Hidden where there is nothing to pick and
 // nothing chosen (a server with no themes, or one older than installed plugins).
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { ThemeChoice } from '../../../shared/appSettings.ts'
 import { themeNote } from './theme'
 import { getThemeLoad, subscribeThemeLoad } from './themeLoadStore'
@@ -12,6 +12,10 @@ export function ThemeSetting(): React.JSX.Element | null {
   const { key, listed, themes, choice, state } = useThemeChoice()
   const load = useSyncExternalStore(subscribeThemeLoad, getThemeLoad)
   const [error, setError] = useState<string | null>(null)
+  // A save error is about the choice as it stood: once the stored choice or its state moves on, the row's own note shows again.
+  const choiceId = choice?.id
+  const choiceSha = choice?.sha256
+  useEffect(() => setError(null), [key, choiceId, choiceSha, state.kind])
   if (key === null || !listed || (themes.length === 0 && state.kind === 'none')) return null
 
   const save = (value: ThemeChoice | null): void => {

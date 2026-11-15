@@ -66,6 +66,13 @@ export function themeState(choice: ThemeChoice | undefined, presence: readonly P
  */
 export type ThemeLoad = { kind: 'idle' } | { kind: 'loading' } | { kind: 'applied' } | { kind: 'stale' } | { kind: 'failed'; reason: string }
 
+/** A `stale` answer is followed by a new list; if none changes anything, the window loads again: this long after, this many times. */
+export const STALE_RETRY_MS = 3000
+export const STALE_RETRIES = 5
+
+/** Still `stale` after the last of those: nothing more is tried by itself, so the row says so (choosing Default and the theme again, or a reconnect, loads again). */
+export const STALE_GAVE_UP: ThemeLoad = { kind: 'failed', reason: 'the server kept changing it; choose it again to retry' }
+
 /** The Theme row's line under its name; `apply` offers the Apply button, `problem` marks a fault. */
 export interface ThemeNote {
   text: string
