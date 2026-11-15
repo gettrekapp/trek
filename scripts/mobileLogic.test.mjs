@@ -1,7 +1,7 @@
 // The phone app's pure modules (6a, apps/mobile/src/logic): the server-address rule, the
 // attention list and its notifications, the key bar, the diff colouring, the terminal feed and
 // the ref counts, the connection notices, the per-server generations, the held topic view and
-// the value a promote request waits for, and the quick buttons' list and built-in context.
+// the value a promote request waits for and the quick buttons' list and built-in context.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -538,7 +538,29 @@ test('quick buttons: what has no value: an unknown agent id or label, a branch w
   const global = resolveBuiltins(quickButtonContext(project, 'g', 'Claude', qbNow))
   assert.equal(global.project_name, 'App')
   assert.equal(global.session_id, 'agent-g')
-  for (const name of ['worktree_id', 'worktree_name', 'worktree_path', 'branch', 'repo_name', 'repo_path', 'workflow_tag', 'ticket']) assert.equal(global[name], undefined, name)
+  for (const name of ['worktree_id', 'worktree_name', 'worktree_path', 'branch', 'repo_name', 'repo_path', 'workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(global[name], undefined, name)
 
   assert.equal(quickButtonContext(project, 'nope', 'Claude', qbNow), null)
+})
+
+test('quick buttons: the main checkout resolves its branch data; a worktree without a branch has none', () => {
+  const project = qbProject()
+  project.repositories[0].worktrees.push(
+    { ...qbWorktree('wm', 'feat', [qbSession('sm')]), isMain: true },
+    (() => {
+      const w = qbWorktree('wn', 'x', [qbSession('sn')])
+      delete w.branch
+      return w
+    })()
+  )
+  const main = resolveBuiltins(quickButtonContext(project, 'sm', 'Claude', qbNow))
+  assert.equal(main.worktree_id, 'wm')
+  assert.equal(main.worktree_name, 'feat')
+  assert.equal(main.branch, 'feat')
+  assert.equal(main.note, 'remember X')
+
+  const none = resolveBuiltins(quickButtonContext(project, 'sn', 'Claude', qbNow))
+  assert.equal(none.worktree_id, 'wn')
+  assert.equal(none.repo_name, 'trek')
+  for (const name of ['branch', 'workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(none[name], undefined, name)
 })
