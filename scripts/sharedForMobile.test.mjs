@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 // fileURLToPath, not .pathname: on Windows that is /D:/… , which resolve() reads as a path on the current drive.
 const root = fileURLToPath(new URL('..', import.meta.url))
 /** What apps/mobile imports from the shared code (keep in step with apps/mobile/src/shared.ts). */
-export const MOBILE_ENTRIES = ['src/shared/client/index.ts', 'src/shared/model/topics.ts', 'src/shared/model/types.ts', 'src/shared/protocolV2.ts', 'src/shared/types.ts', 'src/shared/promote.ts', 'src/shared/push.ts']
+export const MOBILE_ENTRIES = ['src/shared/client/index.ts', 'src/shared/model/topics.ts', 'src/shared/model/types.ts', 'src/shared/protocolV2.ts', 'src/shared/types.ts', 'src/shared/promote.ts', 'src/shared/push.ts', 'src/shared/quickButtonTemplate.ts']
 /** Packages the phone also has (none today: the shared code is dependency-free). */
 const ALLOWED_PACKAGES = new Set([])
 
