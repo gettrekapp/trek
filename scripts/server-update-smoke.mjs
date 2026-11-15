@@ -20,8 +20,8 @@
 // connection hears and the restart that names its version; a config that leaves installing to
 // the command; a version that fails its selfcheck; an update that fails before it downloads
 // anything (its lock held, the feed unverifiable) and says why, and a server that keeps answering
-// while it installs. Last, an install whose bundle is a normal build
-// (no update key built in): it offers clients nothing, and its command says why.
+// while it installs. Last, an install with no update key built in (TREK_UPDATE_NO_KEY, as a
+// build from before the project's key): it offers clients nothing, and its command says why.
 import './smokeGh.mjs'
 import { createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -43,7 +43,7 @@ const check = (what, ok, detail = '') => {
 }
 
 // The temp folder, the two test builds, the feed and the servers' environment (updateFixture.mjs).
-const { work, OLD, NEW, oldBuild, newBuild, buildServer, installFolder, publish, feedRequests, runToEnd, world, start, cleanup } = await createUpdateFixture()
+const { work, OLD, NEW, oldBuild, newBuild, installFolder, publish, feedRequests, runToEnd, world, start, cleanup } = await createUpdateFixture()
 
 /** How a request was refused: [code, details.reason], or what it answered instead. */
 const refusal = (request) => request.then((result) => ['answered', JSON.stringify(result)], (err) => [err.code ?? String(err.message ?? err), err.details?.reason])
@@ -562,17 +562,15 @@ for (const [name, what, tamper, message] of [
   check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)
 }
 
-// ---- 13. an install with no update key built in (a normal build) offers clients nothing ----
+// ---- 13. an install with no update key built in offers clients nothing ----
 {
-  const normal = { dir: buildServer('normal', { test: false }) }
-  const built = JSON.parse(readFileSync(join(normal.dir, 'build.json'), 'utf8'))
-  check('a normal build is not a test build', built.testUpdate === undefined && typeof built.version === 'string', JSON.stringify(built))
-  const w = await world('nokey', { bundle: normal, version: built.version })
-  // A newer signed release is there, and the environment names the feed and its key: a normal build reads neither.
+  const noKey = { TREK_UPDATE_NO_KEY: '1' }
+  const w = await world('nokey')
+  // A newer signed release is there, and the environment names the feed and a key: with no key of its own it asks nothing.
   publish('good', newBuild)
   const asked = feedRequests()
-  const run = start(w.launcher, w.startArgs)
-  check('an install of a normal build starts, and creates its control socket', (await up(w, run, built.version)) && (await control(w.socket, 'status'))?.pid === run.child.pid, run.output)
+  const run = start(w.launcher, w.startArgs, noKey)
+  check('an install with no key starts, and creates its control socket', (await up(w, run, OLD)) && (await control(w.socket, 'status'))?.pid === run.child.pid, run.output)
   try {
     const client = await connect(w.port, w.token)
     check('its welcome does not list `update`', !client.welcome.capabilities.includes('update'), JSON.stringify(client.welcome.capabilities))
@@ -582,9 +580,9 @@ for (const [name, what, tamper, message] of [
   } catch (err) {
     check('a client signs in to it', false, `${err.message}\n${run.output}`)
   }
-  const checked = await w.cli(['update', '--check'])
+  const checked = await w.cli(['update', '--check'], noKey)
   check('`trek-server update --check` on it exits 1, saying it has no update key', checked.status === 1 && /has no update key built in/.test(checked.stderr), checked.out)
-  check('the feed was never asked, and nothing changed', feedRequests() === asked && w.versionAt(w.install) === built.version && w.marks().length === 0 && run.ended === null, `${feedRequests() - asked} requests\n${run.output}`)
+  check('the feed was never asked, and nothing changed', feedRequests() === asked && w.versionAt(w.install) === OLD && w.marks().length === 0 && run.ended === null, `${feedRequests() - asked} requests\n${run.output}`)
   const ended = await stop(run)
   check('SIGTERM stops it', ended?.code === 0, `${JSON.stringify(ended)}\n${run.output}`)
 }

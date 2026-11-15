@@ -151,6 +151,9 @@ test('the feed and keys are fixed, except in a test build that names both', () =
   assert.deepEqual(updateSource({ TREK_UPDATE_FEED: 'http://127.0.0.1:9/r' }, true), { feed: UPDATE_FEED, keys: UPDATE_PUBLIC_KEYS }, 'both or neither')
   assert.deepEqual(updateSource({ TREK_UPDATE_PUBKEY: A.pem }, true), { feed: UPDATE_FEED, keys: UPDATE_PUBLIC_KEYS }, 'both or neither')
   assert.deepEqual(updateSource(env), { feed: UPDATE_FEED, keys: UPDATE_PUBLIC_KEYS }, 'run from source, this is not a test build')
+  assert.deepEqual(updateSource({ ...env, TREK_UPDATE_NO_KEY: '1' }, true), { feed: UPDATE_FEED, keys: [] }, 'a test build can have no key at all')
+  assert.deepEqual(updateSource({ TREK_UPDATE_NO_KEY: '1' }, false), { feed: UPDATE_FEED, keys: UPDATE_PUBLIC_KEYS }, 'a release build keeps its keys')
+  assert.equal(UPDATE_PUBLIC_KEYS.length > 0, true, 'the project has a key: without one no server can update')
   for (const pem of UPDATE_PUBLIC_KEYS) {
     assert.match(pem, /^-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/=\n]+-----END PUBLIC KEY-----\n?$/)
     assert.equal(createPublicKey(pem).asymmetricKeyType, 'ed25519')

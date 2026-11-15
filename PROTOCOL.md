@@ -552,9 +552,8 @@ the same checks and the same result.
 - **When it is listed:** the server runs from a release tarball's folder on macOS or Linux
   (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`), its user can write that folder and
   the folder that holds it, it is not the local server (which is updated with the app), and its
-  build has an update key (`UPDATE_PUBLIC_KEYS` in `server/src/update/keys.ts`). That list is
-  empty in this repository until the project's signing key is generated (docs/RELEASING.md, "The
-  update signing key"), so a server built from the repository as it stands never lists `update`.
+  build has an update key (`UPDATE_PUBLIC_KEYS` in `server/src/update/keys.ts`; a release from
+  before the project's signing key has none, and never lists `update`).
   It is decided once, when the server starts. Any other server leaves `update` out of its welcome,
   answers all three methods `NOT_FOUND`, and never sends `update.changed`.
 - **`UpdateStatus`** is `update.status`'s and `update.check`'s answer and `update.changed`'s

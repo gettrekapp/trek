@@ -182,8 +182,10 @@ signed feed on this machine (a test build with its own key; it never contacts Gi
 
 ### The update signing key
 
-`UPDATE_PUBLIC_KEYS` is empty until this is done. Until then the `release` job warns ("Checksums
-not signed") and signs nothing, and `trek-server update` says it has no update key built in.
+This was done on 2026-11-15: `UPDATE_PUBLIC_KEYS` holds the project's key, and the steps below
+are kept for a new key (see "Rotating the key" and "If the key is lost or leaks"). With an empty
+list the `release` job warns ("Checksums not signed") and signs nothing, and `trek-server update`
+says it has no update key built in.
 
 Once, before the first release that servers should be able to update from:
 

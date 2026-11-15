@@ -167,7 +167,8 @@ const port = await new Promise((done, reject) => {
 })
 const configPath = join(work, 'config.json')
 const tokenHash = createHash('sha256').update(randomBytes(16).toString('base64url'), 'utf8').digest('hex')
-writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [] }), { mode: 0o600 })
+// No look at the release feed: a release build has the project's update key, and a test reaches no real service.
+writeFileSync(configPath, JSON.stringify({ tokenHash, repos: [], updates: { check: false } }), { mode: 0o600 })
 // cmd.exe's line is joined by hand there: a path is quoted.
 const pathArg = (p) => (windows ? `"${p}"` : p)
 const started = viaLauncher(['start', '--config', pathArg(configPath), '--host', '127.0.0.1', '--port', String(port), '--data-dir', pathArg(join(work, 'data'))])

@@ -183,11 +183,11 @@ export async function createUpdateFixture({ prefix = 'trek-upd-', old: OLD = '9.
   if (signals) for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => process.exit(130))
 
   // ---- the builds: one bundle per version ---------------------------------------------------
-  /** A test build claiming `version`, in work/build/<version>. `test: false`: a normal build (no key built in, the repo's own version) in a folder of that name. */
-  function buildServer(version, { test = true } = {}) {
+  /** A test build claiming `version`, in work/build/<version>. */
+  function buildServer(version) {
     const out = join(work, 'build', version)
     execFileSync(process.execPath, [join(root, 'server', 'scripts', 'build.mjs'), '--out', out], {
-      env: test ? { ...process.env, TREK_SERVER_TEST_UPDATE: '1', TREK_SERVER_TEST_VERSION: version } : withoutTestBuild(process.env),
+      env: { ...process.env, TREK_SERVER_TEST_UPDATE: '1', TREK_SERVER_TEST_VERSION: version },
       // esbuild's summary goes to stderr: shown only if the build fails (execFileSync's error carries it).
       stdio: ['ignore', 'ignore', 'pipe'],
       encoding: 'utf8'
@@ -274,9 +274,9 @@ export async function createUpdateFixture({ prefix = 'trek-upd-', old: OLD = '9.
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), TREK_UPDATE_FEED: FEED, TREK_UPDATE_PUBKEY: PUBKEY, TREK_NODE: process.execPath }
 
   /** Runs `file` to its end (the feed is served by this process, so nothing here may block it). */
-  function runToEnd(file, args, ms = 120000) {
+  function runToEnd(file, args, ms = 120000, extraEnv = {}) {
     return new Promise((done) => {
-      const child = spawn(file, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(file, args, { env: { ...env, ...extraEnv }, stdio: ['ignore', 'pipe', 'pipe'] })
       children.add(child)
       let out = ''
       let err = ''
@@ -308,7 +308,7 @@ export async function createUpdateFixture({ prefix = 'trek-upd-', old: OLD = '9.
     const port = await freePort()
     const launcher = join(install, 'bin', 'trek-server')
     const startArgs = ['start', '--config', configPath, '--host', '127.0.0.1', '--port', String(port), '--data-dir', join(base, 'data')]
-    const cli = (args) => runToEnd(launcher, [...args, '--config', configPath])
+    const cli = (args, extraEnv) => runToEnd(launcher, [...args, '--config', configPath], undefined, extraEnv)
     const versionAt = (dir) => JSON.parse(readFileSync(join(dir, 'build.json'), 'utf8')).version
     const state = () => {
       try {
@@ -343,10 +343,4 @@ export async function createUpdateFixture({ prefix = 'trek-upd-', old: OLD = '9.
   const pty = prunedPty()
 
   return { work, OLD, NEW, FEED, PUBKEY, env, children, oldBuild, newBuild, buildServer, installFolder, publish, feedRequests: () => requests, runToEnd, world, start, cleanup }
-}
-
-/** The environment without the test build's switches: what a normal build is made with. */
-function withoutTestBuild(env) {
-  const { TREK_SERVER_TEST_UPDATE: _update, TREK_SERVER_TEST_VERSION: _version, ...rest } = env
-  return rest
 }
