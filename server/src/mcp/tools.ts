@@ -20,6 +20,8 @@ import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
 import { dispatchV2, type V2Context } from '../v2.ts'
 import { describeWorktree, resolveWorktree } from './describe.ts'
+import { automationInput, describeAutomation, resolveAutomation } from './automations.ts'
+import type { AutomationScheduler } from '../automations/scheduler.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { ToolDefinition } from './protocol.ts'
@@ -57,6 +59,10 @@ const ATTRIBUTION_PARAMS = {
 const SESSION_TYPE_PARAM = {
   type: 'string',
   description: 'Session type id or name (case-insensitive), as returned by list_session_types'
+}
+const AUTOMATION_PARAM = {
+  type: 'string',
+  description: 'Automation id or name (case-insensitive), as returned by list_automations. A name several automations share is an error: pass the id.'
 }
 
 const STACK_DESCRIPTION =
@@ -413,11 +419,52 @@ export const MCP_TOOLS: ToolDefinition[] = [
       properties: { worktree: WORKTREE_PARAM, ...ATTRIBUTION_PARAMS },
       required: ['worktree']
     }
+  },
+  {
+    name: 'list_automations',
+    description:
+      "List the project's automations: scheduled prompts that each run unattended in their own Global session (the run tab), started anew on every run. Each has id, name, prompt, cron, timezone, enabled, llm (absent: the project's Global agent), nextRun (absent when disabled), missed (slots that passed while the server could not run them, waiting for the user's answer), runSession (its run tab's terminalId and status, once it has run) and history (its runs, newest first, at most 20: at, trigger, outcome, error).",
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'save_automation',
+    description:
+      'Create an automation, or update the one `automation` names. An update changes only the arguments you pass. Without `automation` it always creates (names are not unique) and needs name, prompt and cron. To turn one on or off, pass automation and enabled. A schedule change or a re-enable restarts its clock: nothing counts as missed. Returns the saved automation in the same shape as a list_automations entry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        automation: { ...AUTOMATION_PARAM, description: `The automation to update; omit to create one. ${AUTOMATION_PARAM.description}` },
+        name: { type: 'string', description: 'Name, at most 80 characters; also the title of its run tab' },
+        prompt: { type: 'string', description: 'The first message of each run, at most 20000 characters' },
+        cron: {
+          type: 'string',
+          description: 'Five-field cron expression (minute hour day-of-month month day-of-week), e.g. "0 9 * * *" for every day at 09:00. It must not run more often than every 5 minutes.'
+        },
+        timezone: { type: 'string', description: "IANA timezone the cron is read in, e.g. America/New_York. Defaults to the server machine's timezone when creating." },
+        enabled: { type: 'boolean', description: 'Whether it runs on schedule. Defaults to true when creating.' },
+        llm: {
+          type: ['object', 'null'],
+          description: "Agent for its runs: { provider, model?, effort? }; it must be one that can use Trek's tools. null = the project's Global agent.",
+          properties: LLM_PARAMS
+        }
+      }
+    }
+  },
+  {
+    name: 'delete_automation',
+    description: 'Delete an automation. Its run tab stays open as a normal Global session.',
+    inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
+  },
+  {
+    name: 'run_automation',
+    description:
+      "Run an automation now, in its run tab, whatever its schedule and whether or not it is enabled. Returns the run tab's terminalId: follow the run with wait_for_sessions and read_terminal. Fails while the tab is still busy with the previous run. The run is recorded in the automation's history.",
+    inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
   }
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -435,6 +482,8 @@ export interface ToolDeps {
   prWatch?: PrWatcher
   /** promote_to_primary's confirmations (5e); without it the tool says no window can confirm */
   promoteRequests?: PromoteRequests
+  /** The automations scheduler, for the automation tools; without it they say the server runs no automations */
+  automations?: AutomationScheduler
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -593,6 +642,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     prWatch: deps.prWatch,
     plugins: deps.plugins,
     history: deps.history,
+    automations: deps.automations,
     // Tool calls subscribe to nothing and attach to no pty.
     subscriber: { send() {} },
     terminal: { send() {}, bufferedAmount: () => 0 }
@@ -629,6 +679,12 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     }
 
     const saveSessionTypes = (types: SessionType[]) => v2('project.updateSettings', { settings: { sessionTypes: types } })
+
+    /** The server's automations scheduler; every automation tool needs one. */
+    const scheduler = (): AutomationScheduler => {
+      if (!deps.automations) throw codedError('TOOL_ERROR', 'this server runs no automations')
+      return deps.automations
+    }
 
     const pollMs = deps.pollMs ?? 250
     const graceMs = deps.graceMs ?? 1500
@@ -1012,6 +1068,36 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       list_session_types: (_args, project) => (project.settings.sessionTypes ?? []).map(withoutIcon),
+
+      list_automations: (_args, project) => {
+        const at = scheduler().now()
+        return (project.automations ?? []).map((a) => describeAutomation(project, a, at))
+      },
+
+      save_automation: async (args, project) => {
+        const at = scheduler().now()
+        const existing = args.automation === undefined || args.automation === null ? undefined : resolveAutomation(project, args.automation)
+        const input = automationInput(existing, args, Intl.DateTimeFormat().resolvedOptions().timeZone)
+        const { id } = (await v2('automation.save', { automation: input })) as { id: string }
+        const fresh = deps.projects.require(projectId)
+        const saved = fresh.automations?.find((a) => a.id === id)
+        if (!saved) throw notFound(`No automation with id "${id}"`)
+        return describeAutomation(fresh, saved, at)
+      },
+
+      delete_automation: async (args, project) => {
+        scheduler()
+        const automation = resolveAutomation(project, args.automation)
+        await v2('automation.delete', { automationId: automation.id })
+        return { deleted: automation.name }
+      },
+
+      run_automation: async (args, project) => {
+        scheduler()
+        const automation = resolveAutomation(project, args.automation)
+        const { sessionId } = (await v2('automation.runNow', { automationId: automation.id })) as { sessionId: string }
+        return { terminalId: sessionId }
+      },
 
       save_session_type: async (args, project) => {
         const types = project.settings.sessionTypes ?? []

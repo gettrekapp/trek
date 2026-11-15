@@ -13,6 +13,7 @@ import { GitPoller } from '../server/src/git/poller.ts'
 import { MCP_TOOLS, createToolCaller } from '../server/src/mcp/tools.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { SessionManager } from '../server/src/sessions/manager.ts'
+import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
 import { BY_USER, recordHistory } from '../server/src/history/record.ts'
 import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
@@ -121,7 +122,11 @@ async function toolSetup(t, opts = {}) {
     warn: () => {}
   })
   const history = new HistoryStore(join(dir, 'history'))
-  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...opts })
+  // The automations scheduler over the real session manager, never started: runs happen only when a tool asks.
+  // `automations: false` in opts leaves it out, as a server without one.
+  const { automations: withAutomations = true, ...callerOpts } = opts
+  const automations = withAutomations ? new AutomationScheduler({ projects, sessions }) : undefined
+  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, automations, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...callerOpts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
     const job = jobs.find((j) => j.ms === 2500 && !j.cancelled && !j.fired)
@@ -135,9 +140,9 @@ async function toolSetup(t, opts = {}) {
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'close_session', 'create_worktree', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
-    'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_worktree',
-    'request_decision', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
+    'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
+    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_worktree',
+    'request_decision', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'
   ])
@@ -834,4 +839,80 @@ test('history: a bad reason on set_worktree_ticket with a URL writes no settings
   await s.call('set_worktree_note', { worktree: 'main', note: 'n', terminalId: 'foreign' })
   const repoId = s.projects.require(s.projectId).repositories[0].id
   assert.deepEqual(s.history.list(s.projectId, repoId, 'main').events[0].actor, { kind: 'mcp' })
+})
+
+const MORNING = { name: 'Morning', prompt: 'Check the PRs', cron: '0 9 * * *', timezone: 'America/New_York' }
+
+test('save_automation creates with defaults and list_automations lists it', async (t) => {
+  const s = await toolSetup(t)
+  assert.deepEqual(await s.call('list_automations', {}), [])
+  const created = await s.call('save_automation', { name: 'Morning', prompt: 'Check the PRs', cron: '0 9 * * *' })
+  assert.equal(created.name, 'Morning')
+  assert.equal(created.cron, '0 9 * * *')
+  assert.equal(created.timezone, Intl.DateTimeFormat().resolvedOptions().timeZone)
+  assert.equal(created.enabled, true)
+  assert.ok(!Number.isNaN(Date.parse(created.nextRun)), 'nextRun is a time')
+  assert.deepEqual(created.history, [])
+  assert.equal('llm' in created, false)
+  assert.equal('runSession' in created, false)
+  assert.deepEqual((await s.call('list_automations', {})).map((a) => a.id), [created.id])
+  await assert.rejects(s.call('save_automation', { name: 'X', prompt: 'p' }), (e) => e.code === 'BAD_REQUEST' && /cron is required to create an automation/.test(e.message))
+})
+
+test('save_automation updates by name or id, changing only what is passed', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_automation', { ...MORNING, llm: { provider: 'claude' } })
+  const off = await s.call('save_automation', { automation: 'morning', enabled: false })
+  assert.equal(off.id, created.id)
+  assert.deepEqual([off.name, off.prompt, off.cron, off.timezone, off.enabled, off.llm], ['Morning', 'Check the PRs', '0 9 * * *', 'America/New_York', false, { provider: 'claude' }])
+  assert.equal('nextRun' in off, false)
+  const moved = await s.call('save_automation', { automation: created.id, cron: '30 8 * * *', llm: null, enabled: true })
+  assert.deepEqual([moved.cron, moved.enabled, 'llm' in moved], ['30 8 * * *', true, false])
+  assert.equal((await s.call('list_automations', {})).length, 1)
+})
+
+test('save_automation refusals: unknown and ambiguous references, a cron under 5 minutes, the 51st', async (t) => {
+  const s = await toolSetup(t)
+  const one = await s.call('save_automation', MORNING)
+  const two = await s.call('save_automation', MORNING)
+  assert.notEqual(one.id, two.id, 'without `automation` a save always creates')
+  await assert.rejects(s.call('save_automation', { automation: 'Morning', enabled: false }), (e) => e.code === 'BAD_REQUEST' && e.message.includes(one.id) && e.message.includes(two.id))
+  await assert.rejects(s.call('save_automation', { automation: 'nope', enabled: false }), (e) => e.code === 'NOT_FOUND' && /Morning/.test(e.message))
+  await assert.rejects(s.call('save_automation', { ...MORNING, cron: '* * * * *' }), (e) => e.code === 'BAD_REQUEST' && /every 5 minutes/.test(e.message))
+  await assert.rejects(s.call('save_automation', { ...MORNING, timezone: 'Mars/Olympus' }), (e) => e.code === 'BAD_REQUEST' && /IANA timezone/.test(e.message))
+  s.projects.apply(s.projectId, (d) => {
+    d.automations = Array.from({ length: 50 }, (_, i) => ({ id: `a${i}`, name: `A${i}`, prompt: 'p', schedule: { cron: '0 9 * * *', tz: 'UTC' }, enabled: false, createdAt: 0, lastSlot: 0, history: [] }))
+  })
+  await assert.rejects(s.call('save_automation', MORNING), (e) => e.code === 'CAPACITY')
+})
+
+test('delete_automation removes one, by name', async (t) => {
+  const s = await toolSetup(t)
+  await s.call('save_automation', MORNING)
+  assert.deepEqual(await s.call('delete_automation', { automation: 'Morning' }), { deleted: 'Morning' })
+  assert.deepEqual(await s.call('list_automations', {}), [])
+  await assert.rejects(s.call('delete_automation', { automation: 'Morning' }), (e) => e.code === 'NOT_FOUND')
+})
+
+test('run_automation runs it in its run tab and records the run; a busy tab is CONFLICT', async (t) => {
+  const s = await toolSetup(t)
+  const created = await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  const tab = s.projects.require(s.projectId).globalSessions.find((g) => g.id === terminalId)
+  assert.deepEqual(tab.context, { kind: 'automation', automationId: created.id })
+  let [listed] = await s.call('list_automations', {})
+  assert.equal(listed.runSession.terminalId, terminalId)
+  assert.deepEqual(listed.history.map((r) => [r.trigger, r.outcome]), [['manual', 'ran']])
+  // The tab's run started a moment ago, so it is still busy.
+  await assert.rejects(s.call('run_automation', { automation: created.id }), (e) => e.code === 'CONFLICT')
+  ;[listed] = await s.call('list_automations', {})
+  assert.deepEqual(listed.history.map((r) => [r.trigger, r.outcome]), [['manual', 'skipped'], ['manual', 'ran']])
+  assert.ok(listed.history[0].error, 'the skip says why')
+})
+
+test('the automation tools say so on a server without automations', async (t) => {
+  const s = await toolSetup(t, { automations: false })
+  for (const [name, args] of [['list_automations', {}], ['save_automation', MORNING], ['delete_automation', { automation: 'x' }], ['run_automation', { automation: 'x' }]]) {
+    await assert.rejects(s.call(name, args), (e) => e.code === 'TOOL_ERROR' && /this server runs no automations/.test(e.message), name)
+  }
 })
