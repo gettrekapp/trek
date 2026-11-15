@@ -18,7 +18,7 @@ import { findSession } from '../sessions/locate.ts'
 import type { TopicHub } from '../topicHub'
 
 /** Namespaces a plugin may not take, beside those of the core methods. */
-const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp'])
+export const RESERVED_IDS: ReadonlySet<string> = new Set(['plugins', 'integrations', 'sys', 'sub', 'mcp'])
 
 /**
  * A data file's name: one path segment, not `.` or `..` (a plugin keeps to its own directory), and
