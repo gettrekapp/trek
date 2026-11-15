@@ -731,7 +731,7 @@ button:disabled {
   color: var(--text);
 }
 
-/* ─── Sidebar navigation rows (Automations, Settings) ──────────────────── */
+/* ─── Sidebar navigation rows (Add repository, Automations, Settings) ──────────────────── */
 
 .sidebar-nav-row {
   display: flex;
@@ -765,8 +765,14 @@ button:disabled {
   background: rgba(10, 141, 255, 0.17);
 }
 
-.sidebar-nav-automations {
-  margin-bottom: 8px;
+.sidebar-nav-row:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sidebar-nav-row:disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
 }
 
 .sidebar-nav-label {
@@ -789,9 +795,15 @@ button:disabled {
   line-height: 16px;
 }
 
-/* The footer's own 16px padding: pull the row out to the worktree rows' edges */
+/* The footer's own 16px padding: pull the rows out to the worktree rows' edges */
 .sidebar-footer .sidebar-nav-row {
-  margin: 2px -8px 0;
+  margin: 0 -8px;
+}
+
+/* The sessions line, under the footer's rows: in line with their icons */
+.sidebar-footer-sessions {
+  margin-top: 4px;
+  padding: 0 3px;
 }
 
 .sidebar-footer {
@@ -800,7 +812,7 @@ button:disabled {
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 2px;
   font-size: 11px;
   color: var(--text-muted);
 }

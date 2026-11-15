@@ -428,7 +428,7 @@ try {
     const deadline = Date.now() + ROW_MS
     let state = {}
     while (Date.now() < deadline) {
-      state = { gone, worktrees: await sidebar.locator('.wt-name').allTextContents(), addDisabled: await sidebar.locator('.footer-btn', { hasText: 'Add repository…' }).isDisabled().catch(() => null) }
+      state = { gone, worktrees: await sidebar.locator('.wt-name').allTextContents(), addDisabled: await sidebar.locator('.sidebar-nav-row', { hasText: 'Add repository…' }).isDisabled().catch(() => null) }
       if (gone && state.worktrees.includes('main') && state.addDisabled === false) return [true, state]
       await sleep(100)
     }
