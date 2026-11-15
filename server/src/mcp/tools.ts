@@ -544,8 +544,15 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'run_automation',
     description:
-      "Run an automation now, in its run tab, whatever its schedule and whether or not it is enabled. Returns the run tab's terminalId: follow the run with wait_for_sessions and read_terminal. Fails while the tab is still busy with the previous run. The run is recorded in the automation's history.",
-    inputSchema: { type: 'object', properties: { automation: AUTOMATION_PARAM }, required: ['automation'] }
+      "Run an automation now, in its run tab, whatever its schedule and whether or not it is enabled. Returns the run tab's terminalId: follow the run with wait_for_sessions and read_terminal. Fails while the tab is still busy with the previous run. The run is recorded in the automation's history. Pass your $TREK_TERMINAL_ID as terminalId: a run cannot start its own automation again, since that would end the session asking.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        automation: AUTOMATION_PARAM,
+        terminalId: { type: 'string', description: "Value of $TREK_TERMINAL_ID. An automation's own run session is refused; any other caller runs it." }
+      },
+      required: ['automation']
+    }
   }
 ]
 
@@ -1286,6 +1293,13 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       run_automation: async (args, project) => {
         scheduler()
         const automation = resolveAutomation(project, args.automation)
+        // A run starting its own automation would end the session that asks. The busy check alone
+        // misses it when the run tab has been quiet long enough to read as done.
+        const caller = strArg(args.terminalId, 'terminalId')
+        const runTab = project.globalSessions.find((g) => g.context?.kind === 'automation' && g.context.automationId === automation.id)
+        if (caller && runTab?.id === caller) {
+          throw codedError('CONFLICT', `${automation.name} can't run itself again: that would end this session. It runs again on its schedule, or another session can run it`)
+        }
         const { sessionId } = (await v2('automation.runNow', { automationId: automation.id })) as { sessionId: string }
         return { terminalId: sessionId }
       },
