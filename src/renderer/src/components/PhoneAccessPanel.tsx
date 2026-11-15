@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { errorText } from '../v2/errors'
-import { phoneAccessLabel } from '../../../shared/appServerRules'
+import { parsePhonePort, phoneAccessLabel } from '../../../shared/appServerRules'
 import type { PhoneAccess } from '../../../shared/protocolV2'
 
 export interface PhoneAccessState {
   /** null until the Local server has answered */
   access: PhoneAccess | null
   error: string | null
-  set: (patch: { enabled?: boolean; port?: number; url?: string | null }) => Promise<void>
+  /** Resolves true when the server took the change, false when it refused (`error` then says why). */
+  set: (patch: { enabled?: boolean; port?: number; url?: string | null }) => Promise<boolean>
   revoke: (name: string) => Promise<void>
 }
 
@@ -34,8 +35,10 @@ export function usePhoneAccess(active: boolean): PhoneAccessState {
     setError(null)
     try {
       setAccess(await window.api.appServers.phoneAccess.set(patch))
+      return true
     } catch (err) {
       setError(errorText(err))
+      return false
     }
   }, [])
 
@@ -70,13 +73,18 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
     return <div className="phone-access">{error ? <div className="error">{error}</div> : <p className="muted">Asking the Local server…</p>}</div>
   }
 
+  // A field the server did not take goes back to the server's value: the effects above only run
+  // when that value changes, and a refusal changes nothing.
   const savePort = (): void => {
-    const next = Number(port)
-    if (next !== access.port) void set({ port: next })
+    const next = parsePhonePort(port)
+    if (next === null) return setPort(String(access.port))
+    if (next === access.port) return
+    void set({ port: next }).then((ok) => ok || setPort(String(access.port)))
   }
   const saveUrl = (): void => {
     const next = url.trim()
-    if (next !== (access.url ?? '')) void set({ url: next === '' ? null : next })
+    if (next === (access.url ?? '')) return
+    void set({ url: next === '' ? null : next }).then((ok) => ok || setUrl(access.url ?? ''))
   }
   const problem = access.state === 'port-in-use' || access.state === 'error' || (access.state === 'no-tailscale' && !access.customUrl)
 

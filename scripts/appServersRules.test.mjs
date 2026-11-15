@@ -28,6 +28,7 @@ import {
   localErrorTitle,
   localStatusLabel,
   originOf,
+  parsePhonePort,
   phoneAccessLabel,
   phonePairingAddress
 } from '../src/shared/appServerRules.ts'
@@ -322,4 +323,14 @@ test('phone access in a line', () => {
   assert.match(phoneAccessLabel({ ...base, state: 'no-tailscale' }), /Tailscale is not running/)
   assert.equal(phoneAccessLabel({ ...base, state: 'port-in-use' }), 'Port 7346 is in use. Choose another.')
   assert.equal(phoneAccessLabel({ ...base, state: 'error', error: 'boom' }), 'Could not listen: boom')
+})
+
+test('parsePhonePort: a whole number from 1024 to 65535, as typed; anything else is null', () => {
+  assert.equal(parsePhonePort('7346'), 7346)
+  assert.equal(parsePhonePort(' 7400 '), 7400)
+  assert.equal(parsePhonePort('1024'), 1024)
+  assert.equal(parsePhonePort('65535'), 65535)
+  for (const text of ['', '   ', 'abc', '80', '1023', '65536', '70000', '7346.5', '73 46', '0x1F90', '1e4', '-7346', '+7346']) {
+    assert.equal(parsePhonePort(text), null, JSON.stringify(text))
+  }
 })

@@ -111,3 +111,14 @@ export function phoneAccessLabel(access: Pick<PhoneAccess, 'state' | 'address' |
       return `Could not listen: ${access.error ?? 'unknown error'}`
   }
 }
+
+/**
+ * The port typed in the phone access panel: a whole number from 1024 to 65535 written in digits
+ * (spaces at the ends aside), or null. The server's own rule for `phoneAccess.set`'s `port`.
+ */
+export function parsePhonePort(text: string): number | null {
+  const digits = text.trim()
+  if (!/^\d{1,5}$/.test(digits)) return null
+  const port = Number(digits)
+  return port >= 1024 && port <= 65535 ? port : null
+}
