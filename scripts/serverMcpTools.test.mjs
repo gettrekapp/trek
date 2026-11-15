@@ -1166,3 +1166,22 @@ test('get_selected_worktree and focus_session act on the most recently used clie
   const bare = await toolSetup(t, { selections: undefined })
   await assert.rejects(bare.call('get_selected_worktree', {}), (e) => e.code === 'TOOL_ERROR')
 })
+
+test("run_automation refuses a run that would restart its own tab, however quiet that tab looks", async (t) => {
+  let clock = Date.now()
+  const s = await toolSetup(t, { automationsNow: () => clock })
+  await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  // Past the just-started window, and the tab reads as done: only the caller's id tells this is the run itself.
+  clock += 60_000
+  s.projects.apply(s.projectId, (d) => { d.globalSessions.find((g) => g.id === terminalId).status = 'done' })
+  const spawnedBefore = s.spawned.length
+  await assert.rejects(s.call('run_automation', { automation: 'Morning', terminalId }), (e) => e.code === 'CONFLICT' && /can't run itself again/.test(e.message))
+  assert.equal(s.spawned.length, spawnedBefore, 'nothing was launched')
+  assert.deepEqual((await s.call('list_automations', {}))[0].history.map((r) => r.outcome), ['ran'], 'and nothing was recorded')
+  await assert.rejects(s.call('run_automation', { automation: 'Morning', terminalId: 7 }), (e) => e.code === 'BAD_REQUEST')
+  // Another session, or no terminalId, runs it as before.
+  await s.call('save_automation', { ...MORNING, name: 'Other' })
+  assert.equal(typeof (await s.call('run_automation', { automation: 'Other', terminalId })).terminalId, 'string', 'a run may start another automation')
+  assert.deepEqual(await s.call('run_automation', { automation: 'Morning', terminalId: 'someone-else' }), { terminalId })
+})
