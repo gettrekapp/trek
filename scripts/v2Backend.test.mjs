@@ -45,6 +45,12 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     terminalQueues: {},
     loadedWorktrees: {},
     hostWorktrees: { 'r1 local': [{ path: '/r', repoId: 'r1', isMain: true }] },
+    activeWorktreeId: null,
+    selected: null,
+    projectPage: null,
+    activeTerminal: {},
+    globalPanelOpen: false,
+    globalView: 'sessions',
     ...state
   }
   const answers = [...confirms]
@@ -62,7 +68,18 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   const connected = []
   const leaveHooks = []
   const logs = []
+  // The store's subscribers, the window's focus listeners, and the sessions the window was asked to show.
+  const stateListeners = []
+  const focusListeners = []
+  const selects = []
+  const subscribeTo = (list) => (listener) => {
+    list.push(listener)
+    return () => list.splice(list.indexOf(listener), 1)
+  }
   const backend = createV2Backend({
+    onStateChange: subscribeTo(stateListeners),
+    onWindowFocus: subscribeTo(focusListeners),
+    selectSession: (select) => void selects.push(select),
     projectId: 'p1',
     closeDialog: (id) => void closed.push(id),
     onConnected: (listener) => {
@@ -143,7 +160,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
     },
     left
   })
-  return { backend, calls, ui, st, reports, waits, timeouts, listeners, owners, closed, connected, leaveHooks, logs }
+  return { backend, calls, ui, st, reports, waits, timeouts, listeners, owners, closed, connected, leaveHooks, logs, idMap, stateListeners, focusListeners, selects }
 }
 
 test('features follow the welcome capabilities, with a stable object', () => {
@@ -1140,4 +1157,102 @@ test('promote_to_primary: a request that ended during the teardown says so plain
     ui.find((u) => u[0] === 'error')[2],
     "The agent's request ended while the dev stack/VM was being torn down; nothing was promoted. Use Promote to primary… to finish."
   )
+})
+
+// What the window shows: the linked worktree w2 with its tab s1.
+const showsFeat = { activeWorktreeId: 'w2', selected: { path: '/r-feat' }, terminals: { s1: { id: 's1', worktreeId: 'w2' } }, activeTerminal: { w2: 's1' } }
+const knowS1 = (idMap) => void (idMap.sessions.s1 = { sessionId: 's1', repoId: 'r1', worktreeId: 'w2', ptyId: null })
+const REPORT_FEAT = ['ui.report', { projectId: 'p1', worktreeId: 'w2', sessionId: 's1' }]
+
+test('ui.report: sent at start with the capability, one follower per backend; nothing without it', async () => {
+  const { backend, calls, idMap, listeners, stateListeners, focusListeners } = setup({ capabilities: ['ui'], state: showsFeat })
+  knowS1(idMap)
+  backend.worktrees.followSelection()
+  backend.worktrees.followSelection()
+  assert.deepEqual(calls, [REPORT_FEAT])
+  assert.equal(listeners['ui.focus'].length, 1)
+  assert.equal(stateListeners.length, 1)
+  assert.equal(focusListeners.length, 1)
+
+  const without = setup({ capabilities: ['mcp', 'promote'], state: showsFeat })
+  knowS1(without.idMap)
+  without.backend.worktrees.followSelection()
+  without.connected[0]()
+  without.stateListeners[0]()
+  without.focusListeners[0]()
+  assert.deepEqual(without.calls, [])
+  // Before any welcome too.
+  const early = setup({ capabilities: null, state: showsFeat })
+  early.backend.worktrees.followSelection()
+  assert.deepEqual(early.calls, [])
+})
+
+test('ui.report: again on each connect and each window focus; a store change sends only a new selection', async () => {
+  const { backend, calls, st, idMap, connected, stateListeners, focusListeners } = setup({ capabilities: ['ui'], state: showsFeat })
+  knowS1(idMap)
+  backend.worktrees.followSelection()
+  connected[0]()
+  assert.deepEqual(calls, [REPORT_FEAT, REPORT_FEAT])
+  focusListeners[0]()
+  assert.equal(calls.length, 3)
+  // The store changed, the selection did not (terminal output, a patch).
+  stateListeners[0]()
+  stateListeners[0]()
+  assert.equal(calls.length, 3)
+  st.activeWorktreeId = '__primary__:r1'
+  st.selected = { path: '/r' }
+  stateListeners[0]()
+  assert.deepEqual(calls.at(-1), ['ui.report', { projectId: 'p1', worktreeId: 'wm', sessionId: null }])
+  assert.equal(calls.length, 4)
+})
+
+test('ui.report: a capability that arrives with a later welcome is reported on that connect', async () => {
+  let caps = ['mcp']
+  const { backend, calls, idMap, connected } = setup({ capabilities: () => caps, state: showsFeat })
+  knowS1(idMap)
+  backend.worktrees.followSelection()
+  assert.deepEqual(calls, [])
+  caps = ['mcp', 'ui']
+  connected[0]()
+  assert.deepEqual(calls, [REPORT_FEAT])
+})
+
+test('ui.report: a dropped link is silent; another failure is logged once', async () => {
+  const offline = setup({ capabilities: ['ui'], replies: { 'ui.report': new CodedError('NOT_CONNECTED', 'down') } })
+  offline.backend.worktrees.followSelection()
+  await tick()
+  assert.deepEqual(offline.logs, [])
+  const failing = setup({ capabilities: ['ui'], replies: { 'ui.report': new CodedError('INTERNAL', 'boom') } })
+  failing.backend.worktrees.followSelection()
+  failing.connected[0]()
+  await tick()
+  assert.equal(failing.logs.length, 1)
+  assert.match(failing.logs[0], /ui\.report/)
+})
+
+test('ui.focus: this project reaches the select path, another project does not; nothing takes focus', async () => {
+  const { backend, listeners, selects, ui } = setup({ capabilities: ['ui'] })
+  backend.worktrees.followSelection()
+  listeners['ui.focus'][0]({ projectId: 'p2', worktreeId: 'w2', sessionId: 's1' })
+  assert.deepEqual(selects, [])
+  listeners['ui.focus'][0]({ projectId: 'p1', worktreeId: 'w2', sessionId: 's1' })
+  assert.deepEqual(selects, [{ projectId: 'p1', sessionId: 's1', worktreeId: 'w2' }])
+  assert.deepEqual(ui, [])
+})
+
+test('ui: leaving stops the reports and the focus requests', async () => {
+  const { backend, calls, connected, leaveHooks, listeners, stateListeners, focusListeners } = setup({ capabilities: ['ui'], state: showsFeat })
+  backend.worktrees.followSelection()
+  const sent = calls.length
+  for (const run of leaveHooks) run()
+  assert.equal(listeners['ui.focus'].length, 0)
+  assert.equal(connected.length, 0)
+  assert.equal(stateListeners.length, 0)
+  assert.equal(focusListeners.length, 0)
+  assert.equal(calls.length, sent)
+  // A window that already left starts nothing.
+  const gone = setup({ capabilities: ['ui'], left: () => true })
+  gone.backend.worktrees.followSelection()
+  assert.deepEqual(gone.calls, [])
+  assert.equal(gone.listeners['ui.focus'], undefined)
 })

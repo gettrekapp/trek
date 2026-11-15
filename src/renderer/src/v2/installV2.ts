@@ -17,6 +17,7 @@ import { applyV2Project, clearV2Projection, setV2ProjectOverlay, v2Ids } from '.
 import { registeredServerEntry } from './serverClients'
 import { cancelRepoPath, requestRepoPath } from './repoPathPrompt'
 import { editReporter, errorCode, errorText } from './errors'
+import { requestSessionSelect } from '../attentionSelect'
 import { agentsFetchKey, agentsRetryDelay, agentsStale } from './sessionChoices'
 import { createNoteDrafts, setV2NoteDrafts } from './noteDrafts'
 import { createSettingsWriter, type ConflictChoice } from './settingsWriter'
@@ -156,7 +157,13 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       })
     },
     onLeave: (run) => void leaveHooks.push(run),
-    log: (message, err) => console.error(`[promote] ${message}`, err ?? '')
+    onStateChange: (listener) => useAppStore.subscribe(listener),
+    onWindowFocus: (listener) => {
+      window.addEventListener('focus', listener)
+      return () => window.removeEventListener('focus', listener)
+    },
+    selectSession: requestSessionSelect,
+    log: (message, err) => console.error(`[server window] ${message}`, err ?? '')
   })
 
   // Settings edits: one compare-and-set per field, shown as pending (the overlay) until the

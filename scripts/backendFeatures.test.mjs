@@ -24,12 +24,18 @@ test('an empty window has no feature (4e: no file windows)', () => {
 
 test('a server window can have settings editing, the Global panel, the server\'s features and this machine\'s', () => {
   const on = FEATURE_NAMES.filter((name) => V2_FEATURES[name])
-  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'automations', 'history', 'settingsEdit', 'globalPanel'])
+  assert.deepEqual(on, ['docker', 'env', 'stacks', 'skills', 'prWatch', 'review', 'moveWorktree', 'reveal', 'openInEditor', 'promote', 'ui', 'automations', 'history', 'settingsEdit', 'globalPanel'])
 })
 
 test('moving a worktree to another server follows move (5d)', () => {
   assert.equal(v2Features(['move']).moveWorktree, true)
   assert.equal(v2Features(['review', 'mcp']).moveWorktree, false)
+})
+
+test('telling the server what the window shows follows ui', () => {
+  assert.equal(v2Features(['ui']).ui, true)
+  assert.equal(v2Features(['promote', 'mcp']).ui, false)
+  assert.equal(v2Features(undefined).ui, false)
 })
 
 test('promote to primary and its reverse follow promote (5e)', () => {

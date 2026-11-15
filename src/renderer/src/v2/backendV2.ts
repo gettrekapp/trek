@@ -29,6 +29,7 @@ import { v2Features, type BackendFeatures } from '../backendFeatures.ts'
 import type { PluginPresence } from '../../../shared/plugins/manifest.ts'
 import { V2_GLOBAL_WORKTREE_ID, v2WorktreeOrder, type V2IdMap } from './projector.ts'
 import { hasNormalTabs } from '../globalTabs.ts'
+import { selectionOf, selectionReporter, type SelectionState } from './uiSelection.ts'
 import { errorCode, errorText, PROMPT_NOT_CONFIRMED, withPromptText } from './errors.ts'
 import { CAPABILITY } from '../../../shared/protocolV2.ts'
 import { ClientError } from '../../../shared/client/connection.ts'
@@ -38,7 +39,7 @@ import type { SessionTarget, WindowBackend } from '../backend'
 import type { TerminalMeta } from '../store'
 import type { EventPayloadsV2, MethodNameV2, MethodParamsV2, MethodResultsV2, TopicRev } from '../../../shared/protocolV2'
 import type { RevResult } from '../../../shared/client/connection'
-import type { GitWorktreeInfo, ProjectFile, Repository } from '../../../shared/types'
+import type { GitWorktreeInfo, ProjectFile, Repository, SessionSelect } from '../../../shared/types'
 
 /** `timeoutMs`: for the long ones (an environment's first boot, a compose run): the SDK's default is a minute */
 export type V2Request = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M], options?: { timeoutMs?: number }) => Promise<MethodResultsV2[M]>
@@ -46,7 +47,7 @@ export type V2Request = <M extends MethodNameV2>(method: M, params: MethodParams
 export type V2RequestWithRev = <M extends MethodNameV2>(method: M, params: MethodParamsV2[M]) => Promise<RevResult<M>>
 
 /** The part of the store the backend reads: the projected slice. */
-export interface V2BackendState {
+export interface V2BackendState extends SelectionState {
   project: ProjectFile | null
   terminals: Record<string, TerminalMeta>
   terminalOrder: Record<string, string[]>
@@ -144,6 +145,12 @@ export interface V2BackendDeps {
   onConnected(listener: () => void): () => void
   /** Runs `run` when the window leaves the project (before `left()` turns true) */
   onLeave(run: () => void): void
+  /** Calls `listener` after each change of the store (`state()`); returns the unsubscribe */
+  onStateChange(listener: () => void): () => void
+  /** Calls `listener` each time the window gains focus; returns the unsubscribe */
+  onWindowFocus(listener: () => void): () => void
+  /** Shows a session in this window as a notification click does (its worktree, its tab), waiting for it to appear; never raises the window */
+  selectSession(select: SessionSelect): void
   /** A failure only a developer sees (the console) */
   log(message: string, err?: unknown): void
 }
@@ -254,6 +261,7 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
   const branchRef = (repoId: string, branch: string) => ({ projectId, repoId, branch })
 
   let promoteFollower: PromoteFollower | null = null
+  let followingSelection = false
   let features: { caps: readonly string[] | undefined; value: BackendFeatures } | null = null
   const can = (capability: string): boolean => deps.capabilities()?.includes(capability) ?? false
   const currentFeatures = (): BackendFeatures => {
@@ -635,6 +643,41 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
           offConnected()
           follower.stop()
           request('promote.listen', { projectId, listen: false }).catch(() => {})
+        })
+      },
+      // One per backend, as the promote follower: until the window leaves the project. The server
+      // drops a connection's reports when it closes, so each connect says the selection again.
+      followSelection: () => {
+        if (followingSelection || deps.left()) return
+        followingSelection = true
+        let logged = false
+        const reporter = selectionReporter((selection) => {
+          request('ui.report', { projectId, ...selection }).catch((err: unknown) => {
+            if (errorCode(err) === 'NOT_CONNECTED' || logged) return
+            logged = true
+            deps.log('ui.report failed: agents cannot see what this window shows', err)
+          })
+        })
+        // Nothing is sent, nor remembered as sent, to a server without `ui`.
+        const report = (force: boolean): void => {
+          if (deps.left() || !currentFeatures().ui) return
+          reporter.report(selectionOf(deps.state(), deps.ids()), force)
+        }
+        const offs = [
+          deps.onConnected(() => report(true)),
+          // The store changes often (a patch, a terminal's status): only a new selection is sent.
+          deps.onStateChange(() => report(false)),
+          // A window used again is the project's most recently used client.
+          deps.onWindowFocus(() => report(true)),
+          // focus_session: the worktree and the tab, as a notification click; the window is not raised.
+          deps.onEvent('ui.focus', (event) => {
+            if (deps.left() || event.projectId !== projectId) return
+            deps.selectSession({ projectId, sessionId: event.sessionId, worktreeId: event.worktreeId })
+          })
+        ]
+        report(true)
+        deps.onLeave(() => {
+          for (const off of offs) off()
         })
       },
       moveRef: (path) => {
