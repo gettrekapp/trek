@@ -28,6 +28,7 @@ import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pu
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
 import {
+  MAX_LINES_SHOWN,
   REVIEW_CHANGED,
   barText,
   canComment,
@@ -40,9 +41,12 @@ import {
   editorAfter,
   elsewherePlace,
   fileReview,
+  gutter,
   hasUnsavedText,
   isCommentGone,
+  isReplyLost,
   isReviewConflict,
+  lineCap,
   newCommentAt,
   noTargetsText,
   reviewFailure,
@@ -1381,6 +1385,28 @@ test('review: where a comment was written, for one not under its line', () => {
   assert.equal(elsewherePlace(comment('c8', { source: { kind: 'commit', sha: SHA_A }, side: 'old' })), 'Commit aaaaaaa · src/a.ts, removed line 2: const b = 3')
 })
 
+test('review: each line of a patch has its number in the old file, the new one, or both', () => {
+  const none = { old: null, new: null }
+  // hunk, unchanged, removed, added, unchanged, note
+  assert.deepEqual(gutter(LINES_A), [none, { old: 1, new: 1 }, { old: 2, new: null }, { old: null, new: 2 }, { old: 3, new: 3 }, none])
+  // A second hunk starts where its header says, in both files; a new file has no old numbers.
+  const two = numberedLines(['@@ -10,2 +10,3 @@', ' a', '+b', ' c', '@@ -40,2 +41,1 @@ fn()', '-d', ' e', '@@ -0,0 +1,1 @@', '+f'])
+  assert.deepEqual(gutter(two), [
+    none,
+    { old: 10, new: 10 },
+    { old: null, new: 11 },
+    { old: 11, new: 12 },
+    none,
+    { old: 40, new: null },
+    { old: 41, new: 41 },
+    none,
+    { old: null, new: 1 }
+  ])
+  // Lines before any hunk are notes: no numbers.
+  assert.deepEqual(gutter(numberedLines(['Binary files differ'])), [none])
+  assert.deepEqual(gutter([]), [])
+})
+
 test('review: the draft bar counts the comments, and those not on this diff', () => {
   assert.deepEqual(barText(1, 0), { count: '1 comment', elsewhere: null })
   assert.deepEqual(barText(6, 0), { count: '6 comments', elsewhere: null })
@@ -1571,9 +1597,66 @@ test('review: what the error line says for each request that failed', () => {
   assert.equal(reviewFailure('add', control), 'Could not add the comment: body must not hold control characters other than line breaks and tabs')
   const noSession = call('review.send', { sessionId: 's9', revision: 6 })
   assert.equal(reviewFailure('send', noSession), 'Could not send the review: No session with id "s9" in this worktree')
-  assert.equal(reviewFailure('clear', new ClientError('TIMEOUT', 'Request timed out')), 'Could not discard the review: Request timed out')
   assert.equal(reviewFailure('remove', new ClientError('NOT_CONNECTED', 'Not connected')), 'Could not delete the comment: Not connected')
   assert.equal(reviewFailure('add', 'boom'), 'Could not add the comment: boom')
+})
+
+test('review: a reply lost with the connection says the request may have been done, so it is checked before a retry', () => {
+  // What the phone's connection rejects a request with when the socket closes under it, when it was
+  // not connected, and when no reply came in time (src/shared/client/connection.ts).
+  const closed = new ClientError('NOT_CONNECTED', 'the connection closed')
+  const timedOut = new ClientError('TIMEOUT', 'review.add timed out')
+  for (const err of [closed, timedOut, new ClientError('NOT_CONNECTED', 'not connected to the server')]) assert.equal(isReplyLost(err), true)
+  for (const not of [new ClientError('CONFLICT', 'the review changed since you read it'), new ClientError('BAD_REQUEST', 'x'), new Error('TIMEOUT'), 'NOT_CONNECTED', null, undefined]) {
+    assert.equal(isReplyLost(not), false)
+  }
+
+  assert.equal(
+    reviewFailure('add', closed),
+    "Could not add the comment: The server was not connected, so the comment may not have been added. Check the file's comments once the phone is back online before adding it again."
+  )
+  assert.equal(
+    reviewFailure('add', timedOut),
+    "Could not add the comment: The server did not answer in time, so the comment may not have been added. Check the file's comments before adding it again."
+  )
+  assert.equal(
+    reviewFailure('edit', closed),
+    'Could not save the comment: The server was not connected, so the comment may not have been saved. Check it once the phone is back online before saving it again.'
+  )
+  assert.equal(
+    reviewFailure('send', closed),
+    "Could not send the review: The server was not connected, so the review may not have been sent. Check the session's queue once the phone is back online before sending it again."
+  )
+  assert.equal(
+    reviewFailure('send', timedOut),
+    "Could not send the review: The server did not answer in time, so the review may not have been sent. Check the session's queue before sending it again."
+  )
+  assert.equal(
+    reviewFailure('clear', timedOut),
+    'Could not discard the review: The server did not answer in time, so the review may not have been discarded. Check it before discarding it again.'
+  )
+  // A delete can be repeated: one that was done is a comment already gone, which says nothing.
+  assert.equal(reviewFailure('remove', timedOut), 'Could not delete the comment: review.add timed out')
+})
+
+test('review: a large patch opens with its first 2,000 lines, and a button for the rest', () => {
+  const none = { byLine: new Map(), newAt: -1 }
+  assert.equal(MAX_LINES_SHOWN, 2000)
+  assert.deepEqual(lineCap(none, 0, false), { shown: 0, more: null })
+  assert.deepEqual(lineCap(none, 2000, false), { shown: 2000, more: null })
+  assert.deepEqual(lineCap(none, 2001, false), { shown: 2000, more: 'Show all 2,001 lines' })
+  assert.deepEqual(lineCap(none, 10000, false), { shown: 2000, more: 'Show all 10,000 lines' })
+  assert.deepEqual(lineCap(none, 1234567, false), { shown: 2000, more: 'Show all 1,234,567 lines' })
+  assert.deepEqual(lineCap(none, 10000, true), { shown: 10000, more: null })
+
+  // Comments under lines that are not shown are counted on the button; those shown are not.
+  const byLine = new Map([[10, [onAdded]], [1999, [onRemoved]], [2000, [outdated]], [7000, [onCommit, notInDiff]]])
+  assert.deepEqual(lineCap({ byLine, newAt: -1 }, 10000, false), { shown: 2000, more: 'Show all 10,000 lines · 3 comments further down' })
+  assert.deepEqual(lineCap({ byLine: new Map([[2000, [outdated]]]), newAt: -1 }, 10000, false), { shown: 2000, more: 'Show all 10,000 lines · 1 comment further down' })
+  // The box of a comment being written is always among the lines shown (its line moved down on a reload).
+  assert.deepEqual(lineCap({ byLine, newAt: 2000 }, 10000, false), { shown: 2001, more: 'Show all 10,000 lines · 2 comments further down' })
+  assert.deepEqual(lineCap({ byLine, newAt: 9999 }, 10000, false), { shown: 10000, more: null })
+  assert.deepEqual(lineCap({ byLine, newAt: 5 }, 10000, false), { shown: 2000, more: 'Show all 10,000 lines · 3 comments further down' })
 })
 
 test('review: what the phone sends is what the server takes, and a saved draft reads back as shown', () => {

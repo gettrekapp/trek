@@ -1,6 +1,7 @@
 // The Changes screen's review: which of the draft's comments sit where on the shown diff, the
 // draft bar's text, the comment box's state (new / edit / conflict) and what it sends, the server's
-// refusals and what the error line says, the sessions a draft can go to, and a commit's row. The
+// refusals and what the error line says (also for a reply that was lost), a patch's line numbers and
+// how many of a large patch's lines are drawn, the sessions a draft can go to, and a commit's row. The
 // rules are the desktop's (ChangesPanel.tsx, WorktreeDetail.tsx' reviewTargets) and the server's
 // (review/reviewHandlers.ts, review/draft.ts); numbering a patch and placing comments on it are the
 // shared code's (numberedLines, patchBody, placeComments, sameSource, sourceLabel). Pure.
@@ -184,6 +185,57 @@ export function fileReview(comments: readonly ReviewComment[], lines: readonly N
   return { byLine: placed.byLine, top, topTitle, newAt, newOnTop }
 }
 
+/** A diff line's numbers as the gutter shows them: null where the line is not in that file. */
+export interface LineNumbers {
+  old: number | null
+  new: number | null
+}
+
+/**
+ * The old and new line number of each of a patch's `lines` (`numberedLines`), by index: a removed
+ * line has the old one, an added line the new one, an unchanged line both, a hunk header or a note
+ * neither. `NumberedLine` numbers an unchanged line in the new file only; its old number counts on
+ * from the hunk header's old start, as `numberedLines` counts a removed line's.
+ */
+export function gutter(lines: readonly NumberedLine[]): LineNumbers[] {
+  let oldLine = 0
+  return lines.map((l): LineNumbers => {
+    if (l.kind === 'hunk') {
+      const m = /^@@ -(\d+)/.exec(l.text)
+      if (m) oldLine = Number(m[1])
+      return { old: null, new: null }
+    }
+    if (l.line === undefined) return { old: null, new: null }
+    if (l.kind === 'del') {
+      oldLine = l.line + 1
+      return { old: l.line, new: null }
+    }
+    if (l.kind === 'add') return { old: null, new: l.line }
+    return { old: oldLine++, new: l.line }
+  })
+}
+
+/** The most lines of one file drawn when it is opened; the rest wait for "Show all <n> lines". */
+export const MAX_LINES_SHOWN = 2000
+
+const grouped = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+
+/**
+ * How many of a file's `total` numbered lines are drawn, from the first, and the text of the button
+ * that draws the rest (null when all are drawn): the first MAX_LINES_SHOWN until `showAll` (the
+ * button was tapped), so opening a large patch never draws every row at once. The box of a comment
+ * being written (`review.newAt`) is always among them. The button counts the comments under lines
+ * it hides: "Show all 10,000 lines · 2 comments further down".
+ */
+export function lineCap(review: Pick<FileReview, 'byLine' | 'newAt'>, total: number, showAll: boolean): { shown: number; more: string | null } {
+  if (showAll || total <= MAX_LINES_SHOWN) return { shown: total, more: null }
+  const shown = Math.max(MAX_LINES_SHOWN, review.newAt + 1)
+  if (shown >= total) return { shown: total, more: null }
+  let below = 0
+  for (const [index, comments] of review.byLine) if (index >= shown) below += comments.length
+  return { shown, more: `Show all ${grouped(total)} lines${below > 0 ? ` · ${below} ${below === 1 ? 'comment' : 'comments'} further down` : ''}` }
+}
+
 /** Where a comment was written, for one not shown under its line: "line 12: <the line>", "removed line 12: <the line>". */
 export function commentPlace(c: Pick<ReviewComment, 'side' | 'line' | 'lineText'>): string {
   return `${c.side === 'old' ? 'removed line' : 'line'} ${c.line}: ${c.lineText}`
@@ -225,6 +277,16 @@ export function isCommentGone(err: unknown): boolean {
   return codeOf(err) === 'NOT_FOUND' && err instanceof Error && err.message.startsWith('No review comment with id')
 }
 
+/**
+ * Whether a request failed without the server's answer, so it may or may not have been done: the
+ * connection closed under it or was not there (`NOT_CONNECTED`), or no reply came in time
+ * (`TIMEOUT`); the two codes the phone's connection itself rejects a request with.
+ */
+export function isReplyLost(err: unknown): boolean {
+  const code = codeOf(err)
+  return code === 'NOT_CONNECTED' || code === 'TIMEOUT'
+}
+
 /** What the error line says when a send or a discard was refused because the draft changed. */
 export const REVIEW_CHANGED = 'The review changed on the server. Check it and send again.'
 
@@ -240,13 +302,32 @@ const COULD_NOT: Record<ReviewAction, string> = {
 }
 
 /**
+ * What a lost reply leaves open, and where to look before doing it again (the desktop's
+ * ADD_NOT_CONFIRMED, SEND_NOT_CONFIRMED and EDIT_NOT_CONFIRMED): `{when}` is " once the phone is
+ * back online" after a dropped connection. A delete has none: doing it again harms nothing.
+ */
+const NOT_CONFIRMED: Record<Exclude<ReviewAction, 'remove'>, string> = {
+  add: "the comment may not have been added. Check the file's comments{when} before adding it again.",
+  edit: 'the comment may not have been saved. Check it{when} before saving it again.',
+  send: "the review may not have been sent. Check the session's queue{when} before sending it again.",
+  clear: 'the review may not have been discarded. Check it{when} before discarding it again.'
+}
+
+/**
  * The error line (above the draft bar) for a review request that failed, or null when the line says
  * nothing: an edit's conflict (the box shows it: `editConflicted`), and a delete of a comment that
- * was already gone. A send or discard of a draft that changed says REVIEW_CHANGED; anything else is
- * the desktop's "Could not …" with the server's message (its limits read as it words them: "a
- * review holds at most 100 comments", "body must be at most 4000 characters").
+ * was already gone. A send or discard of a draft that changed says REVIEW_CHANGED. A save, send or
+ * discard whose reply was lost (`isReplyLost`) says it may have been done and what to check before
+ * doing it again, as the desktop does: a blind retry could add the comment or send the review
+ * twice. Anything else is the desktop's "Could not …" with the server's message (its limits read as
+ * it words them: "a review holds at most 100 comments", "body must be at most 4000 characters").
  */
 export function reviewFailure(action: ReviewAction, err: unknown): string | null {
+  if (isReplyLost(err) && action !== 'remove') {
+    const dropped = codeOf(err) === 'NOT_CONNECTED'
+    const why = dropped ? 'The server was not connected' : 'The server did not answer in time'
+    return `${COULD_NOT[action]}: ${why}, so ${NOT_CONFIRMED[action].replace('{when}', dropped ? ' once the phone is back online' : '')}`
+  }
   if (isReviewConflict(err)) {
     if (action === 'edit') return null
     if (action === 'send' || action === 'clear') return REVIEW_CHANGED
