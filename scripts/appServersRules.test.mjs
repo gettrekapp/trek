@@ -19,7 +19,18 @@ import {
   withRemoving,
   withToken
 } from '../src/main/appServersRules.ts'
-import { LOCAL_ENTRY_ID, STATUS_LABELS, isLocalEntryId, isLoopbackUrl, localErrorTitle, localStatusLabel, originOf } from '../src/shared/appServerRules.ts'
+import {
+  LOCAL_ENTRY_ID,
+  STATUS_LABELS,
+  canPairPhone,
+  isLocalEntryId,
+  isLoopbackUrl,
+  localErrorTitle,
+  localStatusLabel,
+  originOf,
+  phoneAccessLabel,
+  phonePairingAddress
+} from '../src/shared/appServerRules.ts'
 import { LOCAL_ENTRY_ID as MAIN_LOCAL_ENTRY_ID } from '../src/main/localServerRules.ts'
 
 test('parseAppServers keeps valid entries once', () => {
@@ -280,4 +291,35 @@ test("pairingDeadline: from the code's lifetime and this machine's clock (a serv
   for (const bad of [-1, Number.NaN, Infinity, '300000', 25 * 3_600_000]) {
     assert.equal(pairingDeadline({ expiresAt: now + 7, expiresInMs: bad }, now), now + 7, String(bad))
   }
+})
+
+test('Pair a phone… shows for a connected server that pairs: a remote one not at loopback, and Local when it has phone access', () => {
+  const remote = { status: 'connected', url: 'wss://dev.example.com', capabilities: ['pairing'] }
+  assert.equal(canPairPhone(remote), true)
+  assert.equal(canPairPhone({ ...remote, status: 'connecting' }), false)
+  assert.equal(canPairPhone({ ...remote, capabilities: [] }), false)
+  assert.equal(canPairPhone({ ...remote, url: 'ws://127.0.0.1:7345' }), false)
+  const local = { status: 'connected', url: 'ws://127.0.0.1:50123', local: { state: 'running' }, capabilities: ['pairing', 'phoneAccess', 'local'] }
+  assert.equal(canPairPhone(local), true)
+  assert.equal(canPairPhone({ ...local, capabilities: ['pairing', 'local'] }), false, 'an older Local server')
+  assert.equal(canPairPhone({ ...local, status: null }), false)
+})
+
+test('the address a Local pairing QR carries: only while phone access is on and something listens', () => {
+  const base = { enabled: true, port: 7346, phones: [] }
+  assert.equal(phonePairingAddress(null), null)
+  assert.equal(phonePairingAddress({ ...base, state: 'listening', address: '100.64.0.9', url: 'ws://100.64.0.9:7346' }), 'ws://100.64.0.9:7346')
+  assert.equal(phonePairingAddress({ ...base, state: 'no-tailscale' }), null)
+  assert.equal(phonePairingAddress({ ...base, state: 'no-tailscale', url: 'wss://mac.ts.net', customUrl: 'wss://mac.ts.net' }), 'wss://mac.ts.net')
+  assert.equal(phonePairingAddress({ ...base, state: 'port-in-use', url: 'wss://mac.ts.net' }), null)
+  assert.equal(phonePairingAddress({ ...base, enabled: false, state: 'off', url: 'wss://mac.ts.net' }), null)
+})
+
+test('phone access in a line', () => {
+  const base = { enabled: true, port: 7346, phones: [] }
+  assert.equal(phoneAccessLabel({ ...base, enabled: false, state: 'off' }), 'Off')
+  assert.equal(phoneAccessLabel({ ...base, state: 'listening', address: '100.64.0.9' }), 'Listening on 100.64.0.9:7346')
+  assert.match(phoneAccessLabel({ ...base, state: 'no-tailscale' }), /Tailscale is not running/)
+  assert.equal(phoneAccessLabel({ ...base, state: 'port-in-use' }), 'Port 7346 is in use. Choose another.')
+  assert.equal(phoneAccessLabel({ ...base, state: 'error', error: 'boom' }), 'Could not listen: boom')
 })

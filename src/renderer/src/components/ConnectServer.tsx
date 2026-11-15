@@ -7,7 +7,7 @@ import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
 import { PairPhone } from './PairPhone'
 import { ServerUpdateRow, type ServerUpdateAct } from './ServerUpdateRow'
-import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
+import { STATUS_LABELS, canPairPhone, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
 import { RESTARTING_STATUS, canCheckUpdate, restartingToUpdate, settleUpdateActs, updateSignatures, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
 import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
@@ -50,14 +50,6 @@ function unencryptedRemote(url: string): boolean {
   } catch {
     return false
   }
-}
-
-/**
- * "Pair a phone…" (6a) shows for a connected server whose welcome lists `pairing`, but never for
- * the Local server or a loopback URL: a phone can't reach those.
- */
-export function canPairPhone(server: AppServerLink): boolean {
-  return !server.local && server.status === 'connected' && !isLoopbackUrl(server.url) && (server.capabilities ?? []).includes('pairing')
 }
 
 function needsTokenAgain(form: FormState): boolean {

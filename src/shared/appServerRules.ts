@@ -1,6 +1,7 @@
 // Pure rules shared by main and the renderer for the app-wide trek-server list.
 import type { ConnectionStatus } from './client/connection.ts'
 import type { LocalServerStatus } from './types.ts'
+import type { PhoneAccess } from './protocolV2.ts'
 
 /** The synthetic app-server entry's id, for the Local server: recents and open-windows.json are keyed by it. */
 export const LOCAL_ENTRY_ID = 'local'
@@ -72,4 +73,41 @@ export function localStatusLabel(local: Pick<LocalServerStatus, 'state' | 'pid' 
 /** The error dialog's title: what failed (a start, unless the status says a stop or a restart). */
 export function localErrorTitle(failed: LocalServerStatus['failed']): string {
   return `The local server could not ${failed ?? 'start'}.`
+}
+
+/**
+ * "Pair a phone…" (6a) shows for a connected server whose welcome lists `pairing`: a remote one
+ * unless its URL is loopback (a phone can't reach that), and the Local server when it has a
+ * listener for phones (`phoneAccess`).
+ */
+export function canPairPhone(server: { local?: unknown; status: string | null; url: string; capabilities?: string[] }): boolean {
+  const capabilities = server.capabilities ?? []
+  if (server.status !== 'connected' || !capabilities.includes('pairing')) return false
+  return server.local ? capabilities.includes('phoneAccess') : !isLoopbackUrl(server.url)
+}
+
+/**
+ * The address a pairing QR for the Local server carries, or null while there is none to give:
+ * phone access off, nothing listening (the port in use, an error), or no Tailscale address and no
+ * address of the user's own.
+ */
+export function phonePairingAddress(access: PhoneAccess | null): string | null {
+  if (!access || !access.enabled || !access.url) return null
+  return access.state === 'listening' || access.state === 'no-tailscale' ? access.url : null
+}
+
+/** The Local server's phone access in a line. */
+export function phoneAccessLabel(access: Pick<PhoneAccess, 'state' | 'address' | 'port' | 'error'>): string {
+  switch (access.state) {
+    case 'off':
+      return 'Off'
+    case 'listening':
+      return `Listening on ${access.address}:${access.port}`
+    case 'no-tailscale':
+      return 'Tailscale is not running on this computer. Start it, or enter an address of your own below.'
+    case 'port-in-use':
+      return `Port ${access.port} is in use. Choose another.`
+    case 'error':
+      return `Could not listen: ${access.error ?? 'unknown error'}`
+  }
 }
