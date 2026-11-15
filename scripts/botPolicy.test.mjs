@@ -20,7 +20,7 @@ const trek = (name) => `mcp__trek-dev__${name}`
 const bash = (command) => ({ tool: 'Bash', input: { command } })
 
 test('free Trek tools are allowed', { skip }, () => {
-  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval', 'list_automations']) {
+  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval', 'list_automations', 'add_review_comment', 'remove_review_comment']) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'allow', name)
   }
 })

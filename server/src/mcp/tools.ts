@@ -3,7 +3,7 @@
 // Every tool acts on the calling session's project only, and changes state through
 // the v2 commands, run in process.
 import { randomUUID } from 'node:crypto'
-import type { BranchData, Project, Repository, Session } from '../../../src/shared/model/types'
+import type { BranchData, Project, Repository, ReviewComment, Session } from '../../../src/shared/model/types'
 import { keySequence } from '../../../src/shared/keys.ts'
 import { getProvider, isProviderId } from '../../../src/shared/providers/registry.ts'
 import { sanitizeLlmSelection } from '../../../src/shared/providers/selection.ts'
@@ -36,7 +36,9 @@ import { actorLabel, describeEvent } from '../../../src/shared/historyText.ts'
 import type { Attribution } from '../history/record.ts'
 import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
-import { isOutdated, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
+import { isOutdated, reviewLineText, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
+import { numberedLines, patchBody } from '../../../src/shared/changes.ts'
+import { checkSource } from '../review/draft.ts'
 import type { ChangesSource } from '../../../src/shared/types'
 
 /** The most distinct sources get_review_comments diffs to say which comments are outdated. */
@@ -383,8 +385,39 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'get_review_comments',
     description:
-      "Read the user's draft review of a worktree: the line comments they wrote in Trek's Changes tab, not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
+      "Read a worktree's draft review: the line comments written in Trek's Changes tab (by the user, or by an agent with add_review_comment), not yet sent. Each has the file, the side (new: an added or unchanged line; old: a removed line), the line number, the line's text when the comment was written, the comment, who wrote it (by: the user, a session's title, or an agent), the diff it was written on (the branch against its base, the uncommitted changes, or one commit) and whether it is outdated (its line no longer reads the same in that diff; null when that could not be checked). Read-only: the user sends the review to a session themselves.",
     inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
+    name: 'add_review_comment',
+    description:
+      "Add a line comment to a worktree's draft review, shown in Trek's Changes tab under that line and labelled as yours. Use it to leave review findings where the user reads the diff. The line must be one the chosen diff shows (an added, removed or context line): Trek reads the line's text itself. The user can edit, delete or send the draft; nothing is sent to a session by this tool. Pass your $TREK_TERMINAL_ID as terminalId so the comment names your session. Returns the comment in the same shape as a get_review_comments entry.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: WORKTREE_PARAM,
+        file: { type: 'string', description: "The file's path as the diff names it, relative to the worktree (its new name for a rename)" },
+        line: { type: 'integer', minimum: 1, description: '1-based line number: in the new file for side new, in the old file for side old' },
+        side: { type: 'string', enum: ['new', 'old'], description: 'new (default): an added or unchanged line. old: a removed line.' },
+        comment: { type: 'string', description: 'The comment, at most 4000 characters; line breaks are kept' },
+        source: {
+          type: 'object',
+          description: 'The diff to comment on: { kind: "branch" } (default: the branch against its base), { kind: "uncommitted" }, or { kind: "commit", sha } with a full commit id',
+          properties: { kind: { type: 'string', enum: ['branch', 'uncommitted', 'commit'] }, sha: { type: 'string' } }
+        },
+        terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID, so the comment names your session (optional)' }
+      },
+      required: ['worktree', 'file', 'line', 'comment']
+    }
+  },
+  {
+    name: 'remove_review_comment',
+    description: "Remove a comment an agent wrote from a worktree's draft review, by its id from get_review_comments. The user's own comments are refused.",
+    inputSchema: {
+      type: 'object',
+      properties: { worktree: WORKTREE_PARAM, id: { type: 'string', description: 'The comment id' } },
+      required: ['worktree', 'id']
+    }
   },
   {
     name: 'watch_pull_request',
@@ -468,7 +501,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the user's draft line comments on a worktree's changes. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -575,6 +608,22 @@ const tagMatches = (t: { id?: unknown; name?: unknown }, name: string): boolean 
   typeof t?.name === 'string' && (String(t.id).toLowerCase() === name.toLowerCase() || t.name.toLowerCase() === name.toLowerCase())
 const tagNames = (tags: { name?: unknown }[]): string =>
   tags.flatMap((t) => (typeof t?.name === 'string' ? [t.name] : [])).join(', ') || 'none configured'
+
+/** A review comment as the tools return it. `outdated`: null when it could not be checked. */
+function describeComment(c: ReviewComment, outdated: boolean | null) {
+  return {
+    id: c.id,
+    file: c.path,
+    side: c.side,
+    line: c.line,
+    lineText: c.lineText,
+    comment: c.body,
+    by: c.by ? (c.by.sessionTitle ?? 'an agent') : 'the user',
+    source: c.source,
+    sourceLabel: sourceLabel(c.source),
+    outdated
+  }
+}
 
 /** The repository a create_worktree call targets: by id, then name (case-insensitive). Required once a project has several. */
 function targetRepository(project: Project, ref: unknown): Repository {
@@ -981,19 +1030,50 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
           revision: draft.revision,
           comments: draft.comments.map((c) => {
             const diff = diffs.get(sourceKey(c.source))
-            return {
-              id: c.id,
-              file: c.path,
-              side: c.side,
-              line: c.line,
-              lineText: c.lineText,
-              comment: c.body,
-              source: c.source,
-              sourceLabel: sourceLabel(c.source),
-              outdated: diff ? isOutdated(c, Object.hasOwn(diff, c.path) ? diff[c.path] : undefined) : null
-            }
+            return describeComment(c, diff ? isOutdated(c, Object.hasOwn(diff, c.path) ? diff[c.path] : undefined) : null)
           })
         }
+      },
+
+      add_review_comment: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        const path = rawArg(args.file, 'file')
+        if (!path) throw bad('file is required')
+        const side = args.side ?? 'new'
+        if (side !== 'old' && side !== 'new') throw bad('side must be "old" or "new"')
+        const line = args.line
+        if (typeof line !== 'number' || !Number.isInteger(line) || line < 1) throw bad('line must be a whole number from 1')
+        const body = rawArg(args.comment, 'comment')
+        if (body === undefined) throw bad('comment is required')
+        const source = checkSource(args.source ?? undefined)
+        const label = sourceLabel(source)
+        // The line's text is read here, not taken from the agent: a comment sits on a line the diff shows.
+        const diff = (await v2('worktree.diff', { worktreeId: worktree.id, source, paths: [path] })) as Record<string, string>
+        if (!Object.hasOwn(diff, path)) throw bad(`${path} has no changes in ${label}: comment on a file that diff shows`)
+        const shown = numberedLines(patchBody(diff[path])).find((l) => l.side === side && l.line === line)
+        if (!shown) {
+          throw bad(`${side === 'old' ? 'removed line' : 'line'} ${line} of ${path} is not in ${label}: comment on a line that diff shows (side "old" for a removed line)`)
+        }
+        const { commentId } = (await v2(
+          'review.add',
+          { worktreeId: worktree.id, source, path, side, line, lineText: reviewLineText(shown.text), body },
+          attributionOf(args, project)
+        )) as { commentId: string }
+        const draft = resolveWorktree(deps.projects.require(projectId), worktree.id).worktree.review
+        const added = draft?.comments.find((c) => c.id === commentId)
+        if (!draft || !added) throw notFound(`No review comment with id "${commentId}"`)
+        return { worktree: worktree.id, revision: draft.revision, comment: describeComment(added, false) }
+      },
+
+      remove_review_comment: async (args, project) => {
+        const { worktree } = resolveWorktree(project, args.worktree)
+        const id = strArg(args.id, 'id')
+        if (!id) throw bad('id is required')
+        const comment = worktree.review?.comments.find((c) => c.id === id)
+        if (!comment) throw notFound(`No review comment with id "${id}"`)
+        if (!comment.by) throw bad("That comment is the user's: only a comment an agent wrote can be removed")
+        await v2('review.remove', { worktreeId: worktree.id, commentId: id })
+        return { worktree: worktree.id, removed: id }
       },
 
       watch_pull_request: async (args, project) => {

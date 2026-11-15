@@ -141,8 +141,8 @@ async function toolSetup(t, opts = {}) {
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
-    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_worktree',
+    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
+    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
     'request_decision', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'
@@ -194,7 +194,7 @@ test("get_review_comments: the worktree's draft, each comment outdated or not ag
   const res = await s.call('get_review_comments', { worktree: 'main' })
   assert.equal(res.revision, 9)
   assert.deepEqual(res.comments.map((c) => [c.id, c.outdated]), [['fresh', false], ['changed', true], ['nofile', true], ['nocommit', null]])
-  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
+  assert.deepEqual(res.comments[0], { id: 'fresh', file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'c fresh', by: 'the user', source: { kind: 'uncommitted' }, sourceLabel: 'Uncommitted changes', outdated: false })
   // Read-only: the draft is as it was.
   assert.equal(s.projects.require(s.projectId).repositories[0].worktrees[0].review.comments.length, 4)
   await assert.rejects(s.call('get_review_comments', { worktree: 'nope' }), (e) => e.code === 'NOT_FOUND')
@@ -954,4 +954,53 @@ test('run_automation: CONFLICT while the run tab is working (as when a run calls
   await assert.rejects(s.call('run_automation', { automation: 'Morning' }), (e) => e.code === 'CONFLICT')
   setStatus('done')
   assert.deepEqual(await s.call('run_automation', { automation: 'Morning' }), { terminalId })
+})
+
+test("add_review_comment writes a labelled comment on a line the diff shows; remove_review_comment takes only an agent's", async (t) => {
+  const s = await toolSetup(t)
+  writeFileSync(join(s.a, 'a.txt'), 'one\ntwo\n')
+  const main = () => s.projects.require(s.projectId).repositories[0].worktrees[0]
+  const source = { kind: 'uncommitted' }
+  const added = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 2, comment: 'Why two?', source })
+  assert.deepEqual(added, {
+    worktree: main().id,
+    revision: main().review.revision,
+    comment: { id: added.comment.id, file: 'a.txt', side: 'new', line: 2, lineText: 'two', comment: 'Why two?', by: 'an agent', source, sourceLabel: 'Uncommitted changes', outdated: false }
+  })
+  assert.deepEqual(main().review.comments[0].by, { kind: 'mcp' })
+
+  // A call that names its session is labelled with the session's title.
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].sessions.push({ id: 's1', title: 'Review 2', llm: { provider: 'claude' }, queue: [], status: 'idle' })
+  })
+  const named = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 1, comment: 'And one?', source, terminalId: 's1' })
+  assert.equal(named.comment.by, 'Review 2')
+  assert.equal(named.comment.lineText, 'one')
+  assert.deepEqual((await s.call('get_review_comments', { worktree: 'main' })).comments.map((c) => c.by), ['an agent', 'Review 2'])
+
+  const refused = [
+    [{ file: 'a.txt', line: 9, comment: 'x', source }, /line 9 of a\.txt is not in Uncommitted changes/],
+    [{ file: 'a.txt', line: 1, side: 'old', comment: 'x', source }, /removed line 1 of a\.txt is not in Uncommitted changes/],
+    [{ file: 'nope.txt', line: 1, comment: 'x', source }, /nope\.txt has no changes in Uncommitted changes/],
+    [{ file: 'a.txt', line: 1, side: 'left', comment: 'x', source }, /side must be "old" or "new"/],
+    [{ file: 'a.txt', line: 0, comment: 'x', source }, /line must be a whole number/],
+    [{ file: 'a.txt', line: 1, comment: '  ', source }, /must not be empty/],
+    [{ file: 'a.txt', line: 1, source }, /comment is required/],
+    [{ line: 1, comment: 'x', source }, /file is required/],
+    [{ file: 'a.txt', line: 1, comment: 'x', source: { kind: 'staged' } }, /source\.kind/]
+  ]
+  for (const [args, message] of refused) {
+    await assert.rejects(s.call('add_review_comment', { worktree: 'main', ...args }), (e) => e.code === 'BAD_REQUEST' && message.test(e.message), JSON.stringify(args))
+  }
+  assert.equal(main().review.comments.length, 2, 'a refused comment is not added')
+
+  // The user's own comment stays out of an agent's reach.
+  s.projects.apply(s.projectId, (d) => {
+    const w = d.repositories[0].worktrees[0]
+    w.review = { ...w.review, comments: [...w.review.comments, { id: 'mine', source, path: 'a.txt', side: 'new', line: 2, lineText: 'two', body: 'mine', at: 1 }] }
+  })
+  await assert.rejects(s.call('remove_review_comment', { worktree: 'main', id: 'mine' }), (e) => e.code === 'BAD_REQUEST' && /the user's/.test(e.message))
+  assert.deepEqual(await s.call('remove_review_comment', { worktree: 'main', id: added.comment.id }), { worktree: main().id, removed: added.comment.id })
+  await assert.rejects(s.call('remove_review_comment', { worktree: 'main', id: added.comment.id }), (e) => e.code === 'NOT_FOUND')
+  assert.deepEqual(main().review.comments.map((c) => c.id), [named.comment.id, 'mine'])
 })
