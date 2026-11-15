@@ -375,7 +375,7 @@ title or status, and does not edit the project's tag lists.
   **Stop watching** in the worktree's Branch section, while `gh` is signed in on the
   server's machine (a watch already on can be stopped without it). What the watch
   reports (checks, reviews and comments, a conflict, merged, closed) shows as a notice
-  on the worktree's screen, with **Open** and **Dismiss**, as a line on its card in the
+  on the worktree's screen, with **Open** and **Dismiss**, as a line on its row in the
   project, and in the home tab, where it can be dismissed too. There is no live view of
   a pull request's checks, and review comments on GitHub are not answered from the phone.
 - **Automations**: a project's row on its screen opens its automations, each with its

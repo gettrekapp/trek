@@ -17,7 +17,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
-import { ago, attentionKey, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
+import { ago, attentionKey, attentionMark, attentionText, mergeAttention, newItems, notificationContent, notificationRoute } from '../apps/mobile/src/logic/attention.ts'
 import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
 import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.ts'
@@ -27,7 +27,8 @@ import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTempl
 import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
-import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
+import { branchLine, branchParts, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
+import { rowGit, rowLabel, rowMark, rowReason, rowSaved, sessionMark } from '../apps/mobile/src/logic/worktreeRow.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
@@ -2665,4 +2666,62 @@ test('ui.focus: read from a server event; any other event, or one without a sess
   assert.equal(focusEventOf({ event: 'ui.focus', payload: { projectId: 'p', worktreeId: 'w1' } }), null)
   assert.equal(focusEventOf({ event: 'ui.focus', payload: { projectId: 'p', worktreeId: 'w1', sessionId: '' } }), null)
   assert.equal(focusEventOf({ event: 'ui.focus', payload: null }), null)
+})
+
+// ---- The project screen's worktree rows (logic/worktreeRow.ts) -----------------------------------
+
+test('rowMark: the most pressing session state; nothing for an unloaded or empty worktree', () => {
+  const wt = (loaded, ...sessions) => ({ loaded, sessions: sessions.map((s) => (typeof s === 'string' ? { status: s } : s)) })
+  assert.equal(rowMark(wt(true)), 'none')
+  assert.equal(rowMark(wt(false, 'working', 'attention')), 'none')
+  assert.equal(rowMark(wt(true, 'idle', 'exited', 'complete')), 'idle')
+  assert.equal(rowMark(wt(true, 'idle', 'working')), 'working')
+  assert.equal(rowMark(wt(true, 'working', 'done')), 'done')
+  assert.equal(rowMark(wt(true, 'done', 'attention')), 'attention')
+  // A decision waits on the user whatever the session's status says.
+  assert.equal(rowMark(wt(true, { status: 'working', decision: { question: 'Q?', at: 1 } })), 'attention')
+  assert.equal(sessionMark({ status: 'done' }), 'done')
+})
+
+test('rowGit and rowSaved: the marks at the right of a row', () => {
+  assert.equal(rowGit({}), null)
+  assert.equal(rowGit({ ahead: 0, behind: 0, dirty: false }), null)
+  assert.deepEqual(rowGit({ ahead: 2, behind: 1, dirty: true }), { counts: '↑2 ↓1', dirty: true })
+  assert.deepEqual(rowGit({ behind: 58 }), { counts: '↓58', dirty: false })
+  assert.equal(rowSaved({ loaded: false, sessions: [{}, {}] }), 2)
+  assert.equal(rowSaved({ loaded: true, sessions: [{}, {}] }), 0)
+})
+
+test('rowReason: missing, then a decision, then the pull request notice', () => {
+  const notice = { title: 'PR #12', text: 'Checks failed', url: 'u', at: 1 }
+  assert.equal(rowReason({ sessions: [] }), null)
+  assert.deepEqual(rowReason({ sessions: [], prNotice: notice }), { kind: 'notice', text: 'PR #12: Checks failed' })
+  const asked = [{ decision: { question: 'First?', at: 1 } }, {}, { decision: { question: 'Second?', at: 2 } }]
+  assert.deepEqual(rowReason({ sessions: asked, prNotice: notice }), { kind: 'decision', text: 'Decision: First? (+1)' })
+  assert.equal(rowReason({ sessions: [{ decision: { question: '', at: 1 } }] }).text, 'Needs a decision')
+  assert.deepEqual(rowReason({ missing: true, sessions: asked, prNotice: notice }), { kind: 'missing', text: 'Missing on the server' })
+})
+
+test('rowLabel: what a screen reader says for a row', () => {
+  assert.equal(
+    rowLabel({ name: 'main', isMain: true, mark: 'working', saved: 0, git: { counts: '↑2 ↓1', dirty: true }, line: 'In Review · PR #42' }),
+    'main, main checkout, working, uncommitted changes, ahead 2 behind 1, In Review · PR #42'
+  )
+  assert.equal(rowLabel({ name: 'feature-x', isMain: false, mark: 'none', saved: 2, git: null, line: '' }), 'feature-x, 2 saved sessions')
+  assert.equal(rowLabel({ name: 'feature-x', isMain: false, mark: 'none', saved: 0, git: null, line: '' }), 'feature-x, no sessions')
+})
+
+test('branchParts: the line in pieces, tags with their colours', () => {
+  const settings = { worktreeTags: [{ id: 't1', name: 'In Review', color: '#c9a0ff' }], customTags: [{ id: 'c1', name: 'urgent', color: '#ff0000' }] }
+  const repo = { branchData: { b: { tag: 't1', customTags: ['c1'], pr: 'https://github.com/o/r/pull/42' } } }
+  assert.deepEqual(branchParts(settings, repo, 'b', []), [{ text: 'In Review', color: '#c9a0ff' }, { text: 'urgent', color: '#ff0000' }, { text: 'PR #42' }])
+  assert.deepEqual(branchParts(settings, repo, 'other', []), [])
+  assert.equal(branchLine(settings, repo, 'b', []), 'In Review · urgent · PR #42')
+})
+
+test('attentionMark: blue for a finished session, amber for anything that waits on you', () => {
+  assert.equal(attentionMark({ status: 'done' }), 'done')
+  assert.equal(attentionMark({ status: 'attention' }), 'attention')
+  assert.equal(attentionMark({ status: 'done', decision: { question: 'Q?', at: 1 } }), 'attention')
+  assert.equal(attentionMark({ pullRequest: { text: 'Checks failed' } }), 'attention')
 })

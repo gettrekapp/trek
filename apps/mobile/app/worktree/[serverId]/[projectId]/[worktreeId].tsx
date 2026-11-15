@@ -1,13 +1,18 @@
-// A worktree (6a): load or unload it, start a session (agent and session type), its sessions
-// with close and restart, Changes (its review), Remove (not for the main checkout; with its
-// dev stack or Docker VM running, only the desktop can), its pull request's notice
-// (ui/PrNotice.tsx), and its branch's tag, custom tags, note, ticket and pull request with its
-// watch (ui/BranchDetails.tsx).
+// A worktree (6a): its branch's tag, ticket, pull request and git state on one line; its pull
+// request's notice (ui/PrNotice.tsx); its sessions first, each a row with its state mark, a
+// decision answered in place, and Restart and Close behind its ⋯; New session (agent and session
+// type); then a short list: Changes (its review), Branch details (ui/BranchDetails.tsx: tag,
+// custom tags, note, ticket, pull request and its watch), Load or Unload sessions, and Remove
+// worktree (not for the main checkout; with its dev stack or Docker VM running, only the desktop
+// can). Its path is at the bottom.
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native'
+import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
+import { activeTicketProviders } from '../../../../src/logic/tickets.ts'
+import { branchParts, type BranchPart } from '../../../../src/logic/worktreeList.ts'
+import { rowGit, sessionMark } from '../../../../src/logic/worktreeRow.ts'
 import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../src/logic/worktrees.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
 import { useServers } from '../../../../src/state/ServersProvider.tsx'
@@ -17,8 +22,10 @@ import { BranchDetails } from '../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { PrNotice } from '../../../../src/ui/PrNotice.tsx'
 import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
-import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
-import { ui } from '../../../../src/ui/theme.ts'
+import { DecisionActions } from '../../../../src/ui/DecisionActions.tsx'
+import { StateMark } from '../../../../src/ui/StateMark.tsx'
+import { STATUS_TEXT } from '../../../../src/ui/status.ts'
+import { colors, ui } from '../../../../src/ui/theme.ts'
 import { knownPtySize } from '../../../../src/state/ptySizes.ts'
 
 /**
@@ -54,6 +61,7 @@ export default function WorktreeScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
+  const [branchOpen, setBranchOpen] = useState(false)
   // Why Remove is the desktop's to do (its dev stack or VM is running).
   const [blocked, setBlocked] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
@@ -201,75 +209,158 @@ export default function WorktreeScreen(): React.JSX.Element {
     }
   }
 
-  // The Branch section's boxes stay above the keyboard, and one tap on Save works with it up.
+  // Restart and Close are behind a session's ⋯, so a row is one tap target and they are not hit by mistake.
+  const sessionMenu = (sessionId: string, title: string): void => {
+    Alert.alert(title, undefined, [
+      { text: 'Restart', onPress: () => void run(() => req!.request('session.restart', { projectId, sessionId, ...restartSize(serverId, sessionId) })) },
+      { text: 'Close…', style: 'destructive', onPress: () => confirmClose(sessionId, title) },
+      { text: 'Cancel', style: 'cancel' }
+    ])
+  }
+
+  const trackers = project ? activeTicketProviders(server?.connection.welcome, project.settings) : []
+  const facts = project && found ? branchParts(project.settings, found.repo, found.worktree.branch, trackers) : []
+  const git = worktree ? rowGit(worktree) : null
+  // One line under the title: primary, the branch's tag, ticket and pull request, then git's state
+  // (nothing about changes until the server's status poll has run).
+  const factLine: BranchPart[] = worktree
+    ? [
+        ...(worktree.isMain ? [{ text: 'Primary checkout' }] : []),
+        ...facts,
+        ...(worktree.dirty === undefined ? [] : [worktree.dirty ? { text: 'uncommitted changes', color: colors.text } : { text: 'clean' }]),
+        ...(git?.counts ? [{ text: git.counts }] : [])
+      ]
+    : []
+  const off = busy || !server
+  const listRow = ({ pressed }: { pressed: boolean }) => [ui.listRow, { alignItems: 'baseline' as const }, pressed ? { backgroundColor: colors.panel } : null]
+
+  // The Branch details' boxes stay above the keyboard, and one tap on Save works with it up.
   return (
     <KeyboardAvoidingView style={ui.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={headerHeight}>
-      <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
+      <ScrollView style={ui.screen} contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
         <Stack.Screen options={{ title: worktree ? (worktree.branch ?? worktree.name) : 'Worktree' }} />
-        {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
-        {project && !worktree ? <Text style={ui.muted}>This worktree is gone.</Text> : null}
+        <View style={{ paddingHorizontal: 16, paddingTop: 8, gap: 8 }}>
+          {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
+          {project && !worktree ? <Text style={ui.muted}>This worktree is gone.</Text> : null}
+          {worktree ? (
+            <Text style={ui.muted}>
+              {worktree.missing ? <Text style={{ color: colors.danger }}>Missing on the server{factLine.length ? ' · ' : ''}</Text> : null}
+              {factLine.map((part, i) => (
+                <Text key={i}>
+                  {i > 0 ? ' · ' : ''}
+                  <Text style={part.color ? { color: part.color } : null}>{part.text}</Text>
+                </Text>
+              ))}
+            </Text>
+          ) : null}
+          {blocked ? <Text style={ui.warn}>{blocked}</Text> : null}
+          {error ? <Text style={ui.error}>{error}</Text> : null}
+          {/* Keyed by the notice: what was said about one (a failed Open or Dismiss) is not said about the next. */}
+          {worktree?.prNotice ? <PrNotice key={worktree.prNotice.at} serverId={serverId} projectId={projectId} worktreeId={worktree.id} notice={worktree.prNotice} /> : null}
+        </View>
         {worktree ? (
           <>
-            <Text style={ui.muted}>{worktree.path}</Text>
-            <Text style={ui.text}>
-              {worktree.loaded ? 'Loaded' : 'Unloaded'}
-              {worktree.dirty ? ' · uncommitted changes' : ''}
-            </Text>
-            <View style={[ui.row, { flexWrap: 'wrap' }]}>
-              <Button
-                ghost
-                label={worktree.loaded ? 'Unload' : 'Load'}
-                disabled={busy || !server}
-                onPress={() => void run(() => req!.request(worktree.loaded ? 'worktree.unload' : 'worktree.load', { projectId, worktreeId }))}
-              />
-              <Button ghost label="Changes" onPress={() => router.push({ pathname: '/changes/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })} />
-              <Button label="New session" disabled={busy || !server} onPress={() => setPicking((p) => !p)} />
-              {worktree.isMain ? null : <Button ghost danger label={removing ? 'Removing…' : 'Remove'} disabled={busy || !server} onPress={() => void remove()} />}
+            <View style={ui.section}>
+              <Text style={ui.sectionText}>Sessions</Text>
+              {worktree.loaded ? null : <Text style={{ color: colors.muted, fontSize: 12 }}>saved, not running</Text>}
+            </View>
+            {worktree.sessions.length === 0 ? <Text style={[ui.muted, { paddingHorizontal: 16, paddingVertical: 8 }]}>No sessions.</Text> : null}
+            {worktree.sessions.map((s) => {
+              const mark = worktree.loaded ? sessionMark(s) : 'none'
+              const wants = mark === 'attention' || mark === 'done'
+              return (
+                <View key={s.id} style={[ui.listRow, { paddingVertical: 0, paddingRight: 0 }]}>
+                  <View style={{ flex: 1, minWidth: 0, paddingVertical: 12 }}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${s.title}, ${STATUS_TEXT[s.status]}${s.decision ? `, decision: ${s.decision.question}` : ''}`}
+                      style={{ flexDirection: 'row', gap: 12 }}
+                      onPress={() => router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId: s.id } })}
+                    >
+                      <StateMark mark={mark} />
+                      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                        <Text numberOfLines={1} style={{ fontSize: 15, fontWeight: wants ? '600' : '500', color: colors.text }}>
+                          {s.title}
+                        </Text>
+                        <Text numberOfLines={2} style={{ fontSize: 13, color: s.decision ? colors.attention : colors.muted }}>
+                          {s.decision ? `Decision: ${s.decision.question}` : STATUS_TEXT[s.status]}
+                          {s.queue.length ? ` · ${s.queue.length} queued` : ''}
+                        </Text>
+                      </View>
+                    </Pressable>
+                    {s.decision ? (
+                      <View style={{ paddingLeft: 28 }}>
+                        <DecisionActions serverId={serverId} projectId={projectId} sessionId={s.id} />
+                      </View>
+                    ) : null}
+                  </View>
+                  <Pressable accessibilityRole="button" accessibilityLabel={`${s.title}: restart or close`} disabled={off} onPress={() => sessionMenu(s.id, s.title)} style={{ paddingHorizontal: 16, paddingVertical: 12, opacity: off ? 0.4 : 1 }}>
+                    <Text style={{ color: colors.muted, fontSize: 18, lineHeight: 20 }}>⋯</Text>
+                  </Pressable>
+                </View>
+              )
+            })}
+            <View style={{ paddingHorizontal: 16, paddingTop: 14, gap: 8 }}>
+              <Button label={picking ? 'Cancel' : 'New session'} ghost={picking} disabled={off} onPress={() => setPicking((p) => !p)} />
             </View>
             {picking ? (
-              <View style={ui.card}>
-                <Pressable accessibilityRole="button" onPress={() => void start({})}>
-                  <Text style={ui.text}>The project's default agent</Text>
+              <View>
+                <View style={ui.section}>
+                  <Text style={ui.sectionText}>Start with</Text>
+                </View>
+                <Pressable accessibilityRole="button" style={listRow} onPress={() => void start({})}>
+                  <Text style={[ui.text, { fontSize: 15 }]}>The project's default agent</Text>
                 </Pressable>
                 {agents.map((a) => (
-                  <Pressable key={a.provider} accessibilityRole="button" onPress={() => void start({ agent: a })}>
-                    <Text style={ui.text}>{a.label}</Text>
+                  <Pressable key={a.provider} accessibilityRole="button" style={listRow} onPress={() => void start({ agent: a })}>
+                    <Text style={[ui.text, { fontSize: 15 }]}>{a.label}</Text>
                   </Pressable>
                 ))}
-                {sessionTypes.length ? <Text style={ui.heading}>Session types</Text> : null}
                 {sessionTypes.map((t) => (
-                  <Pressable key={t.id} accessibilityRole="button" onPress={() => void start({ type: t })}>
-                    <Text style={ui.text}>{t.name}</Text>
+                  <Pressable key={t.id} accessibilityRole="button" style={listRow} onPress={() => void start({ type: t })}>
+                    <Text style={[ui.text, { flex: 1, fontSize: 15 }]}>{t.name}</Text>
+                    <Text style={{ color: colors.muted, fontSize: 12 }}>session type</Text>
                   </Pressable>
                 ))}
               </View>
             ) : null}
-            {blocked ? <Text style={ui.warn}>{blocked}</Text> : null}
-            {error ? <Text style={ui.error}>{error}</Text> : null}
-            {/* Keyed by the notice: what was said about one (a failed Open or Dismiss) is not said about the next. */}
-            {worktree.prNotice ? <PrNotice key={worktree.prNotice.at} serverId={serverId} projectId={projectId} worktreeId={worktree.id} notice={worktree.prNotice} /> : null}
-            {/* Keyed by the branch: an edit begun for one is not saved to another checked out meanwhile. */}
+            <View style={ui.section}>
+              <Text style={ui.sectionText}>Worktree</Text>
+            </View>
+            <Pressable accessibilityRole="button" style={listRow} onPress={() => router.push({ pathname: '/changes/[serverId]/[projectId]/[worktreeId]', params: { serverId, projectId, worktreeId } })}>
+              <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>Changes</Text>
+              <Text style={{ color: colors.muted, fontSize: 15 }}>›</Text>
+            </Pressable>
             {project && found && worktree.branch ? (
-              <BranchDetails key={`${found.repo.id}\n${worktree.branch}`} serverId={serverId} projectId={projectId} project={project} repo={found.repo} branch={worktree.branch} />
-            ) : null}
-            <Text style={ui.heading}>Sessions</Text>
-            {worktree.sessions.length === 0 ? <Text style={ui.muted}>No sessions.</Text> : null}
-            {worktree.sessions.map((s) => (
-              <View key={s.id} style={ui.card}>
-                <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/session/[serverId]/[projectId]/[sessionId]', params: { serverId, projectId, sessionId: s.id } })}>
-                  <Text style={ui.title}>{s.title}</Text>
-                  <Text style={{ color: statusColor(s.status) }}>
-                    {STATUS_TEXT[s.status]}
-                    {s.decision ? ` · ${s.decision.question}` : ''}
-                    {s.queue.length ? ` · ${s.queue.length} queued` : ''}
-                  </Text>
+              <>
+                <Pressable accessibilityRole="button" accessibilityState={{ expanded: branchOpen }} style={listRow} onPress={() => setBranchOpen((o) => !o)}>
+                  <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>Branch details</Text>
+                  <Text style={{ color: colors.muted, fontSize: 13 }}>{branchOpen ? 'Hide' : 'tag, note, ticket, pull request'}</Text>
                 </Pressable>
-                <View style={[ui.row, { marginTop: 6 }]}>
-                  <Button ghost label="Restart" disabled={busy || !server} onPress={() => void run(() => req!.request('session.restart', { projectId, sessionId: s.id, ...restartSize(serverId, s.id) }))} />
-                  <Button ghost danger label="Close" disabled={busy || !server} onPress={() => confirmClose(s.id, s.title)} />
-                </View>
-              </View>
-            ))}
+                {/* Keyed by the branch: an edit begun for one is not saved to another checked out meanwhile. */}
+                {branchOpen ? (
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 12, gap: 12, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }}>
+                    <BranchDetails key={`${found.repo.id}\n${worktree.branch}`} heading={false} serverId={serverId} projectId={projectId} project={project} repo={found.repo} branch={worktree.branch} />
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              disabled={off}
+              style={(state) => [...listRow(state), { opacity: off ? 0.4 : 1 }]}
+              onPress={() => void run(() => req!.request(worktree.loaded ? 'worktree.unload' : 'worktree.load', { projectId, worktreeId }))}
+            >
+              <Text style={{ flex: 1, color: colors.text, fontSize: 15 }}>{worktree.loaded ? 'Unload sessions' : 'Load sessions'}</Text>
+            </Pressable>
+            {worktree.isMain ? null : (
+              <Pressable accessibilityRole="button" disabled={off} style={(state) => [...listRow(state), { opacity: off ? 0.4 : 1 }]} onPress={() => void remove()}>
+                <Text style={{ flex: 1, color: colors.danger, fontSize: 15 }}>{removing ? 'Removing…' : 'Remove worktree'}</Text>
+              </Pressable>
+            )}
+            <Text selectable style={[ui.mono, { color: colors.muted, fontSize: 11, paddingHorizontal: 16, paddingTop: 14 }]}>
+              {worktree.path}
+            </Text>
           </>
         ) : null}
       </ScrollView>

@@ -142,11 +142,17 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - The server is listed as Connected. `trek-server token list` shows `phone-<name>`.
    - The same code again: "already used". After 5 minutes: "expired".
    - Opening `trek://pair?url=…&code=…` in Safari opens Add server filled in, without pairing.
-     With the app closed first, too; Back from there goes to Attention.
+     With the app closed first, too; Back from there goes to Needs you.
    - Scanning a QR that isn't a pairing code says "Not a Trek pairing code".
    - With camera access denied (Settings → Trek → Camera off), Add server offers Open Settings.
-2. **Attention:**
-   - A session that rings the bell or finishes is listed with its project and age, newest first.
+2. **Needs you** (the home tab, and the first of the bar at the bottom: Needs you, Projects,
+   Servers):
+   - The bar is on those three screens only. Needs you shows how many items wait in amber.
+     Projects and Servers change without a slide and have no back arrow; Needs you in the
+     bar (and Android's back) returns home. Tapping between Projects and Servers many times,
+     then Needs you, leaves nothing under home.
+   - A session that rings the bell or finishes is a row, newest first: an amber `!` (blue dot
+     for one that finished), its title and age, what it wants, and its project and server.
    - A `request_decision` shows its question. **Send answer** types it into the session; **Dismiss** clears it.
      With the keyboard up, one tap on **Send answer** sends it.
    - A pull request notice (item 11) is listed with its title ("PR #<n>") and text. Tapping
@@ -156,29 +162,47 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - Two quick taps on that **Dismiss** send one request and open nothing.
    - With the server out of reach, **Dismiss** shows the error under the item, which stays.
 3. **Projects:**
-   - The server's projects, repositories and worktrees, with their branches and sessions' states.
-   - A worktree with a pull request notice shows it on its card as one line ("PR #<n>:
-     Checks failed: build"), cut off at the card's width, with no buttons.
-   - **Load** / **Unload** follow on the desktop.
+   - The server's projects, repositories and worktrees. Each worktree is a row, as in the
+     desktop's sidebar: one mark for its sessions (amber `!` needs you, blue dot finished,
+     green arc working, hollow ring idle, none with nothing loaded), its branch, and at the
+     right "primary", `●` for uncommitted changes, `↑n ↓n`, and `▸n` for an unloaded
+     worktree's saved sessions. Its second line is the branch's tag (in its colour), custom
+     tags, ticket and pull request.
+   - A worktree that wants you shows the reason on that line instead: "Missing on the
+     server", "Decision: <question>", or its pull request notice ("PR #<n>: Checks failed:
+     build"), cut off at the row's width, with no buttons.
+   - **Load sessions** / **Unload sessions** (the worktree screen's Worktree list) follow on
+     the desktop.
 4. **Sessions:**
-   - **New session** with the default agent, another agent, and a session type.
-   - **Restart** and **Close** (Close asks first).
+   - The worktree screen opens with one line under its title (the branch's tag, ticket and
+     pull request, then "uncommitted changes" or "clean" and `↑n ↓n`), then its sessions, each a
+     row with its state mark. A session's decision is answered on its row.
+   - **New session** lists the default agent, the other agents, and the session types.
+   - A session's **⋯** offers **Restart** and **Close…** (Close asks first).
+   - The worktree's path is at the bottom of the screen.
 5. **Terminal:**
    - The scrollback, then live output, in colour, at the desktop's width (the font shrinks).
      The scrollback isn't wrapped at 80 columns first.
    - Resize the desktop's window: the phone's terminal follows (`pty.resized`); the phone
      never changes the desktop's size.
    - Touch-scroll the scrollback up and back down (and sideways at a wide size).
-   - Tap and type. Each key-bar key does what its label says.
+   - The session's state mark is beside its title in the header, and the terminal runs the
+     full width of the screen.
+   - Tap and type. **Keys** (first in the row under the terminal) opens the key bar and
+     closes it again; each key does what its label says. Open on one session, it is open on
+     the next until the app is closed.
    - `printf '\e]8;;https://example.com\e\\link\e]8;;\e\\\n'` in the session: tapping
      "link" opens nothing.
    - With the keyboard up, the prompt box stays above it, below the header.
-   - **Send** types the prompt now. **Queue** adds it to the queue below, where **Remove** takes it out.
+   - The composer: the round **↑** sends the prompt now (grey with nothing typed). **Queue**
+     appears beside it once something is typed and adds it to the queue. A queue shows as
+     one line under the composer ("Next: …" and "<n> queued ›"); tapping it lists the
+     queue, where **Remove** takes a prompt out.
    - **Quick buttons** (set them up on the desktop: a terminal's button row): the project's
-     buttons are in a row above the prompt box; a Global session shows the Global ones; a
-     project with none shows no row.
+     buttons are in a row above the prompt box, after **Keys**; a Global session shows the
+     Global ones; a project with none shows **Keys** alone.
      - A button with plain text or built-ins that have a value (`[branch]`) sends at once.
-     - A button with an `{INPUT}` (marked ⌨) opens a sheet: the field, a preview that follows
+     - A button with an `{INPUT}` (marked with a trailing …) opens a sheet: the field, a preview that follows
        what is typed, **Send** and **Cancel**. Text in the prompt box is still there afterwards.
      - A button using `[ticket_url]` on a branch whose ticket links (the project has its
        tracker's setting: the Linear workspace, the Azure DevOps project URL) sends the link at
@@ -297,8 +321,9 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - **Add PR** again with the same link (its branch already has a worktree): no second
      worktree, and that worktree's screen opens with the pull request linked.
    - Two quick taps on **Create** or **Add PR** create one worktree.
-9. **Remove a worktree** (**Remove** on the worktree screen):
-   - The main checkout has no **Remove**.
+9. **Remove a worktree** (**Remove worktree** in the worktree screen's Worktree list; its
+   questions' button is **Remove**):
+   - The main checkout has no **Remove worktree**.
    - A clean, unloaded worktree: "Remove <name>?" says its folder is deleted and its branch
      stays. **Remove** removes it, and the phone goes back to the project, where it is gone.
      The branch still exists (`git branch`).
@@ -334,15 +359,16 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
      could not be loaded again: use Load.").
    - A worktree listed as Missing (its folder was deleted) is removed the same way, also on
      a server that runs dev stacks.
-10. **Branch details** (the **Branch** section of a worktree that is on a branch; a detached
-    worktree has none):
+10. **Branch details** (the **Branch details** row of a worktree that is on a branch, which
+    opens the section in place; a detached worktree has none; "the Branch section" below is
+    this one):
     - **Workflow tag**: the project's tags in their colours, the branch's one filled in.
       Tapping another sets it, tapping the current one clears it; the desktop follows. A
       project whose tag list was emptied shows no row.
     - **Custom tags**: each of the project's custom tags toggles on its own; a project with
       none shows no row.
     - A tag set on the desktop shows on the phone without reopening the screen, and on the
-      project screen's worktree card.
+      project screen's worktree row.
     - **Note**: "No note", or the note. **Edit** opens a multi-line box; **Save** saves it,
       **Cancel** leaves it as it was, and saving an empty box clears it.
     - Note conflict: tap **Edit** on the phone, change the note on the desktop, then **Save**
@@ -381,18 +407,18 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
       keeps what was typed.
 11. **Pull request notices** (a watched pull request whose checks fail or settle, that gets
     a review or a comment, conflicts, or is merged or closed; the server polls every 3 minutes):
-    - The worktree's screen shows the notice above the **Branch** section: its title ("PR
+    - The worktree's screen shows the notice above its sessions: its title ("PR
       #<n>"), what happened, and how long ago.
     - **Open** opens the pull request in the browser.
-    - **Dismiss** removes the notice from the screen, from the worktree's card, from the
-      Attention list and from the desktop.
+    - **Dismiss** removes the notice from the screen, from the worktree's row, from the
+      Needs you list and from the desktop.
     - Dismissing it on the desktop removes it from the phone without reopening the screen.
     - A second report on the same pull request replaces the first notice.
     - Two quick taps on **Dismiss** send one request.
     - With the server out of reach, **Dismiss** shows the error in the notice, which stays.
 12. **Automations** (a server with the `automations` capability; create them in the
     desktop app):
-    - The project screen has an **Automations** row above the repositories: "Automations ·
+    - The project screen has an **Automations** row under the repositories: "Automations ·
       <n>", or "Automations" with none. A server without the capability (an older
       trek-server) shows no row.
     - With an automation that has missed runs, the row ends with " · missed runs" in the

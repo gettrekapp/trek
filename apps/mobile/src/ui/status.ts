@@ -11,5 +11,5 @@ export const STATUS_TEXT: Record<SessionStatus, string> = {
 }
 
 export function statusColor(status: SessionStatus): string {
-  return status === 'attention' ? colors.attention : status === 'working' ? colors.accent : status === 'done' ? colors.ok : colors.muted
+  return status === 'attention' ? colors.attention : status === 'working' ? colors.ok : status === 'done' ? colors.accent : colors.muted
 }

@@ -149,7 +149,7 @@ export default function AddWorktreeScreen(): React.JSX.Element {
           value={name}
           onChangeText={setName}
           placeholder="branch name"
-          placeholderTextColor="#6c7086"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
           spellCheck={false}
@@ -197,7 +197,7 @@ export default function AddWorktreeScreen(): React.JSX.Element {
           value={prUrl}
           onChangeText={setPrUrl}
           placeholder="https://github.com/org/repo/pull/123"
-          placeholderTextColor="#6c7086"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="none"
           autoCorrect={false}
           spellCheck={false}
