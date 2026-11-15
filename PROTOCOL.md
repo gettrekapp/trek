@@ -121,9 +121,10 @@ new optional field needs no capability: its absence says enough.
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
 | `automations` | Per-project scheduled prompts (see [Automations](#automations)): `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` |
 | `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
-| `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server but the local one (a phone can't reach this machine's loopback) |
+| `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server; a phone reaches the local one only through its phone listener (`phoneAccess`) |
 | `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
-| `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
+| `phoneAccess` | The local server only: its listener for phones on this machine's Tailscale address (see [Phone access on the local server](#phone-access-on-the-local-server)): `phoneAccess.get`, `phoneAccess.set`, `phoneAccess.revoke` and the `phoneAccess.changed` event, all for its own `local` token |
+| `local` | This is the machine's own local server (`trek-server start --local`): every path check allows any path: `server.addRepo` takes any repo the user picks, `project.import` any worktree path, and so do `worktree.create` targets, and a session's `cwd` and `addDirs`. That is acceptable because the token already grants a shell as the user, it lives only in a 0600 file in a 0700 directory, and the server is loopback-only unless phone access is on (see [Phone access on the local server](#phone-access-on-the-local-server)): it then also listens on this machine's Tailscale address, where the `local` token is refused, and a paired phone's token has the same any-path access. Absolute paths, `NOT_A_REPO` and `project.import`'s registered-repo check still apply. A remote server never lists it |
 
 The strings are `CAPABILITY` in `src/shared/protocolV2.ts`.
 
@@ -413,8 +414,7 @@ redeems the code at `hello`.
   shell-level power on the server's machine; the name of the token it signed in with (a browser
   session's token, for a browser) is recorded on the phone's token as `pairedBy`. `name` is a hint
   for the token's name. `expiresAt` is by the server's clock; `expiresInMs` is the code's lifetime
-  (300000), so a client whose clock is off counts down from its own clock on arrival. The local
-  server answers `NOT_FOUND`.
+  (300000), so a client whose clock is off counts down from its own clock on arrival.
 - **Cancelling:** `pairing.cancel {code}` withdraws a waiting code, which is then refused as
   `pairing code was withdrawn on the desktop`; `cancelled` is false for a code that was unknown,
   spent or expired already. Any signed-in connection that knows the code may cancel it (whoever
@@ -452,17 +452,90 @@ redeems the code at `hello`.
   | `pairing code expired` | its 5 minutes passed, or the token that asked for it was revoked |
   | `pairing code already used` | it was redeemed before |
   | `pairing code was withdrawn on the desktop` | `pairing.cancel` (the desktop's **New code**) withdrew it |
-  | `pairing code not recognised` | no such code (or the local server) |
+  | `pairing code not recognised` | no such code |
   | `too many pairing attempts` | 5 failed redeems from the address in a minute (pairing's own limit, per address only: nothing shared with the web sign-in, no total). Behind a reverse proxy every phone has the proxy's address, so they all share those 5 |
   | `the server could not save the new token` | the code was good but writing the config failed (the server logs why); the code is spent all the same, so the phone needs a new one |
 
   A spent or expired code is remembered (its hash) for 30 minutes, so the reason can say which.
 - **The QR** holds `trek://pair?url=<the server's URL, as the desktop reaches it, without any user
   name or password>&code=<code>`: a code, never a token. The desktop shows **Pair a phone…** only
-  for a connected server whose welcome lists `pairing`, never for the Local server or a loopback
-  URL (`localhost` and `*.localhost`, `127.0.0.0/8`, `::1`, their IPv4-mapped forms such as
+  for a connected server whose welcome lists `pairing`, never for a loopback URL, and for the
+  Local server only when it has phone access (below), with its phone address in place of the
+  desktop's URL (`localhost` and `*.localhost`, `127.0.0.0/8`, `::1`, their IPv4-mapped forms such as
   `[::ffff:127.0.0.1]`, and the any-address `0.0.0.0` / `[::]`). On the phone a `trek://pair`
   link only fills the Add server form; nothing is redeemed until the user taps Pair.
+
+## Phone access on the local server
+
+Behind the `phoneAccess` capability, which only the local server lists. The local server's own
+listener is loopback-only, on a port the OS picks at each start, so a phone can't reach it. With
+phone access on, it opens a second listener at a fixed port (default 7346) on this machine's
+Tailscale IPv4 address and on `127.0.0.1` (for a proxy on the same machine, such as
+`tailscale serve`). It never binds another interface. The same protocol is served there, with one
+difference: a `hello` with the `local` token is refused (`4003`), so the token in `local.json` is
+of no use from the tailnet.
+
+| Method | Params | Result |
+|---|---|---|
+| `phoneAccess.get` | `{}` | `PhoneAccess` |
+| `phoneAccess.set` | `{enabled?, port?, url?}` | `PhoneAccess` |
+| `phoneAccess.revoke` | `{name}` | `{revoked}` |
+
+- **Who may ask:** only a connection signed in with the `local` token (`UNAUTHORIZED` otherwise):
+  a paired phone may not open the listener wider or revoke another phone. On any other server
+  the methods answer `NOT_FOUND`.
+- **The Tailscale address** is the first IPv4 address in `100.64.0.0/10` on an interface whose
+  name starts with `tailscale` or `utun`, in any case (Linux `tailscale0`, macOS `utunN`, Windows
+  `Tailscale`). That range is the general carrier-grade NAT one, so the name is what tells
+  Tailscale from an ISP's or a hotspot's interface. Two consequences: a Tailscale interface given
+  a custom name is not recognised (the state is `no-tailscale`); and on macOS another VPN that
+  uses a `utun` interface with an address in that range would be taken for Tailscale.
+- **`PhoneAccess`:** `{enabled, port, state, address?, error?, url?, customUrl?, phones}`.
+  `state` is `off`; `listening` (with `address`, the Tailscale address); `no-tailscale` (enabled
+  and listening on loopback, but the machine has no Tailscale address yet); `port-in-use`; or
+  `error` (with `error`; nothing listens in these last two). While phone access is on the machine
+  is looked at again every 10 seconds, so a failed listen is retried, and Tailscale starting later
+  or changing its address moves the listener. `url` is the address a pairing QR carries:
+  `customUrl` when the user set one (it is there even while phone access is off or nothing
+  listens), else `ws://<address>:<port>` while listening. `phones` lists every token but `local`
+  (the paired phones, and any token added by hand): `{name, createdAt, pairedBy?}`.
+- **`phoneAccess.set`** changes the fields it is given: `enabled` (true or false), `port` (a
+  whole number from 1024 to 65535), `url` (`null` or `""` goes back to the default). A `url` is
+  trimmed at the ends and then checked as written: at most 300 characters, no spaces or control
+  characters, `ws://` or `wss://`, no user name or password, no query or fragment, not port 0. A
+  path may stay (a proxy may serve the server under one). A bad field, or params that are not an
+  object, is `BAD_REQUEST` and changes nothing. The setting is saved in the local profile's
+  `config.json` (`phoneAccess`), applies at once without a restart (running sessions are not
+  touched), and survives one. The server does not check that a phone will take the `url`: the
+  phone app refuses plain `ws://` to a name such as a MagicDNS `*.ts.net` one, so an address of
+  the user's own is `wss://`, or `ws://` with a private IP address (or a `.local` name).
+- **`phoneAccess.revoke`** removes the token `name`: its connections close and its push grant
+  and waiting pairing codes go, as for any revoked token. A name with no token answers
+  `revoked: false` and writes nothing. The `local` token is `BAD_REQUEST`.
+- **`phoneAccess.changed`** carries the `PhoneAccess` to every connection signed in with the
+  `local` token, whenever it changes: the listener's state, the setting, a phone paired or revoked.
+- **Closing:** when phone access goes off, its port moves or the Tailscale address changes, the
+  connections that came through the phone listener are closed with code `1001`
+  (`phone access is off`). At shutdown they get `daemon.shutdown` and `1001` like any connection.
+- **Bounds:** the phone listener takes at most 64 connections at once on each of its two
+  addresses. Pairing's limit (5 failed redeems a minute per address) sees a phone that arrives
+  through a proxy on this machine, and any process on this machine that dials `127.0.0.1`, as
+  `127.0.0.1`: they share one allowance.
+- **The desktop** shows **Pair a phone…** on the Local row when its welcome lists `pairing` and
+  `phoneAccess`. The panel has the switch (**Allow phones over Tailscale**), the state, the port,
+  the address for the phone, and the paired phones with **Revoke**. A pairing code is asked for
+  only while phone access is on and there is a `url` to give (state `listening`, or
+  `no-tailscale` with a `customUrl`).
+- **What a phone can do:** pairing a phone gives it what the user has in Trek on that machine. A
+  phone's token on the local server has what any of its tokens has: the `local` capability's
+  any-path access, and sessions, each of which is a shell as the user. Only `server.stop` and
+  `phoneAccess.*` are kept to the `local` token, and that is a guard rail, not a security
+  boundary: from a shell session a phone's token can read `local.json`, edit the config, or call
+  `pairing.create`.
+- **Limits:** the phone keeps the address it paired with, so if this machine's Tailscale address
+  or the port changes, the server is added again on the phone. The phone reaches the server only
+  while it runs ("Stop local server on quit" stops it with the app). `TREK_SERVER_PHONE_ADDRESS`
+  (a loopback address only) stands in for the Tailscale address in the smokes.
 
 ## Background push
 
