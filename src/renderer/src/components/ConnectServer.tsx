@@ -246,7 +246,14 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
       {servers?.map((server) => {
         if (server.local) {
           return (
-            <LocalServerItem key={server.id} server={server} selected={selectedId === server.id} onToggle={() => setSelectedId(selectedId === server.id ? null : server.id)} />
+            <LocalServerItem
+              key={server.id}
+              server={server}
+              selected={selectedId === server.id}
+              onToggle={() => setSelectedId(selectedId === server.id ? null : server.id)}
+              pairing={pairFor === server.id}
+              onPair={(open) => setPairFor(open ? server.id : null)}
+            />
           )
         }
         const testState = tests[server.id]
@@ -346,7 +353,7 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
               </div>
             )}
 
-            {pairFor === server.id && canPairPhone(server) && <PairPhone serverId={server.id} onClose={() => setPairFor(null)} />}
+            {pairFor === server.id && canPairPhone(server) && <PairPhone serverId={server.id} local={!!server.local} onClose={() => setPairFor(null)} />}
 
             {rowErrors[server.id] && <div className="error">{rowErrors[server.id]}</div>}
 
@@ -388,9 +395,22 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
 
 /**
  * The Local server's row: first in the list, with no Set token, Edit or Remove (main's
- * supervisor owns it). Its state, and Start, Restart or Reset as the state allows.
+ * supervisor owns it). Its state, and Start, Restart or Reset as the state allows; and
+ * Pair a phone… once it has phone access (`pairing`: its panel is the one open).
  */
-function LocalServerItem({ server, selected, onToggle }: { server: AppServerLink; selected: boolean; onToggle: () => void }): React.JSX.Element {
+function LocalServerItem({
+  server,
+  selected,
+  onToggle,
+  pairing,
+  onPair
+}: {
+  server: AppServerLink
+  selected: boolean
+  onToggle: () => void
+  pairing: boolean
+  onPair: (open: boolean) => void
+}): React.JSX.Element {
   const local = server.local!
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -428,6 +448,11 @@ function LocalServerItem({ server, selected, onToggle }: { server: AppServerLink
               Start
             </button>
           )}
+          {canPairPhone(server) && (
+            <button className="btn btn-ghost" onClick={() => onPair(!pairing)}>
+              Pair a phone…
+            </button>
+          )}
           {local.state === 'error' && local.canReset && (
             <button className="btn btn-ghost danger" disabled={busy} onClick={() => act(() => window.api.localServer.reset())}>
               Reset
@@ -436,6 +461,7 @@ function LocalServerItem({ server, selected, onToggle }: { server: AppServerLink
         </span>
       </div>
       {local.message && local.state !== 'running' && <div className={local.state === 'error' ? 'error connect-local-message' : 'muted connect-local-message'}>{local.message}</div>}
+      {pairing && canPairPhone(server) && <PairPhone serverId={server.id} local onClose={() => onPair(false)} />}
       {error && <div className="error">{error}</div>}
       {selected && running && server.hasToken && <ServerProjects server={server} />}
     </div>
