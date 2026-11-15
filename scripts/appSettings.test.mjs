@@ -103,3 +103,31 @@ test('theme choices are capped: the oldest go first, and a key set again counts 
   assert.deepEqual(more['s:p0'], { id: 'gruv', sha256: SHA_B })
   assert.deepEqual(more['s:new'], { id: 'nord', sha256: SHA_A })
 })
+
+test('a theme choice under an own __proto__ key changes nothing and pollutes nothing', () => {
+  const current = { ...DEFAULTS, themes: { 'local:p1': { id: 'nord', sha256: SHA_A } } }
+  const themes = JSON.parse(`{"__proto__": {"id": "gruv", "sha256": "${SHA_B}", "polluted": true}}`)
+  assert.ok(Object.hasOwn(themes, '__proto__'), 'an own key, as JSON.parse makes it')
+  for (const patch of [{ themes }, JSON.parse(`{"themes": {"__proto__": null}}`)]) {
+    for (const result of [parseAppSettings(patch, current).themes, parseAppSettings({ themes: { ...current.themes, ...patch.themes } }).themes]) {
+      assert.deepEqual(result, current.themes)
+      assert.deepEqual(Object.keys(result), ['local:p1'])
+      assert.equal(Object.getPrototypeOf(result), Object.prototype, "the result's prototype is Object's own")
+      assert.equal(Object.hasOwn(result, '__proto__'), false)
+      assert.equal(result.id, undefined)
+    }
+  }
+  assert.equal({}.polluted, undefined)
+  assert.equal({}.id, undefined)
+  assert.equal({}.sha256, undefined)
+})
+
+test('a stored file with more theme choices than the cap reads as its last ones', () => {
+  const stored = {}
+  for (let i = 0; i < MAX_THEME_CHOICES + 7; i++) stored[`s:p${i}`] = { id: 'nord', sha256: SHA_A }
+  const read = parseAppSettings({ themes: stored }).themes
+  assert.equal(Object.keys(read).length, MAX_THEME_CHOICES)
+  assert.deepEqual(Object.keys(read), Object.keys(stored).slice(-MAX_THEME_CHOICES))
+  assert.equal(Object.keys(read)[0], 's:p7')
+  assert.equal(Object.keys(read).at(-1), `s:p${MAX_THEME_CHOICES + 6}`)
+})

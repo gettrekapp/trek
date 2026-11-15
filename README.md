@@ -629,6 +629,9 @@ one at a time:
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the
   sign-in limit;
+- `npm run smoke:theme`: a theme plugin in a project window on Local: the example theme
+  installed while the app runs, chosen in Settings → Appearance and applied, a second
+  project's default look, a replaced bundle (the default look until Apply) and removal;
 - `npm run smoke:server-update`: `trek-server update` and the protocol's `update.*`, without
   Electron: test builds of the server at two versions, installed as a release tarball
   installs them, against a signed release feed on 127.0.0.1: the command with and without a

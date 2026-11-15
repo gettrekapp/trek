@@ -590,3 +590,16 @@ test("plugins.list replaces the welcome's plugins before the event's listeners h
   sock.event('plugins.list', null)
   assert.deepEqual(conn.welcome.plugins.map((p) => p.id), ['voice', 'nord'], 'a list that is not an array changes nothing')
 })
+
+test('a plugins.list before any welcome is ignored without throwing: there is no welcome to carry it', () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  const theme = { id: 'nord', version: '1.0.0', defaultEnabled: false, type: 'theme', name: 'Nord', description: 'Cold.', contract: 1, sha256: 'a'.repeat(64) }
+  assert.doesNotThrow(() => sock.event('plugins.list', { plugins: [theme] }))
+  assert.doesNotThrow(() => sock.event('plugins.list', null))
+  assert.equal(conn.welcome, null, 'no welcome was made up')
+  sock.welcome({ plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }] })
+  assert.deepEqual(conn.welcome.plugins.map((p) => p.id), ['voice'], "the welcome's own list, not the early one")
+})

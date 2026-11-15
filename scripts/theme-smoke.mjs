@@ -173,9 +173,18 @@ try {
   const { projectId: second } = await sdk.request('project.create', { name: 'second', repositories: [{ path: repoTwo, name: 'two' }] })
 
   const sw = win.locator('.server-window')
-  const show = async (projectId) => {
+  // The window shows a project once the store holds that project (by its name: a project file has
+  // no id) and its rows are drawn: a row alone could be the previous project's.
+  const show = async (projectId, name) => {
     await win.evaluate((id) => window.__store.getState().setServerWindow({ serverEntryId: 'local', projectId: id }), projectId)
-    await sw.locator('.wt-row').first().waitFor({ timeout: 15_000 })
+    await win.waitForFunction(
+      ({ id, name }) => {
+        const state = window.__store.getState()
+        return state.serverWindow?.projectId === id && state.project?.name === name && !!document.querySelector('.server-window .wt-row')
+      },
+      { id: projectId, name },
+      { timeout: 15_000 }
+    )
   }
   const settings = sw.locator('.settings-panel')
   const openSettings = async () => {
@@ -206,7 +215,7 @@ try {
   await win.evaluate(async (projectId) => {
     await window.api.openServerProject('local', projectId, 'first', 'Local')
   }, first)
-  await show(first)
+  await show(first, 'first')
 
   // ---- 2. No themes: no Theme row --------------------------------------------------------------
 
@@ -238,11 +247,11 @@ try {
 
   // ---- 5. Another project: the default look; back: the theme ----------------------------------
 
-  await show(second)
+  await show(second, 'second')
   check('a second project has the default look', await until(look, DEFAULT_LOOK), DEFAULT_LOOK)
   await openSettings()
   check('and its Theme row is on Default', await themeSelect.inputValue(), '')
-  await show(first)
+  await show(first, 'first')
   check('back on the first project, its theme applies again', await until(look, THEMED), THEMED)
 
   // ---- 6. The bundle replaced on the server: default until Apply ------------------------------
