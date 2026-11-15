@@ -130,7 +130,8 @@ sends every action to its server, and every other window on that project sees it
   scoped to the session's own project (list worktrees, start, load and unload sessions,
   send prompts and keystrokes, read terminal output, wait for sessions, rename, restart
   and mark sessions complete, edit a queue, set a branch's tag, note or ticket, manage
-  and run the project's automations, ask the user to decide). See
+  and run the project's automations, see what the user is looking at and show them a
+  session, ask the user to decide). See
   [PROTOCOL.md](PROTOCOL.md#mcp-trek-dev-on-the-server).
 - **Multiple windows**: one window per project. Opening a project another window holds
   focuses that window; `File → New Window` (⌘⇧N) opens an empty one. Closing a window

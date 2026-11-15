@@ -123,6 +123,7 @@ new optional field needs no capability: its absence says enough.
 | `promote` | Promote to primary and its reverse (see [Promote to primary](#promote-to-primary)): `worktree.promote` and `worktree.demote`, each with `dryRun`, and the MCP tool `promote_to_primary`'s confirmation: `promote.request` to the windows that listen (`promote.listen`), `promote.claim` from the one that confirms (then its `worktree.promote {requestId}`) or `promote.answer` to decline, then `promote.settled` |
 | `automations` | Per-project scheduled prompts (see [Automations](#automations)): `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` |
 | `history` | `history.list` and the `history.added` event (the worktree history, see [Worktree history](#worktree-history)) |
+| `ui` | Clients say what they show (see [What a client shows](#what-a-client-shows)): `ui.report`, the event `ui.focus`, and the MCP tools `get_selected_worktree` and `focus_session` |
 | `pairing` | Phone pairing (see [Phone pairing](#phone-pairing)): `pairing.create`, and a `pairingCode` redeemed at `hello`. Every server; a phone reaches the local one only through its phone listener (`phoneAccess`) |
 | `update` | This server can update itself (see [Updating the server](#updating-the-server)): `update.status`, `update.check` and `update.apply`, and the `update.changed` event to every authenticated connection. Listed only by a release tarball install on macOS or Linux whose build has an update key; never by the local server (it is updated with the app). Decided when the server starts |
 | `pluginInstall` | The server takes `plugins.install` and `plugins.remove` from a client (see [Installed plugins](#installed-plugins)). Not listed when its config has `"plugins": {"remoteInstall": false}`; the local server lists it too. Read from the config as each welcome is sent |
@@ -211,6 +212,7 @@ server restarts. A server without this field simply leaves it out.
 | Automations | `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed` |
 | Changes tab review | `review.add`, `review.edit`, `review.remove`, `review.clear`, `review.send` (and `worktree.commits`, `worktree.changes`/`worktree.diff`'s `source`) |
 | Updating the server | `update.status`, `update.check`, `update.apply` (see [Updating the server](#updating-the-server)) |
+| What a client shows | `ui.report` (see [What a client shows](#what-a-client-shows)) |
 | Subscriptions | `sub.subscribe`, `sub.unsubscribe` |
 | Misc | `sys.ping` |
 
@@ -1520,6 +1522,24 @@ saying how it went (`The promote you asked for (promote_to_primary) went through
 …`, a claimant's own error cut to 500 characters) is queued on the asking session
 (`terminalId`), wherever it now is, and never sent by itself.
 
+## What a client shows
+
+With the capability `ui` a client tells the server which worktree and session it shows, and the
+server can ask one client to show a session. The MCP tools `get_selected_worktree` and
+`focus_session` (see [MCP](#mcp-trek-dev-on-the-server)) read and use it; a client that does not
+report is invisible to them.
+
+| Method | Params | Result |
+|---|---|---|
+| `ui.report` | `{projectId, worktreeId?, sessionId?}` | `null`: what this connection's client shows in the project: the selected worktree (`null` or absent: none, or the Global panel) and the session tab shown (`null`: none; with no worktree, a Global session). Each id is at most 200 characters and is not checked against the project. Kept per connection in memory with the time it arrived and the client's kind (`phone` for a `trek-mobile` hello, `web` for a browser's cookie sign-in, else `desktop`); dropped when the connection closes; never sent to other clients. `NOT_FOUND` for an unknown project |
+
+A client reports when its selection changes, after each welcome (a report is per connection), and
+when its window (the Trek app, the web client) or its screen (the phone: the project, worktree and
+session screens) gains focus, so the newest report in a project is its most recently used client's.
+The server sends that one connection `ui.focus` (see [Events](#events)) for `focus_session`; the
+Trek app and the web client select the worktree and the session's tab, the phone opens the
+session's screen.
+
 ## Worktree history
 
 The server records what changes on each branch of a project's repositories, per `(repoId, branch)`
@@ -1948,6 +1968,8 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `unload_worktree` | `worktree` | `{unloaded: true}` |
 | `remove_worktree` | `worktree`; `force?` (true discards uncommitted and untracked changes; default false) | `{removed: true, path, branch}`, through `worktree.remove`: deletes the directory and git's record of it, keeps the branch. `BAD_REQUEST` for the primary checkout, `IN_USE` while it is loaded (unload it first), `GIT_ERROR` with `details.reason: 'dirty'` when it has changes and `force` is not true |
 | `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, decision, worktree}`, `worktree` being an entry (`null` for a Global session) |
+| `get_selected_worktree` | none | `{worktree, terminalId, client, at}`: what the project's most recently used client shows (its newest `ui.report`, see [What a client shows](#what-a-client-shows)). `worktree` is an entry, or `null` (none selected, the Global panel, or one that no longer exists); `terminalId` is the session shown, or `null` (none, or one that no longer exists); `client` is `desktop`, `web` or `phone`; `at` is the report's ISO time. `BAD_REQUEST` when no reporting client has the project open |
+| `focus_session` | `terminalId` (a worktree session's) | `{focused: true, client}`: that client was sent `ui.focus` for the session and its worktree; it changes what the client shows and does not raise its window. `BAD_REQUEST` when no reporting client has the project open, or the event could not be sent |
 | `request_decision` | `terminalId`, `question` (1 to 1000 characters once whitespace runs become one space and it is trimmed; no other control characters) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
 | `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
 | `close_session` | `terminalId` | `{closed: true}` |
@@ -1985,7 +2007,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `delete_automation` | `automation` | `{deleted: name}`; through `automation.delete`: its run tab stays, as a normal Global session |
 | `run_automation` | `automation` | `{terminalId}` of its run tab; through `automation.runNow`, recorded as a `manual` run; `CONFLICT` while the tab is busy with the previous run |
 
-That is 41 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 43 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the
@@ -2002,11 +2024,9 @@ lists their ids, and an unknown one is `NOT_FOUND` with the names that exist. Th
 automation tools are `TOOL_ERROR` on a server that runs no automations. In `save_automation`
 an argument that is `null` counts as not passed, except `llm`, where `null` clears the agent.
 
-**Left out.** The server does not serve these `trek-dev` tools: they are not
-listed, and calling one is `-32602`.
-
-- Client UI only: `get_selected_worktree` and `focus_session` (selection lives in
-  clients). `promote_to_primary` came back in 5e: a window confirms it.
+**Left out.** No `trek-dev` tool of the retired desktop MCP server is left out:
+`get_selected_worktree` and `focus_session` came back with `ui.report`, as
+`promote_to_primary` did in 5e. Calling a tool that is not listed is `-32602`.
 
 **Readiness and waiting.**
 
@@ -2061,6 +2081,7 @@ URL, each at most 200 characters.
 | `plugins.list` | `{plugins}`: the welcome's `plugins` as it now is, after an installed plugin was added, replaced or removed (see [Installed plugins](#installed-plugins)), to every authenticated connection |
 | `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
 | `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
+| `ui.focus` | `{projectId, worktreeId, sessionId}`: the MCP tool `focus_session` asks this client to select the worktree and the session's tab (see [What a client shows](#what-a-client-shows)). Sent to one connection only: the one whose `ui.report` for the project is newest, among those still subscribed to its topic. The client does not raise its window |
 | `history.added` | `{projectId, event}`: on the project topic, a new worktree history entry, or a newer version of one (same id; see [Worktree history](#worktree-history)) |
 | `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: to every authenticated connection. `linear` and `voice` are the Linear and voice plugins' legacy capabilities, sent beside their `plugins.changed` for clients older than plugins. `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 
