@@ -74,11 +74,12 @@ export default function SessionScreen(): React.JSX.Element {
       .request('server.agents', { projectId })
       .then((a) => setAgents(a.agents))
       .catch(() => {})
-  }, [server, projectId])
-  // The session left the snapshot: its sheet goes with it.
+  }, [server, projectId, status])
+  // The session left a ready snapshot: its sheet goes with it. A snapshot that is only missing
+  // (the phone disconnected and is reconnecting) keeps the sheet, so what was typed is not lost.
   useEffect(() => {
-    if (!session) setRunning(null)
-  }, [session])
+    if (topic.state === 'ready' && !session) setRunning(null)
+  }, [topic.state, session])
 
   const toPage = useCallback((messages: PageMessage[]) => {
     if (messages.length) web.current?.injectJavaScript(pageScript(messages))
@@ -135,13 +136,13 @@ export default function SessionScreen(): React.JSX.Element {
     } else if (m.type === 'input' && typeof m.data === 'string') write(m.data)
   }
 
-  const run = async (fn: () => Promise<unknown>, keepPrompt = false): Promise<void> => {
+  const run = async (fn: () => Promise<unknown>): Promise<void> => {
     if (!server) return
     setBusy(true)
     setError(null)
     try {
       await fn()
-      if (!keepPrompt) setPrompt('')
+      setPrompt('')
     } catch (err) {
       setError(errorMessage(err))
     } finally {
@@ -149,8 +150,19 @@ export default function SessionScreen(): React.JSX.Element {
     }
   }
   // A quick button's text goes straight to the session; what is typed in the prompt box stays.
-  const sendQuick = (quickText: string): void => {
-    void run(() => server!.connection.request('session.sendPrompt', { projectId, sessionId, text: quickText }), true)
+  // The result is the error message, or null when it was sent.
+  const sendQuick = async (quickText: string): Promise<string | null> => {
+    if (!server) return 'Not connected'
+    setBusy(true)
+    setError(null)
+    try {
+      await server.connection.request('session.sendPrompt', { projectId, sessionId, text: quickText })
+      return null
+    } catch (err) {
+      return errorMessage(err)
+    } finally {
+      setBusy(false)
+    }
   }
   const pressQuick = (button: TerminalQuickButton): void => {
     if (!project || !session) return
@@ -160,7 +172,11 @@ export default function SessionScreen(): React.JSX.Element {
     const builtins = resolveBuiltins(ctx)
     const plan = planQuickButton(button.text, builtins)
     if (plan.needsModal) setRunning({ button, plan, builtins })
-    else sendQuick(fillTemplate(parseTemplate(button.text), {}, builtins))
+    else {
+      void sendQuick(fillTemplate(parseTemplate(button.text), {}, builtins)).then((message) => {
+        if (message) setError(message)
+      })
+    }
   }
   const text = prompt.trim()
   const source = useMemo(() => ({ html: TERMINAL_HTML }), [])
@@ -240,7 +256,7 @@ export default function SessionScreen(): React.JSX.Element {
           </View>
         ) : null}
       </View>
-      {running && session ? <QuickButtonSheet button={running.button} plan={running.plan} builtins={running.builtins} onSend={sendQuick} onClose={() => setRunning(null)} /> : null}
+      {running ? <QuickButtonSheet button={running.button} plan={running.plan} builtins={running.builtins} canSend={!!session} onSend={sendQuick} onClose={() => setRunning(null)} /> : null}
     </KeyboardAvoidingView>
   )
 }

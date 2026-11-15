@@ -9,7 +9,7 @@ export function QuickButtonRow({ buttons, disabled, onPress }: { buttons: Termin
   return (
     <ScrollView horizontal keyboardShouldPersistTaps="always" contentContainerStyle={{ gap: 6, paddingHorizontal: 8 }} style={{ flexGrow: 0, marginTop: 6 }}>
       {buttons.map((button) => {
-        const label = button.label.trim() || button.text
+        const label = button.label.trim() || button.text.replace(/\s+/g, ' ').trim().slice(0, 60)
         const asks = templateInputs(button.text).length > 0
         return (
           <Pressable
