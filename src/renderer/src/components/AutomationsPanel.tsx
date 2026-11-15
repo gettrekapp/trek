@@ -14,6 +14,9 @@ interface Props {
 
 const NONE: Automation[] = []
 
+const HOW_RUNS_WORK =
+  "Each automation has one Global run tab, under the drawer's Automations view: every run starts it afresh with the prompt, and a run is skipped while the last is still working."
+
 /** Selects a run's tab, opening the Global panel on the tab's view (Automations, unless its automation was deleted). */
 function showRun(sessionId: string): void {
   const s = useAppStore.getState()
@@ -32,6 +35,7 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const now = Date.now()
+  const paused = automations.filter((a) => !a.enabled).length
 
   const act = async (fn: () => Promise<unknown>, explain?: (err: unknown) => string | undefined): Promise<void> => {
     setError(null)
@@ -64,30 +68,42 @@ export function AutomationsPanel({ visible }: Props): React.JSX.Element {
         <>
           <div className="automations-header">
             <h2>Automations</h2>
-            <span className="muted">Each automation has one Global run tab, under the drawer&apos;s Automations view: every run starts it afresh with the prompt, and a run is skipped while the last is still working.</span>
+            {automations.length > 0 && (
+              <span className="muted" title={HOW_RUNS_WORK}>
+                {automations.length} automation{automations.length === 1 ? '' : 's'}
+                {paused > 0 ? ` · ${paused} paused` : ''}
+              </span>
+            )}
             <button className="primary primary-action" disabled={offline} onClick={() => setEditing('new')}>
               New automation
             </button>
           </div>
           {error && <div className="error">{error}</div>}
-          {automations.length === 0 && <p className="muted">No automations yet.</p>}
+          {automations.length === 0 && (
+            <div className="automations-empty muted">
+              No automations yet. An automation sends a prompt to an agent on a schedule. {HOW_RUNS_WORK}
+            </div>
+          )}
           {automations.map((a) => (
             <div key={a.id} className={`automation-row ${a.enabled ? '' : 'paused'}`}>
               <div className="automation-main">
                 <input type="checkbox" aria-label={`Enable ${a.name}`} title={a.enabled ? 'Enabled' : 'Paused'} checked={a.enabled} disabled={offline} onChange={() => void toggle(a)} />
                 <span className="automation-name">{a.name}</span>
+                <span className="automation-actions">
+                  <button disabled={offline} onClick={() => void runNow(a)}>Run now</button>
+                  <button disabled={offline} onClick={() => setEditing(a.id)}>Edit</button>
+                  <button className={expanded === a.id ? 'active' : ''} onClick={() => setExpanded(expanded === a.id ? null : a.id)}>{expanded === a.id ? 'Hide history' : 'History'}</button>
+                </span>
+              </div>
+              <div className="automation-facts">
                 <span className="automation-schedule">{describeCron(a.schedule.cron)}</span>
-                <span className="muted">{nextRunLabel(a, now)}</span>
-                <span className="muted">{lastRunLabel(a)}</span>
+                <span>{nextRunLabel(a, now)}</span>
+                <span>{lastRunLabel(a)}</span>
                 {a.missed && (
-                  <button className="automation-missed" onClick={() => useAppStore.getState().setMissedDismissedKey(null)}>
+                  <button className="automation-missed" title="Choose which missed runs to run" onClick={() => useAppStore.getState().setMissedDismissedKey(null)}>
                     {missedLabel(a.missed, a.schedule.tz)}
                   </button>
                 )}
-                <span className="spacer" />
-                <button disabled={offline} onClick={() => void runNow(a)}>Run now</button>
-                <button disabled={offline} onClick={() => setEditing(a.id)}>Edit</button>
-                <button onClick={() => setExpanded(expanded === a.id ? null : a.id)}>{expanded === a.id ? 'Hide history' : 'History'}</button>
               </div>
               {expanded === a.id && (
                 <ul className="automation-history">
