@@ -65,6 +65,7 @@
 // first falls back to the view alone, the others fail the run with a message.
 // Prints V2 SMOKE PASS (n checks) or V2 SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { openSettingsTab, settingsTabNames } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { spawn, execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -994,25 +995,25 @@ try {
   await settingsRow.click()
   await settings.waitFor({ timeout: 5000 })
   // Environments too since 5a: the server runs them on its own machine.
-  check("a server window's Settings show the project's sections only", await settings.locator('h3').allTextContents(), [
-    'Settings',
-    'Appearance',
-    'Notifications',
-    'Local server',
-    'Plugins',
-    'Voice summaries',
-    'Linear',
-    'Agents',
-    'Worktree tags',
-    'Custom tags',
-    'Terminal quick buttons',
-    'Session system prompt',
-    'Global system prompt',
-    'Global quick buttons',
-    'Session types',
-    'Environments'
+  check("a server window's Settings show the project's tabs, General first", [await settingsTabNames(settings), await settings.locator('.settings-tab.active').textContent()], [
+    ['General', 'Agents', 'Sessions', 'Worktrees', 'Environments', 'Plugins'],
+    'General'
   ])
+  const tabHeadings = async (name) => {
+    await openSettingsTab(settings, name)
+    return settings.locator('h3').allTextContents()
+  }
+  check('each tab has its sections', [await tabHeadings('Agents'), await tabHeadings('Sessions'), await tabHeadings('Worktrees'), await tabHeadings('Environments'), await tabHeadings('Plugins'), await tabHeadings('General')], [
+    ['Agents', 'Session types'],
+    ['Session system prompt', 'Terminal quick buttons', 'Global system prompt', 'Global quick buttons'],
+    ['Worktree tags', 'Custom tags', 'Linked directories'],
+    ['Environments'],
+    ['Plugins', 'Voice summaries', 'Linear'],
+    ['Appearance', 'Notifications', 'Local server']
+  ])
+  await openSettingsTab(settings, 'Agents')
   check("and say the agents' commands are the server's", (await settings.textContent()).includes("set in the server's config"), true)
+  await openSettingsTab(settings, 'General')
   // The app-wide "Show notifications" switch, the one machine setting a server window shows: on by
   // default, saved by main (app-settings.json), and back on for the checks after this one.
   const notifySwitch = settings.locator('input[aria-label="Show notifications"]')
@@ -1022,6 +1023,7 @@ try {
   check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false, stopLocalServerOnQuit: false, plugins: {}, update: {} }), { showNotifications: false, stopLocalServerOnQuit: false, plugins: {}, update: {} })
   await notifySwitch.click()
   check('and on again', await until(appSettingsNow, { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} }), { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} })
+  await openSettingsTab(settings, 'Sessions')
   const prompt = settings.locator('.session-prompt-input')
   const settingsNow = async () => (await projectNow()).settings
   let sentAt = await sentCount()
@@ -1032,12 +1034,15 @@ try {
     { projectId: target.projectId, settings: { sessionSystemPrompt: 'Run the tests first' }, expected: { sessionSystemPrompt: null } }
   ])
   // Added and named at once: the name is built on the pending add, which shows straight away.
+  await openSettingsTab(settings, 'Agents')
   await settings.locator('button', { hasText: '+ Add session type' }).click()
   const typeName = settings.locator('.quick-btn-row input[placeholder="Name, e.g. Review"]')
   await typeName.fill('Review')
   await typeName.blur()
   check('a session type added and named at once is saved whole', await until(async () => (await settingsNow()).sessionTypes?.map((t) => t.name), ['Review']), ['Review'])
 
+  // Back on Sessions for the prompt; Reload must leave that tab open.
+  await openSettingsTab(settings, 'Sessions')
   // A CONFLICT: another client's edit lands while this window has not seen it (its patches are
   // held in main), so the window's edit carries a stale expected value. It asks; Reload is button 0.
   const wc1 = await webContentsIdOf('w1')

@@ -2,13 +2,18 @@
 // the settings section of each plugin that is on.
 import { getBackend } from '../backend'
 import { useAppStore } from '../store'
-import { PluginScope, usePluginEntries } from './PluginHost'
+import { PluginScope, usePluginEntries, type PluginEntry } from './PluginHost'
 import { pluginActive } from './presence'
+
+/** Whether Settings has anything to show for plugins: the Plugins tab shows with it. */
+export function hasPluginSettings(entries: readonly PluginEntry[]): boolean {
+  return entries.length > 0 && !entries.every((e) => e.status === 'unknown')
+}
 
 export function PluginsSettings(): React.JSX.Element | null {
   const entries = usePluginEntries()
   const setPluginEnabled = useAppStore((s) => s.setPluginEnabled)
-  if (entries.length === 0 || entries.every((e) => e.status === 'unknown')) return null
+  if (!hasPluginSettings(entries)) return null
   // A server older than plugins: no switches (its plugins are always on), only their sections.
   const legacyServer = getBackend().plugins.welcome()?.plugins === undefined
   return (
