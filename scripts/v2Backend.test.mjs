@@ -29,7 +29,7 @@ class CodedError extends Error {
  * whenProjected's rev (null without one); `timeouts` each request sent with
  * one; `listeners` what subscribed to each server event.
  */
-function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], welcomePlugins = () => undefined, localEntry = false, machine = {}, projectedAfter = [], left = () => false, revs = {} } = {}) {
+function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp'], welcomePlugins = () => undefined, localEntry = false, machine = {}, projectedAfter = [], left = () => false, revs = {}, windowFocused = () => true } = {}) {
   const calls = []
   const ui = []
   const reports = []
@@ -79,6 +79,7 @@ function setup({ replies = {}, state = {}, confirms = [], capabilities = ['mcp']
   const backend = createV2Backend({
     onStateChange: subscribeTo(stateListeners),
     onWindowFocus: subscribeTo(focusListeners),
+    windowFocused,
     selectSession: (select, options) => void selects.push([select, options]),
     projectId: 'p1',
     closeDialog: (id) => void closed.push(id),
@@ -1162,7 +1163,7 @@ test('promote_to_primary: a request that ended during the teardown says so plain
 // What the window shows: the linked worktree w2 with its tab s1.
 const showsFeat = { activeWorktreeId: 'w2', selected: { path: '/r-feat' }, terminals: { s1: { id: 's1', worktreeId: 'w2' } }, activeTerminal: { w2: 's1' } }
 const knowS1 = (idMap) => void (idMap.sessions.s1 = { sessionId: 's1', repoId: 'r1', worktreeId: 'w2', ptyId: null })
-const REPORT_FEAT = ['ui.report', { projectId: 'p1', worktreeId: 'w2', sessionId: 's1' }]
+const REPORT_FEAT = ['ui.report', { projectId: 'p1', worktreeId: 'w2', sessionId: 's1', active: true }]
 
 test('ui.report: sent at start with the capability, one follower per backend; nothing without it', async () => {
   const { backend, calls, idMap, listeners, stateListeners, focusListeners } = setup({ capabilities: ['ui'], state: showsFeat })
@@ -1202,8 +1203,33 @@ test('ui.report: again on each connect and each window focus; a store change sen
   st.activeWorktreeId = '__primary__:r1'
   st.selected = { path: '/r' }
   stateListeners[0]()
-  assert.deepEqual(calls.at(-1), ['ui.report', { projectId: 'p1', worktreeId: 'wm', sessionId: null }])
+  assert.deepEqual(calls.at(-1), ['ui.report', { projectId: 'p1', worktreeId: 'wm', sessionId: null, active: true }])
   assert.equal(calls.length, 4)
+})
+
+test('ui.report: active while the window has the focus; a connect or a store change in an unfocused window is passive', async () => {
+  let focused = false
+  const { backend, calls, st, idMap, connected, stateListeners, focusListeners } = setup({ capabilities: ['ui'], state: showsFeat, windowFocused: () => focused })
+  knowS1(idMap)
+  const PASSIVE = ['ui.report', { projectId: 'p1', worktreeId: 'w2', sessionId: 's1', active: false }]
+  backend.worktrees.followSelection()
+  connected[0]()
+  assert.deepEqual(calls, [PASSIVE, PASSIVE])
+  // The selection changes by itself in the background (an agent closed the tab).
+  st.activeTerminal = {}
+  stateListeners[0]()
+  assert.deepEqual(calls.at(-1), ['ui.report', { projectId: 'p1', worktreeId: 'w2', sessionId: null, active: false }])
+  // The user comes back: the same selection is sent again, as a use.
+  focused = true
+  focusListeners[0]()
+  assert.deepEqual(calls.at(-1), ['ui.report', { projectId: 'p1', worktreeId: 'w2', sessionId: null, active: true }])
+  assert.equal(calls.length, 4)
+  // Unchanged, a store change still sends nothing.
+  stateListeners[0]()
+  assert.equal(calls.length, 4)
+  st.activeTerminal = { w2: 's1' }
+  stateListeners[0]()
+  assert.deepEqual(calls.at(-1), REPORT_FEAT)
 })
 
 test('ui.report: a capability that arrives with a later welcome is reported on that connect', async () => {

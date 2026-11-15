@@ -29,17 +29,71 @@ test('latest: the newest report among connections still subscribed that take eve
   assert.equal(s.selections.latest('p1'), undefined)
   const a = windowOf(s.hub)
   const b = windowOf(s.hub)
-  s.selections.report('p1', a, sel())
+  s.selections.report('p1', a, sel(), true)
   s.tick()
-  s.selections.report('p1', b, sel({ worktreeId: 'w2', sessionId: null, client: 'phone' }))
+  s.selections.report('p1', b, sel({ worktreeId: 'w2', sessionId: null, client: 'phone' }), true)
   assert.deepEqual({ ...s.selections.latest('p1'), subscriber: undefined }, { worktreeId: 'w2', sessionId: null, client: 'phone', at: 1001, subscriber: undefined })
   assert.equal(s.selections.latest('p1').subscriber, b)
   // A newer report from the first connection wins back; a report in the same millisecond counts as newer.
-  s.selections.report('p1', a, sel({ sessionId: 's9' }))
+  s.selections.report('p1', a, sel({ sessionId: 's9' }), true)
   assert.equal(s.selections.latest('p1').subscriber, a)
   assert.equal(s.selections.latest('p1').sessionId, 's9')
   // Another project's reports are apart.
   assert.equal(s.selections.latest('p2'), undefined)
+})
+
+test('a passive report updates what the connection shows without making it the most recently used', () => {
+  const s = setup()
+  const used = windowOf(s.hub)
+  const background = windowOf(s.hub)
+  s.selections.report('p1', background, sel({ worktreeId: 'bg' }), true)
+  s.tick()
+  s.selections.report('p1', used, sel({ worktreeId: 'used' }), true)
+  // The background window's selection changes by itself (an agent closed its tab), later and by the clock newer.
+  s.tick(50)
+  s.selections.report('p1', background, sel({ worktreeId: 'bg', sessionId: null }), false)
+  assert.equal(s.selections.latest('p1').subscriber, used)
+  // The used window's own passive report is what latest returns for it, with the report's time.
+  s.tick()
+  s.selections.report('p1', used, sel({ worktreeId: 'used', sessionId: 's2' }), false)
+  assert.deepEqual({ ...s.selections.latest('p1'), subscriber: undefined }, { worktreeId: 'used', sessionId: 's2', client: 'desktop', at: 1052, subscriber: undefined })
+  // The passive report was kept: once the used window is gone, the background one shows it.
+  s.selections.forget(used)
+  assert.deepEqual([s.selections.latest('p1').subscriber, s.selections.latest('p1').sessionId, s.selections.latest('p1').at], [background, null, 1051])
+  // Used again, it is the most recently used whatever reported since.
+  const other = windowOf(s.hub)
+  s.selections.report('p1', other, sel({ worktreeId: 'other' }), true)
+  s.selections.report('p1', background, sel({ worktreeId: 'bg' }), true)
+  s.selections.report('p1', other, sel({ worktreeId: 'other2' }), false)
+  assert.equal(s.selections.latest('p1').subscriber, background)
+})
+
+test('connections that only reported passively: the only one is returned, and among several the last to report', () => {
+  const s = setup()
+  const a = windowOf(s.hub)
+  const b = windowOf(s.hub)
+  s.selections.report('p1', a, sel({ worktreeId: 'a' }), false)
+  assert.equal(s.selections.latest('p1').subscriber, a)
+  s.selections.report('p1', b, sel({ worktreeId: 'b' }), false)
+  assert.equal(s.selections.latest('p1').subscriber, b)
+  s.selections.report('p1', a, sel({ worktreeId: 'a2' }), false)
+  assert.equal(s.selections.latest('p1').subscriber, a)
+  // One active report outranks them all, and stays ahead of their later passive ones.
+  s.selections.report('p1', b, sel({ worktreeId: 'b' }), true)
+  s.selections.report('p1', a, sel({ worktreeId: 'a3' }), false)
+  assert.equal(s.selections.latest('p1').subscriber, b)
+})
+
+test('the most recently used is by the order of use, not the clock', () => {
+  const s = setup()
+  const a = windowOf(s.hub)
+  const b = windowOf(s.hub)
+  s.selections.report('p1', a, sel(), true)
+  // The clock steps back before the next use.
+  s.tick(-500)
+  s.selections.report('p1', b, sel(), true)
+  assert.equal(s.selections.latest('p1').subscriber, b)
+  assert.equal(s.selections.latest('p1').at, 500)
 })
 
 test('latest skips a connection that unsubscribed, takes no events, or closed', () => {
@@ -48,10 +102,10 @@ test('latest skips a connection that unsubscribed, takes no events, or closed', 
   const mute = windowOf(s.hub, { takes: false })
   const never = windowOf(s.hub, { subscribed: false })
   const live = windowOf(s.hub)
-  s.selections.report('p1', live, sel({ worktreeId: 'live' }))
+  s.selections.report('p1', live, sel({ worktreeId: 'live' }), true)
   for (const w of [gone, mute, never]) {
     s.tick()
-    s.selections.report('p1', w, sel({ worktreeId: 'other' }))
+    s.selections.report('p1', w, sel({ worktreeId: 'other' }), true)
   }
   s.hub.unsubscribeAll(gone)
   assert.equal(s.selections.latest('p1').worktreeId, 'live')
@@ -64,9 +118,9 @@ test('focus sends ui.focus to the most recently used connection only', () => {
   const a = windowOf(s.hub)
   const b = windowOf(s.hub)
   assert.equal(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), undefined)
-  s.selections.report('p1', a, sel())
+  s.selections.report('p1', a, sel(), true)
   s.tick()
-  s.selections.report('p1', b, sel({ client: 'web' }))
+  s.selections.report('p1', b, sel({ client: 'web' }), true)
   assert.equal(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), 'web')
   const payload = { projectId: 'p1', worktreeId: 'w1', sessionId: 's1' }
   assert.deepEqual(b.events, [['ui.focus', payload, { type: 'event', event: 'ui.focus', payload }]])
@@ -91,6 +145,19 @@ test('ui.report: checks its ids, needs the project, and records the connection\'
   assert.equal(s.selections.latest('p1').client, 'desktop')
   for (const bad of [{ worktreeId: 7 }, { worktreeId: '' }, { sessionId: 'x'.repeat(201) }, { sessionId: {} }]) {
     assert.throws(() => call({ projectId: 'p1', ...bad }), (e) => e.code === 'BAD_REQUEST', JSON.stringify(bad))
+  }
+  // `active`: absent or true is a use of the client; false only updates what it shows.
+  const other = windowOf(s.hub)
+  s.selections.report('p1', other, sel({ worktreeId: 'other' }), true)
+  call({ projectId: 'p1', worktreeId: 'w3', active: false })
+  assert.equal(s.selections.latest('p1').subscriber, other)
+  call({ projectId: 'p1', worktreeId: 'w3', active: true })
+  assert.equal(s.selections.latest('p1').subscriber, w)
+  s.selections.report('p1', other, sel({ worktreeId: 'other' }), true)
+  call({ projectId: 'p1', worktreeId: 'w3' })
+  assert.equal(s.selections.latest('p1').subscriber, w)
+  for (const active of [null, 0, 1, 'true', 'false', {}]) {
+    assert.throws(() => call({ projectId: 'p1', active }), (e) => e.code === 'BAD_REQUEST' && /active/.test(e.message), JSON.stringify(active))
   }
   assert.throws(() => call({ projectId: 'nope' }), (e) => e.code === 'NOT_FOUND')
   assert.throws(() => call({}), (e) => e.code === 'BAD_REQUEST')

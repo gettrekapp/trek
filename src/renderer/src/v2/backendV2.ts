@@ -149,6 +149,8 @@ export interface V2BackendDeps {
   onStateChange(listener: () => void): () => void
   /** Calls `listener` each time the window gains focus; returns the unsubscribe */
   onWindowFocus(listener: () => void): () => void
+  /** Whether the window has the focus now: the user is using it */
+  windowFocused(): boolean
   /**
    * Shows a session in this window as a notification click does (its worktree, its tab), waiting for it to appear; never raises the window.
    * `revealOnly`: the terminal is not given the keyboard focus and the session is not marked seen
@@ -655,7 +657,9 @@ export function createV2Backend(deps: V2BackendDeps): WindowBackend {
         followingSelection = true
         let logged = false
         const reporter = selectionReporter((selection) => {
-          request('ui.report', { projectId, ...selection }).catch((err: unknown) => {
+          // Active only from the window in use: a background window's selection changes too (an agent
+          // closes its tab, a worktree is removed) and it reconnects, without being the one last used.
+          request('ui.report', { projectId, ...selection, active: deps.windowFocused() }).catch((err: unknown) => {
             if (errorCode(err) === 'NOT_CONNECTED' || logged) return
             logged = true
             deps.log('ui.report failed: agents cannot see what this window shows', err)

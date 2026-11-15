@@ -162,6 +162,7 @@ export function installV2Window(entryId: string, projectId: string): V2Window {
       window.addEventListener('focus', listener)
       return () => window.removeEventListener('focus', listener)
     },
+    windowFocused: () => document.hasFocus(),
     selectSession: requestSessionSelect,
     log: (message, err) => console.error(`[server window] ${message}`, err ?? '')
   })

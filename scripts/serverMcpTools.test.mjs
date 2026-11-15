@@ -1125,7 +1125,7 @@ test('get_selected_worktree and focus_session act on the most recently used clie
   await assert.rejects(s.call('focus_session', { terminalId }), noClient)
 
   const desktop = client()
-  s.selections.report(s.projectId, desktop, { worktreeId: main.id, sessionId: terminalId, client: 'desktop' })
+  s.selections.report(s.projectId, desktop, { worktreeId: main.id, sessionId: terminalId, client: 'desktop' }, true)
   const shown = await s.call('get_selected_worktree', {})
   assert.equal(shown.worktree.worktree, main.id)
   assert.deepEqual([shown.terminalId, shown.client], [terminalId, 'desktop'])
@@ -1134,7 +1134,7 @@ test('get_selected_worktree and focus_session act on the most recently used clie
   // A phone used after it is the one that counts; ids it reports that no longer exist read as null.
   await new Promise((resolve) => setTimeout(resolve, 2))
   const phone = client()
-  s.selections.report(s.projectId, phone, { worktreeId: 'gone', sessionId: 'gone', client: 'phone' })
+  s.selections.report(s.projectId, phone, { worktreeId: 'gone', sessionId: 'gone', client: 'phone' }, true)
   assert.deepEqual({ ...(await s.call('get_selected_worktree', {})), at: 0 }, { worktree: null, terminalId: null, client: 'phone', at: 0 })
 
   assert.deepEqual(await s.call('focus_session', { terminalId }), { focused: true, client: 'phone' })
@@ -1144,7 +1144,7 @@ test('get_selected_worktree and focus_session act on the most recently used clie
 
   // A Global session can be what a client shows, but cannot be focused by a tool.
   const { sessionId: globalId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, cols: 80, rows: 24 })
-  s.selections.report(s.projectId, phone, { worktreeId: null, sessionId: globalId, client: 'phone' })
+  s.selections.report(s.projectId, phone, { worktreeId: null, sessionId: globalId, client: 'phone' }, true)
   assert.deepEqual({ ...(await s.call('get_selected_worktree', {})), at: 0 }, { worktree: null, terminalId: globalId, client: 'phone', at: 0 })
   await assert.rejects(s.call('focus_session', { terminalId: globalId }), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message))
 

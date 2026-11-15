@@ -11,6 +11,12 @@ export interface UiReportParams {
   worktreeId?: string | null
   /** The session tab shown; null or absent: none. With no worktree it is a Global session */
   sessionId?: string | null
+  /**
+   * Whether the user is using this client now (absent: true). Only such a report makes the client
+   * the project's most recently used; false is for a selection that changed without the user
+   * (a window in the background, a reconnect) and only updates what the client shows
+   */
+  active?: boolean
 }
 
 /** `ui.focus`: show this session. Sent to one connection, the project's most recently used client. */

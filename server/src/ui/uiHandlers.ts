@@ -21,8 +21,10 @@ export const uiHandlers: Record<string, Handler> = {
     ctx.projects.require(projectId)
     const worktreeId = idOrNull(p.worktreeId, 'worktreeId')
     const sessionId = idOrNull(p.sessionId, 'sessionId')
+    // Absent: a use of the client, as every report was before the field existed.
+    if (p.active !== undefined && typeof p.active !== 'boolean') throw codedError('BAD_REQUEST', 'active must be a boolean')
     if (!ctx.selections) throw codedError('BAD_REQUEST', 'this server does not track what its clients show')
-    ctx.selections.report(projectId, ctx.subscriber, { worktreeId, sessionId, client: ctx.clientKind ?? 'desktop' })
+    ctx.selections.report(projectId, ctx.subscriber, { worktreeId, sessionId, client: ctx.clientKind ?? 'desktop' }, p.active ?? true)
     return null
   }
 }

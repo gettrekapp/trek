@@ -13,9 +13,18 @@ export interface UiSelection {
   at: number
 }
 
+/** A connection's newest report, and when the user last used that client */
+interface Report {
+  selection: UiSelection
+  /** The use counter's value at the connection's last active report; 0: it has only reported passively */
+  used: number
+}
+
 export class UiSelections {
   /** projectId → connection → its newest report, in the order they last reported */
-  private readonly byProject = new Map<string, Map<Subscriber, UiSelection>>()
+  private readonly byProject = new Map<string, Map<Subscriber, Report>>()
+  /** Grows with each active report: the order of use. Not the clock, which can step back */
+  private uses = 0
   private readonly hub: TopicHub
   private readonly now: () => number
 
@@ -24,12 +33,18 @@ export class UiSelections {
     this.now = now
   }
 
-  report(projectId: string, subscriber: Subscriber, selection: Omit<UiSelection, 'at'>): void {
+  /**
+   * The connection's selection now. `active`: the user is using that client, which makes it the
+   * project's most recently used; a passive report (a selection that changed by itself, a
+   * reconnect in the background) keeps the connection's place.
+   */
+  report(projectId: string, subscriber: Subscriber, selection: Omit<UiSelection, 'at'>, active: boolean): void {
     let reports = this.byProject.get(projectId)
     if (!reports) this.byProject.set(projectId, (reports = new Map()))
-    // Re-inserted, so two reports in one millisecond still order by arrival.
+    const used = active ? ++this.uses : (reports.get(subscriber)?.used ?? 0)
+    // Re-inserted, so the map stays in the order of arrival: what `latest` falls back to.
     reports.delete(subscriber)
-    reports.set(subscriber, { ...selection, at: this.now() })
+    reports.set(subscriber, { selection: { ...selection, at: this.now() }, used })
   }
 
   /** The connection closed: its reports go. */
@@ -40,15 +55,20 @@ export class UiSelections {
     }
   }
 
-  /** The project's most recently used client: the newest report of a connection that takes events and still follows the project. */
+  /**
+   * The project's most recently used client, with what it shows now: among the connections that
+   * take events and still follow the project, the one whose active report came last; among those
+   * that only reported passively (when none was active), the last to report.
+   */
   latest(projectId: string): (UiSelection & { subscriber: Subscriber }) | undefined {
     const topic = projectTopic(projectId)
-    let best: (UiSelection & { subscriber: Subscriber }) | undefined
-    for (const [subscriber, selection] of this.byProject.get(projectId) ?? []) {
+    let best: { subscriber: Subscriber; report: Report } | undefined
+    for (const [subscriber, report] of this.byProject.get(projectId) ?? []) {
       if (!subscriber.event || !this.hub.isSubscribed(topic, subscriber)) continue
-      if (!best || selection.at >= best.at) best = { ...selection, subscriber }
+      // In the order of arrival, so an equal count (0: passive only) goes to the later report.
+      if (!best || report.used >= best.report.used) best = { subscriber, report }
     }
-    return best
+    return best && { ...best.report.selection, subscriber: best.subscriber }
   }
 
   /** Asks the most recently used client to show a session; its kind, or undefined when there is none or the event could not be sent. */
