@@ -4,8 +4,10 @@ Phase 6a (and 6b's background push). An Expo app (SDK 58, Expo Router) for iOS a
 Android: what needs you on every paired trek-server, sessions and their terminals,
 prompts, quick buttons, decisions, Changes with its review (line comments on a diff, sent to
 a session), adding and removing worktrees, a branch's tag, custom tags, note, ticket and pull
-request, the pull request's watch and its notices, and pushes while it is closed. The repo's
-README ("Phone companion") says what it does; PROTOCOL.md ("Phone pairing") how it signs in.
+request, the pull request's watch and its notices, a branch's history, a project's automations
+(their runs, Run now, on and off, name and prompt, missed runs), and pushes while it is closed.
+The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone pairing") how it
+signs in.
 
 It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-exports
 `../../src/shared/client`, `model` and `protocolV2`, which Metro watches
@@ -384,16 +386,121 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
     - A second report on the same pull request replaces the first notice.
     - Two quick taps on **Dismiss** send one request.
     - With the server out of reach, **Dismiss** shows the error in the notice, which stays.
-12. **Background:**
+12. **Automations** (a server with the `automations` capability; create them in the
+    desktop app):
+    - The project screen has an **Automations** row above the repositories: "Automations ·
+      <n>", or "Automations" with none. A server without the capability (an older
+      trek-server) shows no row.
+    - With an automation that has missed runs, the row ends with " · missed runs" in the
+      attention colour.
+    - The row opens the list: each automation as a card with its name, its schedule in words
+      and timezone ("Weekdays at 09:00 · America/New_York"), "Next: <date and time>" or "Off",
+      its last run ("Ran 2 h ago", "Failed 2 h ago: <error>", "Skipped …", or "Never run"), and
+      "Agent: …" when it names one.
+    - A project with no automations: "No automations. Create them in the desktop app."
+    - An automation added, renamed or run on the desktop changes the list without reopening it.
+    - Times: "Next:" and an automation's next runs are wall-clock times in the schedule's own
+      timezone, the same as the desktop shows, on an iOS and on an Android device (not checked
+      on a device yet: the phone's JavaScript engine must know the timezone).
+    - If the engine cannot work out a time, the card has no "Next:" line and the schedule shows
+      as its cron text; no screen crashes (not checked on a device yet).
+    - **Missed runs** (stop the server past an automation's time and start it again): a
+      "Missed automations" card is on top of the list, with each such automation's name and
+      "<count> missed since <when>".
+    - Each row has **Run** and **Skip**, with **Skip** chosen at first; tapping one chooses it.
+    - **Done** with one automation on **Run** and another on **Skip**: the first runs (its card
+      says "Ran just now", its run is "Missed"), the second does not, and the card goes. The
+      desktop's missed-runs dialog closes too.
+    - Answer the missed runs on the desktop while the phone's card is up: the card goes
+      without a tap.
+    - **Done** with **Run** on an automation whose run tab is still working: "Some automations
+      did not start" lists "<name>: skipped, the previous run is still working"; **OK** closes it.
+    - Two quick taps on **Done** send one answer; the card's buttons are disabled while it runs.
+    - With the server out of reach, **Done** shows the error in the card, which keeps its choices.
+    - Tapping a card opens the automation: its name and its prompt in full, **On** / **Off**,
+      **Run now**, its schedule, and its runs.
+    - **Schedule**: the schedule in words, the cron text, the timezone, and "Next runs" with
+      three times while it is on (none while it is off), then "Change the schedule in the
+      desktop app." Nothing there can be tapped.
+    - **Edit** opens a name box and a multi-line prompt box. **Save** saves both, on the
+      desktop too; **Cancel** leaves them as they were.
+    - **Save** is disabled while the name or the prompt is blank.
+    - The name box takes at most 80 characters.
+    - A prompt of more than 20,000 characters: **Save** shows the server's refusal
+      ("automation.prompt must be at most 20000 characters") and the box keeps the text.
+    - After a **Save** the schedule, the timezone, the agent and on / off are as they were
+      (check on the desktop's editor).
+    - Changed elsewhere: tap **Edit** on the phone, change the automation's name or prompt on
+      the desktop, then **Save** on the phone. Nothing is saved; the box stays open with what
+      was typed, with "This automation changed on the server" and the desktop's name and
+      prompt under the buttons. **Save** again overwrites them; **Cancel** keeps the desktop's.
+    - Delete the automation on the desktop while its screen is open: "This automation is
+      gone."; with the edit box open, what was typed shows under "You had written:" and can be
+      copied.
+    - A long prompt in the edit box: the box stops growing and scrolls inside, and **Save**
+      stays within reach (not checked on a device yet).
+    - With the keyboard up, one tap on **Save** saves, and the box being typed in stays above
+      the keyboard, on iOS and on Android (not checked on a device yet).
+    - The switch turns the automation off ("Off"; its card says "Off", and the desktop's
+      checkbox clears) and on again.
+    - Turning off an automation that has missed runs asks "Turn <name> off?" with "Its <n>
+      missed runs are discarded." (or "Its 1 missed run is discarded."). **Cancel** leaves it
+      on with its missed runs; **Turn off** turns it off, and its missed runs are gone from
+      the list's card. Without missed runs nothing is asked.
+    - Turning it on or off with the edit box open leaves the box and its text as they are.
+    - The switch does not flip back and forth while its request runs (not checked on a device
+      yet).
+    - **Run now** starts a run and opens its session, where the prompt is the first message.
+      It also runs an automation that is off.
+    - **Run now** while the automation's run tab is still working: "The previous run is still
+      working." shows under the button, nothing opens, and the run is listed as "Skipped".
+    - Two quick taps on **Run now** start one run.
+    - **Open run tab** is there once the automation has a run tab (it ran, and the tab was not
+      closed) and opens that session; close the tab on the desktop and the button goes.
+    - **Runs** lists the runs newest first: the time (in the schedule's timezone), "Scheduled",
+      "Manual" or "Missed", and "Ran", "Failed" or "Skipped", with the error under a failed or
+      skipped one. An automation that never ran: "No runs yet."
+    - Only the newest run that ran says "Open session", and tapping it opens the run tab;
+      older runs open nothing (the tab holds the newest run only). With the tab closed, no run
+      opens anything.
+    - With the server out of reach, **Save**, the switch and **Run now** each show the error
+      under themselves, and nothing changes.
+13. **Branch history** (a server with the `history` capability):
+    - The **Branch** section of a worktree ends with **History**. A server without the
+      capability (an older trek-server) shows no button.
+    - **History** opens the branch's history: its name, then the entries newest first under
+      "Today", "Yesterday" or a date.
+    - Each entry says what changed in the desktop History panel's words ("Status Todo → In
+      review", "Note edited", "PR set to #42"), then who and when ("You · 09:05", "MCP ·
+      <session title>", "Trek"), and the reason when an agent gave one.
+    - A workflow tag or custom tag in an entry is drawn in its colour.
+    - A branch with nothing recorded: "No changes recorded yet."
+    - Live: with the screen open, set the branch's tag on the desktop. The entry appears on
+      top without a refresh.
+    - Edit the branch's note twice within 5 minutes on the desktop: one note entry, not two.
+    - A change to another branch adds nothing to this screen.
+    - A branch with more than 100 entries has **Load more** at the bottom; it adds the older
+      ones under the list, and goes when there are no more.
+    - Two quick taps on **Load more** add each entry once; it is disabled while a page loads
+      and while the list is refreshing.
+    - Pulling down reloads from the newest: older pages loaded before are dropped, and **Load
+      more** brings them back.
+    - Send the app to the background for 30 s, change the branch on the desktop, and come
+      back: the new entry is in the list without pulling down.
+    - With the server out of reach, pulling down shows the error above the list, which stays
+      as it was; with nothing loaded yet there is **Try again**.
+    - A branch named with a slash, and one with `%41` or `?` in its name (`git branch
+      'feat%41/x?y'`): **History** shows that branch's name and its entries, not another's.
+14. **Background:**
    - Send the app to the background. A session needing you within ~20 s gives a notification;
      a decision's says "A decision is waiting in <project>", not its question.
    - Tapping the notification opens that session (also with the app closed since).
    - What was already waiting when the app connected gives no notification.
    - Back in the foreground, everything reconnects.
-13. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
+15. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
     Pairing again from there replaces the entry: the server is listed once.
 
-14. **Push (6b), on a real device only** (a development build with the push entitlement, a
+16. **Push (6b), on a real device only** (a development build with the push entitlement, a
     relay configured as in `relay/README.md`, its address in `extra.relayUrl` or
     `TREK_RELAY_URL`):
     - First launch of a fresh install: allow notifications when asked. Without restarting, the
