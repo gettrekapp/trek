@@ -128,9 +128,9 @@ sends every action to its server, and every other window on that project sees it
   root, with the trek-dev MCP tools to drive the worktree sessions.
 - **MCP server**: each trek-server serves the `trek-dev` MCP tools to its sessions,
   scoped to the session's own project (list worktrees, start, load and unload sessions,
-  send prompts and keystrokes, read terminal output, wait for sessions, edit a queue,
-  set a branch's tag, note or ticket, manage and run the project's automations, ask
-  the user to decide). See
+  send prompts and keystrokes, read terminal output, wait for sessions, rename, restart
+  and mark sessions complete, edit a queue, set a branch's tag, note or ticket, manage
+  and run the project's automations, ask the user to decide). See
   [PROTOCOL.md](PROTOCOL.md#mcp-trek-dev-on-the-server).
 - **Multiple windows**: one window per project. Opening a project another window holds
   focuses that window; `File → New Window` (⌘⇧N) opens an empty one. Closing a window
@@ -154,9 +154,9 @@ start first proves the sandbox works by trying to read a canary file. If the rea
 succeeds, or no sandbox is available, the bot won't run. A bot folder or repository
 inside the user-data directory is refused too.
 
-Trek's MCP server enforces the bot's policy on every tool call. These twelve tools
+Trek's MCP server enforces the bot's policy on every tool call. These thirteen tools
 run or delete something outside the sandbox, so they always ask for your approval,
-whatever `POLICY.json` says: `start_session`, `send_prompt`, `send_keys`, `start_stack`,
+whatever `POLICY.json` says: `start_session`, `restart_session`, `send_prompt`, `send_keys`, `start_stack`,
 `create_worktree`, `load_worktree`, `remove_worktree`, `save_session_type`,
 `delete_session_type`, `save_automation`, `delete_automation`, `run_automation`.
 

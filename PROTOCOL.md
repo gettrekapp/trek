@@ -1947,6 +1947,9 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `request_decision` | `terminalId`, `question` (1 to 1000 characters once whitespace runs become one space and it is trimmed; no other control characters) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
 | `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
 | `close_session` | `terminalId` | `{closed: true}` |
+| `rename_session` | `terminalId`, `title` | `{terminalId, title}`; through `session.rename` with the trimmed title and no `expected` (the last rename wins) |
+| `mark_session_complete` | `terminalId`; `complete?` (default true) | `{terminalId, status}`; through `session.markComplete`: `false` puts a complete session back to `idle` and leaves any other status alone |
+| `restart_session` | `terminalId` | `{terminalId, status}`, at once (no readiness wait); through `session.restart` with 120 columns and 32 rows; `BAD_REQUEST` while the session is running or its worktree is unloaded |
 | `send_prompt` | `terminalId`, `text` | `{sent: true}` |
 | `enqueue_prompt` | `terminalId`, `text` | `{queue}` |
 | `remove_queued_prompt` | `terminalId`, `index` (0-based) | `{removed, queue}` |
@@ -1977,7 +1980,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `delete_automation` | `automation` | `{deleted: name}`; through `automation.delete`: its run tab stays, as a normal Global session |
 | `run_automation` | `automation` | `{terminalId}` of its run tab; through `automation.runNow`, recorded as a `manual` run; `CONFLICT` while the tab is busy with the previous run |
 
-That is 37 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 40 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the
