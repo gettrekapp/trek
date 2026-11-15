@@ -1,5 +1,5 @@
 // Phone access on the Local server: finding the Tailscale address, the phone listener's lifecycle,
-// the config field, the status clients see, and set and revoke.
+// the config field, the status clients see, set and revoke, and the phoneAccess.* methods.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
@@ -11,6 +11,7 @@ import { addToken, matchToken } from '../server/src/tokens.ts'
 import { isTailscaleIPv4, isTailscaleInterface, tailscaleAddress, testPhoneAddress } from '../server/src/tailscale.ts'
 import { PhoneListener } from '../server/src/phoneListener.ts'
 import { createPhoneAccess, phoneAccessOf, phoneAccessStatus, phoneUrlProblem } from '../server/src/phoneAccess.ts'
+import { dispatchV2 } from '../server/src/v2.ts'
 import { removeDir } from './testPlatform.mjs'
 
 const iface = (address, extra = {}) => ({ address, family: 'IPv4', internal: false, netmask: '', mac: '', cidr: null, ...extra })
@@ -326,4 +327,22 @@ test('revoke removes a phone’s token, says whether there was one, and never ta
   assert.throws(() => control.revoke('local'), (err) => err.code === 'BAD_REQUEST')
   assert.throws(() => control.revoke(5), (err) => err.code === 'BAD_REQUEST')
   assert.equal(store.config.tokens.some((t) => t.name === 'local'), true)
+})
+
+test('phoneAccess.*: the Local server only, and its local token only', async (t) => {
+  const { control, store } = controlSetup(t)
+  store.update((c) => {
+    addToken(c, 'phone-Pixel')
+  })
+  const ctx = { store, phoneAccess: control, tokenName: 'local' }
+  const got = await dispatchV2('phoneAccess.get', {}, ctx)
+  assert.deepEqual([got.ok, got.result.enabled, got.result.phones.map((p) => p.name)], [true, false, ['phone-Pixel']])
+  const set = await dispatchV2('phoneAccess.set', { enabled: true }, ctx)
+  assert.deepEqual([set.ok, set.result.state], [true, 'listening'])
+  assert.equal((await dispatchV2('phoneAccess.set', { port: 1 }, ctx)).error.code, 'BAD_REQUEST')
+  assert.deepEqual(await dispatchV2('phoneAccess.revoke', { name: 'phone-Pixel' }, ctx), { ok: true, result: { revoked: true } })
+  for (const method of ['phoneAccess.get', 'phoneAccess.set', 'phoneAccess.revoke']) {
+    assert.equal((await dispatchV2(method, { name: 'x' }, { ...ctx, tokenName: 'phone-Pixel' })).error.code, 'UNAUTHORIZED', method)
+    assert.equal((await dispatchV2(method, { name: 'x' }, { store, tokenName: 'local' })).error.code, 'NOT_FOUND', method)
+  }
 })

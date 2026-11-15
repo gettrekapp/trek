@@ -6,6 +6,7 @@
 // moving a worktree between servers (moveHandlers.ts), and automations (automationHandlers.ts),
 // and the server's own update (update/updateHandlers.ts).
 import type { PairingCodes } from './pairing'
+import type { PhoneAccessControl } from './phoneAccess'
 import { parseTopic, projectTopic, type Topic } from '../../src/shared/model/topics.ts'
 import type { IntegrationsChangedEvent, TopicRev } from '../../src/shared/protocolV2'
 import type { ConfigStore } from './configStore'
@@ -86,8 +87,10 @@ export interface V2Context {
   promoteRequests?: PromoteRequests
   /** Where a promote or demote saves a copy of the work it carries (5e; default: the temp dir) */
   promoteRecoveryDir?: string
-  /** Phone pairing's one-time codes (6a); absent on the local server */
+  /** Phone pairing's one-time codes (6a) */
   pairing?: PairingCodes
+  /** The local server's listener for phones (`phoneAccess.*`); absent on any other server */
+  phoneAccess?: PhoneAccessControl
   /** The name of the token this connection signed in with (a web session's token, for a browser) */
   tokenName?: string
   /** The local server's shutdown (`server.stop`); absent on any other server */
@@ -110,6 +113,13 @@ function pushGrantsOf(ctx: V2Context): PushGrants {
   if (!ctx.push) throw codedError('NOT_FOUND', 'This server does not push')
   if (!ctx.tokenName) throw codedError('BAD_REQUEST', 'push grants belong to a token')
   return ctx.push.grants
+}
+
+/** `phoneAccess.*`: the local server only, and only its own `local` token (a phone may not open the door wider, or revoke another). */
+function phoneAccessOf(ctx: V2Context): PhoneAccessControl {
+  if (!ctx.phoneAccess) throw codedError('NOT_FOUND', 'Only the local server has phone access')
+  if (ctx.tokenName !== LOCAL_TOKEN_NAME) throw codedError('UNAUTHORIZED', `Only the "${LOCAL_TOKEN_NAME}" token may change the local server's phone access`)
+  return ctx.phoneAccess
 }
 
 /** A clearable string field: null or "" clears it; anything else must be a string. */
@@ -401,7 +411,7 @@ const handlers: Record<string, Handler> = {
   // this machine. The caller's token name is recorded as the phone token's pairedBy. Only the
   // code's hash is kept.
   'pairing.create': (p, ctx) => {
-    if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
+    if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones')
     if (p.name !== undefined && typeof p.name !== 'string') throw codedError('BAD_REQUEST', 'name must be a string')
     return ctx.pairing.create(((p.name as string | undefined) ?? '').trim(), Date.now(), ctx.tokenName ?? '')
   },
@@ -421,10 +431,15 @@ const handlers: Record<string, Handler> = {
   // Drops a waiting code. Any signed-in connection that knows the code may: whoever holds it
   // could redeem it, which is more.
   'pairing.cancel': (p, ctx) => {
-    if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones (the local server is not reachable from one)')
+    if (!ctx.pairing) throw codedError('NOT_FOUND', 'This server does not pair phones')
     if (typeof p.code !== 'string' || p.code.length > 64) throw codedError('BAD_REQUEST', 'code must be a string')
     return { cancelled: ctx.pairing.cancel(p.code, Date.now()) }
-  }
+  },
+
+  // The local server's listener for phones, on this machine's Tailscale address.
+  'phoneAccess.get': (_p, ctx) => phoneAccessOf(ctx).status(),
+  'phoneAccess.set': (p, ctx) => phoneAccessOf(ctx).set(p),
+  'phoneAccess.revoke': (p, ctx) => ({ revoked: phoneAccessOf(ctx).revoke(p.name) })
 }
 
 /** The branch-data setters (the history's coverage test checks each records its change) */
