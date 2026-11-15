@@ -4,8 +4,9 @@
 // folder; never src/renderer (scripts/pluginBoundaries.test.mjs).
 //
 // This module is one shared instance at run time, like React: `PluginHostContext` works only if a
-// plugin and the window import the same copy. An installable plugin (a later phase) gets it, and
-// React, from the app as externals; it must never bundle its own.
+// plugin and the window import the same copy. An installed plugin gets it, and React, from the
+// window (globalThis.__trekPlugin, set by the renderer's pluginGlobals.ts); it must never bundle
+// its own.
 import { createContext, useContext, type FC } from 'react'
 import type { PluginManifest, PluginPrefValue } from './manifest.ts'
 import type { TicketInfo, TicketProvider } from './tickets.ts'
@@ -65,6 +66,14 @@ export interface ClientPlugin {
     sidebarToolbar?: FC
     /** Over the window (a floating bubble) */
     overlay?: FC
+  }
+  /**
+   * A theme plugin's look (theme plugins; `manifest.type: 'theme'`), applied while it is the
+   * window's active theme. Of a theme, the window mounts `Runtime` and the `overlay` slot only.
+   */
+  theme?: {
+    /** CSS injected after the app's stylesheet. `<html data-theme="<id>">` is set, to scope rules by. */
+    styles?: string
   }
 }
 
