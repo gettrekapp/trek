@@ -255,7 +255,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'read_terminal',
-    description: "Read the last lines of a session's terminal screen and scrollback.",
+    description: "Read the last lines of a session's terminal screen and scrollback. Also takes an automation's run session (runSession in list_automations).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -268,7 +268,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'wait_for_sessions',
     description:
-      'Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status.',
+      "Block until sessions stop working (status becomes done, attention, idle, complete or exited), or the timeout passes. Returns each session status. Also takes an automation's run session (runSession in list_automations).",
     inputSchema: {
       type: 'object',
       properties: {
@@ -703,6 +703,13 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     const targetIn = (terminalId: unknown, project?: Project): FoundSession => {
       const found = sessionIn(terminalId, project)
       if (!found.worktree) throw bad("the Global session can't be targeted by tools")
+      return found
+    }
+
+    /** As targetIn, for tools that only read: an automation's run tab (a Global session) is allowed too, so a run can be followed. */
+    const readableIn = (terminalId: unknown, project?: Project): FoundSession => {
+      const found = sessionIn(terminalId, project)
+      if (!found.worktree && found.session.context?.kind !== 'automation') throw bad("the Global session can't be targeted by tools")
       return found
     }
 
@@ -1288,7 +1295,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       read_terminal: async (args) => {
-        const { session } = targetIn(args.terminalId)
+        const { session } = readableIn(args.terminalId)
         const lines = Math.min(Math.max(Math.floor(Number(args.lines)) || 80, 1), 2000)
         const ptyId = runningPty(session)
         await deps.sessions.terminals.settled(ptyId)
@@ -1304,7 +1311,7 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         if (!ids.every((id) => typeof id === 'string')) throw bad('terminalIds must be strings')
         const terminalIds = [...new Set(ids as string[])]
         if (terminalIds.length > MAX_WAIT_IDS) throw bad(`terminalIds holds at most ${MAX_WAIT_IDS} sessions`)
-        for (const id of terminalIds) targetIn(id, project)
+        for (const id of terminalIds) readableIn(id, project)
         const any = args.until === 'any'
         const seconds = Math.min(Number(args.timeoutSeconds) || 300, 600)
         /** Each session's record in one project snapshot; undefined once it (or the project) is gone. */

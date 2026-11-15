@@ -916,3 +916,23 @@ test('the automation tools say so on a server without automations', async (t) =>
     await assert.rejects(s.call(name, args), (e) => e.code === 'TOOL_ERROR' && /this server runs no automations/.test(e.message), name)
   }
 })
+
+test("read_terminal and wait_for_sessions take an automation's run tab; tools that act on a session still refuse it", async (t) => {
+  const s = await toolSetup(t)
+  await s.call('save_automation', MORNING)
+  const { terminalId } = await s.call('run_automation', { automation: 'Morning' })
+  const read = await s.call('read_terminal', { terminalId })
+  assert.equal(typeof read.output, 'string')
+  const waited = await s.call('wait_for_sessions', { terminalIds: [terminalId], timeoutSeconds: 0.05 })
+  assert.equal(waited.sessions[0].terminalId, terminalId)
+  const refused = [
+    ['send_prompt', { terminalId, text: 'x' }],
+    ['enqueue_prompt', { terminalId, text: 'x' }],
+    ['remove_queued_prompt', { terminalId, index: 0 }],
+    ['send_keys', { terminalId, keys: ['y'] }],
+    ['close_session', { terminalId }]
+  ]
+  for (const [name, args] of refused) {
+    await assert.rejects(s.call(name, args), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message), name)
+  }
+})
