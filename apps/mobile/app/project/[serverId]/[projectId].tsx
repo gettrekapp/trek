@@ -1,9 +1,13 @@
 // A project (6a): its repositories and worktrees, each with its branch, status and sessions, and
 // its branch's tag, custom tags, ticket and pull request on a line, and its pull request's notice
-// on another. Add worktree under each repository.
+// on another. Add worktree under each repository. Above them, on a server with automations, a row
+// that opens the project's automations.
 // While it is open, the phone also answers promote_to_primary's confirmations for it.
+import { useRef } from 'react'
 import { ScrollView, Pressable, Text, View } from 'react-native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
+import { CAPABILITY } from '../../../src/shared.ts'
+import { automationsRow } from '../../../src/logic/automations.ts'
 import { activeTicketProviders } from '../../../src/logic/tickets.ts'
 import { noticeLine } from '../../../src/logic/prWatch.ts'
 import { branchLine } from '../../../src/logic/worktreeList.ts'
@@ -11,7 +15,7 @@ import { useConnectionNotice, useServer, useTopic } from '../../../src/state/hoo
 import { Button } from '../../../src/ui/Button.tsx'
 import { PromotePrompt } from '../../../src/ui/PromotePrompt.tsx'
 import { STATUS_TEXT, statusColor } from '../../../src/ui/status.ts'
-import { ui } from '../../../src/ui/theme.ts'
+import { colors, ui } from '../../../src/ui/theme.ts'
 
 export default function ProjectScreen(): React.JSX.Element {
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
@@ -21,12 +25,31 @@ export default function ProjectScreen(): React.JSX.Element {
   // The ticket's label comes from the trackers on for the project.
   const welcome = useServer(serverId)?.connection.welcome
   const trackers = topic.state === 'ready' ? activeTicketProviders(welcome, topic.snapshot.settings) : []
+  // Whether the server has automations, as its current welcome says; while its connection is being
+  // made again the last answer holds, so the row does not come and go with a reconnect.
+  const hasAutomations = useRef(false)
+  if (welcome) hasAutomations.current = welcome.capabilities.includes(CAPABILITY.automations)
+  const automations = topic.state === 'ready' && hasAutomations.current ? automationsRow(topic.snapshot.automations) : null
   return (
     <ScrollView style={ui.screen} contentContainerStyle={ui.pad} keyboardShouldPersistTaps="handled">
       <Stack.Screen options={{ title: topic.state === 'ready' ? topic.snapshot.name : 'Project' }} />
       <PromotePrompt serverId={serverId} projectId={projectId} project={topic.state === 'ready' ? topic.snapshot : null} />
       {notice ? <Text style={ui.warn}>{notice}</Text> : topic.state === 'error' ? <Text style={ui.error}>{topic.message}</Text> : null}
       {topic.state === 'loading' ? <Text style={ui.muted}>Loading…</Text> : null}
+      {automations ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={automations.missed ? `${automations.text}, missed runs` : automations.text}
+          accessibilityHint="Opens the project's automations"
+          style={ui.card}
+          onPress={() => router.push({ pathname: '/automations/[serverId]/[projectId]', params: { serverId, projectId } })}
+        >
+          <Text style={ui.title}>
+            {automations.text}
+            {automations.missed ? <Text style={{ color: colors.attention }}> · missed runs</Text> : null}
+          </Text>
+        </Pressable>
+      ) : null}
       {topic.state === 'ready'
         ? topic.snapshot.repositories.map((repo) => (
             <View key={repo.id} style={{ gap: 8 }}>

@@ -1,6 +1,7 @@
 // A project's automations on the phone: the project screen's row, a card's lines, the schedule in
 // words and its next runs, the missed-runs card and its one answer, a run's row, the run tab, the
-// name and prompt edit with its changed-elsewhere rule, and what `automation.save` is sent. The
+// name and prompt edit with its changed-elsewhere rule, what `automation.save` is sent, the question
+// before turning one off, and Run now's refusal. The
 // rules are the desktop's (AutomationsPanel.tsx, AutomationEditor.tsx, MissedRunsModal.tsx and
 // their helpers in src/renderer/src/automations.ts, which the phone cannot import) and the server's
 // (automations/automationHandlers.ts, model.ts, scheduler.ts); the schedule's words and slots are
@@ -191,6 +192,17 @@ export function missedRows(automations: readonly Automation[] | undefined, choic
 }
 
 /**
+ * The choices that still stand: those for automations that have missed runs now. One answered
+ * elsewhere loses its choice, so runs it misses later are skipped again until Run is chosen. The
+ * same object when nothing is dropped.
+ */
+export function missedChoicesKept(automations: readonly Automation[] | undefined, choices: MissedChoices): MissedChoices {
+  const missed = new Set((automations ?? []).filter((a) => a.missed).map((a) => a.id))
+  const kept = Object.entries(choices).filter(([id]) => missed.has(id))
+  return kept.length === Object.keys(choices).length ? choices : Object.fromEntries(kept)
+}
+
+/**
  * Done's one request: `automation.resolveMissed`'s `run` and `dismiss` (with the `projectId`), over
  * the snapshot's automations that have missed runs now: those chosen Run, and the rest. A choice
  * for an automation with nothing missed any more is left out (the server would ignore it). Both
@@ -230,18 +242,21 @@ export interface RunRow {
   outcome: string
   /** Why it failed or was skipped */
   error?: string
-  /** The session a tap opens: the run's, when it is still one of the project's Global sessions */
+  /** The session a tap opens: on the newest run that ran alone, when its session is still one of the project's Global sessions */
   sessionId?: string
 }
 
 /**
  * The automation's runs (`history`, newest first, at most 20). `globalSessions`: the project's, to
- * tell which runs' sessions still exist. Every run of an automation is in its one run tab, which
- * each run starts afresh, so several rows may open the same session: it shows the newest run.
+ * tell whether a run's session still exists. Every run of an automation is in its one run tab, which
+ * each run starts afresh, so the tab shows the newest run alone: only the newest row that ran opens
+ * its session (the desktop's rule), and no row does once that session is closed.
  */
 export function runRows(a: Automation, globalSessions: readonly Pick<Session, 'id'>[] | undefined, now: number): RunRow[] {
   const open = new Set((globalSessions ?? []).map((s) => s.id))
-  return (a.history ?? []).map((run, i) => {
+  const history = a.history ?? []
+  const newestRan = history.findIndex((run) => run.outcome === 'ran')
+  return history.map((run, i) => {
     const error = runError(run)
     return {
       key: `${run.at}:${i}`,
@@ -249,7 +264,7 @@ export function runRows(a: Automation, globalSessions: readonly Pick<Session, 'i
       trigger: TRIGGERS[run.trigger] ?? run.trigger,
       outcome: OUTCOMES[run.outcome] ?? run.outcome,
       ...(error ? { error } : {}),
-      ...(run.sessionId && open.has(run.sessionId) ? { sessionId: run.sessionId } : {})
+      ...(i === newestRan && run.sessionId && open.has(run.sessionId) ? { sessionId: run.sessionId } : {})
     }
   })
 }
@@ -262,7 +277,32 @@ export function runTab<S extends Pick<Session, 'id' | 'context'>>(globalSessions
   return (globalSessions ?? []).find((s) => s.context?.kind === 'automation' && s.context.automationId === automationId)
 }
 
+/** Run now on an automation whose run tab is still busy with its last run (the desktop's words for that refusal). */
+export const RUN_TAB_BUSY = 'The previous run is still working.'
+
+/**
+ * What the screen says when `automation.runNow` fails (`err`: what the request threw). The
+ * server's CONFLICT, its only one, is a busy run tab ("<name>: previous run still working"; the run
+ * is recorded as skipped): RUN_TAB_BUSY. Anything else is the error's own message, as the server
+ * worded it.
+ */
+export function runNowRefusal(err: unknown): string {
+  if (!!err && typeof err === 'object' && (err as { code?: unknown }).code === 'CONFLICT') return RUN_TAB_BUSY
+  return err instanceof Error ? err.message : String(err)
+}
+
 // ── Saving: the name and prompt edit, and On / Off ───────────────────────────────────────────
+
+/**
+ * The question before turning an automation off (the confirming alert's title, message and
+ * button), or null when there is nothing to ask: the server discards an automation's missed runs
+ * when it is turned off, so one that has any asks first. Turning one on never asks.
+ */
+export function turnOffQuestion(a: Automation): { title: string; message: string; confirm: string } | null {
+  if (!a.enabled || !a.missed) return null
+  const { count } = a.missed
+  return { title: `Turn ${a.name} off?`, message: count === 1 ? 'Its 1 missed run is discarded.' : `Its ${count} missed runs are discarded.`, confirm: 'Turn off' }
+}
 
 /**
  * `automation.save`'s `automation` for one of the snapshot's, with `changes` over it (the request

@@ -1903,16 +1903,20 @@ import {
   canSaveAutomationEdit,
   lastRunLine,
   missedAnswer,
+  missedChoicesKept,
   missedErrors,
   missedLine,
   missedRows,
   nextLine,
   nextRuns,
+  RUN_TAB_BUSY,
+  runNowRefusal,
   runRows,
   runTab,
   saveAutomationEdit,
   scheduleLine,
-  scheduleWords
+  scheduleWords,
+  turnOffQuestion
 } from '../apps/mobile/src/logic/automations.ts'
 import { EMPTY_HISTORY, historyAdded, historyDays, historyTime, olderCursor, olderLoaded, reloadFailed, reloadStarted, reloaded } from '../apps/mobile/src/logic/history.ts'
 import { automationHandlers } from '../server/src/automations/automationHandlers.ts'
@@ -2463,4 +2467,76 @@ test("history: the server's paging, as the phone's cursor asks for it", () => {
   assert.equal(ask({ repoId: 'nope' }), 'NOT_FOUND: No repository with id "nope" in this project')
   // A branch without history, and a server without it.
   assert.deepEqual(historyHandlers['history.list']({ projectId: 'p1', repoId: 'r1', branch: 'other' }, { projects: { require: () => project } }), { events: [], more: false })
+})
+
+// ── Automations: the screens' rules ──────────────────────────────────────────────────────────
+
+test('automations: turning one off asks first only when it has missed runs, which the server then discards', () => {
+  assert.equal(turnOffQuestion(automation()), null)
+  assert.deepEqual(turnOffQuestion(automation({ missed: { since: A_NOW - HOUR, count: 1 } })), { title: 'Turn Morning triage off?', message: 'Its 1 missed run is discarded.', confirm: 'Turn off' })
+  assert.deepEqual(turnOffQuestion(automation({ name: 'Nightly', missed: { since: A_NOW - HOUR, count: 3 } })), { title: 'Turn Nightly off?', message: 'Its 3 missed runs are discarded.', confirm: 'Turn off' })
+  // Turning one on discards nothing: no question (an off automation holds no missed runs anyway).
+  assert.equal(turnOffQuestion(automation({ enabled: false })), null)
+  assert.equal(turnOffQuestion(automation({ enabled: false, missed: { since: A_NOW - HOUR, count: 2 } })), null)
+})
+
+test("automations: Run now on a busy run tab says the previous run is still working; another refusal is the server's message", () => {
+  const project = { id: 'p1', globalSessions: [{ id: 's1', status: 'working', context: { kind: 'automation', automationId: 'a1' } }], automations: [automation()] }
+  const projects = { require: () => project, apply: (_id, fn) => fn(project), all: () => [project] }
+  const scheduler = new AutomationScheduler({ projects, now: () => A_NOW, sessions: { start: () => ({ sessionId: 's2', ptyId: 'pty2' }), renew: () => ({ ptyId: 'pty1' }) } })
+  // The refusal as the phone's connection hands it to the screen: the server's wire error as the SDK's ClientError.
+  const refusal = (automationId) => {
+    try {
+      automationHandlers['automation.runNow']({ projectId: 'p1', automationId }, { automations: scheduler, projects })
+    } catch (err) {
+      const w = toWireError('automation.runNow', err)
+      return new ClientError(w.code, w.message)
+    }
+    return null
+  }
+  const busy = refusal('a1')
+  assert.equal(busy.message, 'Morning triage: previous run still working')
+  assert.equal(runNowRefusal(busy), 'The previous run is still working.')
+  assert.equal(RUN_TAB_BUSY, 'The previous run is still working.')
+  assert.equal(runNowRefusal(refusal('gone')), 'No automation with id "gone"')
+  assert.equal(runNowRefusal(new ClientError('CAPACITY', 'a project holds at most 30 Global sessions')), 'a project holds at most 30 Global sessions')
+  assert.equal(runNowRefusal(new ClientError('NOT_CONNECTED', 'not connected to the server')), 'not connected to the server')
+  // Not the server's refusal: the words alone do not make it one.
+  assert.equal(runNowRefusal(new Error('previous run still working')), 'previous run still working')
+  assert.equal(runNowRefusal('CONFLICT'), 'CONFLICT')
+})
+
+test("automations: only the newest run that ran opens its session, and only while that session exists (the run tab holds the newest run alone)", () => {
+  const at = Date.UTC(2026, 0, 5, 14, 0)
+  const history = [
+    { at, trigger: 'manual', outcome: 'skipped', error: 'previous run still working' },
+    { at: at - HOUR, trigger: 'schedule', outcome: 'ran', sessionId: 's1' },
+    { at: at - 2 * HOUR, trigger: 'schedule', outcome: 'ran', sessionId: 's1' },
+    { at: at - 3 * HOUR, trigger: 'manual', outcome: 'ran', sessionId: 's1' }
+  ]
+  const sessions = (a, open) => runRows(a, open, A_NOW).map((r) => r.sessionId)
+  // Every run was in the one run tab: the newest that ran is what it shows.
+  assert.deepEqual(sessions(automation({ history }), [{ id: 's1' }]), [undefined, 's1', undefined, undefined])
+  // The run tab was closed: nothing to open.
+  assert.deepEqual(sessions(automation({ history }), []), [undefined, undefined, undefined, undefined])
+  assert.deepEqual(sessions(automation({ history }), undefined), [undefined, undefined, undefined, undefined])
+  // The run tab was closed and the newest run opened a new one: the older rows' session is gone, and
+  // an older row never opens a session the newest run is not in.
+  const reopened = [{ at: at + HOUR, trigger: 'schedule', outcome: 'ran', sessionId: 's2' }, ...history]
+  assert.deepEqual(sessions(automation({ history: reopened }), [{ id: 's2' }]), ['s2', undefined, undefined, undefined, undefined])
+  assert.deepEqual(sessions(automation({ history: reopened }), [{ id: 's1' }]), [undefined, undefined, undefined, undefined, undefined])
+  // No run ran.
+  assert.deepEqual(sessions(automation({ history: [history[0]] }), [{ id: 's1' }]), [undefined])
+})
+
+test('automations: a Run choice lasts only while its automation has missed runs', () => {
+  const list = [automation({ id: 'a1', missed: { since: 1, count: 1 } }), automation({ id: 'a2' }), automation({ id: 'a3', missed: { since: 1, count: 2 } })]
+  assert.deepEqual(missedChoicesKept(list, { a1: 'run', a2: 'run', a3: 'skip', gone: 'run' }), { a1: 'run', a3: 'skip' })
+  // Nothing to drop: the same choices, so the screen's state does not change.
+  const choices = { a1: 'run' }
+  assert.equal(missedChoicesKept(list, choices), choices)
+  assert.deepEqual(missedChoicesKept(undefined, choices), {})
+  // Answered elsewhere, then missed again: Skip again until Run is chosen.
+  const kept = missedChoicesKept([automation({ id: 'a1' })], choices)
+  assert.deepEqual(missedAnswer(list, kept), { run: [], dismiss: ['a1', 'a3'] })
 })
