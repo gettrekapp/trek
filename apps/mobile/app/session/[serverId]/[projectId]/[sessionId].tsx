@@ -15,12 +15,14 @@ import { errorMessage, useConnectionNotice, useServer, useServerStatus, useTopic
 import { KEY_BAR } from '../../../../src/logic/keys.ts'
 import { sessionPlaceholder } from '../../../../src/logic/connection.ts'
 import { TerminalFeed, pageScript, type PageMessage } from '../../../../src/logic/terminalFeed.ts'
+import { worktreeOfSession } from '../../../../src/logic/uiSelection.ts'
 import { rememberPtySize } from '../../../../src/state/ptySizes.ts'
 import { TERMINAL_HTML } from '../../../../src/terminal/terminalHtml.generated.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { DecisionActions } from '../../../../src/ui/DecisionActions.tsx'
 import { QuickButtonRow } from '../../../../src/ui/QuickButtonRow.tsx'
 import { QuickButtonSheet } from '../../../../src/ui/QuickButtonSheet.tsx'
+import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { colors, ui } from '../../../../src/ui/theme.ts'
 
@@ -65,6 +67,9 @@ export default function SessionScreen(): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   // Quick buttons: the project's (or the Global ones), and the one whose sheet is open.
   const project = topic.state === 'ready' ? topic.snapshot : null
+  // While this screen is the one shown, the server knows the phone shows this session and its
+  // worktree (none for a Global session), once the project's snapshot says which that is.
+  useUiSelection(serverId, projectId, { worktreeId: worktreeOfSession(project, sessionId), sessionId }, project !== null)
   const quickButtons = useMemo(() => (project ? quickButtonsFor(project, sessionId) : []), [project, sessionId])
   const [running, setRunning] = useState<{ button: TerminalQuickButton; plan: QuickButtonPlan; builtins: BuiltinValues } | null>(null)
   // The [agent] built-in is the server's label for the session's provider, when it lists agents.

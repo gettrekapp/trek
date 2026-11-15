@@ -18,6 +18,7 @@ export type { HistoryActor, HistoryAddedEvent, HistoryEvent, HistoryPage, Histor
 export { actorLabel, describeEvent, describeParts, historyDay, mergeHistory } from '../../../src/shared/historyText.ts'
 export type { HistoryPart } from '../../../src/shared/historyText.ts'
 export type { PromoteRequestEvent, PromoteSettledEvent } from '../../../src/shared/promote.ts'
+export type { UiFocusEvent, UiReportParams } from '../../../src/shared/ui.ts'
 export { ALL_PUSH_KINDS_ON, PUSH_GROUPS } from '../../../src/shared/push.ts'
 export type { PushKinds, PushGroup, PushData } from '../../../src/shared/push.ts'
 export type { PushStatusResult } from '../../../src/shared/protocolV2.ts'

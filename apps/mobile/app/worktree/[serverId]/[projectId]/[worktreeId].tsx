@@ -16,6 +16,7 @@ import { confirmAlert } from '../../../../src/ui/alerts.ts'
 import { BranchDetails } from '../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { PrNotice } from '../../../../src/ui/PrNotice.tsx'
+import { useUiSelection } from '../../../../src/ui/useUiSelection.ts'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { ui } from '../../../../src/ui/theme.ts'
 import { knownPtySize } from '../../../../src/state/ptySizes.ts'
@@ -46,6 +47,8 @@ export default function WorktreeScreen(): React.JSX.Element {
   const { get: currentServer } = useServers()
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
+  // While this screen is the one shown, the server knows the phone shows this worktree.
+  useUiSelection(serverId, projectId, { worktreeId, sessionId: null })
   const headerHeight = useHeaderHeight()
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [busy, setBusy] = useState(false)

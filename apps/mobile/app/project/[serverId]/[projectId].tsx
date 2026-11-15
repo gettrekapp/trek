@@ -2,7 +2,8 @@
 // its branch's tag, custom tags, ticket and pull request on a line, and its pull request's notice
 // on another. Add worktree under each repository. Above them, on a server with automations, a row
 // that opens the project's automations.
-// While it is open, the phone also answers promote_to_primary's confirmations for it.
+// While it is open, the phone also answers promote_to_primary's confirmations for it. While it is
+// the screen shown, the server knows the phone shows this project and no worktree (ui/useUiSelection.ts).
 import { useRef } from 'react'
 import { ScrollView, Pressable, Text, View } from 'react-native'
 import { router, Stack, useLocalSearchParams } from 'expo-router'
@@ -14,12 +15,14 @@ import { branchLine } from '../../../src/logic/worktreeList.ts'
 import { useConnectionNotice, useServer, useTopic } from '../../../src/state/hooks.ts'
 import { Button } from '../../../src/ui/Button.tsx'
 import { PromotePrompt } from '../../../src/ui/PromotePrompt.tsx'
+import { useUiSelection } from '../../../src/ui/useUiSelection.ts'
 import { STATUS_TEXT, statusColor } from '../../../src/ui/status.ts'
 import { colors, ui } from '../../../src/ui/theme.ts'
 
 export default function ProjectScreen(): React.JSX.Element {
   const { serverId, projectId } = useLocalSearchParams<{ serverId: string; projectId: string }>()
   const topic = useTopic(serverId, `project:${projectId}`)
+  useUiSelection(serverId, projectId, { worktreeId: null, sessionId: null })
   // While the server is not connected the topic's error is that: the notice says it instead.
   const notice = useConnectionNotice(serverId)
   // The ticket's label comes from the trackers on for the project.

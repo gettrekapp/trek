@@ -20,6 +20,8 @@ export const MOBILE_ENTRIES = [
   'src/shared/protocolV2.ts',
   'src/shared/types.ts',
   'src/shared/promote.ts',
+  // What the phone shows (ui.report) and the session it is asked to show (ui.focus).
+  'src/shared/ui.ts',
   'src/shared/push.ts',
   'src/shared/quickButtonTemplate.ts',
   // The Changes screen's review: numbering a patch, and where a draft's comments sit on it.
