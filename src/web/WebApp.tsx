@@ -9,6 +9,7 @@ import { connectServerEntry } from '../renderer/src/v2/serverClients'
 import { requestSessionSelect, watchAttention } from '../renderer/src/attentionSelect'
 import { loadLlmSettings } from '../renderer/src/llm'
 import { PluginRuntimes, PluginSlot } from '../renderer/src/plugins/PluginHost'
+import { ThemeHost } from '../renderer/src/plugins/ThemeHost'
 import { titleBarForeground } from '../shared/appearance'
 import { STATUS_LABELS } from '../shared/appServerRules.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
@@ -148,6 +149,7 @@ export function WebApp({ web }: { web: WebApi }): React.JSX.Element {
       )}
       <PluginRuntimes />
       <PluginSlot name="overlay" />
+      <ThemeHost />
       <WebDialogHost />
     </div>
   )

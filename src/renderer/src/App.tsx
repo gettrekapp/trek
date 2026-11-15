@@ -8,6 +8,7 @@ import { requestSessionSelect, watchAttention } from './attentionSelect'
 import { runningMoveDetail } from './v2/moveFlow'
 import { loadLlmSettings, watchLlmSettings } from './llm'
 import { PluginRuntimes, PluginSlot } from './plugins/PluginHost'
+import { ThemeHost } from './plugins/ThemeHost'
 import { titleBarForeground } from '../../shared/appearance'
 import { tabView } from './globalTabs'
 import { toggleSidebar } from './sidebarToggle'
@@ -134,6 +135,7 @@ export default function App(): React.JSX.Element {
       ) : null}
       <PluginRuntimes />
       <PluginSlot name="overlay" />
+      <ThemeHost />
     </div>
   )
 }
