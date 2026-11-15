@@ -2,7 +2,7 @@ import { existsSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { basename, dirname, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { homedir, hostname } from 'node:os'
+import { homedir, hostname, networkInterfaces } from 'node:os'
 import { LOCAL_ALREADY_RUNNING_EXIT, LOCAL_INFO_FILE, LOCAL_LOCK_FILE, LOCAL_TOKEN_NAME } from '../../src/shared/localServer'
 import { DEFAULT_DAEMON_PORT } from '../../src/shared/protocolV2'
 import { buildInfo } from './buildInfo'
@@ -18,6 +18,7 @@ import { ProjectState } from './projects/state'
 import { ProjectStore } from './projects/store'
 import { formatRepoList } from './repos'
 import { startServer } from './server'
+import { tailscaleAddress, testPhoneAddress } from './tailscale'
 import { loadNodePty } from './sessions/nativePty'
 import { createMachine } from './integrations/machine'
 import { BUILTIN_SERVER_PLUGINS } from '../../plugins/builtin.server.ts'
@@ -358,6 +359,9 @@ const server = startServer(
     plugins: { list: BUILTIN_SERVER_PLUGINS, secretsFile: secretsPathFor(resolve(args.configPath)), dataDir: serverDataDir },
     web: webBundle ? { bundle: webBundle } : undefined,
     onStopRequest: local ? () => shutdown('server.stop') : undefined,
+    // The local server's listener for phones: this machine's Tailscale address, read each time it
+    // is checked (TREK_SERVER_PHONE_ADDRESS, a loopback address only, stands in for it in the smokes).
+    phoneAccess: local ? { address: () => testPhoneAddress(process.env.TREK_SERVER_PHONE_ADDRESS) ?? tailscaleAddress(networkInterfaces()) } : undefined,
     // Only with a key built in: without one no release can be verified, so a client is offered nothing
     // (`trek-server update` on this machine still says why).
     update: updateInstall && updateSource().keys.length > 0

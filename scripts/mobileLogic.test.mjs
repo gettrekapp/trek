@@ -31,6 +31,15 @@ test('wss:// is always allowed; ws:// only to a private address, with a warning'
   assert.equal(checkServerUrl('ws://[::ffff:192.168.0.1]').ok, false)
 })
 
+test('plain ws:// to a Tailscale address says Tailscale encrypts it, not that the network can read it', () => {
+  const tailnet = checkServerUrl('ws://100.101.1.2:7346')
+  assert.equal(tailnet.ok, true)
+  assert.match(tailnet.warning, /Tailscale/)
+  assert.doesNotMatch(tailnet.warning, /anyone on this network/)
+  assert.match(checkServerUrl('ws://192.168.1.20:7345').warning, /anyone on this network/)
+  assert.match(checkServerUrl('ws://100.63.0.1').ok ? 'allowed' : 'refused', /refused/, 'just outside 100.64/10')
+})
+
 test('attention: every server merged, newest first, with keys unique across servers', () => {
   const entry = (sessionId, since, extra = {}) => ({ projectId: 'p', worktreeId: 'w', sessionId, title: sessionId, status: 'attention', since, projectName: 'App', ...extra })
   const items = mergeAttention([

@@ -1,4 +1,8 @@
-import { createServer, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server } from 'node:http'
+import type { Socket } from 'node:net'
+import { LOCAL_TOKEN_NAME } from '../../src/shared/localServer.ts'
+import { createPhoneAccess, phoneAccessOf, type PhoneAccessControl } from './phoneAccess.ts'
+import { PhoneListener, type PhoneListenerState } from './phoneListener.ts'
 import { WebSocketServer, WebSocket, type RawData } from 'ws'
 import {
   CLOSE_HELLO_TIMEOUT,
@@ -121,6 +125,12 @@ export interface ServerOptions {
    * `local`; elsewhere `server.stop` answers NOT_FOUND.
    */
   onStopRequest?: () => void
+  /**
+   * The local server's listener for phones (only with `local`): where this machine's Tailscale
+   * address is read from. Without it there is no `phoneAccess` capability and `phoneAccess.*`
+   * answers NOT_FOUND.
+   */
+  phoneAccess?: { address: () => string | undefined; recheckMs?: number }
   /**
    * The plugins' server halves (plugin system phase 1: plugins/builtin.server.ts), with the secrets
    * file and data dir they keep their keys and files in. Without it the server has none.
@@ -280,9 +290,9 @@ export function startServer(
     : undefined
   if (web) webSignIns = new WebSocketSignIns(web.sessions, (ws) => closeRevoked(ws, 'signed out'))
   const signedOut = (key: string): void => webSignIns?.signedOut(key)
-  // Phone pairing (6a), on any server but the local one. Failed redeems have their own limit, per
-  // address (nothing shared with the web sign-in's).
-  const pairing = options.local ? undefined : new PairingCodes()
+  // Phone pairing (6a). Failed redeems have their own limit, per address (nothing shared with the
+  // web sign-in's). On the local server a phone reaches it only through the phone listener below.
+  const pairing = new PairingCodes()
   const pairingLimiter = new PairingLimiter()
   // Expired sessions end on the hour even if nothing looks them up, closing their sockets.
   const stopSweep = web ? sweepEvery(web.sessions) : () => {}
@@ -296,10 +306,8 @@ export function startServer(
       if (droppedGrants) console.warn(`[push] dropped ${droppedGrants} push grant(s) of a revoked token`)
     }
     // A revoked token's waiting pairing codes go with it: a code it asked for no longer pairs.
-    if (pairing) {
-      const dropped = pairing.retainIssuedBy(new Set(listTokens(store.config).map((t) => t.name)), Date.now())
-      if (dropped) console.warn(`[auth] dropped ${dropped} waiting pairing code(s) asked for by a revoked token`)
-    }
+    const dropped = pairing.retainIssuedBy(new Set(listTokens(store.config).map((t) => t.name)), Date.now())
+    if (dropped) console.warn(`[auth] dropped ${dropped} waiting pairing code(s) asked for by a revoked token`)
     for (const [ws, hash] of authed) {
       if (active.has(hash)) continue
       console.warn('[auth] token revoked; closing its connection')
@@ -383,6 +391,97 @@ export function startServer(
       : undefined
   })
 
+  // The local server's listener for phones: a second HTTP server per address, whose upgrades go to
+  // the same WebSocket server, so a phone gets the same protocol. Requests that came in through it
+  // are marked: the `local` token is refused there.
+  const phoneRequests = new WeakSet<IncomingMessage>()
+  /** Connections signed in with the `local` token: they hear `phoneAccess.changed` */
+  const localSockets = new Set<WebSocket>()
+  const listenForPhones = (host: string, port: number): Promise<{ close(): void }> =>
+    new Promise((resolve, reject) => {
+      const server = createServer((_req, res) => {
+        res.writeHead(426, { 'content-type': 'text/plain' })
+        res.end('trek-server: WebSocket only\n')
+      })
+      // Reachable from the tailnet (the main listener is loopback only): a bound on what it holds open.
+      server.maxConnections = 64
+      const sockets = new Set<Socket>()
+      /** The WebSockets that came in through this server */
+      const webSockets = new Set<WebSocket>()
+      server.on('connection', (socket) => {
+        sockets.add(socket)
+        socket.on('close', () => sockets.delete(socket))
+      })
+      server.on('upgrade', (req, socket, head) => {
+        phoneRequests.add(req)
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          webSockets.add(ws)
+          ws.on('close', () => webSockets.delete(ws))
+          wss.emit('connection', ws, req)
+        })
+      })
+      server.once('error', reject)
+      server.listen(port, host, () => {
+        server.off('error', reject)
+        server.on('error', (err) => console.warn(`[phone] the listener on ${host}:${port}: ${err.message}`))
+        resolve({
+          // Its phones are told (1001) rather than cut off: the close frame is written, then each
+          // socket ends once what is pending on it has gone out.
+          close: () => {
+            server.close()
+            for (const ws of webSockets) if (ws.readyState === WebSocket.OPEN) ws.close(1001, 'phone access is off')
+            for (const socket of sockets) socket.destroySoon()
+          }
+        })
+      })
+    })
+  let phoneAccess: PhoneAccessControl | undefined
+  let phoneListener: PhoneListener | undefined
+  let followPhoneConfig: (() => void) | undefined
+  if (options.local && options.phoneAccess) {
+    let lastSent = ''
+    /** Tells the app's own connections, when what they would be told has changed. */
+    const notify = (): void => {
+      if (!phoneAccess) return
+      const status = phoneAccess.status()
+      const text = JSON.stringify(status)
+      if (text === lastSent) return
+      lastSent = text
+      for (const ws of localSockets) sendFrame(ws, { type: 'event', event: 'phoneAccess.changed', payload: status })
+    }
+    const describe = (s: PhoneListenerState): string =>
+      s.state === 'listening'
+        ? `listening for phones on ${s.address}:${s.port}`
+        : s.state === 'no-tailscale'
+          ? 'phone access is on, but this machine has no Tailscale address yet'
+          : s.state === 'port-in-use'
+            ? 'phone access is on, but its port is in use'
+            : s.state === 'error'
+              ? `phone access is on, but the listener failed: ${s.error}`
+              : 'phone access is off'
+    const listener = new PhoneListener({
+      address: options.phoneAccess.address,
+      listen: listenForPhones,
+      onChange: (s) => {
+        console.log(`[phone] ${describe(s)}`)
+        notify()
+      },
+      recheckMs: options.phoneAccess.recheckMs
+    })
+    phoneListener = listener
+    phoneAccess = createPhoneAccess(store, listener)
+    // The config as it is now, and after every change (the setting, a phone paired or revoked).
+    followPhoneConfig = () => {
+      const cfg = phoneAccessOf(store.config)
+      void listener
+        .want(cfg.enabled, cfg.port)
+        .then(notify)
+        .catch((err) => console.warn('[phone] could not announce phone access:', err))
+    }
+    store.on('change', followPhoneConfig)
+    followPhoneConfig()
+  }
+
   wss.on('connection', (ws, req) => {
     /** Set once hello is accepted. */
     let protocolVersion: number | undefined
@@ -392,6 +491,8 @@ export function startServer(
     /** The token this connection signed in with (a web session's, for a browser): `pairing.create` records it as pairedBy */
     let callerTokenName = ''
     let rejectTimer: NodeJS.Timeout | undefined
+    /** This connection came in through the phone listener */
+    const viaPhoneListener = phoneRequests.has(req)
     /** This connection as a receiver of v2 pty events */
     const terminal: TerminalSink = {
       send: (event, payload) => sendFrame(ws, { type: 'event', event, payload }),
@@ -512,7 +613,6 @@ export function startServer(
             rejectTimer = setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, reason), BAD_TOKEN_CLOSE_DELAY_MS)
           }
           const address = req.socket.remoteAddress ?? ''
-          if (!pairing) return refuse(PAIRING_CLOSE_REASON.unknown)
           const deviceName = typeof frame.deviceName === 'string' ? frame.deviceName : ''
           const outcome = redeemForPhone({ codes: pairing, limiter: pairingLimiter, store }, frame.pairingCode, deviceName, address, Date.now())
           if (!outcome.ok) {
@@ -532,8 +632,11 @@ export function startServer(
           : webSession && web?.sessions.has(webSession.key, Date.now())
             ? listTokens(store.config).find((t) => t.hash === webSession.tokenHash)
             : undefined
-        if (!entry) {
-          console.warn(`[auth] rejected connection from ${req.socket.remoteAddress}`)
+        // The app's own token never signs in through the phone listener: a local.json that leaked
+        // is of no use from the tailnet.
+        const localTokenOnPhoneListener = entry !== undefined && viaPhoneListener && entry.name === LOCAL_TOKEN_NAME
+        if (!entry || localTokenOnPhoneListener) {
+          console.warn(`[auth] rejected connection from ${req.socket.remoteAddress}${localTokenOnPhoneListener ? ' (the local token, on the phone listener)' : ''}`)
           rejected = true
           rejectTimer = setTimeout(() => ws.close(CLOSE_UNAUTHORIZED, 'unauthorized'), BAD_TOKEN_CLOSE_DELAY_MS)
           return
@@ -545,6 +648,7 @@ export function startServer(
           pusher?.heardFrom(entry.name)
         }
         callerTokenName = entry.name
+        if (entry.name === LOCAL_TOKEN_NAME) localSockets.add(ws)
         const viaWeb = !token && webSession !== undefined
         if (viaWeb) webSignIns?.add(ws, webSession.key, Date.now())
         console.log(
@@ -557,7 +661,7 @@ export function startServer(
           daemonVersion,
           serverId: store.config.serverId ?? '',
           serverName: store.config.name ?? '',
-          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined, installedPlugins !== undefined && remoteInstall()),
+          capabilities: welcomeCapabilities(trek.mcp !== undefined, options.local === true, prWatch?.available() === true, plugins?.legacyCapabilities(), undefined, updateService !== undefined, installedPlugins !== undefined && remoteInstall(), phoneAccess !== undefined),
           ...platformInfo,
           ...(plugins ? { plugins: pluginPresence() } : {}),
           ...(paired ? { pairedToken: paired.token, pairedTokenName: paired.name } : {})
@@ -592,6 +696,7 @@ export function startServer(
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
         pairing,
+        phoneAccess,
         tokenName: callerTokenName,
         requestStop: options.local && options.onStopRequest ? requestStop : undefined,
         push: pushGrants ? { grants: pushGrants } : undefined,
@@ -633,6 +738,7 @@ export function startServer(
       revokeTimers.delete(ws)
       clearInterval(heartbeat)
       authed.delete(ws)
+      localSockets.delete(ws)
       const tokenName = connectedTokens.get(ws)
       connectedTokens.delete(ws)
       // Its last connection gone: what it was shown while connected and is still open is pushed now.
@@ -713,6 +819,7 @@ export function startServer(
     // A move's staged histories (5d) are only of use to the connection that was sending them.
     const cleared = moveTransfers.clear().catch(() => {})
     store.off('change', onConfigChange)
+    if (followPhoneConfig) store.off('change', followPhoneConfig)
     serverState.stop()
     projectsSetup.store.off('health', serverState.refresh)
     const payload = { reason, ...(detail?.version !== undefined ? { version: detail.version } : {}) }
@@ -721,6 +828,8 @@ export function startServer(
       if (authed.has(ws)) sendFrame(ws, { type: 'event', event: 'daemon.shutdown', payload })
       ws.close(1001, 'server shutting down')
     }
+    // After the loop above, so a phone gets the same frames as everyone else before its listener ends.
+    phoneListener?.stop()
     wss.close()
     httpServer.close()
     return cleared

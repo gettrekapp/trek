@@ -3779,6 +3779,64 @@ button:disabled {
   justify-content: flex-end;
 }
 
+/* The Local server's phone access, above its pairing code */
+.phone-access {
+  width: 100%;
+  font-size: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.phone-access-switch {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.phone-access .warn {
+  color: var(--attention);
+}
+
+.phone-access-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+.phone-access-row label {
+  flex: none;
+  width: 150px;
+  color: var(--text-muted);
+}
+
+.phone-access-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Under the address field, in line with it */
+.phone-access-note {
+  margin: 0 0 6px 158px;
+}
+
+#phone-access-port {
+  flex: none;
+  width: 80px;
+}
+
+.phone-access-phone {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.phone-access-phone code {
+  flex: 1;
+}
+
 .server-form-actions {
   display: flex;
   align-items: center;

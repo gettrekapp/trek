@@ -35,7 +35,11 @@ The desktop's window resizes it to its own size as soon as it attaches.
 `ws://` (to a private address only: `src/logic/serverUrl.ts`) needs cleartext traffic,
 which Android release builds refuse by default. `app.json` turns it on through
 `expo-build-properties` (`android.usesCleartextTraffic`); the app's own address rule is
-what keeps plain `ws://` to a LAN, Tailscale or `.local` address. (iOS isn't checked on a
+what keeps plain `ws://` to a LAN, Tailscale or `.local` address.
+A `ws://` address in Tailscale's range (`100.64.0.0/10`) gets its own warning: Tailscale encrypts
+the traffic between devices, so the LAN warning would be wrong there. That is the address the
+desktop's Local server gives a phone (**Pair a phone…** on its Local row, PROTOCOL.md "Phone access
+on the local server"). (iOS isn't checked on a
 device yet: App Transport Security may want `NSAllowsLocalNetworking` for a `.local`
 name). iOS asks for local network access the first time, with the reason in `app.json`'s
 `ios.infoPlist.NSLocalNetworkUsageDescription`.

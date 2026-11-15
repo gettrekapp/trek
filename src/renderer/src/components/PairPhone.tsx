@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { create } from 'qrcode'
 import { errorText } from '../v2/errors'
+import { PhoneAccessPanel, usePhoneAccess } from './PhoneAccessPanel'
+import { phonePairingAddress } from '../../../shared/appServerRules'
 import type { AppServerPairing } from '../../../shared/types'
 
 /**
@@ -11,11 +13,18 @@ import type { AppServerPairing } from '../../../shared/types'
  * closing, leaves it working for the rest of its five minutes: a phone that scanned it may still
  * be redeeming it. A code that arrives after the panel moved on (React StrictMode's second mount,
  * a New code clicked meanwhile) was never shown, and is cancelled at once.
+ *
+ * For the Local server (`local`) the panel starts with its phone access (PhoneAccessPanel), and a
+ * code is asked for only once there is an address to give a phone; a new address asks for a new code.
  */
-export function PairPhone({ serverId, onClose }: { serverId: string; onClose: () => void }): React.JSX.Element {
+export function PairPhone({ serverId, local = false, onClose }: { serverId: string; local?: boolean; onClose: () => void }): React.JSX.Element {
   const [pairing, setPairing] = useState<AppServerPairing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  const phone = usePhoneAccess(local)
+  /** Local: the address the QR will carry, null while there is none. A remote server always has its own. */
+  const address = local ? phonePairingAddress(phone.access) : ''
+  const ready = address !== null
 
   /** The code shown now, which New code withdraws; and which ask is current (bumped by every ask and on unmount). */
   const shown = useRef<string | null>(null)
@@ -46,12 +55,20 @@ export function PairPhone({ serverId, onClose }: { serverId: string; onClose: ()
   }, [serverId, withdrawShown])
 
   // On unmount the code shown is left to expire (not withdrawn); one still on its way is cancelled.
+  // Local: no code while there is no address for it, and a new one when the address changes.
   useEffect(() => {
+    if (!ready) {
+      generation.current++
+      withdrawShown()
+      setPairing(null)
+      setError(null)
+      return
+    }
     void ask()
     return () => {
       generation.current++
     }
-  }, [ask])
+  }, [ask, ready, address, withdrawShown])
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -63,8 +80,9 @@ export function PairPhone({ serverId, onClose }: { serverId: string; onClose: ()
 
   return (
     <div className="pair-phone" role="group" aria-label="Pair a phone">
+      {local && <PhoneAccessPanel phone={phone} />}
       {error && <div className="error">Could not get a pairing code: {error}</div>}
-      {!pairing && !error && <p className="muted">Asking the server for a pairing code…</p>}
+      {ready && !pairing && !error && <p className="muted">Asking the server for a pairing code…</p>}
       {pairing && (
         <>
           {!expired && <QrCode text={pairing.link} />}
@@ -91,7 +109,7 @@ export function PairPhone({ serverId, onClose }: { serverId: string; onClose: ()
         </>
       )}
       <div className="pair-phone-actions">
-        <button className="btn btn-ghost" onClick={() => void ask()}>
+        <button className="btn btn-ghost" disabled={!ready} onClick={() => void ask()}>
           New code
         </button>
         <button className="btn btn-ghost" onClick={onClose}>

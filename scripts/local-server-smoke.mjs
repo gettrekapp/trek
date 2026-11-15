@@ -18,11 +18,13 @@
 import './smokeGh.mjs'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { PtyStream, ServerConnection, TopicMirror, globalSocketFactory } from '../src/shared/client/index.ts'
 import { LOCAL_ALREADY_RUNNING_EXIT, parseLocalInfo } from '../src/shared/localServer.ts'
+import { redeemPairingCode } from '../src/shared/client/pairing.ts'
 
 const WAIT_MS = 15000
 const root = new URL('..', import.meta.url).pathname
@@ -62,6 +64,17 @@ const waitFor = async (pred, ms = WAIT_MS) => {
   return pred()
 }
 
+/** A port nothing listens on now. */
+const freePort = () =>
+  new Promise((resolve, reject) => {
+    const probe = createServer()
+    probe.on('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address()
+      probe.close(() => resolve(port))
+    })
+  })
+
 /** Thrown to skip the rest of a runtime's checks after one they depend on. */
 class Abort extends Error {}
 const must = (cond, msg, detail = '') => {
@@ -83,7 +96,7 @@ async function suite(rt) {
     copyFileSync(bundle, cli)
     symlinkSync(join(root, 'node_modules', 'node-pty'), join(app, 'node_modules', 'node-pty'))
   }
-  const env = { ...process.env, ...rt.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share') }
+  const env = { ...process.env, ...rt.env, HOME: home, XDG_DATA_HOME: join(home, '.local', 'share'), TREK_SERVER_PHONE_ADDRESS: '127.0.0.1' }
   // Only the app's node_modules may resolve: no NODE_PATH fallback.
   delete env.NODE_PATH
   const profile = join(home, '.config', 'trek-server', 'local')
@@ -166,6 +179,58 @@ async function suite(rt) {
     must(conn.status === 'connected', 'a hello with the local.json token is welcomed', `${conn.status} ${conn.statusMessage}`)
     const caps = conn.welcome.capabilities
     check(caps.includes('local') && caps.includes('mcp'), `the first welcome lists local and mcp (${caps.join(',')})`)
+
+    // --- 3b. phone access: a second listener, pairing through it, the local token refused there ---
+    check(caps.includes('pairing') && caps.includes('phoneAccess'), `the welcome lists pairing and phoneAccess (${caps.join(',')})`)
+    const phonePort = await freePort()
+    const phoneEvents = []
+    conn.on('event', (e) => {
+      if (e.event === 'phoneAccess.changed') phoneEvents.push(e.payload)
+    })
+    const off = await conn.request('phoneAccess.get', {})
+    check(off.enabled === false && off.state === 'off' && off.phones.length === 0, 'phone access starts off, with no phones', JSON.stringify(off))
+    const on = await conn.request('phoneAccess.set', { enabled: true, port: phonePort })
+    must(on.state === 'listening' && on.address === '127.0.0.1' && on.url === `ws://127.0.0.1:${phonePort}`, 'turned on, it listens at the port and says the address for a phone', JSON.stringify(on))
+    // Whatever fails in here, phone access ends off and the smoke's phone is gone: the later sections restart on this profile.
+    try {
+      const localOnPhonePort = await connect(phonePort, infoA.token, 'local-token-on-phone-port')
+      check(localOnPhonePort.status === 'needs-auth', 'the local token is refused on the phone listener', localOnPhonePort.status)
+      localOnPhonePort.close()
+      const { code } = await conn.request('pairing.create', { name: '' })
+      let paired
+      try {
+        paired = await redeemPairingCode({ url: on.url, code, deviceName: 'Smoke Phone', createSocket: globalSocketFactory, client: 'trek-mobile', clientVersion: '0.0.0' })
+      } catch (err) {
+        fail(`a phone pairs through the phone listener: ${err.message}`)
+      }
+      if (paired) {
+        check(paired.tokenName === 'phone-Smoke-Phone' && paired.capabilities.includes('local'), `the phone is paired as ${paired.tokenName}`)
+        const phone = await connect(phonePort, paired.token, 'phone')
+        check(phone.status === 'connected', 'the phone connects with its own token on the phone listener', phone.status)
+        const refusedGet = await phone.request('phoneAccess.get', {}).then(() => 'answered', (err) => err.code)
+        check(refusedGet === 'UNAUTHORIZED', 'a phone may not read or change phone access', String(refusedGet))
+        check(await waitFor(() => phoneEvents.some((p) => p.phones.some((x) => x.name === paired.tokenName && x.pairedBy === 'local')), 5000), 'the desktop hears of the paired phone (phoneAccess.changed)')
+        // Off with a phone connected: its connection closes. Then on again, for the revoke.
+        const offWithPhone = await conn.request('phoneAccess.set', { enabled: false })
+        check(offWithPhone.state === 'off' && (await waitFor(() => phone.status !== 'connected', 5000)), 'turning phone access off closes a connected phone\'s connection', `${offWithPhone.state} ${phone.status}`)
+        phone.close()
+        const onAgain = await conn.request('phoneAccess.set', { enabled: true })
+        must(onAgain.state === 'listening' && onAgain.url === on.url, 'turned on again, it listens at the same port', JSON.stringify(onAgain))
+        const phoneAgain = await connect(phonePort, paired.token, 'phone-again')
+        const wasConnected = phoneAgain.status === 'connected'
+        const { revoked } = await conn.request('phoneAccess.revoke', { name: paired.tokenName })
+        check(wasConnected && revoked === true && (await waitFor(() => phoneAgain.status !== 'connected', 5000)), 'revoking the phone closes its connection', phoneAgain.status)
+        phoneAgain.close()
+      }
+      const offAgain = await conn.request('phoneAccess.set', { enabled: false })
+      const afterOff = await connect(phonePort, infoA.token, 'phone-port-after-off')
+      check(offAgain.state === 'off' && afterOff.status !== 'connected' && afterOff.status !== 'needs-auth', 'turned off, nothing listens at the phone port', `${offAgain.state} ${afterOff.status}`)
+      afterOff.close()
+    } finally {
+      await conn.request('phoneAccess.set', { enabled: false }).catch(() => {})
+      await conn.request('phoneAccess.revoke', { name: 'phone-Smoke-Phone' }).catch(() => {})
+    }
+    check(conn.status === 'connected', 'the desktop\'s own connection is untouched throughout')
 
     // --- 4. a repo outside any root, a project, a session through node-pty ---
     let repoId
