@@ -9,8 +9,8 @@ import type { InstalledTheme } from './theme.ts'
 export type LoadResult =
   /**
    * `plugin` is the window's own frozen copy of what the bundle exports, never the bundle's
-   * object: its manifest's plain values, `theme.styles` as text, and `Runtime` and
-   * `slots.overlay` where the bundle has them. Reading it cannot throw.
+   * object: its manifest's plain values (its id and version as they were checked), `theme.styles`
+   * as text, and `Runtime` and `slots.overlay` where the bundle has them. Reading it cannot throw.
    */
   | { kind: 'loaded'; plugin: ClientPlugin }
   /** The server's bundle is no longer the listed one (or is gone): a `plugins.list` follows; not a failure */
@@ -95,14 +95,25 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
 
 /**
- * The window's copy of a bundle's theme plugin, or why it is not one. Every property is read here,
- * once, by a caller that catches: a getter may throw. The copy is frozen plain data: the
- * manifest's text, number and boolean fields, the styles as text ('' with none), and `Runtime`
- * and the `overlay` slot where they are functions. Nothing else of the bundle's object is kept.
+ * Whether a bundle's value is something React renders as a component: a function, or what
+ * `React.memo`, `React.forwardRef` and `React.lazy` return, an object whose `$$typeof` is a
+ * symbol. `$$typeof` is read once, by a caller that catches.
  */
-function plainTheme(plugin: Record<string, unknown>, manifest: Record<string, unknown>): ClientPlugin | string {
-  const fields: Record<string, string | number | boolean> = {}
+const isComponent = (value: unknown): boolean => typeof value === 'function' || (isObject(value) && typeof value.$$typeof === 'symbol')
+
+/**
+ * The window's copy of a bundle's theme plugin, or why it is not one. `id` and `version` are the
+ * manifest's as the caller read and checked them: they are not read again here, so the copy is
+ * the plugin that was checked whatever a getter answers the second time. Every other property is
+ * read here, once, by a caller that catches: a getter may throw. The copy is frozen plain data:
+ * the manifest's text, number and boolean fields, the styles as text ('' with none), and
+ * `Runtime` and the `overlay` slot where they are components. Nothing else of the bundle's object
+ * is kept.
+ */
+function plainTheme(plugin: Record<string, unknown>, manifest: Record<string, unknown>, id: string, version: string): ClientPlugin | string {
+  const fields: Record<string, string | number | boolean> = { id, version }
   for (const name of Object.keys(manifest)) {
+    if (name === 'id' || name === 'version') continue
     const value = manifest[name]
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') fields[name] = value
   }
@@ -111,16 +122,16 @@ function plainTheme(plugin: Record<string, unknown>, manifest: Record<string, un
   const styles = look?.styles
   if (styles != null && typeof styles !== 'string') return 'its styles are not text'
   const Runtime = plugin.Runtime
-  if (Runtime != null && typeof Runtime !== 'function') return 'its Runtime is not a component'
+  if (Runtime != null && !isComponent(Runtime)) return 'its Runtime is not a component'
   const slots = plugin.slots
   if (slots != null && !isObject(slots)) return 'its slots are not an object'
   const overlay = slots?.overlay
-  if (overlay != null && typeof overlay !== 'function') return 'its overlay is not a component'
+  if (overlay != null && !isComponent(overlay)) return 'its overlay is not a component'
   return Object.freeze({
     manifest: Object.freeze(fields) as unknown as ClientPlugin['manifest'],
     theme: Object.freeze({ styles: styles ?? '' }),
-    ...(Runtime ? { Runtime: Runtime as NonNullable<ClientPlugin['Runtime']> } : {}),
-    slots: Object.freeze(overlay ? { overlay: overlay as NonNullable<ClientPlugin['Runtime']> } : {})
+    ...(Runtime != null ? { Runtime: Runtime as NonNullable<ClientPlugin['Runtime']> } : {}),
+    slots: Object.freeze(overlay != null ? { overlay: overlay as NonNullable<ClientPlugin['Runtime']> } : {})
   })
 }
 
@@ -203,7 +214,8 @@ async function fetchAndImport(theme: InstalledTheme, deps: LoaderDeps, cache: Ma
     if (!manifest || typeof manifest !== 'object') return failed('its bundle has no plugin as its default export')
     const { id, version } = manifest as { id?: unknown; version?: unknown }
     if (id !== theme.id || version !== theme.version) return failed(`its bundle is another plugin (${nameOf(id)} ${nameOf(version)})`)
-    const copy = plainTheme(plugin as Record<string, unknown>, manifest as Record<string, unknown>)
+    // The listed id and version, which are what the bundle's were just checked to equal.
+    const copy = plainTheme(plugin as Record<string, unknown>, manifest as Record<string, unknown>, theme.id, theme.version)
     if (typeof copy === 'string') return failed(copy)
     cache.set(theme.sha256, copy)
     return { kind: 'loaded', plugin: copy }

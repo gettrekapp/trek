@@ -32,8 +32,9 @@ native title bar is not recolored.
 - The bundle must finish loading within 15 seconds, top-level `await`s included.
 - The build refuses any import other than `react`, `react/jsx-runtime` and the plugin contract:
   packages, Node built-ins and path aliases alike. A theme's own files, by relative path, are fine.
-- `theme.styles` must be a string, and `Runtime` and `slots.overlay` functions, where present; the
-  window reads them once, when the bundle loads.
+- `theme.styles` must be a string, and `Runtime` and `slots.overlay` React components, where
+  present: a function, or a component wrapped in `React.memo`, `React.forwardRef` or `React.lazy`.
+  The window reads them once, when the bundle loads.
 - In the web client, themes need a secure context (https or localhost): the page must be able to
   compute SHA-256 to check a bundle.
 

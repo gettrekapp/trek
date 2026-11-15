@@ -3,6 +3,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { forwardRef, lazy, memo } from 'react'
 import { loadInstalledPlugin, sha256Hex } from '../src/renderer/src/plugins/installedLoader.ts'
 
 const bundleOf = (id = 'nord', version = '1.0.0') =>
@@ -174,6 +175,59 @@ test("what loads is a frozen plain copy: the bundle's own object is read once, a
   const loaded = await loadInstalledPlugin(bare.theme, bare.sha256, bare.deps)
   assert.equal(loaded.kind, 'loaded')
   assert.deepEqual(loaded.plugin, { manifest: { id: 'nord', version: '1.0.0' }, theme: { styles: '' }, slots: {} })
+})
+
+test('the copy carries the id and version that were checked: a manifest that answers differently the second time changes nothing', async () => {
+  for (const manifest of [
+    "{ get id() { return this.n++ ? 'voice' : 'nord' }, n: 0, version: '1.0.0', name: 'N' }",
+    "{ get id() { if (this.n++) throw new Error('read twice'); return 'nord' }, n: 0, version: '1.0.0', name: 'N' }",
+    "{ id: 'nord', get version() { return this.n++ ? '9.9.9' : '1.0.0' }, n: 0, name: 'N' }"
+  ]) {
+    const f = await fixture(`export default { manifest: ${manifest} }\n`)
+    const result = await loadInstalledPlugin(f.theme, f.sha256, f.deps)
+    assert.equal(result.kind, 'loaded', `${manifest}: ${JSON.stringify(result)}`)
+    assert.equal(result.plugin.manifest.id, 'nord', manifest)
+    assert.equal(result.plugin.manifest.version, '1.0.0', manifest)
+    assert.equal(result.plugin.manifest.name, 'N', manifest)
+    // Kept as the listed plugin, so the next load is from memory: no second request.
+    assert.equal((await loadInstalledPlugin(f.theme, f.sha256, f.deps)).plugin, result.plugin, manifest)
+    assert.equal(f.calls.length, 1, manifest)
+  }
+})
+
+test('a component wrapped by React (memo, forwardRef, lazy) is a component; another object, a number and a string are not', async () => {
+  // What React's wrappers are: an object with a `$$typeof` symbol, not a function.
+  for (const wrapped of [memo(() => null), forwardRef(() => null), lazy(async () => ({ default: () => null }))]) {
+    assert.equal(typeof wrapped, 'object')
+    assert.equal(typeof wrapped.$$typeof, 'symbol')
+  }
+  const memoed = "{ $$typeof: Symbol.for('react.memo'), type() {}, compare: null }"
+  const runtime = await fixture(themed(`Runtime: ${memoed}`))
+  const withRuntime = await loadInstalledPlugin(runtime.theme, runtime.sha256, runtime.deps)
+  assert.equal(withRuntime.kind, 'loaded', JSON.stringify(withRuntime))
+  assert.equal(withRuntime.plugin.Runtime.$$typeof, Symbol.for('react.memo'))
+  const overlay = await fixture(themed(`slots: { overlay: ${memoed} }`))
+  const withOverlay = await loadInstalledPlugin(overlay.theme, overlay.sha256, overlay.deps)
+  assert.equal(withOverlay.kind, 'loaded', JSON.stringify(withOverlay))
+  assert.equal(withOverlay.plugin.slots.overlay.$$typeof, Symbol.for('react.memo'))
+  // `$$typeof` is read once.
+  const once = await fixture(themed("Runtime: { n: 0, get $$typeof() { if (this.n++) throw new Error('read twice'); return Symbol.for('react.memo') } }"))
+  assert.equal((await loadInstalledPlugin(once.theme, once.sha256, once.deps)).kind, 'loaded')
+
+  for (const [client, reason] of [
+    [themed('Runtime: { type() {} }'), 'its Runtime is not a component'],
+    [themed("Runtime: { $$typeof: 'react.memo' }"), 'its Runtime is not a component'],
+    [themed('Runtime: 7'), 'its Runtime is not a component'],
+    [themed("Runtime: 'Runtime'"), 'its Runtime is not a component'],
+    [themed("Runtime: { get $$typeof() { throw new Error('boom') } }"), 'its bundle could not be read (boom)'],
+    [themed('slots: { overlay: { type() {} } }'), 'its overlay is not a component'],
+    [themed('slots: { overlay: 7 }'), 'its overlay is not a component'],
+    [themed("slots: { overlay: 'overlay' }"), 'its overlay is not a component']
+  ]) {
+    const f = await fixture(client)
+    assert.deepEqual(await loadInstalledPlugin(f.theme, f.sha256, f.deps), { kind: 'failed', reason }, client)
+    assert.equal(f.deps.cache.size, 0, 'a bad bundle is not kept')
+  }
 })
 
 test('a then export is not followed: the load fails at once, with a reason', async () => {
