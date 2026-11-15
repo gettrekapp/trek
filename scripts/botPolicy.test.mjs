@@ -20,7 +20,7 @@ const trek = (name) => `mcp__trek-dev__${name}`
 const bash = (command) => ({ tool: 'Bash', input: { command } })
 
 test('free Trek tools are allowed', { skip }, () => {
-  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval', 'list_automations', 'get_review_comments', 'add_review_comment', 'remove_review_comment']) {
+  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval', 'list_automations', 'get_review_comments', 'add_review_comment', 'remove_review_comment', 'rename_session', 'mark_session_complete']) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'allow', name)
   }
 })
@@ -86,7 +86,7 @@ test('overrides move items between free and ask', { skip }, () => {
 })
 
 test('anything that runs or deletes outside the sandbox always needs approval, whatever the overrides say', { skip }, () => {
-  const names = ['start_session', 'send_prompt', 'send_keys', 'start_stack', 'create_worktree', 'load_worktree', 'remove_worktree', 'save_session_type', 'delete_session_type', 'save_automation', 'delete_automation', 'run_automation']
+  const names = ['start_session', 'restart_session', 'send_prompt', 'send_keys', 'start_stack', 'create_worktree', 'load_worktree', 'remove_worktree', 'save_session_type', 'delete_session_type', 'save_automation', 'delete_automation', 'run_automation']
   assert.deepEqual([...ALWAYS_ASK_TOOLS].sort(), [...names].sort())
   const overrides = { free: names }
   for (const name of names) {

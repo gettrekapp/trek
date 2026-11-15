@@ -142,8 +142,8 @@ async function toolSetup(t, opts = {}) {
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
     'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
-    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
-    'request_decision', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
+    'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'mark_session_complete', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
+    'rename_session', 'request_decision', 'restart_session', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
     'wait_for_sessions', 'watch_pull_request'
   ])
@@ -641,6 +641,9 @@ test('Global sessions: only get_current_session and request_decision reach them'
     ['send_keys', { terminalId: sessionId, keys: ['y'] }],
     ['read_terminal', { terminalId: sessionId }],
     ['close_session', { terminalId: sessionId }],
+    ['rename_session', { terminalId: sessionId, title: 'x' }],
+    ['mark_session_complete', { terminalId: sessionId }],
+    ['restart_session', { terminalId: sessionId }],
     ['wait_for_sessions', { terminalIds: [sessionId], timeoutSeconds: 0.01 }]
   ]
   for (const [name, args] of calls) {
@@ -1014,4 +1017,35 @@ test('add_review_comment: a removed line (side old), an unknown terminalId and a
   const source = { kind: 'uncommitted' }
   const old = await s.call('add_review_comment', { worktree: 'main', file: 'a.txt', line: 2, side: 'old', comment: 'Why drop it?', source, terminalId: 'no-such-session', reason: 7 })
   assert.deepEqual([old.comment.side, old.comment.line, old.comment.lineText, old.comment.by, old.comment.agent], ['old', 2, 'two', 'an agent', true])
+})
+
+test('rename_session, mark_session_complete and restart_session', async (t) => {
+  const s = await toolSetup(t)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const session = () => s.projects.require(s.projectId).repositories[0].worktrees[0].sessions.find((x) => x.id === terminalId)
+
+  assert.deepEqual(await s.call('rename_session', { terminalId, title: '  Fix the login  ' }), { terminalId, title: 'Fix the login' })
+  assert.equal(session().title, 'Fix the login')
+  for (const title of [undefined, '', '   ', 7, 'a\x1bb', 'x'.repeat(5000)]) {
+    await assert.rejects(s.call('rename_session', { terminalId, title }), (e) => e.code === 'BAD_REQUEST', JSON.stringify(title))
+  }
+  assert.equal(session().title, 'Fix the login')
+  await assert.rejects(s.call('rename_session', { terminalId: 'nope', title: 'x' }), (e) => e.code === 'NOT_FOUND')
+
+  assert.deepEqual(await s.call('mark_session_complete', { terminalId }), { terminalId, status: 'complete' })
+  assert.deepEqual(await s.call('mark_session_complete', { terminalId, complete: false }), { terminalId, status: 'idle' })
+  // Clearing a session that is not complete leaves its status alone.
+  assert.deepEqual(await s.call('mark_session_complete', { terminalId, complete: false }), { terminalId, status: 'idle' })
+  await assert.rejects(s.call('mark_session_complete', { terminalId, complete: 'yes' }), (e) => e.code === 'BAD_REQUEST' && /complete must be a boolean/.test(e.message))
+
+  await assert.rejects(s.call('restart_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /the session is running/.test(e.message))
+  s.spawned.at(-1).exit(0)
+  assert.equal(session().status, 'exited')
+  const before = s.spawned.length
+  const restarted = await s.call('restart_session', { terminalId })
+  assert.equal(restarted.terminalId, terminalId)
+  assert.equal(typeof restarted.status, 'string')
+  assert.equal(s.spawned.length, before + 1, 'the agent was launched again')
+  assert.deepEqual([s.spawned.at(-1).opts.cols, s.spawned.at(-1).opts.rows], [120, 32])
+  await assert.rejects(s.call('restart_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /the session is running/.test(e.message))
 })

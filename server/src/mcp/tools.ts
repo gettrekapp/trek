@@ -14,7 +14,7 @@ import type { ConfigStore } from '../configStore'
 import { codedError } from '../errors.ts'
 import type { GitPoller } from '../git/poller.ts'
 import type { ProjectState } from '../projects/state.ts'
-import { checkTitle, MAX_PTY_WRITE, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
+import { checkTitle, MAX_PTY_WRITE, MAX_TITLE_LENGTH, MAX_QUEUE_ENTRY, MAX_SESSION_TYPES } from '../sessions/limits.ts'
 import { findSession, type FoundSession } from '../sessions/locate.ts'
 import type { SessionManager } from '../sessions/manager.ts'
 import type { TopicHub } from '../topicHub'
@@ -291,6 +291,34 @@ export const MCP_TOOLS: ToolDefinition[] = [
     inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
   },
   {
+    name: 'rename_session',
+    description: "Rename a session: its tab title in Trek. Use it to label a session you started with what it is working on.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminalId: TERMINAL_PARAM,
+        title: { type: 'string', description: `The new title: one line, at most ${MAX_TITLE_LENGTH} characters` }
+      },
+      required: ['terminalId', 'title']
+    }
+  },
+  {
+    name: 'mark_session_complete',
+    description:
+      "Mark a session complete: its work is finished and needs nothing more from the user (status complete in list_worktrees), until it next works. A session can mark itself, passing its $TREK_TERMINAL_ID. Pass complete false to clear the mark (back to idle). Returns the session's status.",
+    inputSchema: {
+      type: 'object',
+      properties: { terminalId: TERMINAL_PARAM, complete: { type: 'boolean', description: 'true (default) to mark it, false to clear the mark' } },
+      required: ['terminalId']
+    }
+  },
+  {
+    name: 'restart_session',
+    description:
+      "Restart a session whose agent has exited (status exited), resuming its conversation where the agent supports that. Refused while the session is running, and while its worktree is unloaded (load_worktree first). Returns at once with the session's status: follow with wait_for_sessions, or send_prompt, which waits until the agent is ready.",
+    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
+  },
+  {
     name: 'set_worktree_tag',
     description:
       "Set a worktree branch's workflow tag, by name (case-insensitive). Tags are configured per project; an unknown name fails with the list of valid tags. Omit tag to clear it.",
@@ -501,7 +529,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -1331,6 +1359,28 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const { session } = targetIn(args.terminalId)
         await v2('session.close', { sessionId: session.id })
         return { closed: true }
+      },
+
+      rename_session: async (args) => {
+        const { session } = targetIn(args.terminalId)
+        const title = strArg(args.title, 'title')
+        if (!title) throw bad('title is required')
+        await v2('session.rename', { sessionId: session.id, title })
+        return { terminalId: session.id, title }
+      },
+
+      mark_session_complete: async (args) => {
+        const { session } = targetIn(args.terminalId)
+        if (args.complete !== undefined && args.complete !== null && typeof args.complete !== 'boolean') throw bad('complete must be a boolean')
+        await v2('session.markComplete', { sessionId: session.id, complete: args.complete !== false })
+        return { terminalId: session.id, status: current(session.id)?.status ?? 'closed' }
+      },
+
+      restart_session: async (args) => {
+        const { session } = targetIn(args.terminalId)
+        // The size start_session opens a pty with.
+        await v2('session.restart', { sessionId: session.id, cols: 120, rows: 32 })
+        return { terminalId: session.id, status: current(session.id)?.status ?? 'closed' }
       },
 
       send_prompt: async (args, _project, signal) => {
