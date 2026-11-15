@@ -54,6 +54,12 @@ export interface TrekServerConfig {
    * to true.
    */
   updates?: { check?: boolean; remoteApply?: boolean }
+  /**
+   * Installed plugins (`trek-server plugin`). `remoteInstall: false` makes the server refuse a
+   * client's request to install or remove one, leaving that to the command on this machine.
+   * Defaults to true.
+   */
+  plugins?: { remoteInstall?: boolean }
 }
 
 export function defaultConfigPath(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {

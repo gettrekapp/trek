@@ -272,7 +272,9 @@ export const CAPABILITY = {
    */
   update: 'update',
   /** Automations: `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` */
-  automations: 'automations'
+  automations: 'automations',
+  /** `plugins.install` and `plugins.remove`: a client may install a plugin on the server, or remove one (theme plugins) */
+  pluginInstall: 'pluginInstall'
 } as const
 
 /** Close reasons for a refused pairing hello (sent with CLOSE_UNAUTHORIZED, 4003). */
