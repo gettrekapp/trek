@@ -79,6 +79,11 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
       const report = (status: ConnectionStatus, message: string): void =>
         setStatuses((s) => ({ ...s, [server.id]: { status, message, capabilities: conn.welcome?.capabilities ?? [] } }))
       const offStatus = conn.on('status', ({ status, message }) => report(status, message))
+      // gh's sign-in changed on the server: the SDK has put `prWatch` in or out of the welcome's
+      // capabilities, with no status change. Reported again, so the screens that read them draw again.
+      const offIntegrations = conn.on('event', ({ event }) => {
+        if (event === 'integrations.changed') report(conn.status, conn.statusMessage)
+      })
       // add() connects at once: the status it is in already went out before the listener.
       report(conn.status, conn.statusMessage)
       // The first snapshot after connecting is what was waiting already: seen, not notified.
@@ -91,6 +96,7 @@ export function ServersProvider({ children }: { children: ReactNode }): React.JS
       })
       detachers.current.set(server.id, () => {
         offStatus()
+        offIntegrations()
         offAttention()
       })
       return true

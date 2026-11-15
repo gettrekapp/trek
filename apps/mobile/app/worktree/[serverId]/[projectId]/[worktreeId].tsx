@@ -1,7 +1,8 @@
 // A worktree (6a): load or unload it, start a session (agent and session type), its sessions
-// with close and restart, the read-only Changes, Remove (not for the main checkout; with its
-// dev stack or Docker VM running, only the desktop can), and its branch's tag, custom tags, note,
-// ticket and pull request (ui/BranchDetails.tsx).
+// with close and restart, Changes (its review), Remove (not for the main checkout; with its
+// dev stack or Docker VM running, only the desktop can), its pull request's notice
+// (ui/PrNotice.tsx), and its branch's tag, custom tags, note, ticket and pull request with its
+// watch (ui/BranchDetails.tsx).
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
@@ -14,6 +15,7 @@ import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../src/state/teard
 import { confirmAlert } from '../../../../src/ui/alerts.ts'
 import { BranchDetails } from '../../../../src/ui/BranchDetails.tsx'
 import { Button } from '../../../../src/ui/Button.tsx'
+import { PrNotice } from '../../../../src/ui/PrNotice.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { ui } from '../../../../src/ui/theme.ts'
 import { knownPtySize } from '../../../../src/state/ptySizes.ts'
@@ -241,6 +243,8 @@ export default function WorktreeScreen(): React.JSX.Element {
             ) : null}
             {blocked ? <Text style={ui.warn}>{blocked}</Text> : null}
             {error ? <Text style={ui.error}>{error}</Text> : null}
+            {/* Keyed by the notice: what was said about one (a failed Open or Dismiss) is not said about the next. */}
+            {worktree.prNotice ? <PrNotice key={worktree.prNotice.at} serverId={serverId} projectId={projectId} worktreeId={worktree.id} notice={worktree.prNotice} /> : null}
             {/* Keyed by the branch: an edit begun for one is not saved to another checked out meanwhile. */}
             {project && found && worktree.branch ? (
               <BranchDetails key={`${found.repo.id}\n${worktree.branch}`} serverId={serverId} projectId={projectId} project={project} repo={found.repo} branch={worktree.branch} />

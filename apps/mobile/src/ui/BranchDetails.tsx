@@ -1,11 +1,12 @@
 // The worktree screen's Branch section: the branch's workflow tag, custom tags, note, ticket and
-// pull request, read from the project's snapshot and saved at once with the matching branch.set*
-// request. A failure shows in the section's error line; the snapshot remains the truth. The
+// pull request (with its watch: logic/prWatch.ts), read from the project's snapshot and saved at
+// once with the matching branch.set* request. A failure shows in the section's error line; the snapshot remains the truth. The
 // project's tag lists are not edited here, and a ticket's title and status are not looked up.
 import { useEffect, useRef, useState } from 'react'
 import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
-import { DEFAULT_WORKTREE_TAGS, type Project, type Repository, type ServerConnection } from '../shared.ts'
+import { CAPABILITY, DEFAULT_WORKTREE_TAGS, type Project, type Repository, type ServerConnection } from '../shared.ts'
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink, type NoteEdit } from '../logic/branchDetails.ts'
+import { watchAction, watchOffered, watchSuffix } from '../logic/prWatch.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../logic/tickets.ts'
 import { errorMessage, useServer } from '../state/hooks.ts'
 import { Button } from './Button.tsx'
@@ -64,6 +65,13 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
   const ticket = data?.ticket ? ticketView(trackers, settings, data.ticket) : null
   const ticketLink = webLink(ticket?.url)
   const prLink = webLink(data?.pr)
+  // Whether the server can watch a pull request now (gh is signed in there), as its current welcome
+  // says; while its connection is being made again the last answer holds, so a watch is not called
+  // paused for a reconnect.
+  const canWatch = useRef(false)
+  const welcome = server?.connection.welcome
+  if (welcome) canWatch.current = welcome.capabilities.includes(CAPABILITY.prWatch)
+  const watch = watchAction(data)
   const ref = { projectId, repoId: repo.id, branch }
   const off = busy || !server
 
@@ -283,7 +291,14 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
             {editorButtons(savePr, text.trim() !== '', data?.pr ? () => void sendAndClose((conn) => conn.request('branch.setPr', { ...ref, pr: null })) : undefined)}
           </>
         ) : (
-          shown('pr', data?.pr ? pullRequestText(data.pr) : null, 'No pull request', prLink)
+          <>
+            {shown('pr', data?.pr ? `${pullRequestText(data.pr)}${watchSuffix(data, canWatch.current)}` : null, 'No pull request', prLink)}
+            {watchOffered(data, canWatch.current) ? (
+              <View style={[ui.row, { marginTop: 6 }]}>
+                <Button ghost label={watch.label} disabled={off} onPress={() => void send((conn) => conn.request('branch.setPrWatch', { ...ref, watch: watch.watch }))} />
+              </View>
+            ) : null}
+          </>
         )}
       </View>
       {error ? <Text style={ui.error}>{error}</Text> : null}
