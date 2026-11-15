@@ -62,3 +62,22 @@ test('VALUE_FLAGS lists exactly the flags parseArgs reads a value for', () => {
   assert.deepEqual(moves.filter((m) => !m.startsWith('++')).map((m) => m.trim()), ['i =', 'i++'], `the index moves at: ${moves.join(' | ')}`)
   assert.equal(moves.filter((m) => m.startsWith('++')).length, viaValue.length, `the index moves at: ${moves.join(' | ')}`)
 })
+
+test('plugin add, remove and list parse; a missing action or target is refused', () => {
+  assert.ok(COMMANDS.includes('plugin'))
+  const add = parseArgs(['plugin', 'add', './my-theme', '--data-dir', '/tmp/data'])
+  assert.deepEqual([add.command, add.pluginAction, add.pluginTarget, add.dataDir], ['plugin', 'add', './my-theme', '/tmp/data'])
+  const url = parseArgs(['plugin', 'add', 'https://themes.test/nord.trekplugin'])
+  assert.equal(url.pluginTarget, 'https://themes.test/nord.trekplugin')
+  const remove = parseArgs(['plugin', 'remove', 'nord'])
+  assert.deepEqual([remove.pluginAction, remove.pluginTarget], ['remove', 'nord'])
+  assert.equal(parseArgs(['plugin', 'list']).pluginAction, 'list')
+  // `add` and `list` after `plugin` are its actions, not the repo commands.
+  assert.equal(parseArgs(['plugin', 'list']).command, 'plugin')
+  assert.match(refusal(['plugin']), /plugin needs an action/)
+  assert.match(refusal(['plugin', 'install', 'x']), /Unknown plugin action: install/)
+  assert.match(refusal(['plugin', 'add']), /plugin add needs/)
+  assert.match(refusal(['plugin', 'remove']), /plugin remove needs/)
+  assert.match(refusal(['plugin', 'list', 'extra']), /Unknown/)
+  assert.match(refusal(['plugin', 'list', '--local']), /--local only applies/)
+})
