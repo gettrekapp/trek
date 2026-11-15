@@ -30,8 +30,10 @@ native title bar is not recolored.
   active.
 - The bundle's module may not export `then`: such a bundle is refused.
 - The bundle must finish loading within 15 seconds, top-level `await`s included.
-- The build refuses any import other than `react`, `react/jsx-runtime` and the plugin contract:
-  packages, Node built-ins and path aliases alike. A theme's own files, by relative path, are fine.
+- The build refuses an import by a bare name (a package, a Node built-in, a path alias) other
+  than `react` and `react/jsx-runtime`. An import by a path, relative (`./`, `../`) or absolute
+  (`/…`), is not refused: the file is bundled into the theme, whatever it is, except the plugin
+  contract (`…/shared/plugins/client`), which like React is shared with the window.
 - `theme.styles` must be a string, and `Runtime` and `slots.overlay` React components, where
   present: a function, or a component wrapped in `React.memo`, `React.forwardRef` or `React.lazy`.
   The window reads them once, when the bundle loads.

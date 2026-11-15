@@ -230,7 +230,7 @@ try {
   await openSettings()
   check('with no theme installed, Settings shows no Theme row', await themeSelect.count(), 0)
   check('and the window has the default look', await look(), DEFAULT_LOOK)
-  check('but the Installed themes row is there, with its two buttons and no theme listed', [await installRow.locator('button').allTextContents(), await installRow.locator('.theme-list li').count()], [['Install from file…', 'Install from URL…'], 0])
+  check('but the Installed themes row is there, with its two buttons and no theme listed', [await until(() => installRow.locator('button').allTextContents(), ['Install from file…', 'Install from URL…']), await installRow.locator('.theme-list li').count()], [['Install from file…', 'Install from URL…'], 0])
 
   // ---- 3. Installed on the running server: the row appears ------------------------------------
 
