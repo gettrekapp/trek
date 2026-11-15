@@ -1158,6 +1158,10 @@ last. A theme whose bundle changed is not applied until the user accepts the
 new one. The bundle is one ES module with no imports; it reads React, React's JSX runtime and the
 plugin contract from `globalThis.__trekPlugin`, which the window sets first
 ([the example theme](plugins/example-theme/README.md)).
+Where the welcome lists `pluginInstall`, the Trek app and the web client also offer
+`plugins.install` (a picked file's text as `package`, or a typed `url`) and `plugins.remove` in
+Settings; they check the URL's form and the file's size first, show the server's reason when it
+refuses, and take the new list from `plugins.list`, not from the answer.
 
 ## Pull request watch
 

@@ -45,6 +45,9 @@ native title bar is not recolored.
 Add `--local` to install it on the Trek app's Local server. A running server notices the change.
 Then, in a project window: Settings → General → Appearance → Theme.
 
+Or install the built file from the app: Settings → General → Appearance → Installed themes →
+Install from file…, and pick `plugins/example-theme/dist/example-theme.trekplugin`.
+
 The choice is this app's, per server and project: other clients of the project are unaffected. If
 the theme's bundle later changes on the server, the window returns to the default look until you
 click Apply in Settings.

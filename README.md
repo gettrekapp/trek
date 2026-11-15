@@ -682,3 +682,9 @@ Local server) and chosen per project in Settings → General → Appearance → 
 to the app that made it: other clients of the same project keep their own. If a theme's bundle
 changes on the server, the window returns to the default look until you click Apply.
 [`plugins/example-theme`](plugins/example-theme/README.md) is a small theme to start from.
+
+Where the server allows it (it does unless its config has `"plugins": {"remoteInstall": false}`),
+a theme can also be installed from the app: Settings → General → Appearance → Installed themes
+takes a `.trekplugin` file or an `https` URL, and removes an installed theme after asking. A theme
+is installed on the server, for every client of it, and is code that runs in the window: install
+only what you trust.
