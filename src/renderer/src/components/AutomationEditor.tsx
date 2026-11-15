@@ -111,7 +111,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
   const time = picker.kind === 'daily' || picker.kind === 'weekly' ? timeValue(picker) : '09:00'
   return (
     <div className="automation-editor">
-      <h3>{automation ? 'Edit automation' : 'New automation'}</h3>
+      <h2>{automation ? 'Edit automation' : 'New automation'}</h2>
       {error && <div className="error">{error}</div>}
       <label className="settings-row">
         <span className="settings-name">Name</span>
@@ -201,7 +201,7 @@ export function AutomationEditor({ automation, onDone }: Props): React.JSX.Eleme
         </label>
         {llm && <LlmPicker value={llm} onChange={setLlm} {...serverPicker} filter={mcpOnly} />}
       </div>
-      <label className="llm-inline-check">
+      <label className="llm-inline-check automation-enabled">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         Enabled
       </label>

@@ -107,6 +107,28 @@ function PrNoticeFlag({ title }: { title: string }): React.JSX.Element {
   )
 }
 
+/** The footer rows' icons: one line weight and one column, in the row's own colour. */
+function NavIcon({ name }: { name: 'add' | 'notes' | 'automations' | 'settings' }): React.JSX.Element {
+  return (
+    <svg className="sidebar-nav-icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {name === 'add' && <path d="M8 3v10M3 8h10" />}
+      {name === 'notes' && <path d="M4 2.5h8v11H4zM6.2 5.8h3.6M6.2 8h3.6M6.2 10.2h2" />}
+      {name === 'automations' && (
+        <>
+          <circle cx="8" cy="8" r="5.5" />
+          <path d="M8 5v3.2l2 1.3" />
+        </>
+      )}
+      {name === 'settings' && (
+        <>
+          <circle cx="8" cy="8" r="2" />
+          <path d="M8 1.8v1.9M8 12.3v1.9M1.8 8h1.9M12.3 8h1.9M3.6 3.6l1.35 1.35M11.05 11.05l1.35 1.35M3.6 12.4l1.35-1.35M11.05 4.95l1.35-1.35" />
+        </>
+      )}
+    </svg>
+  )
+}
+
 export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
   const project = useAppStore((s) => s.project)!
   const ticketViewOf = useTicketViews()
@@ -752,7 +774,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           disabled={offline}
           onClick={() => void getBackend().repos.add()}
         >
-          <span className="sidebar-nav-icon">＋</span>
+          <NavIcon name="add" />
           <span className="sidebar-nav-label">Add repository…</span>
         </button>
         <button
@@ -760,7 +782,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           title="Every branch note in this project, including branches whose worktree is gone"
           onClick={() => toggleProjectPage('notes')}
         >
-          <span className="sidebar-nav-icon">✎</span>
+          <NavIcon name="notes" />
           <span className="sidebar-nav-label">All Notes</span>
           {noteCount > 0 && <span className="sidebar-nav-count">{noteCount}</span>}
         </button>
@@ -770,9 +792,9 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             title="Automations"
             onClick={() => toggleProjectPage('automations')}
           >
-            <span className="sidebar-nav-icon">⏰</span>
+            <NavIcon name="automations" />
             <span className="sidebar-nav-label">Automations</span>
-            <span className="sidebar-nav-count">{automationCount}</span>
+            {automationCount > 0 && <span className="sidebar-nav-count">{automationCount}</span>}
             {missedCount > 0 && (
               <span
                 className="sidebar-nav-badge"
@@ -789,7 +811,7 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             title="App settings"
             onClick={() => toggleProjectPage('settings')}
           >
-            <span className="sidebar-nav-icon">⚙</span>
+            <NavIcon name="settings" />
             <span className="sidebar-nav-label">Settings</span>
           </button>
         )}
