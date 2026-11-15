@@ -396,7 +396,7 @@ test('every answer carries the security headers', async (t) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) assert.equal(res.headers.get(name), value, `${path} ${name}`)
   }
   const csp = SECURITY_HEADERS['content-security-policy']
-  for (const part of ["script-src 'self'", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'self'"]) assert.ok(csp.includes(part), part)
+  for (const part of ["script-src 'self' blob:;", "connect-src 'self'", "frame-ancestors 'none'", "form-action 'self'"]) assert.ok(csp.includes(part), part)
   assert.ok(!/script-src[^;]*unsafe/.test(csp), 'no unsafe script source')
 })
 

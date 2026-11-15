@@ -102,3 +102,11 @@ test('failed: a default export that is not this plugin', async () => {
     assert.equal(f.deps.cache.size, 0, 'a bad bundle is not kept')
   }
 })
+
+test("both pages' content security policies allow a blob: script, and nothing looser", () => {
+  for (const page of ['src/renderer/index.html', 'src/web/index.html']) {
+    const html = readFileSync(new URL(`../${page}`, import.meta.url), 'utf8')
+    assert.ok(html.includes("script-src 'self' blob:;"), page)
+    assert.equal(/script-src[^;]*unsafe/.test(html), false, page)
+  }
+})
