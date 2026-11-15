@@ -198,25 +198,41 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - Two quick taps on **Create** or **Add PR** create one worktree.
 9. **Remove a worktree** (**Remove** on the worktree screen):
    - The main checkout has no **Remove**.
-   - A clean worktree: "Remove <name>?" says its folder is deleted and its branch stays.
-     **Remove** removes it, and the phone goes back to the project, where it is gone. The
-     branch still exists (`git branch`).
+   - A clean, unloaded worktree: "Remove <name>?" says its folder is deleted and its branch
+     stays. **Remove** removes it, and the phone goes back to the project, where it is gone.
+     The branch still exists (`git branch`).
    - **Cancel**, or Android's back button or a tap outside the alert, removes nothing.
-   - A loaded worktree is unloaded first, then removed.
+   - A loaded worktree: the question also says "Its running sessions will be stopped." It is
+     unloaded first, then removed.
    - A worktree with uncommitted changes: the question is "<name> has uncommitted changes."
-     with **Discard and remove**. Cancelling leaves it as it was, still loaded.
+     with **Discard and remove** (and, when it is loaded, that its sessions will be stopped).
+     Cancelling leaves it as it was, still loaded.
    - Change a file in a clean worktree and tap **Remove** before the phone shows "uncommitted
-     changes": after the first question the discard question follows. Declining it leaves
-     the worktree there, and loaded again if it was loaded.
+     changes": after the first question the discard question follows (for a worktree that
+     was loaded, it says again that its sessions will be stopped). Declining it leaves the
+     worktree there, and loaded again if it was loaded.
+   - On that discard question, put the app in the background for 30 s, come back and tap
+     **Cancel**: the worktree is loaded again, or the phone says "It was unloaded and could
+     not be loaded again: use Load." It is not left unloaded with nothing said.
+   - Unload a loaded worktree on the desktop while the phone's first question is up, then
+     answer **Remove** and have the removal fail (e.g. a locked worktree): the phone does
+     not load it again.
    - With the worktree's dev stack running, or its Docker VM, the phone says "Remove this
      worktree on the desktop: …" and asks nothing.
+   - Start the worktree's dev stack on the desktop while the phone's question is up, then
+     answer **Remove**: the same "Remove this worktree on the desktop: …", and nothing is
+     unloaded or removed.
    - When the phone can't check that (the server stops answering as **Remove** is tapped,
      e.g. its network is cut): "Could not check whether this worktree's dev stack or Docker
      VM is running, so it was not removed. Try again." Nothing is asked, nothing is removed,
      and it does not say to use the desktop.
+   - A server machine without colima (and so with no Docker VMs) removes a worktree normally:
+     that is not a failed check.
    - A removal the server refuses for another reason shows its error, and a worktree the
-     phone unloaded for it is loaded again.
-   - A worktree listed as Missing is removed the same way.
+     phone unloaded for it is loaded again (or the error ends with "It was unloaded and
+     could not be loaded again: use Load.").
+   - A worktree listed as Missing (its folder was deleted) is removed the same way, also on
+     a server that runs dev stacks.
 10. **Branch details** (the **Branch** section of a worktree that is on a branch; a detached
     worktree has none):
     - **Workflow tag**: the project's tags in their colours, the branch's one filled in.
