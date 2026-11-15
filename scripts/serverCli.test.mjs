@@ -79,5 +79,21 @@ test('plugin add, remove and list parse; a missing action or target is refused',
   assert.match(refusal(['plugin', 'add']), /plugin add needs/)
   assert.match(refusal(['plugin', 'remove']), /plugin remove needs/)
   assert.match(refusal(['plugin', 'list', 'extra']), /Unknown/)
-  assert.match(refusal(['plugin', 'list', '--local']), /--local only applies/)
+})
+
+test('plugin takes --local and --local-profile, for the local server; not with --data-dir or --config', () => {
+  const list = parseArgs(['plugin', 'list', '--local'])
+  assert.deepEqual([list.command, list.pluginAction, list.local, list.localProfile], ['plugin', 'list', true, undefined])
+  const add = parseArgs(['plugin', 'add', './my-theme', '--local', '--local-profile', 'dev'])
+  assert.deepEqual([add.command, add.pluginAction, add.pluginTarget, add.local, add.localProfile], ['plugin', 'add', './my-theme', true, 'dev'])
+  const first = parseArgs(['--local-profile', 'dev', '--local', 'plugin', 'remove', 'nord'])
+  assert.deepEqual([first.command, first.pluginAction, first.pluginTarget, first.local, first.localProfile], ['plugin', 'remove', 'nord', true, 'dev'])
+  assert.match(refusal(['plugin', 'list', '--local', '--data-dir', '/tmp/data']), /--local has its own config, data dir/)
+  assert.match(refusal(['plugin', 'list', '--local', '--config', '/tmp/config.json']), /--local has its own config, data dir/)
+  assert.match(refusal(['plugin', 'list', '--local-profile', 'dev']), /--local-profile only applies with --local/)
+  assert.match(refusal(['plugin', 'list', '--local', '--local-profile', 'Bad_Name']), /Invalid local profile name/)
+  assert.match(refusal(['plugin', 'list', '--local', '--web']), /--web does not apply to the local server/)
+  // Still only these three.
+  assert.match(refusal(['token', 'list', '--local']), /--local only applies to `start`, `stop` and `plugin`/)
+  assert.match(refusal(['list', '--local']), /--local only applies/)
 })

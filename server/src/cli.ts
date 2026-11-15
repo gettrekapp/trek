@@ -39,7 +39,7 @@ export interface CliArgs {
   insecure: boolean
   /** `start --web`: serve the web client (5c-3); `web: true` in the config does the same */
   web: boolean
-  /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it. */
+  /** `start --local`: the app's local server, with its own profile (see localProfile.ts). `stop --local` stops it; `plugin … --local` works on its plugins. */
   local: boolean
   /** `--local-profile <name>`: a named local profile (local-<name>) instead of the default one */
   localProfile?: string
@@ -69,7 +69,9 @@ Commands:
   plugin add <source>  Install a theme plugin: a folder with manifest.json and client.js, a
                        .trekplugin file, or an https URL of one. Replaces one of the same id
   plugin list          List the installed plugins
-  plugin remove <id>   Remove an installed plugin
+  plugin remove <id>   Remove an installed plugin, or a folder left there that is not listed
+  plugin … --local     The same for the Trek app's local server, which has its own data
+                       dir (with --local-profile <name> for a named one)
   update               Install the latest release, after asking. A running server restarts
                        into it: its terminals close, and agent sessions resume when their
                        worktrees are opened again
@@ -88,12 +90,13 @@ Options:
                     Not with --local.
   --yes             update: do not ask before installing
   --data-dir <path> start/remove/plugin: project storage (default: config.dataDir or platform dir)
-  --local           start/stop: the app's local server. Its own config, data and lock under
+  --local           start/stop/plugin: the app's local server. Its own config, data and lock under
                     ~/.config/trek-server/local (Windows: %APPDATA%\\trek-server\\local)
                     and <platform data dir>/local; 127.0.0.1
                     on a random port; a new token on every start; any path allowed.
                     Writes the port and token to local.json there (0600) while it runs.
                     Takes none of --config, --data-dir, --port, --host, --insecure, --web.
+                    plugin: installs into, lists or removes from <platform data dir>/local.
                     Exits ${LOCAL_ALREADY_RUNNING_EXIT} if a local server is already running.
   --local-profile <name>
                     With --local: a separate local server, under local-<name> in both
@@ -208,7 +211,7 @@ export function parseArgs(argv: string[]): CliArgs {
     args.command = wantHelp ? 'help' : 'version'
     return args
   }
-  if (args.local && args.command !== 'start' && args.command !== 'stop') usageError('--local only applies to `start` and `stop`')
+  if (args.local && args.command !== 'start' && args.command !== 'stop' && args.command !== 'plugin') usageError('--local only applies to `start`, `stop` and `plugin`')
   if ((args.check || args.yes) && args.command !== 'update') usageError('--check and --yes only apply to `update`')
   if (args.localProfile !== undefined && !args.local) usageError('--local-profile only applies with --local')
   if (args.importEnvFrom !== undefined && !(args.local && args.command === 'start')) usageError('--import-env-from only applies to `start --local`')
