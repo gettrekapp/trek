@@ -66,10 +66,14 @@ export function scheduleLine(schedule: AutomationSchedule | undefined, describe?
   return `${scheduleWords(schedule, describe) ?? schedule.cron} · ${schedule.tz}`
 }
 
-/** "2026-01-05 09:00" in `tz`, or null when the engine cannot say. */
+/**
+ * "2026-01-05 09:00" in `tz`, or null when the engine cannot say: it threw, or it answered without
+ * the parts (cron.ts then computes NaN and does not throw: "NaN-NaN-NaN NaN:NaN").
+ */
 function wall(ms: number, tz: string): string | null {
   try {
-    return formatWall(ms, tz, true)
+    const text = formatWall(ms, tz, true)
+    return text.includes('NaN') ? null : text
   } catch {
     return null
   }
@@ -85,7 +89,10 @@ export function nextRuns(a: Automation, now: number, count = 3): string[] {
   if (!a.enabled) return []
   try {
     const { cron, tz } = a.schedule
-    return nextSlots(parseCron(cron), tz, now, count).map((t) => formatWall(t, tz, true))
+    // An engine that gives no parts makes every slot NaN: no next runs, as when it throws.
+    if (wall(now, tz) === null) return []
+    const times = nextSlots(parseCron(cron), tz, now, count).map((t) => wall(t, tz))
+    return times.every((t): t is string => t !== null) ? times : []
   } catch {
     return []
   }
@@ -100,8 +107,11 @@ export function nextLine(a: Automation, now: number): string | null {
   if (!a.enabled) return 'Off'
   try {
     const { cron, tz } = a.schedule
+    if (wall(now, tz) === null) return null
     const [next] = nextSlots(parseCron(cron), tz, now, 1)
-    return next === undefined ? 'No upcoming run' : `Next: ${formatWall(next, tz, true)}`
+    if (next === undefined) return 'No upcoming run'
+    const when = wall(next, tz)
+    return when === null ? null : `Next: ${when}`
   } catch {
     return null
   }
@@ -302,6 +312,15 @@ export function turnOffQuestion(a: Automation): { title: string; message: string
   if (!a.enabled || !a.missed) return null
   const { count } = a.missed
   return { title: `Turn ${a.name} off?`, message: count === 1 ? 'Its 1 missed run is discarded.' : `Its ${count} missed runs are discarded.`, confirm: 'Turn off' }
+}
+
+/**
+ * Whether a confirmed turn-off question (`asked`: the automation it was built from) still states
+ * what is discarded, against the automation now (`current`): not when more runs were missed while it
+ * was up (ask again with the new count). Fewer, or none, discards no more than was stated.
+ */
+export function turnOffStillMatches(asked: Automation, current: Automation): boolean {
+  return (current.missed?.count ?? 0) <= (asked.missed?.count ?? 0)
 }
 
 /**

@@ -1916,7 +1916,8 @@ import {
   saveAutomationEdit,
   scheduleLine,
   scheduleWords,
-  turnOffQuestion
+  turnOffQuestion,
+  turnOffStillMatches
 } from '../apps/mobile/src/logic/automations.ts'
 import { EMPTY_HISTORY, branchFromParam, branchParam, historyAdded, historyDays, historyTime, olderCursor, olderLoaded, reloadFailed, reloadStarted, reloaded } from '../apps/mobile/src/logic/history.ts'
 import { automationHandlers } from '../server/src/automations/automationHandlers.ts'
@@ -2064,6 +2065,36 @@ test('automations: a schedule or a time the engine cannot work out is a stated f
   assert.equal(nextLine(automation({ schedule: undefined }), A_NOW), null)
   assert.equal(scheduleLine(undefined), '')
   assert.equal(nextLine(automation(), NaN), null)
+})
+
+test('automations: an engine whose Intl succeeds but gives no parts takes the same fallbacks, never "NaN"', () => {
+  // formatToParts answers an empty list (Hermes, if a build lacks the parts): cron.ts then computes NaN without throwing.
+  // cron.ts keeps a formatter per timezone: Pacific/Auckland is used by no other test.
+  const real = Intl.DateTimeFormat
+  Intl.DateTimeFormat = function () {
+    return { formatToParts: () => [] }
+  }
+  try {
+    const a = automation({ schedule: { cron: '0 9 * * 1-5', tz: 'Pacific/Auckland' }, missed: { since: A_NOW - 26 * HOUR, count: 1 }, history: [{ at: A_NOW - 5 * 60_000, trigger: 'missed', outcome: 'failed', error: 'no' }] })
+    assert.equal(nextLine(a, A_NOW), null)
+    assert.deepEqual(nextRuns(a, A_NOW), [])
+    assert.equal(missedLine(a, A_NOW), '1 missed since 1 d ago')
+    assert.deepEqual(runRows(a, [], A_NOW), [{ key: `${A_NOW - 5 * 60_000}:0`, when: '5 min ago', trigger: 'Missed', outcome: 'Failed', error: 'no' }])
+    assert.deepEqual(missedRows([a], {}, A_NOW), [{ id: 'a1', name: 'Morning triage', text: '1 missed since 1 d ago', choice: 'skip' }])
+    assert.equal(automationCard(a, A_NOW).next, null)
+  } finally {
+    Intl.DateTimeFormat = real
+  }
+})
+
+test("automations: the turn-off question's count must still be the current one when it is confirmed", () => {
+  const asked = automation({ missed: { since: A_NOW - HOUR, count: 3 } })
+  assert.equal(turnOffStillMatches(asked, automation({ missed: { since: A_NOW - HOUR, count: 3 } })), true)
+  // More runs were missed while the question was up: ask again.
+  assert.equal(turnOffStillMatches(asked, automation({ missed: { since: A_NOW - HOUR, count: 4 } })), false)
+  // Fewer, or none any more: nothing more is discarded than was stated (no question is needed for none).
+  assert.equal(turnOffStillMatches(asked, automation({ missed: { since: A_NOW - HOUR, count: 2 } })), true)
+  assert.equal(turnOffStillMatches(asked, automation()), true)
 })
 
 test('automations: missed runs are skipped unless Run is chosen; one request answers them all', () => {

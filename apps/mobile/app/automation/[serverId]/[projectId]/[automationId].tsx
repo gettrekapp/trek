@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { CAPABILITY, type AgentInfo, type ServerConnection } from '../../../../src/shared.ts'
+import { CAPABILITY, type AgentInfo, type Automation, type ServerConnection } from '../../../../src/shared.ts'
 import {
   AUTOMATION_CHANGED,
   AUTOMATION_GONE,
@@ -25,6 +25,7 @@ import {
   saveAutomationEdit,
   scheduleWords,
   turnOffQuestion,
+  turnOffStillMatches,
   type AutomationEdit
 } from '../../../../src/logic/automations.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
@@ -157,13 +158,20 @@ export default function AutomationScreen(): React.JSX.Element {
   const toggle = (): void => {
     if (!automation) return
     const enabled = !automation.enabled
-    const question = turnOffQuestion(automation)
     // The request's turn is held from the tap, so a second tap asks nothing while the question is up.
     void run('toggle', async () => {
-      if (question && !(await confirmAlert(question.title, question.message, question.confirm))) return
-      // The question can stay up a while: the automation as it is now. Gone, or already as asked: nothing to send.
-      const current = latest.current
-      if (!mounted.current || !current || current.enabled === enabled) return
+      // The question can stay up a while: after each answer, the automation as it is now. Gone, or
+      // already as asked: nothing to send. More runs missed meanwhile than the question stated: ask again.
+      let asked = automation
+      let current: Automation | undefined = automation
+      for (;;) {
+        const question = turnOffQuestion(asked)
+        if (question && !(await confirmAlert(question.title, question.message, question.confirm))) return
+        current = latest.current
+        if (!mounted.current || !current || current.enabled === enabled) return
+        if (!question || turnOffStillMatches(asked, current)) break
+        asked = current
+      }
       setTurning(enabled)
       try {
         await connection().request('automation.save', { projectId, automation: automationInput(current, { enabled }) })
@@ -292,7 +300,7 @@ export default function AutomationScreen(): React.JSX.Element {
             {error?.kind === 'toggle' ? <Text style={ui.error}>{error.text}</Text> : null}
 
             <View style={[ui.row, { flexWrap: 'wrap' }]}>
-              <Button label={busy === 'run' ? 'Starting…' : 'Run now'} disabled={off} onPress={runNow} />
+              <Button label={busy === 'run' ? 'Starting…' : 'Run now'} disabled={off || edit !== null} onPress={runNow} />
               {tab ? <Button ghost label="Open run tab" onPress={() => openSession(tab.id)} /> : null}
             </View>
             {error?.kind === 'run' ? <Text style={ui.error}>{error.text}</Text> : null}
