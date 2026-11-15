@@ -207,6 +207,71 @@ test('watch: a watcher that fails is closed with a warning, and watch can be cal
   assert.equal(watchers[1].closed, true)
 })
 
+test('watch: a folder that cannot be made or watched is a warning, never a throw, and watch can be called again', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'trek-installed-'))
+  t.after(() => removeDir(root))
+  // The folder's parent is a regular file: it can neither be made nor watched.
+  writeFileSync(join(root, 'a-file'), 'x')
+  const dir = join(root, 'a-file', 'plugins-installed')
+  const warnings = []
+  const store = createInstalledPlugins({ dir, reserved: () => false, warn: (m) => warnings.push(m) })
+  t.after(() => store.dispose())
+  assert.doesNotThrow(() => store.watch())
+  assert.equal(warnings.length, 1, JSON.stringify(warnings))
+  assert.ok(warnings[0].startsWith(`[plugins] cannot watch ${dir}: `), warnings[0])
+  assert.deepEqual(store.list(), [], 'and the store still answers')
+  assert.throws(() => store.add(pkg('solarized')), 'an install there fails, as itself')
+  // Mended: the next call watches.
+  rmSync(join(root, 'a-file'))
+  assert.doesNotThrow(() => store.watch())
+  assert.equal(existsSync(dir), true, 'tried again')
+  assert.equal(warnings.length, 1, JSON.stringify(warnings))
+})
+
+test('watch: after a watcher fails the store tries again by itself until one is live, and not once disposed', async (t) => {
+  const s = setup(t)
+  const watchers = []
+  let failing = 0
+  fakeWatch(t, () => {
+    if (failing > 0) {
+      failing--
+      throw Object.assign(new Error('ENOSPC: no watches left'), { code: 'ENOSPC' })
+    }
+    const watcher = Object.assign(new EventEmitter(), { closed: false, close() { this.closed = true } })
+    watchers.push(watcher)
+    return watcher
+  })
+  const REWATCH_MS = 20
+  const store = createInstalledPlugins({ dir: s.dir, reserved: () => false, warn: (m) => s.warnings.push(m), rewatchMs: REWATCH_MS })
+  t.after(() => store.dispose())
+  const heard = []
+  store.onChange((ids) => heard.push(ids))
+  store.watch()
+  assert.equal(watchers.length, 1)
+
+  // The first two tries fail too (a plain watch is tried after a recursive one, so four throws): it keeps trying.
+  failing = 4
+  watchers[0].emit('error', new Error('EPERM: the folder went away'))
+  // What another process did while nothing watched.
+  s.make().add(pkg('nord'))
+  for (let n = 0; watchers.length < 2 && n < 500; n++) await sleep(REWATCH_MS)
+  assert.equal(watchers.length, 2, 'watched again without being asked')
+  assert.equal(failing, 0, 'after the tries that failed')
+  assert.ok(s.warnings.some((w) => /cannot watch .*ENOSPC/.test(w)), JSON.stringify(s.warnings))
+  assert.equal(s.warnings.filter((w) => w.includes('ENOSPC')).length, 1, 'the same reason is said once')
+  assert.deepEqual(heard, [['nord']], 'and what changed meanwhile is read')
+
+  // Live again: the tries stop.
+  await sleep(REWATCH_MS * 5)
+  assert.equal(watchers.length, 2)
+
+  // Disposed while waiting to try again: no new watcher.
+  watchers[1].emit('error', new Error('EPERM: again'))
+  store.dispose()
+  await sleep(REWATCH_MS * 5)
+  assert.equal(watchers.length, 2)
+})
+
 test('watch: recursive where the platform has it, and plain where asking for it throws', (t) => {
   const s = setup(t)
   const asked = []

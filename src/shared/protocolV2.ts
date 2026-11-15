@@ -786,6 +786,8 @@ export interface EventPayloadsV2 {
   'integrations.changed': IntegrationsChangedEvent
   /** A plugin's server-wide state changed (a key, its config), by any client: its windows re-read it */
   'plugins.changed': PluginsChangedEvent
+  /** The welcome's `plugins` as it is now, before the `plugins.changed` of each installed plugin added, replaced or removed. To every authenticated connection. */
+  'plugins.list': { plugins: PluginPresence[] }
   /** 5e: promote_to_primary asks the project's listening windows to confirm (`promote.claim` / `promote.answer`) */
   'promote.request': PromoteRequestEvent
   /** 5e: the request ended, or another window claimed it (`claimed`): close its dialog (the claimant carries on) */

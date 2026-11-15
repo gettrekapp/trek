@@ -20,6 +20,8 @@ export interface InstalledPluginsOptions {
   /** Whether an id is a built-in plugin's or a core namespace (reserved.ts) */
   reserved: (id: string) => boolean
   warn?: (message: string) => void
+  /** How long after a watcher failed, and then how often, a new watch is tried (default: 30 s) */
+  rewatchMs?: number
 }
 
 export interface InstalledPlugins {
@@ -37,7 +39,7 @@ export interface InstalledPlugins {
   rescan(): boolean
   /** The ids added, replaced or removed, sorted; returns the unsubscribe */
   onChange(listener: (ids: string[]) => void): () => void
-  /** Rescans when the folder changes */
+  /** Rescans when the folder changes. Never throws: a folder that cannot be watched is a warning, and a later call tries again. */
   watch(): void
   dispose(): void
 }
@@ -83,6 +85,10 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
   let skipped = new Map<string, string>()
   let watcher: FSWatcher | undefined
   let timer: NodeJS.Timeout | undefined
+  /** Runs while a watcher that failed has no successor. */
+  let rewatch: NodeJS.Timeout | undefined
+  /** Why the folder is not watched, as last warned: each try at a new watch does not say it again. */
+  let unwatched: string | undefined
 
   const clientBytes = (id: string): Buffer | string => regularFile(join(dir, id, 'client.js'), 'client.js', MAX_PLUGIN_CLIENT_BYTES, 'its client bundle is larger than 1 MB')
 
@@ -170,6 +176,56 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
     }
   }
 
+  const cannotWatch = (err: unknown): void => {
+    const reason = err instanceof Error ? err.message : String(err)
+    if (reason !== unwatched) warn(`[plugins] cannot watch ${dir}: ${reason}`)
+    unwatched = reason
+  }
+
+  const startWatch = (): void => {
+    if (watcher) return
+    // One rescan for a burst of events (an add is several renames and writes).
+    const changed = (): void => {
+      clearTimeout(timer)
+      timer = setTimeout(() => adopt(scan()), 200)
+    }
+    // Recursive, to hear a client.js edited inside its folder; plain where that cannot be had
+    // (bundle() still notices such an edit when the bundle is next asked for).
+    const open = (recursive: boolean): FSWatcher => watchDir(dir, { recursive }, changed)
+    let opened: FSWatcher
+    // Out of watches or of files, a folder that cannot be made: the server still starts, lists
+    // its plugins and takes its own installs. What the command changes is then read at a restart.
+    try {
+      mkdirSync(dir, { recursive: true })
+      try {
+        opened = open(RECURSIVE_WATCH)
+      } catch (err) {
+        if (!RECURSIVE_WATCH) throw err
+        opened = open(false)
+      }
+    } catch (err) {
+      cannotWatch(err)
+      return
+    }
+    watcher = opened
+    unwatched = undefined
+    opened.on('error', (err) => {
+      cannotWatch(err)
+      opened.close()
+      // Cleared, so that watch() starts a new one; and nobody else calls it, so it is tried from here.
+      if (watcher !== opened) return
+      watcher = undefined
+      rewatch ??= setInterval(() => {
+        startWatch()
+        if (!watcher) return
+        clearInterval(rewatch)
+        rewatch = undefined
+        // What changed while nothing watched.
+        adopt(scan())
+      }, options.rewatchMs ?? 30_000).unref()
+    })
+  }
+
   sweep()
   known = scan()
 
@@ -251,34 +307,11 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    watch() {
-      if (watcher) return
-      mkdirSync(dir, { recursive: true })
-      // One rescan for a burst of events (an add is several renames and writes).
-      const changed = (): void => {
-        clearTimeout(timer)
-        timer = setTimeout(() => adopt(scan()), 200)
-      }
-      // Recursive, to hear a client.js edited inside its folder; plain where that cannot be had
-      // (bundle() still notices such an edit when the bundle is next asked for).
-      const open = (recursive: boolean): FSWatcher => watchDir(dir, { recursive }, changed)
-      let opened: FSWatcher
-      try {
-        opened = open(RECURSIVE_WATCH)
-      } catch (err) {
-        if (!RECURSIVE_WATCH) throw err
-        opened = open(false)
-      }
-      watcher = opened
-      opened.on('error', (err) => {
-        warn(`[plugins] cannot watch ${dir}: ${err.message}`)
-        opened.close()
-        // Cleared, so that watch() starts a new one.
-        if (watcher === opened) watcher = undefined
-      })
-    },
+    watch: startWatch,
     dispose() {
       clearTimeout(timer)
+      clearInterval(rewatch)
+      rewatch = undefined
       watcher?.close()
       watcher = undefined
       listeners.clear()

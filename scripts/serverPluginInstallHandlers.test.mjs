@@ -170,7 +170,8 @@ async function server(t, config = {}) {
     trek.httpServer.listen(0, '127.0.0.1', done)
   })
   const url = `ws://127.0.0.1:${trek.httpServer.address().port}`
-  const connect = async () => {
+  /** A connection and every frame it is sent. `hello: false`: it never signs in. */
+  const connect = async ({ hello = true } = {}) => {
     const ws = new WebSocket(url)
     sockets.push(ws)
     const frames = []
@@ -179,10 +180,11 @@ async function server(t, config = {}) {
       frames.push(JSON.parse(String(event.data)))
       for (const wake of waiters) wake()
     })
-    const frame = (pred, what) =>
+    /** The first frame from index `from` on that `pred` accepts; fails with what did arrive. */
+    const frame = (pred, what, from = 0) =>
       new Promise((done, reject) => {
         const look = () => {
-          const found = frames.find(pred)
+          const found = frames.slice(from).find(pred)
           if (!found) return
           clearTimeout(timer)
           waiters.delete(look)
@@ -205,52 +207,111 @@ async function server(t, config = {}) {
       ws.send(JSON.stringify({ type: 'req', id, method, params }))
       return frame((f) => f.type === 'res' && f.id === id, `answer to ${method}`)
     }
-    ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, client: 'test', clientVersion: '0', token }))
-    const welcome = await frame((f) => f.type === 'welcome', 'welcome')
-    const event = (name, pred = () => true) => frame((f) => f.type === 'event' && f.event === name && pred(f.payload), name)
-    return { frames, request, welcome, event }
+    const signIn = () => {
+      ws.send(JSON.stringify({ type: 'hello', protocolVersion: 2, client: 'test', clientVersion: '0', token }))
+      return frame((f) => f.type === 'welcome', 'welcome')
+    }
+    const welcome = hello ? await signIn() : undefined
+    /** The first `name` event from frame index `from` on whose payload `pred` accepts. */
+    const event = (name, pred = () => true, from = 0) => frame((f) => f.type === 'event' && f.event === name && pred(f.payload), name, from)
+    return { frames, request, welcome, event, signIn }
   }
   return { dir, connect }
 }
 
-test('on the wire: the welcome lists installed plugins after the built-ins, and every connection hears an install and a removal', async (t) => {
+const lists = (id) => (p) => p.plugins.some((x) => x.id === id)
+const isId = (id) => (p) => p.id === id
+/** Frames arrive in order, so a connection that is answered has been sent everything before the answer. */
+const settle = async (...connections) => {
+  for (const c of connections) assert.deepEqual((await c.request('sys.ping', { t: 1 })).result, { t: 1 })
+}
+const pluginEvents = (c) => c.frames.filter((f) => f.type === 'event' && (f.event === 'plugins.list' || f.event === 'plugins.changed'))
+
+test('on the wire: the welcome lists installed plugins after the built-ins, and every signed-in connection hears an install and a removal: the list, then the change', async (t) => {
   const s = await server(t)
   const a = await s.connect()
   const b = await s.connect()
+  const stranger = await s.connect({ hello: false })
   assert.ok(a.welcome.capabilities.includes('pluginInstall'))
   const builtIns = a.welcome.plugins.map((p) => p.id)
   assert.ok(builtIns.includes('voice') && !builtIns.includes('solarized'))
 
   const res = await a.request('plugins.install', { package: packageText() })
   assert.equal(res.ok, true, JSON.stringify(res))
-  const listed = (await b.event('plugins.list', (p) => p.plugins.some((x) => x.id === 'solarized'))).payload.plugins
-  assert.deepEqual(listed.map((p) => p.id), [...builtIns, 'solarized'], 'built-ins first')
-  assert.deepEqual(listed.at(-1), res.result)
-  await b.event('plugins.changed', (p) => p.id === 'solarized')
-  await a.event('plugins.list', (p) => p.plugins.some((x) => x.id === 'solarized'))
+  for (const c of [a, b]) {
+    const list = await c.event('plugins.list', lists('solarized'))
+    assert.deepEqual(list.payload.plugins.map((p) => p.id), [...builtIns, 'solarized'], 'built-ins first')
+    assert.deepEqual(list.payload.plugins.at(-1), res.result)
+    const changed = await c.event('plugins.changed', isId('solarized'))
+    assert.ok(c.frames.indexOf(list) < c.frames.indexOf(changed), 'the list, then the change')
+  }
 
   const late = await s.connect()
   assert.deepEqual(late.welcome.plugins.at(-1), res.result, 'a later welcome lists it')
   const bundle = await late.request('plugins.bundle', { id: 'solarized' })
   assert.deepEqual(bundle.result, { sha256: res.result.sha256, client: 'export default {}' })
 
+  // The removal's own frames: only those after this point count (the install's would satisfy a search from the start).
+  const from = new Map([a, b, late].map((c) => [c, c.frames.length]))
   assert.equal((await late.request('plugins.remove', { id: 'solarized' })).ok, true)
-  const after = (await a.event('plugins.list', (p) => !p.plugins.some((x) => x.id === 'solarized') && a.frames.some((f) => f.event === 'plugins.changed'))).payload.plugins
-  assert.deepEqual(after.map((p) => p.id), builtIns)
+  for (const c of [a, b, late]) {
+    const list = await c.event('plugins.list', () => true, from.get(c))
+    assert.deepEqual(list.payload.plugins.map((p) => p.id), builtIns, 'the list without it')
+    const changed = await c.event('plugins.changed', isId('solarized'), from.get(c))
+    assert.ok(c.frames.indexOf(list) < c.frames.indexOf(changed), 'the list, then the change')
+  }
+
+  // One that had not signed in was sent neither. Its frames arrive in order: signing in now, its
+  // welcome comes after anything it was sent before.
+  await settle(a, b, late)
+  await stranger.signIn()
+  assert.deepEqual(stranger.frames.map((f) => f.type), ['welcome'], JSON.stringify(stranger.frames))
+  assert.deepEqual(pluginEvents(a).map((f) => f.event), ['plugins.list', 'plugins.changed', 'plugins.list', 'plugins.changed'], 'and nothing twice')
 })
 
 test('on the wire: a plugin added in the folder by another process reaches the connected clients', async (t) => {
   const s = await server(t)
   const a = await s.connect()
   const other = createInstalledPlugins({ dir: join(s.dir, 'plugins-installed'), reserved: () => false, warn: () => {} })
-  other.add(JSON.parse(packageText({ id: 'nord', name: 'Nord', defaultEnabled: false })))
-  const listed = (await a.event('plugins.list', (p) => p.plugins.some((x) => x.id === 'nord'))).payload.plugins
-  assert.equal(listed.at(-1).name, 'Nord')
+  // The server's watch becomes live some time after it starts (macOS), and a change made before
+  // that is not heard: a real change is made again until one is.
+  const heard = a.event('plugins.list', lists('nord'))
+  let done = false
+  heard.then(() => { done = true }, () => { done = true })
+  for (let n = 0; !done && n < 40; n++) {
+    other.add(JSON.parse(packageText({ id: 'nord', name: `Nord ${n}`, defaultEnabled: false })))
+    await Promise.race([heard.catch(() => {}), new Promise((wake) => setTimeout(wake, 250))])
+  }
+  const list = await heard
+  assert.match(list.payload.plugins.at(-1).name, /^Nord \d+$/)
+  const changed = await a.event('plugins.changed', isId('nord'))
+  assert.ok(a.frames.indexOf(list) < a.frames.indexOf(changed), 'the list, then the change')
 })
 
-test('on the wire: remoteInstall off drops the capability', async (t) => {
+test('on the wire: remoteInstall off drops the capability and refuses install and remove; what is installed is still listed and handed out', async (t) => {
   const s = await server(t, { plugins: { remoteInstall: false } })
   const a = await s.connect()
   assert.ok(!a.welcome.capabilities.includes('pluginInstall'))
+  assert.ok(!a.welcome.plugins.some((p) => p.id === 'solarized'))
   assert.equal((await a.request('plugins.install', { package: packageText() })).error.code, 'NOT_FOUND')
+
+  // Installed on the machine, as `trek-server plugin add` does: the store is there, only the clients' way in is shut.
+  const other = createInstalledPlugins({ dir: join(s.dir, 'plugins-installed'), reserved: () => false, warn: () => {} })
+  // The server hears of it through its watch, which may not be live yet: a real change is made again until it answers.
+  let added
+  let bundle
+  for (let n = 0; n < 40 && !bundle?.ok; n++) {
+    added = other.add(JSON.parse(packageText({ defaultEnabled: false }, `export default ${n}`)))
+    await Promise.race([a.event('plugins.list', lists('solarized')).catch(() => {}), new Promise((wake) => setTimeout(wake, 250))])
+    bundle = await a.request('plugins.bundle', { id: 'solarized' })
+  }
+  assert.equal(bundle.ok, true, JSON.stringify(bundle))
+  assert.equal(bundle.result.sha256, added.sha256, 'the bundle as it is now')
+  const late = await s.connect()
+  assert.ok(!late.welcome.capabilities.includes('pluginInstall'))
+  assert.equal(late.welcome.plugins.at(-1).id, 'solarized', 'the welcome lists it')
+  assert.equal(late.welcome.plugins.at(-1).sha256, added.sha256)
+  const remove = await late.request('plugins.remove', { id: 'solarized' })
+  assert.deepEqual([remove.ok, remove.error.code], [false, 'NOT_FOUND'])
+  assert.equal((await late.request('plugins.bundle', { id: 'solarized' })).ok, true, 'still there')
 })
