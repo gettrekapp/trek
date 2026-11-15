@@ -37,7 +37,7 @@ function TagChip({ tag, selected, disabled, onPress }: { tag: Tag; selected: boo
   )
 }
 
-export function BranchDetails({ serverId, projectId, project, repo, branch }: { serverId: string; projectId: string; project: Project; repo: Repository; branch: string }): React.JSX.Element {
+export function BranchDetails({ serverId, projectId, project, repo, branch, heading = true }: { serverId: string; projectId: string; project: Project; repo: Repository; branch: string; /** false under a row that already names the section */ heading?: boolean }): React.JSX.Element {
   const server = useServer(serverId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -190,7 +190,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
 
   return (
     <View style={{ gap: 8 }}>
-      <Text style={ui.heading}>Branch</Text>
+      {heading ? <Text style={ui.heading}>Branch</Text> : null}
       {tags.length ? (
         <>
           <Text style={ui.muted}>Workflow tag</Text>
@@ -231,7 +231,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
               autoFocus
               textAlignVertical="top"
               placeholder={`Notes for ${branch}…`}
-              placeholderTextColor="#6c7086"
+              placeholderTextColor={colors.placeholder}
               accessibilityLabel="Note"
             />
             {note.conflict ? (
@@ -260,7 +260,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
               onChangeText={type}
               autoFocus
               placeholder="ticket id or URL"
-              placeholderTextColor="#6c7086"
+              placeholderTextColor={colors.placeholder}
               autoCapitalize="none"
               autoCorrect={false}
               spellCheck={false}
@@ -285,7 +285,7 @@ export function BranchDetails({ serverId, projectId, project, repo, branch }: { 
               onChangeText={type}
               autoFocus
               placeholder="https://github.com/org/repo/pull/123"
-              placeholderTextColor="#6c7086"
+              placeholderTextColor={colors.placeholder}
               autoCapitalize="none"
               autoCorrect={false}
               spellCheck={false}

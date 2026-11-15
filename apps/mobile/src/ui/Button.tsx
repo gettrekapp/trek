@@ -1,5 +1,5 @@
 import { Pressable, Text } from 'react-native'
-import { ui } from './theme.ts'
+import { colors, ui } from './theme.ts'
 
 export function Button({ label, onPress, disabled, ghost, danger, selected, accessibilityLabel }: { label: string; onPress: () => void; disabled?: boolean; ghost?: boolean; danger?: boolean; /** For a choice between buttons (a toggle) */ selected?: boolean; /** What a screen reader says instead of the label, for a button whose label needs its context ("Run") */ accessibilityLabel?: string }): React.JSX.Element {
   return (
@@ -11,7 +11,7 @@ export function Button({ label, onPress, disabled, ghost, danger, selected, acce
       onPress={onPress}
       style={({ pressed }) => [ghost ? ui.ghost : ui.button, { opacity: disabled ? 0.4 : pressed ? 0.7 : 1 }]}
     >
-      <Text style={[ghost ? ui.ghostText : ui.buttonText, danger ? { color: '#f38ba8' } : null]}>{label}</Text>
+      <Text style={[ghost ? ui.ghostText : ui.buttonText, danger ? { color: colors.danger } : null]}>{label}</Text>
     </Pressable>
   )
 }

@@ -82,7 +82,7 @@ export function CommentBox({ conflict, inList = true }: { conflict?: string; inL
         maxLength={MAX_REVIEW_BODY}
         textAlignVertical="top"
         placeholder="Comment on this line"
-        placeholderTextColor="#6c7086"
+        placeholderTextColor={colors.placeholder}
         accessibilityLabel="Comment"
       />
       {conflict !== undefined ? (

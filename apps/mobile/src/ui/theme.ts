@@ -1,16 +1,18 @@
-// Colours and shared styles (dark, like the desktop app).
+// Colours and shared styles: the desktop app's own dark palette. Colour is for a session's state
+// and the user's tag colours; the rest is text.
 import { StyleSheet } from 'react-native'
 
 export const colors = {
-  bg: '#1e1e2e',
-  panel: '#262637',
-  border: '#3a3a4f',
-  text: '#cdd6f4',
-  muted: '#9399b2',
-  accent: '#89b4fa',
+  bg: '#111113',
+  panel: '#1a1a1e',
+  border: '#2a2a2f',
+  text: '#ededf0',
+  muted: '#9a9aa2',
+  placeholder: '#6b6b73',
+  accent: '#0a8dff',
   attention: '#e2a336',
-  danger: '#f38ba8',
-  ok: '#85d8a3'
+  danger: '#ff8589',
+  ok: '#5fbf7f'
 }
 
 export const ui = StyleSheet.create({
@@ -26,8 +28,15 @@ export const ui = StyleSheet.create({
   heading: { color: colors.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', marginTop: 8 },
   input: { color: colors.text, backgroundColor: colors.panel, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 10, fontSize: 15 },
   button: { backgroundColor: colors.accent, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center' },
-  buttonText: { color: '#11111b', fontWeight: '600', fontSize: 15 },
+  buttonText: { color: '#ffffff', fontWeight: '600', fontSize: 15 },
   ghost: { borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
   ghostText: { color: colors.text, fontSize: 14 },
+  // A list row: full width, a hairline under it, its mark in a fixed column.
+  listRow: { flexDirection: 'row', gap: 12, paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  section: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 6 },
+  sectionText: { color: colors.muted, fontSize: 12, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
+  // A quiet filled button for a row of them (quick buttons, keys): no border, so the row reads as one strip.
+  chip: { backgroundColor: colors.panel, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  chipText: { color: colors.text, fontSize: 13 },
   mono: { fontFamily: 'Menlo', fontSize: 12, color: colors.text }
 })

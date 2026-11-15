@@ -31,6 +31,11 @@ export function attentionText(item: AttentionEntry): string {
   return 'Needs you'
 }
 
+/** The row's mark on the home tab: blue for a session that finished, amber for everything that waits on the user. */
+export function attentionMark(item: Pick<AttentionEntry, 'decision' | 'pullRequest' | 'status'>): 'attention' | 'done' {
+  return !item.decision && !item.pullRequest && item.status === 'done' ? 'done' : 'attention'
+}
+
 /** The items not seen before (by key), for local notifications. */
 export function newItems(items: AttentionItem[], seen: ReadonlySet<string>): AttentionItem[] {
   return items.filter((i) => !seen.has(i.key))
