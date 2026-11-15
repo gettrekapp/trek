@@ -1,6 +1,7 @@
 import { useAppStore } from '../store'
 import { DEFAULT_TITLE_BAR_COLOR, resolveProjectName } from '../../../shared/appearance'
 import { ImagePicker, type ImageLimits } from './ImagePicker'
+import { ThemeSetting } from '../plugins/ThemeSetting'
 
 const ACCEPTED_IMAGES = 'image/png,image/jpeg,image/webp'
 
@@ -19,7 +20,7 @@ const BANNER_LIMITS: ImageLimits = {
   accept: ACCEPTED_IMAGES
 }
 
-/** Per-project name, title bar color, logo and banner, stored with the project on its server. */
+/** Per-project name, title bar color, logo and banner, stored with the project on its server; and this app's theme for the project (ThemeSetting). */
 export function AppearanceSettings(): React.JSX.Element {
   const projectName = useAppStore((s) => s.project?.name ?? '')
   const setProjectName = useAppStore((s) => s.setProjectName)
@@ -122,6 +123,7 @@ export function AppearanceSettings(): React.JSX.Element {
           wide
         />
       </div>
+      <ThemeSetting />
     </>
   )
 }
