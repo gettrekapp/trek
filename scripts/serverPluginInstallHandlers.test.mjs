@@ -3,7 +3,7 @@
 // on a real server on a loopback port, the welcome's entries and who hears a change.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { removeDir, removeDirWhenFree } from './testPlatform.mjs'
@@ -12,6 +12,7 @@ import { saveConfig } from '../server/src/config.ts'
 import { ConfigStore } from '../server/src/configStore.ts'
 import { createInstalledPlugins } from '../server/src/plugins/installed.ts'
 import { installedIdReserved } from '../server/src/plugins/reserved.ts'
+import { MAX_PACKAGE_BYTES } from '../server/src/plugins/source.ts'
 import { ProjectState } from '../server/src/projects/state.ts'
 import { ProjectStore } from '../server/src/projects/store.ts'
 import { startServer } from '../server/src/server.ts'
@@ -51,9 +52,15 @@ const packageText = (manifest = {}, client = 'export default {}') => JSON.string
 function installCtx(t, { remoteInstall = true, pages = {} } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'trek-plugin-handlers-'))
   t.after(() => removeDir(root))
-  const store = createInstalledPlugins({ dir: join(root, 'plugins-installed'), reserved: installedIdReserved([{ manifest: { id: 'voice' } }]), warn: () => {} })
-  const fetch = async (url) => (pages[url] === undefined ? new Response('', { status: 404 }) : new Response(pages[url]))
-  return { store, ctx: { installed: { store, remoteInstall: () => remoteInstall, fetch } } }
+  const dir = join(root, 'plugins-installed')
+  const store = createInstalledPlugins({ dir, reserved: installedIdReserved([{ manifest: { id: 'voice' } }]), warn: () => {} })
+  const asked = []
+  const fetch = async (url, init) => {
+    asked.push(url)
+    init?.signal?.throwIfAborted()
+    return pages[url] === undefined ? new Response('', { status: 404 }) : new Response(pages[url])
+  }
+  return { dir, store, asked, ctx: { installed: { store, remoteInstall: () => remoteInstall, fetch } } }
 }
 
 test('plugins.install by package and by URL answers the presence entry; plugins.bundle hands the text out; plugins.remove removes', async (t) => {
@@ -71,7 +78,7 @@ test('plugins.install by package and by URL answers the presence entry; plugins.
 })
 
 test('the refusals', async (t) => {
-  const { store, ctx } = installCtx(t)
+  const { dir, store, asked, ctx } = installCtx(t)
   const code = async (method, params) => {
     const outcome = await dispatchV2(method, params, ctx)
     return outcome.ok ? 'ok' : `${outcome.error.code}: ${outcome.error.message}`
@@ -79,6 +86,7 @@ test('the refusals', async (t) => {
   assert.match(await code('plugins.install', {}), /^BAD_REQUEST: .*url or package/)
   assert.match(await code('plugins.install', { url: 'https://a.test/x', package: packageText() }), /^BAD_REQUEST: .*url or package/)
   assert.match(await code('plugins.install', { package: 5 }), /^BAD_REQUEST/)
+  assert.match(await code('plugins.install', { url: 5 }), /^BAD_REQUEST: url must be a string/)
   assert.match(await code('plugins.install', { package: '{' }), /^BAD_REQUEST: .*not JSON/)
   assert.match(await code('plugins.install', { package: packageText({ type: 'feature' }) }), /^BAD_REQUEST: .*type must be "theme"/)
   assert.match(await code('plugins.install', { package: packageText({ id: 'voice' }) }), /^BAD_REQUEST: .*built-in plugin/)
@@ -87,6 +95,27 @@ test('the refusals', async (t) => {
   assert.match(await code('plugins.remove', { id: 'nope' }), /^NOT_FOUND/)
   assert.match(await code('plugins.remove', {}), /^BAD_REQUEST/)
   assert.match(await code('plugins.bundle', { id: 'nope' }), /^NOT_FOUND/)
+
+  // A package that would be taken but for its size: refused before it is parsed.
+  const oversized = JSON.stringify({ manifest: MANIFEST, client: 'export default {}', padding: 'x'.repeat(MAX_PACKAGE_BYTES) })
+  assert.match(await code('plugins.install', { package: oversized }), /^BAD_REQUEST: .*larger than a plugin package may be/)
+
+  // What is not an id, or is too long to be a URL, is not sent back.
+  const fetched = asked.length
+  const longUrl = `https://a.test/${'u'.repeat(2048)}`
+  const refusedUrl = await code('plugins.install', { url: longUrl })
+  assert.match(refusedUrl, /^BAD_REQUEST: url is longer than 2,048 characters$/)
+  assert.equal(asked.length, fetched, 'and not fetched')
+  assert.match(await code('plugins.install', { url: `https://a.test/${'u'.repeat(2048 - 'https://a.test/'.length)}` }), /^BAD_REQUEST: .*HTTP 404/, '2,048 characters are a URL')
+  for (const method of ['plugins.bundle', 'plugins.remove']) {
+    for (const id of ['../../etc/passwd', 'Solarized', 'x'.repeat(33), '<script>alert(1)</script>', 'a\nb']) {
+      assert.equal(await code(method, { id }), 'BAD_REQUEST: id is not a plugin id', `${method} ${JSON.stringify(id)}`)
+    }
+    for (const id of [5, '', null, ['solarized'], { id: 'solarized' }]) assert.equal(await code(method, { id }), 'BAD_REQUEST: id is required', `${method} ${JSON.stringify(id)}`)
+    assert.match(await code(method, null), /^BAD_REQUEST: id is required/)
+  }
+
+  assert.deepEqual(existsSync(dir) ? readdirSync(dir) : [], [], 'nothing was written')
   assert.deepEqual(store.list(), [])
 })
 
