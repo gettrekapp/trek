@@ -328,7 +328,7 @@ server, newest first: decisions waiting (answered right there), sessions that fi
 or stopped, pull request notices. From there: a server's projects, where a repository
 gets a new worktree (on a new or an existing branch, or from a GitHub pull request's
 link, checked out as `pr/<n>`); a worktree (load or unload it, start a session with an
-agent or session type, close or restart one, its read-only Changes, remove it, and its
+agent or session type, close or restart one, its Changes, remove it, and its
 branch's workflow tag, custom tags, note, ticket and pull request, shown and edited);
 and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
 arrows, y, n), a prompt box that sends now or queues, and the project's quick
@@ -340,6 +340,20 @@ phone says to remove it on the desktop. A ticket links to its tracker when that 
 is on for the project and has its project setting; the phone does not look up a ticket's
 title or status, and does not edit the project's tag lists.
 
+- **Changes and review**: a worktree's Changes shows the branch against its base, the
+  uncommitted changes or one commit, file by file with line numbers. Tapping a line
+  writes a comment on it; the comments are the same draft review the desktop's Changes
+  tab has, edited and deleted from either, and **Send to…** queues them as one prompt
+  in one of the worktree's running sessions. Nothing is staged, reverted or committed
+  from the phone. A server without the `review` capability shows the branch's changes
+  read-only.
+- **Pull request watch**: a branch's linked GitHub pull request has **Watch** /
+  **Stop watching** in the worktree's Branch section, while `gh` is signed in on the
+  server's machine (a watch already on can be stopped without it). What the watch
+  reports (checks, reviews and comments, a conflict, merged, closed) shows as a notice
+  on the worktree's screen, with **Open** and **Dismiss**, as a line on its card in the
+  project, and in the home tab, where it can be dismissed too. There is no live view of
+  a pull request's checks, and review comments on GitHub are not answered from the phone.
 - **Pairing**: in **Open on server…**, a connected remote server has **Pair a phone…**.
   It shows a QR and a one-time code (5 minutes, used once), never a token. Scan it in
   the app's **Add server** (or type the server's address and the code): the phone

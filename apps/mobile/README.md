@@ -2,10 +2,10 @@
 
 Phase 6a (and 6b's background push). An Expo app (SDK 58, Expo Router) for iOS and
 Android: what needs you on every paired trek-server, sessions and their terminals,
-prompts, quick buttons, decisions and read-only Changes, adding and removing worktrees, a
-branch's tag, custom tags, note, ticket and pull request, and pushes while it is closed. The
-repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone pairing") how it
-signs in.
+prompts, quick buttons, decisions, Changes with its review (line comments on a diff, sent to
+a session), adding and removing worktrees, a branch's tag, custom tags, note, ticket and pull
+request, the pull request's watch and its notices, and pushes while it is closed. The repo's
+README ("Phone companion") says what it does; PROTOCOL.md ("Phone pairing") how it signs in.
 
 It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-exports
 `../../src/shared/client`, `model` and `protocolV2`, which Metro watches
@@ -143,8 +143,16 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
    - A session that rings the bell or finishes is listed with its project and age, newest first.
    - A `request_decision` shows its question. **Send answer** types it into the session; **Dismiss** clears it.
      With the keyboard up, one tap on **Send answer** sends it.
+   - A pull request notice (item 11) is listed with its title ("PR #<n>") and text. Tapping
+     its text opens the worktree.
+   - **Dismiss** on a pull request item clears the notice without opening the worktree; the
+     item leaves the list, and the notice leaves the worktree's screen and the desktop's chip.
+   - Two quick taps on that **Dismiss** send one request and open nothing.
+   - With the server out of reach, **Dismiss** shows the error under the item, which stays.
 3. **Projects:**
    - The server's projects, repositories and worktrees, with their branches and sessions' states.
+   - A worktree with a pull request notice shows it on its card as one line ("PR #<n>:
+     Checks failed: build"), cut off at the card's width, with no buttons.
    - **Load** / **Unload** follow on the desktop.
 4. **Sessions:**
    - **New session** with the default agent, another agent, and a session type.
@@ -173,7 +181,68 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
      - Add a button on the desktop: it appears on the phone without reopening the screen.
      - With the sheet open and the keyboard up, the fields, the preview and **Send** are all visible above the keyboard, on iOS and on Android (not checked on a device yet).
      - With the sheet open and something typed, send the app to the background for 30 s and come back: the sheet and what was typed are still there; with the server out of reach, **Send** shows the error in the sheet and keeps it open.
-6. **Changes:** files with their status and counts. Tapping one shows its patch: additions green, deletions red.
+6. **Changes** (a worktree's **Changes**; the review needs a server with the `review`
+   capability, and its draft is the one the desktop's Changes tab shows):
+   - **Branch**, **Uncommitted** and **Commit** are at the top, with what is compared under
+     them: "The branch against its base", "Uncommitted changes" or "Commit <sha> (<subject>)".
+   - **Commit** lists the newest commits (subject, short sha, author, age); tapping one shows
+     that commit's files.
+   - Files with their status and counts. Tapping one shows its patch with old and new line
+     numbers: additions green, deletions red.
+   - Opening another file closes the one that was open.
+   - A file with no patch says why instead: "No text changes" (binary), "Diff not shown: over
+     the size limit".
+   - A large file: a patch of more than 2,000 lines shows its first 2,000 and **Show all <n>
+     lines**, which draws the rest. Opening a 10,000-line patch does not hang the screen.
+   - Pulling down reloads the file list and the patches for the shown source.
+   - Tapping an added, removed or unchanged line opens a comment box under it. A hunk header
+     (`@@ … @@`) opens nothing.
+   - **Save** is disabled while the box is blank. **Save** puts the comment under its line,
+     and it shows on the desktop's Changes tab; **Cancel** closes the box and adds nothing.
+   - A line with a comment is marked: a tinted row with a bar at its left edge.
+   - With text typed in a box, tapping another line asks "Discard your comment?"; **Cancel**
+     keeps the box and its text.
+   - With text typed in a new comment's box, choosing another source asks the same.
+   - **Edit** on a comment opens the box with its text; **Save** changes it, on the desktop too.
+   - **Delete** asks "Delete this comment?" and then removes it.
+   - Edit conflict: tap **Edit** on the phone, change that comment on the desktop, then
+     **Save** on the phone. The box stays open with what was typed, with "The comment changed
+     on the server" and the desktop's text under it. **Save** again overwrites it.
+   - Delete that comment on the desktop instead, then **Save**: "Could not save the comment:
+     it is no longer in the review".
+   - Outdated: comment on a line, change that line in the worktree, pull down. The comment is
+     at the top of its file under "Outdated: its line has changed", with "line <n>: <the line
+     as it was>"; **Edit** and **Delete** still work there.
+   - While the draft has comments, a bar at the bottom says "<n> comments", with **Send to…**
+     and **Discard**. A comment added on the desktop changes the count without reopening.
+   - A comment made on another source (or on a file not in this diff) adds "· <m> elsewhere"
+     to the bar; tapping that lists them (the source, path, line and body) with **Delete**.
+   - **Send to…** lists the worktree's running sessions with their status. Tapping one queues
+     the review as one prompt in that session, and the bar goes (the draft is empty).
+   - **Send to…** with no session running: "Start a session in this worktree to send the
+     review to"; for an unloaded worktree, "Load the worktree to send the review to one of
+     its sessions". Nothing can be tapped.
+   - **Discard** asks "Discard <n> comments?" and then deletes the review, on the desktop too.
+   - Review conflict: with the **Discard** question up, add a comment on the desktop, then
+     answer **Discard**. "The review changed on the server. Check it and send again." shows
+     above the bar, nothing is discarded, and the bar has the new count.
+   - With **Send to…**'s list open, add a comment on the desktop: the list closes, so a
+     session is never sent a review other than the one that was counted.
+   - Cut the server's network, then **Save** a comment: the error says the comment "may not
+     have been added" and to check the file's comments before adding it again. The same for
+     **Send to…** ("may not have been sent", the session's queue).
+   - Two quick taps on **Save** add one comment; the buttons are disabled while a request runs.
+   - Tap targets: a line that takes a comment is tall enough to hit with a thumb (28 pt), and
+     a tap on one line never opens the box on its neighbour (not checked on a device yet).
+   - The keyboard: with a comment box open and the keyboard up, the box stays above it, and
+     one tap on **Save** saves, on iOS and on Android (not checked on a device yet).
+   - Scroll a patch with long lines sideways: the comments and the open box under a line stay
+     on screen instead of being left behind at the left (not checked on a device yet).
+   - The two line-number columns are wide enough for the file's largest numbers, and the code
+     is in a monospace font, also on Android (not checked on a device yet).
+   - A server without `review` (an older trek-server): no **Branch** / **Uncommitted** /
+     **Commit**, no comments and no bar. The files of the branch against its base, with the
+     uncommitted work, open as coloured patches; tapping a line does nothing.
 7. **Promote:**
    - With the project open, an agent's `promote_to_primary` shows the confirmation. **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
    - With the worktree's stack running, the phone says to confirm on the desktop.
@@ -260,22 +329,45 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
       saves the link without `/files` and shows "PR #<n>"; tapping it opens the browser.
       Anything else says "Not a GitHub pull request link" and saves nothing. **Clear** unlinks
       it.
+    - **Watch** (under a linked pull request, on a server whose machine has `gh` signed in):
+      the label becomes "PR #<n> · watching" and the button **Stop watching**; the desktop's
+      chip says "watching" too. **Stop watching** takes both away.
+    - A branch without a pull request has no **Watch**. Neither has a linked one on a server
+      where `gh` is not signed in, unless it is already watched.
+    - Sign `gh` out on the server's machine (`gh auth logout`) with the worktree's screen
+      open. Within about 10 minutes, without reopening the screen, an unwatched pull request
+      loses **Watch**, and a watched one says "PR #<n> · watch paused, gh signed out" and
+      keeps **Stop watching**, which still works. Signing in again brings both back.
+    - Watching a pull request whose link is not a github.com one shows the server's refusal
+      ("… is not a GitHub pull request URL") in the section's error line.
+    - **Edit** the pull request to another link, or **Clear** it: the watch is gone with it.
     - With the keyboard up, one tap on **Save** saves, and the box being edited stays above the
       keyboard, on iOS and on Android (not checked on a device yet).
     - Two quick taps on **Save**, or on a tag, send one request; the section's buttons are
       disabled while it runs.
     - With the server out of reach, **Save** shows the error under the section and the box
       keeps what was typed.
-11. **Background:**
+11. **Pull request notices** (a watched pull request whose checks fail or settle, that gets
+    a review or a comment, conflicts, or is merged or closed; the server polls every 3 minutes):
+    - The worktree's screen shows the notice above the **Branch** section: its title ("PR
+      #<n>"), what happened, and how long ago.
+    - **Open** opens the pull request in the browser.
+    - **Dismiss** removes the notice from the screen, from the worktree's card, from the
+      Attention list and from the desktop.
+    - Dismissing it on the desktop removes it from the phone without reopening the screen.
+    - A second report on the same pull request replaces the first notice.
+    - Two quick taps on **Dismiss** send one request.
+    - With the server out of reach, **Dismiss** shows the error in the notice, which stays.
+12. **Background:**
    - Send the app to the background. A session needing you within ~20 s gives a notification;
      a decision's says "A decision is waiting in <project>", not its question.
    - Tapping the notification opens that session (also with the app closed since).
    - What was already waiting when the app connected gives no notification.
    - Back in the foreground, everything reconnects.
-12. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
+13. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
     Pairing again from there replaces the entry: the server is listed once.
 
-13. **Push (6b), on a real device only** (a development build with the push entitlement, a
+14. **Push (6b), on a real device only** (a development build with the push entitlement, a
     relay configured as in `relay/README.md`, its address in `extra.relayUrl` or
     `TREK_RELAY_URL`):
     - First launch of a fresh install: allow notifications when asked. Without restarting, the
