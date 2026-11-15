@@ -22,6 +22,7 @@ async function fixture(client = bundleOf(), over = {}) {
   const imported = []
   const deps = {
     cache: new Map(),
+    pending: new Map(),
     request: async (method, params) => {
       calls.push([method, params])
       return { sha256, client }
@@ -196,6 +197,42 @@ test('the same bundle listed under another id, or another version, is not served
   const again = await loadInstalledPlugin(f.theme, f.sha256, f.deps)
   assert.equal(again.kind, 'loaded')
   assert.equal(f.calls.length, 3, 'the listed one is still in memory')
+})
+
+test('two loads of the same bundle at once share one request and one import, and get the same plugin', async () => {
+  const f = await fixture()
+  const [a, b] = await Promise.all([loadInstalledPlugin(f.theme, f.sha256, f.deps), loadInstalledPlugin(f.theme, f.sha256, f.deps)])
+  assert.equal(a.kind, 'loaded')
+  assert.equal(b.kind, 'loaded')
+  assert.equal(a.plugin, b.plugin)
+  assert.equal(f.calls.length, 1, 'one request')
+  assert.equal(f.imported.length, 1, 'one import')
+  assert.equal(f.deps.pending.size, 0, 'nothing left pending')
+})
+
+test('a load that failed is not kept: two at once share the failure, and the next asks the server again', async () => {
+  const f = await fixture()
+  const answer = f.deps.request
+  f.deps.request = async (method, params) => {
+    f.calls.push([method, params])
+    throw Object.assign(new Error('not connected to the server'), { code: 'NOT_CONNECTED' })
+  }
+  const down = { kind: 'failed', reason: 'the server did not send it (not connected to the server)' }
+  assert.deepEqual(await Promise.all([loadInstalledPlugin(f.theme, f.sha256, f.deps), loadInstalledPlugin(f.theme, f.sha256, f.deps)]), [down, down])
+  assert.equal(f.calls.length, 1, 'one request for the two')
+  assert.equal(f.deps.pending.size, 0)
+  f.deps.request = answer
+  assert.equal((await loadInstalledPlugin(f.theme, f.sha256, f.deps)).kind, 'loaded')
+  assert.equal(f.calls.length, 2, 'asked again')
+})
+
+test('the same bytes listed under another id at the same time are not shared', async () => {
+  const f = await fixture()
+  const [nord, gruv] = await Promise.all([loadInstalledPlugin(f.theme, f.sha256, f.deps), loadInstalledPlugin({ ...f.theme, id: 'gruv' }, f.sha256, f.deps)])
+  assert.equal(nord.kind, 'loaded')
+  assert.deepEqual(gruv, { kind: 'failed', reason: 'its bundle is another plugin (nord 1.0.0)' })
+  assert.deepEqual(f.calls, [['plugins.bundle', { id: 'nord' }], ['plugins.bundle', { id: 'gruv' }]])
+  assert.equal(f.imported.length, 2)
 })
 
 /** A policy's directive: what follows its name, or undefined when the policy has none. */

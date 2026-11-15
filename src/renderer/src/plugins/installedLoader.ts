@@ -23,11 +23,14 @@ export interface LoaderDeps {
   importText?(text: string): Promise<unknown>
   /** Loaded plugins by bundle hash (default: one per page) */
   cache?: Map<string, ClientPlugin>
+  /** The loads under way, by bundle hash, id and version (default: one per page): a second load of the same theme joins the first */
+  pending?: Map<string, Promise<LoadResult>>
   /** How long a bundle's import may take, top-level awaits included (default: 15 seconds) */
   timeoutMs?: number
 }
 
 const loadedPlugins = new Map<string, ClientPlugin>()
+const pendingLoads = new Map<string, Promise<LoadResult>>()
 const IMPORT_TIMEOUT_MS = 15_000
 /** The longest an error's message, and a bundle's own id or version, may be inside a reason. */
 const MAX_MESSAGE = 200
@@ -107,6 +110,22 @@ async function load(theme: InstalledTheme, accepted: string, deps: LoaderDeps): 
   const kept = cache.get(theme.sha256)
   if (kept && kept.manifest.id === theme.id && kept.manifest.version === theme.version) return { kind: 'loaded', plugin: kept }
 
+  // One fetch and one import for loads of the same theme at the same time: a bundle's top-level
+  // code runs once. As the plugin listed, like the cache: the same bytes under another id or
+  // version are not shared. Gone once it settles, so a load that failed can be tried again.
+  const pending = deps.pending ?? pendingLoads
+  const key = `${theme.sha256}\n${theme.id}\n${theme.version}`
+  const running = pending.get(key)
+  if (running) return running
+  const work = fetchAndImport(theme, deps, cache).finally(() => {
+    if (pending.get(key) === work) pending.delete(key)
+  })
+  pending.set(key, work)
+  return work
+}
+
+/** The bundle of `theme` from its server, checked against its hash, imported, and its default export checked; kept in `cache` when it loads. */
+async function fetchAndImport(theme: InstalledTheme, deps: LoaderDeps, cache: Map<string, ClientPlugin>): Promise<LoadResult> {
   let answer: unknown
   try {
     answer = await deps.request('plugins.bundle', { id: theme.id })
