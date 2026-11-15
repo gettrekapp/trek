@@ -987,19 +987,21 @@ A package (a `.trekplugin` file) is the two files as one JSON document:
   "client": "<the text of client.js>" }
 ```
 
-**The manifest.** What is installed keeps these six fields and no other:
+**The manifest.** A package's manifest is checked by these six fields:
 
 | Field | Rule |
 |---|---|
 | `id` | A plugin id: lowercase letters, digits and `-`, starting with a letter, at most 32 characters. Refused: `constructor`, a built-in plugin's id, a core namespace (`plugins`, `integrations`, `sys`, `sub`, `mcp`, and the prefix of any core method: `session`, `update`), and the names Windows keeps for devices (`con`, `prn`, `aux`, `nul`, `com1` to `com9`, `lpt1` to `lpt9`) |
 | `version` | Semver (`1.2.3`, `1.2.3-beta.1`), at most 64 characters |
-| `name` | 1 to 64 visible characters once trimmed, with no control or invisible (format) characters |
+| `name` | 1 to 64 visible characters (UTF-16 code units) once trimmed, with no control or invisible (format) characters |
 | `description` | The same, 1 to 300 |
 | `type` | `"theme"` |
 | `contract` | `1`: the plugin contract's version the bundle was built for |
 
 A manifest that declares `secrets`, `projectSettings`, `legacyCapability` or `legacyBuiltIn` is
-refused: only a built-in plugin may. Any other field is dropped. The manifest is at most 16 KB (as
+refused: only a built-in plugin may. Any other field is dropped: the `manifest.json` the server
+stores has the six fields (`name` and `description` trimmed) and `"defaultEnabled": false`, and
+nothing else, whatever installed it. The manifest is at most 16 KB (as
 compact JSON, in UTF-8), `client` is not empty and at most 1 MB of UTF-8 text, and a package's text
 is at most 6 MB (6,308,864: characters when a client sends it, bytes when it is read from a URL).
 
@@ -1044,17 +1046,29 @@ theme is on nowhere until a client picks it.
   as it now is (the built-ins, then the installed ones), and then `plugins.changed {id}` for each
   plugin that changed. That is so whoever made the change: a client, `trek-server plugin` on the
   machine, or an edit in the folder, which a running server notices by watching it (a moment
-  later) or, for a `client.js` edited in place, when its bundle is next asked for. A server that
-  cannot watch the folder says so in its log and reads such changes when it next starts.
+  later) or, for a `client.js` edited in place, when its bundle is next asked for. The watch is
+  not all it relies on: the server also reads the folder again about two seconds after the watch
+  starts and then every minute, so a change the watch missed is announced within a minute. A
+  server that cannot watch the folder says so in its log, still reads it every minute, and tries
+  to watch it again every 30 seconds until it can.
+- The server's log names each install and removal a client made: `[plugins] token "<name>"
+  installed <id> <version> (sha256 <hash>) from <url>` (the URL without its query or fragment; `from
+  a package` for `{package}`) and `[plugins] token "<name>" removed <id>`.
 - A folder in `plugins-installed` that cannot be installed (a name that is not its manifest's
   `id`, a broken manifest, a file that is a symbolic link) is not listed; the server's log says why.
 
 `trek-server plugin add <source>` installs a package on the server's machine, from a folder with
 `manifest.json` and `client.js`, a `.trekplugin` file, or an `https` URL of one, under the same
 rules, replacing a plugin of the same id; `trek-server plugin list` prints each installed plugin's
-id, version, type and name; `trek-server plugin remove <id>` removes one. They work on the data
-dir's folder (`--data-dir`, else the config's `dataDir`, else the platform's) with no connection
-to a server, whatever `remoteInstall` says; one that is running picks the change up by its watch.
+id, version, type and name; `trek-server plugin remove <id>` removes one, or a folder there named
+as an id that is not listed (one whose manifest broke; never a symbolic link). They work on the
+data dir's folder (`--data-dir`, else the config's `dataDir`, else the platform's; a config that
+is there but cannot be read is a warning, and the platform's is used) with no connection to a
+server, whatever `remoteInstall` says; one that is running picks the change up by its watch, or
+within a minute. The Trek app's local server has a data dir of its own, which none of these
+reach: `trek-server plugin add <source> --local` (and `list --local`, `remove <id> --local`)
+works on it, with `--local-profile <name>` for a named profile, and takes neither `--data-dir`
+nor `--config`.
 
 ## Pull request watch
 
