@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { errorText } from '../v2/errors'
-import { parsePhonePort, phoneAccessLabel } from '../../../shared/appServerRules'
+import { parsePhonePort, phoneAccessLabel, phoneAddressWarning } from '../../../shared/appServerRules'
 import type { PhoneAccess } from '../../../shared/protocolV2'
 
 export interface PhoneAccessState {
@@ -24,7 +24,11 @@ export function usePhoneAccess(active: boolean): PhoneAccessState {
       (got) => live && setAccess(got),
       (err) => live && setError(errorText(err))
     )
-    const off = window.api.appServers.phoneAccess.onChanged((next) => setAccess(next))
+    // A change that arrived is the state now: what an earlier, refused change said no longer applies.
+    const off = window.api.appServers.phoneAccess.onChanged((next) => {
+      setAccess(next)
+      setError(null)
+    })
     return () => {
       live = false
       off()
@@ -35,6 +39,8 @@ export function usePhoneAccess(active: boolean): PhoneAccessState {
     setError(null)
     try {
       setAccess(await window.api.appServers.phoneAccess.set(patch))
+      // Again, after the answer: another change may have been refused while this one was on its way.
+      setError(null)
       return true
     } catch (err) {
       setError(errorText(err))
@@ -64,6 +70,10 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
   const { access, error, set, revoke } = phone
   const [port, setPort] = useState('')
   const [url, setUrl] = useState('')
+  /** Why the port typed was not sent; shown in the error line until the field is typed in or saved again. */
+  const [portError, setPortError] = useState<string | null>(null)
+  /** The phone whose Revoke was clicked once, and now asks "Revoke?" */
+  const [revoking, setRevoking] = useState<string | null>(null)
 
   // The fields follow the server's values whenever those change.
   useEffect(() => setPort(access ? String(access.port) : ''), [access?.port])
@@ -77,7 +87,11 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
   // when that value changes, and a refusal changes nothing.
   const savePort = (): void => {
     const next = parsePhonePort(port)
-    if (next === null) return setPort(String(access.port))
+    if (next === null) {
+      setPortError(port.trim() === '' ? null : 'The port is a whole number from 1024 to 65535.')
+      return setPort(String(access.port))
+    }
+    setPortError(null)
     if (next === access.port) return
     void set({ port: next }).then((ok) => ok || setPort(String(access.port)))
   }
@@ -86,6 +100,8 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
     if (next === (access.url ?? '')) return
     void set({ url: next === '' ? null : next }).then((ok) => ok || setUrl(access.url ?? ''))
   }
+  const shownError = portError ?? error
+  const addressWarning = access.url ? phoneAddressWarning(access.url) : null
   const problem = access.state === 'port-in-use' || access.state === 'error' || (access.state === 'no-tailscale' && !access.customUrl)
 
   return (
@@ -94,10 +110,10 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
         <input type="checkbox" checked={access.enabled} onChange={(e) => void set({ enabled: e.target.checked })} /> Allow phones over Tailscale
       </label>
       <p className="muted">
-        The Local server listens on this computer&rsquo;s Tailscale address, so only devices on your tailnet can reach it. A paired phone
-        can do what you can do in Trek on this computer.
+        The Local server also listens on this computer&rsquo;s Tailscale address, and on this computer itself, at the port below. A paired
+        phone can do what you can do in Trek on this computer.
       </p>
-      {error && <div className="error">{error}</div>}
+      {shownError && <div className="error">{shownError}</div>}
       {access.enabled && (
         <>
           <p className={problem ? 'warn' : 'muted'} aria-live="polite" data-testid="phone-access-status">
@@ -109,9 +125,12 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
               id="phone-access-port"
               inputMode="numeric"
               value={port}
-              onChange={(e) => setPort(e.target.value)}
+              onChange={(e) => {
+                setPort(e.target.value)
+                setPortError(null)
+              }}
               onBlur={savePort}
-              onKeyDown={(e) => e.key === 'Enter' && savePort()}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             />
           </div>
           <div className="phone-access-row">
@@ -123,7 +142,7 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
               spellCheck={false}
               onChange={(e) => setUrl(e.target.value)}
               onBlur={saveUrl}
-              onKeyDown={(e) => e.key === 'Enter' && saveUrl()}
+              onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
             />
             {access.customUrl && (
               <button className="btn btn-ghost" onClick={() => void set({ url: null })}>
@@ -131,6 +150,12 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
               </button>
             )}
           </div>
+          <p className="muted phone-access-note">wss://, or ws:// with an IP address</p>
+          {addressWarning && (
+            <p className="warn phone-access-note" data-testid="phone-access-address-warning">
+              {addressWarning}
+            </p>
+          )}
         </>
       )}
       {access.phones.length > 0 && (
@@ -140,9 +165,26 @@ export function PhoneAccessPanel({ phone }: { phone: PhoneAccessState }): React.
             <div key={p.name} className="phone-access-phone">
               <code>{p.name}</code>
               <span className="muted">{p.createdAt ? new Date(p.createdAt).toLocaleString() : ''}</span>
-              <button className="btn btn-ghost danger" onClick={() => void revoke(p.name)}>
-                Revoke
-              </button>
+              {revoking === p.name ? (
+                <>
+                  <button
+                    className="btn btn-ghost danger"
+                    onClick={() => {
+                      setRevoking(null)
+                      void revoke(p.name)
+                    }}
+                  >
+                    Revoke?
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setRevoking(null)}>
+                    Keep
+                  </button>
+                </>
+              ) : (
+                <button className="btn btn-ghost danger" onClick={() => setRevoking(p.name)}>
+                  Revoke
+                </button>
+              )}
             </div>
           ))}
         </div>

@@ -459,10 +459,10 @@ redeems the code at `hello`.
   A spent or expired code is remembered (its hash) for 30 minutes, so the reason can say which.
 - **The QR** holds `trek://pair?url=<the server's URL, as the desktop reaches it, without any user
   name or password>&code=<code>`: a code, never a token. The desktop shows **Pair a phone…** only
-  for a connected server whose welcome lists `pairing`, never for a loopback URL, and for the
-  Local server only when it has phone access (below), with its phone address in place of the
-  desktop's URL (`localhost` and `*.localhost`, `127.0.0.0/8`, `::1`, their IPv4-mapped forms such as
-  `[::ffff:127.0.0.1]`, and the any-address `0.0.0.0` / `[::]`). On the phone a `trek://pair`
+  for a connected server whose welcome lists `pairing`, never for a loopback URL (`localhost` and
+  `*.localhost`, `127.0.0.0/8`, `::1`, their IPv4-mapped forms such as `[::ffff:127.0.0.1]`, and
+  the any-address `0.0.0.0` / `[::]`), and for the Local server only when it has phone access
+  (below), with its phone address in place of the desktop's URL. On the phone a `trek://pair`
   link only fills the Add server form; nothing is redeemed until the user taps Pair.
 
 ## Phone access on the local server

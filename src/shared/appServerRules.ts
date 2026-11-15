@@ -96,20 +96,43 @@ export function phonePairingAddress(access: PhoneAccess | null): string | null {
   return access.state === 'listening' || access.state === 'no-tailscale' ? access.url : null
 }
 
-/** The Local server's phone access in a line. */
-export function phoneAccessLabel(access: Pick<PhoneAccess, 'state' | 'address' | 'port' | 'error'>): string {
+/**
+ * The Local server's phone access in a line. Without a Tailscale address it listens on this
+ * computer only, which is a problem unless the user entered an address of their own (`customUrl`).
+ */
+export function phoneAccessLabel(access: Pick<PhoneAccess, 'state' | 'address' | 'port' | 'error' | 'customUrl'>): string {
   switch (access.state) {
     case 'off':
       return 'Off'
     case 'listening':
       return `Listening on ${access.address}:${access.port}`
     case 'no-tailscale':
+      if (access.customUrl) return `Listening on this computer only (127.0.0.1:${access.port}). Phones use the address below.`
       return 'Tailscale is not running on this computer. Start it, or enter an address of your own below.'
     case 'port-in-use':
       return `Port ${access.port} is in use. Choose another.`
     case 'error':
       return `Could not listen: ${access.error ?? 'unknown error'}`
   }
+}
+
+/**
+ * What to say of an address for the phone that the Trek phone app will refuse, or null: the phone
+ * takes plain ws:// only to an IP address (or `localhost`, or a `.local` name), and wss:// to
+ * anything. Text that is not a URL gets no warning here: the server refuses it.
+ */
+export function phoneAddressWarning(url: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'ws:') return null
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '')
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[')) return null
+  if (host === 'localhost' || host.endsWith('.local')) return null
+  return 'The Trek phone app takes plain ws:// only to an IP address. Use wss://, or the IP address.'
 }
 
 /**

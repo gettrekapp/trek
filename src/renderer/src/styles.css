@@ -3773,6 +3773,11 @@ button:disabled {
   min-width: 0;
 }
 
+/* Under the address field, in line with it */
+.phone-access-note {
+  margin: 0 0 6px 158px;
+}
+
 #phone-access-port {
   flex: none;
   width: 80px;

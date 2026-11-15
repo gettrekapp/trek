@@ -353,7 +353,7 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
               </div>
             )}
 
-            {pairFor === server.id && canPairPhone(server) && <PairPhone serverId={server.id} local={!!server.local} onClose={() => setPairFor(null)} />}
+            {pairFor === server.id && canPairPhone(server) && <PairPhone serverId={server.id} onClose={() => setPairFor(null)} />}
 
             {rowErrors[server.id] && <div className="error">{rowErrors[server.id]}</div>}
 

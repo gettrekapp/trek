@@ -30,6 +30,7 @@ import {
   originOf,
   parsePhonePort,
   phoneAccessLabel,
+  phoneAddressWarning,
   phonePairingAddress
 } from '../src/shared/appServerRules.ts'
 import { LOCAL_ENTRY_ID as MAIN_LOCAL_ENTRY_ID } from '../src/main/localServerRules.ts'
@@ -321,8 +322,24 @@ test('phone access in a line', () => {
   assert.equal(phoneAccessLabel({ ...base, enabled: false, state: 'off' }), 'Off')
   assert.equal(phoneAccessLabel({ ...base, state: 'listening', address: '100.64.0.9' }), 'Listening on 100.64.0.9:7346')
   assert.match(phoneAccessLabel({ ...base, state: 'no-tailscale' }), /Tailscale is not running/)
+  assert.equal(
+    phoneAccessLabel({ ...base, state: 'no-tailscale', customUrl: 'wss://mac.example.ts.net', url: 'wss://mac.example.ts.net' }),
+    'Listening on this computer only (127.0.0.1:7346). Phones use the address below.'
+  )
+  // An address of the user's own changes nothing while a Tailscale address is listened on.
+  assert.equal(phoneAccessLabel({ ...base, state: 'listening', address: '100.64.0.9', customUrl: 'wss://mac.example.ts.net' }), 'Listening on 100.64.0.9:7346')
   assert.equal(phoneAccessLabel({ ...base, state: 'port-in-use' }), 'Port 7346 is in use. Choose another.')
   assert.equal(phoneAccessLabel({ ...base, state: 'error', error: 'boom' }), 'Could not listen: boom')
+})
+
+test('phoneAddressWarning: plain ws:// to a host name is an address the phone app refuses', () => {
+  const warning = 'The Trek phone app takes plain ws:// only to an IP address. Use wss://, or the IP address.'
+  for (const url of ['ws://mac.tail1234.ts.net:7346', 'ws://mymac:7346']) {
+    assert.equal(phoneAddressWarning(url), warning, url)
+  }
+  for (const url of ['wss://mac.tail1234.ts.net', 'ws://100.64.0.9:7346', 'ws://[fd7a:115c:a1e0::1]:7346', 'ws://studio.local:7346', 'ws://localhost:7346', '', 'nonsense']) {
+    assert.equal(phoneAddressWarning(url), null, JSON.stringify(url))
+  }
 })
 
 test('parsePhonePort: a whole number from 1024 to 65535, as typed; anything else is null', () => {
