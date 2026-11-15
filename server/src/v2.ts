@@ -27,6 +27,8 @@ import { promoteHandlers } from './promote/promoteHandlers.ts'
 import { historyHandlers } from './history/historyHandlers.ts'
 import type { HistoryStore } from './history/store.ts'
 import { updateHandlers } from './update/updateHandlers.ts'
+import { pluginInstallHandlers } from './plugins/installHandlers.ts'
+import type { InstalledPlugins } from './plugins/installed.ts'
 import type { UpdateService } from './update/service.ts'
 import { branchChanges, change, recordHistory, tagValue, type Attribution } from './history/record.ts'
 import type { PromoteRequests } from './promote/requests.ts'
@@ -96,6 +98,8 @@ export interface V2Context {
   push?: { grants: PushGrants }
   /** The server's plugins (plugin system phase 1): a method no core handler has goes to plugin `<id>` */
   plugins?: PluginRegistry
+  /** The installed plugins (theme plugins phase 1): `plugins.install`, `plugins.remove`, `plugins.bundle` */
+  installed?: { store: Pick<InstalledPlugins, 'add' | 'remove' | 'bundle'>; remoteInstall: () => boolean; fetch: typeof fetch }
   /** The worktree history; without it nothing is recorded and history.list is empty */
   history?: HistoryStore
   /** The server's update service (the `update` capability); absent on a server that cannot update itself */
@@ -395,6 +399,7 @@ const handlers: Record<string, Handler> = {
   ...promoteHandlers,
   ...historyHandlers,
   ...updateHandlers,
+  ...pluginInstallHandlers,
 
   // A one-time code a phone redeems at hello for its own token (6a). Any signed-in connection may
   // ask (a web session or a paired phone included): a token already holds shell-level power on
