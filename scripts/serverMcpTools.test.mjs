@@ -141,7 +141,7 @@ async function toolSetup(t, opts = {}) {
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_review_comments', 'get_stack', 'get_worktree_history',
+    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_pull_request', 'get_review_comments', 'get_stack', 'get_worktree_history',
     'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'mark_session_complete', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
     'rename_session', 'request_decision', 'restart_session', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
@@ -1048,4 +1048,59 @@ test('rename_session, mark_session_complete and restart_session', async (t) => {
   assert.equal(s.spawned.length, before + 1, 'the agent was launched again')
   assert.deepEqual([s.spawned.at(-1).opts.cols, s.spawned.at(-1).opts.rows], [120, 32])
   await assert.rejects(s.call('restart_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /the session is running/.test(e.message))
+})
+
+test('get_pull_request: the linked pull request now, and its refusals', async (t) => {
+  const url = 'https://github.com/o/r/pull/9'
+  let available = true
+  let answer = { number: 9, state: 'OPEN', mergeable: 'CONFLICTING', headSha: 'abc', checks: 'failing', failed: ['build', 'lint'], commentTimes: ['2026-01-01T00:00:00Z', '2026-01-02T03:04:05Z'] }
+  const reads = []
+  const prWatch = {
+    available: () => available, pollSoon() {}, forget() {}, dismiss() {},
+    read: async (pr) => {
+      reads.push(pr)
+      if (answer instanceof Error) throw answer
+      return answer
+    }
+  }
+  const s = await toolSetup(t, { prWatch })
+  const refusal = (p) => p.then(() => ['ok', ''], (e) => [e.code, e.message])
+
+  assert.match((await refusal(s.call('get_pull_request', { worktree: 'main' })))[1], /main has no linked pull request/)
+  await s.call('set_worktree_pull_request', { worktree: 'main', pullRequest: url })
+  assert.deepEqual(await s.call('get_pull_request', { worktree: 'main' }), {
+    branch: 'main', pullRequest: url, number: 9, state: 'open', mergeable: 'conflicting', checks: 'failing', failedChecks: ['build', 'lint'],
+    headSha: 'abc', comments: 2, lastCommentAt: '2026-01-02T03:04:05Z', watching: false
+  })
+  assert.deepEqual(reads, [{ url, number: 9, owner: 'o', repo: 'r' }])
+
+  // Watched, with a notice showing, and no comments from others.
+  await s.call('watch_pull_request', { worktree: 'main' })
+  s.projects.apply(s.projectId, (d) => {
+    d.repositories[0].worktrees[0].prNotice = { title: 'PR #9', text: 'Checks failed', url, at: Date.UTC(2026, 0, 3) }
+  })
+  answer = { number: 9, state: 'MERGED', mergeable: 'UNKNOWN', headSha: 'def', checks: 'passing', failed: [], commentTimes: [] }
+  assert.deepEqual(await s.call('get_pull_request', { worktree: 'main' }), {
+    branch: 'main', pullRequest: url, number: 9, state: 'merged', mergeable: 'unknown', checks: 'passing', failedChecks: [],
+    headSha: 'def', comments: 0, watching: true, lastNotice: { text: 'Checks failed', at: '2026-01-03T00:00:00.000Z' }
+  })
+
+  answer = new Error('HTTP 502: bad gateway')
+  assert.deepEqual(await refusal(s.call('get_pull_request', { worktree: 'main' })), ['TOOL_ERROR', `Could not read ${url}: HTTP 502: bad gateway`])
+  available = false
+  const signedOut = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(signedOut[0], 'TOOL_ERROR')
+  assert.match(signedOut[1], /gh is not installed or not signed in/)
+
+  // A link that is not a GitHub pull request (as an older client's branch.setPr could store).
+  s.projects.apply(s.projectId, (d) => { d.repositories[0].branchData.main = { pr: 'https://example.com/x' } })
+  available = true
+  const notGitHub = await refusal(s.call('get_pull_request', { worktree: 'main' }))
+  assert.equal(notGitHub[0], 'BAD_REQUEST')
+  assert.match(notGitHub[1], /is not a GitHub pull request URL/)
+
+  // A server with no watcher at all.
+  const bare = await toolSetup(t)
+  await bare.call('set_worktree_pull_request', { worktree: 'main', pullRequest: url })
+  assert.match((await refusal(bare.call('get_pull_request', { worktree: 'main' })))[1], /gh is not installed or not signed in/)
 })

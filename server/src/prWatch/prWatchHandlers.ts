@@ -10,7 +10,7 @@ import type { V2Context } from '../v2.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
-const NOT_SIGNED_IN = 'gh is not installed or not signed in on the Trek server’s machine (run `gh auth login` there as the server’s user)'
+export const NOT_SIGNED_IN = 'gh is not installed or not signed in on the Trek server’s machine (run `gh auth login` there as the server’s user)'
 
 export const prWatchHandlers: Record<string, Handler> = {
   /**

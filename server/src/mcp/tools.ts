@@ -36,6 +36,8 @@ import { actorLabel, describeEvent } from '../../../src/shared/historyText.ts'
 import type { Attribution } from '../history/record.ts'
 import type { HistoryStore } from '../history/store.ts'
 import type { PrWatcher } from '../prWatch/watcher.ts'
+import { watchableUrl } from '../../../src/shared/prWatch.ts'
+import { NOT_SIGNED_IN } from '../prWatch/prWatchHandlers.ts'
 import { isOutdated, reviewLineText, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
 import { numberedLines, patchBody } from '../../../src/shared/changes.ts'
 import { checkSource } from '../review/draft.ts'
@@ -462,6 +464,12 @@ export const MCP_TOOLS: ToolDefinition[] = [
     }
   },
   {
+    name: 'get_pull_request',
+    description:
+      "Read the state of a worktree branch's linked GitHub pull request now: state (open, merged, closed), mergeable (mergeable, conflicting, or unknown while GitHub works it out), checks on its head commit (none, pending, passing, failing) with the failed checks' names, its head commit, how many reviews and comments others have left and when the newest was, whether Trek is watching it, and the watch's last notice. Read-only: it does not change what a watch reports. Link the PR first with set_worktree_pull_request. Needs gh signed in on the server's machine.",
+    inputSchema: { type: 'object', properties: { worktree: WORKTREE_PARAM }, required: ['worktree'] }
+  },
+  {
     name: 'get_worktree_history',
     description:
       "Read a worktree branch's history, newest first: when its workflow tag, custom tags, note, ticket or pull request changed, when its PR watch started or ended, and when it was created, removed, promoted or moved — each with who did it (the user, an MCP call and its session, or Trek itself) and the reason given.",
@@ -529,7 +537,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), and watch_pull_request has the server follow that pull request's checks, reviews and merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -1115,6 +1123,35 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const watch = args.watch !== false
         await v2('branch.setPrWatch', { repoId: repo.id, branch, watch }, by)
         return { branch, pullRequest: branchData(repo, branch).pr ?? null, watching: watch }
+      },
+
+      get_pull_request: async (args, project) => {
+        const { repo, worktree } = resolveWorktree(project, args.worktree)
+        const { branch } = branchOf(project, args.worktree)
+        const data = branchData(repo, branch)
+        if (!data.pr) throw bad(`${branch} has no linked pull request (set_worktree_pull_request links one)`)
+        const pr = watchableUrl(data.pr)
+        if (!pr) throw bad(`${data.pr} is not a GitHub pull request URL (https://github.com/<owner>/<repo>/pull/<number>)`)
+        const watcher = deps.prWatch
+        if (!watcher?.available()) throw codedError('TOOL_ERROR', NOT_SIGNED_IN)
+        const view = await watcher.read(pr).catch((err: unknown) => {
+          throw codedError('TOOL_ERROR', `Could not read ${pr.url}: ${messageOf(err)}`)
+        })
+        const notice = worktree.prNotice
+        return {
+          branch,
+          pullRequest: pr.url,
+          number: pr.number,
+          state: view.state.toLowerCase(),
+          mergeable: view.mergeable.toLowerCase(),
+          checks: view.checks,
+          failedChecks: view.failed,
+          headSha: view.headSha,
+          comments: view.commentTimes.length,
+          ...(view.commentTimes.length > 0 ? { lastCommentAt: view.commentTimes[view.commentTimes.length - 1] } : {}),
+          watching: data.prWatch !== undefined,
+          ...(notice ? { lastNotice: { text: notice.text, at: new Date(notice.at).toISOString() } } : {})
+        }
       },
 
       get_worktree_history: async (args, project) => {
