@@ -1,7 +1,7 @@
 // The phone app's pure modules (6a, apps/mobile/src/logic): the server-address rule, the
 // attention list and its notifications, the key bar, the diff colouring, the terminal feed and
 // the ref counts, the connection notices, the per-server generations, the held topic view and
-// the value a promote request waits for.
+// the value a promote request waits for, and the quick buttons' list and built-in context.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -10,6 +10,8 @@ import { KEY_BAR } from '../apps/mobile/src/logic/keys.ts'
 import { classifyDiff } from '../apps/mobile/src/logic/diff.ts'
 import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.ts'
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
+import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
+import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
@@ -455,4 +457,88 @@ test('TerminalFeed: a Windows server\'s pty sets xterm up for ConPTY before the 
     { type: 'size', cols: 80, rows: 24 },
     { type: 'data', data: 'out' }
   ])
+})
+
+const qbSession = (id, extra = {}) => ({ id, title: `tab ${id}`, llm: { provider: 'claude' }, queue: [], status: 'idle', ...extra })
+const qbWorktree = (id, branch, sessions) => ({ id, name: branch, path: `/r/trek-${branch}`, branch, isMain: false, loaded: true, sessions })
+const qbProject = () => ({
+  id: 'p',
+  name: 'App',
+  settings: {
+    terminalButtons: [{ id: 'b1', label: 'Ship', text: 'ship [branch]' }],
+    globalTerminalButtons: [{ id: 'g1', label: 'Plan', text: 'plan {WHAT}' }],
+    worktreeTags: [{ id: 'review', name: 'In Review', color: '#fff' }],
+    customTags: [
+      { id: 'a', name: 'Alpha', color: '#000' },
+      { id: 'b', name: 'Beta', color: '#000' }
+    ]
+  },
+  repositories: [
+    {
+      id: 'r',
+      name: 'trek',
+      path: '/r/trek',
+      branchData: { feat: { tag: 'review', customTags: ['b', 'a'], note: 'remember X', ticket: 'TOW-12', pr: 'https://github.com/o/r/pull/42' } },
+      worktrees: [qbWorktree('w1', 'feat', [qbSession('s1', { agentSessionId: 'agent-1' }), qbSession('s2')]), qbWorktree('w2', 'bare', [qbSession('s3')])]
+    }
+  ],
+  globalSessions: [qbSession('g', { agentSessionId: 'agent-g' })]
+})
+const qbNow = new Date(2026, 10, 15, 9, 5)
+
+test('quick buttons: a worktree session gets the project buttons, a Global session the Global ones', () => {
+  const project = qbProject()
+  assert.deepEqual(quickButtonsFor(project, 's1').map((b) => b.id), ['b1'])
+  assert.deepEqual(quickButtonsFor(project, 'g').map((b) => b.id), ['g1'])
+  assert.deepEqual(quickButtonsFor(project, 'nope'), [])
+  project.settings = {}
+  assert.deepEqual(quickButtonsFor(project, 's1'), [])
+  assert.deepEqual(quickButtonsFor(project, 'g'), [])
+})
+
+test('quick buttons: every built-in from the snapshot, except ticket_url', () => {
+  const ctx = quickButtonContext(qbProject(), 's1', 'Claude', qbNow)
+  assert.deepEqual(resolveBuiltins(ctx), {
+    worktree_id: 'w1',
+    worktree_name: 'feat',
+    worktree_path: '/r/trek-feat',
+    branch: 'feat',
+    repo_name: 'trek',
+    repo_path: '/r/trek',
+    project_name: 'App',
+    workflow_tag: 'In Review',
+    labels: 'Alpha, Beta',
+    ticket: 'TOW-12',
+    ticket_url: undefined,
+    pr_url: 'https://github.com/o/r/pull/42',
+    pr_number: '42',
+    note: 'remember X',
+    session_title: 'tab s1',
+    session_id: 'agent-1',
+    terminal_id: 's1',
+    agent: 'Claude',
+    date: '2026-11-15',
+    time: '09:05'
+  })
+  // A button using [ticket_url] asks for it on the phone.
+  assert.deepEqual(planQuickButton('see [ticket_url]', resolveBuiltins(ctx)), { inputs: [], missing: ['ticket_url'], needsModal: true })
+})
+
+test('quick buttons: what has no value: an unknown agent id or label, a branch without data, a Global session', () => {
+  const project = qbProject()
+  const pending = resolveBuiltins(quickButtonContext(project, 's2', undefined, qbNow))
+  assert.equal(pending.session_id, undefined)
+  assert.equal(pending.terminal_id, 's2')
+  assert.equal(pending.agent, undefined)
+
+  const bare = resolveBuiltins(quickButtonContext(project, 's3', 'Codex', qbNow))
+  assert.equal(bare.branch, 'bare')
+  for (const name of ['workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(bare[name], undefined, name)
+
+  const global = resolveBuiltins(quickButtonContext(project, 'g', 'Claude', qbNow))
+  assert.equal(global.project_name, 'App')
+  assert.equal(global.session_id, 'agent-g')
+  for (const name of ['worktree_id', 'worktree_name', 'worktree_path', 'branch', 'repo_name', 'repo_path', 'workflow_tag', 'ticket']) assert.equal(global[name], undefined, name)
+
+  assert.equal(quickButtonContext(project, 'nope', 'Claude', qbNow), null)
 })
