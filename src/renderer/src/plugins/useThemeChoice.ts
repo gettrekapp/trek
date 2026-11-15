@@ -7,6 +7,7 @@ import { useAppStore } from '../store'
 import { useAppSettings } from '../useAppSettings'
 import { welcomeKey } from './PluginHost'
 import { installedThemes, themeKey, themeState, type InstalledTheme, type ThemeState } from './theme'
+import { canInstallThemes } from './themeInstall'
 
 export interface ThemeChoiceView {
   backend: WindowBackend
@@ -14,6 +15,8 @@ export interface ThemeChoiceView {
   key: string | null
   /** The server's welcome is in and lists plugins (false too for a server older than plugins) */
   listed: boolean
+  /** The window's server installs and removes themes for a client (`pluginInstall`) */
+  canInstall: boolean
   themes: InstalledTheme[]
   choice: ThemeChoice | undefined
   state: ThemeState
@@ -30,9 +33,10 @@ export function useThemeChoice(): ThemeChoiceView {
   const id = stored?.id
   const sha256 = stored?.sha256
   return useMemo(() => {
-    const presence = key !== null ? backend.plugins.welcome()?.plugins : undefined
+    const welcomed = key !== null ? backend.plugins.welcome() : undefined
+    const presence = welcomed?.plugins
     const choice = id !== undefined && sha256 !== undefined ? { id, sha256 } : undefined
-    return { backend, key, listed: presence !== undefined, themes: installedThemes(presence), choice, state: themeState(choice, presence) }
+    return { backend, key, listed: presence !== undefined, canInstall: canInstallThemes(welcomed), themes: installedThemes(presence), choice, state: themeState(choice, presence) }
     // `welcome` stands for the server's list, which the backend holds.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend, welcome, key, id, sha256])
