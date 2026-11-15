@@ -1017,11 +1017,11 @@ try {
   // default, saved by main (app-settings.json), and back on for the checks after this one.
   const notifySwitch = settings.locator('input[aria-label="Show notifications"]')
   const appSettingsNow = () => w1.evaluate(() => window.api.appSettings.get())
-  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true, stopLocalServerOnQuit: false, plugins: {} }])
+  check('Show notifications is on by default', [await notifySwitch.isChecked(), await appSettingsNow()], [true, { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} }])
   await notifySwitch.click()
-  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false, stopLocalServerOnQuit: false, plugins: {} }), { showNotifications: false, stopLocalServerOnQuit: false, plugins: {} })
+  check('turned off, main keeps it off', await until(appSettingsNow, { showNotifications: false, stopLocalServerOnQuit: false, plugins: {}, update: {} }), { showNotifications: false, stopLocalServerOnQuit: false, plugins: {}, update: {} })
   await notifySwitch.click()
-  check('and on again', await until(appSettingsNow, { showNotifications: true, stopLocalServerOnQuit: false, plugins: {} }), { showNotifications: true, stopLocalServerOnQuit: false, plugins: {} })
+  check('and on again', await until(appSettingsNow, { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} }), { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} })
   const prompt = settings.locator('.session-prompt-input')
   const settingsNow = async () => (await projectNow()).settings
   let sentAt = await sentCount()

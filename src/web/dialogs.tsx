@@ -1,8 +1,9 @@
 // The web client's dialogs (5c-3), shown: the first waiting in dialogQueue.ts,
 // as an in-page modal over the window. While one is open, focus stays in it:
 // it moves in on open (to its default button), Tab and Shift+Tab cycle through
-// its controls, Escape cancels it wherever focus is (a click on the backdrop
-// doesn't take focus out), and on close focus goes back where it was.
+// its controls, focus the page behind takes comes straight back, Escape cancels
+// it wherever focus is (a click on the backdrop doesn't take focus out), and on
+// close focus goes back where it was.
 import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { answerDialog, dialogId, pendingDialogs, subscribeDialogs, type DialogRequest } from './dialogQueue.ts'
 
@@ -48,10 +49,21 @@ function Dialog({ request }: { request: DialogRequest }): React.JSX.Element {
       e.preventDefault()
       items[next].focus()
     }
+    // The page behind can take focus while the dialog is open (a view that mounts and focuses its
+    // own control): it comes straight back, to where it was in the dialog.
+    let last: HTMLElement | null = document.activeElement instanceof HTMLElement && dialogRef.current?.contains(document.activeElement) ? document.activeElement : null
+    const onFocusIn = (e: FocusEvent): void => {
+      const dialog = dialogRef.current
+      if (!dialog || !(e.target instanceof HTMLElement)) return
+      if (dialog.contains(e.target)) last = e.target
+      else (last?.isConnected ? last : dialog.querySelector<HTMLElement>(FOCUSABLE))?.focus()
+    }
     // Capture: the window's own shortcuts below the dialog don't see these keys first.
     document.addEventListener('keydown', onKeyDown, true)
+    document.addEventListener('focusin', onFocusIn, true)
     return () => {
       document.removeEventListener('keydown', onKeyDown, true)
+      document.removeEventListener('focusin', onFocusIn, true)
       // Back where it was, unless that went away meanwhile.
       if (before?.isConnected) before.focus()
     }
