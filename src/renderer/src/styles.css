@@ -731,7 +731,7 @@ button:disabled {
   color: var(--text);
 }
 
-/* ─── Sidebar navigation rows (Automations, Settings) ──────────────────── */
+/* ─── Sidebar navigation rows (Add repository, Automations, Settings) ──────────────────── */
 
 .sidebar-nav-row {
   display: flex;
@@ -765,8 +765,14 @@ button:disabled {
   background: rgba(10, 141, 255, 0.17);
 }
 
-.sidebar-nav-automations {
-  margin-bottom: 8px;
+.sidebar-nav-row:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sidebar-nav-row:disabled:hover {
+  background: transparent;
+  color: var(--text-muted);
 }
 
 .sidebar-nav-label {
@@ -789,9 +795,15 @@ button:disabled {
   line-height: 16px;
 }
 
-/* The footer's own 16px padding: pull the row out to the worktree rows' edges */
+/* The footer's own 16px padding: pull the rows out to the worktree rows' edges */
 .sidebar-footer .sidebar-nav-row {
-  margin: 2px -8px 0;
+  margin: 0 -8px;
+}
+
+/* The sessions line, under the footer's rows: in line with their icons */
+.sidebar-footer-sessions {
+  margin-top: 4px;
+  padding: 0 3px;
 }
 
 .sidebar-footer {
@@ -800,7 +812,7 @@ button:disabled {
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 2px;
   font-size: 11px;
   color: var(--text-muted);
 }
@@ -2641,6 +2653,49 @@ button:disabled {
   inset: 0;
   flex-direction: column;
   background: var(--bg-darker);
+}
+
+/* The strip stays put; the tab under it scrolls. Narrow windows scroll the strip sideways. */
+.settings-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 18px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  /* No bar over the tabs: a narrow strip is dragged or arrowed along. */
+  scrollbar-width: none;
+}
+
+.settings-tab {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-tab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.settings-tab.active {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -3734,6 +3789,64 @@ button:disabled {
   gap: 8px;
   width: 100%;
   justify-content: flex-end;
+}
+
+/* The Local server's phone access, above its pairing code */
+.phone-access {
+  width: 100%;
+  font-size: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.phone-access-switch {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.phone-access .warn {
+  color: var(--attention);
+}
+
+.phone-access-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+
+.phone-access-row label {
+  flex: none;
+  width: 150px;
+  color: var(--text-muted);
+}
+
+.phone-access-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Under the address field, in line with it */
+.phone-access-note {
+  margin: 0 0 6px 158px;
+}
+
+#phone-access-port {
+  flex: none;
+  width: 80px;
+}
+
+.phone-access-phone {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.phone-access-phone code {
+  flex: 1;
 }
 
 .server-form-actions {

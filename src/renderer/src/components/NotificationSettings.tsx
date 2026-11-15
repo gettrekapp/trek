@@ -7,8 +7,10 @@ import type { AppSettings } from '../../../shared/appSettings'
  *   sessions. The bell still lists them, and each project's audio alerts still sound.
  * - "Stop local server on quit". Off (the default): the Local server keeps running
  *   after Trek quits, and its sessions with it.
+ *
+ * `afterNotifications` is the project's own row under "Notifications" (its audio alerts).
  */
-export function NotificationSettings(): React.JSX.Element {
+export function NotificationSettings({ afterNotifications }: { afterNotifications?: React.ReactNode }): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,6 +58,7 @@ export function NotificationSettings(): React.JSX.Element {
           </span>
         </span>
       </label>
+      {afterNotifications}
       <h3>Local server</h3>
       <label className="settings-row">
         <input

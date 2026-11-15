@@ -1,10 +1,18 @@
 // Which server addresses the phone connects to (6a): wss:// always; plain ws:// only to this
-// device, a private LAN or Tailscale address (with a warning: the token travels unencrypted on
-// that network). Pure, so `node --test` covers it (scripts/mobileLogic.test.mjs).
+// device, a private LAN or Tailscale address (with a warning: on a LAN the token travels unencrypted; Tailscale encrypts it).
+// Pure, so `node --test` covers it (scripts/mobileLogic.test.mjs).
 
 export type UrlCheck = { ok: true; url: string; warning?: string } | { ok: false; message: string }
 
 const PLAIN_WARNING = 'Not encrypted: anyone on this network can read the traffic, the token included. Use wss:// through a TLS proxy when you can.'
+
+const TAILSCALE_WARNING = 'A Tailscale address: Tailscale encrypts the traffic between your devices. If this is not a Tailscale address, it is not encrypted.'
+
+/** 100.64.0.0/10, as written: where Tailscale puts each device. */
+function isTailscaleHost(hostname: string): boolean {
+  const v4 = ipv4(hostname)
+  return v4 !== null && v4[0] === 100 && v4[1] >= 64 && v4[1] <= 127
+}
 
 function ipv4(host: string): number[] | null {
   const parts = host.split('.')
@@ -40,5 +48,5 @@ export function checkServerUrl(input: string): UrlCheck {
   if (url.protocol === 'wss:') return { ok: true, url: text }
   if (url.protocol !== 'ws:') return { ok: false, message: 'The address starts with wss:// (or ws:// on a private network)' }
   if (!isPrivateHost(url.hostname)) return { ok: false, message: 'Plain ws:// is only allowed to a private network address. Use wss://' }
-  return { ok: true, url: text, warning: PLAIN_WARNING }
+  return { ok: true, url: text, warning: isTailscaleHost(url.hostname) ? TAILSCALE_WARNING : PLAIN_WARNING }
 }

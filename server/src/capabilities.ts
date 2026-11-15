@@ -33,11 +33,12 @@ export const STATIC_CAPABILITIES: readonly string[] = [
 
 /**
  * `mcp` while the MCP listener is up, then the features this server always has, then `pairing`
- * (6a: `pairing.create`, and a phone's `pairingCode` at hello) on any server but the local one (a
- * phone can't reach this machine's loopback), then `prWatch` while gh is signed in on its machine
- * (5c-1), then `local` on the local server. `plugins`: the registered plugins' legacy capabilities
+ * (6a: `pairing.create`, and a phone's `pairingCode` at hello), then `prWatch` while gh is signed
+ * in on its machine (5c-1), then on the local server `phoneAccess` (its listener for phones, when
+ * it has one to offer) and `local`. `plugins`: the registered plugins' legacy capabilities
  * (`voice`), listed after the static ones, for clients older than plugins. `update` (after
  * `pairing`) on a server that can update itself (never the local one).
+ * `pluginInstall` (after `update`): the server takes `plugins.install` and `plugins.remove` from a client.
  */
 export function welcomeCapabilities(
   mcp: boolean,
@@ -45,7 +46,9 @@ export function welcomeCapabilities(
   prWatch = false,
   plugins: readonly string[] = [],
   platform: NodeJS.Platform = process.platform,
-  update = false
+  update = false,
+  pluginInstall = false,
+  phoneAccess = false
 ): string[] {
   // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
   const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.env, CAPABILITY.stacks] : []
@@ -53,9 +56,11 @@ export function welcomeCapabilities(
     ...(mcp ? [CAPABILITY.mcp] : []),
     ...STATIC_CAPABILITIES.filter((c) => !windowsOff.includes(c)),
     ...plugins.filter((c) => !STATIC_CAPABILITIES.includes(c)),
-    ...(local ? [] : [CAPABILITY.pairing]),
+    CAPABILITY.pairing,
     ...(update && !local ? [CAPABILITY.update] : []),
+    ...(pluginInstall ? [CAPABILITY.pluginInstall] : []),
     ...(prWatch ? [CAPABILITY.prWatch] : []),
+    ...(local && phoneAccess ? [CAPABILITY.phoneAccess] : []),
     ...(local ? [CAPABILITY.local] : [])
   ]
 }

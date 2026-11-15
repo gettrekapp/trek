@@ -31,6 +31,7 @@
 //
 // Prints SERVER INTEGRATIONS SMOKE PASS (n checks) or SERVER INTEGRATIONS SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
@@ -306,6 +307,7 @@ try {
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
+  await openSettingsTab(settings, 'Plugins')
   check('Settings show Linear, Plugins and Voice summaries', [await settings.locator('h3', { hasText: /^Linear$/ }).count(), await settings.locator('h3', { hasText: /^Plugins$/ }).count(), await settings.locator('h3', { hasText: 'Voice summaries' }).count()], [1, 1, 1])
   const voiceSwitch = settings.locator('label.settings-row', { hasText: 'Agent sessions read a short summary aloud' }).locator('input')
   check('the voice plugin is on for the project (its default)', await voiceSwitch.isChecked(), true)

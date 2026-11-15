@@ -1,4 +1,4 @@
-// trek-server's entry. `update` and `selfcheck` are commands of their own (they are async, and
+// trek-server's entry. `update`, `selfcheck` and `plugin` are commands of their own (they are async, and
 // must not load a config or start anything); every other command is main.ts, the server itself
 // and its synchronous commands, which parses the same arguments again.
 import { parseArgs } from './cli.ts'
@@ -17,6 +17,8 @@ if (args.command === 'selfcheck') {
   // at all as an ES module: neither is an install, and the command says so.
   const installDir = typeof __dirname === 'string' ? __dirname : ''
   void import('./update/command.ts').then((m) => m.runUpdateCommand(args, installDir)).then((code) => process.exit(code), die)
+} else if (args.command === 'plugin') {
+  void import('./plugins/command.ts').then((m) => m.runPluginCommand(args)).then((code) => process.exit(code), die)
 } else {
   // An error thrown while main.ts loads is a bug, not a message for the user: keep its stack, as before the split.
   void import('./main.ts').catch((err: unknown) => {

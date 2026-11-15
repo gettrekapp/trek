@@ -482,25 +482,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
           «
         </button>
       </div>
-      {features.automations && (
-        <button
-          className={`sidebar-nav-row sidebar-nav-automations ${projectPage === 'automations' ? 'active' : ''}`}
-          title="Automations"
-          onClick={() => toggleProjectPage('automations')}
-        >
-          <span className="sidebar-nav-icon">⏰</span>
-          <span className="sidebar-nav-label">Automations</span>
-          <span className="sidebar-nav-count">{automationCount}</span>
-          {missedCount > 0 && (
-            <span
-              className="sidebar-nav-badge"
-              title={`${missedCount} automation${missedCount === 1 ? '' : 's'} missed runs`}
-            >
-              {missedCount}
-            </span>
-          )}
-        </button>
-      )}
       <div className="sidebar-heading">
         <span>Worktrees · {rows.length}</span>
         <div className="sidebar-tag-filter">
@@ -578,12 +559,45 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
         {project.repositories.map(renderSection)}
       </div>
       <div className="sidebar-footer">
-        <div className="sidebar-footer-row">
-          <button className="footer-btn" disabled={offline} onClick={() => void getBackend().repos.add()}>
-            Add repository…
+        <button
+          className="sidebar-nav-row"
+          title="Add a repository to this project"
+          disabled={offline}
+          onClick={() => void getBackend().repos.add()}
+        >
+          <span className="sidebar-nav-icon">＋</span>
+          <span className="sidebar-nav-label">Add repository…</span>
+        </button>
+        {features.automations && (
+          <button
+            className={`sidebar-nav-row ${projectPage === 'automations' ? 'active' : ''}`}
+            title="Automations"
+            onClick={() => toggleProjectPage('automations')}
+          >
+            <span className="sidebar-nav-icon">⏰</span>
+            <span className="sidebar-nav-label">Automations</span>
+            <span className="sidebar-nav-count">{automationCount}</span>
+            {missedCount > 0 && (
+              <span
+                className="sidebar-nav-badge"
+                title={`${missedCount} automation${missedCount === 1 ? '' : 's'} missed runs`}
+              >
+                {missedCount}
+              </span>
+            )}
           </button>
-        </div>
-        <div className="sidebar-footer-row">
+        )}
+        {features.settingsEdit && (
+          <button
+            className={`sidebar-nav-row ${projectPage === 'settings' ? 'active' : ''}`}
+            title="App settings"
+            onClick={() => toggleProjectPage('settings')}
+          >
+            <span className="sidebar-nav-icon">⚙</span>
+            <span className="sidebar-nav-label">Settings</span>
+          </button>
+        )}
+        <div className="sidebar-footer-row sidebar-footer-sessions">
           <span className={`wt-dot ${runningSessions > 0 ? 'done' : 'idle'}`} />
           {runningSessions} session{runningSessions === 1 ? '' : 's'} running
           {loadedCount > 0 && (
@@ -597,16 +611,6 @@ export function Sidebar({ worktrees, onAdd }: Props): React.JSX.Element {
             </button>
           )}
         </div>
-        {features.settingsEdit && (
-          <button
-            className={`sidebar-nav-row ${projectPage === 'settings' ? 'active' : ''}`}
-            title="App settings"
-            onClick={() => toggleProjectPage('settings')}
-          >
-            <span className="sidebar-nav-icon">⚙</span>
-            <span className="sidebar-nav-label">Settings</span>
-          </button>
-        )}
       </div>
     </aside>
   )

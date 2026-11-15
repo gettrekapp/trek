@@ -34,6 +34,7 @@
 //
 // Prints LOCAL FEATURES SMOKE PASS (n checks) or LOCAL FEATURES SMOKE FAIL and exits 0 or 1.
 import './smokeGh.mjs'
+import { openSettingsTab } from './smokeSettings.mjs'
 import { _electron as electron } from 'playwright-core'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -402,9 +403,12 @@ try {
   await win.locator('.server-window .sidebar button[title="App settings"]').click()
   const settings = win.locator('.server-window .settings-panel')
   await settings.waitFor({ timeout: 5000 })
+  await openSettingsTab(settings, 'Plugins')
   const headings = await settings.locator('h3').allTextContents()
-  check('Settings show Linear, Voice summaries and Environments, not Servers', [headings.includes('Linear'), headings.includes('Voice summaries'), headings.includes('Environments'), headings.includes('Servers')], [true, true, true, false])
+  const tabNames = await settings.locator('.settings-tab').allTextContents()
+  check('Settings show Linear, Voice summaries and Environments, not Servers', [headings.includes('Linear'), headings.includes('Voice summaries'), tabNames.includes('Environments'), headings.includes('Servers') || tabNames.includes('Servers')], [true, true, true, false])
   check("its Voice section lists the handed-over key's voices, from the server", await until(() => settings.locator('.settings-row', { hasText: /^Voice/ }).locator('select option').allTextContents().catch(() => []), ['Nine']), ['Nine'])
+  await openSettingsTab(settings, 'Environments')
   await settings.locator('label.settings-row', { hasText: 'Per-worktree Docker environments' }).locator('input').click()
   check('the environments switch is saved on the server', await until(async () => (await project()).repositories[0].environments ?? null, { enabled: true }), { enabled: true })
   check('the environments poll runs: the tool check passes', await until(() => win.evaluate(() => window.__store.getState().envToolCheck?.ok ?? null), true), true)

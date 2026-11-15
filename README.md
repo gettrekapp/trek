@@ -84,7 +84,7 @@ sends every action to its server, and every other window on that project sees it
   delete worktree). A ticket is a Linear issue (`TOW-123`, or paste its
   `linear.app/<workspace>/issue/…` URL) or a legacy Azure DevOps work item id; when the
   branch name contains a Linear id the ticket dialog pre-fills it. Add a Linear API key
-  in ⚙ Settings to show each issue's status and title on its chip; the key is the
+  in ⚙ Settings → Plugins to show each issue's status and title on its chip; the key is the
   window's server's (stored there, owner-only, never sent back to any client), shared by
   every project on that server. The **All Notes** panel
   collects every branch note in one place — including branches whose worktree is gone —
@@ -238,7 +238,7 @@ other window on that project sees them live.
   capabilities) shows no Docker, Env or Stack tab, and Trek does not fall back
   to running them on this machine.
 - **Linear, voice summaries and skills, on the server**: each server keeps its own
-  Linear and ElevenLabs keys (⚙ Settings, set from any window on it; neither is ever
+  Linear and ElevenLabs keys (⚙ Settings → Plugins, set from any window on it; neither is ever
   sent back to a client), its voice and model, and whether its sessions are told to
   speak a summary when they finish ("Summarize automatically"). A session's
   `speak_summary` is synthesized on the server and played in every Trek window that
@@ -440,7 +440,7 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
 
 - **It keeps running after you quit Trek**, so its sessions do too, and the next
   launch reconnects to it. To stop it whenever Trek quits, turn on **Stop local
-  server on quit** in ⚙ Settings.
+  server on quit** in ⚙ Settings → General.
 - **File → Local Server** shows its state, with **Start Local Server** (or
   **Restart Local Server** while it runs) and **Stop Local Server**. The server
   list and a Local window offer Start and Restart too. Restart asks first: it
@@ -476,7 +476,7 @@ screen, or File → New Project…, ⌘N) on Local picks a folder on this machin
   running on the same app data after the take-over, or the other Local profile
   (a dev build's), starts stacks this one cannot see: each takes its own copy.
   Each Local profile reads the other's registry too, so a VM the other one
-  created is not offered for deletion in Settings; a VM another trek-server on
+  created is not offered for deletion in Settings → Environments; a VM another trek-server on
   this machine created is (Settings says it may be another Trek's, and Delete
   removes its containers and volumes).
 - **Your Linear and ElevenLabs keys carry over.** Before this version Trek kept one

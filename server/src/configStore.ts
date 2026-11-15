@@ -57,6 +57,10 @@ export function validateConfig(raw: unknown): TrekServerConfig {
       if (raw.updates[key] !== undefined && typeof raw.updates[key] !== 'boolean') throw new Error(`config.updates.${key} must be true or false`)
     }
   }
+  if (raw.plugins !== undefined) {
+    if (!isRecord(raw.plugins)) throw new Error('config.plugins must be an object')
+    if (raw.plugins.remoteInstall !== undefined && typeof raw.plugins.remoteInstall !== 'boolean') throw new Error('config.plugins.remoteInstall must be true or false')
+  }
   for (const key of ['host', 'serverId', 'name', 'tokenHash', 'dataDir']) {
     if (raw[key] !== undefined && typeof raw[key] !== 'string') throw new Error(`config.${key} must be a string`)
   }
