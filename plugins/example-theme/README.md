@@ -40,7 +40,9 @@ click Apply in Settings.
 `build.mjs` bundles `client/index.ts` with esbuild into one ES module with no imports. `react`,
 `react/jsx-runtime` and the plugin contract are not bundled: they are read from
 `globalThis.__trekPlugin`, which the window sets before importing a bundle. A plugin that bundled
-its own React or its own copy of the contract would not see the window's plugin host.
+its own React or its own copy of the contract would not see the window's plugin host. Importing
+any other package (`react-dom`, say) fails the build, and the bundle is the same text whatever
+directory the build is run from.
 
 A package (`.trekplugin`) is `{ "manifest": {...}, "client": "<the bundle's text>" }`. The
 manifest's `id` and `version` must equal those of the plugin the bundle exports; `manifest.ts` is

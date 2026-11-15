@@ -3,8 +3,10 @@
 // loader with the window's React and plugin contract.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import * as React from 'react'
 import * as jsxRuntime from 'react/jsx-runtime'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -64,4 +66,44 @@ test("a built bundle's components use the window's React and plugin host context
   // The Provider is the test's copy of the contract: the bundle reads the same context only if it did not bundle its own.
   const html = renderToStaticMarkup(React.createElement(client.PluginHostContext.Provider, { value: { id: 'jsx-theme' } }, React.createElement(Overlay)))
   assert.equal(html, '<span data-badge="true">jsx-theme:2</span>')
+})
+
+/** The example theme's bundle, built by a new process whose working directory is `cwd`. */
+function buildFrom(cwd) {
+  const script = `const { buildExampleTheme } = await import(${JSON.stringify(pathToFileURL(join(root, 'plugins/example-theme/build.mjs')).href)}); process.stdout.write((await buildExampleTheme()).client)`
+  const run = spawnSync(process.execPath, [...process.execArgv, '--input-type=module', '-e', script], { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  assert.equal(run.status, 0, run.stderr)
+  return run.stdout
+}
+
+// esbuild names each module in a comment, relative to its working directory, which it takes once
+// per process: so each build here is a process of its own, and one more is built after a chdir.
+test('the build gives the same bundle from any working directory, with no path of this machine in it', async () => {
+  const fromRepo = buildFrom(root)
+  const fromElsewhere = buildFrom(tmpdir())
+  assert.ok(fromRepo.includes('example-theme'))
+  assert.equal(fromElsewhere, fromRepo)
+  assert.equal(await sha256Hex(fromElsewhere), await sha256Hex(fromRepo))
+  const here = process.cwd()
+  let afterChdir
+  try {
+    process.chdir(tmpdir())
+    afterChdir = (await buildExampleTheme()).client
+  } finally {
+    process.chdir(here)
+  }
+  assert.equal(afterChdir, fromRepo)
+  for (const text of [fromRepo, fromElsewhere]) {
+    assert.equal(text.includes(root), false, "the repo's path is not in the bundle")
+    assert.equal(text.includes(root.replaceAll('\\', '/').replace(/^\//, '')), false, 'nor that path after a run of ../')
+  }
+})
+
+test('a plugin that imports any other package is refused: nothing but the shared modules, never a private copy', async () => {
+  const manifest = { id: 'react-dom-theme', version: '0.1.0', name: 'react-dom theme', description: 'A fixture.', type: 'theme', contract: 1 }
+  await assert.rejects(buildPlugin({ entry: join(root, 'scripts/fixtures/react-dom-theme/index.ts'), manifest }), (err) => {
+    assert.match(err.message, /a plugin may not import "react-dom"/)
+    assert.match(err.message, /only react, react\/jsx-runtime and Trek's plugin contract/)
+    return true
+  })
 })

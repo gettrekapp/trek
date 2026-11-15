@@ -1,7 +1,8 @@
 // Builds a theme plugin into a .trekplugin package (theme plugins phase 2): one ES module with no
 // imports left. `react`, `react/jsx-runtime` and Trek's plugin contract are not bundled: they read
 // from globalThis.__trekPlugin, which the window sets before it imports any bundle, so the plugin
-// shares the window's React and the window's PluginHostContext.
+// shares the window's React and the window's PluginHostContext. Any other package a plugin imports
+// fails the build, and the bundle is the same text wherever the build is run.
 //
 // Run: node plugins/example-theme/build.mjs   → plugins/example-theme/dist/example-theme.trekplugin
 import { build } from 'esbuild'
@@ -42,6 +43,13 @@ const trekExternals = {
     b.onResolve({ filter: /^react$/ }, () => ({ path: 'React', namespace: 'trek-global' }))
     b.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsxRuntime', namespace: 'trek-global' }))
     b.onResolve({ filter: /(^|\/)shared\/plugins\/client(\.ts)?$/ }, () => ({ path: 'client', namespace: 'trek-global' }))
+    // Any other package would be bundled, private copy and all: a plugin's own files and Trek's
+    // src/shared/plugins/*.ts (relative imports, which do not reach here) are all it may add.
+    b.onResolve({ filter: /^[^./]/ }, (args) =>
+      args.kind === 'entry-point'
+        ? null
+        : { errors: [{ text: `a plugin may not import ${JSON.stringify(args.path)}: only react, react/jsx-runtime and Trek's plugin contract are shared with the window` }] }
+    )
     b.onLoad({ filter: /.*/, namespace: 'trek-global' }, (args) => ({ contents: sharedModule(args.path), loader: 'js' }))
   }
 }
@@ -50,6 +58,9 @@ const trekExternals = {
 export async function buildPlugin({ entry, manifest: m }) {
   const result = await build({
     entryPoints: [entry],
+    // esbuild names each module in a comment, relative to this: the entry's folder, not the
+    // directory the build was run from, so the bundle (and its SHA-256) is the same everywhere.
+    absWorkingDir: dirname(entry),
     bundle: true,
     format: 'esm',
     platform: 'browser',
