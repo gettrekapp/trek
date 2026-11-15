@@ -2,7 +2,18 @@
 // phase 3): who may, the checks made before the server is asked, and the words shown.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MAX_PACKAGE_CHARS, canInstallThemes, installFailure, installUrlProblem, installedNote, packageFileProblem, removeConfirm } from '../src/renderer/src/plugins/themeInstall.ts'
+import {
+  MAX_PACKAGE_CHARS,
+  MAX_PACKAGE_ESCAPED_BYTES,
+  canInstallThemes,
+  installFailure,
+  installUrlProblem,
+  installedNote,
+  jsonEscapedBytes,
+  packageFileProblem,
+  packageTextProblem,
+  removeConfirm
+} from '../src/renderer/src/plugins/themeInstall.ts'
 
 test('canInstallThemes: a server that lists plugins and holds pluginInstall', () => {
   assert.equal(canInstallThemes(undefined), false)
@@ -12,12 +23,48 @@ test('canInstallThemes: a server that lists plugins and holds pluginInstall', ()
   assert.equal(canInstallThemes({ plugins: [] }), false)
 })
 
-test("packageFileProblem: an empty file and one over the server's package limit are refused unread", () => {
+test('packageFileProblem: an empty file, and one too large to hold a package the server accepts, are refused unread', () => {
   assert.equal(MAX_PACKAGE_CHARS, 6_308_864)
   assert.equal(packageFileProblem({ size: 1 }), null)
   assert.equal(packageFileProblem({ size: MAX_PACKAGE_CHARS }), null)
+  // The server counts characters, and a character is at most three bytes of a file.
+  assert.equal(packageFileProblem({ size: MAX_PACKAGE_CHARS + 1 }), null, 'a multi-byte package may be under the character limit')
+  assert.equal(packageFileProblem({ size: 3 * MAX_PACKAGE_CHARS }), null)
   assert.equal(packageFileProblem({ size: 0 }), 'That file is empty.')
-  assert.equal(packageFileProblem({ size: MAX_PACKAGE_CHARS + 1 }), 'That file is larger than a plugin package may be (6 MB).')
+  assert.equal(packageFileProblem({ size: 3 * MAX_PACKAGE_CHARS + 1 }), 'That file is larger than a plugin package may be (6 MB).')
+})
+
+test('jsonEscapedBytes: the UTF-8 size of the text as a JSON string, without its quotes', () => {
+  const odd = 'plain "quoted" back\\slash \b\f\n\r\t \0\x01\x1f \x7f é ℵ 😀 \ud83d \ude00 \ud83d'
+  for (const text of ['', 'abc', odd, JSON.stringify({ manifest: { id: 'nord' }, client: `export default "${odd}"\n` })]) {
+    assert.equal(jsonEscapedBytes(text), Buffer.byteLength(JSON.stringify(text)) - 2, JSON.stringify(text))
+  }
+  // Past `stopAbove` the count stops: more than it, not the whole size.
+  const counted = jsonEscapedBytes('\0'.repeat(1000), 60)
+  assert.ok(counted > 60 && counted < 6000, String(counted))
+})
+
+test("packageTextProblem: text over the server's character limit, or that would overflow the socket's frame as a JSON string, is refused", () => {
+  const pkg = JSON.stringify({ manifest: { id: 'nord', version: '1.0.0', name: 'Nord', description: 'Cold.', type: 'theme', contract: 1 }, client: 'export default { manifest: { id: "nord" } }\n' })
+  assert.equal(packageTextProblem(pkg), null)
+  assert.equal(packageTextProblem('é'.repeat(1000)), null)
+  // Under the server's frame (16 MB) with room to spare, and over what any package the server accepts escapes to.
+  assert.equal(MAX_PACKAGE_ESCAPED_BYTES, 2 * MAX_PACKAGE_CHARS)
+  assert.ok(MAX_PACKAGE_ESCAPED_BYTES < 16 * 1024 * 1024 - 1024 * 1024)
+  // The largest client the server accepts, all of it \uXXXX escapes, is a package of ordinary size once escaped again.
+  assert.equal(packageTextProblem(JSON.stringify({ manifest: {}, client: '\0'.repeat(1024 * 1024) })), null)
+  // Every character of a package may double (quotes, backslashes, line ends) and still be sent.
+  assert.equal(packageTextProblem('\n'.repeat(MAX_PACKAGE_CHARS)), null)
+  assert.equal(packageTextProblem('a'.repeat(MAX_PACKAGE_CHARS)), null)
+  assert.equal(packageTextProblem('a'.repeat(MAX_PACKAGE_CHARS + 1)), 'That file is larger than a plugin package may be (6 MB).')
+  // 2.7 MB of NUL bytes: under the character limit, over 16 MB as a JSON string.
+  const nuls = '\0'.repeat(Math.ceil(2.7 * 1024 * 1024))
+  assert.ok(Buffer.byteLength(JSON.stringify(nuls)) > 16 * 1024 * 1024)
+  assert.equal(packageTextProblem(nuls), 'That file is not a plugin package.')
+  assert.equal(packageTextProblem('\0'.repeat(Math.floor(MAX_PACKAGE_ESCAPED_BYTES / 6))), null)
+  assert.equal(packageTextProblem('\0'.repeat(Math.floor(MAX_PACKAGE_ESCAPED_BYTES / 6) + 1)), 'That file is not a plugin package.')
+  // Characters of three bytes each, under the character limit.
+  assert.equal(packageTextProblem('ℵ'.repeat(MAX_PACKAGE_CHARS)), 'That file is not a plugin package.')
 })
 
 test('installUrlProblem: an https URL with no credentials, at most 2,048 characters', () => {

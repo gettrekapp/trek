@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBackend } from '../backend'
 import type { InstalledTheme } from './theme'
-import { installFailure, installUrlProblem, installedNote, packageFileProblem, removeConfirm } from './themeInstall'
+import { installFailure, installUrlProblem, installedNote, packageFileProblem, packageTextProblem, removeConfirm } from './themeInstall'
 
 const ABOUT = 'Themes are installed on the server, for every client of it. A theme is code that runs in this window: install only what you trust.'
 
@@ -37,10 +37,18 @@ export function ThemeInstallRow({ themes }: { themes: InstalledTheme[] }): React
     }
   }
 
-  /** Runs one request on the window's server; its outcome shows only while this row is still that window's. */
-  const run = async (what: string, method: string, params: Record<string, unknown>, done: (result: unknown) => string): Promise<boolean> => {
-    const backend = getBackend()
-    const here = (): boolean => alive.current && getBackend() === backend
+  /** Whether this row is still shown, in a window still on `backend`: the server and project an action started with. */
+  const still = (backend: ReturnType<typeof getBackend>): boolean => alive.current && getBackend() === backend
+
+  /** Runs one request on `backend`, the window's server when the action started; its outcome shows only while this row is still that window's. */
+  const run = async (
+    backend: ReturnType<typeof getBackend>,
+    what: string,
+    method: string,
+    params: Record<string, unknown>,
+    done: (result: unknown) => string
+  ): Promise<boolean> => {
+    const here = (): boolean => still(backend)
     setBusy(what)
     setMessage(null)
     try {
@@ -61,14 +69,22 @@ export function ThemeInstallRow({ themes }: { themes: InstalledTheme[] }): React
       setMessage({ text: problem, problem: true })
       return
     }
+    // The file goes to the server of the window it was picked in: not to one the window moved to while it was read.
+    const backend = getBackend()
     let text: string
     try {
       text = await file.text()
     } catch (err) {
-      setMessage({ text: `Could not read that file. (${err instanceof Error ? err.message : String(err)})`, problem: true })
+      if (still(backend)) setMessage({ text: `Could not read that file. (${err instanceof Error ? err.message : String(err)})`, problem: true })
       return
     }
-    await run('install', 'plugins.install', { package: text }, installedNote)
+    if (!still(backend)) return
+    const unfit = packageTextProblem(text)
+    if (unfit) {
+      setMessage({ text: unfit, problem: true })
+      return
+    }
+    await run(backend, 'install', 'plugins.install', { package: text }, installedNote)
   }
 
   const installUrl = async (): Promise<void> => {
@@ -77,7 +93,7 @@ export function ThemeInstallRow({ themes }: { themes: InstalledTheme[] }): React
       setMessage({ text: problem, problem: true })
       return
     }
-    if (await run('install', 'plugins.install', { url: url.trim() }, installedNote)) {
+    if (await run(getBackend(), 'install', 'plugins.install', { url: url.trim() }, installedNote)) {
       if (!alive.current) return
       setUrlOpen(false)
       setUrl('')
@@ -87,8 +103,8 @@ export function ThemeInstallRow({ themes }: { themes: InstalledTheme[] }): React
   const remove = async (theme: InstalledTheme): Promise<void> => {
     const backend = getBackend()
     const confirmed = await window.api.confirm(removeConfirm(theme))
-    if (!confirmed || !alive.current || getBackend() !== backend) return
-    await run(`remove:${theme.id}`, 'plugins.remove', { id: theme.id }, () => `Removed ${theme.name}.`)
+    if (!confirmed || !still(backend)) return
+    await run(backend, `remove:${theme.id}`, 'plugins.remove', { id: theme.id }, () => `Removed ${theme.name}.`)
   }
 
   return (

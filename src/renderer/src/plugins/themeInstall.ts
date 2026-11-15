@@ -22,10 +22,61 @@ export function canInstallThemes(welcome: PluginWelcome | undefined): boolean {
   return welcome?.plugins !== undefined && welcome.capabilities?.includes('pluginInstall') === true
 }
 
-/** Why a picked file is not sent, or null. By its size in bytes, which is never less than its length as text. */
+const TOO_LARGE = `That file is larger than a plugin package may be (${Math.floor(MAX_PACKAGE_CHARS / (1024 * 1024))} MB).`
+
+/**
+ * The most a package's text may come to as a JSON string, in UTF-8 bytes: `plugins.install`
+ * carries it as one, in a socket frame, and the server closes the socket on a frame over 16 MB
+ * (server/src/server.ts, MAX_FRAME_BYTES). Twice the character limit, about 12 MB: every character
+ * of JSON text is at most doubled as a string's content (a quote, a backslash, a line end), so no
+ * ASCII package the server accepts is refused here (the largest real one, a 1 MB client of \uXXXX
+ * escapes, comes to about 7 MB), and 4 MB of the frame are left for the rest of the request.
+ */
+export const MAX_PACKAGE_ESCAPED_BYTES = 2 * MAX_PACKAGE_CHARS
+
+/**
+ * Why a picked file is not read, or null: by its size in bytes, before its text is known. The
+ * server's limit is in characters, and a character is at most three bytes of a UTF-8 file, so a
+ * file over three times the limit cannot be under it; packageTextProblem applies the limit itself
+ * once the file is read.
+ */
 export function packageFileProblem(file: { size: number }): string | null {
   if (file.size === 0) return 'That file is empty.'
-  if (file.size > MAX_PACKAGE_CHARS) return `That file is larger than a plugin package may be (${Math.floor(MAX_PACKAGE_CHARS / (1024 * 1024))} MB).`
+  if (file.size > 3 * MAX_PACKAGE_CHARS) return TOO_LARGE
+  return null
+}
+
+/**
+ * The UTF-8 size of `text` as a JSON string's content (JSON.stringify's escapes, without the
+ * quotes), counted without building that string. Past `stopAbove` the count stops: what returns
+ * is then only more than `stopAbove`.
+ */
+export function jsonEscapedBytes(text: string, stopAbove = Infinity): number {
+  let bytes = 0
+  for (let i = 0; i < text.length && bytes <= stopAbove; i++) {
+    const c = text.charCodeAt(i)
+    if (c === 0x22 || c === 0x5c) bytes += 2
+    else if (c < 0x20) bytes += c === 0x08 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d ? 2 : 6
+    else if (c < 0x80) bytes += 1
+    else if (c < 0x800) bytes += 2
+    else if (c < 0xd800 || c > 0xdfff) bytes += 3
+    else if (c < 0xdc00 && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      // A surrogate pair: one character of four bytes.
+      bytes += 4
+      i++
+    } else bytes += 6 // A lone surrogate is written as \udXXX.
+  }
+  return bytes
+}
+
+/**
+ * Why a picked file's text is not sent, or null: longer than the server takes from a client, or
+ * text that as a JSON string would overflow the socket's frame (a file of NUL bytes, say), which
+ * would drop the window's link instead of being refused.
+ */
+export function packageTextProblem(text: string): string | null {
+  if (text.length > MAX_PACKAGE_CHARS) return TOO_LARGE
+  if (jsonEscapedBytes(text, MAX_PACKAGE_ESCAPED_BYTES) > MAX_PACKAGE_ESCAPED_BYTES) return 'That file is not a plugin package.'
   return null
 }
 
