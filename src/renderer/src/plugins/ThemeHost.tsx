@@ -22,7 +22,7 @@ interface Loaded {
 }
 
 export function ThemeHost(): React.JSX.Element | null {
-  const { backend, state } = useThemeChoice()
+  const { backend, listed, state } = useThemeChoice()
   const ready = state.kind === 'ready' ? state.theme : null
   const readyId = ready?.id
   const readySha = ready?.sha256
@@ -30,14 +30,18 @@ export function ThemeHost(): React.JSX.Element | null {
   // A load that failed while the link was down goes again when it is back.
   const [attempt, setAttempt] = useState(0)
   const staleTries = useRef(0)
-  useEffect(
-    () =>
-      backend.plugins.onConnected(() => {
-        staleTries.current = 0
-        setAttempt((n) => n + 1)
-      }),
-    [backend]
-  )
+  // Subscribed once the server's welcome is in, not when the backend is made: `onConnected` listens
+  // on the connection registered at that moment and is a no-op without one, and a window opened
+  // directly on a project has its backend before its connection. `listed` means a connection
+  // exists and has welcomed. Nothing is missed before it: a theme is `ready`, and so loads, only
+  // once it is listed, in the same render that makes `listed` true.
+  useEffect(() => {
+    if (!listed) return
+    return backend.plugins.onConnected(() => {
+      staleTries.current = 0
+      setAttempt((n) => n + 1)
+    })
+  }, [backend, listed])
   useEffect(() => {
     staleTries.current = 0
   }, [backend, readyId, readySha])
