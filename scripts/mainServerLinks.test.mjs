@@ -12,7 +12,7 @@ const SECRET = 'tok-S3CRET-never-in-a-snapshot'
  * `withHooks: false` leaves out `linked` and `unlinked`, as a caller may.
  * `onHook(kind, id)` runs inside each hook, after it is recorded (it may throw).
  */
-function setup({ entries = [], stored = {}, withHooks = true, onHook = () => {} } = {}) {
+function setup({ entries = [], stored = {}, withHooks = true, onHook = () => {}, extra } = {}) {
   const list = entries.map((e) => ({ ...e }))
   const secrets = new Map(Object.entries(stored))
   const server = fakeServer()
@@ -35,6 +35,7 @@ function setup({ entries = [], stored = {}, withHooks = true, onHook = () => {} 
     clientVersion: '9.9.9',
     changed: (snapshot) => changes.push(snapshot),
     now: () => time,
+    ...(extra && { extra }),
     ...(withHooks && {
       linked: (id, registered) => {
         hooks.push(['linked', id, registered])
@@ -71,7 +72,7 @@ test('one connection per entry with a token; none without one', async () => {
   assert.equal(sock.sent[0].client, 'trek-desktop-main')
   sock.welcome({ serverName: 'build-box', capabilities: ['mcp', 'agents'] })
   assert.deepEqual(last().servers, [
-    { id: 'box', name: 'Box', url: 'ws://box:8800', hasToken: true, status: 'connected', message: '', serverName: 'build-box', capabilities: ['mcp', 'agents'] },
+    { id: 'box', name: 'Box', url: 'ws://box:8800', hasToken: true, status: 'connected', message: '', serverName: 'build-box', capabilities: ['mcp', 'agents'], version: '0.2.0' },
     { id: 'lab', name: 'Lab', url: 'ws://lab:8800', hasToken: false, status: null, message: '' }
   ])
 })
@@ -85,7 +86,7 @@ test('a snapshot never carries a token, only the listed fields', async () => {
   sock.serverClose(4003, 'unauthorized')
   const all = [...changes, links.snapshot()]
   assert.ok(all.length >= 4)
-  const allowed = ['capabilities', 'hasToken', 'id', 'local', 'message', 'name', 'serverName', 'status', 'url']
+  const allowed = ['capabilities', 'hasToken', 'id', 'local', 'message', 'name', 'serverName', 'status', 'url', 'version']
   for (const snapshot of all) {
     assert.deepEqual(Object.keys(snapshot).sort(), ['seq', 'servers'])
     assert.equal(JSON.stringify(snapshot).includes(SECRET), false)
@@ -428,4 +429,70 @@ test('without the linked and unlinked hooks, an entry with a token is still conn
   assert.equal(last().servers[0].status, 'connected')
   links.close()
   assert.deepEqual(hooks, [])
+})
+
+test("a link carries the server's version from its welcome, and the update fields `extra` gives for its entry", async () => {
+  const status = { current: '0.2.0', latest: '0.3.0', state: 'idle', sessions: 0, canRelaunch: true, restartNeeded: false, remoteApply: true }
+  const said = { box: { update: status, updateRestarting: undefined, updateWitnessed: { version: '0.2.0' } }, lab: { update: undefined, updateRestarting: { version: '0.3.0' } } }
+  const asked = []
+  const { links, sockFor, last } = setup({
+    entries: [box, lab, { id: 'bare', name: 'Bare', url: 'ws://bare:8800' }],
+    stored: { box: SECRET, lab: SECRET },
+    extra: (id) => {
+      asked.push(id)
+      return said[id] ?? {}
+    }
+  })
+  await links.sync()
+  assert.equal(last().servers[0].version, undefined, 'none before a welcome')
+  sockFor('ws://box:8800').open()
+  sockFor('ws://box:8800').welcome({ daemonVersion: '0.2.0' })
+  const [first, second, third] = last().servers
+  assert.equal(first.version, '0.2.0')
+  assert.deepEqual(first.update, status)
+  assert.equal('updateRestarting' in first, false, 'an undefined field is left out')
+  assert.deepEqual(first.updateWitnessed, { version: '0.2.0' })
+  assert.equal('updateWitnessed' in second, false)
+  assert.deepEqual(second.updateRestarting, { version: '0.3.0' })
+  assert.equal('update' in second, false)
+  assert.equal('version' in second, false)
+  assert.deepEqual(Object.keys(third).sort(), ['hasToken', 'id', 'message', 'name', 'status', 'url'])
+  assert.ok(asked.includes('box') && asked.includes('lab'))
+  // Only the update fields are taken from `extra`.
+  said.box = { update: status, token: SECRET, name: 'other' }
+  assert.equal(links.snapshot().servers[0].name, 'Box')
+  assert.equal(JSON.stringify(links.snapshot()).includes(SECRET), false)
+})
+
+test('an `extra` that throws leaves the link without the update fields', async () => {
+  const { links, last } = setup({
+    entries: [box],
+    stored: { box: SECRET },
+    extra: () => {
+      throw new Error('no')
+    }
+  })
+  const error = console.error
+  console.error = () => {}
+  try {
+    await links.sync()
+    assert.equal(last().servers[0].id, 'box')
+    assert.equal('update' in last().servers[0], false)
+  } finally {
+    console.error = error
+  }
+})
+
+test('refresh broadcasts the links again under a higher seq (a window keeps only a newer snapshot); not after close', async () => {
+  const { links, changes, last } = setup({ entries: [box], stored: { box: SECRET } })
+  await links.sync()
+  const before = changes.length
+  const seq = last().seq
+  links.refresh()
+  assert.equal(changes.length, before + 1)
+  assert.ok(last().seq > seq)
+  links.close()
+  const closedAt = changes.length
+  links.refresh()
+  assert.equal(changes.length, closedAt)
 })

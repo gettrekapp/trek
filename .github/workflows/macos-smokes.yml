@@ -95,6 +95,9 @@ jobs:
       - name: smoke:server-pairing
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node scripts/server-pairing-smoke.mjs
+      - name: smoke:server-update-app
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: node scripts/server-update-app-smoke.mjs
       - name: smoke:import
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: node scripts/import-smoke.mjs

@@ -4,16 +4,20 @@
 // expected version and target; flushed to disk; then swapped into the install's own path, so the
 // symlink in ~/.local/bin, a systemd unit and PATH keep working. The version it replaces stays as
 // <install>.previous until the next update.
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { open, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { hidden } from '../../../src/host/childOptions.ts'
 import { commandPath } from '../../../src/host/commandPath.ts'
 import { LEFTOVER_PREFIX, LOCK_STALE_MS } from './lock.ts'
 
 export const MAX_TARBALL_BYTES = 500 * 1024 * 1024
 export const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
+
+const execFileAsync = promisify(execFile)
 
 export function previousDir(install: string): string {
   return `${install}.previous`
@@ -107,15 +111,19 @@ export function checkEntries(names: readonly string[]): string {
   return top
 }
 
-/** Unpacks `tarball` into `stage` (emptied first) with the system tar. Returns the folder it held. */
-export function unpack(tarball: string, stage: string): string {
-  const listing = execFileSync(commandPath('tar'), ['-tzf', tarball], hidden({ encoding: 'utf8' as const, maxBuffer: 64 * 1024 * 1024 }))
+/**
+ * Unpacks `tarball` into `stage` (emptied first) with the system tar. Returns the folder it held.
+ * tar runs beside this process, not in its way: a server that installs an update for a client
+ * keeps serving its terminals meanwhile.
+ */
+export async function unpack(tarball: string, stage: string): Promise<string> {
+  const { stdout: listing } = await execFileAsync(commandPath('tar'), ['-tzf', tarball], hidden({ encoding: 'utf8' as const, maxBuffer: 64 * 1024 * 1024 }))
   const top = checkEntries(listing.split('\n').filter((line) => line !== ''))
   rmSync(stage, { recursive: true, force: true })
   mkdirSync(stage, { recursive: true, mode: 0o700 })
   // --no-same-owner: as root, tar would give each file the owner the archive names (the id of
   // whoever built the release, some local user's here). The files are the updating user's.
-  execFileSync(commandPath('tar'), ['--no-same-owner', '-xzf', tarball, '-C', stage], hidden({ stdio: ['ignore', 'ignore', 'pipe'] as ['ignore', 'ignore', 'pipe'] }))
+  await execFileAsync(commandPath('tar'), ['--no-same-owner', '-xzf', tarball, '-C', stage], hidden({ encoding: 'utf8' as const }))
   return join(stage, top)
 }
 
@@ -138,14 +146,14 @@ export function validateStaged(dir: string, expect: { version: string; target: s
 }
 
 /** Flushes one file's, or one folder's, data to disk. */
-export type Flush = (path: string) => void
+export type Flush = (path: string) => void | Promise<void>
 
-const fsyncPath: Flush = (path) => {
-  const fd = openSync(path, 'r')
+const fsyncPath: Flush = async (path) => {
+  const handle = await open(path, 'r')
   try {
-    fsyncSync(fd)
+    await handle.sync()
   } finally {
-    closeSync(fd)
+    await handle.close()
   }
 }
 
@@ -153,9 +161,9 @@ const fsyncPath: Flush = (path) => {
 const NO_DIR_FSYNC = new Set(['EINVAL', 'EISDIR', 'EPERM'])
 
 /** Flushes a folder's entries (the names in it). Where folders cannot be flushed, nothing happens; any other error is thrown. */
-export function flushDir(dir: string, flush: Flush = fsyncPath): void {
+export async function flushDir(dir: string, flush: Flush = fsyncPath): Promise<void> {
   try {
-    flush(dir)
+    await flush(dir)
   } catch (err) {
     if (!NO_DIR_FSYNC.has((err as NodeJS.ErrnoException).code ?? '')) throw err
   }
@@ -164,15 +172,16 @@ export function flushDir(dir: string, flush: Flush = fsyncPath): void {
 /**
  * Flushes every file and folder under `dir`, and `dir`, to disk: after it, a power cut cannot
  * leave a renamed-in install whose files' data never arrived. Links are skipped (what they point
- * at is not this folder's). A file that cannot be flushed is an error.
+ * at is not this folder's). A file that cannot be flushed is an error. One path at a time, each
+ * waited for off the event loop: a running server is not held up by the disk.
  */
-export function flushTree(dir: string, flush: Flush = fsyncPath): void {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+export async function flushTree(dir: string, flush: Flush = fsyncPath): Promise<void> {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name)
-    if (entry.isDirectory()) flushTree(path, flush)
-    else if (entry.isFile()) flush(path)
+    if (entry.isDirectory()) await flushTree(path, flush)
+    else if (entry.isFile()) await flush(path)
   }
-  flushDir(dir, flush)
+  await flushDir(dir, flush)
 }
 
 /** `staged` takes the install's path; the install becomes <install>.previous (replacing an older one). Undone if the second rename fails. */

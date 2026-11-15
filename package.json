@@ -36,6 +36,7 @@
     "smoke:server-promote": "npm run build && node scripts/server-promote-smoke.mjs",
     "smoke:server-web": "npm run build && node scripts/server-web-smoke.mjs",
     "smoke:server-update": "node scripts/server-update-smoke.mjs",
+    "smoke:server-update-app": "npm run build && node scripts/server-update-app-smoke.mjs",
     "smoke:push": "npm --prefix server run build && npm --prefix relay run build && node scripts/push-smoke.mjs",
     "smoke:import": "npm run build && node scripts/import-smoke.mjs",
     "smoke:local-window": "npm run build && node scripts/local-window-smoke.mjs",

@@ -3,6 +3,7 @@ import type { RawProjectFile } from './migration'
 import type { LlmSelection } from './providers/types'
 import type { ConnectionStatus } from './client/connection'
 import type { Automation, ReviewDraft } from './model/types'
+import type { UpdateStatus } from './protocolV2.ts'
 
 /** A workflow tag assignable to a branch's worktree, configured per project. */
 export interface WorktreeTag {
@@ -153,6 +154,20 @@ export interface AppServerLink {
   /** From the connection's last welcome */
   serverName?: string
   capabilities?: string[]
+  /** The server's version, from the connection's last welcome */
+  version?: string
+  /** A server that can update itself (the `update` capability): its last update status */
+  update?: UpdateStatus
+  /**
+   * The server said it is restarting into a new version (`daemon.shutdown`, reason `update`):
+   * until it is connected again, or RESTART_GRACE_MS passes, the row says so instead of "disconnected".
+   */
+  updateRestarting?: { version?: string }
+  /**
+   * main saw this server update to `version` since the app started (it went away to update and
+   * came back running it): "Updated to X" is said only then, never for an update found already done.
+   */
+  updateWitnessed?: { version: string }
   /** The Local entry only: what the supervisor (src/main/localServer.ts) knows of the server */
   local?: LocalServerStatus
 }

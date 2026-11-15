@@ -3,7 +3,7 @@
 // only then swap it into the install's place, marked pending until it starts. Anything that
 // fails before the swap leaves the install, and a server running from it, untouched. One update
 // at a time per install (lock.ts: a lock beside it).
-import { spawnSync } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { hidden } from '../../../src/host/childOptions.ts'
@@ -18,6 +18,8 @@ import type { Install } from './updatable.ts'
 
 export { LOCK_FILE }
 const SELFCHECK_TIMEOUT_MS = 60_000
+/** The most a selfcheck may print (a real one prints a few lines): one that goes on is stopped */
+const SELFCHECK_MAX_OUTPUT = 1024 * 1024
 
 export type UpdateStep = 'checking' | 'downloading' | 'unpacking' | 'selfcheck' | 'installing'
 
@@ -41,9 +43,13 @@ export interface ApplyDeps extends FindDeps {
   onStep?: (step: UpdateStep) => void
   onProgress?: (bytes: number, total: number | undefined) => void
   /** Runs the staged version's `selfcheck`; the default runs it through the staged launcher */
-  selfcheck?: (stagedDir: string) => SelfcheckOutcome
-  /** The release the caller showed and had confirmed: the update fails if the latest is another by now */
-  expect?: { version: string }
+  selfcheck?: (stagedDir: string) => SelfcheckOutcome | Promise<SelfcheckOutcome>
+  /**
+   * The release the caller showed and had confirmed: the update fails if the latest is another by
+   * now. `retry`: what that failure says to do next (the command names itself; a client is shown
+   * the default).
+   */
+  expect?: { version: string; retry?: string }
 }
 
 export type ApplyResult =
@@ -56,18 +62,63 @@ export type ApplyResult =
  * through the staged launcher (so one that is not executable, does not parse or finds no usable
  * Node fails here, before the swap), with the Node a relaunch hands it (`env`). The launcher marks
  * nothing for it: selfcheck is not a start, and the staged folder has no pending update yet. One
- * that does not finish in time, or is killed, has failed.
+ * that does not finish in time, or is killed, has failed. Never rejects, and never holds the
+ * event loop: the server that asked keeps serving while the new version proves itself.
  */
-export function runStagedSelfcheck(stagedDir: string, timeoutMs: number = SELFCHECK_TIMEOUT_MS, env: NodeJS.ProcessEnv = relaunchEnv()): SelfcheckOutcome {
-  const run = spawnSync(commandPath(launcherPath(stagedDir)), ['selfcheck'], hidden({ encoding: 'utf8' as const, timeout: timeoutMs, killSignal: 'SIGKILL' as const, env }))
-  const output = `${run.stdout ?? ''}${run.stderr ?? ''}`.trim()
-  const failed = (why: string): SelfcheckOutcome => ({ ok: false, output: `${output}\n${why}`.trim() })
-  if (run.error) {
-    const timedOut = (run.error as NodeJS.ErrnoException).code === 'ETIMEDOUT'
-    return failed(timedOut ? `selfcheck did not finish within ${timeoutMs / 1000} s` : `selfcheck could not be run: ${run.error.message}`)
-  }
-  if (run.status === null) return failed(`selfcheck was ended by ${run.signal ?? 'a signal'}`)
-  return { ok: run.status === 0, output }
+export function runStagedSelfcheck(stagedDir: string, timeoutMs: number = SELFCHECK_TIMEOUT_MS, env: NodeJS.ProcessEnv = relaunchEnv()): Promise<SelfcheckOutcome> {
+  return new Promise((resolve) => {
+    const launcher = launcherPath(stagedDir)
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let timedOut = false
+    let flooded = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const output = (): string => `${stdout}${stderr}`.trim()
+    const finish = (outcome: SelfcheckOutcome): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(outcome)
+    }
+    const failed = (why: string): void => finish({ ok: false, output: `${output()}\n${why}`.trim() })
+    let child: ChildProcess
+    try {
+      child = spawn(commandPath(launcher), ['selfcheck'], hidden<SpawnOptions>({ env, stdio: ['ignore', 'pipe', 'pipe'] }))
+    } catch (err) {
+      failed(`selfcheck could not be run: ${(err as Error).message}`)
+      return
+    }
+    const collect = (chunk: string, to: 'out' | 'err'): void => {
+      if (flooded) return
+      const room = SELFCHECK_MAX_OUTPUT - stdout.length - stderr.length
+      if (to === 'out') stdout += chunk.slice(0, room)
+      else stderr += chunk.slice(0, room)
+      if (chunk.length > room) {
+        flooded = true
+        child.kill('SIGKILL')
+      }
+    }
+    child.stdout?.setEncoding('utf8').on('data', (chunk: string) => collect(chunk, 'out'))
+    child.stderr?.setEncoding('utf8').on('data', (chunk: string) => collect(chunk, 'err'))
+    timer = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGKILL')
+    }, timeoutMs)
+    const ended = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (timedOut) failed(`selfcheck did not finish within ${timeoutMs / 1000} s`)
+      else if (flooded) failed(`selfcheck could not be run: spawn ${launcher} ENOBUFS`)
+      else if (code === null) failed(`selfcheck was ended by ${signal ?? 'a signal'}`)
+      else finish({ ok: code === 0, output: output() })
+    }
+    child.on('error', (err) => failed(`selfcheck could not be run: ${err.message}`))
+    // 'close': its output has all arrived. One that was killed may have left a process of its own
+    // holding the pipes, so its exit is enough.
+    child.on('close', ended)
+    child.on('exit', (code, signal) => {
+      if (timedOut || flooded) ended(code, signal)
+    })
+  })
 }
 
 /**
@@ -139,7 +190,7 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     if (!release) return { kind: 'up-to-date', current: from }
     target = release.version
     if (deps.expect && release.version !== deps.expect.version) {
-      throw new Error(`the latest release is now trek-server ${release.version}, not the ${deps.expect.version} that was confirmed: run \`trek-server update\` again`)
+      throw new Error(`the latest release is now trek-server ${release.version}, not the ${deps.expect.version} that was confirmed: ${deps.expect.retry ?? 'check again'}`)
     }
 
     // A new folder (0700) with a name nobody could have known: nothing was put in it beforehand,
@@ -150,11 +201,11 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     await download(tarballUrl(deps.feed, release), tarball, release.sha256, { fetch: deps.fetch, onProgress: deps.onProgress })
 
     deps.onStep?.('unpacking')
-    const staged = unpack(tarball, join(work, 'stage'))
+    const staged = await unpack(tarball, join(work, 'stage'))
     validateStaged(staged, { version: release.version, target: install.target })
 
     deps.onStep?.('selfcheck')
-    const check = (deps.selfcheck ?? runStagedSelfcheck)(staged)
+    const check = await (deps.selfcheck ?? runStagedSelfcheck)(staged)
     if (!check.ok) throw new Error(`trek-server ${release.version} does not run on this machine, so ${from} stays:\n${check.output}`)
 
     // Nothing has been written into the install up to here. The marker goes into the staged
@@ -165,14 +216,17 @@ export async function applyUpdate(deps: ApplyDeps): Promise<ApplyResult> {
     remove(failedDir(install.dir))
     // On disk before it is renamed into place, and the renames after: a power cut must not leave
     // the new version's name on files whose data never arrived.
-    flushTree(staged)
+    await flushTree(staged)
+    // The two renames, with nothing of this process between them.
     swap(install.dir, staged)
-    flushDir(install.parent)
+    await flushDir(install.parent)
     return { kind: 'installed', from, to: release.version }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
     try {
-      writeState(deps.configDir, { lastResult: { ok: false, from, to: target ?? from, at: now().toISOString(), error } })
+      // `to`: the release that was being installed. When the feed could not be read at all, that is
+      // the one the caller confirmed: a failure "from 1.0.0 to 1.0.0" would be a failure of nothing.
+      writeState(deps.configDir, { lastResult: { ok: false, from, to: target ?? deps.expect?.version ?? from, at: now().toISOString(), error } })
     } catch {
       // The record is a courtesy: the failure is still returned.
     }

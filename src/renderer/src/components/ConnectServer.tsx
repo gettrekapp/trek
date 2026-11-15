@@ -6,7 +6,9 @@ import { shouldReconnect, shouldReconnectOnMove } from '../v2/appServerLinks'
 import { useAppServerLinks } from '../useAppServerLinks'
 import { NewServerProjectModal } from './NewServerProjectModal'
 import { PairPhone } from './PairPhone'
+import { ServerUpdateRow, type ServerUpdateAct } from './ServerUpdateRow'
 import { STATUS_LABELS, isLoopbackUrl, localStatusLabel, originOf } from '../../../shared/appServerRules.ts'
+import { RESTARTING_STATUS, canCheckUpdate, restartingToUpdate, settleUpdateActs, updateSignatures, type ServerUpdateAction } from '../../../shared/serverUpdate.ts'
 import type { ConnectionStatus, RegisteredServer, StatusChange } from '../../../shared/client/index.ts'
 import type { ServerTopic } from '../../../shared/model/topics'
 import type { AppServerLink, AppServerTest } from '../../../shared/types'
@@ -74,6 +76,10 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
   const [tokenValue, setTokenValue] = useState('')
   const [tests, setTests] = useState<Record<string, TestState>>({})
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  /** Each server's last click on an update button: in flight, or how it ended (the update state itself is main's broadcast) */
+  const [updateActs, setUpdateActs] = useState<Record<string, ServerUpdateAct>>({})
+  /** What each row showed at the last snapshot: a click's error goes when its row has moved on */
+  const updateShown = useRef<Record<string, string>>({})
   /** Ids from the last snapshot, so the next can drop removed entries' connections. */
   const knownIds = useRef<Set<string>>(new Set())
   const tokenInputId = useId()
@@ -87,6 +93,16 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
     const shown = useAppStore.getState().serverWindow?.serverEntryId
     for (const id of knownIds.current) if (!ids.has(id) && id !== shown) dropServerEntry(id)
     knownIds.current = ids
+  }, [servers])
+
+  // A click's error is about the row as it was: once the server's update line or connection has
+  // changed, or the server is gone from the list, it is dropped (a click in flight is left alone).
+  useEffect(() => {
+    if (!servers) return
+    const before = updateShown.current
+    const now = updateSignatures(servers)
+    updateShown.current = now
+    setUpdateActs((acts) => settleUpdateActs(acts, before, now))
   }, [servers])
 
   // The view goes: so do the connections it opened for the picked server's projects. Not the
@@ -172,6 +188,24 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
     }
   }
 
+  // Check for Update, Update, Try Again, Check Again. Main asks before an install; what the server
+  // then does shows on the row through the broadcast.
+  const updateAction = async (server: AppServerLink, action: ServerUpdateAction): Promise<void> => {
+    const ended = (act: ServerUpdateAct): void => setUpdateActs((a) => ({ ...a, [server.id]: act }))
+    ended({ busy: true, kind: action.kind })
+    try {
+      if (action.kind === 'apply') {
+        await window.api.appServers.applyUpdate(server.id)
+        ended({ busy: false })
+      } else {
+        await window.api.appServers.checkUpdate(server.id)
+        ended({ busy: false, checked: true })
+      }
+    } catch (err) {
+      ended({ busy: false, error: errorText(err) })
+    }
+  }
+
   const remove = async (server: AppServerLink): Promise<void> => {
     const confirmed = await window.api.confirm({
       title: 'Remove Server',
@@ -224,13 +258,16 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
           )
         }
         const testState = tests[server.id]
-        const label = server.hasToken ? (server.status ? STATUS_LABELS[server.status] : 'Not connected') : 'Needs a token'
-        const message = server.hasToken ? server.message : 'Set a token to connect'
+        const updateAct = updateActs[server.id]
+        // Away because it said it is restarting to update: that, not "Disconnected" and why the socket closed.
+        const restarting = restartingToUpdate(server)
+        const label = !server.hasToken ? 'Needs a token' : restarting ? RESTARTING_STATUS : server.status ? STATUS_LABELS[server.status] : 'Not connected'
+        const message = !server.hasToken ? 'Set a token to connect' : restarting ? '' : server.message
         return (
           <div key={server.id} className={`connect-server-item${selectedId === server.id ? ' selected' : ''}`}>
             <div className="server-row">
               <span
-                className={`wt-dot ${server.hasToken ? dotClass(server.status ?? undefined) : 'exited'}`}
+                className={`wt-dot ${!server.hasToken ? 'exited' : restarting ? 'running' : dotClass(server.status ?? undefined)}`}
                 title={message ? `${label}: ${message}` : label}
               />
               <span className="connect-server-name">{server.name}</span>
@@ -264,6 +301,15 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
                     Pair a phone…
                   </button>
                 )}
+                {(canCheckUpdate(server) || (updateAct?.busy && updateAct.kind === 'check')) && (
+                  <button
+                    className="btn btn-ghost"
+                    disabled={updateAct?.busy}
+                    onClick={() => void updateAction(server, { kind: 'check', label: 'Check for Update' })}
+                  >
+                    {updateAct?.busy && updateAct.kind === 'check' ? 'Checking…' : 'Check for Update'}
+                  </button>
+                )}
                 <button className="btn btn-ghost" onClick={() => startEdit(server)}>
                   Edit
                 </button>
@@ -272,6 +318,8 @@ export function ConnectServer({ onBack }: Props): React.JSX.Element {
                 </button>
               </span>
             </div>
+
+            <ServerUpdateRow server={server} act={updateAct} onAction={(action) => void updateAction(server, action)} />
 
             {tokenFor === server.id && (
               <div className="server-form-row connect-token-row">

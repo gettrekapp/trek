@@ -5,7 +5,7 @@ Three GitHub Actions workflows live in `.github/workflows/`:
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | `ci.yml` (CI) | every pull request, every push to `main`, by hand (Run workflow); called by `release.yml` | Linux (ubuntu-latest, Node 22): `npm ci`, which runs `npm ci` in `server/` and `relay/` too (`scripts/postinstall.mjs`), so every lockfile is enforced; typecheck the app, trek-server and trek-relay; `npm test`; `npm run build` and `npm run build:relay`; the Node-only smokes (`server` smoke on the built bundle, `smoke:client`, `smoke:push`); the phone app's typecheck and `expo export` for iOS and Android. A newer push to the same PR cancels the older run (not on `main`). A push to any other branch runs nothing by itself (open a PR, or Run workflow), so a PR's branch is not tested twice per push. |
-| `macos-smokes.yml` (macOS smokes) | nightly at 07:17 UTC, by hand, and called by `release.yml` | macOS arm64: `npm test` (with the macOS-only sandbox tests), one `npm run build`, then every Electron smoke one at a time (`smoke:local`, `windows`, `providers`, `v2`, `local-app`, `local-window`, `local-features`, `server-env`, `server-integrations`, `server-prwatch`, `server-review`, `server-web`, `server-move`, `server-promote`, `server-pairing`, `import`). Each smoke runs even if an earlier one failed, so one run shows every failure. |
+| `macos-smokes.yml` (macOS smokes) | nightly at 07:17 UTC, by hand, and called by `release.yml` | macOS arm64: `npm test` (with the macOS-only sandbox tests), one `npm run build`, then every Electron smoke one at a time (`smoke:local`, `windows`, `providers`, `v2`, `local-app`, `local-window`, `local-features`, `server-env`, `server-integrations`, `server-prwatch`, `server-review`, `server-web`, `server-move`, `server-promote`, `server-pairing`, `server-update-app`, `import`). Each smoke runs even if an earlier one failed, so one run shows every failure. |
 | `release.yml` (Release) | a pushed tag `v*` | Checks the version (every other job waits for it, so a malformed tag stops there), runs both workflows above as its gate, builds and checks every artifact, and creates a **draft** GitHub Release. |
 
 The phone app (`apps/mobile`) is not released here: EAS builds and submits it (see
@@ -169,7 +169,9 @@ from the latest **published** release, and installs nothing unless the signature
 a public key built into that server (`UPDATE_PUBLIC_KEYS` in `server/src/update/keys.ts`); the
 tarball it then downloads must have the sha256 that `SHA256SUMS` names. A draft or a prerelease is
 never offered, so publishing the draft is what ships the update. A running server also looks once
-a day and only logs what it finds.
+a day: it logs what it finds and tells its connected clients, and a Trek app can then ask it to
+run the same update (the server's row in Open on server…; PROTOCOL.md, "Updating the server").
+It installs nothing by itself.
 
 Do not rename or delete `SHA256SUMS`, `SHA256SUMS.sig` or the server tarballs on a published
 release, and do not replace any of them with other bytes: servers would find no update, or

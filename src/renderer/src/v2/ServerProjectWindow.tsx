@@ -10,6 +10,7 @@ import { errorText } from './errors'
 import { projectGone, watchesServerTopic } from './projectWatch'
 import { V2Workspace } from './V2Workspace'
 import { STATUS_LABELS, localStatusLabel } from '../../../shared/appServerRules.ts'
+import { RESTART_GRACE_MS, restartingBanner, updateRestartOf } from '../../../shared/serverUpdate.ts'
 import { SERVER_REMOVED_MESSAGE, type ServerConnection, type StatusChange } from '../../../shared/client/index.ts'
 import type { AppServerLink } from '../../../shared/types'
 
@@ -111,6 +112,8 @@ function ServerProjectTree({
   /** The last patch, and the time the connection last dropped: "last seen" is the later. */
   const [lastPatchAt, setLastPatchAt] = useState<number | null>(null)
   const [droppedAt, setDroppedAt] = useState<number | null>(null)
+  /** The server said, on this window's connection, that it is restarting to update: until it is back (or stays away too long), the banner says so */
+  const [restarting, setRestarting] = useState<{ version?: string } | undefined>(undefined)
 
   useEffect(() => {
     const { connection, mirror } = registered
@@ -145,7 +148,10 @@ function ServerProjectTree({
       if (previous === 'connected' && change.status !== 'connected') setDroppedAt(Date.now())
       previous = change.status
       setStatus(change)
-      if (change.status === 'connected') watchServer()
+      if (change.status === 'connected') {
+        watchServer()
+        setRestarting(undefined)
+      }
       if (!isCurrent()) return
       useAppStore.getState().setServerLink(change.status)
       // The welcome's capabilities may have changed the backend's features.
@@ -161,6 +167,12 @@ function ServerProjectTree({
     const offPrWatch = connection.on('event', (frame) => {
       if (frame.event !== 'integrations.changed' || !isCurrent()) return
       if (typeof (frame.payload as { prWatch?: unknown } | null)?.prWatch === 'boolean') backendChanged()
+    })
+    // The server is going down to update (`daemon.shutdown`, reason `update`): the banner says that, not why the socket closed.
+    const offShutdown = connection.on('event', (frame) => {
+      if (frame.event !== 'daemon.shutdown') return
+      const notice = updateRestartOf(frame.payload)
+      if (notice) setRestarting(notice)
     })
     const offTopic = mirror.subscribe(`project:${projectId}`, (update) => {
       if ('error' in update) {
@@ -179,12 +191,20 @@ function ServerProjectTree({
     return () => {
       offStatus()
       offPrWatch()
+      offShutdown()
       offTopic()
       offServer?.()
       // The slice and the project setters (setProjectSetters) go with serverWindow (windowKind.ts); the streams go now.
       disposeV2Terminals()
     }
   }, [registered, entry.id, projectId])
+
+  // A server that said it was restarting and stays away is, after a while, just disconnected (as its row in the list says).
+  useEffect(() => {
+    if (!restarting) return
+    const timer = setTimeout(() => setRestarting(undefined), RESTART_GRACE_MS)
+    return () => clearTimeout(timer)
+  }, [restarting])
 
   // Stuck states never retry by themselves: once main's connection to the entry is up (a token
   // set, or the server fixed, in any window), this one is worth another try.
@@ -216,13 +236,14 @@ function ServerProjectTree({
   if (view && 'notFound' in view) return <ProjectNotFound entry={entry} />
 
   const connected = status.status === 'connected'
+  const updating = restartingBanner(restarting, status.status)
   const lastSeen = lastPatchAt === null && droppedAt === null ? null : Math.max(lastPatchAt ?? 0, droppedAt ?? 0)
   return (
     <div className="server-window server-workspace">
       {!connected && (
         <div className="server-window-banner" role="status">
-          <strong>{STATUS_LABELS[status.status]}</strong>
-          {status.message ? ` — ${status.message}` : ''}
+          <strong>{updating ? updating.label : STATUS_LABELS[status.status]}</strong>
+          {updating ? ` — ${updating.message}` : status.message ? ` — ${status.message}` : ''}
           {lastSeen !== null && <span className="server-window-last-seen"> · last seen {formatLastSeen(lastSeen)}</span>}
           {entry.local && <LocalServerAction local={entry.local} />}
         </div>

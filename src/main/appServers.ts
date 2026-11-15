@@ -5,7 +5,7 @@
 // one is set; no IPC call ever returns one. Main reads tokens for the relay, for Test and for
 // its own connections (serverLinks.ts), whose statuses every window hears through
 // `appServers:changed` (a snapshot with `hasToken`, never a token).
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, type MessageBoxOptions, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,6 +34,9 @@ import { checkLocalServer, localEntry, localServerUrl, localToken, onLocalServer
 import { LOCAL_ENTRY_ID } from './localServerRules'
 import { isLocalEntryId, isLoopbackUrl } from '../shared/appServerRules.ts'
 import { createServerLinks, type ServerLinks, type ServerLinksDeps } from './serverLinks'
+import { createServerUpdates, type ServerUpdates } from './serverUpdates'
+import { NOT_CONNECTED, applyServerUpdate } from './applyServerUpdate'
+import type { UpdateStatus } from '../shared/protocolV2.ts'
 import type { RegisteredServer } from '../shared/client/index.ts'
 import type { AppServerInfo, AppServerPairing, AppServersChanged, AppServerTest } from '../shared/types'
 
@@ -51,6 +54,8 @@ let servers: AppServer[] | null = null
 const removing = new Map<string, RemovingEntry>()
 /** Main's own connections, from registerAppServerHandlers on */
 let links: ServerLinks | null = null
+/** Each remote server's update state, over main's connections (never Local's), from registerAppServerHandlers on */
+let updates: ServerUpdates | null = null
 /** Hears every change of the list (a rename relabels the attention entries) */
 let listChanged: (() => void) | null = null
 
@@ -360,6 +365,61 @@ async function cancelPairing(id: unknown, code: unknown): Promise<boolean> {
   }
 }
 
+/** The Local server is the app's own: it is updated with Trek, never over the protocol. */
+function refuseLocalUpdate(id: string): void {
+  if (isLocalEntryId(id)) throw new Error('The Local server is updated with Trek')
+}
+
+/**
+ * "Check for Update" on a server's row: the server reads its release feed now, over main's own
+ * connection. What it found reaches every window with the links; the answer is for the row that asked.
+ */
+async function checkUpdate(id: unknown): Promise<UpdateStatus> {
+  const server = requireKnown(id)
+  refuseLocalUpdate(server.id)
+  if (!updates) throw new Error(NOT_CONNECTED)
+  try {
+    return await updates.check(server.id)
+  } finally {
+    // What the check changed has reached the windows before its answer (or its error) does.
+    updates.flush()
+  }
+}
+
+/**
+ * "Update" on a server's row: reads the server's status now, asks in a sheet on the window that
+ * asked, then has the server install its latest release (applyServerUpdate.ts: the question and
+ * the version sent come from that one answer). `started` is false when the user cancelled.
+ */
+async function applyUpdate(sender: WebContents, id: unknown): Promise<{ started: boolean }> {
+  const server = requireKnown(id)
+  refuseLocalUpdate(server.id)
+  if (!updates) throw new Error(NOT_CONNECTED)
+  const following = updates
+  // What reading the status changed has reached the windows before the answer (or the error) does.
+  return applyServerUpdate(server.id, {
+    entry: (entryId) => {
+      const entry = listed().find((s) => s.id === entryId)
+      const link = links?.get(entryId)
+      return entry && link ? { name: entry.name, link, connected: link.connection.status === 'connected' } : undefined
+    },
+    updates,
+    ask: async (confirm) => {
+      const options: MessageBoxOptions = {
+        type: 'question',
+        message: confirm.message,
+        detail: confirm.detail,
+        buttons: confirm.buttons,
+        defaultId: 0,
+        cancelId: 1
+      }
+      const win = BrowserWindow.fromWebContents(sender)
+      const { response } = win && !win.isDestroyed() ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options)
+      return response === 0
+    }
+  }).finally(() => following.flush())
+}
+
 /** Quit: main's connections close for good. */
 export function closeServerLinks(): void {
   links?.close()
@@ -375,6 +435,9 @@ export function registerAppServerHandlers(
   hooks: Pick<ServerLinksDeps, 'linked' | 'unlinked'> & { listChanged?: () => void } = {}
 ): void {
   listChanged = hooks.listChanged ?? null
+  // A server's update state changed: every window hears the links again (under a new seq).
+  const following = createServerUpdates({ changed: () => links?.refresh() })
+  updates = following
   links = createServerLinks({
     entries: linkEntries,
     token: getAppServerToken,
@@ -387,10 +450,17 @@ export function registerAppServerHandlers(
         registered.connection.on('status', ({ status }) => {
           if (status !== 'connected') checkLocalServer()
         })
+      } else {
+        // Local is updated with the app: nothing is asked of it, nothing is shown for it.
+        following.follow(id, registered.connection)
       }
       hooks.linked?.(id, registered)
     },
-    unlinked: hooks.unlinked
+    unlinked: (id) => {
+      following.forget(id)
+      hooks.unlinked?.(id)
+    },
+    extra: (id) => ({ update: following.statusOf(id), updateRestarting: following.restartingOf(id), updateWitnessed: following.witnessedOf(id) })
   })
   const ready = links.sync()
   // Local's server changed (started, stopped, restarted): main's connection follows its URL and
@@ -419,4 +489,6 @@ export function registerAppServerHandlers(
   ipcMain.handle('appServers:test', (_event, id: unknown) => test(id))
   ipcMain.handle('appServers:pairPhone', (_event, id: unknown) => pairPhone(id))
   ipcMain.handle('appServers:cancelPairing', (_event, id: unknown, code: unknown) => cancelPairing(id, code))
+  ipcMain.handle('appServers:checkUpdate', (_event, id: unknown) => checkUpdate(id))
+  ipcMain.handle('appServers:applyUpdate', (event, id: unknown) => applyUpdate(event.sender, id))
 }

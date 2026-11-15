@@ -36,14 +36,16 @@ export const STATIC_CAPABILITIES: readonly string[] = [
  * (6a: `pairing.create`, and a phone's `pairingCode` at hello) on any server but the local one (a
  * phone can't reach this machine's loopback), then `prWatch` while gh is signed in on its machine
  * (5c-1), then `local` on the local server. `plugins`: the registered plugins' legacy capabilities
- * (`voice`), listed after the static ones, for clients older than plugins.
+ * (`voice`), listed after the static ones, for clients older than plugins. `update` (after
+ * `pairing`) on a server that can update itself (never the local one).
  */
 export function welcomeCapabilities(
   mcp: boolean,
   local = false,
   prWatch = false,
   plugins: readonly string[] = [],
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  update = false
 ): string[] {
   // Windows (W1): no environments or dev stacks yet (machineHandlersFor).
   const windowsOff: readonly string[] = platform === 'win32' ? [CAPABILITY.env, CAPABILITY.stacks] : []
@@ -52,6 +54,7 @@ export function welcomeCapabilities(
     ...STATIC_CAPABILITIES.filter((c) => !windowsOff.includes(c)),
     ...plugins.filter((c) => !STATIC_CAPABILITIES.includes(c)),
     ...(local ? [] : [CAPABILITY.pairing]),
+    ...(update && !local ? [CAPABILITY.update] : []),
     ...(prWatch ? [CAPABILITY.prWatch] : []),
     ...(local ? [CAPABILITY.local] : [])
   ]

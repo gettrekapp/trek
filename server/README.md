@@ -544,24 +544,60 @@ mv trek-server-0.5.0-linux-x64.previous trek-server-0.5.0-linux-x64
 ```
 
 **The daily check.** A running tarball server also looks for a newer release 30 seconds after it
-starts and once a day after that, and only logs it:
+starts and once a day after that. It logs what it finds, and tells the connected clients (the
+Trek app then shows it on the server's row, below):
 
 ```
 update: trek-server 0.6.0 is available (this is 0.5.0); run `trek-server update`
 ```
 
 It never installs anything by itself. In the config, this turns the check off (the command
-still works):
+still works, and so does the app's **Check for Update**):
 
 ```json
 { "updates": { "check": false } }
 ```
 
-`updates.remoteApply` is reserved for updating from the app, which does not exist yet: it is
-accepted (true or false) and changes nothing.
+**Updating from the app.** A connected Trek app can ask the server to do the same: in **Open on
+server…** the server's row says "Update available: 0.6.0" with an **Update** button, and has
+**Check for Update** to look now (the server reads the release feed at most once in 30 seconds,
+whoever asks: a check asked sooner is answered from the last read). Update asks first (which
+version, and how many terminals close: the app asks the server at that moment, so the count is
+the terminals open then), then the server itself runs the update described above: the same signed checksums, the
+same download, sha256 and selfcheck, the same swap, `<folder>.previous` and rollback, and the
+same restart. The app only asks and shows the progress; nothing comes from the app, and only the
+latest published release, newer than this install and signed with the project's key, is ever
+installed, whoever asks. Any client with a token may ask (see Security notes). The server keeps
+serving its terminals and clients while it downloads, unpacks and checks the new version. While
+the server restarts, its row says "Restarting to update…" (for up to two minutes; after that it
+is "Disconnected" like any server that is away; a window open on one of its projects says the
+same in its banner, and reconnects by itself), then "Updated to 0.6.0" in the app that saw the
+update happen (an app that connects later says nothing of it), or "Update failed: …" with the
+reason. That includes an update that never got to download anything: the release feed could
+not be read or verified, or another update holds the install's lock (`trek-server update`
+running on the machine, or a `.trek-update.lock` left behind: the reason names it). A reason is
+recorded and reported up to its first 2,000 characters. When the server cannot restart itself (Node older than 22.15), the question says
+so before anything is installed, and afterwards the row says "An update is installed. Restart
+trek-server on that machine to finish.": the server keeps running the old version until you
+restart it (`systemctl --user restart trek-server`). The row says the same after a
+`trek-server update` on the machine that could not restart the server: the server tells its
+connected clients when it refuses the command's restart request. See PROTOCOL.md, "Updating the
+server".
+
+To leave installing to `trek-server update` on this machine, refuse it to clients in the config:
+
+```json
+{ "updates": { "remoteApply": false } }
+```
+
+The app's row then still shows a newer release and can still check, but has no Update button: it
+says to run `trek-server update` on the server's machine. The command is not affected. The
+setting is read at each request, so a change to the config file needs no restart, and connected
+apps show it at once.
 
 A trek-server with no update key built in (a release from before the project's signing key)
-checks nothing, and `trek-server update` says so and exits 1: install the new version by hand
+checks nothing and offers the app nothing (its row has no update line and no Check for Update),
+and `trek-server update` says so and exits 1: install the new version by hand
 (unpack the new tarball and move the symlink and the unit's path to it).
 
 **Where `update` is not available.** It says why and exits 1:
@@ -627,6 +663,12 @@ through, which the web client's same-origin checks compare with the browser's
   port-scoped: the web client needs a host name no other service or dev stack is
   reached on, and on loopback any other local web server the browser visits sees
   the cookie.
+- **Any client with a token can have the server update itself** (the app's Update
+  button), which restarts it and closes its terminals. It cannot choose what is
+  installed: only the latest published release, newer than the install, whose
+  checksums are signed with a key built into the running server. `"updates":
+  { "remoteApply": false }` refuses it and leaves updating to `trek-server update`
+  on the machine (see Updating).
 - Auth failures are logged with the peer address; bad tokens get a delayed
   close to blunt brute force.
 - Never expose the plain `ws://` listener beyond loopback (`--insecure`

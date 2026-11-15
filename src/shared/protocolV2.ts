@@ -79,6 +79,8 @@ export type WireErrorCode =
    * A docker, colima or stack.sh command on the server's machine failed. `details.reason`
    * `missing`: the tool is not on the server's PATH (not installed there); `registry`: the
    * server's environments registry cannot be read (env.list only: env.up and env.destroy resolve -1 instead; nothing written).
+   * Also what the server answers when something else it reaches for the caller fails: a plugin's
+   * service (Linear, ElevenLabs), gh, and `update.check` when the release feed cannot be read or verified.
    */
   | 'TOOL_ERROR'
 
@@ -95,6 +97,8 @@ export interface WireErrorDetails {
    * `dirty`: `worktree.remove` refused a worktree with modified or untracked files.
    * `missing`: a TOOL_ERROR's tool is not installed on the server.
    * `registry`: a TOOL_ERROR's environments registry cannot be read on the server.
+   * `disabled`, `busy`, `stale`: why `update.apply` was refused (CONFLICT); `busy` also refuses an
+   * `update.check` while an update is running.
    * The client SDK's own `TOPIC_ENDED` errors carry the `topic.ended` reason here.
    */
   reason?: string
@@ -260,6 +264,13 @@ export const CAPABILITY = {
    * and the server posts the kinds it switched on to the relay while the phone isn't connected
    */
   push: 'push',
+  /**
+   * This server can update itself (a release tarball install on macOS or Linux): `update.status`,
+   * `update.check` and `update.apply`, and the `update.changed` event to every signed-in
+   * connection. Never listed by the local server (it is updated with the app) or by a server
+   * that has nothing to replace.
+   */
+  update: 'update',
   /** Automations: `automation.save`, `automation.delete`, `automation.runNow`, `automation.resolveMissed`, and `Project.automations` */
   automations: 'automations'
 } as const
@@ -425,6 +436,10 @@ export interface MethodParamsV2 {
   'push.clearGrant': Record<string, never>
   /** 6b: this token's grant, without its secret */
   'push.status': Record<string, never>
+  'update.status': Record<string, never>
+  'update.check': Record<string, never>
+  /** `version`: the release the user was shown; refused (CONFLICT, reason `stale`) if the latest is another */
+  'update.apply': { version: string }
 
   // Automations
   'automation.save': ProjectRef & { automation: AutomationInput }
@@ -639,6 +654,11 @@ export interface MethodResultsV2 {
   'push.clearGrant': null
   /** null: no grant. `active` false: the relay refused it (`lastError` says why): grant again */
   'push.status': PushStatusResult | null
+  'update.status': UpdateStatus
+  /** The status after a fresh read of the release feed */
+  'update.check': UpdateStatus
+  /** The update has begun; its progress and outcome arrive as `update.changed` */
+  'update.apply': { started: true }
   'automation.save': { id: string }
   'automation.delete': null
   'automation.runNow': { sessionId: string }
@@ -745,7 +765,10 @@ export interface EventPayloadsV2 {
   'pty.exit': PtyExitEventWire
   /** 6a: an attached connection's `pty.resize` changed the pty's size; to every connection attached to it */
   'pty.resized': PtyResizedEventWire
-  'daemon.shutdown': { reason: string }
+  /** `reason` is `update` when the server is restarting into a new version, which `version` names */
+  'daemon.shutdown': { reason: string; version?: string }
+  /** To every signed-in connection, whatever it subscribes to: the server's update state changed */
+  'update.changed': UpdateStatus
   'state.patch': StatePatchPayload
   /** Sent to a topic's subscribers just before it stops; nothing more comes for it */
   'topic.ended': TopicEndedPayload
@@ -784,6 +807,38 @@ export interface IntegrationsChangedEvent {
   prWatch?: boolean
 }
 
+
+/** How a server's last update went (`update.status`). */
+export interface UpdateResultWire {
+  ok: boolean
+  from: string
+  to: string
+  /** When it was settled (ISO) */
+  at: string
+  error?: string
+}
+
+/** A server's update state: `update.status`'s answer and `update.changed`'s payload. */
+export interface UpdateStatus {
+  /** The version this server is running */
+  current: string
+  /** A newer release the last check found */
+  latest?: string
+  state: 'idle' | 'checking' | 'downloading' | 'installing' | 'restarting'
+  /** 0-100, while downloading and the size is known */
+  percent?: number
+  /** Terminals running now: they close when the server restarts */
+  sessions: number
+  /** False when this server cannot restart itself into a new version (Node older than 22.15): an update then waits for a restart by hand */
+  canRelaunch: boolean
+  /** A newer version is installed and this process is still the old one: restart it to finish */
+  restartNeeded: boolean
+  /** False when the server's config leaves installing to `trek-server update` on its machine (`updates.remoteApply: false`): `update.apply` is refused */
+  remoteApply: boolean
+  /** When the release feed was last read (ISO) */
+  checkedAt?: string
+  lastResult?: UpdateResultWire
+}
 
 /** `push.status`'s answer (6b) */
 export interface PushStatusResult {
