@@ -2652,6 +2652,8 @@ button:disabled {
   padding: 10px 18px 0;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  /* No bar over the tabs: a narrow strip is dragged or arrowed along. */
+  scrollbar-width: none;
 }
 
 .settings-tab {
