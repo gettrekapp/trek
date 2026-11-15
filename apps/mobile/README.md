@@ -402,8 +402,10 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
     - Times: "Next:" and an automation's next runs are wall-clock times in the schedule's own
       timezone, the same as the desktop shows, on an iOS and on an Android device (not checked
       on a device yet: the phone's JavaScript engine must know the timezone).
-    - If the engine cannot work out a time, the card has no "Next:" line and the schedule shows
-      as its cron text; no screen crashes (not checked on a device yet).
+    - If the engine cannot work out a time, the card has no "Next:" line and the automation's
+      screen has no "Next runs"; run times and "missed since" show as ages ("2 h ago"). The
+      schedule's words do not depend on it. No screen crashes and no time reads "NaN" (not
+      checked on a device yet).
     - **Missed runs** (stop the server past an automation's time and start it again): a
       "Missed automations" card is on top of the list, with each such automation's name and
       "<count> missed since <when>".
@@ -447,6 +449,8 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
       missed runs are discarded." (or "Its 1 missed run is discarded."). **Cancel** leaves it
       on with its missed runs; **Turn off** turns it off, and its missed runs are gone from
       the list's card. Without missed runs nothing is asked.
+      If more runs are missed while the question is up, **Turn off** asks again with the new
+      count.
     - Turning it on or off with the edit box open leaves the box and its text as they are.
     - The switch does not flip back and forth while its request runs (not checked on a device
       yet).
@@ -455,6 +459,8 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
     - **Run now** while the automation's run tab is still working: "The previous run is still
       working." shows under the button, nothing opens, and the run is listed as "Skipped".
     - Two quick taps on **Run now** start one run.
+    - **Run now** is disabled while **Edit** is open (it runs the saved prompt, not the typed
+      one).
     - **Open run tab** is there once the automation has a run tab (it ran, and the tab was not
       closed) and opens that session; close the tab on the desktop and the button goes.
     - **Runs** lists the runs newest first: the time (in the schedule's timezone), "Scheduled",
