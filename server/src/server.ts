@@ -48,6 +48,8 @@ import { PrWatcher } from './prWatch/watcher.ts'
 import { AutomationScheduler } from './automations/scheduler.ts'
 import { HistoryStore } from './history/store.ts'
 import { PromoteRequests } from './promote/requests.ts'
+import { UiSelections } from './ui/selections.ts'
+import type { UiClientKind } from '../../src/shared/ui.ts'
 import { LoginLimiter, parseCookies, sameOrigin, SESSION_COOKIE, WebSessions } from './web/auth.ts'
 import { createWebHandler } from './web/http.ts'
 import { sweepEvery, WebSocketSignIns } from './web/sockets.ts'
@@ -245,6 +247,8 @@ export function startServer(
   // Started once the MCP listener is up (below), so a run the first check starts has the trek-dev tools.
   // promote_to_primary's confirmations (5e): asked of the project's windows.
   const promoteRequests = new PromoteRequests(hub)
+  // What each client shows (`ui.report`), for get_selected_worktree and focus_session.
+  const selections = new UiSelections(hub)
 
   // Background push (6b). A token counts as connected while one of its phone sockets (hello
   // `client: 'trek-mobile'`) is open: the phone already shows what would be pushed. A desktop window
@@ -490,6 +494,8 @@ export function startServer(
     let rejected = false
     /** The token this connection signed in with (a web session's, for a browser): `pairing.create` records it as pairedBy */
     let callerTokenName = ''
+    /** The kind of client this is, known once hello is accepted: what its `ui.report`s are recorded as */
+    let clientKind: UiClientKind = 'desktop'
     let rejectTimer: NodeJS.Timeout | undefined
     /** This connection came in through the phone listener */
     const viaPhoneListener = phoneRequests.has(req)
@@ -651,6 +657,7 @@ export function startServer(
         if (entry.name === LOCAL_TOKEN_NAME) localSockets.add(ws)
         const viaWeb = !token && webSession !== undefined
         if (viaWeb) webSignIns?.add(ws, webSession.key, Date.now())
+        clientKind = frame.client === PHONE_CLIENT ? 'phone' : viaWeb ? 'web' : 'desktop'
         console.log(
           `[auth] ${String(frame.client)}/${String(frame.clientVersion)} (token "${entry.name}"${viaWeb ? ', web sign-in' : ''}, protocol ${protocolVersion}) ` +
             `connected from ${req.socket.remoteAddress}`
@@ -695,6 +702,8 @@ export function startServer(
         automations,
         promoteRequests,
         promoteRecoveryDir: options.promoteRecoveryDir,
+        selections,
+        clientKind,
         pairing,
         phoneAccess,
         tokenName: callerTokenName,
@@ -747,6 +756,7 @@ export function startServer(
       hub.unsubscribeAll(subscriber)
       // A promote_to_primary request this window claimed but had not started fails.
       promoteRequests.forget(subscriber)
+      selections.forget(subscriber)
       // PTYs keep running — the client reattaches on its next connection.
       sessions.terminals.detachAll(terminal)
     })

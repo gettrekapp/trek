@@ -388,7 +388,7 @@ test('project.delete ends the project topic for its subscribers, before the serv
 })
 
 test('welcome capabilities: mcp while the listener is up, then what the server always has and the plugins’ legacy capabilities, pairing on every server, then phoneAccess and local on the local server', () => {
-  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'skills', 'review', 'move', 'promote', 'push', 'automations', 'history']
+  const all = ['topicEnd', 'decisions', 'dequeue', 'agents', 'docker', 'env', 'stacks', 'skills', 'review', 'move', 'promote', 'push', 'automations', 'history', 'ui']
   // A macOS or Linux server's (a Windows one's are in serverWindowsMachine.test.mjs).
   assert.deepEqual(welcomeCapabilities(true, false, false, [], 'linux'), ['mcp', ...all, 'pairing'])
   assert.deepEqual(welcomeCapabilities(false, false, false, [], 'linux'), [...all, 'pairing'])

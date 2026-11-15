@@ -18,6 +18,7 @@ import type { PushKinds } from './push.ts'
 import type { PluginPresence } from './plugins/manifest.ts'
 import type { HistoryAddedEvent, HistoryEvent, HistoryPage } from './model/history.ts'
 import type { PromoteClaimResult, PromotePlan, PromoteRequestEvent, PromoteResult, PromoteSettledEvent } from './promote.ts'
+import type { UiFocusEvent, UiReportParams } from './ui.ts'
 import type {
   ComposeAction,
   ContainerAction,
@@ -256,6 +257,8 @@ export const CAPABILITY = {
   promote: 'promote',
   /** Worktree history: `history.list`, and the `history.added` event on the project topic */
   history: 'history',
+  /** Clients say what they show (`ui.report`) and can be asked to show a session (`ui.focus`): the MCP tools get_selected_worktree and focus_session */
+  ui: 'ui',
   /**
    * Phone pairing (6a): `pairing.create` gives a signed-in client a one-time code (5 minutes) that
    * a phone redeems once at hello (`pairingCode`) for its own named token (`welcome.pairedToken`)
@@ -437,6 +440,8 @@ export interface MethodParamsV2 {
   'promote.answer': { projectId: string; requestId: string; outcome: 'declined' | 'failed' | 'unknown-worktree'; error?: string; claimToken?: string }
   /** 5e: this connection can confirm promote_to_primary's requests for the project (`listen: false`: no longer) */
   'promote.listen': { projectId: string; listen?: boolean }
+  /** This client's selection in the project, for get_selected_worktree and focus_session */
+  'ui.report': UiReportParams
   'pairing.create': { name?: string }
   /** 6a: drops a waiting code (the desktop's New code, or its panel closing); it is then refused as expired */
   'pairing.cancel': { code: string }
@@ -660,6 +665,7 @@ export interface MethodResultsV2 {
   'worktree.demote': PromotePlan | PromoteResult
   'promote.answer': { accepted: boolean }
   'promote.listen': null
+  'ui.report': null
   /** `expiresAt` by the server's clock; `expiresInMs` the code's lifetime, to count down by the client's own clock */
   'pairing.create': { code: string; expiresAt: number; expiresInMs: number }
   /** Whether a waiting code was dropped (false: unknown, spent or expired already) */
@@ -809,6 +815,8 @@ export interface EventPayloadsV2 {
   'promote.request': PromoteRequestEvent
   /** 5e: the request ended, or another window claimed it (`claimed`): close its dialog (the claimant carries on) */
   'promote.settled': PromoteSettledEvent
+  /** focus_session asks this connection's client to show a session */
+  'ui.focus': UiFocusEvent
   'history.added': HistoryAddedEvent
 }
 
