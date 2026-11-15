@@ -1,8 +1,17 @@
-// Phone access on the Local server: finding the Tailscale address, and the phone listener's lifecycle.
+// Phone access on the Local server: finding the Tailscale address, the phone listener's lifecycle,
+// the config field, the status clients see, and set and revoke.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { saveConfig } from '../server/src/config.ts'
+import { ConfigStore } from '../server/src/configStore.ts'
+import { addToken, matchToken } from '../server/src/tokens.ts'
 import { isTailscaleIPv4, isTailscaleInterface, tailscaleAddress, testPhoneAddress } from '../server/src/tailscale.ts'
 import { PhoneListener } from '../server/src/phoneListener.ts'
+import { createPhoneAccess, phoneAccessOf, phoneAccessStatus, phoneUrlProblem } from '../server/src/phoneAccess.ts'
+import { removeDir } from './testPlatform.mjs'
 
 const iface = (address, extra = {}) => ({ address, family: 'IPv4', internal: false, netmask: '', mac: '', cidr: null, ...extra })
 
@@ -227,4 +236,94 @@ test('a listen that rejects with something that is not an Error still gives a me
   t.after(() => listener.stop())
   await listener.want(true, 7346)
   assert.deepEqual(listener.state(), { state: 'error', error: 'boom' })
+})
+
+test('the config’s phoneAccess: off and port 7346 unless it says otherwise; nonsense is ignored', () => {
+  assert.deepEqual(phoneAccessOf({ repos: [] }), { enabled: false, port: 7346 })
+  assert.deepEqual(phoneAccessOf({ repos: [], phoneAccess: { enabled: true, port: 8000, url: 'wss://mac.tail1234.ts.net' } }), { enabled: true, port: 8000, url: 'wss://mac.tail1234.ts.net' })
+  for (const raw of [null, 'yes', [], { enabled: 'true', port: 80, url: 'http://x' }, { enabled: 1, port: 7346.5, url: 5 }]) {
+    assert.deepEqual(phoneAccessOf({ repos: [], phoneAccess: raw }), { enabled: false, port: 7346 }, JSON.stringify(raw))
+  }
+})
+
+test('an address for the phone is ws:// or wss://, without a user name or password', () => {
+  assert.equal(phoneUrlProblem('ws://100.64.0.9:7346'), null)
+  assert.equal(phoneUrlProblem('wss://mac.tail1234.ts.net'), null)
+  for (const url of ['http://x', 'mac.ts.net', '', 'wss://me:pw@mac.ts.net', `wss://${'a'.repeat(300)}.net`]) assert.equal(typeof phoneUrlProblem(url), 'string', url)
+})
+
+test('the status: the default address while listening, the user’s own when set, and every token but local as a phone', () => {
+  const config = { repos: [] }
+  addToken(config, 'local', new Date(0))
+  addToken(config, 'phone-Pixel', new Date(5000), { pairedBy: 'local' })
+  const phones = [{ name: 'phone-Pixel', createdAt: new Date(5000).toISOString(), pairedBy: 'local' }]
+  assert.deepEqual(phoneAccessStatus(config, { state: 'off' }), { enabled: false, port: 7346, state: 'off', phones })
+  config.phoneAccess = { enabled: true }
+  assert.deepEqual(phoneAccessStatus(config, { state: 'listening', address: '100.64.0.9', port: 7346 }), {
+    enabled: true, port: 7346, state: 'listening', address: '100.64.0.9', url: 'ws://100.64.0.9:7346', phones
+  })
+  assert.deepEqual(phoneAccessStatus(config, { state: 'no-tailscale' }), { enabled: true, port: 7346, state: 'no-tailscale', phones })
+  assert.deepEqual(phoneAccessStatus(config, { state: 'error', error: 'boom' }), { enabled: true, port: 7346, state: 'error', error: 'boom', phones })
+  config.phoneAccess.url = 'wss://mac.tail1234.ts.net'
+  assert.deepEqual(phoneAccessStatus(config, { state: 'no-tailscale' }), {
+    enabled: true, port: 7346, state: 'no-tailscale', url: 'wss://mac.tail1234.ts.net', customUrl: 'wss://mac.tail1234.ts.net', phones
+  })
+})
+
+/** A real ConfigStore in a temp dir, with a `local` token, and a control over a fake listener. */
+function controlSetup(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'trek-phone-access-'))
+  t.after(() => removeDir(dir))
+  const path = join(dir, 'config.json')
+  saveConfig(path, { serverId: 'sid', name: 'box', repos: [] })
+  const store = new ConfigStore(path)
+  t.after(() => store.close())
+  const wants = []
+  const listener = {
+    current: { state: 'off' },
+    state() { return this.current },
+    async want(enabled, port) {
+      wants.push([enabled, port])
+      this.current = enabled ? { state: 'listening', address: '100.64.0.9', port } : { state: 'off' }
+    }
+  }
+  return { store, wants, listener, control: createPhoneAccess(store, listener) }
+}
+
+test('set saves the config, moves the listener, and answers the new status; each field alone is kept', async (t) => {
+  const { store, wants, control } = controlSetup(t)
+  const on = await control.set({ enabled: true })
+  assert.deepEqual([on.enabled, on.port, on.state, on.url], [true, 7346, 'listening', 'ws://100.64.0.9:7346'])
+  assert.deepEqual(store.config.phoneAccess, { enabled: true, port: 7346 })
+  assert.deepEqual(wants, [[true, 7346]])
+  assert.equal((await control.set({ port: 7400 })).url, 'ws://100.64.0.9:7400')
+  assert.equal((await control.set({ url: ' wss://mac.tail1234.ts.net ' })).url, 'wss://mac.tail1234.ts.net')
+  assert.deepEqual(store.config.phoneAccess, { enabled: true, port: 7400, url: 'wss://mac.tail1234.ts.net' })
+  const back = await control.set({ url: null })
+  assert.deepEqual([back.url, back.customUrl], ['ws://100.64.0.9:7400', undefined])
+  assert.equal((await control.set({ enabled: false })).state, 'off')
+})
+
+test('set refuses a bad field with BAD_REQUEST and changes nothing', async (t) => {
+  const { store, wants, control } = controlSetup(t)
+  for (const bad of [{ enabled: 'yes' }, { port: 80 }, { port: 70000 }, { port: '7346' }, { url: 'http://x' }, { url: 5 }]) {
+    await assert.rejects(control.set(bad), (err) => err.code === 'BAD_REQUEST', JSON.stringify(bad))
+  }
+  assert.equal(store.config.phoneAccess, undefined)
+  assert.deepEqual(wants, [])
+})
+
+test('revoke removes a phone’s token, says whether there was one, and never takes the local token', (t) => {
+  const { store, control } = controlSetup(t)
+  let phone = ''
+  store.update((c) => {
+    addToken(c, 'local')
+    phone = addToken(c, 'phone-Pixel')
+  })
+  assert.equal(control.revoke('phone-Pixel'), true)
+  assert.equal(matchToken(store.config, phone), undefined)
+  assert.equal(control.revoke('phone-Pixel'), false)
+  assert.throws(() => control.revoke('local'), (err) => err.code === 'BAD_REQUEST')
+  assert.throws(() => control.revoke(5), (err) => err.code === 'BAD_REQUEST')
+  assert.equal(store.config.tokens.some((t) => t.name === 'local'), true)
 })

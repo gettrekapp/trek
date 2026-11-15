@@ -47,6 +47,8 @@ export const CLOSE_REASON_UPGRADE_CLIENT = 'UPGRADE_CLIENT'
 
 /** Default server port (loopback; TLS is terminated by a reverse proxy). */
 export const DEFAULT_DAEMON_PORT = 7345
+/** The Local server's port for phones (`phoneAccess`), unless its config names another */
+export const DEFAULT_PHONE_PORT = 7346
 
 // WebSocket close codes (4000-range = application-defined)
 export const CLOSE_HELLO_TIMEOUT = 4001
@@ -260,6 +262,12 @@ export const CAPABILITY = {
    */
   pairing: 'pairing',
   /**
+   * The Local server only: `phoneAccess.get`, `phoneAccess.set` and `phoneAccess.revoke` (for its
+   * own `local` token), and the `phoneAccess.changed` event: a second listener, for phones, on
+   * this machine's Tailscale address.
+   */
+  phoneAccess: 'phoneAccess',
+  /**
    * Background push (6b): a phone hands the server its relay grant (`push.setGrant`, write-only),
    * and the server posts the kinds it switched on to the relay while the phone isn't connected
    */
@@ -430,6 +438,10 @@ export interface MethodParamsV2 {
   'pairing.create': { name?: string }
   /** 6a: drops a waiting code (the desktop's New code, or its panel closing); it is then refused as expired */
   'pairing.cancel': { code: string }
+  'phoneAccess.get': Record<string, never>
+  /** `url`: the address a pairing QR carries, in place of ws://<Tailscale address>:<port>; null or '' goes back to that */
+  'phoneAccess.set': { enabled?: boolean; port?: number; url?: string | null }
+  'phoneAccess.revoke': { name: string }
   /** 6b: this token's relay grant (replaces the one before); `kinds` defaults to all on, `paused` to false */
   'push.setGrant': { relayUrl: string; grantSecret: string; kinds?: Partial<PushKinds>; paused?: boolean }
   /** 6b: forget this token's relay grant */
@@ -650,6 +662,9 @@ export interface MethodResultsV2 {
   'pairing.create': { code: string; expiresAt: number; expiresInMs: number }
   /** Whether a waiting code was dropped (false: unknown, spent or expired already) */
   'pairing.cancel': { cancelled: boolean }
+  'phoneAccess.get': PhoneAccess
+  'phoneAccess.set': PhoneAccess
+  'phoneAccess.revoke': { revoked: boolean }
   'push.setGrant': null
   'push.clearGrant': null
   /** null: no grant. `active` false: the relay refused it (`lastError` says why): grant again */
@@ -769,6 +784,8 @@ export interface EventPayloadsV2 {
   'daemon.shutdown': { reason: string; version?: string }
   /** To every signed-in connection, whatever it subscribes to: the server's update state changed */
   'update.changed': UpdateStatus
+  /** The Local server, to connections signed in with its `local` token: phone access changed (its state, its address, or the paired phones) */
+  'phoneAccess.changed': PhoneAccess
   'state.patch': StatePatchPayload
   /** Sent to a topic's subscribers just before it stops; nothing more comes for it */
   'topic.ended': TopicEndedPayload
@@ -838,6 +855,27 @@ export interface UpdateStatus {
   /** When the release feed was last read (ISO) */
   checkedAt?: string
   lastResult?: UpdateResultWire
+}
+
+/** The Local server's phone access: `phoneAccess.get`/`set`'s answer and `phoneAccess.changed`'s payload. */
+export interface PhoneAccess {
+  enabled: boolean
+  port: number
+  /**
+   * `listening`: on `address` (and loopback). `no-tailscale`: enabled, loopback listens, but this
+   * machine has no Tailscale address yet. `port-in-use` and `error`: enabled, nothing listens (retried).
+   */
+  state: 'off' | 'listening' | 'no-tailscale' | 'port-in-use' | 'error'
+  /** With `listening`: this machine's Tailscale address */
+  address?: string
+  /** With `error`: the listen error */
+  error?: string
+  /** The address a pairing QR carries: `customUrl`, else ws://<address>:<port> while listening */
+  url?: string
+  /** The address the user entered in place of the default */
+  customUrl?: string
+  /** Every token but `local`: the paired phones (and any token added by hand) */
+  phones: { name: string; createdAt: string; pairedBy?: string }[]
 }
 
 /** `push.status`'s answer (6b) */
