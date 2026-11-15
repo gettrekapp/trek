@@ -22,6 +22,9 @@ export const MOBILE_ENTRIES = [
   'src/shared/promote.ts',
   'src/shared/push.ts',
   'src/shared/quickButtonTemplate.ts',
+  // The Changes screen's review: numbering a patch, and where a draft's comments sit on it.
+  'src/shared/changes.ts',
+  'src/shared/review.ts',
   // Tickets: the trackers' providers and manifests (plugins/, pure shared code) and core's generic tickets.
   'src/shared/plugins/manifest.ts',
   'src/shared/plugins/tickets.ts',

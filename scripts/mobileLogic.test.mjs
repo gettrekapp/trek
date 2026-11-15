@@ -6,7 +6,10 @@
 // and state/teardown.ts' check for what only the desktop can tear down first)
 // and a ticket's label, link and input through the project's trackers, and what the worktree list
 // says about a branch (its tag, custom tags, ticket and pull request on one line), and the Branch
-// section's rules (the custom tags' toggle, the note's edit and its conflict, a pull request's input).
+// section's rules (the custom tags' toggle, the note's edit and its conflict, a pull request's input),
+// and the Changes screen's review (which comments sit where on the shown diff, the draft bar, the
+// comment box's state and what it sends, the server's refusals, the sessions a draft can go to, a
+// commit's row) and the pull request watch (the switch, its label, a notice's line and dismissal).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -24,6 +27,35 @@ import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/log
 import { beginNoteEdit, chipColors, isNoteConflict, noteConflicted, noteSave, pullRequestInput, pullRequestText, toggledCustomTags, webLink } from '../apps/mobile/src/logic/branchDetails.ts'
 import { ClientError } from '../src/shared/client/connection.ts'
 import { checkExpected } from '../server/src/validate.ts'
+import {
+  REVIEW_CHANGED,
+  barText,
+  canComment,
+  canSaveComment,
+  commentPlace,
+  commitRow,
+  draftOnDiff,
+  editConflicted,
+  editOf,
+  editorAfter,
+  elsewherePlace,
+  fileReview,
+  hasUnsavedText,
+  isCommentGone,
+  isReviewConflict,
+  newCommentAt,
+  noTargetsText,
+  reviewFailure,
+  saveRequest,
+  sendTargets,
+  writingOn
+} from '../apps/mobile/src/logic/review.ts'
+import { isWatching, noticeAge, noticeDismissal, noticeLine, watchAction, watchOffered, watchSuffix } from '../apps/mobile/src/logic/prWatch.ts'
+import { numberedLines, patchBody } from '../src/shared/changes.ts'
+import { BRANCH_SOURCE, MAX_REVIEW_BODY, MAX_REVIEW_COMMENTS, MAX_REVIEW_LINE_TEXT, isOutdated } from '../src/shared/review.ts'
+import { reviewHandlers } from '../server/src/review/reviewHandlers.ts'
+import { prWatchHandlers } from '../server/src/prWatch/prWatchHandlers.ts'
+import { toWireError } from '../server/src/errors.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
@@ -1253,4 +1285,419 @@ test("branch details: a chip in its tag's colour has text that reads on it", () 
   for (const color of ['#5dabef', '#b8a8f0', '#ff8589', '#e2a336', '#55c7e4', '#b8b8b8', '#5bb98b', '#ff7eb0']) assert.equal(chipColors(color).text, '#11111b', color)
   // Not a hex colour: a neutral chip, never text that can't be read.
   for (const bad of ['', 'red', '#12', '#12345', '#gggggg', 'rgb(1,2,3)', undefined]) assert.deepEqual(chipColors(bad), { fill: '#9399b2', text: '#11111b' }, String(bad))
+})
+
+// ── Review in Changes ────────────────────────────────────────────────────────────────────────
+
+const SHA_A = 'a'.repeat(40)
+const SHA_B = 'b'.repeat(40)
+const UNCOMMITTED = { kind: 'uncommitted' }
+const PATCH_A = [
+  'diff --git a/src/a.ts b/src/a.ts',
+  'index 1111111..2222222 100644',
+  '--- a/src/a.ts',
+  '+++ b/src/a.ts',
+  '@@ -1,3 +1,3 @@',
+  ' const a = 1',
+  '-const b = 2',
+  '+const b = 3',
+  ' const c = 4',
+  '\\ No newline at end of file',
+  ''
+].join('\n')
+/** hunk, `new 1`, `old 2`, `new 2`, `new 3`, note */
+const LINES_A = numberedLines(patchBody(PATCH_A))
+const comment = (id, over = {}) => ({ id, source: BRANCH_SOURCE, path: 'src/a.ts', side: 'new', line: 2, lineText: 'const b = 3', body: `body of ${id}`, at: 1000, ...over })
+const onAdded = comment('c1')
+const onRemoved = comment('c2', { side: 'old', lineText: 'const b = 2' })
+const outdated = comment('c3', { line: 3, lineText: 'const c = 5' })
+const onUncommitted = comment('c4', { source: UNCOMMITTED })
+const notInDiff = comment('c5', { path: 'src/gone.ts', line: 7, lineText: 'gone()' })
+const onCommit = comment('c6', { source: { kind: 'commit', sha: SHA_A } })
+const DRAFT = { revision: 6, comments: [onAdded, onRemoved, outdated, onUncommitted, notInDiff, onCommit] }
+
+test('review: only a line with a side and a number can be commented on', () => {
+  assert.deepEqual(LINES_A.map(canComment), [false, true, true, true, true, false])
+  assert.equal(canComment({ text: 'index 1..2', kind: 'note' }), false)
+})
+
+test("review: the draft's comments on the shown diff by file, the rest elsewhere", () => {
+  const shown = draftOnDiff(DRAFT, BRANCH_SOURCE, ['src/a.ts', 'src/b.ts'])
+  assert.deepEqual([...shown.byPath.keys()], ['src/a.ts'])
+  assert.deepEqual(shown.byPath.get('src/a.ts'), [onAdded, onRemoved, outdated])
+  // Another source, a file not in this diff, a commit: in the draft's order.
+  assert.deepEqual(shown.elsewhere, [onUncommitted, notInDiff, onCommit])
+
+  const commit = draftOnDiff(DRAFT, { kind: 'commit', sha: SHA_A }, new Set(['src/a.ts']))
+  assert.deepEqual(commit.byPath.get('src/a.ts'), [onCommit])
+  assert.equal(commit.elsewhere.length, 5)
+  // Another commit is another source.
+  assert.equal(draftOnDiff(DRAFT, { kind: 'commit', sha: SHA_B }, ['src/a.ts']).elsewhere.length, 6)
+  // The file list not loaded yet (or failed): nothing is shown on a file, so everything is elsewhere.
+  assert.equal(draftOnDiff(DRAFT, BRANCH_SOURCE, []).elsewhere.length, 6)
+
+  // No draft.
+  const none = draftOnDiff(undefined, BRANCH_SOURCE, ['src/a.ts'])
+  assert.equal(none.byPath.size, 0)
+  assert.deepEqual(none.elsewhere, [])
+})
+
+test('review: a file\'s comments under their lines; one whose line reads differently is outdated, at the top', () => {
+  const comments = draftOnDiff(DRAFT, BRANCH_SOURCE, ['src/a.ts']).byPath.get('src/a.ts')
+  const placed = fileReview(comments, LINES_A, null)
+  assert.deepEqual([...placed.byLine.entries()], [[3, [onAdded]], [2, [onRemoved]]])
+  assert.deepEqual(placed.top, [outdated])
+  assert.equal(placed.topTitle, 'Outdated: its line has changed')
+  assert.equal(placed.newAt, -1)
+  assert.equal(placed.newOnTop, false)
+  // As the shared rule (and the agents' get_review_comments) sees it.
+  assert.equal(isOutdated(outdated, PATCH_A), true)
+  assert.equal(isOutdated(onAdded, PATCH_A), false)
+
+  const gone = comment('c7', { line: 40, lineText: 'far away' })
+  assert.equal(fileReview([outdated, gone], LINES_A, null).topTitle, 'Outdated: their lines have changed')
+
+  // Nothing outdated: no box.
+  const clean = fileReview([onAdded], LINES_A, null)
+  assert.deepEqual(clean.top, [])
+  assert.equal(clean.topTitle, null)
+  assert.deepEqual(fileReview([], LINES_A, null), { byLine: new Map(), top: [], topTitle: null, newAt: -1, newOnTop: false })
+})
+
+test('review: a file whose patch is not shown holds its comments at the top, not as outdated', () => {
+  // Binary, too large, still loading, or the diff failed: no line can say a comment is outdated.
+  const held = fileReview([onAdded, outdated], undefined, null)
+  assert.equal(held.byLine.size, 0)
+  assert.deepEqual(held.top, [onAdded, outdated])
+  assert.equal(held.topTitle, 'Comments on this file')
+  assert.equal(fileReview([], undefined, null).topTitle, null)
+})
+
+test('review: where a comment was written, for one not under its line', () => {
+  assert.equal(commentPlace(outdated), 'line 3: const c = 5')
+  assert.equal(commentPlace(onRemoved), 'removed line 2: const b = 2')
+  assert.equal(elsewherePlace(notInDiff), 'The branch against its base · src/gone.ts, line 7: gone()')
+  assert.equal(elsewherePlace(onUncommitted), 'Uncommitted changes · src/a.ts, line 2: const b = 3')
+  assert.equal(elsewherePlace(comment('c8', { source: { kind: 'commit', sha: SHA_A }, side: 'old' })), 'Commit aaaaaaa · src/a.ts, removed line 2: const b = 3')
+})
+
+test('review: the draft bar counts the comments, and those not on this diff', () => {
+  assert.deepEqual(barText(1, 0), { count: '1 comment', elsewhere: null })
+  assert.deepEqual(barText(6, 0), { count: '6 comments', elsewhere: null })
+  assert.deepEqual(barText(6, 3), { count: '6 comments', elsewhere: '· 3 elsewhere' })
+  assert.deepEqual(barText(1, 1), { count: '1 comment', elsewhere: '· 1 elsewhere' })
+  const shown = draftOnDiff(DRAFT, BRANCH_SOURCE, ['src/a.ts'])
+  assert.deepEqual(barText(DRAFT.comments.length, shown.elsewhere.length), { count: '6 comments', elsewhere: '· 3 elsewhere' })
+})
+
+test('review: a new comment is opened on a commentable line, with the line as a comment keeps it', () => {
+  assert.equal(newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[0]), null)
+  assert.equal(newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[5]), null)
+  assert.deepEqual(newCommentAt(UNCOMMITTED, 'src/a.ts', LINES_A[2]), { kind: 'new', source: UNCOMMITTED, path: 'src/a.ts', side: 'old', line: 2, lineText: 'const b = 2' })
+  // A long line is cut and its control characters dropped, as the server requires (and placeComments compares).
+  const long = newCommentAt(BRANCH_SOURCE, 'src/a.ts', { text: `\u001b[31m${'x'.repeat(600)}\r`, kind: 'add', side: 'new', line: 9 })
+  assert.equal(long.lineText, `[31m${'x'.repeat(MAX_REVIEW_LINE_TEXT - 4)}`)
+})
+
+test('review: a comment box saves a new comment with review.add and an edit with review.edit', () => {
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  assert.deepEqual(saveRequest(fresh, 'why 3?\n  not 2'), {
+    method: 'review.add',
+    params: { source: BRANCH_SOURCE, path: 'src/a.ts', side: 'new', line: 2, lineText: 'const b = 3', body: 'why 3?\n  not 2' }
+  })
+  const edit = editOf(onAdded)
+  assert.deepEqual(edit, { kind: 'edit', commentId: 'c1', expected: 'body of c1', conflict: false })
+  assert.deepEqual(saveRequest(edit, 'better'), { method: 'review.edit', params: { commentId: 'c1', body: 'better', expected: 'body of c1' } })
+
+  // Nothing to save: blank, or longer than a comment may be.
+  for (const text of ['', '  \n\t ']) {
+    assert.equal(canSaveComment(text), false)
+    assert.equal(saveRequest(fresh, text), null)
+    assert.equal(saveRequest(edit, text), null)
+  }
+  assert.equal(canSaveComment('x'.repeat(MAX_REVIEW_BODY)), true)
+  assert.equal(canSaveComment('x'.repeat(MAX_REVIEW_BODY + 1)), false)
+  assert.equal(saveRequest(fresh, 'x'.repeat(MAX_REVIEW_BODY + 1)), null)
+  // A pasted Windows or old-Mac line break is a line break (the server takes LF only).
+  assert.equal(saveRequest(fresh, 'one\r\ntwo\rthree').params.body, 'one\ntwo\nthree')
+  assert.equal(saveRequest(null, 'text'), null)
+})
+
+test('review: unsaved text is what opening another box would lose', () => {
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  assert.equal(hasUnsavedText(null, 'anything'), false)
+  assert.equal(hasUnsavedText(fresh, ''), false)
+  assert.equal(hasUnsavedText(fresh, ' \n '), false)
+  assert.equal(hasUnsavedText(fresh, 'x'), true)
+  const edit = editOf(onAdded)
+  assert.equal(hasUnsavedText(edit, 'body of c1'), false)
+  assert.equal(hasUnsavedText(edit, 'body of c1!'), true)
+  // Emptied: the comment's text is not what the box holds.
+  assert.equal(hasUnsavedText(edit, ''), true)
+  // After a conflict the user's text is unsaved even if it is the body the edit began from.
+  const theirs = { revision: 7, comments: [{ ...onAdded, body: 'theirs' }] }
+  assert.equal(hasUnsavedText(editConflicted(edit, theirs), 'body of c1'), true)
+})
+
+test('review: the box closes when its comment is gone or another source is shown', () => {
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  assert.equal(editorAfter(null, DRAFT, BRANCH_SOURCE), null)
+  // A new comment stays through any change to the draft (also with none), and is kept as the same object.
+  assert.equal(editorAfter(fresh, DRAFT, BRANCH_SOURCE), fresh)
+  assert.equal(editorAfter(fresh, undefined, { kind: 'branch' }), fresh)
+  assert.equal(editorAfter(fresh, DRAFT, UNCOMMITTED), null)
+  const onA = newCommentAt({ kind: 'commit', sha: SHA_A }, 'src/a.ts', LINES_A[3])
+  assert.equal(editorAfter(onA, DRAFT, { kind: 'commit', sha: SHA_A }), onA)
+  assert.equal(editorAfter(onA, DRAFT, { kind: 'commit', sha: SHA_B }), null)
+
+  // An edit stays while its comment is in the draft, whatever is shown (it may be listed elsewhere).
+  const edit = editOf(onUncommitted)
+  assert.equal(editorAfter(edit, DRAFT, BRANCH_SOURCE), edit)
+  assert.equal(editorAfter(edit, { revision: 7, comments: [onAdded] }, BRANCH_SOURCE), null)
+  assert.equal(editorAfter(edit, undefined, BRANCH_SOURCE), null)
+})
+
+test('review: a new comment\'s box sits under its line while that reads the same, else at the file\'s top', () => {
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  assert.equal(writingOn(fresh, BRANCH_SOURCE, 'src/a.ts'), fresh)
+  assert.equal(writingOn(fresh, BRANCH_SOURCE, 'src/b.ts'), null)
+  assert.equal(writingOn(fresh, UNCOMMITTED, 'src/a.ts'), null)
+  assert.equal(writingOn(editOf(onAdded), BRANCH_SOURCE, 'src/a.ts'), null)
+  assert.equal(writingOn(null, BRANCH_SOURCE, 'src/a.ts'), null)
+
+  const under = fileReview([], LINES_A, fresh)
+  assert.equal(under.newAt, 3)
+  assert.equal(under.newOnTop, false)
+  assert.equal(under.topTitle, null)
+
+  // A refresh changed the line: the box moves to the top, with where it was opened.
+  const changed = numberedLines(patchBody(PATCH_A.replace('+const b = 3', '+const b = 30')))
+  const stray = fileReview([], changed, fresh)
+  assert.equal(stray.newAt, -1)
+  assert.equal(stray.newOnTop, true)
+  assert.equal(stray.topTitle, 'Its line is no longer in this diff')
+  assert.equal(commentPlace(fresh), 'line 2: const b = 3')
+  // With outdated comments there too, the box's title is theirs.
+  assert.equal(fileReview([outdated], changed, fresh).topTitle, 'Outdated: its line has changed')
+  // The patch no longer shown.
+  const hidden = fileReview([], undefined, fresh)
+  assert.equal(hidden.newOnTop, true)
+  assert.equal(hidden.topTitle, 'Comments on this file')
+})
+
+/** The server's own review handlers on one worktree, as the phone gets their refusals (toWireError, then the SDK's ClientError). */
+function reviewServer(review) {
+  const worktree = { id: 'w1', name: 'feat', loaded: true, sessions: [{ id: 's1', title: 'Claude', status: 'idle', queue: [] }], review }
+  const project = { id: 'p1', repositories: [{ id: 'r1', branchData: {}, worktrees: [worktree] }] }
+  let ids = 0
+  const ctx = { projects: { apply: (_id, fn) => fn(project), newId: () => `n${++ids}` } }
+  const call = (method, params) => {
+    try {
+      reviewHandlers[method]({ projectId: 'p1', worktreeId: 'w1', ...params }, ctx)
+      return null
+    } catch (err) {
+      const wire = toWireError(method, err)
+      return new ClientError(wire.code, wire.message, wire.details)
+    }
+  }
+  return { worktree, call }
+}
+
+test("review: the server's refusal of a draft or a comment that changed meanwhile is told from other errors", () => {
+  const { worktree, call } = reviewServer({ revision: 6, comments: [onAdded, onRemoved] })
+  // The revision shown is no longer the draft's: send and discard.
+  for (const method of ['review.send', 'review.clear']) {
+    const stale = call(method, { sessionId: 's1', revision: 5 })
+    assert.equal(stale.code, 'CONFLICT', method)
+    assert.equal(stale.message, 'the review changed since you read it')
+    assert.equal(isReviewConflict(stale), true)
+  }
+  // The draft is gone (sent from the desktop): its revision is not 0 either.
+  assert.equal(isReviewConflict(reviewServer(undefined).call('review.send', { sessionId: 's1', revision: 6 })), true)
+  assert.equal(worktree.review.comments.length, 2)
+
+  // An edit that began from a body the comment no longer has.
+  const edited = call('review.edit', saveRequest(editOf({ ...onAdded, body: 'as I read it' }), 'mine').params)
+  assert.equal(edited.code, 'CONFLICT')
+  assert.equal(edited.message, 'the comment changed since you read it')
+  assert.equal(isReviewConflict(edited), true)
+  assert.equal(isCommentGone(edited), false)
+
+  // A comment that no longer exists: edit and remove.
+  for (const method of ['review.edit', 'review.remove']) {
+    const gone = call(method, { commentId: 'c9', body: 'x', expected: 'y' })
+    assert.equal(gone.code, 'NOT_FOUND', method)
+    assert.equal(gone.message, 'No review comment with id "c9"')
+    assert.equal(isCommentGone(gone), true)
+    assert.equal(isReviewConflict(gone), false)
+  }
+  // NOT_FOUND for something else is not a comment gone: the worktree, the session.
+  const noWorktree = call('review.remove', { worktreeId: 'w9', commentId: 'c1' })
+  assert.equal(noWorktree.code, 'NOT_FOUND')
+  assert.equal(isCommentGone(noWorktree), false)
+  const noSession = call('review.send', { sessionId: 's9', revision: 6 })
+  assert.equal(noSession.code, 'NOT_FOUND')
+  assert.equal(isCommentGone(noSession), false)
+
+  for (const not of [new Error('the review changed since you read it'), 'CONFLICT', null, undefined, new ClientError('BAD_REQUEST', 'revision must be an integer')]) {
+    assert.equal(isReviewConflict(not), false)
+    assert.equal(isCommentGone(not), false)
+  }
+})
+
+test('review: what the error line says for each request that failed', () => {
+  const { call } = reviewServer({ revision: 6, comments: [onAdded] })
+  // A draft that changed is not retried: the bar shows the current one.
+  assert.equal(REVIEW_CHANGED, 'The review changed on the server. Check it and send again.')
+  assert.equal(reviewFailure('send', call('review.send', { sessionId: 's1', revision: 5 })), REVIEW_CHANGED)
+  assert.equal(reviewFailure('clear', call('review.clear', { revision: 5 })), REVIEW_CHANGED)
+  // An edit's conflict is shown by the box, not the line.
+  const conflict = call('review.edit', { commentId: 'c1', body: 'mine', expected: 'stale' })
+  assert.equal(reviewFailure('edit', conflict), null)
+  // A comment already gone: deleting it is done; an edit of it has nowhere to go.
+  const gone = call('review.remove', { commentId: 'c9' })
+  assert.equal(reviewFailure('remove', gone), null)
+  assert.equal(reviewFailure('edit', call('review.edit', { commentId: 'c9', body: 'x' })), 'Could not save the comment: it is no longer in the review')
+
+  // The server's limits, in its words.
+  const full = reviewServer({ revision: 200, comments: Array.from({ length: MAX_REVIEW_COMMENTS }, (_, i) => comment(`f${i}`)) })
+  const refused = full.call('review.add', saveRequest(newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3]), 'one more').params)
+  assert.equal(refused.code, 'BAD_REQUEST')
+  assert.equal(reviewFailure('add', refused), 'Could not add the comment: a review holds at most 100 comments')
+  const long = call('review.edit', { commentId: 'c1', body: 'x'.repeat(MAX_REVIEW_BODY + 1), expected: 'body of c1' })
+  assert.equal(long.code, 'BAD_REQUEST')
+  assert.equal(reviewFailure('edit', long), 'Could not save the comment: body must be at most 4000 characters')
+  const control = call('review.add', { source: BRANCH_SOURCE, path: 'src/a.ts', side: 'new', line: 2, lineText: 'x', body: 'bell\u0007' })
+  assert.equal(reviewFailure('add', control), 'Could not add the comment: body must not hold control characters other than line breaks and tabs')
+  const noSession = call('review.send', { sessionId: 's9', revision: 6 })
+  assert.equal(reviewFailure('send', noSession), 'Could not send the review: No session with id "s9" in this worktree')
+  assert.equal(reviewFailure('clear', new ClientError('TIMEOUT', 'Request timed out')), 'Could not discard the review: Request timed out')
+  assert.equal(reviewFailure('remove', new ClientError('NOT_CONNECTED', 'Not connected')), 'Could not delete the comment: Not connected')
+  assert.equal(reviewFailure('add', 'boom'), 'Could not add the comment: boom')
+})
+
+test('review: what the phone sends is what the server takes, and a saved draft reads back as shown', () => {
+  const { worktree, call } = reviewServer(undefined)
+  const fresh = newCommentAt(BRANCH_SOURCE, 'src/a.ts', LINES_A[3])
+  assert.equal(call('review.add', saveRequest(fresh, 'why 3?\r\nnot 2').params), null)
+  assert.equal(worktree.review.revision, 1)
+  const saved = worktree.review.comments[0]
+  assert.equal(saved.body, 'why 3?\nnot 2')
+  assert.deepEqual(fileReview(draftOnDiff(worktree.review, BRANCH_SOURCE, ['src/a.ts']).byPath.get('src/a.ts'), LINES_A, null).byLine.get(3), [saved])
+  // An edit guarded by the body it began from; then one from a stale body conflicts and keeps both.
+  const edit = editOf(saved)
+  assert.equal(call('review.edit', saveRequest(edit, 'better').params), null)
+  assert.equal(worktree.review.comments[0].body, 'better')
+  assert.equal(isReviewConflict(call('review.edit', saveRequest(edit, 'mine').params)), true)
+  const conflicted = editConflicted(edit, worktree.review)
+  assert.deepEqual(conflicted, { kind: 'edit', commentId: saved.id, expected: 'better', conflict: true })
+  // The next save overwrites the body shown, knowingly.
+  assert.equal(call('review.edit', saveRequest(conflicted, 'mine').params), null)
+  assert.equal(worktree.review.comments[0].body, 'mine')
+})
+
+test("review: after an edit's conflict the box keeps going, guarded by the comment's body now", () => {
+  const edit = editOf(onAdded)
+  const theirs = { revision: 7, comments: [onRemoved, { ...onAdded, body: 'theirs' }] }
+  const conflicted = editConflicted(edit, theirs)
+  assert.deepEqual(conflicted, { kind: 'edit', commentId: 'c1', expected: 'theirs', conflict: true })
+  assert.deepEqual(edit, { kind: 'edit', commentId: 'c1', expected: 'body of c1', conflict: false })
+  // Changed once more before that save.
+  assert.deepEqual(editConflicted(conflicted, { revision: 8, comments: [{ ...onAdded, body: 'theirs again' }] }).expected, 'theirs again')
+  // The comment went meanwhile (sent, deleted): nothing to edit.
+  assert.equal(editConflicted(edit, { revision: 8, comments: [onRemoved] }), null)
+  assert.equal(editConflicted(edit, undefined), null)
+})
+
+test("review: a draft goes to one of a loaded worktree's open sessions, newest first", () => {
+  const session = (id, status, over = {}) => ({ id, title: `Session ${id}`, status, queue: [], ptyId: `pty-${id}`, ...over })
+  const worktree = { loaded: true, sessions: [session('s1', 'idle'), session('s2', 'exited'), session('s3', 'working'), session('s4', 'done', { ptyId: undefined })] }
+  assert.deepEqual(sendTargets(worktree), [
+    { sessionId: 's3', title: 'Session s3', status: 'working' },
+    { sessionId: 's1', title: 'Session s1', status: 'idle' }
+  ])
+  assert.deepEqual(sendTargets({ ...worktree, loaded: false }), [])
+  assert.deepEqual(sendTargets({ loaded: true, sessions: [] }), [])
+  assert.equal(noTargetsText(true), 'Start a session in this worktree to send the review to')
+  assert.equal(noTargetsText(false), 'Load the worktree to send the review to one of its sessions')
+})
+
+test("review: a commit's row is its subject, then its short sha, author and age", () => {
+  const now = 1_700_000_000_000
+  assert.deepEqual(commitRow({ sha: SHA_A, subject: 'Fix the thing', author: 'Ann', at: now - 5 * 60_000 }, now), { title: 'Fix the thing', detail: 'aaaaaaa · Ann · 5 min ago' })
+  assert.deepEqual(commitRow({ sha: SHA_B, subject: '', author: '', at: now - 3 * 86_400_000 }, now), { title: '(no subject)', detail: 'bbbbbbb · 3 d ago' })
+})
+
+// ── Pull request watch ───────────────────────────────────────────────────────────────────────
+
+test('pr watch: a branch is watched while it has a pull request and a watch', () => {
+  assert.equal(isWatching(undefined), false)
+  assert.equal(isWatching({}), false)
+  assert.equal(isWatching({ pr: 'https://github.com/o/r/pull/1' }), false)
+  // `{}` until its first poll, then `{seen}`.
+  assert.equal(isWatching({ pr: 'https://github.com/o/r/pull/1', prWatch: {} }), true)
+  assert.equal(isWatching({ pr: 'https://github.com/o/r/pull/1', prWatch: { seen: { checks: 'abc SUCCESS', conflict: false } } }), true)
+  assert.equal(isWatching({ prWatch: {} }), false)
+})
+
+test('pr watch: the switch is offered for a linked pull request when gh is signed in, or to stop a watch', () => {
+  const pr = 'https://github.com/o/r/pull/1'
+  const cases = [
+    // data, capable, offered, suffix, action
+    [undefined, true, false, '', { label: 'Watch', watch: true }],
+    [{}, true, false, '', { label: 'Watch', watch: true }],
+    [{ pr }, false, false, '', { label: 'Watch', watch: true }],
+    [{ pr }, true, true, '', { label: 'Watch', watch: true }],
+    [{ pr, prWatch: {} }, true, true, ' · watching', { label: 'Stop watching', watch: false }],
+    [{ pr, prWatch: {} }, false, true, ' · watch paused, gh signed out', { label: 'Stop watching', watch: false }],
+    [{ prWatch: {} }, true, false, '', { label: 'Watch', watch: true }]
+  ]
+  for (const [data, capable, offered, suffix, action] of cases) {
+    const what = `${JSON.stringify(data)} capable=${capable}`
+    assert.equal(watchOffered(data, capable), offered, what)
+    assert.equal(watchSuffix(data, capable), suffix, what)
+    assert.deepEqual(watchAction(data), action, what)
+  }
+})
+
+test("pr watch: the server's refusals of a watch, as the section's error line shows them", () => {
+  const data = {}
+  const project = { id: 'p1', repositories: [{ id: 'r1', branchData: { feat: data }, worktrees: [] }] }
+  const ctx = (signedIn) => ({ prWatch: { available: () => signedIn, pollSoon() {}, forget() {} }, projects: { apply: (_id, fn) => fn(project) } })
+  const call = (signedIn, watch) => {
+    try {
+      prWatchHandlers['branch.setPrWatch']({ projectId: 'p1', repoId: 'r1', branch: 'feat', watch }, ctx(signedIn))
+      return null
+    } catch (err) {
+      const wire = toWireError('branch.setPrWatch', err)
+      return new ClientError(wire.code, wire.message, wire.details)
+    }
+  }
+  const signedOut = call(false, true)
+  assert.equal(signedOut.code, 'TOOL_ERROR')
+  assert.match(signedOut.message, /^gh is not installed or not signed in on the Trek server/)
+  const noPr = call(true, true)
+  assert.equal(noPr.code, 'BAD_REQUEST')
+  assert.equal(noPr.message, 'feat has no linked pull request')
+  data.pr = 'https://dev.azure.com/o/p/_git/r/pullrequest/9'
+  const notGitHub = call(true, true)
+  assert.equal(notGitHub.code, 'BAD_REQUEST')
+  assert.match(notGitHub.message, /is not a GitHub pull request URL/)
+})
+
+test('pr watch: a notice on a card is one line; its age is on the phone\'s clock', () => {
+  const now = 1_700_000_000_000
+  const notice = { title: 'PR #12', text: 'Checks failed: build, lint', url: 'https://github.com/o/r/pull/12', at: now - 3 * 60_000 }
+  assert.equal(noticeLine(notice), 'PR #12: Checks failed: build, lint')
+  assert.equal(noticeLine({ ...notice, text: 'Can’t be read:\n gh said no ' }), 'PR #12: Can’t be read: gh said no')
+  assert.equal(noticeAge(notice, now), '3 min ago')
+  // The server's clock ahead of the phone's.
+  assert.equal(noticeAge({ ...notice, at: now + 60_000 }, now), 'just now')
+})
+
+test('pr watch: only a pull request item of a worktree can be dismissed from the Attention list', () => {
+  const entry = { projectId: 'p1', worktreeId: 'w1', sessionId: '', title: 'PR #12', status: 'attention', since: 1, projectName: 'Trek', pullRequest: { text: 'Merged', url: 'https://github.com/o/r/pull/12' } }
+  assert.deepEqual(noticeDismissal(entry), { projectId: 'p1', worktreeId: 'w1' })
+  assert.equal(noticeDismissal({ ...entry, pullRequest: undefined, sessionId: 's1' }), null)
+  assert.equal(noticeDismissal({ ...entry, worktreeId: null }), null)
 })
