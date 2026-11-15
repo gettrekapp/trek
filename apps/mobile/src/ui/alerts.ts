@@ -1,5 +1,6 @@
-// Alert.alert as a promise that always settles: a button, or the alert going away without one
-// (Android: the back button or a tap outside it; an iOS alert only closes by a button).
+// Alert.alert as a promise that settles when the alert closes: a button, or the alert going away
+// without one (Android: the back button or a tap outside it; an iOS alert only closes by a button).
+// It never settles when Android has no Activity attached: React Native then shows nothing and only warns.
 import { Alert } from 'react-native'
 
 /** A question with Cancel and one confirming button; true only when that button is tapped. */

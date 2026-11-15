@@ -53,8 +53,26 @@ export function refusedAsDirty(err: unknown): boolean {
   return details?.reason === 'dirty' || (typeof message === 'string' && UNCOMMITTED.test(message))
 }
 
+/** What both questions add for a loaded worktree: the desktop's wording (backendV2.ts' worktree remove). */
+const SESSIONS_STOP = ' Its running sessions will be stopped.'
+
+/** The plain question or the discard one, for an alert; `loaded` adds that its sessions stop. */
+export function removeQuestion(name: string, loaded: boolean, which: 'remove' | 'discard'): { title: string; message: string } {
+  const stop = loaded ? SESSIONS_STOP : ''
+  if (which === 'discard') return { title: `${name} has uncommitted changes.`, message: `Removing it discards them. This cannot be undone.${stop}` }
+  return { title: `Remove ${name}?`, message: `The worktree's folder is deleted. Its branch stays.${stop}` }
+}
+
 export interface RemoveDeps {
-  worktree: { id: string; name: string; loaded: boolean; dirty?: boolean }
+  /** `dirty` as the snapshot had it at the tap: it decides which question is asked first */
+  worktree: { id: string; name: string; dirty?: boolean }
+  /** Whether the worktree is loaded now; read once, after the first confirmation (another client can unload it while the question is up) */
+  loaded(): boolean
+  /**
+   * Asked after the first confirmation, before anything is sent: why the removal can't go on
+   * (its dev stack or VM was started while the question was up), or null.
+   */
+  stillAllowed?(): Promise<string | null>
   /** worktree.unload / worktree.load / worktree.remove for this worktree */
   unload(): Promise<void>
   load(): Promise<void>
@@ -67,27 +85,38 @@ export interface RemoveDeps {
   refusedAsDirty(err: unknown): boolean
 }
 
-export type RemoveOutcome = { kind: 'removed' } | { kind: 'cancelled' } | { kind: 'failed'; error: unknown }
+/** `reloadFailed`: the worktree was unloaded here and could not be loaded again, so it is left unloaded. */
+export type RemoveOutcome =
+  | { kind: 'removed' }
+  | { kind: 'cancelled'; reloadFailed?: true }
+  | { kind: 'blocked'; why: string }
+  | { kind: 'failed'; error: unknown; reloadFailed?: true }
 
 /**
  * The remove flow: the question (the discard one when the snapshot says the worktree has changes),
- * the unload of a loaded worktree, the removal, and, when git refuses for changes that appeared
- * since, the discard question and a forced removal. On a failure, or a declined discard, a
- * worktree unloaded here is loaded again (best effort). Never rejects.
+ * the check that it is still allowed, the unload of a worktree that is loaded then, the removal,
+ * and, when git refuses for changes that appeared since, the discard question and a forced
+ * removal. On a failure, or a declined discard, a worktree unloaded here is loaded again (best
+ * effort; the outcome says when that failed). Never rejects.
  */
 export async function removeWorktree(deps: RemoveDeps): Promise<RemoveOutcome> {
   const dirty = deps.worktree.dirty === true
   let unloaded = false
   // The removal's own error is the one to report, also when `load` throws instead of rejecting.
-  const reload = async (): Promise<void> => {
-    if (!unloaded) return
+  const reload = async (): Promise<{ reloadFailed?: true }> => {
+    if (!unloaded) return {}
     try {
       await deps.load()
-    } catch {}
+      return {}
+    } catch {
+      return { reloadFailed: true }
+    }
   }
   try {
     if (!(await (dirty ? deps.confirmDiscard() : deps.confirmRemove()))) return { kind: 'cancelled' }
-    if (deps.worktree.loaded) {
+    const why = deps.stillAllowed ? await deps.stillAllowed() : null
+    if (why !== null) return { kind: 'blocked', why }
+    if (deps.loaded()) {
       await deps.unload()
       unloaded = true
     }
@@ -98,14 +127,10 @@ export async function removeWorktree(deps: RemoveDeps): Promise<RemoveOutcome> {
       // Changes can appear between the snapshot and the removal; a forced one is not asked about again.
       if (dirty || !deps.refusedAsDirty(err)) throw err
     }
-    if (!(await deps.confirmDiscard())) {
-      await reload()
-      return { kind: 'cancelled' }
-    }
+    if (!(await deps.confirmDiscard())) return { kind: 'cancelled', ...(await reload()) }
     await deps.remove(true)
     return { kind: 'removed' }
   } catch (error) {
-    await reload()
-    return { kind: 'failed', error }
+    return { kind: 'failed', error, ...(await reload()) }
   }
 }

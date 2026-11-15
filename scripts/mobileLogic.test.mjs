@@ -17,7 +17,7 @@ import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
-import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
+import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeQuestion, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { activeTicketProviders, parseTicketInput, ticketView } from '../apps/mobile/src/logic/tickets.ts'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../apps/mobile/src/state/teardown.ts'
 import { branchLine, repoFolder, worktreeOnBranch } from '../apps/mobile/src/logic/worktreeList.ts'
@@ -654,8 +654,12 @@ const removal = (worktree, over = {}) => {
     calls.push(args.length ? `${name}(${args.join(',')})` : name)
     return typeof result === 'function' ? result(...args) : result
   }
+  const { loaded = false, ...rest } = worktree
   const deps = {
-    worktree: { id: 'w1', name: 'feat', loaded: false, ...worktree },
+    worktree: { id: 'w1', name: 'feat', ...rest },
+    // Not a request or a question: not recorded.
+    loaded: over.loaded ?? (() => loaded),
+    ...('stillAllowed' in over ? { stillAllowed: step('stillAllowed', over.stillAllowed) } : {}),
     unload: step('unload', over.unload),
     load: step('load', over.load),
     remove: step('remove', over.remove),
@@ -713,9 +717,9 @@ test('worktrees: a failed removal loads again what the phone unloaded, and never
   assert.deepEqual(await failed.run(), { kind: 'failed', error: boom })
   assert.deepEqual(failed.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
 
-  // The reload is best effort: the removal's own error is the one reported.
+  // The reload is best effort: the removal's own error is the one reported, with the failed reload said.
   const reloadFails = removal({ loaded: true }, { remove: rejects(boom), load: rejects(new Error('load failed')) })
-  assert.deepEqual(await reloadFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(await reloadFails.run(), { kind: 'failed', error: boom, reloadFailed: true })
   assert.deepEqual(reloadFails.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
 
   const notLoaded = removal({}, { remove: rejects(boom) })
@@ -763,7 +767,8 @@ test('worktrees: a reload that throws instead of rejecting does not break the re
     }
     const run = () =>
       removeWorktree({
-        worktree: { id: 'w1', name: 'feat', loaded: true },
+        worktree: { id: 'w1', name: 'feat' },
+        loaded: () => true,
         unload: step('unload'),
         load: () => {
           calls.push('load')
@@ -777,12 +782,119 @@ test('worktrees: a reload that throws instead of rejecting does not break the re
     return { calls, run }
   }
   const failed = throwingLoad({ remove: rejects(boom) })
-  assert.deepEqual(await failed.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(await failed.run(), { kind: 'failed', error: boom, reloadFailed: true })
   assert.deepEqual(failed.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
 
   const declined = throwingLoad({ remove: rejects(dirtyRefusal()), confirmDiscard: false })
-  assert.deepEqual(await declined.run(), { kind: 'cancelled' })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled', reloadFailed: true })
   assert.deepEqual(declined.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
+})
+
+test('worktrees: a reload that fails is reported, only for a worktree the phone unloaded', async () => {
+  const boom = new Error('boom')
+  const loadFails = rejects(new Error('Not connected'))
+  const declined = removal({ loaded: true }, { remove: rejects(dirtyRefusal()), confirmDiscard: false, load: loadFails })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled', reloadFailed: true })
+  assert.deepEqual(declined.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
+
+  const forced = removal({ loaded: true }, { remove: (force) => rejects(force ? boom : dirtyRefusal())(), load: loadFails })
+  assert.deepEqual(await forced.run(), { kind: 'failed', error: boom, reloadFailed: true })
+
+  // A reload that works, or none to do: nothing said.
+  const reloaded = removal({ loaded: true }, { remove: rejects(boom) })
+  assert.deepEqual(await reloaded.run(), { kind: 'failed', error: boom })
+  const notLoaded = removal({}, { remove: rejects(boom), load: loadFails })
+  assert.deepEqual(await notLoaded.run(), { kind: 'failed', error: boom })
+  const unloadFails = removal({ loaded: true }, { unload: rejects(boom), load: loadFails })
+  assert.deepEqual(await unloadFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(unloadFails.calls, ['confirmRemove', 'unload'])
+})
+
+test('worktrees: whether it is loaded is read after the confirmation, not at the tap', async () => {
+  const boom = new Error('boom')
+  // Loaded at the tap, unloaded by another client while the question was up: the phone neither
+  // unloads it nor, after a failure, loads it (which would start its sessions again).
+  const during = (over) => {
+    let loaded = true
+    return removal({}, { loaded: () => loaded, confirmRemove: () => ((loaded = false), true), ...over })
+  }
+  const gone = during({ remove: rejects(boom) })
+  assert.deepEqual(await gone.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(gone.calls, ['confirmRemove', 'remove(false)'])
+  const declined = during({ remove: rejects(dirtyRefusal()), confirmDiscard: false })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled' })
+  assert.deepEqual(declined.calls, ['confirmRemove', 'remove(false)', 'confirmDiscard'])
+
+  // The other way round: loaded while the question was up, so unloaded (and loaded again on a failure).
+  let loaded = false
+  const since = removal({}, { loaded: () => loaded, confirmRemove: () => ((loaded = true), true), remove: rejects(boom) })
+  assert.deepEqual(await since.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(since.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
+
+  // Not read at all when the question is declined; read once otherwise.
+  let reads = 0
+  const count = () => (reads++, true)
+  assert.deepEqual(await removal({}, { loaded: count, confirmRemove: false }).run(), { kind: 'cancelled' })
+  assert.equal(reads, 0)
+  assert.equal((await removal({}, { loaded: count, remove: rejects(dirtyRefusal()), confirmDiscard: false }).run()).kind, 'cancelled')
+  assert.equal(reads, 1)
+})
+
+test('worktrees: the stack and VM are checked again after the confirmation, before anything is sent', async () => {
+  const boom = new Error('boom')
+  const allowed = removal({ loaded: true }, { stillAllowed: null })
+  assert.deepEqual(await allowed.run(), { kind: 'removed' })
+  assert.deepEqual(allowed.calls, ['confirmRemove', 'stillAllowed', 'unload', 'remove(false)'])
+
+  const blocked = removal({ loaded: true }, { stillAllowed: 'its dev stack is running' })
+  assert.deepEqual(await blocked.run(), { kind: 'blocked', why: 'its dev stack is running' })
+  assert.deepEqual(blocked.calls, ['confirmRemove', 'stillAllowed'])
+
+  const dirtyBlocked = removal({ dirty: true, loaded: true }, { stillAllowed: 'its Docker VM (trek-x) is running' })
+  assert.deepEqual(await dirtyBlocked.run(), { kind: 'blocked', why: 'its Docker VM (trek-x) is running' })
+  assert.deepEqual(dirtyBlocked.calls, ['confirmDiscard', 'stillAllowed'])
+
+  // Not asked when the question is declined.
+  const declined = removal({ loaded: true }, { stillAllowed: 'its dev stack is running', confirmRemove: false })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled' })
+  assert.deepEqual(declined.calls, ['confirmRemove'])
+
+  // A check that rejects, or throws, is a failure with nothing sent.
+  const rejected = removal({ loaded: true }, { stillAllowed: rejects(boom) })
+  assert.deepEqual(await rejected.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(rejected.calls, ['confirmRemove', 'stillAllowed'])
+  const thrown = await removeWorktree({
+    worktree: { id: 'w1', name: 'feat' },
+    loaded: () => true,
+    stillAllowed: () => {
+      throw boom
+    },
+    unload: () => assert.fail('unload'),
+    load: () => assert.fail('load'),
+    remove: () => assert.fail('remove'),
+    confirmRemove: async () => true,
+    confirmDiscard: async () => true,
+    refusedAsDirty
+  })
+  assert.deepEqual(thrown, { kind: 'failed', error: boom })
+
+  // Asked once: not again before the discard question after a refusal.
+  const refused = removal({}, { stillAllowed: null, remove: (force) => (force ? undefined : rejects(dirtyRefusal())()) })
+  assert.deepEqual(await refused.run(), { kind: 'removed' })
+  assert.deepEqual(refused.calls, ['confirmRemove', 'stillAllowed', 'remove(false)', 'confirmDiscard', 'remove(true)'])
+})
+
+test('worktrees: the questions, which say that a loaded worktree\'s sessions stop', () => {
+  assert.deepEqual(removeQuestion('feat', false, 'remove'), { title: 'Remove feat?', message: "The worktree's folder is deleted. Its branch stays." })
+  assert.deepEqual(removeQuestion('feat', true, 'remove'), {
+    title: 'Remove feat?',
+    message: "The worktree's folder is deleted. Its branch stays. Its running sessions will be stopped."
+  })
+  assert.deepEqual(removeQuestion('feat', false, 'discard'), { title: 'feat has uncommitted changes.', message: 'Removing it discards them. This cannot be undone.' })
+  assert.deepEqual(removeQuestion('feat', true, 'discard'), {
+    title: 'feat has uncommitted changes.',
+    message: 'Removing it discards them. This cannot be undone. Its running sessions will be stopped.'
+  })
 })
 
 /** A server whose stack.status and env.list answer (or reject with) what is given; `asked` lists the requests. */
@@ -794,12 +906,12 @@ const teardownServer = (capabilities, answers) => {
     if (answer instanceof Error) throw answer
     return answer
   }
-  return { asked, server: { connection: { welcome: { capabilities }, request } } }
+  return { asked, server: { connection: { welcome: capabilities ? { capabilities } : undefined, request } } }
 }
 const tdWorktree = { id: 'w1', path: '/r/x' }
-const tdCheck = (capabilities, answers, options) => {
+const tdCheck = (capabilities, answers, options, worktree = tdWorktree) => {
   const { asked, server } = teardownServer(capabilities, answers)
-  return teardownBlocker(server, 'p1', 'r1', tdWorktree, options).then((why) => ({ why, asked }))
+  return teardownBlocker(server, 'p1', 'r1', worktree, options).then((why) => ({ why, asked }))
 }
 
 test("teardown: a running dev stack or Docker VM is the desktop's to tear down; a server without them has none", async () => {
@@ -837,6 +949,74 @@ test('teardown: a check that fails counts as nothing running for a promote, and 
     (await tdCheck(['stacks', 'env'], { 'stack.status': down, 'env.list': [{ worktreePath: '/r/x', vmState: 'running', profile: 'trek-x' }] }, { strict: true })).why,
     'its Docker VM (trek-x) is running'
   )
+})
+
+test('teardown: a strict check tells what the server cannot have running from a check that failed', async () => {
+  const idle = { containers: 0, upRunning: false }
+  const strict = { strict: true }
+  const both = ['stacks', 'env']
+  const runningVm = { worktreePath: '/r/x', vmState: 'running', profile: 'trek-x' }
+  // The errors as the server words them (machineHandlers.ts' viaTool, worktreeHandlers.ts' present, paths.ts).
+  const noColima = new ClientError('TOOL_ERROR', "colima is not installed on the server (it is not on the server's PATH)", { reason: 'missing' })
+  const outsideRoots = new ClientError('PATH_DENIED', 'Path not under a configured root: /r/x')
+  const gone = new ClientError('BAD_REQUEST', '/r/x no longer exists; remove the worktree or create its branch again')
+
+  // A server machine without colima has no VMs.
+  assert.deepEqual(await tdCheck(both, { 'stack.status': idle, 'env.list': noColima }, strict), { why: null, asked: ['stack.status', 'env.list'] })
+  assert.equal((await tdCheck(both, { 'stack.status': { containers: 1, upRunning: false }, 'env.list': noColima }, strict)).why, 'its dev stack is running')
+  assert.equal((await tdCheck(both, { 'stack.status': new Error('Not connected'), 'env.list': noColima }, strict)).why, TEARDOWN_UNCHECKED)
+  // Only that rejection of env.list: any other tool error, or the same one for the stack, is a failed check.
+  const envFailures = [
+    new ClientError('TOOL_ERROR', 'colima list exited with code 1'),
+    new ClientError('TOOL_ERROR', 'the registry is unreadable', { reason: 'registry' }),
+    new ClientError('INTERNAL', 'boom', { reason: 'missing' }),
+    new ClientError('PATH_DENIED', '/r is not a registered repo'),
+    new ClientError('TIMEOUT', 'Request timed out'),
+    new ClientError('NOT_CONNECTED', 'Not connected'),
+    new Error('Not connected')
+  ]
+  for (const err of envFailures) assert.equal((await tdCheck(both, { 'stack.status': idle, 'env.list': err }, strict)).why, TEARDOWN_UNCHECKED, err.message)
+  assert.equal((await tdCheck(both, { 'stack.status': noColima, 'env.list': [] }, strict)).why, TEARDOWN_UNCHECKED)
+
+  // A worktree git no longer lists has no stack: stack.status (which refuses it) is not asked; its VM still is.
+  const missing = { ...tdWorktree, missing: true }
+  assert.deepEqual(await tdCheck(both, { 'stack.status': gone, 'env.list': [] }, strict, missing), { why: null, asked: ['env.list'] })
+  assert.deepEqual(await tdCheck(['stacks'], { 'stack.status': gone }, strict, missing), { why: null, asked: [] })
+  assert.equal((await tdCheck(both, { 'stack.status': gone, 'env.list': [runningVm] }, strict, missing)).why, 'its Docker VM (trek-x) is running')
+  assert.equal((await tdCheck(both, { 'stack.status': gone, 'env.list': new Error('Not connected') }, strict, missing)).why, TEARDOWN_UNCHECKED)
+  assert.deepEqual(await tdCheck(both, { 'stack.status': gone, 'env.list': noColima }, strict, missing), { why: null, asked: ['env.list'] })
+  // The same refusal for a worktree not known as missing is a failed check.
+  assert.equal((await tdCheck(both, { 'stack.status': gone, 'env.list': [] }, strict)).why, TEARDOWN_UNCHECKED)
+
+  // A worktree outside the server's allowed roots: the server runs no stack there.
+  assert.deepEqual(await tdCheck(both, { 'stack.status': outsideRoots, 'env.list': [] }, strict), { why: null, asked: ['stack.status', 'env.list'] })
+  assert.equal((await tdCheck(both, { 'stack.status': outsideRoots, 'env.list': [runningVm] }, strict)).why, 'its Docker VM (trek-x) is running')
+  assert.equal((await tdCheck(both, { 'stack.status': outsideRoots, 'env.list': outsideRoots }, strict)).why, TEARDOWN_UNCHECKED)
+  const stackFailures = [
+    new ClientError('TOOL_ERROR', 'stack.sh status exited with code 1'),
+    new ClientError('NOT_FOUND', 'this server has no machine services'),
+    new ClientError('TIMEOUT', 'Request timed out'),
+    new ClientError('INTERNAL', 'boom')
+  ]
+  for (const err of stackFailures) assert.equal((await tdCheck(both, { 'stack.status': err, 'env.list': [] }, strict)).why, TEARDOWN_UNCHECKED, err.message)
+})
+
+test('teardown: a connection with no welcome yet is unchecked for a removal, and asks nothing', async () => {
+  assert.deepEqual(await tdCheck(undefined, {}, { strict: true }), { why: TEARDOWN_UNCHECKED, asked: [] })
+  assert.deepEqual(await tdCheck(undefined, {}), { why: null, asked: [] })
+  assert.deepEqual(await tdCheck(undefined, {}, {}), { why: null, asked: [] })
+})
+
+test('teardown: a promote asks and answers as before, whatever the rejection or the worktree', async () => {
+  const idle = { containers: 0, upRunning: false }
+  const both = ['stacks', 'env']
+  const missing = { ...tdWorktree, missing: true }
+  const noColima = new ClientError('TOOL_ERROR', 'colima is not installed', { reason: 'missing' })
+  const gone = new ClientError('BAD_REQUEST', '/r/x no longer exists')
+  assert.deepEqual(await tdCheck(both, { 'stack.status': idle, 'env.list': noColima }), { why: null, asked: ['stack.status', 'env.list'] })
+  assert.deepEqual(await tdCheck(both, { 'stack.status': gone, 'env.list': [] }, undefined, missing), { why: null, asked: ['stack.status', 'env.list'] })
+  assert.deepEqual(await tdCheck(both, { 'stack.status': new ClientError('PATH_DENIED', 'no'), 'env.list': [] }, {}), { why: null, asked: ['stack.status', 'env.list'] })
+  assert.equal((await tdCheck(both, { 'stack.status': { containers: 1, upRunning: false }, 'env.list': [] }, undefined, missing)).why, 'its dev stack is running')
 })
 
 test("tickets: the providers on for the project, by the server's plugin list and the project's plugins setting", () => {

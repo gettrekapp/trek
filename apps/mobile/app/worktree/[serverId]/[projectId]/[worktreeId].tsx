@@ -6,9 +6,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native'
 import { router, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
-import { CAPABILITY, type AgentInfo, type Project, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
-import { refusedAsDirty, removeWorktree } from '../../../../src/logic/worktrees.ts'
+import { CAPABILITY, type AgentInfo, type Project, type RegisteredServer, type Repository, type SessionType, type Worktree } from '../../../../src/shared.ts'
+import { refusedAsDirty, removeQuestion, removeWorktree } from '../../../../src/logic/worktrees.ts'
 import { errorMessage, useConnectionNotice, useServer, useTopic } from '../../../../src/state/hooks.ts'
+import { useServers } from '../../../../src/state/ServersProvider.tsx'
 import { TEARDOWN_UNCHECKED, teardownBlocker } from '../../../../src/state/teardown.ts'
 import { confirmAlert } from '../../../../src/ui/alerts.ts'
 import { BranchDetails } from '../../../../src/ui/BranchDetails.tsx'
@@ -27,6 +28,9 @@ const START_SIZE = { cols: 80, rows: 24 }
 /** A restart keeps the size the phone last saw the session's pty at (else START_SIZE, as for a new one). */
 const restartSize = (serverId: string, sessionId: string): { cols: number; rows: number } => knownPtySize(serverId, sessionId) ?? START_SIZE
 
+/** Said when a removal that did not happen leaves the worktree unloaded (logic/worktrees.ts' reloadFailed). */
+const RELOAD_FAILED = 'It was unloaded and could not be loaded again: use Load.'
+
 function findWorktree(project: Project, worktreeId: string): { repo: Repository; worktree: Worktree } | undefined {
   for (const repo of project.repositories) for (const worktree of repo.worktrees) if (worktree.id === worktreeId) return { repo, worktree }
   return undefined
@@ -35,6 +39,9 @@ function findWorktree(project: Project, worktreeId: string): { repo: Repository;
 export default function WorktreeScreen(): React.JSX.Element {
   const { serverId, projectId, worktreeId } = useLocalSearchParams<{ serverId: string; projectId: string; worktreeId: string }>()
   const server = useServer(serverId)
+  // The registry's connection at the time of the call: the phone replaces its connections after
+  // a while in the background, and a removal's questions can stay up across that.
+  const { get: currentServer } = useServers()
   const topic = useTopic(serverId, `project:${projectId}`)
   const notice = useConnectionNotice(serverId)
   const headerHeight = useHeaderHeight()
@@ -48,7 +55,8 @@ export default function WorktreeScreen(): React.JSX.Element {
   // One removal at a time, also for two taps before the button is drawn disabled.
   const removingNow = useRef(false)
   // Whether this screen is the one shown: a removal that goes on after it went (Back), or under
-  // another screen, neither asks nor navigates.
+  // another screen, does not ask its first question and does not navigate. Its discard question,
+  // after git refuses for changes, can still come up over another screen: it names the worktree.
   const shown = useRef(false)
   useFocusEffect(
     useCallback(() => {
@@ -77,6 +85,9 @@ export default function WorktreeScreen(): React.JSX.Element {
   const project = topic.state === 'ready' ? topic.snapshot : null
   const found = project ? findWorktree(project, worktreeId) : undefined
   const worktree = found?.worktree
+  // The latest snapshot's worktree, for a removal to read after its question (undefined once it is gone).
+  const latest = useRef(found)
+  latest.current = found
   const sessionTypes: SessionType[] = project?.settings.sessionTypes ?? []
 
   const run = async (fn: () => Promise<unknown>): Promise<unknown> => {
@@ -116,14 +127,31 @@ export default function WorktreeScreen(): React.JSX.Element {
   }
 
   // The desktop's order (backendV2.ts' worktree remove) without what only it can do: with the dev
-  // stack or VM running, nothing is done here. Then the question, the unload, the removal, and
-  // the discard question when git refuses for changes (logic/worktrees.ts).
+  // stack or VM running, nothing is done here. Then the question, that check again, the unload,
+  // the removal, and the discard question when git refuses for changes (logic/worktrees.ts).
   const remove = async (): Promise<void> => {
     if (!server || !found || found.worktree.isMain || removingNow.current) return
-    const conn = server.connection
     const { repo, worktree: target } = found
     const name = target.branch ?? target.name
     const ref = { projectId, worktreeId: target.id }
+    // Each request goes over the connection the server has when it is made, not the tap's.
+    const now = (): RegisteredServer => {
+      const current = currentServer(serverId)
+      if (!current) throw new Error('Not connected')
+      return current
+    }
+    // Strict: a check that fails stops the removal (its dev stack may be running).
+    const check = async (): Promise<string | null> => teardownBlocker(now(), projectId, repo.id, latest.current?.worktree ?? target, { strict: true })
+    const sayBlocker = (why: string): void => {
+      if (why === TEARDOWN_UNCHECKED) setError("Could not check whether this worktree's dev stack or Docker VM is running, so it was not removed. Try again.")
+      else setBlocked(`Remove this worktree on the desktop: ${why}, and only the desktop can tear it down first.`)
+    }
+    // The questions say that sessions stop: for a worktree loaded at the tap, or unloaded here since.
+    let sessionsStop = target.loaded
+    const ask = (which: 'remove' | 'discard'): Promise<boolean> => {
+      const { title, message } = removeQuestion(name, sessionsStop, which)
+      return confirmAlert(title, message, which === 'discard' ? 'Discard and remove' : 'Remove', true)
+    }
     removingNow.current = true
     // The agent list goes: no session is started in a worktree that is being removed.
     setPicking(false)
@@ -132,29 +160,33 @@ export default function WorktreeScreen(): React.JSX.Element {
     setError(null)
     setBlocked(null)
     try {
-      // Strict: a check that fails stops the removal (its dev stack may be running).
-      const why = await teardownBlocker(server, projectId, repo.id, target, { strict: true })
+      const why = await check().catch(() => TEARDOWN_UNCHECKED)
       if (!shown.current) return
-      if (why === TEARDOWN_UNCHECKED) {
-        setError("Could not check whether this worktree's dev stack or Docker VM is running, so it was not removed. Try again.")
-        return
-      }
       if (why) {
-        setBlocked(`Remove this worktree on the desktop: ${why}, and only the desktop can tear it down first.`)
+        sayBlocker(why)
         return
       }
       const outcome = await removeWorktree({
-        worktree: { id: target.id, name, loaded: target.loaded, dirty: target.dirty },
-        unload: async () => void (await conn.request('worktree.unload', ref)),
-        load: async () => void (await conn.request('worktree.load', ref)),
-        remove: async (force) => void (await conn.request('worktree.remove', { ...ref, force })),
-        confirmRemove: () => confirmAlert(`Remove ${name}?`, "The worktree's folder is deleted. Its branch stays.", 'Remove', true),
-        confirmDiscard: () => confirmAlert(`${name} has uncommitted changes.`, 'Removing it discards them. This cannot be undone.', 'Discard and remove', true),
+        worktree: { id: target.id, name, dirty: target.dirty },
+        loaded: () => latest.current?.worktree.loaded === true,
+        // The question can stay up a long time: a stack or VM started meanwhile stops the removal.
+        stillAllowed: check,
+        unload: async () => {
+          sessionsStop = true
+          await now().connection.request('worktree.unload', ref)
+        },
+        load: async () => void (await now().connection.request('worktree.load', ref)),
+        remove: async (force) => void (await now().connection.request('worktree.remove', { ...ref, force })),
+        confirmRemove: () => ask('remove'),
+        confirmDiscard: () => ask('discard'),
         refusedAsDirty
       })
-      if (outcome.kind === 'failed') {
-        if (mounted.current) setError(errorMessage(outcome.error))
-      } else if (outcome.kind === 'removed' && shown.current) router.back()
+      if (outcome.kind === 'removed') {
+        if (shown.current) router.back()
+      } else if (!mounted.current) return
+      else if (outcome.kind === 'blocked') sayBlocker(outcome.why)
+      else if (outcome.kind === 'failed') setError(outcome.reloadFailed ? `${errorMessage(outcome.error)}\n${RELOAD_FAILED}` : errorMessage(outcome.error))
+      else if (outcome.reloadFailed) setError(RELOAD_FAILED)
     } finally {
       removingNow.current = false
       if (mounted.current) {
