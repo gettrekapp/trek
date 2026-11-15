@@ -1,4 +1,5 @@
-// The phone (6a, apps/mobile) imports src/shared/client, src/shared/model and src/shared/protocolV2
+// The phone (6a, apps/mobile) imports src/shared/client, src/shared/model and src/shared/protocolV2,
+// and the ticket plugins' pure shared files (plugins/<id>/manifest.ts, plugins/<id>/shared/ticket.ts),
 // straight from the repo (Metro watchFolders). This walks the import graph from those entry points
 // and fails on anything React Native can't run: node:* and Node built-ins, electron, a package the
 // phone doesn't have, or the DOM's document/window globals.
@@ -12,7 +13,31 @@ import { fileURLToPath } from 'node:url'
 // fileURLToPath, not .pathname: on Windows that is /D:/… , which resolve() reads as a path on the current drive.
 const root = fileURLToPath(new URL('..', import.meta.url))
 /** What apps/mobile imports from the shared code (keep in step with apps/mobile/src/shared.ts). */
-export const MOBILE_ENTRIES = ['src/shared/client/index.ts', 'src/shared/model/topics.ts', 'src/shared/model/types.ts', 'src/shared/protocolV2.ts', 'src/shared/types.ts', 'src/shared/promote.ts', 'src/shared/push.ts']
+export const MOBILE_ENTRIES = [
+  'src/shared/client/index.ts',
+  'src/shared/model/topics.ts',
+  'src/shared/model/types.ts',
+  'src/shared/protocolV2.ts',
+  'src/shared/types.ts',
+  'src/shared/promote.ts',
+  'src/shared/push.ts',
+  'src/shared/quickButtonTemplate.ts',
+  // The Changes screen's review: numbering a patch, and where a draft's comments sit on it.
+  'src/shared/changes.ts',
+  'src/shared/review.ts',
+  // Automations: a schedule in words and its next runs. A branch's history: its entries, their wording, merging pages.
+  'src/shared/cron.ts',
+  'src/shared/model/history.ts',
+  'src/shared/historyText.ts',
+  // Tickets: the trackers' providers and manifests (plugins/, pure shared code) and core's generic tickets.
+  'src/shared/plugins/manifest.ts',
+  'src/shared/plugins/tickets.ts',
+  'src/shared/tickets.ts',
+  'plugins/linear/manifest.ts',
+  'plugins/linear/shared/ticket.ts',
+  'plugins/azure-devops/manifest.ts',
+  'plugins/azure-devops/shared/ticket.ts'
+]
 /** Packages the phone also has (none today: the shared code is dependency-free). */
 const ALLOWED_PACKAGES = new Set([])
 
@@ -92,7 +117,7 @@ test('the shared code the phone imports runs on React Native: no Node, Electron,
 
 test("apps/mobile/src/shared.ts imports only these entry points", () => {
   const src = readFileSync(join(root, 'apps/mobile/src/shared.ts'), 'utf8')
-  const imported = [...src.matchAll(/from '\.\.\/\.\.\/\.\.\/(src\/shared\/[^']+)'/g)].map((m) => m[1])
+  const imported = [...src.matchAll(/from '\.\.\/\.\.\/\.\.\/((?:src\/shared|plugins)\/[^']+)'/g)].map((m) => m[1])
   assert.ok(imported.length > 0)
   for (const path of imported) assert.ok(MOBILE_ENTRIES.includes(path), `${path} is not in MOBILE_ENTRIES`)
 })

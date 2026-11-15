@@ -1,4 +1,5 @@
-// Home: what needs you across every paired server, newest first (6a). A decision is answered here.
+// Home: what needs you across every paired server, newest first (6a). A decision is answered here,
+// and a pull request's notice dismissed.
 import { useEffect, useState } from 'react'
 import { FlatList, Platform, Pressable, Text, View } from 'react-native'
 import { Link, router, Stack } from 'expo-router'
@@ -6,7 +7,9 @@ import * as Notifications from 'expo-notifications'
 import { useServers } from '../src/state/ServersProvider.tsx'
 import { usePush } from '../src/state/PushProvider.tsx'
 import { ago, attentionText, notificationRoute, type AttentionItem } from '../src/logic/attention.ts'
+import { noticeDismissal } from '../src/logic/prWatch.ts'
 import { DecisionActions } from '../src/ui/DecisionActions.tsx'
+import { DismissNotice } from '../src/ui/PrNotice.tsx'
 import { colors, ui } from '../src/ui/theme.ts'
 
 export default function AttentionScreen(): React.JSX.Element {
@@ -69,16 +72,25 @@ export default function AttentionScreen(): React.JSX.Element {
           data={attention}
           keyExtractor={(i) => i.key}
           ListEmptyComponent={<Text style={ui.muted}>Nothing needs you.</Text>}
-          renderItem={({ item }) => (
-            <Pressable accessibilityRole="button" onPress={() => open(item)} style={ui.card}>
-              <Text style={ui.muted}>
-                {item.serverName} · {item.projectName} · {ago(item.since, now)}
-              </Text>
-              <Text style={ui.title}>{item.title}</Text>
-              <Text style={item.decision ? ui.warn : ui.text}>{attentionText(item)}</Text>
-              {item.decision && item.sessionId ? <DecisionActions serverId={item.serverId} projectId={item.projectId} sessionId={item.sessionId} /> : null}
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const dismissal = noticeDismissal(item)
+            // The item's text opens it; what is done to it here is beside the text, not inside it, so
+            // a tap on Dismiss (also while it is disabled, mid-request) never opens the worktree.
+            return (
+              <View style={ui.card}>
+                <Pressable accessibilityRole="button" onPress={() => open(item)} style={{ gap: 4 }}>
+                  <Text style={ui.muted}>
+                    {item.serverName} · {item.projectName} · {ago(item.since, now)}
+                  </Text>
+                  <Text style={ui.title}>{item.title}</Text>
+                  <Text style={item.decision ? ui.warn : ui.text}>{attentionText(item)}</Text>
+                </Pressable>
+                {item.decision && item.sessionId ? <DecisionActions serverId={item.serverId} projectId={item.projectId} sessionId={item.sessionId} /> : null}
+                {/* The item goes when the server's list drops it, not at the tap. */}
+                {dismissal ? <DismissNotice serverId={item.serverId} projectId={dismissal.projectId} worktreeId={dismissal.worktreeId} /> : null}
+              </View>
+            )
+          }}
         />
       )}
     </View>

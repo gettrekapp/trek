@@ -325,14 +325,45 @@ other window on that project sees them live.
 The Trek phone app (`apps/mobile`, Expo, iOS and Android; phase 6a) is for watching and
 steering agents away from the desk. Its home tab lists what needs you on every paired
 server, newest first: decisions waiting (answered right there), sessions that finished
-or stopped, pull request notices. From there: a server's projects, a worktree (load or
-unload it, start a session with an agent or session type, close or restart one, its
-read-only Changes), and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
-arrows, y, n) and a prompt box that sends now or queues. While a project is open on
+or stopped, pull request notices. From there: a server's projects, where a repository
+gets a new worktree (on a new or an existing branch, or from a GitHub pull request's
+link, checked out as `pr/<n>`); a worktree (load or unload it, start a session with an
+agent or session type, close or restart one, its Changes, remove it, and its
+branch's workflow tag, custom tags, note, ticket and pull request, shown and edited);
+and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
+arrows, y, n), a prompt box that sends now or queues, and the project's quick
+buttons (run only: a button that asks for input opens a sheet for it). While a project is open on
 the phone, an agent's `promote_to_primary` can be confirmed there, unless the
 worktree's dev stack or Docker VM is running (then only the desktop can, since it
-tears them down first).
+tears them down first). The same goes for removing a worktree: with either running, the
+phone says to remove it on the desktop. A ticket links to its tracker when that tracker
+is on for the project and has its project setting; the phone does not look up a ticket's
+title or status, and does not edit the project's tag lists.
 
+- **Changes and review**: a worktree's Changes shows the branch against its base, the
+  uncommitted changes or one commit, file by file with line numbers. Tapping a line
+  writes a comment on it; the comments are the same draft review the desktop's Changes
+  tab has, edited and deleted from either, and **Send to…** queues them as one prompt
+  in one of the worktree's running sessions. Nothing is staged, reverted or committed
+  from the phone. A server without the `review` capability shows the branch's changes
+  read-only.
+- **Pull request watch**: a branch's linked GitHub pull request has **Watch** /
+  **Stop watching** in the worktree's Branch section, while `gh` is signed in on the
+  server's machine (a watch already on can be stopped without it). What the watch
+  reports (checks, reviews and comments, a conflict, merged, closed) shows as a notice
+  on the worktree's screen, with **Open** and **Dismiss**, as a line on its card in the
+  project, and in the home tab, where it can be dismissed too. There is no live view of
+  a pull request's checks, and review comments on GitHub are not answered from the phone.
+- **Automations**: a project's row on its screen opens its automations, each with its
+  schedule in words, its next run and its last. An automation's screen shows its prompt,
+  its schedule and its runs; there it is turned on or off, run now (which opens the
+  session it ran in), and its name and prompt are edited. An edit is not saved over a
+  name or prompt that changed elsewhere meanwhile: the phone shows the new ones first.
+  Missed runs are answered at the top of the list, **Run** or **Skip** for each. Needs a
+  server with the `automations` capability.
+- **Branch history**: **History** in a worktree's Branch section lists what changed on the
+  branch, who changed it, when and why, newest first, with new entries arriving while it
+  is open. Needs a server with the `history` capability.
 - **Pairing**: in **Open on server…**, a connected remote server has **Pair a phone…**.
   It shows a QR and a one-time code (5 minutes, used once), never a token. Scan it in
   the app's **Add server** (or type the server's address and the code): the phone
@@ -349,7 +380,9 @@ tears them down first).
   switches on the phone (Servers → Push…), and the Servers screen has **Pause all pushes**. A push
   says only the project and what happened. The relay holds the APNs key and the FCM credentials;
   your servers never do.
-- **Not yet**: creating or moving worktrees, or starting a promote, from the phone.
+- **Not yet**: moving worktrees, starting a promote, adding and editing quick buttons,
+  or creating, deleting and rescheduling automations (and changing one's timezone or
+  agent), from the phone.
 
 See `apps/mobile/README.md` to build and run it.
 

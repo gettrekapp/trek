@@ -1,10 +1,11 @@
 import { Pressable, Text } from 'react-native'
 import { ui } from './theme.ts'
 
-export function Button({ label, onPress, disabled, ghost, danger, selected }: { label: string; onPress: () => void; disabled?: boolean; ghost?: boolean; danger?: boolean; /** For a choice between buttons (a toggle) */ selected?: boolean }): React.JSX.Element {
+export function Button({ label, onPress, disabled, ghost, danger, selected, accessibilityLabel }: { label: string; onPress: () => void; disabled?: boolean; ghost?: boolean; danger?: boolean; /** For a choice between buttons (a toggle) */ selected?: boolean; /** What a screen reader says instead of the label, for a button whose label needs its context ("Run") */ accessibilityLabel?: string }): React.JSX.Element {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={selected === undefined ? { disabled: !!disabled } : { disabled: !!disabled, selected }}
       disabled={disabled}
       onPress={onPress}

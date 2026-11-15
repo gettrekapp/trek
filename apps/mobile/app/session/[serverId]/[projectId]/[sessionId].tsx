@@ -1,13 +1,16 @@
 // A session (6a): its terminal (xterm.js in a WebView, fed by the pty stream, at the pty's own
 // size: the phone never resizes the pty, it follows pty.resized from the desktop), a key bar,
 // and a prompt box that sends now or queues, with the queue below it. A decision the agent
-// asked for is answered here too.
+// asked for is answered here too. The project's quick buttons (set up on the desktop) run from a row above the prompt box.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native'
 import { Stack, useLocalSearchParams } from 'expo-router'
 import { useHeaderHeight } from 'expo-router/react-navigation'
 import { WebView as RNWebView, type WebViewMessageEvent } from 'react-native-webview'
-import type { Project, Session } from '../../../../src/shared.ts'
+import { CAPABILITY, fillTemplate, parseTemplate, planQuickButton, resolveBuiltins } from '../../../../src/shared.ts'
+import type { AgentInfo, BuiltinValues, Project, QuickButtonPlan, Session, TerminalQuickButton } from '../../../../src/shared.ts'
+import { quickButtonContext, quickButtonsFor } from '../../../../src/logic/quickButtons.ts'
+import { activeTicketProviders, ticketView } from '../../../../src/logic/tickets.ts'
 import { errorMessage, useConnectionNotice, useServer, useServerStatus, useTopic } from '../../../../src/state/hooks.ts'
 import { KEY_BAR } from '../../../../src/logic/keys.ts'
 import { sessionPlaceholder } from '../../../../src/logic/connection.ts'
@@ -16,6 +19,8 @@ import { rememberPtySize } from '../../../../src/state/ptySizes.ts'
 import { TERMINAL_HTML } from '../../../../src/terminal/terminalHtml.generated.ts'
 import { Button } from '../../../../src/ui/Button.tsx'
 import { DecisionActions } from '../../../../src/ui/DecisionActions.tsx'
+import { QuickButtonRow } from '../../../../src/ui/QuickButtonRow.tsx'
+import { QuickButtonSheet } from '../../../../src/ui/QuickButtonSheet.tsx'
 import { STATUS_TEXT, statusColor } from '../../../../src/ui/status.ts'
 import { colors, ui } from '../../../../src/ui/theme.ts'
 
@@ -58,6 +63,24 @@ export default function SessionScreen(): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Quick buttons: the project's (or the Global ones), and the one whose sheet is open.
+  const project = topic.state === 'ready' ? topic.snapshot : null
+  const quickButtons = useMemo(() => (project ? quickButtonsFor(project, sessionId) : []), [project, sessionId])
+  const [running, setRunning] = useState<{ button: TerminalQuickButton; plan: QuickButtonPlan; builtins: BuiltinValues } | null>(null)
+  // The [agent] built-in is the server's label for the session's provider, when it lists agents.
+  const [agents, setAgents] = useState<AgentInfo[]>([])
+  useEffect(() => {
+    if (!server || !server.connection.welcome?.capabilities.includes(CAPABILITY.agents)) return
+    void server.connection
+      .request('server.agents', { projectId })
+      .then((a) => setAgents(a.agents))
+      .catch(() => {})
+  }, [server, projectId, status])
+  // The session left a ready snapshot: its sheet goes with it. A snapshot that is only missing
+  // (the phone disconnected and is reconnecting) keeps the sheet, so what was typed is not lost.
+  useEffect(() => {
+    if (topic.state === 'ready' && !session) setRunning(null)
+  }, [topic.state, session])
 
   const toPage = useCallback((messages: PageMessage[]) => {
     if (messages.length) web.current?.injectJavaScript(pageScript(messages))
@@ -127,6 +150,37 @@ export default function SessionScreen(): React.JSX.Element {
       setBusy(false)
     }
   }
+  // A quick button's text goes straight to the session; what is typed in the prompt box stays.
+  // The result is the error message, or null when it was sent.
+  const sendQuick = async (quickText: string): Promise<string | null> => {
+    if (!server) return 'Not connected'
+    setBusy(true)
+    setError(null)
+    try {
+      await server.connection.request('session.sendPrompt', { projectId, sessionId, text: quickText })
+      return null
+    } catch (err) {
+      return errorMessage(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const pressQuick = (button: TerminalQuickButton): void => {
+    if (!project || !session) return
+    const agent = agents.find((a) => a.provider === session.llm.provider)?.label
+    // [ticket_url]: the ticket's link through the trackers on for the project.
+    const trackers = activeTicketProviders(server?.connection.welcome, project.settings)
+    const ctx = quickButtonContext(project, sessionId, agent, new Date(), (ticketId) => ticketView(trackers, project.settings, ticketId).url)
+    if (!ctx) return
+    const builtins = resolveBuiltins(ctx)
+    const plan = planQuickButton(button.text, builtins)
+    if (plan.needsModal) setRunning({ button, plan, builtins })
+    else {
+      void sendQuick(fillTemplate(parseTemplate(button.text), {}, builtins)).then((message) => {
+        if (message) setError(message)
+      })
+    }
+  }
   const text = prompt.trim()
   const source = useMemo(() => ({ html: TERMINAL_HTML }), [])
 
@@ -183,6 +237,7 @@ export default function SessionScreen(): React.JSX.Element {
           </Pressable>
         ))}
       </ScrollView>
+      <QuickButtonRow buttons={quickButtons} disabled={busy || !session} onPress={pressQuick} />
       <View style={{ padding: 8, gap: 6 }}>
         <TextInput style={[ui.input, { maxHeight: 120 }]} multiline value={prompt} onChangeText={setPrompt} placeholder="Prompt" placeholderTextColor="#6c7086" accessibilityLabel="Prompt" />
         <View style={ui.row}>
@@ -204,6 +259,7 @@ export default function SessionScreen(): React.JSX.Element {
           </View>
         ) : null}
       </View>
+      {running ? <QuickButtonSheet button={running.button} plan={running.plan} builtins={running.builtins} canSend={!!session} onSend={sendQuick} onClose={() => setRunning(null)} /> : null}
     </KeyboardAvoidingView>
   )
 }
