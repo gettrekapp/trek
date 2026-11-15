@@ -1117,7 +1117,7 @@ test('get_selected_worktree and focus_session act on the most recently used clie
     s.hub.subscribe(topic, w)
     return w
   }
-  const noClient = (e) => e.code === 'BAD_REQUEST' && /No Trek window has this project open/.test(e.message)
+  const noClient = (e) => e.code === 'BAD_REQUEST' && /No Trek client has this project open/.test(e.message)
   const { terminalId } = await s.call('start_session', { worktree: 'main' })
   const main = s.projects.require(s.projectId).repositories[0].worktrees[0]
 
@@ -1141,6 +1141,20 @@ test('get_selected_worktree and focus_session act on the most recently used clie
   assert.deepEqual(phone.events, [['ui.focus', { projectId: s.projectId, worktreeId: main.id, sessionId: terminalId }]])
   assert.deepEqual(desktop.events, [])
   await assert.rejects(s.call('focus_session', { terminalId: 'nope' }), (e) => e.code === 'NOT_FOUND')
+
+  // The session moved since the report (a promote, before the client reports again): the worktree is the session's own.
+  s.selections.report(s.projectId, phone, { worktreeId: 'elsewhere', sessionId: terminalId, client: 'phone' }, true)
+  const moved = await s.call('get_selected_worktree', {})
+  assert.deepEqual([moved.worktree.worktree, moved.terminalId], [main.id, terminalId])
+  // A session gone since: the reported worktree, if it still exists.
+  s.selections.report(s.projectId, phone, { worktreeId: main.id, sessionId: 'gone', client: 'phone' }, true)
+  const stale = await s.call('get_selected_worktree', {})
+  assert.deepEqual([stale.worktree.worktree, stale.terminalId], [main.id, null])
+
+  // A client that cannot take the event now is not "no client": the refusal says so, and noClient's words are not used.
+  phone.event = () => false
+  await assert.rejects(s.call('focus_session', { terminalId }), (e) => e.code === 'BAD_REQUEST' && /phone/.test(e.message) && /could not be asked/.test(e.message) && !noClient(e))
+  phone.event = (event, payload) => (phone.events.push([event, payload]), true)
 
   // A Global session can be what a client shows, but cannot be focused by a tool.
   const { sessionId: globalId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, cols: 80, rows: 24 })

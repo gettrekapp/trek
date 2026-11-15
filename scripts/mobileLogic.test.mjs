@@ -72,7 +72,7 @@ import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
 import { RefCounts } from '../apps/mobile/src/logic/refCount.ts'
-import { focusEventOf, focusRoute, reportParams, shouldFollow, worktreeOfSession } from '../apps/mobile/src/logic/uiSelection.ts'
+import { focusEventOf, focusNavigation, focusRoute, reportParams, shouldFollow, worktreeOfSession } from '../apps/mobile/src/logic/uiSelection.ts'
 
 test('wss:// is always allowed; ws:// only to a private address, with a warning', () => {
   assert.deepEqual(checkServerUrl(' wss://dev.example.com '), { ok: true, url: 'wss://dev.example.com' })
@@ -2630,7 +2630,7 @@ test('ui selection: a report goes only to a server with the ui capability, and o
   assert.deepEqual(reportParams(['ui'], 'p', { worktreeId: 'w1', sessionId: null, extra: 1 }, true), { projectId: 'p', worktreeId: 'w1', sessionId: null })
 })
 
-test('ui.focus: the session screen to push, as the worktree screen pushes it', () => {
+test('ui.focus: the session screen to open, as the worktree screen pushes it', () => {
   assert.deepEqual(focusRoute('srv', { projectId: 'p', worktreeId: 'w1', sessionId: 's1' }), {
     pathname: '/session/[serverId]/[projectId]/[sessionId]',
     params: { serverId: 'srv', projectId: 'p', sessionId: 's1' }
@@ -2647,6 +2647,15 @@ test('ui.focus: followed for this project, unless its session is already the one
   assert.equal(shouldFollow(focus, 'p', { worktreeId: null, sessionId: null }), true)
   assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: null }), true)
   assert.equal(shouldFollow(focus, 'p', { worktreeId: 'w1', sessionId: 's2' }), true)
+})
+
+test('ui.focus: a session screen is replaced, any other screen is pushed onto', () => {
+  // From the project's or a worktree's screen: Back returns to it.
+  assert.equal(focusNavigation({ worktreeId: null, sessionId: null }), 'push')
+  assert.equal(focusNavigation({ worktreeId: 'w1', sessionId: null }), 'push')
+  // From a session's screen (a Global session's too): repeated requests do not grow the stack.
+  assert.equal(focusNavigation({ worktreeId: 'w1', sessionId: 's2' }), 'replace')
+  assert.equal(focusNavigation({ worktreeId: null, sessionId: 'g1' }), 'replace')
 })
 
 test('ui.focus: read from a server event; any other event, or one without a session to show, is not one', () => {

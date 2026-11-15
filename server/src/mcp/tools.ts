@@ -109,7 +109,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
   {
     name: 'focus_session',
     description:
-      "Show a session to the user: asks the Trek client they used most recently to select the session's worktree and its tab. It changes what that client shows; it does not raise its window. Use it sparingly, when the user needs to look at a session now. Fails when no Trek client has this project open.",
+      "Show a session to the user: asks the Trek client they used most recently to select the session's worktree and its tab. It selects the tab only: it does not raise the client's window, take the keyboard focus or mark the session seen. Success means the client was asked, not that the user saw it. Use it sparingly, when the user needs to look at a session now. Fails when no Trek client has this project open, or when that client cannot be asked right now.",
     inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
   },
   {
@@ -792,7 +792,16 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       return deps.automations
     }
 
-    const NO_CLIENT = 'No Trek window has this project open, or none is new enough to say what it shows'
+    const NO_CLIENT = 'No Trek client has this project open, or none is new enough to say what it shows'
+    /** A report's id that may be gone since: null for NOT_FOUND, any other error as it is. */
+    const orGone = <T>(resolve: () => T): T | null => {
+      try {
+        return resolve()
+      } catch (err) {
+        if ((err as { code?: unknown } | null)?.code === 'NOT_FOUND') return null
+        throw err
+      }
+    }
     /** The server's record of what its clients show; both UI tools need it. */
     const selections = (): UiSelections => {
       if (!deps.selections) throw codedError('TOOL_ERROR', 'this server does not track what its clients show')
@@ -1351,30 +1360,20 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
         const latest = selections().latest(projectId)
         if (!latest) throw bad(NO_CLIENT)
         // A report names what the client showed then: a worktree or session gone since reads as none.
-        let worktree: ReturnType<typeof describeById> | null = null
-        if (latest.worktreeId) {
-          try {
-            worktree = describeById(latest.worktreeId)
-          } catch {
-            worktree = null
-          }
-        }
-        let terminalId: string | null = null
-        if (latest.sessionId) {
-          try {
-            terminalId = findSession(project, latest.sessionId).session.id
-          } catch {
-            terminalId = null
-          }
-        }
-        return { worktree, terminalId, client: latest.client, at: new Date(latest.at).toISOString() }
+        const { sessionId } = latest
+        const found = sessionId ? orGone(() => findSession(project, sessionId)) : null
+        // The session's own worktree while it has one: a promote can move it before the client reports again.
+        const worktreeId = found?.worktree ? found.worktree.id : latest.worktreeId
+        const worktree = worktreeId ? orGone(() => describeById(worktreeId)) : null
+        return { worktree, terminalId: found ? found.session.id : null, client: latest.client, at: new Date(latest.at).toISOString() }
       },
 
       focus_session: (args) => {
         const found = targetIn(args.terminalId)
-        const client = selections().focus(projectId, { worktreeId: found.worktree!.id, sessionId: found.session.id })
-        if (!client) throw bad(NO_CLIENT)
-        return { focused: true, client }
+        const asked = selections().focus(projectId, { worktreeId: found.worktree!.id, sessionId: found.session.id })
+        if (!asked) throw bad(NO_CLIENT)
+        if (!asked.sent) throw bad(`The Trek client last used with this project (${asked.client}) could not be asked: it is busy or disconnecting. Try again in a moment`)
+        return { focused: true, client: asked.client }
       },
 
       start_session: async (args, project, signal) => {

@@ -121,13 +121,17 @@ test('focus sends ui.focus to the most recently used connection only', () => {
   s.selections.report('p1', a, sel(), true)
   s.tick()
   s.selections.report('p1', b, sel({ client: 'web' }), true)
-  assert.equal(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), 'web')
+  assert.deepEqual(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), { client: 'web', sent: true })
   const payload = { projectId: 'p1', worktreeId: 'w1', sessionId: 's1' }
   assert.deepEqual(b.events, [['ui.focus', payload, { type: 'event', event: 'ui.focus', payload }]])
   assert.deepEqual(a.events, [])
-  // A connection that cannot take the frame now (its event returns false) was not asked.
+  // A connection that cannot take the frame now (its event returns false, or throws) was not asked: there is a client, unlike above.
   b.event = () => false
-  assert.equal(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), undefined)
+  assert.deepEqual(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), { client: 'web', sent: false })
+  b.event = () => { throw new Error('closing') }
+  assert.deepEqual(s.selections.focus('p1', { worktreeId: 'w1', sessionId: 's1' }), { client: 'web', sent: false })
+  // The other connection is not asked in its place.
+  assert.deepEqual(a.events, [])
 })
 
 test('ui.report: checks its ids, needs the project, and records the connection\'s client kind', () => {

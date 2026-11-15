@@ -1531,14 +1531,22 @@ report is invisible to them.
 
 | Method | Params | Result |
 |---|---|---|
-| `ui.report` | `{projectId, worktreeId?, sessionId?}` | `null`: what this connection's client shows in the project: the selected worktree (`null` or absent: none, or the Global panel) and the session tab shown (`null`: none; with no worktree, a Global session). Each id is at most 200 characters and is not checked against the project. Kept per connection in memory with the time it arrived and the client's kind (`phone` for a `trek-mobile` hello, `web` for a browser's cookie sign-in, else `desktop`); dropped when the connection closes; never sent to other clients. `NOT_FOUND` for an unknown project |
+| `ui.report` | `{projectId, worktreeId?, sessionId?, active?}` | `null`: what this connection's client shows in the project: the selected worktree (`null` or absent: none, or the Global panel) and the session tab shown (`null`: none; with no worktree, a Global session). Each id is at most 200 characters and is not checked against the project. `active` (a boolean, default `true`; anything else is `BAD_REQUEST`) says whether the user is using this client now: only an active report makes it the project's most recently used client, a passive one (`false`) only updates what it shows. Kept per connection in memory with the time it arrived and the client's kind (`phone` for a `trek-mobile` hello, `web` for a browser's cookie sign-in, else `desktop`); dropped when the connection closes; never sent to other clients. `NOT_FOUND` for an unknown project |
 
 A client reports when its selection changes, after each welcome (a report is per connection), and
 when its window (the Trek app, the web client) or its screen (the phone: the project, worktree and
-session screens) gains focus, so the newest report in a project is its most recently used client's.
-The server sends that one connection `ui.focus` (see [Events](#events)) for `focus_session`; the
-Trek app and the web client select the worktree and the session's tab, the phone opens the
-session's screen.
+session screens) gains focus. The Trek app and the web client send `active` as whether their window
+has the focus, so a window in the background whose selection changes by itself (an agent closes its
+tab, a worktree is removed), or that reconnects, reports passively; the phone reports only from its
+focused screen and leaves `active` out. The project's most recently used client is the connection
+whose active report came last, by the order the reports arrived and not by the clock, among the
+connections still subscribed to the project's topic; when none of them has reported actively, the
+one that reported last. The tools read that connection's newest report, active or passive.
+The server sends that one connection `ui.focus` (see [Events](#events)) for `focus_session`. The
+Trek app and the web client select the worktree and the session's tab, and nothing more: the window
+is not raised, the terminal does not take the keyboard focus, and no `session.seen` is sent, so the
+session's `attention`/`done` status stays until the user looks at it. The phone opens the session's
+screen: in place of the session screen it shows, or else on top of the screen it shows.
 
 ## Worktree history
 
@@ -1968,8 +1976,8 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `unload_worktree` | `worktree` | `{unloaded: true}` |
 | `remove_worktree` | `worktree`; `force?` (true discards uncommitted and untracked changes; default false) | `{removed: true, path, branch}`, through `worktree.remove`: deletes the directory and git's record of it, keeps the branch. `BAD_REQUEST` for the primary checkout, `IN_USE` while it is loaded (unload it first), `GIT_ERROR` with `details.reason: 'dirty'` when it has changes and `force` is not true |
 | `get_current_session` | `terminalId` | `{terminalId, title, status, llm, queue, decision, worktree}`, `worktree` being an entry (`null` for a Global session) |
-| `get_selected_worktree` | none | `{worktree, terminalId, client, at}`: what the project's most recently used client shows (its newest `ui.report`, see [What a client shows](#what-a-client-shows)). `worktree` is an entry, or `null` (none selected, the Global panel, or one that no longer exists); `terminalId` is the session shown, or `null` (none, or one that no longer exists); `client` is `desktop`, `web` or `phone`; `at` is the report's ISO time. `BAD_REQUEST` when no reporting client has the project open |
-| `focus_session` | `terminalId` (a worktree session's) | `{focused: true, client}`: that client was sent `ui.focus` for the session and its worktree; it changes what the client shows and does not raise its window. `BAD_REQUEST` when no reporting client has the project open, or the event could not be sent |
+| `get_selected_worktree` | none | `{worktree, terminalId, client, at}`: what the project's most recently used client shows (its newest `ui.report`, see [What a client shows](#what-a-client-shows)). `worktree` is an entry, or `null` (none selected, the Global panel, or one that no longer exists): the worktree the shown session is in now while that session exists in one (a promote can move it before the client reports again), else the reported worktree; `terminalId` is the session shown, or `null` (none, or one that no longer exists); `client` is `desktop`, `web` or `phone`; `at` is the report's ISO time. `BAD_REQUEST` when no reporting client has the project open |
+| `focus_session` | `terminalId` (a worktree session's) | `{focused: true, client}`: the project's most recently used client was sent `ui.focus` for the session and its worktree. It was asked; nothing says the user saw it. The client selects the worktree and the tab only: it does not raise its window, give the terminal the keyboard focus or mark the session seen. `BAD_REQUEST` when no reporting client has the project open, and, with its own message naming the client's kind, when that client could not be sent the event (its connection is busy or closing) |
 | `request_decision` | `terminalId`, `question` (1 to 1000 characters once whitespace runs become one space and it is trimmed; no other control characters) | `{notified: true}`; sets the session's `decision` (see [Decisions](#sessions)) |
 | `start_session` | `worktree`; `sessionType?` (id or name, case-insensitive); `prompt?`; `provider?`, `model?`, `effort?` | `{terminalId, status}`; with a `prompt`, also `promptSent` (and `reason` when it is `false`) |
 | `close_session` | `terminalId` | `{closed: true}` |
@@ -2081,7 +2089,7 @@ URL, each at most 200 characters.
 | `plugins.list` | `{plugins}`: the welcome's `plugins` as it now is, after an installed plugin was added, replaced or removed (see [Installed plugins](#installed-plugins)), to every authenticated connection |
 | `promote.request` | `{projectId, requestId, worktreeId, branch, from?}`: the MCP tool `promote_to_primary` asks the project's listening windows (`promote.listen`) to confirm a promote; the one that confirms claims it (`promote.claim`) and runs `worktree.promote {requestId}`, a decline is `promote.answer` (see [Promote to primary](#promote-to-primary)) |
 | `promote.settled` | `{projectId, requestId, claimed?}`: that request ended, or (`claimed: true`) a window claimed it: close its dialog, unless this connection is the claimant |
-| `ui.focus` | `{projectId, worktreeId, sessionId}`: the MCP tool `focus_session` asks this client to select the worktree and the session's tab (see [What a client shows](#what-a-client-shows)). Sent to one connection only: the one whose `ui.report` for the project is newest, among those still subscribed to its topic. The client does not raise its window |
+| `ui.focus` | `{projectId, worktreeId, sessionId}`: the MCP tool `focus_session` asks this client to select the worktree and the session's tab (see [What a client shows](#what-a-client-shows)). Sent to one connection only: the project's most recently used client (the one whose active `ui.report` came last), among those still subscribed to its topic. The client does not raise its window, give the terminal the keyboard focus or send `session.seen`; the phone opens the session's screen, replacing a session screen it shows |
 | `history.added` | `{projectId, event}`: on the project topic, a new worktree history entry, or a newer version of one (same id; see [Worktree history](#worktree-history)) |
 | `integrations.changed` | `{linear?: true, voice?: true, prWatch?: boolean}`: to every authenticated connection. `linear` and `voice` are the Linear and voice plugins' legacy capabilities, sent beside their `plugins.changed` for clients older than plugins. `prWatch` is gh's new sign-in state on the server's machine: the `prWatch` capability is now listed or not (see [Pull request watch](#pull-request-watch)); the client SDK updates `welcome.capabilities` before its listeners hear the event |
 

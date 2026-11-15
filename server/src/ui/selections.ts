@@ -71,16 +71,20 @@ export class UiSelections {
     return best && { ...best.report.selection, subscriber: best.subscriber }
   }
 
-  /** Asks the most recently used client to show a session; its kind, or undefined when there is none or the event could not be sent. */
-  focus(projectId: string, target: { worktreeId: string; sessionId: string }): UiClientKind | undefined {
+  /**
+   * Asks the most recently used client to show a session: its kind, and whether the event was
+   * sent to it (not when the connection is busy or closing); undefined when there is no such client.
+   */
+  focus(projectId: string, target: { worktreeId: string; sessionId: string }): { client: UiClientKind; sent: boolean } | undefined {
     const latest = this.latest(projectId)
     if (!latest) return undefined
     const payload: UiFocusEvent = { projectId, ...target }
+    let sent = false
     try {
-      const sent = latest.subscriber.event!('ui.focus', payload, () => JSON.stringify({ type: 'event', event: 'ui.focus', payload }))
-      return sent ? latest.client : undefined
+      sent = latest.subscriber.event!('ui.focus', payload, () => JSON.stringify({ type: 'event', event: 'ui.focus', payload }))
     } catch {
-      return undefined
+      sent = false
     }
+    return { client: latest.client, sent }
   }
 }

@@ -538,8 +538,10 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
     - On a worktree's screen, the MCP tool `get_selected_worktree` returns that worktree with
       `client: "phone"` and `terminalId: null`; on a session's screen, its worktree and that
       session's `terminalId`; on the project screen, `worktree: null`.
-    - `focus_session` with another session's `terminalId` opens that session's screen (Back
-      returns to the screen before); with the session already shown, nothing moves.
+    - `focus_session` with a session's `terminalId`, from the project's or a worktree's screen,
+      opens that session's screen (Back returns to the screen before); from another session's
+      screen, it takes that screen's place (Back returns to the screen before that one, however
+      many times it is asked); with the session already shown, nothing moves.
     - On the Servers or Projects screen only (no project open), both tools say no client has
       the project open.
 

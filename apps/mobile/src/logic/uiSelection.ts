@@ -40,7 +40,15 @@ export function shouldFollow(event: UiFocusEvent, projectId: string, current: Ui
   return event.projectId === projectId && event.sessionId !== current.sessionId
 }
 
-/** The session screen to push for a `ui.focus`, as the worktree screen pushes it. */
+/**
+ * How the focused screen opens the session's screen: a session screen is replaced by it, so
+ * repeated requests do not grow the stack; any other screen has it pushed on, and Back returns there.
+ */
+export function focusNavigation(current: UiSelection): 'push' | 'replace' {
+  return current.sessionId ? 'replace' : 'push'
+}
+
+/** The session screen to open for a `ui.focus`, as the worktree screen pushes it. */
 export function focusRoute(
   serverId: string,
   event: UiFocusEvent

@@ -4,7 +4,7 @@
 // `ui.focus` is taken once however many of them are in the stack. The rules are logic/uiSelection.ts'.
 import { useCallback } from 'react'
 import { router, useFocusEffect } from 'expo-router'
-import { focusEventOf, focusRoute, reportParams, shouldFollow } from '../logic/uiSelection.ts'
+import { focusEventOf, focusNavigation, focusRoute, reportParams, shouldFollow } from '../logic/uiSelection.ts'
 import { useServer } from '../state/hooks.ts'
 
 /**
@@ -29,7 +29,11 @@ export function useUiSelection(serverId: string, projectId: string, selection: {
       const offWelcome = conn.on('welcome', report)
       const offEvent = conn.on('event', (event) => {
         const focus = focusEventOf(event)
-        if (focus && shouldFollow(focus, projectId, current)) router.push(focusRoute(serverId, focus))
+        if (!focus || !shouldFollow(focus, projectId, current)) return
+        const route = focusRoute(serverId, focus)
+        // A session screen is replaced: repeated requests do not grow the stack.
+        if (focusNavigation(current) === 'replace') router.replace(route)
+        else router.push(route)
       })
       return () => {
         offWelcome()
