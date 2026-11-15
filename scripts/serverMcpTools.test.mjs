@@ -17,6 +17,7 @@ import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
 import { BY_USER, recordHistory } from '../server/src/history/record.ts'
 import { HistoryStore } from '../server/src/history/store.ts'
 import { TopicHub } from '../server/src/topicHub.ts'
+import { UiSelections } from '../server/src/ui/selections.ts'
 import { createPluginRegistry } from '../server/src/plugins/registry.ts'
 import { isCoreMethod } from '../server/src/v2.ts'
 import { BUILTIN_SERVER_PLUGINS } from '../plugins/builtin.server.ts'
@@ -127,7 +128,9 @@ async function toolSetup(t, opts = {}) {
   // `automationsNow` is the scheduler's clock, for tests that move it.
   const { automations: withAutomations = true, automationsNow, ...callerOpts } = opts
   const automations = withAutomations ? new AutomationScheduler({ projects, sessions, now: automationsNow }) : undefined
-  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, automations, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...callerOpts })
+  // What the clients show (ui.report); `selections: undefined` in opts leaves it out, as a server without it.
+  const selections = new UiSelections(hub)
+  const callerFor = createToolCaller({ store, hub, projects, poller, sessions, plugins, history, automations, selections, pollMs: 5, graceMs: 10, readyTimeouts: { firstOutputMs: 200, settleMs: 200 }, ...callerOpts })
   /** Fires the one pending 2.5 s quiet timer of a session's current run. */
   const fireQuiet = () => {
     const job = jobs.find((j) => j.ms === 2500 && !j.cancelled && !j.fired)
@@ -135,13 +138,13 @@ async function toolSetup(t, opts = {}) {
     job.fired = true
     job.fn()
   }
-  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub, history }
+  return { call: callerFor(projectId), callerFor, projects, projectId, sessions, spawned, registered, fireQuiet, a, dir, hub, history, selections }
 }
 
 // speak_summary is the voice plugin's since plugin system phase 1 (scripts/voicePlugin.test.mjs).
 test('the tool list matches decision 5', () => {
   assert.deepEqual(MCP_TOOLS.map((t) => t.name).sort(), [
-    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'get_current_session', 'get_pull_request', 'get_review_comments', 'get_stack', 'get_worktree_history',
+    'add_review_comment', 'close_session', 'create_worktree', 'delete_automation', 'delete_session_type', 'enqueue_prompt', 'focus_session', 'get_current_session', 'get_pull_request', 'get_review_comments', 'get_selected_worktree', 'get_stack', 'get_worktree_history',
     'list_automations', 'list_session_types', 'list_worktrees', 'load_worktree', 'mark_session_complete', 'promote_to_primary', 'read_stack_log', 'read_terminal', 'remove_queued_prompt', 'remove_review_comment', 'remove_worktree',
     'rename_session', 'request_decision', 'restart_session', 'run_automation', 'save_automation', 'save_session_type', 'send_keys', 'send_prompt', 'set_worktree_custom_tag', 'set_worktree_note',
     'set_worktree_pull_request', 'set_worktree_tag', 'set_worktree_ticket', 'start_session', 'start_stack', 'stop_stack', 'unload_worktree',
@@ -1103,4 +1106,49 @@ test('get_pull_request: the linked pull request now, and its refusals', async (t
   const bare = await toolSetup(t)
   await bare.call('set_worktree_pull_request', { worktree: 'main', pullRequest: url })
   assert.match((await refusal(bare.call('get_pull_request', { worktree: 'main' })))[1], /gh is not installed or not signed in/)
+})
+
+test('get_selected_worktree and focus_session act on the most recently used client', async (t) => {
+  const s = await toolSetup(t)
+  const topic = `project:${s.projectId}`
+  const client = () => {
+    const events = []
+    const w = { events, send() {}, event: (event, payload) => (events.push([event, payload]), true) }
+    s.hub.subscribe(topic, w)
+    return w
+  }
+  const noClient = (e) => e.code === 'BAD_REQUEST' && /No Trek window has this project open/.test(e.message)
+  const { terminalId } = await s.call('start_session', { worktree: 'main' })
+  const main = s.projects.require(s.projectId).repositories[0].worktrees[0]
+
+  await assert.rejects(s.call('get_selected_worktree', {}), noClient)
+  await assert.rejects(s.call('focus_session', { terminalId }), noClient)
+
+  const desktop = client()
+  s.selections.report(s.projectId, desktop, { worktreeId: main.id, sessionId: terminalId, client: 'desktop' })
+  const shown = await s.call('get_selected_worktree', {})
+  assert.equal(shown.worktree.worktree, main.id)
+  assert.deepEqual([shown.terminalId, shown.client], [terminalId, 'desktop'])
+  assert.ok(!Number.isNaN(Date.parse(shown.at)))
+
+  // A phone used after it is the one that counts; ids it reports that no longer exist read as null.
+  await new Promise((resolve) => setTimeout(resolve, 2))
+  const phone = client()
+  s.selections.report(s.projectId, phone, { worktreeId: 'gone', sessionId: 'gone', client: 'phone' })
+  assert.deepEqual({ ...(await s.call('get_selected_worktree', {})), at: 0 }, { worktree: null, terminalId: null, client: 'phone', at: 0 })
+
+  assert.deepEqual(await s.call('focus_session', { terminalId }), { focused: true, client: 'phone' })
+  assert.deepEqual(phone.events, [['ui.focus', { projectId: s.projectId, worktreeId: main.id, sessionId: terminalId }]])
+  assert.deepEqual(desktop.events, [])
+  await assert.rejects(s.call('focus_session', { terminalId: 'nope' }), (e) => e.code === 'NOT_FOUND')
+
+  // A Global session can be what a client shows, but cannot be focused by a tool.
+  const { sessionId: globalId } = s.sessions.start({ projectId: s.projectId, worktreeId: null, cols: 80, rows: 24 })
+  s.selections.report(s.projectId, phone, { worktreeId: null, sessionId: globalId, client: 'phone' })
+  assert.deepEqual({ ...(await s.call('get_selected_worktree', {})), at: 0 }, { worktree: null, terminalId: globalId, client: 'phone', at: 0 })
+  await assert.rejects(s.call('focus_session', { terminalId: globalId }), (e) => e.code === 'BAD_REQUEST' && /the Global session can't be targeted by tools/.test(e.message))
+
+  // A server without selection tracking.
+  const bare = await toolSetup(t, { selections: undefined })
+  await assert.rejects(bare.call('get_selected_worktree', {}), (e) => e.code === 'TOOL_ERROR')
 })

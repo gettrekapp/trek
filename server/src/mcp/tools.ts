@@ -23,6 +23,7 @@ import { describeWorktree, resolveWorktree } from './describe.ts'
 import { automationInput, describeAutomation, resolveAutomation } from './automations.ts'
 import type { AutomationScheduler } from '../automations/scheduler.ts'
 import type { PromoteRequests } from '../promote/requests.ts'
+import type { UiSelections } from '../ui/selections.ts'
 import { MAX_PROMOTE_QUEUED_ERROR } from '../../../src/shared/promote.ts'
 import type { ToolDefinition } from './protocol.ts'
 import type { PluginRegistry } from '../plugins/registry.ts'
@@ -98,6 +99,18 @@ export const MCP_TOOLS: ToolDefinition[] = [
       properties: { terminalId: { type: 'string', description: 'Value of $TREK_TERMINAL_ID' } },
       required: ['terminalId']
     }
+  },
+  {
+    name: 'get_selected_worktree',
+    description:
+      "What the user is looking at: the worktree selected in the Trek client they used most recently (a desktop window, the web client or the phone), in the same shape as a list_worktrees entry, and terminalId, the session tab shown there. worktree is null when none is selected or the Global panel is shown; terminalId is null when no session is shown. client says which kind of client it is and at when it last said so. Fails when no Trek client has this project open.",
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'focus_session',
+    description:
+      "Show a session to the user: asks the Trek client they used most recently to select the session's worktree and its tab. It changes what that client shows; it does not raise its window. Use it sparingly, when the user needs to look at a session now. Fails when no Trek client has this project open.",
+    inputSchema: { type: 'object', properties: { terminalId: TERMINAL_PARAM }, required: ['terminalId'] }
   },
   {
     name: 'request_decision',
@@ -537,7 +550,7 @@ export const MCP_TOOLS: ToolDefinition[] = [
 ]
 
 export const MCP_INSTRUCTIONS =
-  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
+  "Controls this Trek project on the Trek server; every tool acts on this project only. Each git worktree can run agent sessions (Claude, Codex, Gemini, Grok or a local model); use list_worktrees to see them, create_worktree to add one, start_session/send_prompt to delegate work or run a skill in a worktree (list_session_types for specialised session types such as reviews), and wait_for_sessions and read_terminal to follow progress; rename_session labels a session, mark_session_complete marks its work finished, and restart_session brings back one whose agent exited. The set_worktree_* tools record a branch's workflow tag, custom tags, note, ticket and pull request (pass reason and your $TREK_TERMINAL_ID so the worktree's history says why and who; get_worktree_history reads it), get_pull_request reads that pull request's state, checks and reviews now, and watch_pull_request has the server follow them and its merge state. get_review_comments reads the draft line comments on a worktree's changes (the user's and agents'); add_review_comment leaves one under a line of the diff for the user to read in the Changes tab, and remove_review_comment takes back one an agent wrote. get_stack/start_stack/stop_stack/read_stack_log run a worktree's dev stack on the server's machine. promote_to_primary asks the user to check a worktree's branch out in the main checkout (they confirm in a Trek window). list_automations, save_automation, delete_automation and run_automation manage the project's automations (scheduled prompts that run unattended in their own Global session); a run can be followed with wait_for_sessions and read_terminal. A session can find itself with get_current_session, passing its $TREK_TERMINAL_ID; get_selected_worktree says which worktree and session the user is looking at, and focus_session shows them one. Any session that stops to ask the user to make a decision should call request_decision so Trek flags it."
 
 export interface ToolDeps {
   /** The worktree history: what the tools change is recorded as theirs */
@@ -557,6 +570,8 @@ export interface ToolDeps {
   promoteRequests?: PromoteRequests
   /** The automations scheduler, for the automation tools; without it they say the server runs no automations */
   automations?: AutomationScheduler
+  /** What each client shows (`ui.report`), for get_selected_worktree and focus_session; without it they say the server does not track it */
+  selections?: UiSelections
   /** How often waits re-check session state (default 250 ms) */
   pollMs?: number
   /** wait_for_sessions waits this long first when its condition already holds (default 1.5 s) */
@@ -775,6 +790,13 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
     const scheduler = (): AutomationScheduler => {
       if (!deps.automations) throw codedError('TOOL_ERROR', 'this server runs no automations')
       return deps.automations
+    }
+
+    const NO_CLIENT = 'No Trek window has this project open, or none is new enough to say what it shows'
+    /** The server's record of what its clients show; both UI tools need it. */
+    const selections = (): UiSelections => {
+      if (!deps.selections) throw codedError('TOOL_ERROR', 'this server does not track what its clients show')
+      return deps.selections
     }
 
     const pollMs = deps.pollMs ?? 250
@@ -1324,6 +1346,36 @@ export function createToolCaller(deps: ToolDeps): (projectId: string) => ToolCal
       },
 
       get_current_session: (args) => describeSession(sessionIn(args.terminalId)),
+
+      get_selected_worktree: (_args, project) => {
+        const latest = selections().latest(projectId)
+        if (!latest) throw bad(NO_CLIENT)
+        // A report names what the client showed then: a worktree or session gone since reads as none.
+        let worktree: ReturnType<typeof describeById> | null = null
+        if (latest.worktreeId) {
+          try {
+            worktree = describeById(latest.worktreeId)
+          } catch {
+            worktree = null
+          }
+        }
+        let terminalId: string | null = null
+        if (latest.sessionId) {
+          try {
+            terminalId = findSession(project, latest.sessionId).session.id
+          } catch {
+            terminalId = null
+          }
+        }
+        return { worktree, terminalId, client: latest.client, at: new Date(latest.at).toISOString() }
+      },
+
+      focus_session: (args) => {
+        const found = targetIn(args.terminalId)
+        const client = selections().focus(projectId, { worktreeId: found.worktree!.id, sessionId: found.session.id })
+        if (!client) throw bad(NO_CLIENT)
+        return { focused: true, client }
+      },
 
       start_session: async (args, project, signal) => {
         const { worktree } = resolveWorktree(project, args.worktree)

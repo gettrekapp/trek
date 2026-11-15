@@ -20,13 +20,13 @@ const trek = (name) => `mcp__trek-dev__${name}`
 const bash = (command) => ({ tool: 'Bash', input: { command } })
 
 test('free Trek tools are allowed', { skip }, () => {
-  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval', 'list_automations', 'get_review_comments', 'add_review_comment', 'remove_review_comment', 'rename_session', 'mark_session_complete', 'get_pull_request']) {
+  for (const name of ['list_worktrees', 'enqueue_prompt', 'remove_queued_prompt', 'get_stack', 'stop_stack', 'set_worktree_note', 'request_approval', 'list_automations', 'get_review_comments', 'add_review_comment', 'remove_review_comment', 'rename_session', 'mark_session_complete', 'get_pull_request', 'get_selected_worktree']) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'allow', name)
   }
 })
 
 test('ask-tier Trek tools need approval', { skip }, () => {
-  for (const name of ['close_session', 'unload_worktree', 'promote_to_primary', 'save_session_type', 'delete_session_type', 'save_automation', 'delete_automation', 'run_automation']) {
+  for (const name of ['close_session', 'unload_worktree', 'promote_to_primary', 'save_session_type', 'delete_session_type', 'save_automation', 'delete_automation', 'run_automation', 'focus_session']) {
     assert.equal(decide({ tool: trek(name), input: {} }, ctx()).decision, 'ask', name)
   }
 })
