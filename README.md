@@ -325,14 +325,20 @@ other window on that project sees them live.
 The Trek phone app (`apps/mobile`, Expo, iOS and Android; phase 6a) is for watching and
 steering agents away from the desk. Its home tab lists what needs you on every paired
 server, newest first: decisions waiting (answered right there), sessions that finished
-or stopped, pull request notices. From there: a server's projects, a worktree (load or
-unload it, start a session with an agent or session type, close or restart one, its
-read-only Changes), and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
+or stopped, pull request notices. From there: a server's projects, where a repository
+gets a new worktree (on a new or an existing branch, or from a GitHub pull request's
+link, checked out as `pr/<n>`); a worktree (load or unload it, start a session with an
+agent or session type, close or restart one, its read-only Changes, remove it, and its
+branch's workflow tag, custom tags, note, ticket and pull request, shown and edited);
+and a session's terminal with a key bar (Enter, Esc, Tab, ^C,
 arrows, y, n), a prompt box that sends now or queues, and the project's quick
 buttons (run only: a button that asks for input opens a sheet for it). While a project is open on
 the phone, an agent's `promote_to_primary` can be confirmed there, unless the
 worktree's dev stack or Docker VM is running (then only the desktop can, since it
-tears them down first).
+tears them down first). The same goes for removing a worktree: with either running, the
+phone says to remove it on the desktop. A ticket links to its tracker when that tracker
+is on for the project and has its project setting; the phone does not look up a ticket's
+title or status, and does not edit the project's tag lists.
 
 - **Pairing**: in **Open on server…**, a connected remote server has **Pair a phone…**.
   It shows a QR and a one-time code (5 minutes, used once), never a token. Scan it in
@@ -350,8 +356,8 @@ tears them down first).
   switches on the phone (Servers → Push…), and the Servers screen has **Pause all pushes**. A push
   says only the project and what happened. The relay holds the APNs key and the FCM credentials;
   your servers never do.
-- **Not yet**: creating or moving worktrees, starting a promote, or adding and editing
-  quick buttons, from the phone.
+- **Not yet**: moving worktrees, starting a promote, or adding and editing quick
+  buttons, from the phone.
 
 See `apps/mobile/README.md` to build and run it.
 

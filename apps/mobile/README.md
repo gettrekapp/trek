@@ -2,8 +2,10 @@
 
 Phase 6a (and 6b's background push). An Expo app (SDK 58, Expo Router) for iOS and
 Android: what needs you on every paired trek-server, sessions and their terminals,
-prompts, quick buttons, decisions and read-only Changes, and pushes while it is closed. The repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone
-pairing") how it signs in.
+prompts, quick buttons, decisions and read-only Changes, adding and removing worktrees, a
+branch's tag, custom tags, note, ticket and pull request, and pushes while it is closed. The
+repo's README ("Phone companion") says what it does; PROTOCOL.md ("Phone pairing") how it
+signs in.
 
 It talks protocol v2 through the repo's own shared code: `src/shared.ts` re-exports
 `../../src/shared/client`, `model` and `protocolV2`, which Metro watches
@@ -175,16 +177,89 @@ network, so a server on this Mac at a LAN address works, with a warning for `ws:
 7. **Promote:**
    - With the project open, an agent's `promote_to_primary` shows the confirmation. **Promote** moves the branch into the main checkout, and the desktop's dialog closes.
    - With the worktree's stack running, the phone says to confirm on the desktop.
-8. **Background:**
+8. **Add worktree** (a repository's **Add worktree** on the project screen):
+   - Typing in the branch field lists up to 8 branches containing the text; tapping one fills
+     the field and turns **Use existing branch** on.
+   - If the repository's branches can't be loaded, "Could not load the branches: …" shows,
+     nothing is suggested, and **Create** still works.
+   - **Create** is disabled while the field is empty. With the switch off it creates a new
+     branch; with it on it checks out the named one. The new worktree's screen replaces Add
+     worktree (Back goes to the project), and no session is started.
+   - A branch that already has a worktree, or a new branch whose name exists: the server's
+     error shows under **Create**, and the form keeps what was typed.
+   - A repository with linked folders, one of which can't be linked: an alert lists the
+     warnings before the worktree's screen opens.
+   - A pull request field holding anything but a github.com pull request link says "Not a
+     GitHub pull request link", and **Add PR** is disabled.
+   - **Add PR** with a pull request's link creates the worktree on `pr/<n>` and opens it; its
+     Branch section shows "PR #<n>".
+   - **Add PR** again with the same link (its branch already has a worktree): no second
+     worktree, and that worktree's screen opens with the pull request linked.
+   - Two quick taps on **Create** or **Add PR** create one worktree.
+9. **Remove a worktree** (**Remove** on the worktree screen):
+   - The main checkout has no **Remove**.
+   - A clean worktree: "Remove <name>?" says its folder is deleted and its branch stays.
+     **Remove** removes it, and the phone goes back to the project, where it is gone. The
+     branch still exists (`git branch`).
+   - **Cancel**, or Android's back button or a tap outside the alert, removes nothing.
+   - A loaded worktree is unloaded first, then removed.
+   - A worktree with uncommitted changes: the question is "<name> has uncommitted changes."
+     with **Discard and remove**. Cancelling leaves it as it was, still loaded.
+   - Change a file in a clean worktree and tap **Remove** before the phone shows "uncommitted
+     changes": after the first question the discard question follows. Declining it leaves
+     the worktree there, and loaded again if it was loaded.
+   - With the worktree's dev stack running, or its Docker VM, the phone says "Remove this
+     worktree on the desktop: …" and asks nothing.
+   - When the phone can't check that (the server stops answering as **Remove** is tapped,
+     e.g. its network is cut): "Could not check whether this worktree's dev stack or Docker
+     VM is running, so it was not removed. Try again." Nothing is asked, nothing is removed,
+     and it does not say to use the desktop.
+   - A removal the server refuses for another reason shows its error, and a worktree the
+     phone unloaded for it is loaded again.
+   - A worktree listed as Missing is removed the same way.
+10. **Branch details** (the **Branch** section of a worktree that is on a branch; a detached
+    worktree has none):
+    - **Workflow tag**: the project's tags in their colours, the branch's one filled in.
+      Tapping another sets it, tapping the current one clears it; the desktop follows. A
+      project whose tag list was emptied shows no row.
+    - **Custom tags**: each of the project's custom tags toggles on its own; a project with
+      none shows no row.
+    - A tag set on the desktop shows on the phone without reopening the screen, and on the
+      project screen's worktree card.
+    - **Note**: "No note", or the note. **Edit** opens a multi-line box; **Save** saves it,
+      **Cancel** leaves it as it was, and saving an empty box clears it.
+    - Note conflict: tap **Edit** on the phone, change the note on the desktop, then **Save**
+      on the phone. The box stays open with what was typed, with "The note changed on the
+      server" and the desktop's note under it. **Save** again overwrites it with the phone's
+      text; **Cancel** keeps the desktop's.
+    - **Ticket**: **Edit**, then a Linear id (`TOW-12`), an Azure DevOps id (`123`) or either
+      tracker's URL saves its id and shows its label. Anything else shows what the trackers
+      take ("Enter a Linear issue id … or issue URL…"); with no tracker on in the project,
+      "No ticket tracker is on in this project. Turn one on in the desktop app's Settings →
+      Plugins." **Clear** (only with a ticket set) unlinks it.
+    - A ticket whose tracker has its project setting (the Linear workspace, the Azure DevOps
+      project URL) opens in the browser when tapped; without it, it is plain text. Pasting a
+      tracker URL on the phone does not write that setting.
+    - **Pull request**: **Edit**, then `https://github.com/<owner>/<repo>/pull/<n>/files`
+      saves the link without `/files` and shows "PR #<n>"; tapping it opens the browser.
+      Anything else says "Not a GitHub pull request link" and saves nothing. **Clear** unlinks
+      it.
+    - With the keyboard up, one tap on **Save** saves, and the box being edited stays above the
+      keyboard, on iOS and on Android (not checked on a device yet).
+    - Two quick taps on **Save**, or on a tag, send one request; the section's buttons are
+      disabled while it runs.
+    - With the server out of reach, **Save** shows the error under the section and the box
+      keeps what was typed.
+11. **Background:**
    - Send the app to the background. A session needing you within ~20 s gives a notification;
      a decision's says "A decision is waiting in <project>", not its question.
    - Tapping the notification opens that session (also with the app closed since).
    - What was already waiting when the app connected gives no notification.
    - Back in the foreground, everything reconnects.
-9. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
-   Pairing again from there replaces the entry: the server is listed once.
+12. **Revocation:** `trek-server token revoke phone-<name>`. The server shows **Pair again**.
+    Pairing again from there replaces the entry: the server is listed once.
 
-10. **Push (6b), on a real device only** (a development build with the push entitlement, a
+13. **Push (6b), on a real device only** (a development build with the push entitlement, a
     relay configured as in `relay/README.md`, its address in `extra.relayUrl` or
     `TREK_RELAY_URL`):
     - First launch of a fresh install: allow notifications when asked. Without restarting, the
