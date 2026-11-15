@@ -12,7 +12,7 @@ export { fillTemplate, parseTemplate, planQuickButton, resolveBuiltins, template
 export type { BuiltinContext, BuiltinValues, QuickButtonPlan } from '../../../src/shared/quickButtonTemplate.ts'
 export { missingPatchNote, numberedLines, patchBody } from '../../../src/shared/changes.ts'
 export type { NumberedLine } from '../../../src/shared/changes.ts'
-export { BRANCH_SOURCE, MAX_REVIEW_BODY, placeComments, reviewLineText, sameSource, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
+export { BRANCH_SOURCE, MAX_REVIEW_BODY, commentAuthorLabel, placeComments, reviewLineText, sameSource, sourceKey, sourceLabel } from '../../../src/shared/review.ts'
 export { describeCron, formatWall, nextSlots, parseCron } from '../../../src/shared/cron.ts'
 export type { HistoryActor, HistoryAddedEvent, HistoryEvent, HistoryPage, HistoryValue } from '../../../src/shared/model/history.ts'
 export { actorLabel, describeEvent, describeParts, historyDay, mergeHistory } from '../../../src/shared/historyText.ts'
