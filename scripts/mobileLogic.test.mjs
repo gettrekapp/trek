@@ -9,7 +9,10 @@
 // section's rules (the custom tags' toggle, the note's edit and its conflict, a pull request's input),
 // and the Changes screen's review (which comments sit where on the shown diff, the draft bar, the
 // comment box's state and what it sends, the server's refusals, the sessions a draft can go to, a
-// commit's row) and the pull request watch (the switch, its label, a notice's line and dismissal).
+// commit's row) and the pull request watch (the switch, its label, a notice's line and dismissal),
+// and automations (a card's lines, next runs in the schedule's timezone, the missed-runs answer, the
+// edit's changed-elsewhere rule, the save input against the server's own save, run rows, the run
+// tab) and a branch's history (an entry's wording per kind, days and times, pages and live entries).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -1885,4 +1888,579 @@ test('pr watch: only a pull request item of a worktree can be dismissed from the
   assert.deepEqual(noticeDismissal(entry), { projectId: 'p1', worktreeId: 'w1' })
   assert.equal(noticeDismissal({ ...entry, pullRequest: undefined, sessionId: 's1' }), null)
   assert.equal(noticeDismissal({ ...entry, worktreeId: null }), null)
+})
+
+// ── Automations ──────────────────────────────────────────────────────────────────────────────
+
+import {
+  AUTOMATION_CHANGED,
+  MAX_AUTOMATION_NAME,
+  agentLine,
+  automationCard,
+  automationInput,
+  automationsRow,
+  beginAutomationEdit,
+  canSaveAutomationEdit,
+  lastRunLine,
+  missedAnswer,
+  missedErrors,
+  missedLine,
+  missedRows,
+  nextLine,
+  nextRuns,
+  runRows,
+  runTab,
+  saveAutomationEdit,
+  scheduleLine,
+  scheduleWords
+} from '../apps/mobile/src/logic/automations.ts'
+import { EMPTY_HISTORY, historyAdded, historyDays, historyTime, olderCursor, olderLoaded, reloadFailed, reloadStarted, reloaded } from '../apps/mobile/src/logic/history.ts'
+import { automationHandlers } from '../server/src/automations/automationHandlers.ts'
+import { MAX_AUTOMATION_NAME as SERVER_MAX_AUTOMATION_NAME, MAX_AUTOMATION_PROMPT } from '../server/src/automations/model.ts'
+import { AutomationScheduler } from '../server/src/automations/scheduler.ts'
+import { historyHandlers } from '../server/src/history/historyHandlers.ts'
+import { HISTORY_KINDS } from '../src/shared/model/history.ts'
+
+/** Monday 2026-01-05 12:00 UTC: 07:00 in New York, 21:00 in Tokyo. */
+const A_NOW = Date.UTC(2026, 0, 5, 12, 0)
+const HOUR = 3_600_000
+const automation = (over = {}) => ({
+  id: 'a1',
+  name: 'Morning triage',
+  prompt: 'Triage the new issues',
+  schedule: { cron: '0 9 * * 1-5', tz: 'America/New_York' },
+  enabled: true,
+  createdAt: A_NOW - 30 * 24 * HOUR,
+  lastSlot: A_NOW - 22 * HOUR,
+  history: [],
+  ...over
+})
+
+/** Runs `fn` on an engine whose Intl.DateTimeFormat throws (cron.ts keeps a formatter per timezone: use one no other test has used). */
+function withoutIntl(fn) {
+  const real = Intl.DateTimeFormat
+  Intl.DateTimeFormat = function () {
+    throw new RangeError('Intl.DateTimeFormat: timeZone is not supported')
+  }
+  try {
+    fn()
+  } finally {
+    Intl.DateTimeFormat = real
+  }
+}
+
+test("automations: the project screen's row counts them and says when runs were missed", () => {
+  assert.deepEqual(automationsRow(undefined), { text: 'Automations', missed: false })
+  assert.deepEqual(automationsRow([]), { text: 'Automations', missed: false })
+  assert.deepEqual(automationsRow([automation(), automation({ id: 'a2' }), automation({ id: 'a3' })]), { text: 'Automations · 3', missed: false })
+  assert.deepEqual(automationsRow([automation(), automation({ id: 'a2', missed: { since: A_NOW - HOUR, count: 1 } })]), { text: 'Automations · 2', missed: true })
+})
+
+test("automations: a card's lines for an enabled automation that never ran", () => {
+  assert.deepEqual(automationCard(automation(), A_NOW), {
+    id: 'a1',
+    name: 'Morning triage',
+    schedule: 'Weekdays at 09:00 · America/New_York',
+    next: 'Next: 2026-01-05 09:00',
+    lastRun: 'Never run',
+    agent: null,
+    missed: null
+  })
+})
+
+test('automations: a card says Off, the last run with its age and error, the agent and missed runs', () => {
+  const ran = { at: A_NOW - 2 * HOUR, slot: A_NOW - 2 * HOUR, trigger: 'schedule', outcome: 'ran', sessionId: 's1' }
+  assert.equal(nextLine(automation({ enabled: false }), A_NOW), 'Off')
+  assert.equal(lastRunLine(automation({ history: [ran, { ...ran, at: A_NOW - 26 * HOUR, outcome: 'failed' }] }), A_NOW), 'Ran 2 h ago')
+  assert.equal(lastRunLine(automation({ history: [{ at: A_NOW - 2 * HOUR, trigger: 'manual', outcome: 'failed', error: 'claude is not installed' }] }), A_NOW), 'Failed 2 h ago: claude is not installed')
+  assert.equal(lastRunLine(automation({ history: [{ at: A_NOW - 5 * 60_000, trigger: 'schedule', outcome: 'skipped', error: 'previous run still working' }] }), A_NOW), 'Skipped 5 min ago: previous run still working')
+  // An error is always given by today's server; without one the desktop's words stand in.
+  assert.equal(lastRunLine(automation({ history: [{ at: A_NOW, trigger: 'schedule', outcome: 'failed' }] }), A_NOW), 'Failed just now: unknown error')
+  assert.equal(lastRunLine(automation({ history: [{ at: A_NOW, trigger: 'schedule', outcome: 'skipped' }] }), A_NOW), 'Skipped just now: previous run still working')
+
+  const agents = [{ provider: 'codex', label: 'Codex', installed: true }]
+  assert.equal(agentLine(automation()), null)
+  assert.equal(agentLine(automation({ llm: { provider: 'codex' } }), agents), 'Agent: Codex')
+  assert.equal(agentLine(automation({ llm: { provider: 'codex', model: 'gpt-5', effort: 'high' } }), agents), 'Agent: Codex · gpt-5 · high')
+  // The server's agent list not loaded (or an agent it no longer lists): the provider's id.
+  assert.equal(agentLine(automation({ llm: { provider: 'codex' } })), 'Agent: codex')
+
+  const off = automationCard(automation({ enabled: false, llm: { provider: 'codex' }, history: [ran], missed: { since: Date.UTC(2026, 0, 2, 14, 0), count: 2 } }), A_NOW, agents)
+  assert.deepEqual(off, {
+    id: 'a1',
+    name: 'Morning triage',
+    schedule: 'Weekdays at 09:00 · America/New_York',
+    next: 'Off',
+    lastRun: 'Ran 2 h ago',
+    agent: 'Agent: Codex',
+    missed: '2 missed since 2026-01-02 09:00'
+  })
+})
+
+test("automations: a schedule in words with its timezone; one the editor's picker cannot write keeps its cron", () => {
+  assert.equal(scheduleWords({ cron: '*/15 * * * *', tz: 'UTC' }), 'Every 15 minutes')
+  assert.equal(scheduleLine({ cron: '*/15 * * * *', tz: 'UTC' }), 'Every 15 minutes · UTC')
+  assert.equal(scheduleLine({ cron: '0 9 1 * *', tz: 'Asia/Tokyo' }), 'Cron: 0 9 1 * * · Asia/Tokyo')
+  assert.equal(scheduleLine({ cron: 'nonsense', tz: 'UTC' }), 'Invalid schedule · UTC')
+})
+
+test('automations: next runs are wall-clock times in the schedule\'s own timezone', () => {
+  // 09:00 on weekdays: still ahead today in New York, already past in Tokyo.
+  assert.deepEqual(nextRuns(automation(), A_NOW), ['2026-01-05 09:00', '2026-01-06 09:00', '2026-01-07 09:00'])
+  const tokyo = automation({ schedule: { cron: '0 9 * * 1-5', tz: 'Asia/Tokyo' } })
+  assert.deepEqual(nextRuns(tokyo, A_NOW), ['2026-01-06 09:00', '2026-01-07 09:00', '2026-01-08 09:00'])
+  assert.equal(nextLine(tokyo, A_NOW), 'Next: 2026-01-06 09:00')
+  assert.deepEqual(nextRuns(tokyo, A_NOW, 1), ['2026-01-06 09:00'])
+  // Over a weekend, and over the spring-forward night (02:30 does not exist on 2026-03-08 in New York).
+  assert.deepEqual(nextRuns(automation(), Date.UTC(2026, 0, 9, 20, 0), 1), ['2026-01-12 09:00'])
+  const early = automation({ schedule: { cron: '30 2 * * *', tz: 'America/New_York' } })
+  assert.deepEqual(nextRuns(early, Date.UTC(2026, 2, 7, 12, 0), 2), ['2026-03-09 02:30', '2026-03-10 02:30'])
+  // Off: no next runs.
+  assert.deepEqual(nextRuns(automation({ enabled: false }), A_NOW), [])
+})
+
+test('automations: a schedule or a time the engine cannot work out is a stated fallback, never a throw', () => {
+  // A timezone this engine does not know (the real RangeError).
+  const lost = automation({ schedule: { cron: '0 9 * * 1-5', tz: 'Mars/Olympus_Mons' }, missed: { since: A_NOW - 3 * HOUR, count: 3 }, history: [{ at: A_NOW - 2 * HOUR, trigger: 'schedule', outcome: 'ran', sessionId: 's1' }] })
+  assert.equal(nextLine(lost, A_NOW), null)
+  assert.deepEqual(nextRuns(lost, A_NOW), [])
+  assert.equal(missedLine(lost, A_NOW), '3 missed since 3 h ago')
+  assert.deepEqual(runRows(lost, [], A_NOW), [{ key: `${A_NOW - 2 * HOUR}:0`, when: '2 h ago', trigger: 'Scheduled', outcome: 'Ran' }])
+  assert.equal(scheduleLine(lost.schedule), 'Weekdays at 09:00 · Mars/Olympus_Mons')
+  assert.deepEqual(automationCard(lost, A_NOW), {
+    id: 'a1',
+    name: 'Morning triage',
+    schedule: 'Weekdays at 09:00 · Mars/Olympus_Mons',
+    next: null,
+    lastRun: 'Ran 2 h ago',
+    agent: null,
+    missed: '3 missed since 3 h ago'
+  })
+
+  // An engine without Intl's time zones (Hermes, if a build lacks them): the same fallbacks.
+  withoutIntl(() => {
+    const a = automation({ schedule: { cron: '0 9 * * 1-5', tz: 'Europe/Paris' }, missed: { since: A_NOW - 26 * HOUR, count: 1 }, history: [{ at: A_NOW - 5 * 60_000, trigger: 'missed', outcome: 'failed', error: 'no' }] })
+    assert.equal(nextLine(a, A_NOW), null)
+    assert.deepEqual(nextRuns(a, A_NOW), [])
+    assert.equal(missedLine(a, A_NOW), '1 missed since 1 d ago')
+    assert.equal(lastRunLine(a, A_NOW), 'Failed 5 min ago: no')
+    assert.deepEqual(runRows(a, [], A_NOW), [{ key: `${A_NOW - 5 * 60_000}:0`, when: '5 min ago', trigger: 'Missed', outcome: 'Failed', error: 'no' }])
+    assert.equal(scheduleLine(a.schedule), 'Weekdays at 09:00 · Europe/Paris')
+    assert.deepEqual(missedRows([a], {}, A_NOW), [{ id: 'a1', name: 'Morning triage', text: '1 missed since 1 d ago', choice: 'skip' }])
+  })
+
+  // The words themselves failing: the cron text and the timezone's name.
+  const boom = () => {
+    throw new Error('no words')
+  }
+  assert.equal(scheduleWords({ cron: '0 9 * * 1-5', tz: 'UTC' }, boom), null)
+  assert.equal(scheduleLine({ cron: '0 9 * * 1-5', tz: 'UTC' }, boom), '0 9 * * 1-5 · UTC')
+  // A snapshot that is not what it should be.
+  assert.equal(nextLine(automation({ schedule: { cron: 'nonsense', tz: 'UTC' } }), A_NOW), null)
+  assert.equal(nextLine(automation({ schedule: undefined }), A_NOW), null)
+  assert.equal(scheduleLine(undefined), '')
+  assert.equal(nextLine(automation(), NaN), null)
+})
+
+test('automations: missed runs are skipped unless Run is chosen; one request answers them all', () => {
+  const list = [
+    automation({ id: 'a1', name: 'One', missed: { since: Date.UTC(2026, 0, 2, 14, 0), count: 1 } }),
+    automation({ id: 'a2', name: 'Two' }),
+    automation({ id: 'a3', name: 'Three', schedule: { cron: '0 9 * * *', tz: 'Asia/Tokyo' }, missed: { since: Date.UTC(2026, 0, 3, 0, 0), count: 4 } })
+  ]
+  assert.deepEqual(missedRows(list, {}, A_NOW), [
+    { id: 'a1', name: 'One', text: '1 missed since 2026-01-02 09:00', choice: 'skip' },
+    { id: 'a3', name: 'Three', text: '4 missed since 2026-01-03 09:00', choice: 'skip' }
+  ])
+  assert.deepEqual(missedRows(undefined, {}, A_NOW), [])
+  assert.deepEqual(missedAnswer(list, {}), { run: [], dismiss: ['a1', 'a3'] })
+  assert.deepEqual(missedAnswer(list, { a3: 'run' }), { run: ['a3'], dismiss: ['a1'] })
+  assert.equal(missedRows(list, { a3: 'run' }, A_NOW)[1].choice, 'run')
+  // A choice for an automation that has nothing missed any more (answered elsewhere), or is gone, is not sent.
+  assert.deepEqual(missedAnswer(list, { a1: 'run', a2: 'run', gone: 'run' }), { run: ['a1'], dismiss: ['a3'] })
+  assert.deepEqual(missedAnswer([], { a1: 'run' }), { run: [], dismiss: [] })
+
+  // The answer's entries that did not start, by name, worded as the desktop's dialog words them.
+  const started = [
+    { automationId: 'a1', sessionId: 's1' },
+    { automationId: 'a3', error: 'previous run still working' },
+    { automationId: 'a9', error: 'a project holds at most 30 Global sessions' }
+  ]
+  assert.deepEqual(missedErrors(list, started), ['Three: skipped, the previous run is still working', 'a9: a project holds at most 30 Global sessions'])
+  assert.deepEqual(missedErrors(list, []), [])
+})
+
+test("automations: the server's answer to missed runs, as the phone's lists reach it", () => {
+  const project = { id: 'p1', globalSessions: [], automations: [automation({ id: 'a1', missed: { since: 1, count: 2 } }), automation({ id: 'a2' }), automation({ id: 'a3', missed: { since: 1, count: 1 } })] }
+  const runs = []
+  const ctx = {
+    automations: { now: () => A_NOW, run: (_p, id, trigger) => (runs.push([id, trigger]), { run: id === 'a3' ? { outcome: 'skipped', error: 'previous run still working' } : { outcome: 'ran', sessionId: `s-${id}` } }) },
+    projects: { apply: (_id, fn) => fn(project) }
+  }
+  const { run, dismiss } = missedAnswer(project.automations, { a3: 'run' })
+  const answer = automationHandlers['automation.resolveMissed']({ projectId: 'p1', run, dismiss }, ctx)
+  assert.deepEqual(answer, { started: [{ automationId: 'a3', error: 'previous run still working' }] })
+  assert.deepEqual(runs, [['a3', 'missed']])
+  assert.equal(project.automations.some((a) => a.missed), false)
+  // Answered already (another window): nothing runs, nothing is refused.
+  assert.deepEqual(automationHandlers['automation.resolveMissed']({ projectId: 'p1', run: ['a1', 'nope'], dismiss: ['a3'] }, ctx), { started: [] })
+  assert.throws(() => automationHandlers['automation.resolveMissed']({ projectId: 'p1', run: 'a1', dismiss: [] }, ctx), { code: 'BAD_REQUEST', message: 'run must be a list of at most 50 automation ids' })
+})
+
+test('automations: an edit is not saved over a name or prompt that changed elsewhere; the next save is measured against those', () => {
+  const a = automation()
+  const begun = beginAutomationEdit(a)
+  assert.deepEqual(begun, { name: 'Morning triage', prompt: 'Triage the new issues', base: { name: 'Morning triage', prompt: 'Triage the new issues' }, changed: false })
+  const typed = { ...begun, name: 'Triage', prompt: 'Triage the new issues, then summarise' }
+
+  // Nothing changed elsewhere: the save is sent.
+  assert.deepEqual(saveAutomationEdit(typed, a), {
+    input: { id: 'a1', name: 'Triage', prompt: 'Triage the new issues, then summarise', schedule: { cron: '0 9 * * 1-5', tz: 'America/New_York' }, enabled: true, llm: null }
+  })
+  // Something else of it changed (turned off elsewhere, a run recorded): still saved, with the snapshot's value now.
+  const offNow = { ...a, enabled: false, history: [{ at: A_NOW, trigger: 'manual', outcome: 'ran', sessionId: 's1' }] }
+  assert.equal(saveAutomationEdit(typed, offNow).input.enabled, false)
+
+  // The prompt changed elsewhere: not saved; the typed text stays and the server's is the new base.
+  const elsewhere = { ...a, prompt: 'Triage the new issues and label them' }
+  const refused = saveAutomationEdit(typed, elsewhere)
+  assert.deepEqual(refused, { edit: { name: 'Triage', prompt: 'Triage the new issues, then summarise', base: { name: 'Morning triage', prompt: 'Triage the new issues and label them' }, changed: true } })
+  assert.equal(AUTOMATION_CHANGED, 'This automation changed on the server')
+  // Saved again against what is shown: sent, overwriting knowingly.
+  assert.deepEqual(saveAutomationEdit(refused.edit, elsewhere).input.prompt, 'Triage the new issues, then summarise')
+  // Changed again meanwhile: refused again, against the newest.
+  const again = saveAutomationEdit(refused.edit, { ...elsewhere, name: 'Renamed' })
+  assert.deepEqual(again.edit.base, { name: 'Renamed', prompt: 'Triage the new issues and label them' })
+  assert.equal(again.edit.changed, true)
+  // Only the name changed elsewhere.
+  assert.deepEqual(saveAutomationEdit(typed, { ...a, name: 'Renamed' }).edit.base, { name: 'Renamed', prompt: 'Triage the new issues' })
+
+  // Save is offered for a name and a prompt that are not blank, as the desktop's editor does.
+  assert.equal(canSaveAutomationEdit(typed), true)
+  assert.equal(canSaveAutomationEdit({ ...typed, name: '  ' }), false)
+  assert.equal(canSaveAutomationEdit({ ...typed, prompt: '\n' }), false)
+  assert.equal(MAX_AUTOMATION_NAME, SERVER_MAX_AUTOMATION_NAME)
+})
+
+test("automations: a name and prompt edit or an on/off flip, through the server's own save, leaves the schedule, the timezone and the agent as they were", () => {
+  const withAgent = automation({ id: 'a1', llm: { provider: 'codex', model: 'gpt-5', effort: 'high' }, missed: { since: A_NOW - 30 * HOUR, count: 1 } })
+  const globalAgent = automation({ id: 'a2', name: 'Nightly', schedule: { cron: '30 2 * * *', tz: 'Asia/Tokyo' } })
+  const project = { id: 'p1', automations: [withAgent, globalAgent] }
+  const ctx = { automations: { now: () => A_NOW }, projects: { apply: (_id, fn) => fn(project), newId: () => 'new' } }
+  const save = (input) => automationHandlers['automation.save']({ projectId: 'p1', automation: input }, ctx)
+  const stored = (id) => project.automations.find((a) => a.id === id)
+  // What the phone sends is what the wire carries: JSON.
+  const wire = (input) => JSON.parse(JSON.stringify(input))
+
+  // The input names every field the server replaces: the agent as it is, or null for the Global agent.
+  assert.deepEqual(automationInput(withAgent), { id: 'a1', name: 'Morning triage', prompt: 'Triage the new issues', schedule: { cron: '0 9 * * 1-5', tz: 'America/New_York' }, enabled: true, llm: { provider: 'codex', model: 'gpt-5', effort: 'high' } })
+  assert.equal(automationInput(globalAgent).llm, null)
+  // It is a copy: changing it does not touch the snapshot.
+  assert.notEqual(automationInput(withAgent).schedule, withAgent.schedule)
+  assert.notEqual(automationInput(withAgent).llm, withAgent.llm)
+
+  // A name and prompt edit.
+  const edited = saveAutomationEdit({ ...beginAutomationEdit(withAgent), name: ' Triage ', prompt: 'New prompt\n' }, withAgent)
+  assert.deepEqual(save(wire(edited.input)), { id: 'a1' })
+  assert.deepEqual(stored('a1'), { ...withAgent, name: 'Triage', prompt: 'New prompt' })
+  assert.equal(project.automations.length, 2)
+
+  // Off: the same but `enabled`; the server drops what was missed.
+  save(wire(automationInput(stored('a1'), { enabled: false })))
+  const { missed: _missed, ...unmissed } = withAgent
+  assert.deepEqual(stored('a1'), { ...unmissed, name: 'Triage', prompt: 'New prompt', enabled: false })
+  // On again: the same but `enabled`; the server starts counting slots from now.
+  save(wire(automationInput(stored('a1'), { enabled: true })))
+  assert.deepEqual(stored('a1'), { ...unmissed, name: 'Triage', prompt: 'New prompt', enabled: true, lastSlot: A_NOW })
+
+  // The project's Global agent stays the Global agent.
+  save(wire(automationInput(globalAgent, { name: 'Nightly check' })))
+  assert.deepEqual(stored('a2'), { ...globalAgent, name: 'Nightly check' })
+  assert.equal('llm' in stored('a2'), false)
+
+  // Leaving the agent out would have reset it: that is why the input always names it.
+  const { llm: _llm, ...without } = automationInput(stored('a1'))
+  save(wire(without))
+  assert.equal('llm' in stored('a1'), false)
+
+  // The server's refusals, as the screen shows them.
+  const refusal = (input) => {
+    try {
+      save(wire(input))
+      return null
+    } catch (err) {
+      const w = toWireError('automation.save', err)
+      return `${w.code}: ${w.message}`
+    }
+  }
+  assert.equal(refusal(automationInput(globalAgent, { name: 'x'.repeat(81) })), 'BAD_REQUEST: automation.name must be at most 80 characters')
+  assert.equal(refusal(automationInput(globalAgent, { name: '   ' })), 'BAD_REQUEST: automation.name must not be empty')
+  assert.equal(refusal(automationInput(globalAgent, { name: 'a\tb' })), 'BAD_REQUEST: automation.name must not contain control characters')
+  assert.equal(refusal(automationInput(globalAgent, { prompt: ' ' })), 'BAD_REQUEST: automation.prompt must not be empty')
+  assert.equal(refusal(automationInput(globalAgent, { prompt: 'x'.repeat(MAX_AUTOMATION_PROMPT + 1) })), 'BAD_REQUEST: automation.prompt must be at most 20000 characters')
+  assert.equal(refusal(automationInput(globalAgent, { prompt: 'a\u0007b' })), 'BAD_REQUEST: automation.prompt must not contain control characters')
+  assert.equal(refusal(automationInput(globalAgent, { prompt: 'tabs\tand\nlines' })), null)
+  // Deleted meanwhile: refused, never created anew (the input always carries the id).
+  assert.equal(refusal(automationInput({ ...globalAgent, id: 'gone' })), 'NOT_FOUND: No automation with id "gone"')
+  assert.equal(project.automations.length, 2)
+})
+
+test("automations: Run now's refusals are the server's: a busy run tab, an automation that is gone", () => {
+  const a = automation()
+  const project = { id: 'p1', globalSessions: [{ id: 's1', status: 'working', context: { kind: 'automation', automationId: 'a1' } }], automations: [a] }
+  const projects = { require: () => project, apply: (_id, fn) => fn(project), all: () => [project] }
+  const started = []
+  const scheduler = new AutomationScheduler({ projects, now: () => A_NOW, sessions: { start: (p) => (started.push(p), { sessionId: 's2', ptyId: 'pty2' }), renew: () => ({ ptyId: 'pty1' }) } })
+  const ctx = { automations: scheduler, projects }
+  const runNow = (automationId) => {
+    try {
+      return automationHandlers['automation.runNow']({ projectId: 'p1', automationId }, ctx)
+    } catch (err) {
+      const w = toWireError('automation.runNow', err)
+      return `${w.code}: ${w.message}`
+    }
+  }
+  assert.equal(runNow('a1'), 'CONFLICT: Morning triage: previous run still working')
+  assert.equal(runNow('gone'), 'NOT_FOUND: No automation with id "gone"')
+  // The skipped run is recorded, and reads so on the card and in the runs.
+  assert.equal(lastRunLine(project.automations[0], A_NOW), 'Skipped just now: previous run still working')
+  // An idle run tab is renewed and answered: the session the phone opens. Off does not matter.
+  project.globalSessions[0].status = 'done'
+  project.automations[0].enabled = false
+  assert.deepEqual(runNow('a1'), { sessionId: 's1' })
+  assert.deepEqual(runRows(project.automations[0], project.globalSessions, A_NOW).map((r) => [r.trigger, r.outcome, r.sessionId]), [['Manual', 'Ran', 's1'], ['Manual', 'Skipped', undefined]])
+})
+
+test('automations: a run row is when, the trigger, the outcome, its error, and the session when it still exists', () => {
+  const at = Date.UTC(2026, 0, 5, 14, 0)
+  const a = automation({
+    history: [
+      { at, slot: at, trigger: 'schedule', outcome: 'ran', sessionId: 's1' },
+      { at: at - 24 * HOUR, trigger: 'manual', outcome: 'failed', error: 'claude is not installed' },
+      { at: at - 48 * HOUR, trigger: 'missed', outcome: 'skipped', error: 'previous run still working' },
+      { at: at - 48 * HOUR, trigger: 'manual', outcome: 'ran', sessionId: 'closed' },
+      { at: at - 72 * HOUR, trigger: 'later', outcome: 'paused' }
+    ]
+  })
+  assert.deepEqual(runRows(a, [{ id: 's1' }, { id: 's2' }], A_NOW), [
+    { key: `${at}:0`, when: '2026-01-05 09:00', trigger: 'Scheduled', outcome: 'Ran', sessionId: 's1' },
+    { key: `${at - 24 * HOUR}:1`, when: '2026-01-04 09:00', trigger: 'Manual', outcome: 'Failed', error: 'claude is not installed' },
+    { key: `${at - 48 * HOUR}:2`, when: '2026-01-03 09:00', trigger: 'Missed', outcome: 'Skipped', error: 'previous run still working' },
+    // Its session was closed: nothing to open.
+    { key: `${at - 48 * HOUR}:3`, when: '2026-01-03 09:00', trigger: 'Manual', outcome: 'Ran' },
+    // A newer server's words are shown as they are.
+    { key: `${at - 72 * HOUR}:4`, when: '2026-01-02 09:00', trigger: 'later', outcome: 'paused' }
+  ])
+  assert.deepEqual(runRows(automation(), [], A_NOW), [])
+})
+
+test("automations: the run tab is the Global session the server opened for the automation", () => {
+  const sessions = [
+    { id: 's0', title: 'Global' },
+    { id: 's1', title: 'Other · 09:00', context: { kind: 'automation', automationId: 'a2' } },
+    { id: 's2', title: 'Morning triage · 09:00', context: { kind: 'automation', automationId: 'a1' } }
+  ]
+  assert.equal(runTab(sessions, 'a1')?.id, 's2')
+  assert.equal(runTab(sessions, 'a3'), undefined)
+  assert.equal(runTab(undefined, 'a1'), undefined)
+})
+
+// ── Branch history ───────────────────────────────────────────────────────────────────────────
+
+/** Noon local time on 2026-01-15 (the day labels and times are the phone's local ones). */
+const H_NOW = new Date(2026, 0, 15, 12, 0).getTime()
+const hEvent = (over = {}) => ({ id: 'e1', at: H_NOW - 60_000, repoId: 'r1', branch: 'feat', kind: 'created', actor: { kind: 'user' }, ...over })
+const H_REF = { projectId: 'p1', repoId: 'r1', branch: 'feat' }
+
+test('history: every kind of entry is worded as the History panel words it', () => {
+  const tag = { id: 't1', text: 'In review', color: '#89b4fa' }
+  const cases = [
+    [{ kind: 'created', to: { text: '/w/feat' } }, 'Worktree created'],
+    [{ kind: 'removed', from: { text: '/w/feat' } }, 'Worktree removed'],
+    [{ kind: 'status', from: { id: 't0', text: 'Todo' }, to: tag }, 'Status Todo → In review'],
+    [{ kind: 'status', to: tag }, 'Status set to In review'],
+    [{ kind: 'status', from: tag }, 'Status In review cleared'],
+    [{ kind: 'label.added', to: { id: 'l1', text: 'urgent' } }, 'Label urgent added'],
+    [{ kind: 'label.removed', from: { id: 'l1', text: 'urgent' } }, 'Label urgent removed'],
+    [{ kind: 'note', to: { text: 'added' } }, 'Note added'],
+    [{ kind: 'note', to: { text: 'edited' } }, 'Note edited'],
+    [{ kind: 'note', to: { text: 'cleared' } }, 'Note cleared'],
+    [{ kind: 'ticket', from: { text: 'ENG-1' }, to: { text: 'ENG-2' } }, 'Ticket ENG-1 → ENG-2'],
+    [{ kind: 'ticket', to: { text: 'ENG-2' } }, 'Ticket set to ENG-2'],
+    [{ kind: 'ticket', from: { text: 'ENG-1' } }, 'Ticket ENG-1 cleared'],
+    [{ kind: 'pr', to: { text: 'https://github.com/o/r/pull/42' } }, 'PR set to #42'],
+    [{ kind: 'pr', from: { text: 'https://github.com/o/r/pull/42' } }, 'PR unlinked'],
+    [{ kind: 'prWatch.on' }, 'PR watch started'],
+    [{ kind: 'prWatch.off' }, 'PR watch stopped'],
+    [{ kind: 'prWatch.off', to: { text: 'merged' } }, 'PR watch ended: merged'],
+    [{ kind: 'promoted' }, 'Promoted to primary'],
+    [{ kind: 'demoted' }, 'Moved out of the primary checkout'],
+    [{ kind: 'moved.out', to: { text: 'studio' } }, 'Moved to studio'],
+    [{ kind: 'moved.out' }, 'Moved to another server'],
+    [{ kind: 'moved.in', from: { text: 'laptop' } }, 'Moved in from laptop'],
+    [{ kind: 'moved.in' }, 'Moved in from another server'],
+    // A newer server's kind is shown by its name.
+    [{ kind: 'rebased' }, 'rebased']
+  ]
+  const row = (over) => historyDays([hEvent(over)], H_NOW)[0].rows[0]
+  for (const [over, text] of cases) assert.equal(row(over).text, text, JSON.stringify(over))
+  // Every kind the model defines has a case above.
+  for (const kind of HISTORY_KINDS) assert.ok(cases.some(([over]) => over.kind === kind), kind)
+  // A tag is a part with its colour then, for a chip; the words around it are strings.
+  assert.deepEqual(row({ kind: 'status', to: tag }).parts, ['Status set to ', tag])
+})
+
+test('history: a row says who did it, when, and why', () => {
+  const at = new Date(2026, 0, 15, 9, 5).getTime()
+  const row = (over) => historyDays([hEvent({ at, ...over })], H_NOW)[0].rows[0]
+  assert.deepEqual(row({}), { id: 'e1', parts: ['Worktree created'], text: 'Worktree created', actor: 'You', time: '09:05' })
+  assert.equal(row({ actor: { kind: 'trek' } }).actor, 'Trek')
+  assert.equal(row({ actor: { kind: 'mcp' } }).actor, 'MCP')
+  assert.equal(row({ actor: { kind: 'mcp', terminalId: 't1', sessionTitle: 'Fix the build' } }).actor, 'MCP · Fix the build')
+  // An automation's change is its run tab's session.
+  assert.equal(row({ actor: { kind: 'mcp', sessionTitle: 'Morning triage · 09:00' } }).actor, 'MCP · Morning triage · 09:00')
+  assert.equal(row({ reason: 'The review asked for it' }).reason, 'The review asked for it')
+  assert.equal('reason' in row({ reason: '' }), false)
+  assert.equal(historyTime(new Date(2026, 0, 15, 23, 59).getTime()), '23:59')
+  assert.equal(historyTime(NaN), '')
+})
+
+test('history: entries are grouped by day, newest first, in the phone\'s local time', () => {
+  const events = [
+    hEvent({ id: 'e4', at: new Date(2026, 0, 15, 9, 0).getTime() }),
+    hEvent({ id: 'e3', at: new Date(2026, 0, 15, 0, 1).getTime() }),
+    hEvent({ id: 'e2', at: new Date(2026, 0, 14, 23, 59).getTime() }),
+    hEvent({ id: 'e1', at: new Date(2026, 0, 12, 8, 0).getTime() })
+  ]
+  const days = historyDays(events, H_NOW)
+  assert.deepEqual(days.map((d) => [d.day, d.rows.map((r) => r.id)]).slice(0, 2), [['Today', ['e4', 'e3']], ['Yesterday', ['e2']]])
+  assert.deepEqual(days[2].rows.map((r) => r.id), ['e1'])
+  assert.match(days[2].day, /12/)
+  assert.deepEqual(historyDays([], H_NOW), [])
+
+  // An engine that cannot word a date: the date in figures.
+  const real = Date.prototype.toLocaleDateString
+  Date.prototype.toLocaleDateString = () => {
+    throw new RangeError('no locale data')
+  }
+  try {
+    assert.deepEqual(historyDays(events, H_NOW).map((d) => d.day), ['Today', 'Yesterday', '2026-01-12'])
+  } finally {
+    Date.prototype.toLocaleDateString = real
+  }
+})
+
+test('history: pages and live entries make one list, newest first, one entry per id', () => {
+  const e = (id, minutesAgo, over = {}) => hEvent({ id, at: H_NOW - minutesAgo * 60_000, ...over })
+  assert.deepEqual(EMPTY_HISTORY, { events: [], more: false, arriving: null })
+  assert.equal(olderCursor(EMPTY_HISTORY), undefined)
+
+  // The first page.
+  let list = reloaded(reloadStarted(EMPTY_HISTORY), { events: [e('e5', 1), e('e4', 2), e('e3', 3)], more: true })
+  assert.deepEqual(list.events.map((x) => x.id), ['e5', 'e4', 'e3'])
+  assert.equal(list.more, true)
+  assert.equal(list.arriving, null)
+  assert.equal(olderCursor(list), 'e3')
+
+  // Load more: older entries after them; `more` is the newest answer's.
+  list = olderLoaded(list, { events: [e('e2', 4), e('e1', 5)], more: false })
+  assert.deepEqual(list.events.map((x) => x.id), ['e5', 'e4', 'e3', 'e2', 'e1'])
+  assert.equal(list.more, false)
+  assert.equal(olderCursor(list), 'e1')
+
+  // A live entry goes on top; `more` is untouched.
+  list = historyAdded({ ...list, more: true }, { projectId: 'p1', event: e('e6', 0, { kind: 'note', to: { text: 'added' } }) }, H_REF)
+  assert.deepEqual(list.events.map((x) => x.id), ['e6', 'e5', 'e4', 'e3', 'e2', 'e1'])
+  assert.equal(list.more, true)
+  // The same id again (a folded note edit, with a later time): replaced, not added.
+  const folded = e('e6', -1, { kind: 'note', to: { text: 'edited' } })
+  list = historyAdded(list, { projectId: 'p1', event: folded }, H_REF)
+  assert.deepEqual(list.events.map((x) => x.id), ['e6', 'e5', 'e4', 'e3', 'e2', 'e1'])
+  assert.deepEqual(list.events[0], folded)
+  // A page that repeats an entry does not double it, and the cursor is still the oldest.
+  list = olderLoaded(list, { events: [e('e1', 5), e('e0', 6)], more: false })
+  assert.deepEqual(list.events.map((x) => x.id), ['e6', 'e5', 'e4', 'e3', 'e2', 'e1', 'e0'])
+  assert.equal(olderCursor(list), 'e0')
+
+  // Another branch's, repository's or project's entry, or a payload that is not one, changes nothing.
+  for (const payload of [
+    { projectId: 'p1', event: e('x', 0, { branch: 'main' }) },
+    { projectId: 'p1', event: e('x', 0, { repoId: 'r2' }) },
+    { projectId: 'p2', event: e('x', 0) },
+    { projectId: 'p1' },
+    { projectId: 'p1', event: { id: 'x', repoId: 'r1', branch: 'feat' } },
+    null,
+    'history'
+  ]) {
+    assert.equal(historyAdded(list, payload, H_REF), list, JSON.stringify(payload))
+  }
+})
+
+test('history: a reload replaces the list with the newest page and keeps what arrived live meanwhile', () => {
+  const e = (id, minutesAgo) => hEvent({ id, at: H_NOW - minutesAgo * 60_000 })
+  const loaded = olderLoaded(reloaded(reloadStarted(EMPTY_HISTORY), { events: [e('e3', 3), e('e2', 4)], more: true }), { events: [e('e1', 5)], more: false })
+
+  // Pull to refresh: the old list stays on screen while the page is asked for.
+  const asking = reloadStarted(loaded)
+  assert.deepEqual(asking.events, loaded.events)
+  assert.deepEqual(asking.arriving, [])
+  // An entry arrives live before the answer: shown at once, and kept when the answer (made before it) lacks it.
+  const live = historyAdded(asking, { projectId: 'p1', event: e('e9', 0) }, H_REF)
+  assert.deepEqual(live.events.map((x) => x.id), ['e9', 'e3', 'e2', 'e1'])
+  const fresh = reloaded(live, { events: [e('e8', 1), e('e7', 2)], more: true })
+  // From the newest again: the older pages are gone (entries between could be missing), so Load more continues from this page.
+  assert.deepEqual(fresh.events.map((x) => x.id), ['e9', 'e8', 'e7'])
+  assert.equal(fresh.more, true)
+  assert.equal(fresh.arriving, null)
+  assert.equal(olderCursor(fresh), 'e7')
+  // The answer already has the live entry: once.
+  assert.deepEqual(reloaded(live, { events: [e('e9', 0), e('e8', 1)], more: false }).events.map((x) => x.id), ['e9', 'e8'])
+
+  // A reload that failed: the list as it was, live entries included.
+  const failed = reloadFailed(live)
+  assert.deepEqual(failed.events.map((x) => x.id), ['e9', 'e3', 'e2', 'e1'])
+  assert.equal(failed.more, false)
+  assert.equal(failed.arriving, null)
+  // A branch with no history.
+  assert.deepEqual(reloaded(reloadStarted(EMPTY_HISTORY), { events: [], more: false }), EMPTY_HISTORY)
+})
+
+test("history: the server's paging, as the phone's cursor asks for it", () => {
+  const all = Array.from({ length: 5 }, (_, i) => hEvent({ id: `e${i + 1}`, at: H_NOW - (5 - i) * 60_000 }))
+  const project = { id: 'p1', repositories: [{ id: 'r1' }] }
+  const store = {
+    // server/src/history/store.ts' list, over this branch's entries (oldest first).
+    list: (_p, _r, _b, { before, limit }) => {
+      let end = all.length
+      if (before !== undefined) {
+        const at = all.findIndex((x) => x.id === before)
+        end = at >= 0 ? at : 0
+      }
+      const start = Math.max(0, end - limit)
+      return { events: all.slice(start, end).reverse(), more: start > 0 }
+    }
+  }
+  const ctx = { projects: { require: () => project }, history: store }
+  const ask = (params) => {
+    try {
+      return historyHandlers['history.list']({ projectId: 'p1', repoId: 'r1', branch: 'feat', ...params }, ctx)
+    } catch (err) {
+      const w = toWireError('history.list', err)
+      return `${w.code}: ${w.message}`
+    }
+  }
+  let list = reloaded(reloadStarted(EMPTY_HISTORY), ask({ limit: 2 }))
+  assert.deepEqual(list.events.map((x) => x.id), ['e5', 'e4'])
+  list = olderLoaded(list, ask({ limit: 2, before: olderCursor(list) }))
+  list = olderLoaded(list, ask({ limit: 2, before: olderCursor(list) }))
+  assert.deepEqual(list.events.map((x) => x.id), ['e5', 'e4', 'e3', 'e2', 'e1'])
+  assert.equal(list.more, false)
+  // An entry the server no longer keeps as the cursor: an empty last page, not an error.
+  assert.deepEqual(ask({ before: 'pruned' }), { events: [], more: false })
+  // Refusals.
+  assert.equal(ask({ limit: 101 }), 'BAD_REQUEST: limit must be an integer from 1 to 100')
+  assert.equal(ask({ before: 5 }), 'BAD_REQUEST: before must be an event id')
+  assert.equal(ask({ repoId: 'nope' }), 'NOT_FOUND: No repository with id "nope" in this project')
+  // A branch without history, and a server without it.
+  assert.deepEqual(historyHandlers['history.list']({ projectId: 'p1', repoId: 'r1', branch: 'other' }, { projects: { require: () => project } }), { events: [], more: false })
 })

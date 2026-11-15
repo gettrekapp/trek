@@ -25,6 +25,10 @@ export const MOBILE_ENTRIES = [
   // The Changes screen's review: numbering a patch, and where a draft's comments sit on it.
   'src/shared/changes.ts',
   'src/shared/review.ts',
+  // Automations: a schedule in words and its next runs. A branch's history: its entries, their wording, merging pages.
+  'src/shared/cron.ts',
+  'src/shared/model/history.ts',
+  'src/shared/historyText.ts',
   // Tickets: the trackers' providers and manifests (plugins/, pure shared code) and core's generic tickets.
   'src/shared/plugins/manifest.ts',
   'src/shared/plugins/tickets.ts',
