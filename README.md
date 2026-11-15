@@ -270,7 +270,8 @@ other window on that project sees them live.
   `read_stack_log` MCP tools. A server older than this Trek (without the `linear`,
   `voice` and `skills` capabilities) shows none of these.
 - **Pull request watch, on the server**: with a pull request linked to a branch, the
-  worktree's … menu has **Watch pull request** (agents can call `watch_pull_request`).
+  worktree's … menu has **Watch pull request** (agents can call `watch_pull_request`,
+  and read the pull request's state at any time with `get_pull_request`).
   The server asks `gh` on its own machine about it every few minutes; when its checks
   fail or pass, new reviews or comments arrive, it gets a merge conflict, or it is
   merged or closed, a prompt saying so (and which `gh` command shows it) is queued on

@@ -1182,6 +1182,10 @@ read: <reason>`, once, and the next good poll withdraws it.
 `branch.setPr` with a different URL, or none, also removes the branch's watch: it watched the old
 pull request. The MCP tool `watch_pull_request` turns a watch on or off.
 
+An agent can also read a linked PR at any time with the MCP tool `get_pull_request`, watched or
+not. It runs the same query once, compares nothing and remembers nothing, so it never changes
+what a watch reports.
+
 ## Automations
 
 With the capability `automations`, a project holds scheduled prompts, `Project.automations`
@@ -1962,6 +1966,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `set_worktree_ticket` | `worktree`; `ticket?` (an id or URL of a tracker on in the project: a Linear id or URL, an Azure DevOps id or URL; omit to unlink) | `{branch, ticket, url}` |
 | `set_worktree_pull_request` | `worktree`; `pullRequest?` (a GitHub PR URL, or a number or `#number` when another PR in the repository gives the owner and repo; omit to unlink) | `{branch, pullRequest}` |
 | `watch_pull_request` | `worktree`; `watch?` (default true; false stops) | `{branch, pullRequest, watching}`, through `branch.setPrWatch` (see [Pull request watch](#pull-request-watch)): `TOOL_ERROR` when gh is not signed in on the server, `BAD_REQUEST` with no linked github.com PR |
+| `get_pull_request` | `worktree` | `{branch, pullRequest, number, state, mergeable, checks, failedChecks, headSha, comments, lastCommentAt?, watching, lastNotice?: {text, at}}`: the linked PR read now with one `gh api graphql` call (the watch's query), shared by callers while it runs. `state`: `open`, `merged`, `closed`; `mergeable`: `mergeable`, `conflicting`, `unknown`; `checks`: `none`, `pending`, `passing`, `failing`; `comments` counts reviews and comments by others. It changes nothing a watch remembers and works unwatched. `BAD_REQUEST` with no linked PR or a link that is not a github.com pull URL; `TOOL_ERROR` when gh is missing, signed out, or fails |
 | `get_review_comments` | `worktree` | `{worktree, revision, comments: [{id, file, side, line, lineText, comment, by, agent, source, sourceLabel, outdated}]}`: the worktree's draft review (see [Changes tab review](#changes-tab-review)); `revision: null` and no comments without one. Read-only. `by` is `the user`, the writing session's title, or `an agent`; `agent` is true for a comment an agent wrote (a session can be titled anything). `outdated` is worked out now against each comment's own source (one `worktree.diff` per source, of only the files commented on in it, with its path checks and limits, at most 5 sources): `true` when its file has no patch there or its line no longer reads the same, `null` when that diff could not be read (a commit gone, a missing worktree) or past the fifth source. Because it reads only the commented files, `outdated` does not depend on the full diff's 8 MiB size cap or git's rename limit, so it can differ from what the Changes tab shows when the whole diff hits either |
 | `add_review_comment` | `worktree`, `file`, `line`, `comment`; `side?` (`new`, the default, or `old` for a removed line); `source?` (default the branch against its base); `terminalId?` (names the session on the comment) | `{worktree, revision, comment}`, the comment as `get_review_comments` gives it. The line's text is read from the file's patch in that source (`worktree.diff`), then `review.add` with its limits; `BAD_REQUEST` when the file has no patch there or the patch shows no such line on that side |
 | `remove_review_comment` | `worktree`, `id` | `{worktree, removed}`; through `review.remove`; `BAD_REQUEST` for a comment the user wrote (one without `by`), `NOT_FOUND` for an unknown id |
@@ -1980,7 +1985,7 @@ or `null`, and `watchingPullRequest` says the server watches the branch's pull r
 | `delete_automation` | `automation` | `{deleted: name}`; through `automation.delete`: its run tab stays, as a normal Global session |
 | `run_automation` | `automation` | `{terminalId}` of its run tab; through `automation.runNow`, recorded as a `manual` run; `CONFLICT` while the tab is busy with the previous run |
 
-That is 40 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
+That is 41 tools. Every tool whose change goes in the worktree's history also takes `reason?` (why, in a sentence, shown in the worktree's history) and `terminalId?` (your `$TREK_TERMINAL_ID`, so the history names your session). The stack tools run through `stack.status`, `stack.up`, `stack.down` and
 `stack.log` (their path checks), on the server's machine; a worktree without
 `docker/stack/stack.sh` has no stack (`get_stack` says so, the others are `BAD_REQUEST`). Tags are matched by name or id, case-insensitively, and an
 unknown name fails with the list of valid ones. `set_worktree_ticket` parses through the
