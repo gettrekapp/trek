@@ -3,7 +3,7 @@
 // against the server's list and the hash this app accepted, an import from a `blob:` URL, and a
 // check of the default export. Pure but for the default importer: imported by tests.
 import type { ClientPlugin } from '../../../shared/plugins/client.ts'
-import { PLUGIN_CONTRACT_VERSION } from '../../../shared/plugins/manifest.ts'
+import { PLUGIN_CONTRACT_VERSION, PLUGIN_ID_RE } from '../../../shared/plugins/manifest.ts'
 import type { InstalledTheme } from './theme.ts'
 
 export type LoadResult =
@@ -15,13 +15,23 @@ export type LoadResult =
 export interface LoaderDeps {
   /** A request on the window's server (backend.plugins.request) */
   request(method: string, params: Record<string, unknown>): Promise<unknown>
-  /** Imports a module's text and resolves its namespace (default: from a `blob:` URL) */
+  /**
+   * Imports a module's text and resolves `{ ns }`, its namespace inside another object (default:
+   * from a `blob:` URL). Never the namespace itself: a promise resolved with a module that
+   * exports `then` calls it, and so may never settle.
+   */
   importText?(text: string): Promise<unknown>
   /** Loaded plugins by bundle hash (default: one per page) */
   cache?: Map<string, ClientPlugin>
+  /** How long a bundle's import may take, top-level awaits included (default: 15 seconds) */
+  timeoutMs?: number
 }
 
 const loadedPlugins = new Map<string, ClientPlugin>()
+const IMPORT_TIMEOUT_MS = 15_000
+/** The longest an error's message, and a bundle's own id or version, may be inside a reason. */
+const MAX_MESSAGE = 200
+const MAX_NAME = 80
 
 /** Lowercase hex SHA-256 of the string's UTF-8 bytes, exactly as given: nothing trimmed or stripped. */
 export async function sha256Hex(text: string): Promise<string> {
@@ -29,25 +39,71 @@ export async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+/**
+ * The namespace of `text` as `{ ns }`. `import()` itself follows a `then` export, so the text is
+ * imported by a second module that re-exports its namespace under a name: that module's own
+ * namespace has no `then`.
+ */
 async function importFromBlob(text: string): Promise<unknown> {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }))
+  const outer = URL.createObjectURL(new Blob([`export * as ns from ${JSON.stringify(url)}`], { type: 'text/javascript' }))
   try {
-    return await import(/* @vite-ignore */ url)
+    return await import(/* @vite-ignore */ outer)
   } finally {
+    URL.revokeObjectURL(outer)
     URL.revokeObjectURL(url)
   }
 }
 
-const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+const clamp = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
+/** An error's message, cut to a length; whatever was thrown, this does not throw. */
+function messageOf(err: unknown): string {
+  try {
+    const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+    if (typeof message === 'string' && message) return clamp(message, MAX_MESSAGE)
+  } catch {
+    // A message that cannot be read is no message.
+  }
+  return 'an error with no message'
+}
+
+/** A bundle's own id or version inside a reason: a string, cut to a length, or `?`. */
+const nameOf = (value: unknown): string => (typeof value === 'string' ? clamp(value, MAX_NAME) : '?')
+
+const failed = (reason: string): LoadResult => ({ kind: 'failed', reason })
+const TIMED_OUT = Symbol('timed out')
+
+/** `work`'s value, or TIMED_OUT after `ms`; the timer does not outlive the answer. */
+async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([work, new Promise<typeof TIMED_OUT>((resolve) => (timer = setTimeout(() => resolve(TIMED_OUT), ms)))])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 /**
  * The plugin of `theme` (the server's listed entry), whose bundle hash the user accepted as
- * `accepted`. Never rejects. `globalThis.__trekPlugin` must be set before (pluginGlobals.ts).
+ * `accepted`. Never rejects, and settles: a bundle's import has a time limit.
+ * `globalThis.__trekPlugin` must be set before (pluginGlobals.ts).
  */
 export async function loadInstalledPlugin(theme: InstalledTheme, accepted: string, deps: LoaderDeps): Promise<LoadResult> {
+  try {
+    return await load(theme, accepted, deps)
+  } catch (err) {
+    return failed(`it could not be loaded (${messageOf(err)})`)
+  }
+}
+
+async function load(theme: InstalledTheme, accepted: string, deps: LoaderDeps): Promise<LoadResult> {
   const cache = deps.cache ?? loadedPlugins
-  if (theme.sha256 !== accepted) return { kind: 'failed', reason: 'its bundle is not the one accepted in this app' }
-  if (theme.contract !== PLUGIN_CONTRACT_VERSION) return { kind: 'failed', reason: "it was built for another version of Trek's plugin contract" }
+  // The id goes into a request and a sourceURL comment: nothing but a plugin id may.
+  if (typeof theme.id !== 'string' || !PLUGIN_ID_RE.test(theme.id)) return failed('its id is not a plugin id')
+  if (theme.sha256 !== accepted) return failed('its bundle is not the one accepted in this app')
+  if (theme.contract !== PLUGIN_CONTRACT_VERSION) return failed("it was built for another version of Trek's plugin contract")
+  // By hash, and only as the plugin listed: the same bytes under another id or version are checked again.
   const kept = cache.get(theme.sha256)
   if (kept && kept.manifest.id === theme.id && kept.manifest.version === theme.version) return { kind: 'loaded', plugin: kept }
 
@@ -57,25 +113,43 @@ export async function loadInstalledPlugin(theme: InstalledTheme, accepted: strin
   } catch (err) {
     // Listed but gone: it is being replaced or removed, and the next plugins.list says which.
     if ((err as { code?: unknown } | null)?.code === 'NOT_FOUND') return { kind: 'stale' }
-    return { kind: 'failed', reason: `the server did not send it (${messageOf(err)})` }
+    return failed(`the server did not send it (${messageOf(err)})`)
   }
   const { sha256, client } = (answer && typeof answer === 'object' ? answer : {}) as { sha256?: unknown; client?: unknown }
-  if (typeof client !== 'string' || typeof sha256 !== 'string') return { kind: 'failed', reason: 'the server sent no bundle' }
+  if (typeof client !== 'string' || typeof sha256 !== 'string') return failed('the server sent no bundle')
   if (sha256 !== theme.sha256) return { kind: 'stale' }
-  if ((await sha256Hex(client)) !== theme.sha256) return { kind: 'failed', reason: 'the bundle does not match its hash' }
+  let hash: string
+  try {
+    hash = await sha256Hex(client)
+  } catch {
+    // crypto.subtle is missing on a page that is not a secure context.
+    return failed('this page cannot check a bundle (no SHA-256 here)')
+  }
+  if (hash !== theme.sha256) return failed('the bundle does not match its hash')
 
-  let module: unknown
+  let wrapped: unknown
   try {
     // The name a stack trace shows; added after hashing, so it is not part of what was checked.
-    module = await (deps.importText ?? importFromBlob)(`${client}\n//# sourceURL=trek-plugin/${theme.id}/client.js`)
+    const importing = (deps.importText ?? importFromBlob)(`${client}\n//# sourceURL=trek-plugin/${theme.id}/client.js`)
+    wrapped = await within(Promise.resolve(importing), deps.timeoutMs ?? IMPORT_TIMEOUT_MS)
   } catch (err) {
-    return { kind: 'failed', reason: `its code could not be loaded (${messageOf(err)})` }
+    return failed(`its code could not be loaded (${messageOf(err)})`)
   }
-  const plugin = (module as { default?: unknown } | null)?.default
-  const manifest = plugin && typeof plugin === 'object' ? (plugin as { manifest?: unknown }).manifest : undefined
-  if (!manifest || typeof manifest !== 'object') return { kind: 'failed', reason: 'its bundle has no plugin as its default export' }
-  const { id, version } = manifest as { id?: unknown; version?: unknown }
-  if (id !== theme.id || version !== theme.version) return { kind: 'failed', reason: `its bundle is another plugin (${String(id)} ${String(version)})` }
-  cache.set(theme.sha256, plugin as ClientPlugin)
-  return { kind: 'loaded', plugin: plugin as ClientPlugin }
+  // A top-level await that never ends, or an importer that followed a `then` export.
+  if (wrapped === TIMED_OUT) return failed('its code did not finish loading')
+
+  try {
+    // The bundle's own objects from here on: a getter may throw, and a value may be anything.
+    const ns = (wrapped as { ns?: unknown } | null)?.ns as { default?: unknown; then?: unknown } | null | undefined
+    if (ns && ns.then !== undefined) return failed('its bundle exports a "then", which a plugin may not')
+    const plugin = ns?.default
+    const manifest = plugin && typeof plugin === 'object' ? (plugin as { manifest?: unknown }).manifest : undefined
+    if (!manifest || typeof manifest !== 'object') return failed('its bundle has no plugin as its default export')
+    const { id, version } = manifest as { id?: unknown; version?: unknown }
+    if (id !== theme.id || version !== theme.version) return failed(`its bundle is another plugin (${nameOf(id)} ${nameOf(version)})`)
+    cache.set(theme.sha256, plugin as ClientPlugin)
+    return { kind: 'loaded', plugin: plugin as ClientPlugin }
+  } catch (err) {
+    return failed(`its bundle could not be read (${messageOf(err)})`)
+  }
 }

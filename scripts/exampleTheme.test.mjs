@@ -14,7 +14,8 @@ import { loadInstalledPlugin, sha256Hex } from '../src/renderer/src/plugins/inst
 import { buildExampleTheme, buildPlugin } from '../plugins/example-theme/build.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const importText = (text) => import(`data:text/javascript;base64,${Buffer.from(text).toString('base64')}`)
+const dataUrl = (text) => `data:text/javascript;base64,${Buffer.from(text).toString('base64')}`
+const importText = (text) => import(dataUrl(`export * as ns from ${JSON.stringify(dataUrl(text))}`))
 
 /** Loads a built package the way a window does. */
 async function load(pkg) {

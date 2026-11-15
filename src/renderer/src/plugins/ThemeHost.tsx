@@ -2,7 +2,7 @@
 // window's server while the choice is `ready`, then applies it: its styles after the app's, the
 // id on <html data-theme>, and its Runtime and overlay inside its host and the plugin error
 // boundary. Anything else (no choice, changed, missing, a load that failed) is the default look.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ClientPlugin } from '../../../shared/plugins/client.ts'
 import type { WindowBackend } from '../backend'
 import { loadInstalledPlugin } from './installedLoader'
@@ -10,6 +10,10 @@ import { PluginScope, themeEntry } from './PluginHost'
 import { exposePluginGlobals } from './pluginGlobals'
 import { setThemeLoad } from './themeLoadStore'
 import { useThemeChoice } from './useThemeChoice'
+
+/** A `stale` answer is followed by a new list; if none changes anything, the load goes again: this long after, this many times. */
+const STALE_RETRY_MS = 3000
+const STALE_RETRIES = 5
 
 interface Loaded {
   backend: WindowBackend
@@ -25,7 +29,18 @@ export function ThemeHost(): React.JSX.Element | null {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   // A load that failed while the link was down goes again when it is back.
   const [attempt, setAttempt] = useState(0)
-  useEffect(() => backend.plugins.onConnected(() => setAttempt((n) => n + 1)), [backend])
+  const staleTries = useRef(0)
+  useEffect(
+    () =>
+      backend.plugins.onConnected(() => {
+        staleTries.current = 0
+        setAttempt((n) => n + 1)
+      }),
+    [backend]
+  )
+  useEffect(() => {
+    staleTries.current = 0
+  }, [backend, readyId, readySha])
 
   useEffect(() => {
     if (!ready) {
@@ -35,19 +50,29 @@ export function ThemeHost(): React.JSX.Element | null {
     let live = true
     setThemeLoad({ kind: 'loading' })
     exposePluginGlobals()
-    void loadInstalledPlugin(ready, ready.sha256, { request: (method, params) => backend.plugins.request(method, params) }).then((result) => {
-      if (!live) return
-      if (result.kind === 'loaded') {
-        setLoaded({ backend, sha256: ready.sha256, plugin: result.plugin })
-        setThemeLoad({ kind: 'applied' })
-      } else {
+    let retry: ReturnType<typeof setTimeout> | undefined
+    loadInstalledPlugin(ready, ready.sha256, { request: (method, params) => backend.plugins.request(method, params) })
+      // The loader does not reject; if it ever did, that is a failed load, not a status stuck on loading.
+      .catch((): { kind: 'failed'; reason: string } => ({ kind: 'failed', reason: 'it could not be loaded' }))
+      .then((result) => {
+        if (!live) return
+        if (result.kind === 'loaded') {
+          setLoaded({ backend, sha256: ready.sha256, plugin: result.plugin })
+          setThemeLoad({ kind: 'applied' })
+          return
+        }
         // Whatever was applied before is not this load's: a load that did not succeed is the default look.
         setLoaded(null)
         setThemeLoad(result)
-      }
-    })
+        // Stale, and then the server lists this same bundle again: no new list starts a load, so this does.
+        if (result.kind === 'stale' && staleTries.current < STALE_RETRIES) {
+          staleTries.current += 1
+          retry = setTimeout(() => setAttempt((n) => n + 1), STALE_RETRY_MS)
+        }
+      })
     return () => {
       live = false
+      clearTimeout(retry)
     }
     // `ready` is a new object on every list: its id and hash are what a load depends on.
     // eslint-disable-next-line react-hooks/exhaustive-deps
