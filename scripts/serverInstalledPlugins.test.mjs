@@ -265,11 +265,179 @@ test('watch: after a watcher fails the store tries again by itself until one is 
   await sleep(REWATCH_MS * 5)
   assert.equal(watchers.length, 2)
 
-  // Disposed while waiting to try again: no new watcher.
+  // Disposed while waiting to try again: no new watcher. (This watcher has worked for a while, so
+  // a new one is tried at once: that try fails too, and the store is left waiting.)
+  failing = 1000
   watchers[1].emit('error', new Error('EPERM: again'))
+  assert.equal(failing, 998, 'tried at once, recursive then plain')
   store.dispose()
   await sleep(REWATCH_MS * 5)
   assert.equal(watchers.length, 2)
+  assert.equal(failing, 998, 'and not tried again')
+})
+
+/** A watcher that never says anything, as one that is not live yet, or one whose event was lost. */
+const silentWatcher = () => Object.assign(new EventEmitter(), { closed: false, close() { this.closed = true } })
+/** Until `done()` (about 10 s at most). */
+async function until(done) {
+  for (let n = 0; !done() && n < 500; n++) await sleep(20)
+}
+
+test('watch: a change the watcher never told of is still announced, by the slow rescan', async (t) => {
+  const s = setup(t)
+  fakeWatch(t, silentWatcher)
+  const store = createInstalledPlugins({ dir: s.dir, reserved: () => false, warn: (m) => s.warnings.push(m), settleMs: 600_000, rescanMs: 20 })
+  t.after(() => store.dispose())
+  const heard = []
+  store.onChange((ids) => heard.push(ids))
+  await sleep(60)
+  s.make().add(pkg('nord'))
+  assert.deepEqual(heard, [], 'no rescan before watch() is called')
+  store.watch()
+  await until(() => heard.length > 0)
+  assert.deepEqual(heard, [['nord']])
+  s.make().add(pkg('solarized'))
+  await until(() => heard.length > 1)
+  assert.deepEqual(heard, [['nord'], ['solarized']], 'and again: it goes on')
+  assert.deepEqual(store.list().map((p) => p.manifest.id), ['nord', 'solarized'])
+
+  // Disposed: the folder is no longer read.
+  store.dispose()
+  s.make().remove('nord')
+  await sleep(100)
+  assert.equal(heard.length, 2)
+  assert.deepEqual(s.warnings, [])
+})
+
+test('watch: the folder is read once more a moment after a watch starts, for what changed before it was live', async (t) => {
+  const s = setup(t)
+  fakeWatch(t, silentWatcher)
+  const store = createInstalledPlugins({ dir: s.dir, reserved: () => false, warn: (m) => s.warnings.push(m), settleMs: 30, rescanMs: 600_000 })
+  t.after(() => store.dispose())
+  const heard = []
+  store.onChange((ids) => heard.push(ids))
+  store.watch()
+  // `trek-server plugin add` straight after the server started.
+  s.make().add(pkg('nord'))
+  assert.deepEqual(heard, [])
+  await until(() => heard.length > 0)
+  assert.deepEqual(heard, [['nord']])
+  // Once: a later change waits for the watcher or the slow rescan.
+  s.make().add(pkg('solarized'))
+  await sleep(150)
+  assert.equal(heard.length, 1)
+})
+
+test('watch: a folder that could not be watched at first is tried again by itself, and what changed meanwhile is read', async (t) => {
+  const s = setup(t)
+  const watchers = []
+  let failing = 4
+  fakeWatch(t, () => {
+    if (failing > 0) {
+      failing--
+      throw Object.assign(new Error('ENOSPC: no watches left'), { code: 'ENOSPC' })
+    }
+    const watcher = silentWatcher()
+    watchers.push(watcher)
+    return watcher
+  })
+  const store = createInstalledPlugins({ dir: s.dir, reserved: () => false, warn: (m) => s.warnings.push(m), rewatchMs: 20, settleMs: 600_000, rescanMs: 600_000 })
+  t.after(() => store.dispose())
+  const heard = []
+  store.onChange((ids) => heard.push(ids))
+  store.watch()
+  assert.equal(failing, 2, 'recursive, then plain')
+  assert.equal(watchers.length, 0)
+  s.make().add(pkg('nord'))
+  await until(() => watchers.length > 0)
+  assert.equal(watchers.length, 1, 'watched without being asked again')
+  assert.deepEqual(heard, [['nord']])
+  assert.equal(s.warnings.filter((w) => w.includes('ENOSPC')).length, 1, JSON.stringify(s.warnings))
+  await sleep(100)
+  assert.equal(watchers.length, 1, 'live: the tries stop')
+})
+
+test('watch: a watcher that fails after working for a while is replaced at once', async (t) => {
+  const s = setup(t)
+  const watchers = []
+  fakeWatch(t, () => {
+    const watcher = silentWatcher()
+    watchers.push(watcher)
+    return watcher
+  })
+  const REWATCH_MS = 20
+  const store = createInstalledPlugins({ dir: s.dir, reserved: () => false, warn: (m) => s.warnings.push(m), rewatchMs: REWATCH_MS, settleMs: 600_000, rescanMs: 600_000 })
+  t.after(() => store.dispose())
+  const heard = []
+  store.onChange((ids) => heard.push(ids))
+  store.watch()
+  await sleep(REWATCH_MS * 3)
+  s.make().add(pkg('nord'))
+  watchers[0].emit('error', new Error('EPERM: the folder went away'))
+  assert.equal(watchers.length, 2, 'no wait')
+  assert.deepEqual(heard, [['nord']], 'and what changed while nothing watched is read')
+  // One that fails as soon as it started waits its turn.
+  watchers[1].emit('error', new Error('EPERM: again'))
+  assert.equal(watchers.length, 2)
+  await until(() => watchers.length > 2)
+  assert.equal(watchers.length, 3)
+})
+
+/** fs.renameSync that fails on the calls `failing(n)` accepts (the first is 1), for the test. */
+function fakeRename(t, failing) {
+  const real = fs.renameSync
+  let calls = 0
+  fs.renameSync = (...args) => {
+    if (failing(++calls)) throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    return real(...args)
+  }
+  syncBuiltinESMExports()
+  const restore = () => {
+    fs.renameSync = real
+    syncBuiltinESMExports()
+  }
+  t.after(restore)
+  return restore
+}
+
+test('add: a replacement that cannot be moved into place puts the old plugin back: still listed, still served', (t) => {
+  const s = setup(t)
+  const store = s.make()
+  const old = store.add(pkg('solarized', 'export default 1'))
+  const heard = []
+  store.onChange((ids) => heard.push(ids))
+  // The old folder steps aside (1), the new one is moved in (2, fails), the old one goes back (3).
+  const restore = fakeRename(t, (n) => n === 2)
+  assert.throws(() => store.add(pkg('solarized', 'export default 2', { version: '2.0.0' })), /EPERM/)
+  restore()
+  assert.deepEqual(store.list(), [old])
+  assert.deepEqual(store.bundle('solarized'), { sha256: sha('export default 1'), client: 'export default 1' })
+  assert.deepEqual(readdirSync(s.dir), ['solarized'], 'neither the staged folder nor the one that stepped aside is left')
+  assert.equal(JSON.parse(readFileSync(join(s.dir, 'solarized', 'manifest.json'), 'utf8')).version, '1.0.0')
+  assert.equal(store.rescan(), false, 'the folder is as it was known')
+  assert.deepEqual(s.make().list(), [old], 'and a new store reads the old one')
+  assert.deepEqual(heard, [], 'nothing changed, nothing announced')
+  assert.deepEqual(s.warnings, [])
+})
+
+test('add checks what it is given: what cannot be installed is BAD_REQUEST with the reason, and what is stored is the cleaned package', (t) => {
+  const s = setup(t)
+  const store = s.make()
+  const refused = (given, reason) => assert.throws(() => store.add(given), (err) => err.code === 'BAD_REQUEST' && reason.test(err.message), JSON.stringify(given)?.slice(0, 80))
+  refused(raw('solarized', 'x', { type: 'feature' }), /Not an installable plugin: type must be "theme"/)
+  refused(raw('../escape'), /is not a plugin id/)
+  refused(raw('solarized', ''), /client must be a non-empty string/)
+  refused(raw('solarized', 'x', { secrets: ['key'] }), /cannot declare secrets/)
+  refused({ manifest: raw().manifest }, /client must be a non-empty string/)
+  refused(null, /must be an object/)
+  assert.equal(existsSync(s.dir) ? readdirSync(s.dir).length : 0, 0, 'nothing was written')
+
+  // Unchecked, with more than a manifest may keep: stored as checkPluginPackage cleans it.
+  const added = store.add(raw('solarized', 'export default {}', { name: '  Solarized  ', defaultEnabled: true, homepage: 'https://example.test' }))
+  const cleaned = { id: 'solarized', version: '1.0.0', name: 'Solarized', description: 'A theme.', defaultEnabled: false, type: 'theme', contract: 1 }
+  assert.deepEqual(added.manifest, cleaned)
+  assert.deepEqual(JSON.parse(readFileSync(join(s.dir, 'solarized', 'manifest.json'), 'utf8')), cleaned)
+  assert.deepEqual(s.make().list(), [added])
 })
 
 test('watch: recursive where the platform has it, and plain where asking for it throws', (t) => {

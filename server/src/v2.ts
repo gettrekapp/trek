@@ -99,7 +99,7 @@ export interface V2Context {
   /** The server's plugins (plugin system phase 1): a method no core handler has goes to plugin `<id>` */
   plugins?: PluginRegistry
   /** The installed plugins (theme plugins phase 1): `plugins.install`, `plugins.remove`, `plugins.bundle` */
-  installed?: { store: Pick<InstalledPlugins, 'add' | 'remove' | 'bundle'>; remoteInstall: () => boolean; fetch: typeof fetch }
+  installed?: { store: Pick<InstalledPlugins, 'add' | 'remove' | 'bundle'>; remoteInstall: () => boolean; fetch: typeof fetch; /** Where an install or a removal is logged (default: console.log) */ log?: (line: string) => void }
   /** The worktree history; without it nothing is recorded and history.list is empty */
   history?: HistoryStore
   /** The server's update service (the `update` capability); absent on a server that cannot update itself */

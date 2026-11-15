@@ -7,7 +7,7 @@ import { PLUGIN_ID_RE } from '../../../src/shared/plugins/manifest.ts'
 import { codedError } from '../errors.ts'
 import type { V2Context } from '../v2.ts'
 import { presenceOf } from './installed.ts'
-import { fetchPluginPackage, parsePluginPackageText } from './source.ts'
+import { fetchPluginPackage, parsePluginPackageText, shownUrl } from './source.ts'
 
 type Handler = (params: any, ctx: V2Context) => unknown
 
@@ -26,6 +26,13 @@ function writable(ctx: V2Context): NonNullable<V2Context['installed']> {
 }
 
 const MAX_URL_CHARS = 2048
+
+/** Who changed what is installed, in the server's log: any token may, and a theme is code its clients will run. */
+function logChange(ctx: V2Context, what: string): void {
+  const log = ctx.installed?.log ?? console.log
+  // Quoted as JSON: a token's name is its owner's text, and stays on its line.
+  log(`[plugins] token ${JSON.stringify(ctx.tokenName ?? '')} ${what}`)
+}
 
 /** The `id` asked about: a plugin id by its form, so a message that names it sends back nothing else. */
 function idOf(p: unknown): string {
@@ -51,12 +58,15 @@ export const pluginInstallHandlers: Record<string, Handler> = {
     if (typeof url === 'string' && url.length > MAX_URL_CHARS) throw codedError('BAD_REQUEST', 'url is longer than 2,048 characters')
     if (text !== undefined && typeof text !== 'string') throw codedError('BAD_REQUEST', "package must be a string (the .trekplugin file's text)")
     const pkg = typeof url === 'string' ? await fetchPluginPackage(url, service.fetch) : parsePluginPackageText(text as string)
-    return presenceOf(service.store.add(pkg))
+    const presence = presenceOf(service.store.add(pkg))
+    logChange(ctx, `installed ${presence.id} ${presence.version} (sha256 ${presence.sha256}) from ${typeof url === 'string' ? shownUrl(url) : 'a package'}`)
+    return presence
   },
   'plugins.remove': (p, ctx) => {
     const service = writable(ctx)
     const id = idOf(p)
     if (!service.store.remove(id)) throw codedError('NOT_FOUND', `No installed plugin with id "${id}"`)
+    logChange(ctx, `removed ${id}`)
     return {}
   }
 }

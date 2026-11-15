@@ -3,6 +3,7 @@
 // on a real server on a loopback port, the welcome's entries and who hears a change.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -48,8 +49,8 @@ test('config.plugins.remoteInstall must be true or false', (t) => {
 const MANIFEST = { id: 'solarized', version: '1.0.0', name: 'Solarized', description: 'A theme.', type: 'theme', contract: 1 }
 const packageText = (manifest = {}, client = 'export default {}') => JSON.stringify({ manifest: { ...MANIFEST, ...manifest }, client })
 
-/** The context the plugin install handlers read: the store, the switch, and a fetch that serves `pages`. */
-function installCtx(t, { remoteInstall = true, pages = {} } = {}) {
+/** The context the plugin install handlers read: the store, the switch (a value, or a function asked each time), a fetch that serves `pages`, and the lines logged. */
+function installCtx(t, { remoteInstall = true, pages = {}, tokenName = 'laptop' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'trek-plugin-handlers-'))
   t.after(() => removeDir(root))
   const dir = join(root, 'plugins-installed')
@@ -60,7 +61,9 @@ function installCtx(t, { remoteInstall = true, pages = {} } = {}) {
     init?.signal?.throwIfAborted()
     return pages[url] === undefined ? new Response('', { status: 404 }) : new Response(pages[url])
   }
-  return { dir, store, asked, ctx: { installed: { store, remoteInstall: () => remoteInstall, fetch } } }
+  const logged = []
+  const allowed = typeof remoteInstall === 'function' ? remoteInstall : () => remoteInstall
+  return { dir, store, asked, logged, ctx: { tokenName, installed: { store, remoteInstall: allowed, fetch, log: (line) => logged.push(line) } } }
 }
 
 test('plugins.install by package and by URL answers the presence entry; plugins.bundle hands the text out; plugins.remove removes', async (t) => {
@@ -129,6 +132,78 @@ test('remoteInstall off: install and remove are NOT_FOUND, the bundle is still h
   assert.deepEqual([remove.ok, remove.error.code], [false, 'NOT_FOUND'])
   assert.equal((await dispatchV2('plugins.bundle', { id: 'solarized' }, ctx)).ok, true)
   assert.deepEqual(store.list().map((p) => p.manifest.id), ['solarized'])
+})
+
+test('remoteInstall is asked at each request: a config changed while the server runs is obeyed at once', async (t) => {
+  let on = true
+  let asks = 0
+  const { store, ctx } = installCtx(t, { remoteInstall: () => (asks++, on) })
+  assert.equal((await dispatchV2('plugins.install', { package: packageText() }, ctx)).ok, true)
+  on = false
+  const install = await dispatchV2('plugins.install', { package: packageText({ id: 'nord' }) }, ctx)
+  assert.deepEqual([install.ok, install.error.code], [false, 'NOT_FOUND'])
+  const remove = await dispatchV2('plugins.remove', { id: 'solarized' }, ctx)
+  assert.deepEqual([remove.ok, remove.error.code], [false, 'NOT_FOUND'])
+  assert.deepEqual(store.list().map((p) => p.manifest.id), ['solarized'])
+  assert.equal((await dispatchV2('plugins.bundle', { id: 'solarized' }, ctx)).ok, true, 'the bundle does not ask')
+  on = true
+  assert.deepEqual(await dispatchV2('plugins.remove', { id: 'solarized' }, ctx), { ok: true, result: {} })
+  assert.equal((await dispatchV2('plugins.install', { package: packageText({ id: 'nord' }) }, ctx)).ok, true)
+  assert.equal(asks, 5, 'once per install or remove')
+})
+
+test('an install and a removal are logged with the token that asked; a refusal is not', async (t) => {
+  const url = 'https://user:secret@themes.test/packs/nord.trekplugin?key=secret#frag'
+  // The fetch is never given credentials: the URL with them is refused, so the page is the one without.
+  const page = 'https://themes.test/packs/nord.trekplugin?key=secret#frag'
+  const { logged, ctx } = installCtx(t, { tokenName: 'my "phone"\nx', pages: { [page]: packageText({ id: 'nord', version: '2.1.0' }, 'export default 2') } })
+  const first = await dispatchV2('plugins.install', { package: packageText() }, ctx)
+  assert.deepEqual(logged, [`[plugins] token "my \\"phone\\"\\nx" installed solarized 1.0.0 (sha256 ${first.result.sha256}) from a package`], 'the name is quoted, on one line')
+  assert.equal((await dispatchV2('plugins.install', { url }, ctx)).ok, false)
+  assert.equal(logged.length, 1, 'a refused install is not logged')
+  const byUrl = await dispatchV2('plugins.install', { url: page }, ctx)
+  assert.equal(byUrl.ok, true, JSON.stringify(byUrl))
+  assert.equal(logged[1], `[plugins] token "my \\"phone\\"\\nx" installed nord 2.1.0 (sha256 ${byUrl.result.sha256}) from https://themes.test/packs/nord.trekplugin`, 'the URL without its query or fragment')
+  assert.match(byUrl.result.sha256, /^[0-9a-f]{64}$/)
+  assert.equal((await dispatchV2('plugins.remove', { id: 'nope' }, ctx)).ok, false)
+  assert.equal((await dispatchV2('plugins.remove', { id: 'nord' }, ctx)).ok, true)
+  assert.deepEqual(logged.slice(2), ['[plugins] token "my \\"phone\\"\\nx" removed nord'])
+
+  // A plain name, as the user's sentence has it; and the default is console.log.
+  const plain = installCtx(t, { tokenName: 'laptop' })
+  delete plain.ctx.installed.log
+  const real = console.log
+  const printed = []
+  console.log = (line) => printed.push(line)
+  try {
+    await dispatchV2('plugins.install', { package: packageText() }, plain.ctx)
+    await dispatchV2('plugins.remove', { id: 'solarized' }, plain.ctx)
+  } finally {
+    console.log = real
+  }
+  assert.equal(printed.length, 2, JSON.stringify(printed))
+  assert.match(printed[0], /^\[plugins\] token "laptop" installed solarized 1\.0\.0 \(sha256 [0-9a-f]{64}\) from a package$/)
+  assert.equal(printed[1], '[plugins] token "laptop" removed solarized')
+})
+
+test('text that is not ASCII keeps its bytes: the hash a client computes of the bundle it is sent is the one announced', async (t) => {
+  // A leading U+FEFF, two- three- and four-byte characters, a line and paragraph separator.
+  const client = '\uFEFFexport default { name: "Zażółć 日本語 🎨", sep: "\u2028\u2029" } // é\n'
+  const { dir, store, ctx } = installCtx(t)
+  const installed = await dispatchV2('plugins.install', { package: packageText({}, client) }, ctx)
+  assert.equal(installed.ok, true, JSON.stringify(installed))
+  const bundle = await dispatchV2('plugins.bundle', { id: 'solarized' }, ctx)
+  assert.equal(bundle.ok, true)
+  assert.equal(bundle.result.client, client, 'the text as it was sent, its U+FEFF kept')
+  assert.equal(bundle.result.client.charCodeAt(0), 0xfeff)
+  const clientSide = createHash('sha256').update(new TextEncoder().encode(bundle.result.client)).digest('hex')
+  assert.equal(clientSide, bundle.result.sha256)
+  assert.equal(installed.result.sha256, clientSide, "the install's answer")
+  assert.equal(store.presence()[0].sha256, clientSide, "the welcome's entry")
+  // Read from the folder, as after a restart: the same.
+  const restarted = createInstalledPlugins({ dir, reserved: () => false, warn: () => {} })
+  assert.equal(restarted.presence()[0].sha256, clientSide)
+  assert.deepEqual(restarted.bundle('solarized'), bundle.result)
 })
 
 test('a server with no installed plugins store answers NOT_FOUND to all three', async () => {

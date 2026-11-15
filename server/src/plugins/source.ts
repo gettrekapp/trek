@@ -58,6 +58,11 @@ const parsedUrl = (value: string, base?: string): URL | undefined => {
 }
 /** The URL as a message names it: no user name or password, no query, no fragment (any may be a secret). */
 const shown = (url: URL): string => `${url.protocol}//${url.host}${url.pathname}`
+/** A URL a client gave, as a log line names it; what is not a URL is not shown at all. */
+export function shownUrl(source: string): string {
+  const url = parsedUrl(source)
+  return url ? shown(url) : 'a URL'
+}
 const hasCredentials = (url: URL): boolean => url.username !== '' || url.password !== ''
 
 /** Why a fetch or a body's read failed. Node's fetch says only `fetch failed`: the reason is its cause. */

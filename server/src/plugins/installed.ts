@@ -20,8 +20,12 @@ export interface InstalledPluginsOptions {
   /** Whether an id is a built-in plugin's or a core namespace (reserved.ts) */
   reserved: (id: string) => boolean
   warn?: (message: string) => void
-  /** How long after a watcher failed, and then how often, a new watch is tried (default: 30 s) */
+  /** How often a new watch is tried while the folder cannot be watched; a watcher that fails after working this long is replaced at once (default: 30 s) */
   rewatchMs?: number
+  /** How long after a watch starts the folder is read once more: a watch is not always live when it returns (default: 2 s) */
+  settleMs?: number
+  /** How often the folder is read anyway once watch() was called: a missed event is then not for ever (default: 60 s) */
+  rescanMs?: number
 }
 
 export interface InstalledPlugins {
@@ -29,7 +33,7 @@ export interface InstalledPlugins {
   list(): InstalledPlugin[]
   /** Their entries in the welcome's `plugins` */
   presence(): PluginPresence[]
-  /** Installs a checked package (checkPluginPackage), replacing a plugin of the same id. BAD_REQUEST for a reserved id. */
+  /** Installs a package, replacing a plugin of the same id. It is checked here (checkPluginPackage) and stored as cleaned: BAD_REQUEST for one that cannot be installed, or whose id is reserved. */
   add(pkg: PluginPackage): InstalledPlugin
   /** False when no plugin has the id */
   remove(id: string): boolean
@@ -39,7 +43,7 @@ export interface InstalledPlugins {
   rescan(): boolean
   /** The ids added, replaced or removed, sorted; returns the unsubscribe */
   onChange(listener: (ids: string[]) => void): () => void
-  /** Rescans when the folder changes. Never throws: a folder that cannot be watched is a warning, and a later call tries again. */
+  /** Rescans when the folder changes, and now and then anyway. Never throws: a folder that cannot be watched is a warning, and a new watch is tried until one is live. */
   watch(): void
   dispose(): void
 }
@@ -85,8 +89,14 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
   let skipped = new Map<string, string>()
   let watcher: FSWatcher | undefined
   let timer: NodeJS.Timeout | undefined
-  /** Runs while a watcher that failed has no successor. */
+  /** Runs while the folder has no watcher: after one failed, or when none could be started. */
   let rewatch: NodeJS.Timeout | undefined
+  /** The one rescan a moment after a watch started. */
+  let settle: NodeJS.Timeout | undefined
+  /** The slow rescan, from the first watch() to dispose(). */
+  let poll: NodeJS.Timeout | undefined
+  let disposed = false
+  const rewatchMs = options.rewatchMs ?? 30_000
   /** Why the folder is not watched, as last warned: each try at a new watch does not say it again. */
   let unwatched: string | undefined
 
@@ -182,48 +192,64 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
     unwatched = reason
   }
 
-  const startWatch = (): void => {
-    if (watcher) return
+  /** Starts a watcher; false (and a warning) when the folder cannot be watched now. */
+  const open = (): boolean => {
     // One rescan for a burst of events (an add is several renames and writes).
     const changed = (): void => {
       clearTimeout(timer)
       timer = setTimeout(() => adopt(scan()), 200)
     }
     // Recursive, to hear a client.js edited inside its folder; plain where that cannot be had
-    // (bundle() still notices such an edit when the bundle is next asked for).
-    const open = (recursive: boolean): FSWatcher => watchDir(dir, { recursive }, changed)
+    // (bundle() and the slow rescan still notice such an edit).
+    const watchIt = (recursive: boolean): FSWatcher => watchDir(dir, { recursive }, changed)
     let opened: FSWatcher
     // Out of watches or of files, a folder that cannot be made: the server still starts, lists
-    // its plugins and takes its own installs. What the command changes is then read at a restart.
+    // its plugins and takes its own installs. What the command changes is read by the slow rescan.
     try {
       mkdirSync(dir, { recursive: true })
       try {
-        opened = open(RECURSIVE_WATCH)
+        opened = watchIt(RECURSIVE_WATCH)
       } catch (err) {
         if (!RECURSIVE_WATCH) throw err
-        opened = open(false)
+        opened = watchIt(false)
       }
     } catch (err) {
       cannotWatch(err)
-      return
+      return false
     }
     watcher = opened
-    unwatched = undefined
+    const openedAt = Date.now()
     opened.on('error', (err) => {
       cannotWatch(err)
       opened.close()
-      // Cleared, so that watch() starts a new one; and nobody else calls it, so it is tried from here.
-      if (watcher !== opened) return
+      if (watcher !== opened || disposed) return
       watcher = undefined
-      rewatch ??= setInterval(() => {
-        startWatch()
-        if (!watcher) return
-        clearInterval(rewatch)
-        rewatch = undefined
-        // What changed while nothing watched.
-        adopt(scan())
-      }, options.rewatchMs ?? 30_000).unref()
+      // At once: a folder removed and made again can be watched straight away. Not for a watcher
+      // that failed as soon as it started: one after another would fail with no pause between them.
+      if (Date.now() - openedAt >= rewatchMs) startWatch()
+      else retryLater()
     })
+    return true
+  }
+
+  /** Nobody else calls watch() again: it is tried from here until one is live. */
+  const retryLater = (): void => {
+    rewatch ??= setInterval(startWatch, rewatchMs).unref()
+  }
+
+  const startWatch = (): void => {
+    if (watcher || disposed) return
+    // Whatever the watch does or misses, the folder is read now and then.
+    poll ??= setInterval(() => adopt(scan()), options.rescanMs ?? 60_000).unref()
+    if (!open()) return retryLater()
+    clearInterval(rewatch)
+    rewatch = undefined
+    // What changed while nothing watched.
+    if (unwatched !== undefined) adopt(scan())
+    unwatched = undefined
+    // The watch may become live only after it returns (macOS): what changed before that is read once it surely is.
+    clearTimeout(settle)
+    settle = setTimeout(() => adopt(scan()), options.settleMs ?? 2_000).unref()
   }
 
   sweep()
@@ -234,9 +260,12 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
     presence() {
       return this.list().map(presenceOf)
     },
-    add(pkg) {
+    add(given) {
+      // Whoever calls: nothing unchecked is stored.
+      const checked = checkPluginPackage(given)
+      if (checked.problem !== undefined) throw codedError('BAD_REQUEST', `Not an installable plugin: ${checked.problem}`)
+      const pkg = checked.package
       const id = pkg.manifest.id
-      if (!PLUGIN_ID_RE.test(id)) throw codedError('BAD_REQUEST', `${JSON.stringify(id)} is not a plugin id`)
       if (options.reserved(id)) throw codedError('BAD_REQUEST', `${id} is the id of a built-in plugin or a core namespace`)
       mkdirSync(dir, { recursive: true })
       const staged = scratch('tmp', id)
@@ -309,9 +338,13 @@ export function createInstalledPlugins(options: InstalledPluginsOptions): Instal
     },
     watch: startWatch,
     dispose() {
+      disposed = true
       clearTimeout(timer)
+      clearTimeout(settle)
       clearInterval(rewatch)
+      clearInterval(poll)
       rewatch = undefined
+      poll = undefined
       watcher?.close()
       watcher = undefined
       listeners.clear()
