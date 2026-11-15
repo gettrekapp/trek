@@ -288,7 +288,7 @@ function controlSetup(t) {
       this.current = enabled ? { state: 'listening', address: '100.64.0.9', port } : { state: 'off' }
     }
   }
-  return { store, wants, listener, control: createPhoneAccess(store, listener) }
+  return { store, wants, listener, path, control: createPhoneAccess(store, listener) }
 }
 
 test('set saves the config, moves the listener, and answers the new status; each field alone is kept', async (t) => {
@@ -345,4 +345,105 @@ test('phoneAccess.*: the Local server only, and its local token only', async (t)
     assert.equal((await dispatchV2(method, { name: 'x' }, { ...ctx, tokenName: 'phone-Pixel' })).error.code, 'UNAUTHORIZED', method)
     assert.equal((await dispatchV2(method, { name: 'x' }, { store, tokenName: 'local' })).error.code, 'NOT_FOUND', method)
   }
+})
+
+test('a phone address is checked as written: no spaces or control characters, ws:// or wss://, no query, fragment or port 0; a path may stay', () => {
+  for (const url of ['ws://100.64.0.9:7346', 'wss://mac.tail1234.ts.net', 'wss://mac.tail1234.ts.net/trek', 'ws://[fd7a:115c:a1e0::1]:7346', 'WSS://mac.tail1234.ts.net']) {
+    assert.equal(phoneUrlProblem(url), null, url)
+  }
+  const space = 'url must not contain spaces or control characters'
+  const scheme = 'url must be a ws:// or wss:// address'
+  const extra = 'url must not have a query or a fragment'
+  const refused = [
+    ['ws://ma\tc.ts.net', space],
+    ['ws://a\nb', space],
+    ['ws://a b.net', space],
+    [' wss://mac.ts.net', space],
+    ['ws://mac.ts.net\x00', space],
+    ['ws://mac.ts.net\x7f', space],
+    ['ws:foo', scheme],
+    ['ws:/foo', scheme],
+    ['http://x', scheme],
+    ['ws://', scheme],
+    ['wss://me@mac.ts.net', 'url must not hold a user name or password'],
+    ['ws://h/p?x=1#f', extra],
+    ['ws://h/p?x=1', extra],
+    ['ws://h/p#f', extra],
+    ['ws://h:0', 'url must not use port 0'],
+    [`wss://${'a'.repeat(300)}.net`, 'url is too long']
+  ]
+  for (const [url, problem] of refused) assert.equal(phoneUrlProblem(url), problem, JSON.stringify(url))
+})
+
+test('a hand-edited address in the config is trimmed, and ignored unless it passes the same check', () => {
+  assert.deepEqual(phoneAccessOf({ repos: [], phoneAccess: { url: ' wss://mac.ts.net ' } }), { enabled: false, port: 7346, url: 'wss://mac.ts.net' })
+  for (const url of ['ws://a\tb.net', 'ws:foo', 'ws://h/p?x=1#f', 'ws://h:0', '   ']) {
+    assert.deepEqual(phoneAccessOf({ repos: [], phoneAccess: { url } }), { enabled: false, port: 7346 }, JSON.stringify(url))
+  }
+})
+
+test('set refuses an address with a control character inside it, and saves nothing', async (t) => {
+  const { store, wants, control } = controlSetup(t)
+  await assert.rejects(control.set({ url: 'ws://ma\tc.ts.net' }), (err) => err.code === 'BAD_REQUEST')
+  assert.equal(store.config.phoneAccess, undefined)
+  assert.deepEqual(wants, [])
+})
+
+test('set builds on the config as it is on disk, not on the copy the server last read', async (t) => {
+  const { store, wants, control, path } = controlSetup(t)
+  // A hand edit the store has not reloaded yet.
+  saveConfig(path, { ...store.config, phoneAccess: { enabled: true, port: 9000 } })
+  await control.set({ url: 'wss://mac.ts.net' })
+  assert.deepEqual(store.config.phoneAccess, { enabled: true, port: 9000, url: 'wss://mac.ts.net' })
+  assert.deepEqual(wants, [[true, 9000]])
+})
+
+test('set takes an object only: anything else is BAD_REQUEST and saves nothing; an empty one is allowed', async (t) => {
+  const { store, wants, control } = controlSetup(t)
+  let changes = 0
+  store.on('change', () => changes++)
+  for (const bad of [[], [{ enabled: true }], 'on', null, undefined, 5, true]) {
+    await assert.rejects(control.set(bad), (err) => err.code === 'BAD_REQUEST' && err.message === 'params must be an object', JSON.stringify(bad))
+  }
+  assert.equal(store.config.phoneAccess, undefined)
+  assert.deepEqual(wants, [])
+  assert.equal(changes, 0)
+  assert.equal((await control.set({})).enabled, false)
+  assert.deepEqual(wants, [[false, 7346]])
+})
+
+test('revoking a name that has no token writes nothing; a real revoke writes once', (t) => {
+  const { store, control } = controlSetup(t)
+  store.update((c) => {
+    addToken(c, 'local')
+    addToken(c, 'phone-Pixel')
+  })
+  let changes = 0
+  store.on('change', () => changes++)
+  assert.equal(control.revoke('nobody'), false)
+  assert.equal(changes, 0)
+  assert.equal(control.revoke('phone-Pixel'), true)
+  assert.equal(changes, 1)
+  assert.equal(control.revoke('phone-Pixel'), false)
+  assert.equal(changes, 1)
+})
+
+test('the status gives a phone’s createdAt as a string, whatever a hand edit left there', () => {
+  const config = { repos: [], tokens: [{ name: 'phone-a', hash: 'h1', createdAt: 5 }, { name: 'phone-b', hash: 'h2' }, { name: 'phone-c', hash: 'h3', createdAt: '2026-11-15T00:00:00.000Z' }] }
+  assert.deepEqual(phoneAccessStatus(config, { state: 'off' }).phones, [
+    { name: 'phone-a', createdAt: '' },
+    { name: 'phone-b', createdAt: '' },
+    { name: 'phone-c', createdAt: '2026-11-15T00:00:00.000Z' }
+  ])
+})
+
+test('phoneAccess.*: a connection without a token name, or with an empty one, is refused', async (t) => {
+  const { control, store } = controlSetup(t)
+  for (const tokenName of [undefined, '']) {
+    for (const method of ['phoneAccess.get', 'phoneAccess.set', 'phoneAccess.revoke']) {
+      const answer = await dispatchV2(method, { name: 'x' }, { store, phoneAccess: control, tokenName })
+      assert.equal(answer.error.code, 'UNAUTHORIZED', `${method} ${JSON.stringify(tokenName)}`)
+    }
+  }
+  assert.equal(store.config.phoneAccess, undefined)
 })

@@ -870,7 +870,11 @@ export interface PhoneAccess {
   address?: string
   /** With `error`: the listen error */
   error?: string
-  /** The address a pairing QR carries: `customUrl`, else ws://<address>:<port> while listening */
+  /**
+   * The address a pairing QR carries: `customUrl`, else ws://<address>:<port> while listening. With
+   * a `customUrl` it is present even while `enabled` is false or nothing listens: whether to show a
+   * QR is decided from `enabled` and `state`, not from `url` alone.
+   */
   url?: string
   /** The address the user entered in place of the default */
   customUrl?: string

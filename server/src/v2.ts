@@ -116,7 +116,7 @@ function pushGrantsOf(ctx: V2Context): PushGrants {
 }
 
 /** `phoneAccess.*`: the local server only, and only its own `local` token (a phone may not open the door wider, or revoke another). */
-function phoneAccessOf(ctx: V2Context): PhoneAccessControl {
+function phoneControlOf(ctx: V2Context): PhoneAccessControl {
   if (!ctx.phoneAccess) throw codedError('NOT_FOUND', 'Only the local server has phone access')
   if (ctx.tokenName !== LOCAL_TOKEN_NAME) throw codedError('UNAUTHORIZED', `Only the "${LOCAL_TOKEN_NAME}" token may change the local server's phone access`)
   return ctx.phoneAccess
@@ -437,9 +437,9 @@ const handlers: Record<string, Handler> = {
   },
 
   // The local server's listener for phones, on this machine's Tailscale address.
-  'phoneAccess.get': (_p, ctx) => phoneAccessOf(ctx).status(),
-  'phoneAccess.set': (p, ctx) => phoneAccessOf(ctx).set(p),
-  'phoneAccess.revoke': (p, ctx) => ({ revoked: phoneAccessOf(ctx).revoke(p.name) })
+  'phoneAccess.get': (_p, ctx) => phoneControlOf(ctx).status(),
+  'phoneAccess.set': (p, ctx) => phoneControlOf(ctx).set(p),
+  'phoneAccess.revoke': (p, ctx) => ({ revoked: phoneControlOf(ctx).revoke(p.name) })
 }
 
 /** The branch-data setters (the history's coverage test checks each records its change) */
