@@ -10,7 +10,8 @@
 //   - the first launch spawns the Local server: local.json with its pid, detached in its own
 //     session (setsid), its output in the profile's server.log (0600); its agents get no TREK_
 //     variable from the app's env;
-//   - Open on server lists Local first, Running, with no Set token, Edit or Remove;
+//   - Open on server lists Local first, Running, with no Set token, Edit or Remove (Projects,
+//     Restart and Pair a phone…);
 //   - the start screen's New Project… lists Local first; on it: the folder picker (stubbed) → server.addRepo → the modal named after
 //     the folder with it ticked → Create; the window becomes the Local project window;
 //   - a session started on it runs the fake agent, and the window shows its output;
@@ -293,7 +294,9 @@ try {
   const item = localItem(win)
   await item.locator('.connect-server-status', { hasText: /^Running/ }).waitFor({ timeout: 15_000 })
   check('Local is listed first, Running', [await item.locator('.connect-server-name').textContent(), (await item.locator('.connect-server-status').textContent()).startsWith(`Running ${bundled.version} (pid ${first.pid})`)], ['Local', true])
-  check('with no Set token, Edit or Remove', await item.locator('.server-row-actions button').allTextContents(), ['Projects', 'Restart'])
+  // Pair a phone… joins the row once main's connection has the server's welcome (it has phone access).
+  const localActions = ['Projects', 'Restart', 'Pair a phone…']
+  check('with no Set token, Edit or Remove', await until(() => item.locator('.server-row-actions button').allTextContents(), localActions), localActions)
   check("main's connection to Local is up", await until(async () => (await localLink(win))?.status, 'connected'), 'connected')
   check('the menu shows its state, Restart and Stop', await menuLabels(), [`Running ${bundled.version} (pid ${first.pid}) (off)`, 'Restart Local Server', 'Stop Local Server'])
   check('no renderer sees the token', await tokenInRenderer(win, first.token), false)
