@@ -1,7 +1,8 @@
 // The phone app's pure modules (6a, apps/mobile/src/logic): the server-address rule, the
 // attention list and its notifications, the key bar, the diff colouring, the terminal feed and
 // the ref counts, the connection notices, the per-server generations, the held topic view and
-// the value a promote request waits for and the quick buttons' list and built-in context.
+// the value a promote request waits for, the quick buttons' list and built-in context, and the
+// rules for adding and removing a worktree (pull request links, branch suggestions, the remove flow).
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { checkServerUrl, isPrivateHost } from '../apps/mobile/src/logic/serverUrl.ts'
@@ -12,6 +13,7 @@ import { TerminalFeed, pageScript } from '../apps/mobile/src/logic/terminalFeed.
 import { connectionNotice, sessionPlaceholder } from '../apps/mobile/src/logic/connection.ts'
 import { quickButtonContext, quickButtonsFor } from '../apps/mobile/src/logic/quickButtons.ts'
 import { planQuickButton, resolveBuiltins } from '../src/shared/quickButtonTemplate.ts'
+import { branchSuggestions, parsePullRequestUrl, prBranch, pullRequestLabel, refusedAsDirty, removeWorktree } from '../apps/mobile/src/logic/worktrees.ts'
 import { bumpGenerations } from '../apps/mobile/src/logic/generations.ts'
 import { viewFor } from '../apps/mobile/src/logic/topicView.ts'
 import { Latest } from '../apps/mobile/src/logic/latest.ts'
@@ -563,4 +565,138 @@ test('quick buttons: the main checkout resolves its branch data; a worktree with
   assert.equal(none.worktree_id, 'wn')
   assert.equal(none.repo_name, 'trek')
   for (const name of ['branch', 'workflow_tag', 'labels', 'ticket', 'pr_url', 'pr_number', 'note']) assert.equal(none[name], undefined, name)
+})
+
+test('worktrees: a github.com pull request link, in its canonical form; its label and its branch', () => {
+  assert.deepEqual(parsePullRequestUrl('https://github.com/o/r/pull/42/files?x=1'), { owner: 'o', repo: 'r', number: 42, url: 'https://github.com/o/r/pull/42' })
+  assert.deepEqual(parsePullRequestUrl('  http://www.github.com/my-org/my.repo/pull/7  '), { owner: 'my-org', repo: 'my.repo', number: 7, url: 'https://github.com/my-org/my.repo/pull/7' })
+  assert.equal(parsePullRequestUrl('https://www.github.com/o/r/pull/1')?.number, 1)
+  for (const bad of ['https://gitlab.com/o/r/pull/1', 'github.com/o/r/pull/1', 'https://github.com/o/r/issues/1', 'https://github.com/o/r/pull/', '']) {
+    assert.equal(parsePullRequestUrl(bad), null, bad)
+  }
+  assert.equal(pullRequestLabel('https://github.com/o/r/pull/42'), '#42')
+  assert.equal(pullRequestLabel('https://dev.azure.com/o/p/_git/r/pullrequest/9'), '#9')
+  assert.equal(pullRequestLabel('https://github.com/o/r'), 'PR')
+  assert.equal(prBranch(42), 'pr/42')
+})
+
+test('worktrees: branch suggestions contain the typed text, the exact match first, up to the limit', () => {
+  const branches = ['main', 'feat/login', 'fix/Login-crash', 'login']
+  assert.deepEqual(branchSuggestions(branches, 'login'), ['login', 'feat/login', 'fix/Login-crash'])
+  assert.deepEqual(branchSuggestions(branches, ' LOGIN '), ['login', 'feat/login', 'fix/Login-crash'])
+  assert.deepEqual(branchSuggestions(branches, ''), [])
+  assert.deepEqual(branchSuggestions(branches, '   '), [])
+  assert.deepEqual(branchSuggestions(branches, 'nope'), [])
+  assert.deepEqual(branchSuggestions(branches, 'login', 2), ['login', 'feat/login'])
+  const many = Array.from({ length: 20 }, (_, i) => `b${i}`)
+  assert.equal(branchSuggestions(many, 'b').length, 8)
+})
+
+test("worktrees: a refused removal is a dirty one by the server's reason or git's text, as on the desktop", () => {
+  const err = (code, message, details) => Object.assign(new Error(message), { code, details })
+  assert.equal(refusedAsDirty(err('GIT_ERROR', 'git refused', { reason: 'dirty' })), true)
+  assert.equal(refusedAsDirty(err('GIT_ERROR', "fatal: '/r/x' contains modified or untracked files, use --force to delete it")), true)
+  assert.equal(refusedAsDirty(err('GIT_ERROR', 'Contains Modified Or Untracked files')), true)
+  assert.equal(refusedAsDirty(err('GIT_ERROR', 'fatal: not a working tree')), false)
+  assert.equal(refusedAsDirty(err('GIT_ERROR', 'no', { reason: 'locked' })), false)
+  // Only git's refusal counts, whatever else the error says.
+  assert.equal(refusedAsDirty(err('INTERNAL', 'contains modified or untracked files', { reason: 'dirty' })), false)
+  assert.equal(refusedAsDirty(new Error('contains modified or untracked files')), false)
+  assert.equal(refusedAsDirty('modified or untracked'), false)
+  assert.equal(refusedAsDirty(null), false)
+})
+
+/** A remove flow whose requests and questions are recorded in `calls`. */
+const removal = (worktree, over = {}) => {
+  const calls = []
+  const step = (name, result) => async (...args) => {
+    calls.push(args.length ? `${name}(${args.join(',')})` : name)
+    return typeof result === 'function' ? result(...args) : result
+  }
+  const deps = {
+    worktree: { id: 'w1', name: 'feat', loaded: false, ...worktree },
+    unload: step('unload', over.unload),
+    load: step('load', over.load),
+    remove: step('remove', over.remove),
+    confirmRemove: step('confirmRemove', over.confirmRemove ?? true),
+    confirmDiscard: step('confirmDiscard', over.confirmDiscard ?? true),
+    refusedAsDirty: over.refusedAsDirty ?? refusedAsDirty
+  }
+  return { calls, run: () => removeWorktree(deps) }
+}
+const dirtyRefusal = () => Object.assign(new Error('git refused'), { code: 'GIT_ERROR', details: { reason: 'dirty' } })
+const rejects = (error) => () => {
+  throw error
+}
+
+test('worktrees: removing asks first, unloads a loaded worktree, then removes', async () => {
+  const clean = removal({})
+  assert.deepEqual(await clean.run(), { kind: 'removed' })
+  assert.deepEqual(clean.calls, ['confirmRemove', 'remove(false)'])
+
+  const declined = removal({ loaded: true }, { confirmRemove: false })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled' })
+  assert.deepEqual(declined.calls, ['confirmRemove'])
+
+  const loaded = removal({ loaded: true })
+  assert.deepEqual(await loaded.run(), { kind: 'removed' })
+  assert.deepEqual(loaded.calls, ['confirmRemove', 'unload', 'remove(false)'])
+})
+
+test('worktrees: a worktree with changes is removed with force, after the discard question', async () => {
+  const dirty = removal({ dirty: true, loaded: true })
+  assert.deepEqual(await dirty.run(), { kind: 'removed' })
+  assert.deepEqual(dirty.calls, ['confirmDiscard', 'unload', 'remove(true)'])
+
+  const declined = removal({ dirty: true, loaded: true }, { confirmDiscard: false })
+  assert.deepEqual(await declined.run(), { kind: 'cancelled' })
+  assert.deepEqual(declined.calls, ['confirmDiscard'])
+
+  // Changes that appeared since the snapshot: git refuses, the phone asks, then forces.
+  const refused = removal({}, { remove: (force) => (force ? undefined : rejects(dirtyRefusal())()) })
+  assert.deepEqual(await refused.run(), { kind: 'removed' })
+  assert.deepEqual(refused.calls, ['confirmRemove', 'remove(false)', 'confirmDiscard', 'remove(true)'])
+
+  const kept = removal({ loaded: true }, { remove: rejects(dirtyRefusal()), confirmDiscard: false })
+  assert.deepEqual(await kept.run(), { kind: 'cancelled' })
+  assert.deepEqual(kept.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
+
+  const keptUnloaded = removal({}, { remove: rejects(dirtyRefusal()), confirmDiscard: false })
+  assert.deepEqual(await keptUnloaded.run(), { kind: 'cancelled' })
+  assert.deepEqual(keptUnloaded.calls, ['confirmRemove', 'remove(false)', 'confirmDiscard'])
+})
+
+test('worktrees: a failed removal loads again what the phone unloaded, and never rejects', async () => {
+  const boom = new Error('boom')
+  const failed = removal({ loaded: true }, { remove: rejects(boom) })
+  assert.deepEqual(await failed.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(failed.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
+
+  // The reload is best effort: the removal's own error is the one reported.
+  const reloadFails = removal({ loaded: true }, { remove: rejects(boom), load: rejects(new Error('load failed')) })
+  assert.deepEqual(await reloadFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(reloadFails.calls, ['confirmRemove', 'unload', 'remove(false)', 'load'])
+
+  const notLoaded = removal({}, { remove: rejects(boom) })
+  assert.deepEqual(await notLoaded.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(notLoaded.calls, ['confirmRemove', 'remove(false)'])
+
+  // Not unloaded by the phone, so not loaded by it either.
+  const unloadFails = removal({ loaded: true }, { unload: rejects(boom) })
+  assert.deepEqual(await unloadFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(unloadFails.calls, ['confirmRemove', 'unload'])
+
+  // A forced removal that fails is not asked about again, even refused as dirty.
+  const forced = removal({ dirty: true, loaded: true }, { remove: rejects(dirtyRefusal()) })
+  assert.equal((await forced.run()).kind, 'failed')
+  assert.deepEqual(forced.calls, ['confirmDiscard', 'unload', 'remove(true)', 'load'])
+
+  const forcedAfterRefusal = removal({ loaded: true }, { remove: (force) => rejects(force ? boom : dirtyRefusal())() })
+  assert.deepEqual(await forcedAfterRefusal.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(forcedAfterRefusal.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'remove(true)', 'load'])
+
+  // A question that throws is a failure too, with the reload.
+  const askFails = removal({ loaded: true }, { remove: rejects(dirtyRefusal()), confirmDiscard: rejects(boom) })
+  assert.deepEqual(await askFails.run(), { kind: 'failed', error: boom })
+  assert.deepEqual(askFails.calls, ['confirmRemove', 'unload', 'remove(false)', 'confirmDiscard', 'load'])
 })
