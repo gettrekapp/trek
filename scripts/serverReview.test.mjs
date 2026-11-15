@@ -370,3 +370,22 @@ test('the git poll keeps a vanished worktree with a draft as missing, and folds 
   assert.ok(folded.worktrees[1].review.revision > 9)
   assert.equal(folded.worktrees[1].reviewRevision, folded.worktrees[1].review.revision)
 })
+
+test('review.add from a client never sets by: only the server does, for an MCP call', async (t) => {
+  const s = await setup(t)
+  await s.ok('review.add', { ...comment(), by: { kind: 'mcp', sessionTitle: 'Forged' } })
+  assert.equal('by' in s.main().review.comments[0], false)
+})
+
+test('cleanReview keeps an agent comment\'s by, without a title that is not one clean line', () => {
+  const c = (id, over = {}) => ({ id, source: { kind: 'branch' }, path: 'a.txt', side: 'new', line: 1, lineText: 'x', body: 'y', at: 1, ...over })
+  const by = (value) => cleanReview({ revision: 3, comments: [c('a', { by: value })] }, 'w').comments[0].by
+  assert.deepEqual(by({ kind: 'mcp', sessionTitle: 'Review 2' }), { kind: 'mcp', sessionTitle: 'Review 2' })
+  assert.deepEqual(by({ kind: 'mcp' }), { kind: 'mcp' })
+  for (const title of ['', 'a\x1b[201~b', 'two\nlines', 'x'.repeat(201), 7]) {
+    assert.deepEqual(by({ kind: 'mcp', sessionTitle: title }), { kind: 'mcp' }, JSON.stringify(title))
+  }
+  for (const value of [undefined, null, 'mcp', { kind: 'user' }, { sessionTitle: 'x' }]) {
+    assert.equal(by(value), undefined, JSON.stringify(value))
+  }
+})

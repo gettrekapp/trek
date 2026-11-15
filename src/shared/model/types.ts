@@ -142,6 +142,13 @@ export interface ReviewDraft {
   comments: ReviewComment[]
 }
 
+/** Who wrote a review comment when it was not the user: an agent, through the MCP tools. */
+export interface ReviewAuthor {
+  kind: 'mcp'
+  /** Its session's title when the call named one of this project's sessions */
+  sessionTitle?: string
+}
+
 /** One line comment. It keeps the line's text, so it can still be sent once the line has changed. */
 export interface ReviewComment {
   /** Server-assigned */
@@ -159,6 +166,8 @@ export interface ReviewComment {
   body: string
   /** Epoch ms, the server's clock: when it was written or last edited */
   at: number
+  /** Set by the server for a comment an agent wrote (add_review_comment); absent: the user wrote it */
+  by?: ReviewAuthor
 }
 
 export interface Repository {
