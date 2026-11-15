@@ -7,6 +7,11 @@ import { PLUGIN_CONTRACT_VERSION, PLUGIN_ID_RE } from '../../../shared/plugins/m
 import type { InstalledTheme } from './theme.ts'
 
 export type LoadResult =
+  /**
+   * `plugin` is the window's own frozen copy of what the bundle exports, never the bundle's
+   * object: its manifest's plain values, `theme.styles` as text, and `Runtime` and
+   * `slots.overlay` where the bundle has them. Reading it cannot throw.
+   */
   | { kind: 'loaded'; plugin: ClientPlugin }
   /** The server's bundle is no longer the listed one (or is gone): a `plugins.list` follows; not a failure */
   | { kind: 'stale' }
@@ -85,6 +90,38 @@ async function within<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED
   } finally {
     clearTimeout(timer)
   }
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null
+
+/**
+ * The window's copy of a bundle's theme plugin, or why it is not one. Every property is read here,
+ * once, by a caller that catches: a getter may throw. The copy is frozen plain data: the
+ * manifest's text, number and boolean fields, the styles as text ('' with none), and `Runtime`
+ * and the `overlay` slot where they are functions. Nothing else of the bundle's object is kept.
+ */
+function plainTheme(plugin: Record<string, unknown>, manifest: Record<string, unknown>): ClientPlugin | string {
+  const fields: Record<string, string | number | boolean> = {}
+  for (const name of Object.keys(manifest)) {
+    const value = manifest[name]
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') fields[name] = value
+  }
+  const look = plugin.theme
+  if (look != null && !isObject(look)) return 'its theme is not an object'
+  const styles = look?.styles
+  if (styles != null && typeof styles !== 'string') return 'its styles are not text'
+  const Runtime = plugin.Runtime
+  if (Runtime != null && typeof Runtime !== 'function') return 'its Runtime is not a component'
+  const slots = plugin.slots
+  if (slots != null && !isObject(slots)) return 'its slots are not an object'
+  const overlay = slots?.overlay
+  if (overlay != null && typeof overlay !== 'function') return 'its overlay is not a component'
+  return Object.freeze({
+    manifest: Object.freeze(fields) as unknown as ClientPlugin['manifest'],
+    theme: Object.freeze({ styles: styles ?? '' }),
+    ...(Runtime ? { Runtime: Runtime as NonNullable<ClientPlugin['Runtime']> } : {}),
+    slots: Object.freeze(overlay ? { overlay: overlay as NonNullable<ClientPlugin['Runtime']> } : {})
+  })
 }
 
 /**
@@ -166,8 +203,10 @@ async function fetchAndImport(theme: InstalledTheme, deps: LoaderDeps, cache: Ma
     if (!manifest || typeof manifest !== 'object') return failed('its bundle has no plugin as its default export')
     const { id, version } = manifest as { id?: unknown; version?: unknown }
     if (id !== theme.id || version !== theme.version) return failed(`its bundle is another plugin (${nameOf(id)} ${nameOf(version)})`)
-    cache.set(theme.sha256, plugin as ClientPlugin)
-    return { kind: 'loaded', plugin: plugin as ClientPlugin }
+    const copy = plainTheme(plugin as Record<string, unknown>, manifest as Record<string, unknown>)
+    if (typeof copy === 'string') return failed(copy)
+    cache.set(theme.sha256, copy)
+    return { kind: 'loaded', plugin: copy }
   } catch (err) {
     return failed(`its bundle could not be read (${messageOf(err)})`)
   }

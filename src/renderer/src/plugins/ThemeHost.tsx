@@ -18,6 +18,7 @@ const STALE_RETRIES = 5
 interface Loaded {
   backend: WindowBackend
   sha256: string
+  /** The loader's frozen copy, never the bundle's own object: reading it here, outside the plugin error boundary, cannot throw */
   plugin: ClientPlugin
 }
 

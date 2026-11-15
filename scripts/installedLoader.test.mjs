@@ -123,6 +123,59 @@ test('a default export of an odd shape fails with a reason: it never rejects', a
   }
 })
 
+const themed = (rest) => `export default { manifest: { id: 'nord', version: '1.0.0', name: 'N', description: 'D', defaultEnabled: false, type: 'theme', contract: 1 }, ${rest} }\n`
+
+test('a plugin object that throws when read, or holds the wrong kind of value, fails with a reason: it never rejects', async () => {
+  for (const [client, reason] of [
+    [themed("get theme() { throw new Error('boom') }"), 'its bundle could not be read (boom)'],
+    [themed("theme: { get styles() { throw new Error('boom') } }"), 'its bundle could not be read (boom)'],
+    [themed("get Runtime() { throw new Error('boom') }"), 'its bundle could not be read (boom)'],
+    [themed("get slots() { throw new Error('boom') }"), 'its bundle could not be read (boom)'],
+    [themed("slots: { get overlay() { throw new Error('boom') } }"), 'its bundle could not be read (boom)'],
+    [themed('theme: { styles: 7 }'), 'its styles are not text'],
+    [themed("theme: { styles: { toString() { return 'x' } } }"), 'its styles are not text'],
+    [themed("theme: 'blue'"), 'its theme is not an object'],
+    [themed("Runtime: 'no'"), 'its Runtime is not a component'],
+    [themed('Runtime: {}'), 'its Runtime is not a component'],
+    [themed('slots: 3'), 'its slots are not an object'],
+    [themed('slots: { overlay: {} }'), 'its overlay is not a component']
+  ]) {
+    const f = await fixture(client)
+    assert.deepEqual(await loadInstalledPlugin(f.theme, f.sha256, f.deps), { kind: 'failed', reason }, client)
+    assert.equal(f.deps.cache.size, 0, 'a bad bundle is not kept')
+  }
+})
+
+test("what loads is a frozen plain copy: the bundle's own object is read once, and never handed on", async () => {
+  const f = await fixture(
+    `let reads = 0
+     const Runtime = () => null
+     const overlay = () => null
+     export default {
+       manifest: { id: 'nord', version: '1.0.0', name: 'N', description: 'D', defaultEnabled: false, type: 'theme', contract: 1, secrets: ['x'] },
+       get theme() { if (reads++) throw new Error('read twice'); return { styles: 'a{}' } },
+       Runtime,
+       slots: { overlay, settings: () => null },
+       extra: 1
+     }\n`
+  )
+  const result = await loadInstalledPlugin(f.theme, f.sha256, f.deps)
+  assert.equal(result.kind, 'loaded', JSON.stringify(result))
+  const { plugin } = result
+  assert.deepEqual(Object.keys(plugin).sort(), ['Runtime', 'manifest', 'slots', 'theme'])
+  assert.deepEqual(plugin.manifest, { id: 'nord', version: '1.0.0', name: 'N', description: 'D', defaultEnabled: false, type: 'theme', contract: 1 })
+  assert.deepEqual(plugin.theme, { styles: 'a{}' })
+  assert.equal(typeof plugin.Runtime, 'function')
+  assert.deepEqual(Object.keys(plugin.slots), ['overlay'])
+  assert.ok(Object.isFrozen(plugin) && Object.isFrozen(plugin.manifest) && Object.isFrozen(plugin.theme) && Object.isFrozen(plugin.slots))
+  assert.equal((await loadInstalledPlugin(f.theme, f.sha256, f.deps)).plugin, plugin, 'and that copy is what is kept')
+  // No theme, Runtime or slots: empty styles and nothing to mount.
+  const bare = await fixture("export default { manifest: { id: 'nord', version: '1.0.0' } }\n")
+  const loaded = await loadInstalledPlugin(bare.theme, bare.sha256, bare.deps)
+  assert.equal(loaded.kind, 'loaded')
+  assert.deepEqual(loaded.plugin, { manifest: { id: 'nord', version: '1.0.0' }, theme: { styles: '' }, slots: {} })
+})
+
 test('a then export is not followed: the load fails at once, with a reason', async () => {
   const f = await fixture(`export function then() {}\n${bundleOf()}`)
   f.deps.timeoutMs = 60_000
