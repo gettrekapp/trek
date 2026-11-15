@@ -2,9 +2,9 @@
 // the plugins' per-app preferences (plugin system phase 1), with 0.2.x's voiceActive moved into them.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_APP_SETTINGS, MAX_PLUGIN_PREFS, parseAppSettings } from '../src/shared/appSettings.ts'
+import { DEFAULT_APP_SETTINGS, MAX_PLUGIN_PREFS, MAX_THEME_CHOICES, parseAppSettings } from '../src/shared/appSettings.ts'
 
-const DEFAULTS = { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {} }
+const DEFAULTS = { showNotifications: true, stopLocalServerOnQuit: false, plugins: {}, update: {}, themes: {} }
 
 test('notifications are on and stopping Local on quit is off by default; a missing, corrupt or mistyped file reads as the defaults', () => {
   assert.deepEqual(DEFAULT_APP_SETTINGS, DEFAULTS)
@@ -15,7 +15,7 @@ test('notifications are on and stopping Local on quit is off by default; a missi
 })
 
 test('a patch changes only the fields it carries, over the current settings', () => {
-  const current = { showNotifications: false, stopLocalServerOnQuit: true, plugins: { voice: { active: true } }, update: {} }
+  const current = { showNotifications: false, stopLocalServerOnQuit: true, plugins: { voice: { active: true } }, update: {}, themes: {} }
   assert.deepEqual(parseAppSettings({}, current), current)
   assert.deepEqual(parseAppSettings({ showNotifications: true }, current), { ...current, showNotifications: true })
   assert.deepEqual(parseAppSettings({ stopLocalServerOnQuit: false }, current), { ...current, stopLocalServerOnQuit: false })
@@ -70,4 +70,64 @@ test('an update patch changes only the keys it carries; null removes one', () =>
   assert.deepEqual(parseAppSettings({ update: { skippedVersion: null } }, current).update, { lastCheckAt: 1000 })
   assert.deepEqual(parseAppSettings({ update: { skippedVersion: 'bad' } }, current).update, current.update)
   assert.deepEqual(parseAppSettings({ showNotifications: false }, current).update, current.update)
+})
+
+const SHA_A = 'a'.repeat(64)
+const SHA_B = 'b'.repeat(64)
+
+test('theme choices merge per key; null removes one; a bad key, id or hash is ignored', () => {
+  const current = { ...DEFAULTS, themes: { 'local:p1': { id: 'nord', sha256: SHA_A }, 'local:p2': { id: 'gruv', sha256: SHA_B } } }
+  assert.deepEqual(parseAppSettings({}, current).themes, current.themes)
+  assert.deepEqual(parseAppSettings({ themes: { 'local:p1': { id: 'gruv', sha256: SHA_B, extra: 1 } } }, current).themes, {
+    'local:p2': { id: 'gruv', sha256: SHA_B },
+    'local:p1': { id: 'gruv', sha256: SHA_B }
+  })
+  assert.deepEqual(parseAppSettings({ themes: { 'local:p1': null } }, current).themes, { 'local:p2': { id: 'gruv', sha256: SHA_B } })
+  for (const bad of [{ id: 'Nord', sha256: SHA_A }, { id: 'nord', sha256: 'abc' }, { id: 'nord', sha256: SHA_A.toUpperCase() }, { id: 'nord' }, 'nord', 1, []]) {
+    assert.deepEqual(parseAppSettings({ themes: { 'local:p1': bad } }, current).themes, current.themes, JSON.stringify(bad))
+  }
+  assert.deepEqual(parseAppSettings({ themes: { '': { id: 'nord', sha256: SHA_A }, ['k'.repeat(257)]: { id: 'nord', sha256: SHA_A } } }, current).themes, current.themes)
+  assert.deepEqual(parseAppSettings({ themes: [] }, current).themes, current.themes)
+  assert.deepEqual(parseAppSettings({ themes: { 'web:p': { id: 'nord', sha256: SHA_A } } }).themes, { 'web:p': { id: 'nord', sha256: SHA_A } }, 'a stored file reads the same way')
+})
+
+test('theme choices are capped: the oldest go first, and a key set again counts as new', () => {
+  const full = {}
+  for (let i = 0; i < MAX_THEME_CHOICES; i++) full[`s:p${i}`] = { id: 'nord', sha256: SHA_A }
+  const again = parseAppSettings({ themes: { 's:p0': { id: 'gruv', sha256: SHA_B } } }, { ...DEFAULTS, themes: full }).themes
+  assert.equal(Object.keys(again).length, MAX_THEME_CHOICES)
+  assert.equal(Object.keys(again).at(-1), 's:p0')
+  const more = parseAppSettings({ themes: { 's:new': { id: 'nord', sha256: SHA_A } } }, { ...DEFAULTS, themes: again }).themes
+  assert.equal(Object.keys(more).length, MAX_THEME_CHOICES)
+  assert.equal('s:p1' in more, false, 'the oldest was dropped')
+  assert.deepEqual(more['s:p0'], { id: 'gruv', sha256: SHA_B })
+  assert.deepEqual(more['s:new'], { id: 'nord', sha256: SHA_A })
+})
+
+test('a theme choice under an own __proto__ key changes nothing and pollutes nothing', () => {
+  const current = { ...DEFAULTS, themes: { 'local:p1': { id: 'nord', sha256: SHA_A } } }
+  const themes = JSON.parse(`{"__proto__": {"id": "gruv", "sha256": "${SHA_B}", "polluted": true}}`)
+  assert.ok(Object.hasOwn(themes, '__proto__'), 'an own key, as JSON.parse makes it')
+  for (const patch of [{ themes }, JSON.parse(`{"themes": {"__proto__": null}}`)]) {
+    for (const result of [parseAppSettings(patch, current).themes, parseAppSettings({ themes: { ...current.themes, ...patch.themes } }).themes]) {
+      assert.deepEqual(result, current.themes)
+      assert.deepEqual(Object.keys(result), ['local:p1'])
+      assert.equal(Object.getPrototypeOf(result), Object.prototype, "the result's prototype is Object's own")
+      assert.equal(Object.hasOwn(result, '__proto__'), false)
+      assert.equal(result.id, undefined)
+    }
+  }
+  assert.equal({}.polluted, undefined)
+  assert.equal({}.id, undefined)
+  assert.equal({}.sha256, undefined)
+})
+
+test('a stored file with more theme choices than the cap reads as its last ones', () => {
+  const stored = {}
+  for (let i = 0; i < MAX_THEME_CHOICES + 7; i++) stored[`s:p${i}`] = { id: 'nord', sha256: SHA_A }
+  const read = parseAppSettings({ themes: stored }).themes
+  assert.equal(Object.keys(read).length, MAX_THEME_CHOICES)
+  assert.deepEqual(Object.keys(read), Object.keys(stored).slice(-MAX_THEME_CHOICES))
+  assert.equal(Object.keys(read)[0], 's:p7')
+  assert.equal(Object.keys(read).at(-1), `s:p${MAX_THEME_CHOICES + 6}`)
 })

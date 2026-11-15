@@ -24,7 +24,8 @@ export function pluginStatus(manifest: PluginManifest, welcome: PluginWelcome | 
     const capability = !!manifest.legacyCapability && welcome.capabilities?.includes(manifest.legacyCapability) === true
     return capability || manifest.legacyBuiltIn === true ? 'legacy' : 'missing'
   }
-  const listed = welcome.plugins.find((p) => p.id === manifest.id)
+  // An installed plugin's entry (it carries a type or a hash) is never a built-in's, whatever its id.
+  const listed = welcome.plugins.find((p) => p.id === manifest.id && p.type === undefined && p.sha256 === undefined)
   if (!listed) return 'missing'
   // The server's default, not this app's: the two decide the same project's tools and UI.
   return pluginEnabled(settings, { id: manifest.id, defaultEnabled: listed.defaultEnabled }) ? 'on' : 'off'

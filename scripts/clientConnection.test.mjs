@@ -571,3 +571,35 @@ test("integrations.changed {prWatch} moves prWatch in the welcome's capabilities
   sock.event('integrations.changed', { prWatch: 'yes' })
   assert.deepEqual(conn.welcome.capabilities, ['mcp'])
 })
+
+test("plugins.list replaces the welcome's plugins before the event's listeners hear it; a bad list is ignored", () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  sock.welcome({ plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }] })
+  const before = conn.welcome
+  const seen = []
+  conn.on('event', (ev) => seen.push([ev.event, conn.welcome.plugins.map((p) => p.id)]))
+  const theme = { id: 'nord', version: '1.0.0', defaultEnabled: false, type: 'theme', name: 'Nord', description: 'Cold.', contract: 1, sha256: 'a'.repeat(64) }
+  sock.event('plugins.list', { plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }, theme] })
+  assert.deepEqual(seen, [['plugins.list', ['voice', 'nord']]])
+  assert.deepEqual(conn.welcome.plugins[1], theme)
+  assert.notEqual(conn.welcome, before, 'a new welcome object, as for prWatch')
+  sock.event('plugins.list', { plugins: 'x' })
+  sock.event('plugins.list', null)
+  assert.deepEqual(conn.welcome.plugins.map((p) => p.id), ['voice', 'nord'], 'a list that is not an array changes nothing')
+})
+
+test('a plugins.list before any welcome is ignored without throwing: there is no welcome to carry it', () => {
+  const { server, conn } = setup()
+  conn.connect()
+  const sock = server.last()
+  sock.open()
+  const theme = { id: 'nord', version: '1.0.0', defaultEnabled: false, type: 'theme', name: 'Nord', description: 'Cold.', contract: 1, sha256: 'a'.repeat(64) }
+  assert.doesNotThrow(() => sock.event('plugins.list', { plugins: [theme] }))
+  assert.doesNotThrow(() => sock.event('plugins.list', null))
+  assert.equal(conn.welcome, null, 'no welcome was made up')
+  sock.welcome({ plugins: [{ id: 'voice', version: '1.0.0', defaultEnabled: true }] })
+  assert.deepEqual(conn.welcome.plugins.map((p) => p.id), ['voice'], "the welcome's own list, not the early one")
+})

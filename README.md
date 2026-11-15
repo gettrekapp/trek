@@ -633,6 +633,9 @@ one at a time:
   bare browser window (no Trek main or preload): sign-in, the cookie, a project and its
   session's terminal, the Origin rule on sockets, sign-out, revocation and the
   sign-in limit;
+- `npm run smoke:theme`: a theme plugin in a project window on Local: the example theme
+  installed while the app runs, chosen in Settings → Appearance and applied, a second
+  project's default look, a replaced bundle (the default look until Apply) and removal;
 - `npm run smoke:server-update`: `trek-server update` and the protocol's `update.*`, without
   Electron: test builds of the server at two versions, installed as a release tarball
   installs them, against a signed release feed on 127.0.0.1: the command with and without a
@@ -674,3 +677,18 @@ macOS. A `vX.Y.Z` tag builds a signed, notarized `Trek-X.Y.Z-arm64.dmg`, trek-se
 macOS and Linux (x64 and arm64) and the trek-relay bundle, and opens a draft GitHub Release. How
 to cut a release, the signing secrets and how to run the macOS smokes by hand:
 [docs/RELEASING.md](docs/RELEASING.md). The phone app ships through EAS, not this workflow.
+
+## Themes
+
+A project window can be restyled by a theme plugin. A theme is installed on a Trek server
+(`trek-server plugin add <folder | file.trekplugin | https url>`, with `--local` for the app's
+Local server) and chosen per project in Settings → General → Appearance → Theme. The choice belongs
+to the app that made it: other clients of the same project keep their own. If a theme's bundle
+changes on the server, the window returns to the default look until you click Apply.
+[`plugins/example-theme`](plugins/example-theme/README.md) is a small theme to start from.
+
+Where the server allows it (it does unless its config has `"plugins": {"remoteInstall": false}`),
+a theme can also be installed from the app: Settings → General → Appearance → Installed themes
+takes a `.trekplugin` file or an `https` URL, and removes an installed theme after asking. A theme
+is installed on the server, for every client of it, and is code that runs in the window: install
+only what you trust.

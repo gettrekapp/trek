@@ -370,6 +370,12 @@ export class ServerConnection {
         const others = this.welcome.capabilities.filter((c) => c !== 'prWatch')
         this.welcome = { ...this.welcome, capabilities: prWatch ? [...others, 'prWatch'] : others }
       }
+      // The installed plugins changed (theme plugins): the welcome's list follows, as a new
+      // object, before the event's listeners hear it. The welcome itself is never resent.
+      if (frame.event === 'plugins.list' && this.welcome) {
+        const plugins = parsePluginPresence((frame.payload as { plugins?: unknown } | null)?.plugins)
+        if (plugins) this.welcome = { ...this.welcome, plugins }
+      }
       const ev: ServerEvent = { event: frame.event, payload: frame.payload }
       this.emit(this.eventListeners, ev, 'event')
     }

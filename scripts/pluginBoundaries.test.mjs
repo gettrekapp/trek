@@ -76,3 +76,10 @@ test('the plugin contract (src/shared/plugins) imports no core code beyond src/s
   }
   assert.deepEqual(problems, [])
 })
+
+test('the example theme is installable only: not listed in plugins/builtin.*.ts', () => {
+  for (const name of ['builtin.client.ts', 'builtin.server.ts']) {
+    assert.equal(readFileSync(join(pluginDir, name), 'utf8').includes('example-theme'), false, name)
+  }
+  assert.ok(existsSync(join(pluginDir, 'example-theme', 'client', 'index.ts')), 'and the boundary walk above covers its folder')
+})

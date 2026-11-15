@@ -15,14 +15,16 @@ export const MAX_LOGIN_DRAIN = 1024 * 1024
 /**
  * On every answer. The page loads its scripts and styles from this server only
  * (no inline script; React sets inline style attributes, hence 'unsafe-inline'
- * for styles alone), connects back to it only, is never framed, and sends no
- * Referer to another site. `same-origin` rather than `no-referrer`: under
+ * for styles alone), plus an installed plugin's bundle, which the page imports
+ * from a blob: URL after checking its hash (theme plugins; a worker gets no
+ * blob:, hence worker-src), connects back to
+ * it only, is never framed, and sends no Referer to another site. `same-origin` rather than `no-referrer`: under
  * no-referrer a browser sends `Origin: null` with the page's own form posts,
  * and the sign-in's same-origin check would refuse them.
  */
 export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'content-security-policy':
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; " +
+    "default-src 'self'; script-src 'self' blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; " +
     "media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'same-origin',

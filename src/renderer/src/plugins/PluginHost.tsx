@@ -7,7 +7,7 @@ import { BUILTIN_CLIENT_PLUGINS } from '../../../../plugins/builtin.client.ts'
 import { getBackend, subscribeBackend, type WindowBackend } from '../backend'
 import { allBranchTickets, useAppStore } from '../store'
 import { terminalLabel } from '../terminals'
-import { createClientHost } from './host'
+import { createClientHost, type HostDeps } from './host'
 import { pluginActive, pluginStatus, type PluginStatus } from './presence'
 
 export interface PluginEntry {
@@ -31,29 +31,55 @@ function generationOf(backend: WindowBackend): number {
   return generation
 }
 
+/** What every plugin host in this window is built with. */
+const hostDeps = (): HostDeps => ({
+  appSettings: window.api.appSettings,
+  terminalLabel,
+  currentBackend: getBackend,
+  ticketIds: projectTicketIds,
+  onTicketIdsChanged: (listener) => {
+    let last = projectTicketIds().join('\n')
+    return useAppStore.subscribe(() => {
+      const now = projectTicketIds().join('\n')
+      if (now === last) return
+      last = now
+      listener()
+    })
+  }
+})
+
 function hostFor(backend: WindowBackend, plugin: ClientPlugin): ClientPluginHost {
   let byId = hosts.get(backend)
   if (!byId) hosts.set(backend, (byId = new Map()))
   let host = byId.get(plugin.manifest.id)
   if (!host) {
-    host = createClientHost(plugin.manifest, backend, {
-      appSettings: window.api.appSettings,
-      terminalLabel,
-      currentBackend: getBackend,
-      ticketIds: projectTicketIds,
-      onTicketIdsChanged: (listener) => {
-        let last = projectTicketIds().join('\n')
-        return useAppStore.subscribe(() => {
-          const now = projectTicketIds().join('\n')
-          if (now === last) return
-          last = now
-          listener()
-        })
-      }
-    })
+    host = createClientHost(plugin.manifest, backend, hostDeps())
     byId.set(plugin.manifest.id, host)
   }
   return host
+}
+
+/** Themes' hosts, apart from the built-ins': an installed theme may carry any id. */
+const themeHosts = new WeakMap<WindowBackend, Map<string, ClientPluginHost>>()
+
+/**
+ * The window's active theme as an entry for PluginScope (theme plugins). Its host has no server
+ * half: `request` rejects, `onEvent` never fires and it publishes no ticket info; `prefs` works.
+ */
+export function themeEntry(backend: WindowBackend, plugin: ClientPlugin): PluginEntry {
+  let byId = themeHosts.get(backend)
+  if (!byId) themeHosts.set(backend, (byId = new Map()))
+  let host = byId.get(plugin.manifest.id)
+  if (!host) {
+    host = {
+      ...createClientHost(plugin.manifest, backend, hostDeps()),
+      request: () => Promise.reject(new Error('A theme has no server half to ask')),
+      onEvent: () => () => {},
+      setTicketInfo: () => {}
+    }
+    byId.set(plugin.manifest.id, host)
+  }
+  return { plugin, status: 'on', host, key: `theme:${plugin.manifest.id}:${generationOf(backend)}` }
 }
 
 /** The window's project's linked ticket ids, once each, sorted. */

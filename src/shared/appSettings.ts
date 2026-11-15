@@ -10,6 +10,14 @@ export interface AppUpdatePrefs {
   lastCheckAt?: number
 }
 
+/** The theme a project window uses in this app (theme plugins): the plugin's id and the bundle hash the user accepted. */
+export interface ThemeChoice {
+  id: string
+  sha256: string
+}
+
+export type ThemeChoices = Record<string, ThemeChoice>
+
 export interface AppSettings {
   /** OS notifications for sessions on the app-wide servers (main's attention); on by default */
   showNotifications: boolean
@@ -22,19 +30,27 @@ export interface AppSettings {
   plugins: PluginPrefs
   /** The app updater's skipped version and last check time */
   update: AppUpdatePrefs
+  /**
+   * The chosen theme per server and project (theme plugins), keyed `<server entry id>:<project id>`
+   * (`themeKey`, src/renderer/src/plugins/theme.ts). This app's choice only: other clients of the
+   * same project are unaffected.
+   */
+  themes: ThemeChoices
 }
 
-/** A change to the app settings: any of its fields; `plugins` is merged per plugin and key, `update` per key, and a key set to null is removed. */
-export type AppSettingsPatch = Partial<Omit<AppSettings, 'plugins' | 'update'>> & {
+/** A change to the app settings: any of its fields; `plugins` is merged per plugin and key, `update` per key, `themes` per key, and a key set to null is removed. */
+export type AppSettingsPatch = Partial<Omit<AppSettings, 'plugins' | 'update' | 'themes'>> & {
   plugins?: Record<string, Record<string, PluginPrefValue | null>>
   update?: { skippedVersion?: string | null; lastCheckAt?: number | null }
+  themes?: Record<string, ThemeChoice | null>
 }
 
 export const DEFAULT_APP_SETTINGS: Readonly<AppSettings> = Object.freeze({
   showNotifications: true,
   stopLocalServerOnQuit: false,
   plugins: Object.freeze({}) as PluginPrefs,
-  update: Object.freeze({}) as AppUpdatePrefs
+  update: Object.freeze({}) as AppUpdatePrefs,
+  themes: Object.freeze({}) as ThemeChoices
 })
 
 /** The most preferences a plugin keeps, and the longest key or string value. */
@@ -87,6 +103,34 @@ function mergeUpdatePrefs(base: AppUpdatePrefs | undefined, patch: unknown): App
   return out
 }
 
+/** The most theme choices kept (one per server and project), and the longest key. */
+export const MAX_THEME_CHOICES = 256
+export const MAX_THEME_KEY_CHARS = 256
+const SHA256_RE = /^[0-9a-f]{64}$/
+
+/**
+ * `patch` over `base`, key by key; null removes a key; a choice that is not `{ id, sha256 }` (a
+ * plugin id, 64 lowercase hex) is ignored. A key that is set moves to the end, and past the cap
+ * the oldest go first.
+ */
+function mergeThemes(base: ThemeChoices | undefined, patch: unknown): ThemeChoices {
+  const out: ThemeChoices = { ...base }
+  if (!isObject(patch)) return out
+  for (const [key, value] of Object.entries(patch)) {
+    if (!key || key.length > MAX_THEME_KEY_CHARS || key === '__proto__') continue
+    if (value === null) {
+      delete out[key]
+      continue
+    }
+    if (!isObject(value) || typeof value.id !== 'string' || !PLUGIN_ID_RE.test(value.id) || typeof value.sha256 !== 'string' || !SHA256_RE.test(value.sha256)) continue
+    delete out[key]
+    out[key] = { id: value.id, sha256: value.sha256 }
+  }
+  const keys = Object.keys(out)
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_THEME_CHOICES))) delete out[key]
+  return out
+}
+
 /**
  * A stored file (or a patch): known fields of the right type are kept, the rest fall back to `base`.
  * The 0.2.x `voiceActive` reads as the voice plugin's `active` when it has none of its own (so the
@@ -102,6 +146,7 @@ export function parseAppSettings(raw: unknown, base: Readonly<AppSettings> = DEF
     showNotifications: flag('showNotifications'),
     stopLocalServerOnQuit: flag('stopLocalServerOnQuit'),
     plugins,
-    update: mergeUpdatePrefs(base.update, from.update)
+    update: mergeUpdatePrefs(base.update, from.update),
+    themes: mergeThemes(base.themes, from.themes)
   }
 }

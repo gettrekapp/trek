@@ -192,3 +192,11 @@ test('isCurrent: false once the window has another backend', () => {
   current = fakeBackend().backend
   assert.equal(host.isCurrent(), false)
 })
+
+test("pluginStatus: an installed plugin's entry with a built-in's id is not the built-in", () => {
+  // An older server may hold a theme whose id a newer client has built in.
+  const asTheme = { plugins: [{ id: 'voice', version: '9.0.0', defaultEnabled: true, type: 'theme', sha256: 'a'.repeat(64) }], capabilities: [] }
+  assert.equal(pluginStatus(voice, asTheme, { voice: { enabled: true } }), 'missing')
+  const hashOnly = { plugins: [{ id: 'voice', version: '9.0.0', defaultEnabled: true, sha256: 'a'.repeat(64) }], capabilities: [] }
+  assert.equal(pluginStatus(voice, hashOnly, undefined), 'missing')
+})

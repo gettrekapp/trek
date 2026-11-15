@@ -883,9 +883,10 @@ session is live and its token still listed; the `welcome` is the same as a token
 Anything else is `4003` as for a bad token.
 
 **Headers.** Every answer carries `Content-Security-Policy: default-src 'self';
-script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src
-'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none';
-base-uri 'none'; form-action 'self'; object-src 'none'`, `X-Content-Type-Options:
+script-src 'self' blob:; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src
+'self' data:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self';
+frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'` (`blob:`
+is for an installed plugin's bundle, as a script and not as a worker), `X-Content-Type-Options:
 nosniff`, `Referrer-Policy: same-origin` (not `no-referrer`: under it a browser sends
 `Origin: null` with the page's own form posts), `X-Frame-Options: DENY`,
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Resource-Policy:
@@ -1049,7 +1050,7 @@ links nowhere. A server older than plugins handled Linear (its `linear` capabili
 
 ### Installed plugins
 
-A server also keeps plugins that are not built into Trek (theme plugins phase 1), in
+A server also keeps plugins that are not built into Trek (theme plugins), in
 `plugins-installed/<id>/` in its data dir: a `manifest.json` and a `client.js`. Only theme plugins
 (`"type": "theme"`) can be installed. The server stores them and hands them to clients; it never
 runs `client.js`.
@@ -1144,6 +1145,25 @@ within a minute. The Trek app's local server has a data dir of its own, which no
 reach: `trek-server plugin add <source> --local` (and `list --local`, `remove <id> --local`)
 works on it, with `--local-profile <name>` for a named profile, and takes neither `--data-dir`
 nor `--config`.
+
+**How a client uses one.** The Trek app and the web client (theme plugins phase 2) list the themes
+in Settings → Appearance. The choice is the client's own, per server and project: the theme's `id`
+and the `sha256` the user accepted. A window loads a theme only while its entry's `sha256` equals
+the accepted one: it asks `plugins.bundle`, hashes the UTF-8 bytes of exactly the `client` text it
+received, and imports the text only if that hash is the entry's. A client keeps `welcome.plugins`
+current from `plugins.list`; an entry that carries `type` or `sha256` is never taken for a built-in
+plugin of the same id. A `plugins.bundle` that answers `NOT_FOUND`, or a `sha256` other than the
+listed one, means the list is about to change: the client waits for the next `plugins.list` rather
+than reporting a failure. Trek's clients also ask again by themselves, in case no list follows: up
+to 5 times, 3 seconds apart, and report a failure only if the answer is still the same after the
+last. A theme whose bundle changed is not applied until the user accepts the
+new one. The bundle is one ES module with no imports; it reads React, React's JSX runtime and the
+plugin contract from `globalThis.__trekPlugin`, which the window sets first
+([the example theme](plugins/example-theme/README.md)).
+Where the welcome lists `pluginInstall`, the Trek app and the web client also offer
+`plugins.install` (a picked file's text as `package`, or a typed `url`) and `plugins.remove` in
+Settings; they check the URL's form and the file's size first, show the server's reason when it
+refuses, and take the new list from `plugins.list`, not from the answer.
 
 ## Pull request watch
 

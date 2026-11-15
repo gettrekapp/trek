@@ -168,6 +168,10 @@ function ServerProjectTree({
       if (frame.event !== 'integrations.changed' || !isCurrent()) return
       if (typeof (frame.payload as { prWatch?: unknown } | null)?.prWatch === 'boolean') backendChanged()
     })
+    // The server's installed plugins changed (theme plugins): the SDK has already replaced the welcome's list.
+    const offPluginList = connection.on('event', (frame) => {
+      if (frame.event === 'plugins.list' && isCurrent()) backendChanged()
+    })
     // The server is going down to update (`daemon.shutdown`, reason `update`): the banner says that, not why the socket closed.
     const offShutdown = connection.on('event', (frame) => {
       if (frame.event !== 'daemon.shutdown') return
@@ -191,6 +195,7 @@ function ServerProjectTree({
     return () => {
       offStatus()
       offPrWatch()
+      offPluginList()
       offShutdown()
       offTopic()
       offServer?.()

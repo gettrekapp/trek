@@ -2341,6 +2341,42 @@ button:disabled {
   gap: 8px;
 }
 
+/* Settings → Appearance → Installed themes (theme plugins phase 3) */
+.theme-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.theme-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Server text: a long name or version wraps inside the row. */
+.theme-list li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.theme-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.theme-url input {
+  flex: 1;
+  min-width: 0;
+  cursor: text;
+}
+
 .session-type-icon-clear {
   padding: 0;
   border: none;
