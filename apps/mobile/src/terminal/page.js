@@ -89,7 +89,18 @@
       var lines = moved > 0 ? Math.floor(moved / h) : Math.ceil(moved / h)
       touch.rest = moved - lines * h
       touch.y = y
-      if (lines) term.scrollLines(lines)
+      if (!lines) return
+      // The normal screen scrolls its own scrollback. A full-screen app (the alternate screen,
+      // which has none) gets the swipe as the mouse wheel, as on the desktop: xterm sends it a
+      // wheel report when it tracks the mouse, arrow keys when not.
+      if (term.buffer.active.type === 'normal') term.scrollLines(lines)
+      else {
+        var screen = el.querySelector('.xterm-screen') || el
+        var step = lines > 0 ? 1 : -1
+        for (var i = 0; i < Math.abs(lines); i++) {
+          screen.dispatchEvent(new WheelEvent('wheel', { deltaY: step, deltaMode: 1, bubbles: true, cancelable: true, clientX: x, clientY: y }))
+        }
+      }
     },
     { passive: false }
   )
