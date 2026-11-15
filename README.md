@@ -670,3 +670,12 @@ macOS. A `vX.Y.Z` tag builds a signed, notarized `Trek-X.Y.Z-arm64.dmg`, trek-se
 macOS and Linux (x64 and arm64) and the trek-relay bundle, and opens a draft GitHub Release. How
 to cut a release, the signing secrets and how to run the macOS smokes by hand:
 [docs/RELEASING.md](docs/RELEASING.md). The phone app ships through EAS, not this workflow.
+
+## Themes
+
+A project window can be restyled by a theme plugin. A theme is installed on a Trek server
+(`trek-server plugin add <folder | file.trekplugin | https url>`, with `--local` for the app's
+Local server) and chosen per project in Settings → General → Appearance → Theme. The choice belongs
+to the app that made it: other clients of the same project keep their own. If a theme's bundle
+changes on the server, the window returns to the default look until you click Apply.
+[`plugins/example-theme`](plugins/example-theme/README.md) is a small theme to start from.
